@@ -43,6 +43,7 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 | Implementation record | Recorded status | Current reference |
 | --- | --- | --- |
 | [Development end-to-end guide](15-development-end-to-end-guide.md) | Completed | [Development TUI guide](../docs/guides/deploy.md#development-end-to-end-tui); verified in `c208e48` |
+| [Feature Spec: Production interactive TUI](16-production-tui-end-to-end.md) | Implemented; PR review pending | [Deployment guide](../docs/guides/deploy.md#attach-with-the-openclaw-tui), [production TUI flow](../docs/flows/production-tui.md) |
 
 ## Archived specifications
 

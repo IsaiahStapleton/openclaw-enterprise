@@ -35,7 +35,8 @@ OpenClaw Enterprise is the open platform for managing agents.
 
 - [Development startup](flows/development-startup.md),
   [Docker Compose development](flows/docker-compose-development.md),
-  [production startup](flows/production-startup.md), and
+  [production startup](flows/production-startup.md),
+  [production TUI attachment](flows/production-tui.md), and
   [shared platform startup](flows/platform-startup.md).
 - [Controller worker](flows/controller-worker.md),
   [Harness execution topology](flows/harness-execution-topology.md), and

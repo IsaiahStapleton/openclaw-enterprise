@@ -1,7 +1,7 @@
 # Feature Spec: Production interactive TUI
 
 **Date:** 2026-08-31
-**Status:** Implementing
+**Status:** Implemented; PR review pending
 **Owner:** Production deployment documentation and Kubernetes integration
 **Source baseline:** `b43cc49c45fa6275e79985be0eabb517743c6a23`
 
@@ -48,7 +48,9 @@ and model Secrets, then sends a bodyless deploy request and waits for
 Poll with a deadline; stop on HTTP failure or failed/deleting Namespace state.
 
 Use [createHarnessConfiguration](../tests/helpers/harness-configuration.mjs) for
-native `openai/<model>` / runtime `openclaw`. Keep `${OPENCLAW_GATEWAY_TOKEN}`
+native `openai/<model>` / runtime `openclaw`. Set `agents.defaults.skipBootstrap`
+to `true` for the connectivity demo so first-run identity setup does not replace
+the requested test reply. Keep `${OPENCLAW_GATEWAY_TOKEN}`
 literal and model credentials out of Configuration/revision snapshots. Existing
 key environment supplies only the exact embedded gateway model Secret. Neither
 API nor worker receives a model key. Use no service account resource for this proof.
@@ -104,6 +106,10 @@ state with an invalid token must fail; cached device tokens cannot satisfy denia
 
 ## Verification
 
+Local production Helm proof passed with `gpt-5.1`: four assistant nonce replies
+across two revisions, authentication denial, explicit exit, network isolation,
+credential checks and session revocation. The final setup remains attachable.
+
 | Outcome | Required evidence |
 | --- | --- |
 | Production installation | Helm initialization Job completes; API and worker ready on real PostgreSQL, authenticated Installation read succeeds. |
@@ -124,5 +130,7 @@ proves the production installation path, not deployment to a remote shared clust
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- [2026-08-31 16:22]: Verified the production Helm/TUI journey and selected explicit bootstrap-free demo configuration; implementation awaits PR review. (01a059fc-1a4d-7fa2-8375-3999ef6aeff8 - de8a4390e7dfe0576647c1355a9ea1f0e94d789f)
 
 - [2026-08-31 15:47]: Added the approved production installation and interactive TUI completion requirement. (01a059fc-1a4d-7fa2-8375-3999ef6aeff8 - b43cc49c45fa6275e79985be0eabb517743c6a23)
