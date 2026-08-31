@@ -4,12 +4,9 @@ authors:
   - Kevin Lin
 created: 2026-07-08
 last_updated: 2026-08-24
-status: draft
-issue:
-rfc_pr:
 ---
 
-# Proposal: OpenClaw as the Open Enterprise Agent Platform
+# OpenClaw as the Open Enterprise Agent Platform
 
 ## Summary
 
