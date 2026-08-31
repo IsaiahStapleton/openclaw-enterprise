@@ -59,8 +59,7 @@ pnpm test
 ```
 
 PostgreSQL, Docker, and Kubernetes integration suites require additional setup;
-see [test environment settings](docs/reference/settings.md#postgresql-test-environment) and
-[contributor instructions](AGENTS.md#running-integration-tests).
+see [Testing](docs/testing.md) for suite coverage, credentials, setup, and commands.
 
 ## Code layout
 

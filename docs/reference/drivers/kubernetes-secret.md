@@ -23,13 +23,17 @@ gateway's responsibility.
   worker and workloads do not need direct Kubernetes Secret API permission.
 - The caller must be authenticated through OCC and authorized to create or
   mutate the exact Secret. Configuration and Agent assignment changes that bind a
-  Secret separately require `operate` on each exact Secret.
+  Secret separately require caller `operate` on each exact Secret. Deployment
+  also requires the deploying actor and the consuming Agent's service principal
+  to have `operate` on every bound Secret; see
+  [binding and deployment requirements](#bind-a-secret-to-gateway-environment).
 - Secret values must be nonempty UTF-8 strings without NUL bytes, at most
   65,536 UTF-8 bytes, and fit the OCC request-body limit.
 
 The Installation operator remains responsible for Kubernetes at-rest
-encryption, safe backups, tenant-local RoleBindings, and metadata-only audit
-configuration for Kubernetes Secret operations.
+encryption, safe backups, tenant-local RoleBindings, metadata-only audit
+configuration for Kubernetes Secret operations, and IAM policy provisioning for
+Secret consumption.
 
 ## Configure the driver
 
@@ -137,14 +141,26 @@ Agent mutation permission and `operate` on each exact Secret. Namespace
 membership, Configuration access, Agent access, or possession of a ref is not
 enough.
 
+Before deployment, the selected IAM policy must grant both the deploying actor
+and the consuming Agent's existing stable service principal `operate` on every
+bound Secret. Native IAM policy is controller-owned persisted state, not
+Installation YAML, Driver YAML, or Kubernetes RoleBindings. Until a public
+IAM-management surface exists, ordinary API-only operators cannot discover the
+Agent service principal ID or create this grant through OCC endpoints because the
+public Agent response hides the internal service principal. An administrator or
+integration with access to controller-owned IAM state must complete that exact
+grant before a Secret-backed deployment can be admitted.
+
 Deployment freezes the normalized bindings and selected Secret Driver ID in the
 immutable AgentRevision. It does not snapshot backend locators or value bytes.
-The API asks the selected Secret Driver to validate the backend during admission.
-The worker resolves current OCC metadata and passes an ephemeral projection
-context to the Compute Driver; it does not call the Secret Driver or Kubernetes
-Secret API. The Compute Driver renders Kubernetes `secretKeyRef` environment variables only
-into each explicitly selected consuming gateway. Native OpenClaw configuration
-then resolves the env SecretRefs normally.
+The API authorizes the deploying actor and the consuming Agent service principal,
+then asks the selected Secret Driver to validate the backend during admission.
+The worker rechecks the actor and Agent service principal before resolving
+current OCC metadata and passing an ephemeral projection context to the Compute
+Driver; it does not call the Secret Driver or Kubernetes Secret API. The Compute
+Driver renders Kubernetes `secretKeyRef` environment variables only into each
+explicitly selected consuming gateway. Native OpenClaw configuration then
+resolves the env SecretRefs normally.
 
 Dedicated Codex model credentials do not use this binding path: the separate
 Codex workload keeps its existing Agent-specific model Secret or provider-issued
@@ -167,8 +183,13 @@ current Kubernetes Secret value. Restarting an older revision also consumes the
 current value because revisions hold references, not historical Secret bytes.
 
 There is no value history, automatic rotation, automatic workload restart, or
-value rollback. Immediate revocation requires stopping the workload, deleting or
-updating the Secret, or revoking the upstream credential.
+value rollback. Updating or deleting an OCC Secret does not remove credentials
+already delivered to a running process environment, and deletion is blocked while
+current Configurations, active revisions, or pending deployments still depend on
+the Secret. For a compromised credential, stop the affected workloads and revoke
+the credential at the upstream provider; then update the OCC Secret with a
+replacement value and redeploy the intended consumers. Delete the Secret only
+after its reference dependencies are cleared; see [Delete](#delete).
 
 ## Delete
 
@@ -196,9 +217,11 @@ metadata cleanup after OCC verifies the stored backend identity.
 - **Secret create returns `409`:** Wait until the platform Namespace is `ready`
   and its backing Kubernetes namespace is bound to the exact Namespace ID.
 - **Secret operation returns `403`:** Verify OCC permission for the exact Secret
-  or parent Namespace. For binding or Agent assignment, also verify `operate` on
-  each exact Secret. Kubernetes tenant-local Secret RBAC is a separate
-  requirement.
+  or parent Namespace. For binding or Agent assignment, also verify caller
+  `operate` on each exact Secret. For deployment, verify both the deploying actor
+  and the consuming Agent service principal have `operate` on every bound Secret.
+  Kubernetes tenant-local Secret RBAC is a separate requirement and does not
+  grant IAM authority.
 - **Secret operation returns `503`:** Check Kubernetes authentication, TLS,
   tenant namespace readiness, API RoleBinding, and whether the backend object
   still has exact OCC labels and annotations.

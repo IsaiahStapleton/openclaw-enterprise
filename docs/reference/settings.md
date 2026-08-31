@@ -300,8 +300,8 @@ directory, the `occ` application schema, and
 | Variable                             | Required by                              | Behavior                                                                                                                       |
 | ------------------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `OCC_TEST_DATABASE_URL`              | Real PostgreSQL integration tests.       | Must use an initialized application-role database. General PostgreSQL cases are skipped when absent.                           |
-| `OCC_MIGRATION_DATABASE_URL`         | Migration-aware integration checks.      | Uses the separate migrator role where migration ownership must be verified.                                                    |
-| `OCC_PSQL_TEST_DATABASE_URL`         | Production controller queue integration. | Uses a migrated application-role database; production queue cases are skipped when absent.                                     |
+| `OCC_MIGRATION_DATABASE_URL`         | `db:migrate` setup before tests.         | Uses the separate migrator role for schema and migration-history ownership; the test process should use application-role URLs. |
+| `OCC_PSQL_TEST_DATABASE_URL`         | Production controller queue integration. | Uses a migrated application-role database and requires host `psql` on `PATH`; production queue cases are skipped when absent.  |
 | `OCC_PRODUCTION_WIREUP_DATABASE_URL` | Production bootstrap integration.        | Uses a separately migrated, disposable, initially empty application-role database; the production bootstrap skips when absent. |
 | `OCC_TEST_KUBERNETES_CONFIGURATION`  | Optional live Configuration coverage.    | Set to `1` only when the PostgreSQL integration also has an explicitly configured live Kubernetes Configuration Driver.        |
 
@@ -312,13 +312,17 @@ connections:
 
 ```bash
 export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_enterprise
-export OCC_MIGRATION_DATABASE_URL=postgresql://occ_migrator:occ-migrator-local@127.0.0.1:55432/openclaw_enterprise
 export OCC_PSQL_TEST_DATABASE_URL="$OCC_TEST_DATABASE_URL"
 export OCC_PRODUCTION_WIREUP_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_production_bootstrap
 
 node --test --test-concurrency=1 \
   tests/integration/postgres-*.test.mjs
 ```
+
+The production queue and bootstrap cases can be prepared from the host with
+`psql` or the Compose PostgreSQL service, then migrated with
+`OCC_MIGRATION_DATABASE_URL` pointed at each disposable database. See the
+[PostgreSQL testing guide](../testing.md#postgresql) for the full setup sequence.
 
 The bootstrap integration creates its own exact Installation and administrator;
 do not rerun it against a previous bootstrap database or point it at an
@@ -364,22 +368,26 @@ Kubernetes reconciliation, model credentials, or a model turn.
 ### Docker Compose development test environment
 
 The Docker Compose development integration exercises the supported local stack.
-It requires Docker
-Engine, real runtime images, PostgreSQL, the OCC API, the worker, and a real
-provider response.
+It requires Docker Engine, a locally available runtime image, PostgreSQL, the
+OCC API, the worker, and a real provider response. Set
+`OCC_TEST_DOCKER_COMPUTE_REAL=1` or any `OCC_DOCKER_*_IMAGE` variable to select
+the suite; once selected, missing Docker, image, bootstrap, worker, or model
+prerequisites fail instead of skipping.
 
-| Variable                              | Requirement or default                                                                    |
-| ------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `OCC_DOCKER_GATEWAY_IMAGE`            | Existing production-equivalent OpenClaw gateway image.                                    |
-| `OCC_DOCKER_AGENT_IMAGE`              | Existing production-equivalent Codex Agent image for dedicated execution.                 |
-| `OCC_DOCKER_RUNTIME_IMAGE`            | Optional shared image fallback for both gateway and Agent when it contains both runtimes. |
-| `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` | Explicit Compose bridge range admitted as development traffic.                            |
-| `OCC_DEVELOPMENT_CONFIGURATION_ROOT`  | Filesystem Configuration Driver root; Compose sets `/app/.development/configurations`.    |
-| `OPENAI_API_KEY`                      | Existing authorized provider credential for real embedded and dedicated model turns.      |
-| `OCC_TEST_OPENAI_MODEL`               | Authorized provider model; defaults to `gpt-5.1`.                                         |
+| Variable                       | Requirement or default                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------- |
+| `OCC_TEST_DOCKER_COMPUTE_REAL` | Set to `1` to explicitly opt into the real Docker Compute proof.                      |
+| `OCC_DOCKER_GATEWAY_IMAGE`     | Existing production-equivalent OpenClaw gateway image; defaults to the runtime image. |
+| `OCC_DOCKER_AGENT_IMAGE`       | Existing production-equivalent Codex Agent image; defaults to the runtime image.      |
+| `OCC_DOCKER_RUNTIME_IMAGE`     | Optional shared image fallback for both gateway and Agent.                            |
+| `OPENAI_API_KEY`               | Existing authorized provider credential for real embedded and dedicated model turns.  |
+| `OCC_TEST_OPENAI_MODEL`        | Authorized provider model; defaults to `gpt-5.1`.                                     |
 
 The selected model must support Codex custom tools as well as the embedded
 OpenClaw path. `gpt-4.1` does not support the dedicated Codex request shape.
+The test generates its own Compose bridge CIDR and Configuration Driver root;
+`OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` and
+`OCC_DEVELOPMENT_CONFIGURATION_ROOT` are not external test inputs.
 
 Missing Docker Engine access, runtime images, bootstrap, worker startup, or
 model credentials fails the Compose integration. Do not replace this path with
@@ -391,7 +399,7 @@ Real-cluster integration is opt-in for ordinary development and required when
 explicitly requested or validating the production-capable Kubernetes driver for
 release. Set all three Kubernetes variables to enable it; setting only some
 fails rather than silently skipping. The test harness requires a dedicated
-loopback-only k3d context, and both real-cluster integration cases have been
+loopback-only k3d context, and all three HTTP fixture cases have been
 verified against a k3d-managed cluster. The driver itself also supports verified
 remote HTTPS API servers and in-cluster ServiceAccount authentication. These
 variables do not configure `server.mjs`, `worker.mjs`, the normal controller, or
@@ -404,7 +412,8 @@ its default Compute Driver.
 | `OCC_TEST_KUBERNETES_IMAGE`      | Locally available fixture image already imported into the selected cluster.                        |
 | `OCC_TEST_DATABASE_URL`          | Required for API-and-worker coverage; must select a dedicated, migrated `openclaw_k8s_*` database. |
 
-Follow the canonical [integration-test instructions](../../AGENTS.md#running-integration-tests)
+Follow the canonical
+[Kubernetes HTTP fixture testing guide](../testing.md#kubernetes-http-fixture)
 for disposable `k3d` setup, fixture image import, and PostgreSQL-backed
 coverage. Kubernetes API-and-worker coverage rejects the ordinary
 `openclaw_enterprise` development database. The real-cluster suite uses an HTTP
@@ -415,11 +424,14 @@ or model turn. A separate real-runtime lane below provides model-turn proof.
 
 [`harness-topology-k3d-real.test.mjs`](../../tests/integration/harness-topology-k3d-real.test.mjs)
 is independently opt-in. Set `OCC_TEST_HARNESS_K3D_REAL=1` or explicitly select
-a real runtime image to enable it. Once selected, missing cluster, image,
-database, credential, or NetworkPolicy prerequisites fail instead of skipping.
-It verifies dedicated Codex and embedded OpenClaw turns through real Enterprise
-gateways on an explicitly selected disposable k3d cluster; it does not send or
-receive Slack messages.
+a real runtime image to enable the ordinary three-case suite. Once selected,
+missing cluster, image, database, credential, or NetworkPolicy prerequisites
+fail instead of skipping. The ordinary suite verifies dedicated Codex, embedded
+OpenClaw with a persisted provider credential, and embedded OpenClaw with the
+Secret API through real Enterprise gateways on an explicitly selected disposable
+k3d cluster. For dedicated Codex coverage, set `OCC_TEST_OPENAI_MODEL` to an
+authorized model that supports Codex custom tools, such as `gpt-5.1`; the source
+default remains `gpt-4.1`.
 
 | Variable                               | Requirement or default                                                                                 |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -436,6 +448,57 @@ receive Slack messages.
 | `OPENAI_API_KEY`                       | Existing authorized provider credential for real embedded and dedicated model turns.                   |
 | `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-4.1`.                                                      |
 
+### Slack test environment
+
+`OCC_TEST_SLACK_LIVE=1` selects the separate live Slack case and suppresses the
+ordinary three-case suite. The Slack case uses the same production k3d,
+PostgreSQL, image, and model-turn prerequisites, then posts a real message and
+waits for a gateway-authored reply. It does not delete the Slack messages it
+creates.
+
+| Variable                          | Requirement                                                                                |
+| --------------------------------- | ------------------------------------------------------------------------------------------ |
+| `OCC_TEST_SLACK_LIVE`             | Set to `1` to run the selected live Slack case instead of the ordinary real-runtime cases. |
+| `OCC_TEST_SLACK_PROXY_URL`        | Approved exact literal-IP proxy URL with an explicit port for channel egress.              |
+| `OCC_TEST_SLACK_CHANNEL_ID`       | Shared test channel joined by the gateway bot and the sender bot.                          |
+| `SLACK_APP_TOKEN`                 | Gateway Socket Mode token; must start with `xapp-`.                                        |
+| `SLACK_BOT_TOKEN`                 | Gateway bot token; must start with `xoxb-`.                                                |
+| `OCC_TEST_SLACK_SENDER_BOT_TOKEN` | Distinct sender bot token in the same Slack workspace; must start with `xoxb-`.            |
+
+See the [Slack testing guide](../testing.md#slack) for setup and cleanup
+expectations before selecting the live case.
+
+### OpenShell test environment
+
+[`sandbox-driver-openshell-k3d-real.test.mjs`](../../tests/integration/sandbox-driver-openshell-k3d-real.test.mjs)
+is selected by `OCC_TEST_OPENSHELL_K3D_REAL=1` or by setting any Kubernetes,
+image, database, or OpenShell-specific prerequisite. If any of those variables
+is present while the flag is not `1`, prerequisite validation still fails; use a
+scoped environment file for this suite.
+
+| Variable                              | Requirement or default                                                                                           |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `OCC_TEST_OPENSHELL_K3D_REAL`         | Set to `1` to explicitly opt into the real OpenShell integration.                                                |
+| `OPENAI_API_KEY`                      | Existing authorized provider credential for the required real model turn.                                        |
+| `OCC_TEST_OPENAI_MODEL`               | Authorized provider model; defaults to `gpt-5.6-sol`.                                                            |
+| `OCC_TEST_KUBERNETES_KUBECONFIG`      | Absolute kubeconfig path for the dedicated disposable k3d cluster.                                               |
+| `OCC_TEST_KUBERNETES_CONTEXT`         | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                     |
+| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`   | Imported immutable real OpenClaw gateway image; `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` is accepted as a fallback.   |
+| `OCC_TEST_KUBERNETES_AGENT_IMAGE`     | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_CODEX_IMAGE` and runtime image fallbacks are accepted. |
+| `OCC_TEST_DATABASE_URL`               | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                                         |
+| `OCC_TEST_OPENSHELL_CLI`              | Official OpenShell CLI binary.                                                                                   |
+| `OCC_TEST_OPENSHELL_HELM`             | Helm binary used to install the namespace-scoped OpenShell gateway.                                              |
+| `OCC_TEST_OPENSHELL_HELM_CHART`       | OpenShell Helm chart path or chart archive.                                                                      |
+| `OCC_TEST_OPENSHELL_GATEWAY_IMAGE`    | Imported immutable OpenShell gateway image pinned by SHA-256 digest.                                             |
+| `OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE` | Imported immutable OpenShell supervisor image pinned by SHA-256 digest.                                          |
+| `OCC_TEST_OPENSHELL_CHART_VERSION`    | Optional OpenShell chart version; defaults to `0.0.113`.                                                         |
+| `OCC_TEST_OPENSHELL_RUNTIME_CLASS`    | Existing RuntimeClass used by Agent Sandbox Pods; defaults to `openshell-sandbox`.                               |
+
+The selected cluster must already expose the Agent Sandbox CRD and a ready Agent
+Sandbox controller. See the
+[OpenShell SandboxDriver testing guide](../testing.md#openshell-sandbox) for
+the required cluster, image, database, RuntimeClass, and chart setup.
+
 ### ChatGPT service-account integration test environment
 
 [`service-account-driver-real.test.mjs`](../../tests/integration/service-account-driver-real.test.mjs)
@@ -444,20 +507,25 @@ associated dedicated Codex Agent, and requires one genuine provider-backed
 model turn. Set `OCC_TEST_CHATGPT_SERVICE_ACCOUNT_REAL=1` to opt in; missing
 prerequisites then fail rather than skip.
 
-| Variable                                | Requirement                                                                                          |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_CHATGPT_SERVICE_ACCOUNT_REAL` | Set to `1` to enable the real provider-backed account and model-turn test.                           |
-| `OCC_TEST_CHATGPT_ADMIN_KEY_PATH`       | Preferred protected `0600` admin-key file; avoids placing the credential in an environment variable. |
-| `OCC_TEST_CHATGPT_ADMIN_KEY`            | Explicit admin-key alternative when no protected file path is configured.                            |
-| `OCC_TEST_CHATGPT_WORKSPACE_ID`         | ChatGPT workspace authorized for account and credential creation.                                    |
-| `OCC_TEST_KUBERNETES_KUBECONFIG`        | Absolute kubeconfig path for the dedicated disposable local cluster.                                 |
-| `OCC_TEST_KUBERNETES_CONTEXT`           | Explicit `k3d-*` context with a verified loopback HTTPS API.                                         |
-| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`     | Imported immutable real OpenClaw gateway image.                                                      |
-| `OCC_TEST_KUBERNETES_CODEX_IMAGE`       | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_AGENT_IMAGE` is also accepted.             |
-| `OCC_TEST_DATABASE_URL`                 | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                             |
+| Variable                                | Requirement                                                                              |
+| --------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `OCC_TEST_CHATGPT_SERVICE_ACCOUNT_REAL` | Set to `1` to enable the real provider-backed account and model-turn test.               |
+| `OCC_TEST_CHATGPT_ADMIN_KEY`            | Explicit admin key; takes precedence over the path when set.                             |
+| `OCC_TEST_CHATGPT_ADMIN_KEY_PATH`       | Protected `0600` admin-key file read only when `OCC_TEST_CHATGPT_ADMIN_KEY` is unset.    |
+| `OCC_TEST_CHATGPT_WORKSPACE_ID`         | ChatGPT workspace authorized for account and credential creation.                        |
+| `OCC_TEST_KUBERNETES_KUBECONFIG`        | Absolute kubeconfig path for the dedicated disposable local cluster.                     |
+| `OCC_TEST_KUBERNETES_CONTEXT`           | Explicit `k3d-*` context with a verified loopback HTTPS API.                             |
+| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`     | Imported immutable real OpenClaw gateway image.                                          |
+| `OCC_TEST_KUBERNETES_CODEX_IMAGE`       | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_AGENT_IMAGE` is also accepted. |
+| `OCC_TEST_DATABASE_URL`                 | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                 |
 
 This scenario uses its newly issued access token, not `OPENAI_API_KEY`. Its
-optional `OCC_TEST_OPENAI_MODEL` defaults to `gpt-4.1`.
+optional `OCC_TEST_OPENAI_MODEL` defaults to `gpt-4.1`; set it to an authorized
+custom-tool-capable model, such as `gpt-5.1`, for dedicated Codex execution.
+When using the file path, unset `OCC_TEST_CHATGPT_ADMIN_KEY` first so the test
+actually reads the protected file. See the
+[ChatGPT service-account testing guide](../testing.md#chatgpt-service-accounts)
+for the complete setup.
 
 ### Helm packaging test environment
 

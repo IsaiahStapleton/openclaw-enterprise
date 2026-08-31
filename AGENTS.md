@@ -132,6 +132,7 @@ Run all integration tests with `pnpm test:integration`, or target one case with
 `node --test tests/integration/<name>.test.mjs`. Real-runtime coverage uses the
 Docker Compose or Kubernetes integrations with explicitly selected runtime
 images and existing authorized model credentials. Follow the
+[testing guide](docs/testing.md) and
 [test environment settings](docs/reference/settings.md#docker-compose-development-test-environment)
 for each selected suite. Never substitute a fake runtime or skip a requested
 runtime integration.
@@ -146,6 +147,7 @@ disposable database using the
 pnpm db:up
 export OCC_MIGRATION_DATABASE_URL=postgresql://occ_migrator:occ-migrator-local@127.0.0.1:55432/openclaw_enterprise
 pnpm db:migrate
+unset OCC_MIGRATION_DATABASE_URL
 export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_enterprise
 export OCC_PSQL_TEST_DATABASE_URL="$OCC_TEST_DATABASE_URL"
 export OCC_PRODUCTION_WIREUP_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_production_bootstrap
@@ -195,11 +197,12 @@ docker compose -f compose.postgres.yaml exec -T postgres \
 
 export OCC_MIGRATION_DATABASE_URL=postgresql://occ_migrator:occ-migrator-local@127.0.0.1:55432/openclaw_k8s_local
 pnpm db:migrate
+unset OCC_MIGRATION_DATABASE_URL
 export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_k8s_local
 node --test tests/integration/kubernetes-compute-real.test.mjs
 ```
 
-Both real-cluster cases must pass without skips. Partial Kubernetes setup,
+All three real-cluster fixture cases must pass without skips. Partial Kubernetes setup,
 unenforced NetworkPolicies, missing fixtures, insufficient permissions, or an
 unavailable explicitly requested cluster must fail rather than substituting a
 fake. The suite provisions its own scoped controller ServiceAccount and
@@ -221,12 +224,16 @@ export OCC_TEST_KUBERNETES_GATEWAY_IMAGE='<gateway-image>@sha256:<digest>'
 export OCC_TEST_KUBERNETES_AGENT_IMAGE='<codex-agent-image>@sha256:<digest>'
 test -n "${OPENAI_API_KEY:-}"
 export OPENAI_API_KEY
+export OCC_TEST_OPENAI_MODEL=gpt-5.1
+export OCC_TEST_SLACK_LIVE=0
 node --test tests/integration/harness-topology-k3d-real.test.mjs
 ```
 
 `OCC_TEST_KUBERNETES_KUBECONFIG` and `OCC_TEST_KUBERNETES_CONTEXT` must still
 explicitly select the disposable loopback `k3d` cluster. Set
-`OCC_TEST_OPENAI_MODEL` only when overriding its default `gpt-5.6-sol`. Import
+`OCC_TEST_OPENAI_MODEL` to an authorized custom-tool-capable model, such as
+`gpt-5.1`, when running dedicated Codex coverage; the source default is
+`gpt-4.1`. Import
 the local image tags, then configure their corresponding digest references; k3d
 does not import images by digest. Also register each immutable reference inside
 the k3s container with
@@ -234,10 +241,12 @@ the k3s container with
 otherwise Kubernetes attempts a remote pull and reports `ImagePullBackOff`.
 Optional
 `OCC_TEST_KUBERNETES_OPENCLAW_VERSION` and `OCC_TEST_KUBERNETES_CODEX_VERSION`
-assert the actual image versions; Codex defaults to `0.147.0`. The two cases
-must produce real provider-backed model responses: `embedded` OpenClaw uses
-one combined gateway/Agent Pod, and `dedicated` Codex uses
-separate gateway and authenticated app-server Pods. Both require
+assert the actual image versions; Codex defaults to `0.147.0`. The ordinary
+real-runtime suite has three cases: `dedicated` Codex, `embedded` OpenClaw with
+a persisted provider credential, and `embedded` OpenClaw with the Secret API.
+Each case must produce real provider-backed model responses. Embedded OpenClaw
+uses one combined gateway/Agent Pod; dedicated Codex uses separate gateway and
+authenticated app-server Pods. All cases require
 operator-owned Agent-specific transport/model Secrets, exact projected
 workload identity, bounded Pod-local writable runtime state, and enforced
 default-deny networking. The model key appears only in the combined embedded
@@ -249,6 +258,11 @@ Dedicated native configuration must register only its selected `codex/<model>`
 under `models.providers.codex`, with `api: "openai-responses"` and a fail-closed
 `baseUrl: "http://127.0.0.1:9"`; authenticated WebSocket execution remains in
 the Codex Agent, which alone receives the model credential.
+
+`OCC_TEST_SLACK_LIVE=1` selects the separate live Slack case and suppresses the
+ordinary three real-runtime cases. That case posts real Slack messages and waits
+for a gateway-authored reply; follow
+[the Slack testing guide](docs/testing.md#slack) before selecting it.
 
 A separate genuine production installation additionally requires the real
 Helm-installed controller and PostgreSQL, tenant-local RoleBindings, a model
