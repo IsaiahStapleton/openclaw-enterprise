@@ -1,0 +1,18 @@
+# Local secrets must never be staged or archived.
+.env
+.env.*
+!.env.example
+
+# Dependency trees and generated artifacts remain machine-local at every depth.
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+playwright-report/
+test-results/
+.playwright-cli/
+output/playwright/
+
+# Agent-local progress is not product source.
+.agents/

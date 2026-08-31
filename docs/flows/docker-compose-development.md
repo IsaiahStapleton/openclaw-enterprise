@@ -1,0 +1,223 @@
+---
+created: 2026-08-24
+updated: 2026-08-28
+last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+---
+
+# Docker Compose Development Flow
+
+## Overview
+
+`docker compose up --build` starts the supported local OpenClaw Enterprise
+development environment. Compose owns PostgreSQL, migrations, idempotent
+controller-owned bootstrap for fresh databases, the OCC API with a
+filesystem-backed Configuration Driver, and the worker. The worker selects the
+Docker Compute Driver and starts real OpenClaw/Codex runtime containers for
+authorized Namespace and AgentRevision work. This flow stops after the worker
+has reconciled Docker-backed runtimes and cleanup for development resources.
+
+Use the [deployment guide](../guides/deploy.md) for setup and shutdown and the
+[quickstart](../guides/quickstart.md) for authenticated API commands. The
+[development startup flow](development-startup.md) ends at control-plane
+readiness; this trace continues through Docker workload creation and cleanup.
+
+## Entry Points
+
+- Trigger: `docker compose up --build`
+- Source: `compose.yaml`, `apps/controller/src/server.mjs:start`,
+  `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`
+- Assumptions: Docker Engine is available; PostgreSQL can write
+  `occ_postgres_data`; the controller can write `occ_configuration_data` at
+  `/app/.development/configurations`; runtime images are supplied through
+  `OCC_DOCKER_GATEWAY_IMAGE` and `OCC_DOCKER_AGENT_IMAGE` or shared
+  `OCC_DOCKER_RUNTIME_IMAGE`; `OPENAI_API_KEY` exists for real model turns; the
+  API is published only on host loopback.
+
+## Flow
+
+```mermaid
+graph TD
+  A["docker compose up --build"] --> B["PostgreSQL starts on a persistent local volume"]
+  B --> C["Migration job applies occ schema with migrator role"]
+  C --> D["Controller composes Better Auth, PostgreSQL, config volume, and dev admin account"]
+  D --> E["Controller signs in and bootstraps a fresh Installation through the existing route"]
+  E --> F["OCC API listens and becomes healthy"]
+  F --> G["Worker starts with compute-docker-development"]
+  F --> H["Authenticated API mutations enqueue Namespace and AgentRevision work"]
+  G --> I["Worker claims durable work"]
+  I --> J["Docker driver ensures one network per Namespace"]
+  I --> K{"Harness topology"}
+  K -->|embedded OpenClaw| L["Start one gateway plus embedded Harness container"]
+  K -->|dedicated Codex| M["Start gateway plus authenticated Codex container"]
+  L --> N["Real provider response proves execution"]
+  M --> N
+  I --> O["Retire revisions and delete owned Namespace resources"]
+```
+
+## Execution Trace
+
+### 1. compose.yaml:services.postgres and services.migrate
+
+`compose.yaml:services.postgres`, `compose.yaml:services.migrate`
+
+Compose starts PostgreSQL first and keeps its data in the local
+`occ_postgres_data` volume. Compose also declares `occ_configuration_data`, but
+mounts it only into the controller for development Configuration documents. The
+PostgreSQL service uses local-only administrator credentials to initialize the
+database and the checked-in local SQL to create the less-privileged
+`occ_migrator` and `occ_app` roles.
+
+The migration service waits for PostgreSQL, connects with
+`OCC_MIGRATION_DATABASE_URL`, and applies Drizzle migrations. The API and
+worker never use the migrator or PostgreSQL administrator URL.
+
+### 2. The controller self-bootstraps fresh development databases
+
+`apps/controller/src/server.mjs:start`,
+`apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`,
+`apps/controller/src/composition/development-postgres.ts:bootstrapDevelopmentInstallation`,
+`apps/controller/src/index.ts:perform`
+
+On a fresh database, the controller provisions the configured development
+administrator account before sign-in. It then signs in through Better Auth with
+the development account inputs and calls the existing authenticated bootstrap
+API to create the singleton Installation. Existing Compose volumes keep their
+persisted Installation, administrator, IAM policy, audit events, queued work,
+Configuration documents, and revisions; the controller does not re-bootstrap an
+existing database.
+
+Development self-bootstrap uses `OPENCLAW_DEV_EMAIL`,
+`OPENCLAW_DEV_PASSWORD`, and `OPENCLAW_DEV_INSTALLATION_NAME`, or their
+defaults. It does not generate or print a one-time password. Production
+bootstrap is the separate protected flow that writes a generated password to
+`OCC_BOOTSTRAP_PASSWORD_FILE`.
+
+### 3. The API admits only local development traffic
+
+`apps/controller/src/server.mjs:start`,
+`apps/controller/src/composition/development-postgres.ts:createDevelopmentConfigurationDriver`,
+`apps/controller/src/drivers/configuration/filesystem/index.ts:FilesystemConfigurationDriver`
+
+The API starts in `NODE_ENV=development`, binds inside the Compose network, and
+publishes its host port only on `127.0.0.1`. `OCC_AUTH_SECRET` signs Better Auth
+sessions and `OCC_AUTH_BASE_URL` fixes the cookie origin.
+
+Development accepts the explicitly configured Compose bridge CIDR as local
+control-plane traffic, while non-loopback clients, forwarded headers,
+caller-supplied identity headers, bearer credentials, and trusted-proxy claims
+remain rejected. The API uses the application-role PostgreSQL URL and never
+receives the Docker socket.
+
+When `OCC_CONFIG_PATH` is absent, PostgreSQL-backed development selects the
+filesystem Configuration Driver from `OCC_DEVELOPMENT_CONFIGURATION_ROOT`.
+Compose sets that root to `/app/.development/configurations` and backs it with
+the `occ_configuration_data` named volume. PostgreSQL remains the OCC metadata
+system of record; native Configuration documents live in that driver-owned
+volume.
+
+### 4. The worker selects Docker compute and claims durable work
+
+`apps/controller/src/worker.mjs:configuration`
+
+The worker starts after the controller is healthy with the same
+application-role `OCC_DATABASE_URL`. When `OCC_CONFIG_PATH` is absent in
+development, it selects `compute-docker-development` with implementation
+`docker-local`. Setting `OCC_CONFIG_PATH` explicitly selects the trusted Driver
+set described by that file instead.
+
+The worker loads the singleton Installation, validates persisted IAM policy,
+and polls the PostgreSQL work queue. Every claimed operation reauthorizes the
+original actor before calling Compute. The worker is the only Compose service
+with Docker Engine access. It does not mount the configuration volume.
+
+### 5. Docker creates Namespace networks and Agent runtimes
+
+`apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`
+
+For Namespace provisioning, the Docker driver creates or verifies one labeled
+Docker network for the exact Namespace. The network is not the Compose
+management network, and creating it does not start a gateway.
+
+For revision preparation, the driver validates the immutable Harness identity
+and mode. Embedded OpenClaw starts one Agent-owned gateway container that also
+runs the Harness. Dedicated Codex starts one gateway container plus one
+exact-revision Codex container connected by authenticated `APP_SERVER_URL` and
+`APP_SERVER_TOKEN` transport.
+
+Runtime images come from `OCC_DOCKER_GATEWAY_IMAGE` and
+`OCC_DOCKER_AGENT_IMAGE`, or from `OCC_DOCKER_RUNTIME_IMAGE` when one supplied
+image contains both entrypoints. The driver does not build or pull a hidden
+runtime image.
+
+### 6. Credential placement follows the Harness topology
+
+`apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`
+
+`OPENAI_API_KEY` is inherited from the developer environment only for the
+container that performs the model call. Embedded OpenClaw receives it in the
+combined gateway/Harness container. Dedicated Codex receives it only in the
+Codex app-server container; the separate gateway never receives it.
+
+The key is not stored in the Installation snapshot, native configuration,
+audit events, Docker labels, API responses, command-line arguments, or sibling
+Agent containers. Workload containers do not receive the Docker socket,
+controller credentials, host homes, SSH-agent sockets, or another Namespace's
+network.
+
+### 7. Cleanup removes only owned development resources
+
+`apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`
+
+Revision retirement removes only the exact revision's owned runtime and
+preserves another active Agent or replacement runtime. Namespace deletion
+removes only containers and the network labeled for that exact Namespace.
+Foreign resources with colliding names but different ownership labels are not
+adopted or deleted.
+
+If provisioning fails after creating partial resources, the driver compensates
+resources created for that failed attempt. Interrupted work remains durable in
+PostgreSQL and can be retried by the worker.
+
+## Debugging and Verification
+
+- `docker compose up --build` should show PostgreSQL readiness, migration
+  completion, API listening on `127.0.0.1:${OPENCLAW_DEV_PORT:-3000}`,
+  controller-owned fresh-database bootstrap, and `worker.started` with
+  `computeDriverId` set to `compute-docker-development`.
+- `docker network ls --filter label=org.openclaw.enterprise.compute-driver=docker`
+  should show one owned network for each ready development Namespace.
+- `docker ps --filter label=org.openclaw.enterprise.compute-driver=docker`
+  should show one embedded gateway container or a dedicated gateway plus Codex
+  container for deployed revisions.
+- The Docker Compose integration test must perform an authenticated API
+  deployment through the worker and receive a real provider response containing
+  a fresh nonce for both embedded and dedicated topologies. It may invoke the
+  gateway through the Namespace network or through the Docker-published
+  `127.0.0.1` gateway port.
+- After Namespace deletion, the matching labeled containers and network should
+  be absent while unrelated Namespaces remain.
+
+## Related docs
+
+- [Deployment guide: development and production](../guides/deploy.md)
+- [Quickstart](../guides/quickstart.md)
+- [Development startup flow](development-startup.md)
+- [Controller worker execution flow](controller-worker.md)
+- [Docker Compute Driver](../reference/drivers/docker-compute.md)
+- [Controller worker](../reference/controller.md)
+- [Configuration reference](../reference/settings.md)
+- [ComputeDriver contract](../reference/drivers/compute.md)
+- [Harness execution topology flow](harness-execution-topology.md)
+- [Platform startup flow](platform-startup.md)
+
+## Manual Notes
+
+[keep this for the user to add notes. do not change between edits]
+
+## Changelog
+
+- 2026-08-28 17:54: Clarified the Docker workload execution boundary and linked operator setup, quickstart, and worker traces. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
+- 2026-08-25 10:13: Removed the deleted bootstrap sidecar/script from the Compose flow and documented controller-owned fresh-database self-bootstrap. (01a03630-cd9f-7352-9e64-1d30de98c7dd - c56867448b187304723d20043dd5a0e184736ef2)
+- 2026-08-25 08:46: Clarified that Docker E2E verification may invoke gateways through Namespace networking or published loopback ports. (01a03630-cd9f-7352-9e64-1d30de98c7dd - 949e57ba008486c7ad60978df79dc53cce31bee9)
+- 2026-08-24 22:43: Added API-only filesystem Configuration Driver volume boundaries and removed stale Docker subnet knobs. (01a03630-cd9f-7352-9e64-1d30de98c7dd - 63890cf94cfc15f848f62f8f957eb766d2101f55)
+- 2026-08-24 21:40: Documented Docker Compose development startup and Docker Compute Driver runtime flow. (01a03630-cd9f-7352-9e64-1d30de98c7dd - 63890cf94cfc15f848f62f8f957eb766d2101f55)

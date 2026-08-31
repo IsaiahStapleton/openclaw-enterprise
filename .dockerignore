@@ -1,0 +1,31 @@
+# Archived prior art and repository history are never production build inputs.
+.git
+.git/
+legacy/
+.worktrees/
+**/.worktrees/
+.kube/
+**/.kube/
+.npm/
+.npmrc
+**/.npmrc
+.pnpm-store/
+
+# Keep local credentials and machine-specific state out of every build context.
+.env
+.env.*
+**/.env
+**/.env.*
+node_modules
+**/node_modules
+dist
+**/dist
+coverage
+playwright-report
+test-results
+.playwright-cli
+output/playwright
+*.log
+tests/
+specs/
+docs/

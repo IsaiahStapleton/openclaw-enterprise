@@ -1,0 +1,214 @@
+# Service accounts
+
+A service account is an OCC-owned, Namespace-scoped identity that links Agents
+to one credential without exposing its value. It is neither a platform
+ServicePrincipal, a Kubernetes ServiceAccount, nor a provider account. Native
+accounts accept existing API-key references; an optionally selected
+`ServiceAccountDriver` can instead create and manage an upstream account while
+keeping its provider-specific identity private.
+
+This page defines current account behavior and credential boundaries. For
+controller setup and authentication, see the [quickstart](../guides/quickstart.md)
+and [deployment guide](../guides/deploy.md).
+
+## Account ownership and authorization
+
+The server assigns each account an `sa_`-prefixed ID inside exactly one
+Namespace. Multiple Agents in that Namespace may share the account. Each
+account has at most one credential reference; its provider identity and
+credential bytes remain private. Creating an account is supported while its
+Namespace is `provisioning` or `ready`.
+
+| Operation                                                                      | Required exact permission                       |
+| ------------------------------------------------------------------------------ | ----------------------------------------------- |
+| `POST /namespaces/:namespaceId/service-accounts`                               | `create` on the Namespace's account collection. |
+| `GET /namespaces/:namespaceId/service-accounts/:serviceAccountId`              | `read` on the account.                          |
+| `POST /namespaces/:namespaceId/service-accounts/:serviceAccountId/credentials` | `update` on the exact account.                  |
+| `PATCH /namespaces/:namespaceId/service-accounts/:serviceAccountId/credential` | `update` on the native account.                 |
+| `DELETE /namespaces/:namespaceId/service-accounts/:serviceAccountId`           | `delete` on the unreferenced account.           |
+
+Account creation and credential issuance are separate. OCC authorizes each
+operation before provider or Kubernetes effects; provider authorization remains
+independent. Responses expose only OCC account metadata and an optional generic
+credential/Secret reference, never provider identities or credential bytes.
+
+## Provider selection and configuration
+
+The optional ChatGPT implementation requires an Installation-scoped integration
+and a matching `service_account` Driver selection in the trusted startup YAML:
+
+```yaml
+integrations:
+  chatgpt:
+    workspaceId: <chatgpt-workspace-id>
+    adminKeyPath: /etc/openclaw/chatgpt/admin-key
+    credentialTtlSeconds: 2592000
+
+drivers:
+  service_account:
+    id: chatgpt-service-accounts
+    configuration: {}
+```
+
+The workspace identifies the provider backend, not an OCC Namespace.
+`credentialTtlSeconds` defaults to 30 days and accepts 1–2,592,000 seconds;
+choose a smaller value when required upstream. The integration and Driver must
+be configured together and require durable PostgreSQL persistence.
+
+Production Helm values separately name the existing admin Secret mounted only
+into the controller API Pod and restrict provider egress:
+
+```yaml
+integrations:
+  chatgpt:
+    enabled: true
+    secretName: occ-chatgpt-admin
+    key: admin-key
+    providerCidr: <approved-provider-or-egress-proxy-cidr>
+```
+
+These are **Helm values**, not Installation YAML. The admin key is mounted only
+into the API Pod; `providerCidr` must identify one approved provider/proxy
+host using `/32`. The key requires
+`chatgpt.enterprise.service_account.write` and authority for the configured
+workspace; issued credentials receive only
+`chatgpt.workspace.feature.allow-codex-local-access.access`. See
+[production deployment](../guides/deploy.md) and
+[security boundaries](security.md).
+
+Both processes load the same Installation configuration; only the API
+initializes `ChatGPTClient` and `ChatGPTServiceAccountDriver`. Other capability
+Drivers may reuse that provider client.
+
+## Account and credential lifecycle
+
+Creation and credential issuance are separate authorized operations. With the
+provider Driver selected, `POST /namespaces/:namespaceId/service-accounts`
+accepts a name, returns `201` with an OCC account envelope, and privately links
+the newly created upstream account. Without that Driver, creation produces a
+native OCC account. Neither operation issues a credential automatically.
+
+A representative account-creation body is:
+
+```json
+{ "name": "support-model" }
+```
+
+`POST /namespaces/:namespaceId/service-accounts/:serviceAccountId/credentials`
+accepts `{}` and issues a credential through the selected Driver. The `201`
+account envelope contains only `kind: "access_token"` and an opaque `secretRef`.
+Compute creates one account-owned token/workspace Secret; the Driver privately
+persists the upstream credential ID for exact cleanup. A second issuance fails
+with `409`; rotation and reconciliation are not implemented. Calling issuance
+without a selected provider Driver fails with `503 DEPENDENCY_UNAVAILABLE`.
+
+An Agent associates the same-Namespace account through `serviceAccountId`.
+Association and deployment require `read` on the exact account. Updating or
+detaching an associated account requires current-account `read`; replacement
+requires `read` on both accounts. An Agent can reference an account before it
+has a credential, but deployment rejects that state.
+
+Deletion requires `delete` on the exact account and is rejected while an Agent's
+current `serviceAccountId` still references it. Provider-managed deletion removes
+the exact upstream credential, the account-owned Secret, and the upstream
+account before deleting OCC account state. Native deletion removes OCC account
+state; the operator owns the referenced source Secret.
+
+## Revision snapshots and credential delivery
+
+Deploying an Agent freezes the account ID, credential kind, and Secret reference
+in its immutable AgentRevision. It does not copy credential bytes into the
+revision. Later account edits do not rewrite that snapshot. A Secret reference
+is not a snapshot of the Secret's value. Before dispatch, the worker reauthorizes
+exact-account `read` for the actor who requested the deployment.
+
+### Provider-managed access tokens
+
+For an `access_token`, only dedicated Codex execution is supported. Kubernetes
+projects both keys directly from the one account-owned Secret into the exact
+Codex Pod:
+
+| Account Secret key | Codex environment variable   | Purpose                              |
+| ------------------ | ---------------------------- | ------------------------------------ |
+| `token`            | `CODEX_ACCESS_TOKEN`         | One upstream account access token.   |
+| `workspace-id`     | `CODEX_CHATGPT_WORKSPACE_ID` | Forced upstream workspace selection. |
+
+Codex authenticates through
+`codex -c cli_auth_credentials_store=file -c forced_chatgpt_workspace_id="<workspace-id>" login --with-access-token`
+and saves login state only in its bounded ephemeral workload volume. Its
+gateway receives neither key; there is no duplicate token Secret, API-key
+fallback, or direct worker/workload Secret access.
+
+### Native API-key references
+
+`PATCH /namespaces/:namespaceId/service-accounts/:serviceAccountId/credential`
+sets or replaces a native credential reference. It cannot set an `access_token`
+or manually replace a provider-issued access token. The native API-key body
+names an existing Secret and key in the account's exact backing namespace:
+
+```json
+{
+  "kind": "api_key",
+  "secretRef": { "name": "provider-key", "key": "api-key" }
+}
+```
+
+An independently authorized operator materializes the exact source into the
+Agent-owned model Secret. Dedicated Codex or embedded OpenClaw receives
+`OPENAI_API_KEY` only in its Harness Pod; the Compute-owned account Secret path
+applies only to Driver-issued access tokens.
+
+`oauth_access_token` references remain representable, but deployment and
+refresh are unsupported. OAuth refresh belongs to a future credential-owning
+provider, not IAM, Compute, OCC, or the Harness.
+
+## Failures and current limitations
+
+- `403`: Missing exact OCC account permission.
+- `404`: Account or Agent is outside its exact Namespace.
+- `409 RESOURCE_CONFLICT`: Duplicate account name, existing credential,
+  referenced-account deletion, missing credential, or unsupported Harness or
+  OAuth deployment.
+- Provider denial or Kubernetes failure: Creation fails closed; compensation deletes
+  only the newly created exact provider account, provider credential, or
+  account-owned Secret when durable state confirms it was not committed.
+- Expired token: Execution fails closed; automated refresh and rotation are
+  not implemented.
+
+## Evidence and related references
+
+The [controller domain operations](../../packages/occ/src/index.ts) own account
+admission, association, deletion, and revision snapshots. The
+[ChatGPT Driver](../../apps/controller/src/drivers/service-account/chatgpt.ts)
+owns private upstream bindings and compensation; the
+[worker](../../apps/controller/src/worker.ts) reauthorizes the deployment actor.
+
+[API integration tests](../../tests/integration/occ-api.test.mjs) cover native
+references, immutable revision snapshots, and Namespace-scoped access.
+[Driver conformance tests](../../tests/conformance/service-account-driver.test.mjs)
+cover authorized lifecycle, transaction-failure compensation, and execution-mode
+admission. These checks do not establish live provider or Kubernetes behavior.
+
+The [real provider integration](../../tests/integration/service-account-driver-real.test.mjs)
+creates a provider account, issues a credential, and runs dedicated Codex without
+`OPENAI_API_KEY`. It requires explicit opt-in, a protected admin-key file,
+authorized workspace, disposable Kubernetes context, digest-pinned images, and
+a migrated disposable PostgreSQL database; missing selected prerequisites fail.
+The [real harness integration](../../tests/integration/harness-topology-k3d-real.test.mjs)
+separately covers native API-key Codex and embedded OpenClaw execution. See the
+[integration instructions](../../AGENTS.md#running-integration-tests) for execution
+requirements.
+
+- [ServiceAccountDriver contract](drivers/service-account.md)
+- [Kubernetes Compute reference](drivers/kubernetes-compute.md)
+- [Authorization](authorization.md)
+- [Provider-managed credential flow](../flows/service-account-driver-credential-delivery.md)
+- [Native API-key credential flow](../flows/native-service-account-credential-delivery.md)
+
+## Manual Notes
+
+[keep this for the user to add notes. do not change between edits]
+
+## Changelog
+
+- [2026-08-28 17:54]: Reorganize as a current feature reference; distinguish account lifecycle, immutable references, and supported credential delivery. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)

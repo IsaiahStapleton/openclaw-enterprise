@@ -1,0 +1,294 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import {
+  KubernetesConfigurationDriver,
+  kubernetesConfigurationName,
+} from "../../apps/controller/src/drivers/configuration/kubernetes/index.ts";
+
+const namespaceId = "ns_00000000-0000-4000-8000-000000000001";
+const configuration = {
+  id: "cfg_00000000-0000-4000-8000-000000000001",
+  namespaceId,
+  kind: "agent",
+  generation: 1,
+  values: {
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: { source: "store", provider: "teamstore", id: "OPENAI_API_KEY" },
+        },
+      },
+    },
+    secrets: {
+      providers: { teamstore: { source: "store" } },
+      defaults: { store: "teamstore" },
+      egressProxy: { enabled: true },
+    },
+    agents: { defaults: { sandbox: { mode: "all" } } },
+    plugins: { entries: { example: { config: { enabled: true, retries: 3, tags: [null] } } } },
+  },
+  createdAt: "2026-08-19T00:00:00.000Z",
+};
+
+function createDriver(authentication = { mode: "inCluster" }) {
+  return new KubernetesConfigurationDriver({ authentication });
+}
+
+test("Kubernetes configuration implementations expose a closed preconstruction schema", () => {
+  const schema = KubernetesConfigurationDriver.configurationSchema;
+  assert.equal(schema.type, "object");
+  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(schema.required, ["authentication"]);
+  assert.doesNotThrow(() =>
+    KubernetesConfigurationDriver.validateConfiguration({ authentication: { mode: "inCluster" } }),
+  );
+
+  for (const invalid of [
+    undefined,
+    {},
+    { authentication: { mode: "ambient" } },
+    { authentication: { mode: "inCluster", context: "unexpected" } },
+    { authentication: { mode: "kubeconfig", kubeconfigPath: "relative", context: "tenant" } },
+    { authentication: { mode: "kubeconfig", kubeconfigPath: "/tmp/config", context: "" } },
+    { authentication: { mode: "inCluster" }, token: "not-allowed" },
+    { authentication: { mode: "inCluster" }, clients: {} },
+  ]) {
+    assert.throws(() => KubernetesConfigurationDriver.validateConfiguration(invalid));
+    assert.throws(() => new KubernetesConfigurationDriver(invalid));
+  }
+
+  // Inherited client injection must not evade the closed own-property schema.
+  const inheritedClients = Object.assign(Object.create({ clients: {} }), {
+    authentication: { mode: "inCluster" },
+  });
+  assert.throws(() => new KubernetesConfigurationDriver(inheritedClients), /client/i);
+});
+
+test("configuration Driver selection is explicit and cannot switch implementations", () => {
+  const selected = new KubernetesConfigurationDriver(
+    { authentication: { mode: "inCluster" } },
+    { id: "config-selected", implementation: "occ/kubernetes-configmap" },
+  );
+  assert.equal(selected.id, "config-selected");
+  assert.equal(selected.capability, "configuration");
+  assert.equal(selected.implementation, "occ/kubernetes-configmap");
+  assert.throws(
+    () => new KubernetesConfigurationDriver({ authentication: { mode: "inCluster" } }, { id: "" }),
+    /driver id/i,
+  );
+  assert.throws(
+    () =>
+      new KubernetesConfigurationDriver(
+        { authentication: { mode: "inCluster" } },
+        { implementation: "docker" },
+      ),
+    /implementation/i,
+  );
+});
+
+test("ConfigMap object names are deterministic, DNS-safe, bounded, and collision-resistant", () => {
+  for (const id of ["cfg_Upper.Case_and!punctuation", `cfg_${"x".repeat(250)}`, "cfg_---"]) {
+    const name = kubernetesConfigurationName(id);
+    const suffix = createHash("sha256").update(id).digest("hex").slice(0, 12);
+
+    assert.equal(name, kubernetesConfigurationName(id));
+    assert.match(name, /^cfg-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
+    assert.ok(name.length <= 63);
+    assert.ok(name.endsWith(suffix));
+  }
+
+  // Normalization must not collapse distinct server-owned configuration identities.
+  assert.notEqual(
+    kubernetesConfigurationName("cfg_Team A"),
+    kubernetesConfigurationName("cfg_Team-A"),
+  );
+  assert.throws(() => kubernetesConfigurationName("agent_123"), /cfg_/);
+});
+
+test("Namespace configurations accept native, bounded OpenClaw documents", async () => {
+  const driver = createDriver();
+  await assert.doesNotReject(driver.validate(configuration));
+
+  for (const [values, reason] of [
+    [undefined, /document|object/i],
+    [null, /document|object/i],
+    [[], /document|object/i],
+    [{ models: { displayName: "x".repeat(1_048_576) } }, /size/i],
+  ]) {
+    await assert.rejects(driver.validate({ ...configuration, values }), reason);
+  }
+
+  await assert.rejects(driver.validate({ ...configuration, id: "agent_1" }), /cfg_/);
+  await assert.rejects(driver.validate({ ...configuration, namespaceId: "" }), /namespace/i);
+  for (const kind of [undefined, "gateway", "namespace", ""]) {
+    await assert.rejects(driver.validate({ ...configuration, kind }), /kind|agent/i);
+  }
+  for (const generation of [undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "1"]) {
+    await assert.rejects(driver.validate({ ...configuration, generation }), /generation/i);
+  }
+  await assert.rejects(driver.validate({ ...configuration, createdAt: "invalid" }), /time/i);
+});
+
+test("ConfigMaps contain exactly one native document and preserve real ownership boundaries", async () => {
+  const driver = createDriver();
+  const physicalNamespace = "customer-support-existing";
+
+  // Exercise the production serializer/read boundary directly without claiming a mock is a cluster.
+  const observed = driver.manifest(configuration, physicalNamespace);
+  assert.equal(observed.metadata.namespace, physicalNamespace);
+  assert.deepEqual(observed.metadata.labels, {
+    "app.kubernetes.io/managed-by": "openclaw-enterprise",
+    "openclaw.dev/namespace": configuration.namespaceId,
+    "openclaw.dev/configuration": configuration.id,
+  });
+  assert.deepEqual(observed.data, { "openclaw.json": JSON.stringify(configuration.values) });
+  assert.equal(observed.metadata.annotations["openclaw.dev/configuration-kind"], "agent");
+  assert.equal(observed.metadata.annotations["openclaw.dev/configuration-generation"], "1");
+  assert.deepEqual(
+    await driver.checkedConfiguration(observed, configuration, physicalNamespace),
+    configuration,
+  );
+  assert.deepEqual(
+    await driver.checkedConfiguration(
+      { ...observed, binaryData: {} },
+      configuration,
+      physicalNamespace,
+    ),
+    configuration,
+  );
+
+  for (const [mutate, reason] of [
+    [(resource) => (resource.data = {}), /data|invalid/i],
+    [(resource) => (resource.data["openclaw.json"] = "{"), /malformed|json/i],
+    [(resource) => (resource.data["openclaw.json"] = "[]"), /document|object/i],
+    [(resource) => (resource.data.extra = "not-allowed"), /data|invalid/i],
+    [(resource) => (resource.binaryData = { secret: "c2VjcmV0" }), /binary/i],
+    [(resource) => (resource.data["openclaw.json"] = "x".repeat(1_048_576)), /size/i],
+    [
+      (resource) => (resource.metadata.annotations["openclaw.dev/namespace-id"] = "ns_other"),
+      /exact|namespace/i,
+    ],
+    [
+      (resource) => (resource.metadata.annotations["openclaw.dev/configuration-kind"] = "gateway"),
+      /kind|unsupported/i,
+    ],
+    [
+      (resource) => delete resource.metadata.annotations["openclaw.dev/configuration-kind"],
+      /kind|unsupported/i,
+    ],
+    [
+      (resource) => (resource.metadata.annotations["openclaw.dev/configuration-generation"] = "0"),
+      /generation/i,
+    ],
+    [
+      (resource) => (resource.metadata.annotations["openclaw.dev/configuration-generation"] = "2"),
+      /generation/i,
+    ],
+    [
+      (resource) => (resource.metadata.annotations["openclaw.dev/configuration-generation"] = "01"),
+      /generation/i,
+    ],
+    [
+      (resource) =>
+        (resource.metadata.annotations["openclaw.dev/configuration-generation"] =
+          "9007199254740992"),
+      /generation/i,
+    ],
+    [
+      (resource) => delete resource.metadata.annotations["openclaw.dev/configuration-generation"],
+      /generation/i,
+    ],
+  ]) {
+    const invalid = structuredClone(observed);
+    mutate(invalid);
+    await assert.rejects(
+      driver.checkedConfiguration(invalid, configuration, physicalNamespace),
+      reason,
+    );
+  }
+});
+
+test("configuration operations reject invalid references before reading Kubernetes credentials", async () => {
+  const driver = createDriver();
+
+  await assert.rejects(driver.read({ id: "agent_1", namespaceId }), /cfg_/);
+  await assert.rejects(driver.delete({ id: configuration.id, namespaceId: "" }), /namespace/i);
+  await assert.rejects(driver.update({ ...configuration, values: [] }), /document|object/i);
+});
+
+test("configuration CRUD fails closed when its explicitly selected kubeconfig is unavailable", async () => {
+  const driver = createDriver({
+    mode: "kubeconfig",
+    kubeconfigPath: `/tmp/openclaw-configuration-missing-${process.pid}`,
+    context: "explicit-tenant-context",
+  });
+
+  await assert.rejects(driver.read(configuration), /ENOENT|no such file/i);
+  await assert.rejects(driver.create(configuration), /ENOENT|no such file/i);
+});
+
+test("the official Kubernetes client rejects ambiguous identities and insecure API servers", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "openclaw-configuration-auth-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  for (const scenario of [
+    { name: "missing-context", requestedContext: "unselected" },
+    { name: "missing-user", users: [] },
+    { name: "plaintext-api", server: "http://127.0.0.1:1" },
+    { name: "unverified-tls", skipTLSVerify: true },
+    { name: "embedded-credentials", server: "https://user:password@127.0.0.1:1" },
+    { name: "unexpected-api-path", server: "https://127.0.0.1:1/untrusted" },
+  ]) {
+    const path = join(directory, `${scenario.name}.json`);
+    await writeFile(
+      path,
+      JSON.stringify({
+        apiVersion: "v1",
+        kind: "Config",
+        clusters: [
+          {
+            name: "configuration-cluster",
+            cluster: {
+              server: scenario.server ?? "https://127.0.0.1:1",
+              ...(scenario.skipTLSVerify ? { "insecure-skip-tls-verify": true } : {}),
+            },
+          },
+        ],
+        users: scenario.users ?? [
+          { name: "configuration-user", user: { token: "test-only-fixture-token" } },
+        ],
+        contexts: [
+          {
+            name: "configuration-context",
+            context: { cluster: "configuration-cluster", user: "configuration-user" },
+          },
+        ],
+        "current-context": "configuration-context",
+      }),
+    );
+
+    const driver = createDriver({
+      mode: "kubeconfig",
+      kubeconfigPath: path,
+      context: scenario.requestedContext ?? "configuration-context",
+    });
+
+    // The real Kubernetes SDK parses each fixture; unsafe identity or transport must fail before I/O.
+    await assert.rejects(
+      driver.read(configuration),
+      /context|credential|identity|verified HTTPS/i,
+      scenario.name,
+    );
+  }
+});
+
+test(
+  "live Kubernetes ConfigMap CRUD and namespaced RBAC require a provisioned cluster",
+  { skip: "No explicitly provisioned Kubernetes integration cluster is available." },
+  () => {},
+);

@@ -1,0 +1,93 @@
+name: openclaw-enterprise-development
+
+x-development-build: &development-build
+  context: .
+  target: development
+  args:
+    NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:24-bookworm}
+
+services:
+  postgres:
+    extends:
+      file: compose.postgres.yaml
+      service: postgres
+    networks:
+      development:
+
+  migrate:
+    build: *development-build
+    environment:
+      OCC_MIGRATION_DATABASE_URL: postgresql://occ_migrator:occ-migrator-local@postgres:5432/openclaw_enterprise
+    command: ["scripts/migrate-production.mjs"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      development:
+
+  controller:
+    build: *development-build
+    environment:
+      NODE_ENV: development
+      OCC_HOST: 0.0.0.0
+      OCC_PORT: 3000
+      OCC_DATABASE_URL: postgresql://occ_app:occ-app-local@postgres:5432/openclaw_enterprise
+      OCC_AUTH_SECRET: ${OCC_AUTH_SECRET:-openclaw-development-auth-secret-minimum-32-bytes}
+      OCC_AUTH_BASE_URL: http://127.0.0.1:${OPENCLAW_DEV_PORT:-3000}
+      OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR: ${OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR:-172.30.41.0/24}
+      OCC_DEVELOPMENT_CONFIGURATION_ROOT: /app/.development/configurations
+      OPENCLAW_DEV_EMAIL: ${OPENCLAW_DEV_EMAIL:-admin@openclaw.local}
+      OPENCLAW_DEV_PASSWORD: ${OPENCLAW_DEV_PASSWORD:-openclaw-development-password}
+      OPENCLAW_DEV_INSTALLATION_NAME: ${OPENCLAW_DEV_INSTALLATION_NAME:-OpenClaw Local Development}
+      OCC_DOCKER_RUNTIME_IMAGE: ${OCC_DOCKER_RUNTIME_IMAGE:-}
+      OCC_DOCKER_GATEWAY_IMAGE: ${OCC_DOCKER_GATEWAY_IMAGE:-}
+      OCC_DOCKER_AGENT_IMAGE: ${OCC_DOCKER_AGENT_IMAGE:-}
+    command: ["apps/controller/src/server.mjs"]
+    ports:
+      - "127.0.0.1:${OPENCLAW_DEV_PORT:-3000}:3000"
+    volumes:
+      - occ_configuration_data:/app/.development/configurations
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:3000/api/auth/session'').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      development:
+
+  worker:
+    build: *development-build
+    user: "0:0"
+    environment:
+      NODE_ENV: development
+      OCC_DATABASE_URL: postgresql://occ_app:occ-app-local@postgres:5432/openclaw_enterprise
+      OCC_WORKER_READINESS_PATH: /tmp/openclaw-worker-ready
+      OCC_DOCKER_RUNTIME_IMAGE: ${OCC_DOCKER_RUNTIME_IMAGE:-}
+      OCC_DOCKER_GATEWAY_IMAGE: ${OCC_DOCKER_GATEWAY_IMAGE:-}
+      OCC_DOCKER_AGENT_IMAGE: ${OCC_DOCKER_AGENT_IMAGE:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    command: ["apps/controller/src/worker.mjs"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      controller:
+        condition: service_healthy
+    networks:
+      development:
+
+volumes:
+  occ_postgres_data:
+  occ_configuration_data:
+
+networks:
+  development:
+    ipam:
+      config:
+        - subnet: ${OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR:-172.30.41.0/24}

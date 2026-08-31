@@ -1,0 +1,61 @@
+# Implementation specifications
+
+This directory records individual proposals, implementation plans, milestones,
+and delivery decisions. The documents describe work at a point in time. Their
+existing filenames and historical content remain intact; a title containing
+“Feature Spec” does not make the document the current feature specification.
+
+For supported behavior at this repository version, use the
+[living feature reference](../docs/reference/README.md). The
+[platform design](../docs/design.md) remains the architectural authority. Source
+execution belongs in [flow docs](../docs/README.md#understand-the-code), and startup
+procedures belong in [quickstart](../docs/guides/quickstart.md) and
+[deployment](../docs/guides/deploy.md).
+
+## Lifecycle
+
+New implementation specifications identify the current reference pages they will
+change. Use `Proposed`, `Accepted`, `Implementing`, `Completed`, `Superseded`, or
+`Rejected` to distinguish discussion, approval, delivery, and historical outcome.
+Acceptance is permission to implement, not evidence of current availability.
+
+Before marking work complete, record the actual outcome and implementation PR or
+commit, verification limitations, and links to updated current reference. Update
+affected guides and flows in the implementation PR. A later substantial change
+gets a new implementation specification; do not rewrite the original decision to
+match it. Small fixes need not create a new specification.
+
+Existing status labels are preserved below as recorded. They have not been
+automatically reconciled with implementation or release history and are not
+availability claims. Links in historical documents may be maintained after file
+moves without changing their substantive contract or Manual Notes. Historical
+commands and test paths can describe an older revision; run current verification
+from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
+
+## Specifications and current owners
+
+| Implementation record                                                                                                                           | Recorded status                                                         | Current reference                                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| [Milestone 1.2: Initial OCC API](01-initial-platform/milestones/1.2-initial-occ-api.md)                                                         | draft                                                                   | [API reference](../docs/reference/api.md)                                                          |
+| [Milestone 1.3: PostgreSQL Persistence](01-initial-platform/milestones/1.3-postgresql-persistence.md)                                           | implemented                                                             | [Controller reconciliation](../docs/reference/controller.md)                                       |
+| [Feature Spec: Milestone 1.4 — Bootstrap, Namespaces, and IAM](01-initial-platform/milestones/1.4-bootstrap-namespaces-iam.md)                  | implemented                                                             | [Namespaces](../docs/reference/namespaces.md), [authorization](../docs/reference/authorization.md) |
+| [Feature Spec: Milestone 1.5 — OCC Controller](01-initial-platform/milestones/1.5-occ-controller.md)                                            | implemented                                                             | [Controller reconciliation](../docs/reference/controller.md)                                       |
+| [Feature Spec: Milestone 1.6 — Agents and Immutable AgentRevisions](01-initial-platform/milestones/1.6-agents-and-immutable-agent-revisions.md) | implemented                                                             | [Agents](../docs/reference/agents.md)                                                              |
+| [Feature Spec: Milestone 1.7 — Local Test Drivers](01-initial-platform/milestones/1.7-local-test-drivers.md)                                    | implemented                                                             | Removed; historical implementation only                                                            |
+| [Feature Spec: Compute Driver Lifecycle Hooks](04-compute-driver-lifecycle-hooks.md)                                                            | Completed                                                               | [ComputeDriver](../docs/reference/drivers/compute.md)                                              |
+| [Feature Spec: Production Kubernetes Packaging and Agent Wireup](04-production-kubernetes-wireup.md)                                            | Implemented; pending review                                             | [Kubernetes Compute](../docs/reference/drivers/kubernetes-compute.md)                              |
+| [Feature Spec: OpenClaw-Native Namespace Configuration](05-openclaw-native-configuration.md)                                                    | Completed                                                               | [Configuration](../docs/reference/configuration.md)                                                |
+| [Feature Spec: Configuration Kind and Agent-Owned Gateways](06-configuration-kind.md)                                                           | Completed                                                               | [Configuration](../docs/reference/configuration.md)                                                |
+| [Feature Spec: Harness Execution Topology](07-harness-execution-topology.md)                                                                    | Implementation                                                          | [Harness execution](../docs/reference/harness-execution.md)                                        |
+| [Feature Spec: Configuration-Native Agent Channels](08-configuration-native-agent-channels.md)                                                  | Planning                                                                | [Configuration](../docs/reference/configuration.md)                                                |
+| [Feature Spec: Local Email and Password Authentication](10-local-password-authentication.md)                                                    | Completed                                                               | [Authentication](../docs/reference/authentication.md)                                              |
+| [Feature Spec: Native Service Accounts](10-native-service-accounts.md)                                                                          | Planning                                                                | [Service accounts](../docs/reference/service-accounts.md)                                          |
+| [Feature Spec: Docker Compose development and Docker Compute Driver](11-docker-compute-driver.md)                                               | Completed                                                               | [Docker Compute](../docs/reference/drivers/docker-compute.md)                                      |
+| [Feature Spec: ChatGPT Service Account Driver](11-service-account-driver.md)                                                                    | Planning                                                                | [Service accounts](../docs/reference/service-accounts.md)                                          |
+| [Feature Spec: Dedicated Harness Shared Workspace Drive](12-dedicated-harness-shared-workspace-drive.md)                                        | Planning                                                                | [Harness execution](../docs/reference/harness-execution.md)                                        |
+| [Feature Spec: Existing Kubernetes Tenant Namespaces](12-kubernetes-existing-namespaces.md)                                                     | Implemented; live Kubernetes verification requires a disposable cluster | [Kubernetes Compute](../docs/reference/drivers/kubernetes-compute.md)                              |
+| [Integration Plan: SandboxDriver OpenShell Kubernetes](13-sandbox-driver-provisioning.integ.md)                                                 | draft                                                                   | [SandboxDriver](../docs/reference/drivers/sandbox.md)                                              |
+| [Proposal: SandboxDriver Provisioning and Lifecycle](13-sandbox-driver-provisioning.md)                                                         | draft                                                                   | [SandboxDriver](../docs/reference/drivers/sandbox.md)                                              |
+| [Feature Spec: SecretDriver storage and delivery](14-secret-driver.md)                                                                          | Approved for implementation; implementation in progress                 | [Kubernetes Secret Driver](../docs/reference/drivers/kubernetes-secret.md)                         |
+| [Feature Design: Production Kubernetes Compute Driver](2026-08-18-kubernetes-deployment-design.md)                                              | Draft                                                                   | [Kubernetes Compute](../docs/reference/drivers/kubernetes-compute.md)                              |
+| [Feature Spec: Production Kubernetes Controller Operation](2026-08-19-production-kubernetes-controller-operation.md)                            | Superseded by Production Kubernetes Packaging and Agent Wireup          | [Kubernetes Compute](../docs/reference/drivers/kubernetes-compute.md)                              |

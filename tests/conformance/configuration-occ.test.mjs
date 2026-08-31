@@ -1,0 +1,819 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  DEVELOPMENT_HARNESS_DESCRIPTOR,
+  resolveApprovedHarness as resolveApprovedDevelopmentHarness,
+  resolveApprovedProductionHarness,
+} from "../../apps/controller/src/composition/production-harness.ts";
+import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import {
+  AuthorizationDeniedError,
+  DependencyUnavailableError,
+  InMemoryPlatformState,
+  NamespaceNotEmptyError,
+  OpenClawController,
+  ScopeViolationError,
+  resolveConfiguredHarnessId,
+} from "../../packages/occ/src/index.ts";
+import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+
+const administrator = "principal-configuration-administrator";
+const deployOnly = "principal-configuration-deploy-only";
+const installation = Object.freeze({
+  id: "installation-configuration-occ",
+  name: "Configuration OCC conformance",
+  createdAt: "2026-08-19T00:00:00.000Z",
+});
+async function fixture() {
+  const permissions = [
+    { action: "create", resourceKind: "namespace" },
+    { action: "read", resourceKind: "namespace" },
+    { action: "delete", resourceKind: "namespace" },
+    { action: "create", resourceKind: "configuration" },
+    { action: "read", resourceKind: "configuration" },
+    { action: "update", resourceKind: "configuration" },
+    { action: "delete", resourceKind: "configuration" },
+    { action: "create", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent" },
+    { action: "update", resourceKind: "agent" },
+    { action: "deploy", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent_revision" },
+  ];
+  const iam = new NativeIAMDriver(
+    {
+      loadNativeIAMState: async () => ({
+        identities: [administrator, deployOnly].map((id) => ({
+          kind: "principal",
+          id,
+          issuer: "configuration-conformance",
+          subject: id,
+        })),
+        groups: [],
+        memberships: [],
+        roles: [
+          { id: "configuration-administrator-role", permissions },
+          {
+            id: "configuration-deploy-only-role",
+            permissions: [{ action: "deploy", resourceKind: "agent" }],
+          },
+        ],
+        bindings: [
+          {
+            id: "configuration-administrator-binding",
+            subjectKind: "identity",
+            subjectId: administrator,
+            roleId: "configuration-administrator-role",
+          },
+          {
+            id: "configuration-deploy-only-binding",
+            subjectKind: "identity",
+            subjectId: deployOnly,
+            roleId: "configuration-deploy-only-role",
+          },
+        ],
+        restrictions: [],
+      }),
+    },
+    { id: "configuration-occ-iam" },
+  );
+  const compute = {
+    id: "configuration-occ-compute",
+    capability: "compute",
+    implementation: "configuration-conformance-compute",
+    async ensureNamespace(namespace) {
+      return { namespaceId: namespace.id, namespaceReady: true };
+    },
+    async deleteNamespace(namespace) {
+      return { namespaceId: namespace.id, namespaceDeleted: true };
+    },
+    async prepareRevision(revision) {
+      return {
+        namespaceId: revision.namespaceId,
+        agentId: revision.agentId,
+        revisionId: revision.id,
+        ready: true,
+      };
+    },
+    async retireRevision() {},
+  };
+  const configurationDriver = createTestConfigurationDriver();
+  const state = new InMemoryPlatformState();
+  const controller = new OpenClawController(installation, { state });
+  for (const driver of [iam, compute, configurationDriver]) {
+    controller.registerDriver(driver);
+    controller.selectDriver(driver.capability, driver.id);
+  }
+  const namespace = await controller.createNamespace(administrator, {
+    name: "Configuration conformance tenant",
+  });
+  const configuration = await controller.createConfiguration(administrator, {
+    namespaceId: namespace.id,
+    kind: "agent",
+    values: {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "store", provider: "teamstore", id: "OPENAI_API_KEY" },
+          },
+        },
+      },
+      secrets: {
+        providers: { teamstore: { source: "store" } },
+        defaults: { store: "teamstore" },
+      },
+      agents: { defaults: { sandbox: { mode: "all" } } },
+      plugins: { entries: { example: { enabled: true, regions: ["west"], retryCount: 2 } } },
+    },
+  });
+  const agent = await controller.createAgent(administrator, {
+    namespaceId: namespace.id,
+    name: "Configuration conformance agent",
+    configurationId: configuration.id,
+  });
+  await controller.transact((transaction) =>
+    transaction.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
+  );
+
+  return { agent, compute, configuration, configurationDriver, controller, iam, namespace, state };
+}
+
+test("concurrent Configuration updates serialize into distinct server-managed generations", async () => {
+  const { configuration, controller, namespace } = await fixture();
+
+  // The real in-memory unit of work serializes competing writers instead of losing a generation.
+  const updated = await Promise.all(
+    ["first", "second"].map((model) =>
+      controller.updateConfiguration(administrator, {
+        namespaceId: namespace.id,
+        configurationId: configuration.id,
+        values: { model },
+      }),
+    ),
+  );
+
+  assert.deepEqual(
+    updated.map((value) => value.generation),
+    [2, 3],
+  );
+  const latest = await controller.getConfiguration(administrator, namespace.id, configuration.id);
+  assert.equal(latest.generation, 3);
+  assert.deepEqual(latest.values, { model: "second" });
+});
+
+test("Configuration metadata and selected substrate generation divergence fails closed", async () => {
+  const { agent, configuration, configurationDriver, controller, namespace } = await fixture();
+
+  // Simulate a real persisted-metadata/substrate mismatch without replacing OCC or Driver behavior.
+  await controller.transact((state) =>
+    state.configurations.advanceConfigurationGeneration(namespace.id, configuration.id, 1),
+  );
+
+  await assert.rejects(
+    controller.getConfiguration(administrator, namespace.id, configuration.id),
+    DependencyUnavailableError,
+  );
+  await assert.rejects(
+    controller.updateConfiguration(administrator, {
+      namespaceId: namespace.id,
+      configurationId: configuration.id,
+      values: { model: "must-not-overwrite-divergence" },
+    }),
+    DependencyUnavailableError,
+  );
+  await assert.rejects(
+    controller.deployAgent(
+      administrator,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    ),
+    DependencyUnavailableError,
+  );
+  assert.deepEqual(
+    await configurationDriver.read({ id: configuration.id, namespaceId: namespace.id }),
+    configuration,
+  );
+});
+
+test("native Configuration documents remain bound to their exact Namespace", async () => {
+  const { controller, namespace } = await fixture();
+  const otherNamespace = await controller.createNamespace(administrator, {
+    name: "Foreign native-configuration tenant",
+  });
+  const foreign = await controller.createConfiguration(administrator, {
+    namespaceId: otherNamespace.id,
+    kind: "agent",
+    values: {
+      models: {
+        providers: {
+          openai: { apiKey: { source: "store", provider: "default", id: "FOREIGN_API_KEY" } },
+        },
+      },
+    },
+  });
+
+  await assert.rejects(
+    controller.getConfiguration(administrator, namespace.id, foreign.id),
+    ScopeViolationError,
+  );
+  await assert.rejects(
+    controller.createAgent(administrator, {
+      namespaceId: namespace.id,
+      name: "Cross-namespace configuration agent",
+      configurationId: foreign.id,
+    }),
+    ScopeViolationError,
+  );
+});
+
+test("Agent deployment snapshots its selected Configuration and Compute identity", async () => {
+  const { agent, compute, configuration, controller, namespace } = await fixture();
+
+  const revision = await controller.deployAgent(
+    administrator,
+    { namespaceId: namespace.id, agentId: agent.id },
+    resolveApprovedDevelopmentHarness,
+  );
+
+  assert.equal(revision.configurationId, configuration.id);
+  assert.equal(revision.configurationKind, "agent");
+  assert.equal(revision.configurationGeneration, configuration.generation);
+  assert.deepEqual(revision.configuration, configuration.values);
+  assert.equal(Object.isFrozen(configuration.values.models.providers.openai.apiKey), true);
+  assert.equal(Object.isFrozen(revision.configuration.plugins.entries.example.regions), true);
+  assert.equal(agent.executionMode, "embedded");
+  assert.deepEqual(revision.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
+  assert.deepEqual(revision.compute, { id: compute.id, implementation: compute.implementation });
+});
+
+test("native selected-model policy explicitly chooses Codex or OpenClaw", () => {
+  for (const [model, runtime] of [
+    ["codex/gpt-4.1", "codex"],
+    ["openai/gpt-4.1", "openclaw"],
+  ]) {
+    assert.equal(
+      resolveConfiguredHarnessId({
+        agents: { defaults: { model, models: { [model]: { agentRuntime: { id: runtime } } } } },
+      }),
+      runtime,
+    );
+  }
+  assert.equal(
+    resolveConfiguredHarnessId({
+      agents: { defaults: { model: "openai/gpt-4.1" } },
+      models: {
+        providers: {
+          openai: {
+            agentRuntime: { id: "openclaw" },
+            baseUrl: "https://provider.example.test/v1",
+          },
+        },
+      },
+    }),
+    "openclaw",
+  );
+  assert.equal(
+    resolveConfiguredHarnessId({
+      agents: {
+        defaults: {
+          model: { primary: "codex/gpt-4.1", fallbacks: [] },
+          models: { "codex/gpt-4.1": { agentRuntime: { id: "codex" } } },
+        },
+        list: [],
+      },
+    }),
+    "codex",
+  );
+  assert.equal(
+    resolveConfiguredHarnessId({
+      agents: {
+        defaults: {
+          model: "openai/gpt-4.1",
+          models: {
+            "openai/gpt-4.1": { agentRuntime: { id: "codex" } },
+            "openai/gpt-4.1-mini": { agentRuntime: { id: "codex" } },
+            "openai/gpt-4o": { agentRuntime: { id: "codex" } },
+          },
+        },
+        entries: { main: { default: true } },
+      },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: { appServer: { transport: "websocket" } },
+          },
+        },
+      },
+    }),
+    "codex",
+  );
+  assert.equal(
+    resolveConfiguredHarnessId({
+      agents: {
+        defaults: {
+          model: "openai/gpt-4.1",
+          models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+        },
+        entries: {
+          primary: {
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            agentRuntime: { id: "openclaw" },
+            models: [{ id: "gpt-4.1", agentRuntime: { id: "openclaw" } }],
+          },
+        },
+      },
+    }),
+    "openclaw",
+  );
+  assert.equal(
+    resolveConfiguredHarnessId({
+      agents: {
+        defaults: { models: { "codex/gpt-4.1": { agentRuntime: { id: "codex" } } } },
+        entries: { primary: { model: "codex/gpt-4.1" } },
+      },
+    }),
+    "codex",
+  );
+});
+
+test("an unambiguous built-in model defaults to embedded OpenClaw", () => {
+  assert.equal(resolveConfiguredHarnessId({}), "openclaw");
+  assert.equal(
+    resolveConfiguredHarnessId({ agents: { defaults: { model: "anthropic/claude" } } }),
+    "openclaw",
+  );
+});
+
+test("ambiguous and plugin-routed models require supported explicit native policy", () => {
+  for (const configuration of [
+    { agents: { defaults: { model: "openai/gpt-4.1" } } },
+    { agents: { defaults: { model: "codex/gpt-4.1" } } },
+    {
+      agents: { defaults: { model: "openai/gpt-4.1", agentRuntime: { id: "openclaw" } } },
+    },
+    {
+      agents: { defaults: { model: "anthropic/claude" } },
+      models: { providers: { anthropic: { baseUrl: "https://provider.example.test/v1" } } },
+    },
+    {
+      agents: { defaults: { model: "custom/plugin-model" } },
+      plugins: { entries: { custom: { enabled: true } } },
+    },
+    {
+      agents: {
+        defaults: {
+          model: "openai/gpt-4.1",
+          models: { "openai/gpt-4.1": { agentRuntime: { id: "unsupported" } } },
+        },
+      },
+    },
+  ]) {
+    assert.throws(() => resolveConfiguredHarnessId(configuration), ScopeViolationError);
+  }
+});
+
+test("one installation admits embedded and dedicated revisions without rewriting historical placement", async () => {
+  const { agent, configuration, controller, namespace } = await fixture();
+  const embedded = await controller.deployAgent(
+    administrator,
+    { namespaceId: namespace.id, agentId: agent.id },
+    resolveApprovedDevelopmentHarness,
+  );
+  const codexConfiguration = await controller.createConfiguration(administrator, {
+    namespaceId: namespace.id,
+    kind: "agent",
+    values: {
+      agents: {
+        defaults: {
+          model: { primary: "codex/gpt-4.1" },
+          models: { "codex/gpt-4.1": { agentRuntime: { id: "codex" } } },
+        },
+      },
+    },
+  });
+  const dedicatedAgent = await controller.createAgent(administrator, {
+    namespaceId: namespace.id,
+    name: "Dedicated configuration conformance agent",
+    configurationId: codexConfiguration.id,
+    executionMode: "dedicated",
+  });
+  const dedicatedNeighbor = await controller.deployAgent(
+    administrator,
+    { namespaceId: namespace.id, agentId: dedicatedAgent.id },
+    resolveApprovedDevelopmentHarness,
+  );
+  assert.deepEqual(dedicatedNeighbor.harness, {
+    id: "codex",
+    version: "1.0.0",
+    mode: "dedicated",
+  });
+  const updated = await controller.updateAgent(administrator, {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: codexConfiguration.id,
+    executionMode: "dedicated",
+  });
+  assert.equal(updated.executionMode, "dedicated");
+
+  const dedicated = await controller.deployAgent(
+    administrator,
+    { namespaceId: namespace.id, agentId: agent.id },
+    resolveApprovedDevelopmentHarness,
+  );
+  assert.deepEqual(embedded.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
+  assert.deepEqual(dedicated.harness, { id: "codex", version: "1.0.0", mode: "dedicated" });
+  assert.equal(embedded.configurationId, configuration.id);
+  assert.equal(dedicated.configurationId, codexConfiguration.id);
+
+  // Omitting placement during a later edit cannot silently reset the explicit dedicated choice.
+  const preserved = await controller.updateAgent(administrator, {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: codexConfiguration.id,
+  });
+  assert.equal(preserved.executionMode, "dedicated");
+  assert.equal(embedded.harness.mode, "embedded");
+});
+
+test("actual OCC admission accepts an official OpenAI Codex model selection", async () => {
+  const { controller, namespace } = await fixture();
+  const values = {
+    agents: {
+      defaults: {
+        model: "openai/gpt-4.1",
+        models: {
+          "openai/gpt-4.1": { agentRuntime: { id: "codex" } },
+          "openai/gpt-4.1-mini": { agentRuntime: { id: "codex" } },
+          "openai/gpt-4.1": { agentRuntime: { id: "codex" } },
+        },
+      },
+      entries: { main: { default: true } },
+    },
+    channels: { slack: { enabled: true, allowBots: false } },
+    plugins: {
+      entries: {
+        codex: {
+          enabled: true,
+          config: { appServer: { transport: "websocket" } },
+        },
+      },
+    },
+  };
+  const configuration = await controller.createConfiguration(administrator, {
+    namespaceId: namespace.id,
+    kind: "agent",
+    values,
+  });
+  const dedicated = await controller.createAgent(administrator, {
+    namespaceId: namespace.id,
+    name: "OpenAI Codex Runtime",
+    configurationId: configuration.id,
+    executionMode: "dedicated",
+  });
+
+  const admitted = await controller.deployAgent(
+    administrator,
+    { namespaceId: namespace.id, agentId: dedicated.id },
+    resolveApprovedProductionHarness,
+  );
+
+  assert.deepEqual(admitted.configuration, values);
+  assert.deepEqual(admitted.harness, { id: "codex", version: "1.0.0", mode: "dedicated" });
+  assert.equal(admitted.compute.id, "configuration-occ-compute");
+});
+
+test("OCC rejects alternate selectable runtimes and unsupported Codex providers before admitting work", async () => {
+  const scenarios = [
+    {
+      name: "embedded OpenClaw cannot fall back to dedicated Codex",
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-4.1", fallbacks: ["codex/gpt-4.1"] },
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+      },
+    },
+    {
+      name: "dedicated Codex cannot fall back to embedded OpenClaw",
+      executionMode: "dedicated",
+      values: {
+        agents: {
+          defaults: {
+            model: { primary: "codex/gpt-4.1", fallbacks: ["openai/gpt-4.1"] },
+            models: { "codex/gpt-4.1": { agentRuntime: { id: "codex" } } },
+          },
+        },
+      },
+    },
+    {
+      name: "agent lists cannot introduce a separate dedicated runtime",
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4.1",
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+          },
+          list: [{ id: "alternate", model: "codex/gpt-4.1" }],
+        },
+      },
+    },
+    {
+      name: "the selectable model catalog cannot offer a conflicting runtime",
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4.1",
+            models: {
+              "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } },
+              "codex/gpt-4.1": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "per-agent primary model fallbacks cannot select dedicated Codex",
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4.1",
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+          },
+          entries: {
+            primary: {
+              model: { primary: "openai/gpt-4.1", fallbacks: ["codex/gpt-4.1"] },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "per-agent selectable models cannot offer a conflicting runtime",
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4.1",
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+          },
+          entries: {
+            primary: {
+              models: {
+                "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } },
+                "codex/gpt-4.1": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "provider model catalogs cannot expose alternate runtime overrides",
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4.1",
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [
+                { id: "gpt-4.1", agentRuntime: { id: "openclaw" } },
+                { id: "gpt-5.6-luna", agentRuntime: { id: "codex" } },
+              ],
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "selected model policy cannot mask a conflicting provider runtime",
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4.1",
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        models: { providers: { openai: { agentRuntime: { id: "codex" } } } },
+      },
+    },
+    {
+      name: "selected model policy cannot mask a conflicting provider-model runtime",
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4.1",
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-4.1", agentRuntime: { id: "codex" } }] },
+          },
+        },
+      },
+    },
+    {
+      name: "per-agent model policy cannot mask a conflicting default runtime",
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4.1",
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+          },
+          entries: {
+            primary: {
+              models: { "openai/gpt-4.1": { agentRuntime: { id: "codex" } } },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "dedicated Codex cannot use the OpenAI gateway provider",
+      executionMode: "dedicated",
+      values: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-4.1",
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "codex" } } },
+          },
+        },
+      },
+    },
+  ];
+
+  for (const { name, executionMode, values } of scenarios) {
+    const { agent, controller, namespace } = await fixture();
+    const configuration = await controller.createConfiguration(administrator, {
+      namespaceId: namespace.id,
+      kind: "agent",
+      values,
+    });
+    await controller.updateAgent(administrator, {
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: configuration.id,
+      executionMode,
+    });
+    const operations = controller.pendingOperations();
+
+    // Admission must fail before creating an immutable revision or enqueuing runtime work.
+    await assert.rejects(
+      controller.deployAgent(
+        administrator,
+        { namespaceId: namespace.id, agentId: agent.id },
+        resolveApprovedDevelopmentHarness,
+      ),
+      ScopeViolationError,
+      name,
+    );
+    assert.deepEqual(
+      await controller.listRevisions(administrator, namespace.id, agent.id),
+      [],
+      name,
+    );
+    assert.deepEqual(controller.pendingOperations(), operations, name);
+  }
+});
+
+test("Harness admission rejects conflicting selections, mode mismatches, and unapproved routes", async () => {
+  const { agent, controller, namespace } = await fixture();
+  const codexConfiguration = await controller.createConfiguration(administrator, {
+    namespaceId: namespace.id,
+    kind: "agent",
+    values: {
+      agents: {
+        defaults: {
+          model: "codex/gpt-4.1",
+          models: { "codex/gpt-4.1": { agentRuntime: { id: "codex" } } },
+        },
+      },
+    },
+  });
+  await controller.updateAgent(administrator, {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: codexConfiguration.id,
+  });
+
+  // An explicit Codex selection cannot run in an embedded Agent or use OpenClaw's approval.
+  await assert.rejects(
+    controller.deployAgent(
+      administrator,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    ),
+    DependencyUnavailableError,
+  );
+  await assert.rejects(
+    controller.deployAgent(
+      administrator,
+      { namespaceId: namespace.id, agentId: agent.id },
+      () => DEVELOPMENT_HARNESS_DESCRIPTOR,
+    ),
+    ScopeViolationError,
+  );
+
+  // Production accepts the same explicitly approved embedded OpenClaw placement as development.
+  const openclawConfiguration = await controller.createConfiguration(administrator, {
+    namespaceId: namespace.id,
+    kind: "agent",
+    values: {},
+  });
+  await controller.updateAgent(administrator, {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: openclawConfiguration.id,
+  });
+  assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), []);
+  const embedded = await controller.deployAgent(
+    administrator,
+    { namespaceId: namespace.id, agentId: agent.id },
+    resolveApprovedProductionHarness,
+  );
+  assert.deepEqual(embedded.harness, { ...DEVELOPMENT_HARNESS_DESCRIPTOR, mode: "embedded" });
+  assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), [
+    embedded,
+  ]);
+
+  assert.throws(
+    () =>
+      resolveConfiguredHarnessId({
+        agents: {
+          defaults: {
+            model: "codex/gpt-4.1",
+            models: { "codex/gpt-4.1": { agentRuntime: { id: "codex" } } },
+          },
+          entries: { secondary: { model: "anthropic/claude" } },
+        },
+      }),
+    ScopeViolationError,
+  );
+  assert.throws(
+    () =>
+      resolveConfiguredHarnessId({
+        agents: {
+          defaults: {
+            model: "openai/gpt-4.1",
+            models: { "openai/gpt-4.1": { agentRuntime: "openclaw" } },
+          },
+        },
+      }),
+    ScopeViolationError,
+  );
+});
+
+test("Agent deployment separately authorizes its exact Configuration", async () => {
+  const { agent, controller, namespace } = await fixture();
+
+  // An Agent deploy grant does not imply authority to read its referenced Configuration.
+  await assert.rejects(
+    controller.deployAgent(
+      deployOnly,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    ),
+    AuthorizationDeniedError,
+  );
+  assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), []);
+});
+
+test("Namespace deletion refuses an otherwise agent-free Namespace with Configuration", async () => {
+  const { controller } = await fixture();
+  const namespace = await controller.createNamespace(administrator, {
+    name: "Configuration-only tenant",
+  });
+  await controller.createConfiguration(administrator, {
+    namespaceId: namespace.id,
+    kind: "agent",
+    values: { model: "unattached-model" },
+  });
+
+  // Namespace ownership must remain intact until every ConfigMap-backed resource is removed.
+  await assert.rejects(
+    controller.deleteNamespace(administrator, namespace.id),
+    NamespaceNotEmptyError,
+  );
+  assert.equal((await controller.getNamespace(administrator, namespace.id)).status, "provisioning");
+});

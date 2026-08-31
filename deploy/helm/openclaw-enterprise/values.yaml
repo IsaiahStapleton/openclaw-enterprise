@@ -1,0 +1,60 @@
+images:
+  controller: ""
+
+installation:
+  name: openclaw-enterprise
+  secretName: occ-installation-startup
+  key: installation.yaml
+
+auth:
+  baseUrl: ""
+  secretName: occ-auth
+  secretKey: secret
+
+bootstrap:
+  adminEmail: ""
+  password:
+    claimName: ""
+    mountPath: /var/lib/openclaw/bootstrap
+    fileName: initial-admin-password
+
+integrations:
+  chatgpt:
+    enabled: false
+    secretName: occ-chatgpt-admin
+    key: admin-key
+    providerCidr: ""
+
+database:
+  secretName: occ-database
+  appUrlKey: application-url
+  migrationUrlKey: migration-url
+  cidr: ""
+  port: 5432
+
+api:
+  port: 8080
+  clients: []
+
+cluster:
+  cidr: ""
+  port: 443
+
+dns:
+  namespace: kube-system
+  podLabels:
+    k8s-app: kube-dns
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+worker:
+  pollIntervalMs: 250
+  leaseDurationMs: 5000
+  maxAttempts: 5
+  convergenceTimeoutMs: 900000

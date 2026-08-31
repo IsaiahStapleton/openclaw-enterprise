@@ -1,0 +1,124 @@
+{{- range $component := list "api" "worker" }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-enterprise-{{ $component }}
+  labels:
+    {{- include "openclaw.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $component }}
+  template:
+    metadata:
+      labels:
+        {{- include "openclaw.labels" (dict "root" $ "component" $component) | nindent 8 }}
+    spec:
+      serviceAccountName: openclaw-enterprise-{{ $component }}
+      automountServiceAccountToken: true
+      securityContext:
+        {{- include "openclaw.podSecurity" $ | nindent 8 }}
+      volumes:
+        - name: installation-startup
+          secret:
+            secretName: {{ $.Values.installation.secretName }}
+            items:
+              - key: {{ $.Values.installation.key }}
+                path: installation.yaml
+        {{- if eq $component "api" }}
+        {{- if $.Values.integrations.chatgpt.enabled }}
+        {{- $chatgpt := $.Values.integrations.chatgpt }}
+        {{- if or (not $chatgpt.secretName) (not $chatgpt.key) }}
+        {{- fail "integrations.chatgpt requires a dedicated admin Secret name and key" }}
+        {{- end }}
+        {{- if or (eq $chatgpt.secretName $.Values.installation.secretName) (eq $chatgpt.secretName $.Values.database.secretName) (eq $chatgpt.secretName $.Values.auth.secretName) }}
+        {{- fail "integrations.chatgpt admin credentials must use a dedicated Secret" }}
+        {{- end }}
+        - name: chatgpt-admin
+          secret:
+            secretName: {{ $chatgpt.secretName }}
+            items:
+              - key: {{ $chatgpt.key }}
+                path: admin-key
+        {{- end }}
+        {{- else }}
+        - name: worker-readiness
+          emptyDir:
+            sizeLimit: 1Mi
+        {{- end }}
+      containers:
+        - name: {{ $component }}
+          image: {{ $.Values.images.controller | quote }}
+          args:
+            - apps/controller/src/{{ ternary "server" "worker" (eq $component "api") }}.mjs
+          securityContext:
+            {{- include "openclaw.containerSecurity" $ | nindent 12 }}
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: OCC_CONFIG_PATH
+              value: /etc/openclaw/installation/installation.yaml
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_DATABASE_URL" "secretName" $.Values.database.secretName "key" $.Values.database.appUrlKey) | nindent 12 }}
+            {{- if eq $component "api" }}
+            - name: OCC_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: OCC_PORT
+              value: {{ $.Values.api.port | quote }}
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_SECRET" "secretName" $.Values.auth.secretName "key" $.Values.auth.secretKey) | nindent 12 }}
+            - name: OCC_AUTH_BASE_URL
+              value: {{ $.Values.auth.baseUrl | quote }}
+            {{- else }}
+            - name: OCC_WORKER_READINESS_PATH
+              value: /var/run/openclaw/ready
+            - name: OCC_WORKER_POLL_INTERVAL_MS
+              value: {{ $.Values.worker.pollIntervalMs | quote }}
+            - name: OCC_WORKER_LEASE_DURATION_MS
+              value: {{ $.Values.worker.leaseDurationMs | quote }}
+            - name: OCC_WORKER_MAX_ATTEMPTS
+              value: {{ $.Values.worker.maxAttempts | quote }}
+            - name: OCC_WORKER_CONVERGENCE_TIMEOUT_MS
+              value: {{ $.Values.worker.convergenceTimeoutMs | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: installation-startup
+              mountPath: /etc/openclaw/installation
+              readOnly: true
+            {{- if eq $component "api" }}
+            {{- if $.Values.integrations.chatgpt.enabled }}
+            - name: chatgpt-admin
+              mountPath: /etc/openclaw/chatgpt
+              readOnly: true
+            {{- end }}
+            {{- else }}
+            - name: worker-readiness
+              mountPath: /var/run/openclaw
+            {{- end }}
+          {{- if eq $component "api" }}
+          ports:
+            - name: http
+              containerPort: {{ $.Values.api.port }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          {{- else }}
+          readinessProbe:
+            exec:
+              command: [node, scripts/production-healthcheck.mjs, worker, ready]
+          livenessProbe:
+            exec:
+              command: [node, scripts/production-healthcheck.mjs, worker]
+          {{- end }}
+{{- end }}

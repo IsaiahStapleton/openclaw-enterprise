@@ -1,0 +1,47 @@
+{
+  "name": "openclaw-enterprise",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc --build tsconfig.json --pretty false",
+    "typecheck": "tsc --build tsconfig.json --pretty false",
+    "format:fix": "prettier --write \"{apps,packages,scripts,tests}/**/*.{ts,mjs,json}\" \"*.{json,yaml,yml,md}\" \"docs/**/*.md\" \"!docs/reference/api.md\"",
+    "format:check": "prettier --check \"{apps,packages,scripts,tests}/**/*.{ts,mjs,json}\" \"*.{json,yaml,yml,md}\" \"docs/**/*.md\" \"!docs/reference/api.md\"",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "prepare": "node scripts/install-git-hooks.mjs --if-git-present",
+    "check:workspace": "node scripts/verify-workspace-boundary.mjs",
+    "openapi:generate": "node scripts/generate-occ-openapi.mjs",
+    "openapi:check": "node scripts/generate-occ-openapi.mjs --check",
+    "start:controller": "node apps/controller/src/server.mjs",
+    "start:controller:production": "NODE_ENV=production node apps/controller/src/server.mjs",
+    "start:worker": "node apps/controller/src/worker.mjs",
+    "start:worker:production": "NODE_ENV=production node apps/controller/src/worker.mjs",
+    "db:bootstrap:production": "node scripts/bootstrap-production.mjs",
+    "db:migrate:production": "node scripts/migrate-production.mjs",
+    "db:up": "docker compose -f compose.postgres.yaml up -d --wait",
+    "db:down": "docker compose -f compose.postgres.yaml down",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down",
+    "docker:test": "node --test tests/integration/docker-compute-real.test.mjs",
+    "test": "node --test tests/conformance/*.test.mjs tests/integration/*.test.mjs",
+    "test:conformance": "node --test tests/conformance/*.test.mjs",
+    "test:integration": "node --test tests/integration/*.test.mjs",
+    "test:postgres": "node --test --test-concurrency=1 tests/integration/postgres-*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@types/pg": "8.21.0",
+    "drizzle-kit": "0.31.10",
+    "pg": "8.23.0",
+    "prettier": "3.9.4",
+    "typescript": "6.0.3"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@fixture/test-compute-driver",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./compiled/index.js",
+      "require": "./compiled/index.cjs"
+    }
+  },
+  "files": [
+    "compiled"
+  ]
+}

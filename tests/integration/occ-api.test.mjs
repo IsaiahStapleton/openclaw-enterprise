@@ -1,0 +1,1832 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { createServer } from "node:net";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { AuthAccountRoleNotFoundError } from "../../apps/controller/src/auth/index.ts";
+import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
+import { createControllerApp, createFastifyApp } from "../../apps/controller/src/index.ts";
+import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
+import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
+import {
+  authenticatedHeaders,
+  createTestAuthPrincipal,
+  signInWithEmailPassword,
+  signInToControllerApp,
+} from "../helpers/auth-session.mjs";
+import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+
+const repository = fileURLToPath(new URL("../..", import.meta.url));
+const entrypoint = fileURLToPath(new URL("../../apps/controller/src/server.mjs", import.meta.url));
+const developmentEmail = "admin@openclaw.local";
+const developmentPassword = "openclaw-development-password";
+const uuidV4 = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const identifier = (prefix) => new RegExp(`^${prefix}_${uuidV4}$`);
+const missingRevisionId = "rev_3dd29693-ce8b-4b4c-97c4-14b4c68c6e9c";
+
+async function availableLoopbackPort() {
+  const server = createServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  assert.notEqual(address, null);
+  await new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return address.port;
+}
+
+function childEnvironment(port, overrides = {}) {
+  const environment = {
+    ...process.env,
+    NODE_ENV: "development",
+    OCC_HOST: "127.0.0.1",
+    OCC_PORT: String(port),
+    OCC_AUTH_BASE_URL: `http://127.0.0.1:${port}`,
+    OCC_AUTH_SECRET: "openclaw-development-auth-secret-minimum-32-bytes",
+    OPENCLAW_DEV_EMAIL: developmentEmail,
+    OPENCLAW_DEV_PASSWORD: developmentPassword,
+    ...overrides,
+  };
+
+  for (const [key, value] of Object.entries(environment)) {
+    if (value === undefined) delete environment[key];
+  }
+
+  return environment;
+}
+
+function startChild(port, overrides = {}) {
+  const child = spawn(process.execPath, [entrypoint], {
+    cwd: repository,
+    env: childEnvironment(port, overrides),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    output += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    output += chunk;
+  });
+
+  return { child, output: () => output };
+}
+
+async function stopChild(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+
+  const exited = once(child, "exit");
+  child.kill("SIGTERM");
+  const forced = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }, 1_000);
+  forced.unref();
+
+  try {
+    await exited;
+  } finally {
+    clearTimeout(forced);
+  }
+}
+
+async function assertUnsafeStartupRejected() {
+  const configuredDatabase = { OCC_DATABASE_URL: "postgresql://127.0.0.1:1/openclaw" };
+  for (const [description, overrides] of [
+    ["missing development database", {}],
+    ["production mode", { ...configuredDatabase, NODE_ENV: "production", OCC_HOST: "192.0.2.10" }],
+    ["nonloopback bind", { ...configuredDatabase, OCC_HOST: "192.0.2.10" }],
+    ["unsafe container bind", { ...configuredDatabase, OCC_HOST: "0.0.0.0" }],
+    ["low-entropy auth secret", { ...configuredDatabase, OCC_AUTH_SECRET: "insecure" }],
+    ["invalid auth base URL", { ...configuredDatabase, OCC_AUTH_BASE_URL: "not-a-url" }],
+    [
+      "nonloopback auth base URL",
+      { ...configuredDatabase, OCC_AUTH_BASE_URL: "http://192.0.2.10:3000" },
+    ],
+    ["missing development email", { ...configuredDatabase, OPENCLAW_DEV_EMAIL: "" }],
+    ["missing development password", { ...configuredDatabase, OPENCLAW_DEV_PASSWORD: "" }],
+  ]) {
+    const port = await availableLoopbackPort();
+    const processState = startChild(port, overrides);
+    let deadline;
+
+    try {
+      const result = await Promise.race([
+        once(processState.child, "exit"),
+        new Promise((_, reject) => {
+          deadline = setTimeout(
+            () => reject(new Error(`${description} unexpectedly started listening`)),
+            5_000,
+          );
+        }),
+      ]);
+      const [exitCode] = result;
+      assert.notEqual(exitCode, 0, `${description} must fail closed:\n${processState.output()}`);
+    } finally {
+      clearTimeout(deadline);
+      await stopChild(processState.child);
+    }
+  }
+}
+
+async function request(url, method, path, options = {}) {
+  const headers = {
+    ...(options.identity === false ? {} : authenticatedHeaders(options.session)),
+    ...options.headers,
+  };
+  let body;
+
+  if (Object.hasOwn(options, "body")) {
+    body = JSON.stringify(options.body);
+    headers["content-type"] ??= "application/json";
+  } else if (Object.hasOwn(options, "rawBody")) {
+    body = options.rawBody;
+  }
+
+  const response = await fetch(`${url}${path}`, {
+    method,
+    headers,
+    ...(body === undefined ? {} : { body }),
+    signal: AbortSignal.timeout(5_000),
+  });
+  assert.match(response.headers.get("content-type") ?? "", /application\/json/i);
+  const payload = await response.json();
+  assert.match(payload.meta?.requestId ?? "", identifier("req"));
+  assert.equal(response.headers.get("x-request-id"), payload.meta.requestId);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+
+  if (response.ok) {
+    assert.deepEqual(Object.keys(payload).sort(), ["data", "meta"]);
+  } else {
+    assert.deepEqual(Object.keys(payload).sort(), ["error", "meta"]);
+    assert.equal(typeof payload.error.code, "string");
+    assert.ok(payload.error.code.length > 0);
+    assert.match(payload.error.code, /^[A-Z][A-Z_]*$/);
+    assert.equal(typeof payload.error.message, "string");
+    assert.ok(payload.error.message.length > 0);
+  }
+
+  return {
+    status: response.status,
+    headers: response.headers,
+    body: payload,
+    data: payload.data,
+  };
+}
+
+async function bootstrap(controller, name = "Enterprise development") {
+  const result = await controller.request("POST", "/installation/bootstrap", {
+    body: { name },
+  });
+  assert.equal(result.status, 201);
+  assert.equal(result.data.name, name);
+  assert.match(result.data.id, identifier("ins"));
+  assert.equal(Number.isNaN(Date.parse(result.data.createdAt)), false);
+  return result.data;
+}
+
+async function createNamespace(controller, name) {
+  const result = await controller.request("POST", "/namespaces", {
+    body: { name },
+  });
+  assert.equal(result.status, 201);
+  assert.equal(result.data.name, name);
+  assert.match(result.data.id, identifier("ns"));
+  assert.equal(result.data.status, "provisioning");
+  assert.equal(Object.hasOwn(result.data, "installationId"), false);
+  return result.data;
+}
+
+async function createConfiguration(controller, namespaceId, values = {}) {
+  const result = await controller.request("POST", `/namespaces/${namespaceId}/configurations`, {
+    body: { kind: "agent", values },
+  });
+  assert.equal(result.status, 201);
+  assert.match(result.data.id, identifier("cfg"));
+  assert.equal(result.data.namespaceId, namespaceId);
+  assert.deepEqual(result.data.values, values);
+  return result.data;
+}
+
+async function createServiceAccount(controller, namespaceId, name) {
+  const result = await controller.request("POST", `/namespaces/${namespaceId}/service-accounts`, {
+    body: { name },
+  });
+  assert.equal(result.status, 201);
+  assert.match(result.data.id, identifier("sa"));
+  assert.deepEqual(result.data, {
+    id: result.data.id,
+    namespaceId,
+    name,
+  });
+  return result.data;
+}
+
+async function createAgent(controller, namespaceId, name, values = {}) {
+  const configuration = await createConfiguration(controller, namespaceId, values);
+  const result = await controller.request("POST", `/namespaces/${namespaceId}/agents`, {
+    body: { name, configurationId: configuration.id },
+  });
+  assert.equal(result.status, 201);
+  assert.equal(result.data.name, name);
+  assert.equal(result.data.namespaceId, namespaceId);
+  assert.match(result.data.id, identifier("agt"));
+  assert.equal(result.data.configurationId, configuration.id);
+  assert.equal(Object.hasOwn(result.data, "installationId"), false);
+  assert.equal(Object.hasOwn(result.data, "servicePrincipalId"), false);
+  return result.data;
+}
+
+async function createInjectedFixture(options = {}) {
+  const installationId = "ins_3033697e-6397-4cc6-9b04-8ec17af78cf1";
+  const authFixture = await createTestAuthPrincipal({
+    installationId,
+    email: `admin-${randomUUID()}@example.com`,
+    password: `generated-password-${randomUUID()}`,
+    name: "OCC API Administrator",
+  });
+  const principal = authFixture.seed.principal;
+  const state = {
+    identities: [principal],
+    groups: [],
+    memberships: [],
+    roles: authFixture.seed.roles.map((role) => ({
+      ...role,
+      permissions: [...role.permissions],
+    })),
+    bindings: [
+      {
+        id: "binding-admin",
+        subjectKind: "identity",
+        subjectId: principal.id,
+        roleId: authFixture.seed.roles[0].id,
+      },
+    ],
+    restrictions: [],
+  };
+  const iamDriver =
+    options.iamDriver ??
+    new NativeIAMDriver({ loadNativeIAMState: async () => state }, { id: "iam-integration" });
+  const computeCalls = { ensureNamespace: [], deleteNamespace: [] };
+  const computeDriver = {
+    id: "compute-integration",
+    capability: "compute",
+    implementation: "deterministic-test",
+    async ensureNamespace(namespace) {
+      computeCalls.ensureNamespace.push(namespace.id);
+      return {
+        namespaceId: namespace.id,
+        namespaceReady: true,
+      };
+    },
+    async deleteNamespace(namespace) {
+      computeCalls.deleteNamespace.push(namespace.id);
+      return {
+        namespaceId: namespace.id,
+        namespaceDeleted: true,
+      };
+    },
+    async prepareRevision(revision) {
+      return {
+        namespaceId: revision.namespaceId,
+        agentId: revision.agentId,
+        revisionId: revision.id,
+        ready: true,
+      };
+    },
+    async retireRevision() {},
+  };
+  const auditSink = options.auditSink ?? new InMemoryAuditSink();
+  const configurationDriver = createTestConfigurationDriver({ id: "configuration-integration" });
+  const sessionsByPrincipalId = new Map();
+  let controller;
+  let app;
+
+  async function installAuthSeed(seed, { auditEvent } = {}) {
+    const roleIds = new Set(state.roles.map((role) => role.id));
+    for (const binding of seed.bindings) {
+      if (!roleIds.has(binding.roleId)) throw new AuthAccountRoleNotFoundError(binding.roleId);
+    }
+    state.identities.push(seed.principal);
+    state.roles.push(...seed.roles);
+    state.bindings.push(...seed.bindings);
+    if (auditEvent !== undefined) await auditSink.append(auditEvent);
+  }
+
+  function createApp(identity = principal, createApplication = createControllerApp) {
+    const created = createApplication({
+      ...(controller
+        ? { controller }
+        : {
+            createController(installation) {
+              controller = new OpenClawController(installation, {
+                state: new InMemoryPlatformState({ auditSink }),
+                recordOperations: false,
+              });
+              return controller;
+            },
+          }),
+      iamDriver,
+      computeDriver,
+      configurationDriver,
+      resolveHarness: resolveApprovedDevelopmentHarness,
+      auditSink,
+      development: {
+        enabled: true,
+        installationId,
+      },
+      auth: authFixture.auth,
+      ...(options.provisionAuthAccount === undefined
+        ? {}
+        : {
+            provisionAuthAccount: (seed, auditEvent) =>
+              options.provisionAuthAccount(seed, {
+                installAuthSeed,
+                state,
+                auditEvent,
+              }),
+          }),
+    });
+    created.defaultSession = sessionsByPrincipalId.get(identity.id);
+    return created;
+  }
+
+  app = createApp();
+  sessionsByPrincipalId.set(principal.id, await signInToControllerApp(app, authFixture));
+  app.defaultSession = sessionsByPrincipalId.get(principal.id);
+
+  return {
+    app,
+    session: app.defaultSession,
+    authFixture,
+    auditSink,
+    computeCalls,
+    createApp,
+    async createAuthPrincipal(name) {
+      const email = `${name}-${randomUUID()}@example.com`;
+      const password = `generated-password-${randomUUID()}`;
+      const account = await authFixture.auth.createAccount({
+        email,
+        password,
+        name,
+      });
+      const seed = authFixture.auth.principalSeed(account);
+      sessionsByPrincipalId.set(
+        seed.principal.id,
+        await signInToControllerApp(app, { email, password }),
+      );
+      return {
+        principal: seed.principal,
+        session: sessionsByPrincipalId.get(seed.principal.id),
+      };
+    },
+    get iamDriver() {
+      return iamDriver;
+    },
+    installationId,
+    principal,
+    state,
+    installAuthSeed,
+    get controller() {
+      return controller;
+    },
+  };
+}
+
+async function configuredController() {
+  const fixture = await createInjectedFixture();
+  return {
+    fixture,
+    request: (method, pathname, options) => injectedRequest(fixture.app, method, pathname, options),
+  };
+}
+
+async function injectedRequest(app, method, pathname, options = {}) {
+  const headers = {
+    ...(options.identity === false
+      ? {}
+      : authenticatedHeaders(options.session ?? app.defaultSession)),
+    ...options.headers,
+  };
+  const hasBody = Object.hasOwn(options, "body");
+  const hasRawBody = Object.hasOwn(options, "rawBody");
+  if (hasBody || hasRawBody) headers["content-type"] ??= "application/json";
+  let payload;
+  if (hasRawBody) payload = options.rawBody;
+  else if (hasBody) payload = JSON.stringify(options.body);
+  const response = await app.fetch(
+    new Request(`http://127.0.0.1${pathname}`, {
+      method,
+      headers,
+      ...(payload === undefined ? {} : { body: payload }),
+    }),
+  );
+  const body = await response.json();
+  assert.match(body.meta?.requestId ?? "", identifier("req"));
+  return { status: response.status, headers: response.headers, body, data: body.data };
+}
+
+async function createInjectedConfiguration(fixture, namespaceId, values = {}) {
+  const result = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespaceId}/configurations`,
+    { body: { kind: "agent", values } },
+  );
+  assert.equal(result.status, 201);
+  return result.data;
+}
+
+test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource routes", async () => {
+  const controller = await configuredController();
+  const installation = await bootstrap(controller);
+
+  const singleton = await controller.request("GET", "/installation");
+  assert.equal(singleton.status, 200);
+  assert.deepEqual(singleton.data, installation);
+
+  const namespace = await createNamespace(controller, "research");
+  assert.equal(Object.hasOwn(namespace, "installationId"), false);
+
+  const namespaces = await controller.request("GET", "/namespaces");
+  assert.equal(namespaces.status, 200);
+  assert.deepEqual(namespaces.data, [namespace]);
+
+  const namespaceDetail = await controller.request("GET", `/namespaces/${namespace.id}`);
+  assert.equal(namespaceDetail.status, 200);
+  assert.deepEqual(namespaceDetail.data, namespace);
+
+  const agent = await createAgent(controller, namespace.id, "research-agent");
+  assert.equal(Object.hasOwn(agent, "installationId"), false);
+
+  const agents = await controller.request("GET", `/namespaces/${namespace.id}/agents`);
+  assert.equal(agents.status, 200);
+  assert.deepEqual(agents.data, [agent]);
+
+  const agentDetail = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(agentDetail.status, 200);
+  assert.deepEqual(agentDetail.data, agent);
+
+  const deployment = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+  );
+  assert.equal(deployment.status, 409);
+  assert.equal(deployment.body.error.code, "NAMESPACE_NOT_READY");
+
+  const secondDeployment = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+  );
+  assert.equal(secondDeployment.status, 409);
+  assert.equal(secondDeployment.body.error.code, "NAMESPACE_NOT_READY");
+
+  const revisions = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/revisions`,
+  );
+  assert.equal(revisions.status, 200);
+  assert.deepEqual(revisions.data, []);
+
+  const revisionDetail = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/revisions/${missingRevisionId}`,
+  );
+  assert.equal(revisionDetail.status, 404);
+  assert.equal(revisionDetail.body.error.code, "NOT_FOUND");
+
+  const secondBootstrap = await controller.request("POST", "/installation/bootstrap", {
+    body: { name: "another installation" },
+  });
+  assert.equal(secondBootstrap.status, 409);
+  assert.equal(secondBootstrap.body.error.code, "INSTALLATION_EXISTS");
+
+  const installationCollection = await controller.request("POST", "/installations", {
+    body: { name: "forbidden collection" },
+  });
+  assert.equal(installationCollection.status, 404);
+
+  const auditEndpoint = await controller.request("GET", "/audit");
+  assert.equal(auditEndpoint.status, 404);
+
+  const unchanged = await controller.request("GET", "/installation");
+  assert.deepEqual(unchanged.data, installation);
+});
+
+test("native ServiceAccounts bind exact credential references and freeze Agent revision snapshots", async () => {
+  const controller = await configuredController();
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "service-account-lifecycle");
+  const account = await createServiceAccount(controller, namespace.id, "model-provider");
+  const accountPath = `/namespaces/${namespace.id}/service-accounts/${account.id}`;
+
+  const detail = await controller.request("GET", accountPath);
+  assert.deepEqual(detail.data, account);
+
+  const configuration = await createConfiguration(controller, namespace.id);
+  const agentResult = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "service-account-agent",
+      configurationId: configuration.id,
+      serviceAccountId: account.id,
+    },
+  });
+  assert.equal(agentResult.status, 201);
+  assert.equal(agentResult.data.serviceAccountId, account.id);
+  const agent = agentResult.data;
+  const deploymentPath = `/namespaces/${namespace.id}/agents/${agent.id}/deploy`;
+
+  // A ready Namespace is insufficient: associated accounts without credentials cannot admit revisions.
+  await controller.fixture.controller.handleNamespaceLifecycle(
+    controller.fixture.principal.id,
+    namespace.id,
+    "ready",
+  );
+  const missingCredential = await controller.request("POST", deploymentPath);
+  assert.equal(missingCredential.status, 409);
+  assert.equal(missingCredential.body.error.code, "RESOURCE_CONFLICT");
+
+  const initialCredential = {
+    kind: "api_key",
+    secretRef: { name: "namespace-provider-source", key: "provider-api-key" },
+  };
+  const assigned = await controller.request("PATCH", `${accountPath}/credential`, {
+    body: initialCredential,
+  });
+  assert.equal(assigned.status, 200);
+  assert.deepEqual(assigned.data.credential, initialCredential);
+
+  const initialRevision = await controller.request("POST", deploymentPath);
+  assert.equal(initialRevision.status, 202);
+  assert.deepEqual(initialRevision.data.serviceAccount, {
+    id: account.id,
+    credential: initialCredential,
+  });
+
+  // OAuth references are representable, but no refresh or OAuth execution exists yet.
+  const oauthCredential = {
+    kind: "oauth_access_token",
+    secretRef: { name: "namespace-oauth-source", key: "access-token" },
+  };
+  const oauthUpdate = await controller.request("PATCH", `${accountPath}/credential`, {
+    body: oauthCredential,
+  });
+  assert.equal(oauthUpdate.status, 200);
+  const oauthDeployment = await controller.request("POST", deploymentPath);
+  assert.equal(oauthDeployment.status, 409);
+  assert.equal(oauthDeployment.body.error.code, "RESOURCE_CONFLICT");
+
+  const replacementCredential = {
+    kind: "api_key",
+    secretRef: { name: "namespace-provider-rotated", key: "rotated-api-key" },
+  };
+  const replaced = await controller.request("PATCH", `${accountPath}/credential`, {
+    body: replacementCredential,
+  });
+  assert.equal(replaced.status, 200);
+  const replacementRevision = await controller.request("POST", deploymentPath);
+  assert.equal(replacementRevision.status, 202);
+  assert.deepEqual(replacementRevision.data.serviceAccount.credential, replacementCredential);
+
+  // Credential edits affect future admissions only; a historical revision keeps its original reference.
+  const historical = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/revisions/${initialRevision.data.id}`,
+  );
+  assert.deepEqual(historical.data.serviceAccount.credential, initialCredential);
+
+  const boundDeletion = await controller.request("DELETE", accountPath);
+  assert.equal(boundDeletion.status, 409);
+  assert.equal(boundDeletion.body.error.code, "RESOURCE_CONFLICT");
+
+  const detached = await controller.request(
+    "PATCH",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+    {
+      body: { configurationId: configuration.id, serviceAccountId: null },
+    },
+  );
+  assert.equal(detached.status, 200);
+  assert.equal(Object.hasOwn(detached.data, "serviceAccountId"), false);
+
+  // Successful DELETE is intentionally bodyless, unlike canonical JSON resource responses.
+  const deleted = await controller.fixture.app.fetch(
+    new Request(`http://127.0.0.1${accountPath}`, {
+      method: "DELETE",
+      headers: authenticatedHeaders(controller.fixture.session),
+    }),
+  );
+  assert.equal(deleted.status, 204);
+  const missingAccount = await controller.request("GET", accountPath);
+  assert.equal(missingAccount.status, 404);
+
+  const accountEvents = controller.fixture.auditSink.events.filter(
+    (event) => event.kind === "mutation" && event.resource.kind === "service_account",
+  );
+  assert.deepEqual(
+    new Set(accountEvents.map(({ action }) => action)),
+    new Set([
+      "openclaw.service_accounts.create",
+      "openclaw.service_accounts.update",
+      "openclaw.service_accounts.delete",
+    ]),
+  );
+  assert.deepEqual(accountEvents[0].authorization.resource, {
+    kind: "service_account",
+    id: namespace.id,
+    namespaceId: namespace.id,
+  });
+  assert.deepEqual(accountEvents.at(-1).authorization.resource, {
+    kind: "service_account",
+    id: account.id,
+    namespaceId: namespace.id,
+  });
+});
+
+test("native ServiceAccounts reject invalid references and enforce exact Namespace-scoped access", async () => {
+  const controller = await configuredController();
+  await bootstrap(controller);
+  const namespaceA = await createNamespace(controller, "service-account-namespace-a");
+  const namespaceB = await createNamespace(controller, "service-account-namespace-b");
+  const accountA = await createServiceAccount(controller, namespaceA.id, "account-a");
+  const accountB = await createServiceAccount(controller, namespaceA.id, "account-b");
+  const exactAccountPath = `/namespaces/${namespaceA.id}/service-accounts/${accountA.id}`;
+
+  const duplicate = await controller.request(
+    "POST",
+    `/namespaces/${namespaceA.id}/service-accounts`,
+    { body: { name: "account-a" } },
+  );
+  assert.equal(duplicate.status, 409);
+
+  // Account ownership participates in Namespace emptiness even before any Agent is created.
+  const occupiedNamespace = await controller.request("DELETE", `/namespaces/${namespaceA.id}`);
+  assert.equal(occupiedNamespace.status, 409);
+  assert.equal(occupiedNamespace.body.error.code, "NAMESPACE_NOT_EMPTY");
+
+  for (const invalid of [
+    { name: "unrecognized-field", implementation: "native" },
+    { name: "cross-namespace", namespaceId: namespaceB.id },
+  ]) {
+    const rejected = await controller.request(
+      "POST",
+      `/namespaces/${namespaceA.id}/service-accounts`,
+      { body: invalid },
+    );
+    assert.equal(rejected.status, 400);
+  }
+
+  for (const invalid of [
+    ...[".", ".."].map((key) => ({ kind: "api_key", secretRef: { name: "valid-source", key } })),
+    { kind: "api_key", secretRef: { name: "valid-source", key: "credential", namespace: "other" } },
+    { kind: "provider_token", secretRef: { name: "valid-source", key: "credential" } },
+  ]) {
+    const rejected = await controller.request("PATCH", `${exactAccountPath}/credential`, {
+      body: invalid,
+    });
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+  }
+
+  const credential = { kind: "api_key", secretRef: { name: "account-a-source", key: "api-key" } };
+  const assigned = await controller.request("PATCH", `${exactAccountPath}/credential`, {
+    body: credential,
+  });
+  assert.equal(assigned.status, 200);
+
+  // A real account ID never becomes accessible by substituting a sibling Namespace in the URL.
+  for (const [method, suffix, options] of [
+    ["GET", ""],
+    ["PATCH", "/credential", { body: credential }],
+    ["DELETE", ""],
+  ]) {
+    const crossNamespace = await controller.request(
+      method,
+      `/namespaces/${namespaceB.id}/service-accounts/${accountA.id}${suffix}`,
+      options,
+    );
+    assert.equal(crossNamespace.status, 404);
+  }
+
+  const configurationB = await createConfiguration(controller, namespaceB.id);
+  const configurationA = await createConfiguration(controller, namespaceA.id);
+  const crossNamespaceAssociation = await controller.request(
+    "POST",
+    `/namespaces/${namespaceB.id}/agents`,
+    {
+      body: {
+        name: "cross-namespace-agent",
+        configurationId: configurationB.id,
+        serviceAccountId: accountA.id,
+      },
+    },
+  );
+  assert.equal(crossNamespaceAssociation.status, 404);
+
+  // Namespace-wide Agent authority never substitutes for an exact ServiceAccount binding.
+  controller.fixture.state.roles.push(
+    {
+      id: "role-service-account-namespace-reader",
+      namespaceId: namespaceA.id,
+      permissions: [
+        { action: "read", resourceKind: "namespace" },
+        { action: "read", resourceKind: "configuration" },
+        { action: "create", resourceKind: "agent" },
+        { action: "read", resourceKind: "agent" },
+        { action: "update", resourceKind: "agent" },
+      ],
+    },
+    {
+      id: "role-exact-service-account-reader",
+      namespaceId: namespaceA.id,
+      permissions: [{ action: "read", resourceKind: "service_account" }],
+    },
+  );
+  async function exactReader(suffix, accountId) {
+    const { principal: identity } = await controller.fixture.createAuthPrincipal(suffix);
+    controller.fixture.state.identities.push(identity);
+    controller.fixture.state.bindings.push(
+      ...["namespace", "account"].map((kind) => ({
+        id: `binding-${suffix}-${kind}`,
+        namespaceId: namespaceA.id,
+        subjectKind: "identity",
+        subjectId: identity.id,
+        roleId:
+          kind === "namespace"
+            ? "role-service-account-namespace-reader"
+            : "role-exact-service-account-reader",
+        ...(kind === "account" ? { resourceKind: "service_account", resourceId: accountId } : {}),
+      })),
+    );
+    return { identity, app: controller.fixture.createApp(identity) };
+  }
+
+  const { identity: reader, app: readerApp } = await exactReader(
+    "existing-account-reader",
+    accountA.id,
+  );
+
+  const authorizedAccount = await injectedRequest(readerApp, "GET", exactAccountPath);
+  assert.equal(authorizedAccount.status, 200);
+
+  const denied = await injectedRequest(
+    readerApp,
+    "GET",
+    `/namespaces/${namespaceA.id}/service-accounts/${accountB.id}`,
+  );
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body.error.code, "FORBIDDEN");
+  const denial = controller.fixture.auditSink.events.at(-1);
+  assert.deepEqual(denial.resource, {
+    kind: "service_account",
+    id: accountB.id,
+    namespaceId: namespaceA.id,
+  });
+  assert.equal(denial.action, "openclaw.service_accounts.read");
+
+  // Agent creation still needs read permission on its exact associated account, not a sibling.
+  const deniedAssociation = await injectedRequest(
+    readerApp,
+    "POST",
+    `/namespaces/${namespaceA.id}/agents`,
+    {
+      body: {
+        name: "denied-account-association",
+        configurationId: configurationA.id,
+        serviceAccountId: accountB.id,
+      },
+    },
+  );
+  assert.equal(deniedAssociation.status, 403);
+  const deniedAssociationAudit = controller.fixture.auditSink.events.at(-1);
+  assert.equal(deniedAssociationAudit.action, "openclaw.agents.create");
+  assert.deepEqual(deniedAssociationAudit.authorization, {
+    principalId: reader.id,
+    action: "read",
+    resource: { kind: "service_account", id: accountB.id, namespaceId: namespaceA.id },
+  });
+
+  const allowedAssociation = await injectedRequest(
+    readerApp,
+    "POST",
+    `/namespaces/${namespaceA.id}/agents`,
+    {
+      body: {
+        name: "allowed-account-association",
+        configurationId: configurationA.id,
+        serviceAccountId: accountA.id,
+      },
+    },
+  );
+  assert.equal(allowedAssociation.status, 201);
+  assert.equal(allowedAssociation.data.serviceAccountId, accountA.id);
+  const associatedAgentPath = `/namespaces/${namespaceA.id}/agents/${allowedAssociation.data.id}`;
+
+  // Replacing A with B requires exact read on the new account, not merely authority over A.
+  const deniedNewAccount = await injectedRequest(readerApp, "PATCH", associatedAgentPath, {
+    body: { configurationId: configurationA.id, serviceAccountId: accountB.id },
+  });
+  assert.equal(deniedNewAccount.status, 403);
+  const unchangedAfterNewAccountDenial = await injectedRequest(
+    readerApp,
+    "GET",
+    associatedAgentPath,
+  );
+  assert.equal(unchangedAfterNewAccountDenial.data.serviceAccountId, accountA.id);
+
+  const deniedCreation = await injectedRequest(
+    readerApp,
+    "POST",
+    `/namespaces/${namespaceA.id}/service-accounts`,
+    { body: { name: "unauthorized-account" } },
+  );
+  assert.equal(deniedCreation.status, 403);
+  assert.deepEqual(controller.fixture.auditSink.events.at(-1).resource, {
+    kind: "service_account",
+    id: namespaceA.id,
+    namespaceId: namespaceA.id,
+  });
+
+  // Reading replacement account B cannot authorize detaching or replacing the existing account A.
+  const { identity: replacementOnlyReader, app: replacementOnlyApp } = await exactReader(
+    "replacement-only-reader",
+    accountB.id,
+  );
+
+  for (const serviceAccountId of [null, accountB.id]) {
+    const deniedOldAccount = await injectedRequest(
+      replacementOnlyApp,
+      "PATCH",
+      associatedAgentPath,
+      { body: { configurationId: configurationA.id, serviceAccountId } },
+    );
+    assert.equal(deniedOldAccount.status, 403);
+    const deniedOldAccountAudit = controller.fixture.auditSink.events.at(-1);
+    assert.equal(deniedOldAccountAudit.action, "openclaw.agents.update");
+    assert.deepEqual(deniedOldAccountAudit.authorization, {
+      principalId: replacementOnlyReader.id,
+      action: "read",
+      resource: {
+        kind: "service_account",
+        id: accountA.id,
+        namespaceId: namespaceA.id,
+      },
+    });
+
+    const unchanged = await injectedRequest(replacementOnlyApp, "GET", associatedAgentPath);
+    assert.equal(unchanged.data.serviceAccountId, accountA.id);
+  }
+});
+
+test("session inspection stays optional and never exposes session or credential secrets", async () => {
+  const fixture = await createInjectedFixture();
+
+  const anonymous = await injectedRequest(fixture.app, "GET", "/api/auth/session", {
+    identity: false,
+  });
+  assert.equal(anonymous.status, 200);
+  assert.equal(anonymous.data, null);
+
+  const authenticated = await injectedRequest(fixture.app, "GET", "/api/auth/session");
+  assert.equal(authenticated.status, 200);
+  assert.notEqual(authenticated.data, null);
+  const exposed = JSON.stringify(authenticated.data);
+  assert.doesNotMatch(exposed, /token|password|credential/i);
+  assert.equal(exposed.includes(fixture.app.defaultSession.cookie), false);
+});
+
+test("administrator-created auth accounts sign in and receive only provisioned IAM access", async () => {
+  let provisionedSeed;
+  const fixture = await createInjectedFixture({
+    provisionAuthAccount(seed, { installAuthSeed, auditEvent }) {
+      provisionedSeed = seed;
+      return installAuthSeed(seed, { auditEvent });
+    },
+  });
+  const selectedIAMDriver = fixture.iamDriver;
+  const controller = {
+    fixture,
+    request: (method, pathname, options) => injectedRequest(fixture.app, method, pathname, options),
+  };
+  await bootstrap(controller, "Provisioned account installation");
+  const readOnlyRole = {
+    id: "role-read-only-auth-account",
+    name: "Read-only auth account",
+    permissions: [{ action: "read", resourceKind: "installation" }],
+  };
+  fixture.state.roles.push(readOnlyRole);
+
+  const missingRole = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
+    body: {
+      email: `missing-role-${randomUUID()}@example.com`,
+      password: `generated-password-${randomUUID()}`,
+      name: "Missing Role Operator",
+    },
+  });
+  assert.equal(missingRole.status, 400);
+
+  const unknownRole = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
+    body: {
+      email: `unknown-role-${randomUUID()}@example.com`,
+      password: `generated-password-${randomUUID()}`,
+      name: "Unknown Role Operator",
+      roleId: "role-does-not-exist",
+    },
+  });
+  assert.equal(unknownRole.status, 400);
+
+  const invalidEmail = "invalid-auth-account-email";
+  const invalidEmailPassword = `generated-password-${randomUUID()}`;
+  const stateCounts = {
+    identities: fixture.state.identities.length,
+    roles: fixture.state.roles.length,
+    bindings: fixture.state.bindings.length,
+    auditEvents: fixture.auditSink.events.length,
+  };
+  const invalidEmailResult = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
+    body: {
+      email: invalidEmail,
+      password: invalidEmailPassword,
+      name: "Invalid Email Operator",
+      roleId: readOnlyRole.id,
+    },
+  });
+  assert.equal(invalidEmailResult.status, 400);
+  assert.equal(invalidEmailResult.body.error.code, "INVALID_REQUEST");
+  assert.deepEqual(
+    {
+      identities: fixture.state.identities.length,
+      roles: fixture.state.roles.length,
+      bindings: fixture.state.bindings.length,
+      auditEvents: fixture.auditSink.events.length,
+    },
+    stateCounts,
+  );
+  await assert.rejects(
+    signInWithEmailPassword({
+      fetch: fixture.app.fetch.bind(fixture.app),
+      email: invalidEmail,
+      password: invalidEmailPassword,
+    }),
+    /HTTP 400/,
+  );
+
+  const email = `operator-${randomUUID()}@example.com`;
+  const password = `generated-password-${randomUUID()}`;
+  const auditCount = fixture.auditSink.events.length;
+  const created = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
+    body: { email, password, name: "Read Only Operator", roleId: readOnlyRole.id },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(fixture.iamDriver, selectedIAMDriver);
+  assert.equal(created.data.email, email);
+  assert.equal(created.data.name, "Read Only Operator");
+  assert.equal(created.data.principalId, provisionedSeed.principal.id);
+  assert.deepEqual(provisionedSeed.roles, []);
+  assert.deepEqual(
+    provisionedSeed.bindings.map(({ roleId }) => roleId),
+    [readOnlyRole.id],
+  );
+  const accountEvents = fixture.auditSink.events.slice(auditCount);
+  assert.equal(accountEvents.length, 1);
+  assert.equal(accountEvents[0].kind, "mutation");
+  assert.equal(accountEvents[0].action, "openclaw.auth.accounts.create");
+  assert.deepEqual(accountEvents[0].resource, {
+    kind: "installation",
+    id: fixture.installationId,
+  });
+
+  const secondSession = await signInWithEmailPassword({
+    fetch: fixture.app.fetch.bind(fixture.app),
+    email,
+    password,
+  });
+  const installation = await injectedRequest(fixture.app, "GET", "/installation", {
+    session: secondSession,
+  });
+  assert.equal(installation.status, 200);
+
+  const denied = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    session: secondSession,
+    body: { name: "denied-account-namespace" },
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body.error.code, "FORBIDDEN");
+});
+
+test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB limit", async () => {
+  const controller = await configuredController();
+
+  const malformedJson = await controller.request("POST", "/installation/bootstrap", {
+    rawBody: "{not-json",
+    headers: { "content-type": "application/json" },
+  });
+  assert.equal(malformedJson.status, 400);
+  assert.equal(malformedJson.body.error.code, "INVALID_REQUEST");
+
+  const unsupportedType = await controller.request("POST", "/installation/bootstrap", {
+    rawBody: "name=enterprise",
+    headers: { "content-type": "text/plain" },
+  });
+  assert.equal(unsupportedType.status, 415);
+  assert.equal(unsupportedType.body.error.code, "UNSUPPORTED_MEDIA_TYPE");
+
+  for (const invalid of [null, [], {}, { name: "" }, { name: "   " }]) {
+    const result = await controller.request("POST", "/installation/bootstrap", { body: invalid });
+    assert.equal(result.status, 400);
+  }
+
+  await bootstrap(controller);
+
+  for (const invalid of [null, [], {}, { name: "" }, { name: 4 }]) {
+    const result = await controller.request("POST", "/namespaces", {
+      body: invalid,
+    });
+    assert.equal(result.status, 400);
+  }
+
+  const namespace = await createNamespace(controller, "validated");
+  const duplicateNamespace = await controller.request("POST", "/namespaces", {
+    body: { name: "validated" },
+  });
+  assert.equal(duplicateNamespace.status, 409);
+  assert.equal(duplicateNamespace.body.error.code, "RESOURCE_CONFLICT");
+
+  const invalidAgent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: { name: "" },
+  });
+  assert.equal(invalidAgent.status, 400);
+
+  const agent = await createAgent(controller, namespace.id, "valid-agent");
+  const duplicateAgent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: { name: "valid-agent", configurationId: agent.configurationId },
+  });
+  assert.equal(duplicateAgent.status, 409);
+  assert.equal(duplicateAgent.body.error.code, "RESOURCE_CONFLICT");
+
+  for (const configurationId of [null, [], "invalid"]) {
+    const invalidCreation = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+      body: { name: "invalid-configuration-agent", configurationId },
+    });
+    assert.equal(invalidCreation.status, 400);
+
+    const invalidReplacement = await controller.request(
+      "PATCH",
+      `/namespaces/${namespace.id}/agents/${agent.id}`,
+      { body: { configurationId } },
+    );
+    assert.equal(invalidReplacement.status, 400);
+  }
+
+  for (const body of [{ configuration: {} }, { draft_spec: {} }, {}]) {
+    const invalidDeployment = await controller.request(
+      "POST",
+      `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+      { body },
+    );
+    assert.equal(invalidDeployment.status, 400);
+  }
+
+  for (const key of ["__proto__", "constructor", "prototype"]) {
+    const unsafeConfiguration = await controller.request(
+      "POST",
+      `/namespaces/${namespace.id}/configurations`,
+      {
+        rawBody: `{\"kind\":\"agent\",\"values\":{\"${key}\":\"polluted\"}}`,
+        headers: { "content-type": "application/json" },
+      },
+    );
+    assert.equal(unsafeConfiguration.status, 400, key);
+    assert.equal(unsafeConfiguration.body.error.code, "INVALID_REQUEST");
+  }
+
+  let deeplyNested = {};
+  for (let depth = 0; depth < 26; depth += 1) deeplyNested = { nested: deeplyNested };
+  const tooDeep = await controller.request("POST", `/namespaces/${namespace.id}/configurations`, {
+    body: { kind: "agent", values: deeplyNested },
+  });
+  assert.equal(tooDeep.status, 400);
+  assert.equal(tooDeep.body.error.details[0]?.code, "TOO_DEEP");
+
+  for (const extra of ["name", "namespaceId", "servicePrincipalId"]) {
+    const injected = await controller.request(
+      "PATCH",
+      `/namespaces/${namespace.id}/agents/${agent.id}`,
+      { body: { configurationId: agent.configurationId, [extra]: "injected" } },
+    );
+    assert.equal(injected.status, 400, extra);
+  }
+
+  const foreignInstallation = await controller.request("POST", "/namespaces", {
+    body: { name: "foreign", installationId: "installation-foreign" },
+  });
+  assert.equal(foreignInstallation.status, 400);
+
+  const namespaceOverride = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "foreign",
+      configurationId: agent.configurationId,
+      namespaceId: "namespace-foreign",
+    },
+  });
+  assert.equal(namespaceOverride.status, 400);
+
+  const unexpectedQuery = await controller.request("GET", "/namespaces?owner=foreign");
+  assert.equal(unexpectedQuery.status, 400);
+  assert.equal(unexpectedQuery.body.error.code, "INVALID_REQUEST");
+
+  const malformedIdentifier = await controller.request("GET", "/namespaces/ns_not-a-uuid");
+  assert.equal(malformedIdentifier.status, 400);
+
+  const wrongResourceKind = await controller.request("GET", `/namespaces/${agent.id}`);
+  assert.equal(wrongResourceKind.status, 400);
+
+  const oversized = await controller.request("POST", "/namespaces", {
+    body: { name: "x".repeat(64 * 1024) },
+  });
+  assert.equal(oversized.status, 413);
+  assert.equal(oversized.body.error.code, "PAYLOAD_TOO_LARGE");
+
+  const unsupportedMethod = await controller.request("DELETE", "/namespaces");
+  assert.equal(unsupportedMethod.status, 405);
+  assert.equal(unsupportedMethod.body.error.code, "METHOD_NOT_ALLOWED");
+  assert.match(unsupportedMethod.headers.get("allow") ?? "", /GET/);
+  assert.match(unsupportedMethod.headers.get("allow") ?? "", /POST/);
+
+  const fixture = await createInjectedFixture();
+  const bootstrapped = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
+    body: { name: "Validation-order installation" },
+  });
+  assert.equal(bootstrapped.status, 201);
+
+  const originalLookup = fixture.iamDriver.lookupIdentity;
+  const originalAuthorize = fixture.iamDriver.authorize;
+  let identityLookups = 0;
+  let authorizationChecks = 0;
+  fixture.iamDriver.lookupIdentity = async (...args) => {
+    identityLookups += 1;
+    return originalLookup.apply(fixture.iamDriver, args);
+  };
+  fixture.iamDriver.authorize = async (...args) => {
+    authorizationChecks += 1;
+    return originalAuthorize.apply(fixture.iamDriver, args);
+  };
+  const auditCount = fixture.auditSink.events.length;
+
+  try {
+    for (const options of [
+      { rawBody: '{"name":' },
+      { body: { name: "invalid-scope", installationId: fixture.installationId } },
+    ]) {
+      const invalid = await injectedRequest(fixture.app, "POST", "/namespaces", options);
+      assert.equal(invalid.status, 400);
+      assert.equal(invalid.body.error.code, "INVALID_REQUEST");
+      assert.equal(identityLookups, 0);
+      assert.equal(authorizationChecks, 0);
+      assert.equal(fixture.auditSink.events.length, auditCount);
+    }
+  } finally {
+    fixture.iamDriver.lookupIdentity = originalLookup;
+    fixture.iamDriver.authorize = originalAuthorize;
+  }
+
+  const untouched = await injectedRequest(fixture.app, "GET", "/namespaces");
+  assert.deepEqual(untouched.data, []);
+});
+
+test("bootstrap fails closed when IAM omits structured authorization evidence", async () => {
+  const fixture = await createInjectedFixture();
+  fixture.iamDriver.authorize = async () => ({
+    allowed: true,
+    driverId: fixture.iamDriver.id,
+  });
+
+  const response = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
+    body: { name: "Must not initialize" },
+  });
+
+  assert.equal(response.status, 503);
+  assert.equal(response.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  assert.equal(fixture.controller, undefined);
+  assert.deepEqual(fixture.auditSink.events, []);
+});
+
+test("OCC development subprocess requires PostgreSQL-backed startup", async () => {
+  await assertUnsafeStartupRejected();
+});
+
+test("bodyless OCC routes reject request payloads before IAM or domain side effects", async () => {
+  const fixture = await createInjectedFixture();
+  const installation = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
+    body: { name: "Bodyless-route installation" },
+  });
+  assert.equal(installation.status, 201);
+
+  const namespace = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "bodyless-route-namespace" },
+  });
+  assert.equal(namespace.status, 201);
+
+  const configuration = await createInjectedConfiguration(fixture, namespace.data.id);
+  const agent = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents`,
+    { body: { name: "bodyless-route-agent", configurationId: configuration.id } },
+  );
+  assert.equal(agent.status, 201);
+
+  const originalLookup = fixture.iamDriver.lookupIdentity;
+  const originalAuthorize = fixture.iamDriver.authorize;
+  let identityLookups = 0;
+  let authorizationChecks = 0;
+  fixture.iamDriver.lookupIdentity = async (...args) => {
+    identityLookups += 1;
+    return originalLookup.apply(fixture.iamDriver, args);
+  };
+  fixture.iamDriver.authorize = async (...args) => {
+    authorizationChecks += 1;
+    return originalAuthorize.apply(fixture.iamDriver, args);
+  };
+  const auditCount = fixture.auditSink.events.length;
+  const app = fixture.createApp(fixture.principal, createFastifyApp);
+
+  try {
+    for (const [method, url] of [
+      ["GET", "/installation"],
+      ["GET", "/namespaces"],
+      ["GET", `/namespaces/${namespace.data.id}`],
+      ["GET", `/namespaces/${namespace.data.id}/agents`],
+      ["GET", `/namespaces/${namespace.data.id}/agents/${agent.data.id}`],
+      ["GET", `/namespaces/${namespace.data.id}/agents/${agent.data.id}/revisions`],
+      [
+        "GET",
+        `/namespaces/${namespace.data.id}/agents/${agent.data.id}/revisions/${missingRevisionId}`,
+      ],
+      ["POST", `/namespaces/${namespace.data.id}/agents/${agent.data.id}/deploy`],
+    ]) {
+      const response = await app.inject({
+        method,
+        url,
+        headers: {
+          ...authenticatedHeaders(app.defaultSession),
+          "content-type": "application/json",
+          host: "127.0.0.1",
+        },
+        payload: JSON.stringify({ unexpected: "request body" }),
+        remoteAddress: "127.0.0.1",
+      });
+      const body = response.json();
+
+      assert.equal(response.statusCode, 400, url);
+      assert.equal(body.error.code, "INVALID_REQUEST", url);
+      assert.match(body.meta.requestId, identifier("req"));
+      assert.equal(identityLookups, 0, url);
+      assert.equal(authorizationChecks, 0, url);
+      assert.equal(fixture.auditSink.events.length, auditCount, url);
+    }
+  } finally {
+    fixture.iamDriver.lookupIdentity = originalLookup;
+    fixture.iamDriver.authorize = originalAuthorize;
+    await app.close();
+  }
+});
+
+test("OCC isolates Namespace ownership and filters collections by exact IAM grants", async () => {
+  const controller = await configuredController();
+  await bootstrap(controller);
+
+  const namespaceA = await createNamespace(controller, "namespace-a");
+  const namespaceB = await createNamespace(controller, "namespace-b");
+  const agentA = await createAgent(controller, namespaceA.id, "private-agent-a");
+  const agentB = await createAgent(controller, namespaceB.id, "private-agent-b");
+
+  const listedA = await controller.request("GET", `/namespaces/${namespaceA.id}/agents`);
+  const listedB = await controller.request("GET", `/namespaces/${namespaceB.id}/agents`);
+  assert.deepEqual(listedA.data, [agentA]);
+  assert.deepEqual(listedB.data, [agentB]);
+
+  for (const [method, path, options] of [
+    ["GET", `/namespaces/${namespaceB.id}/agents/${agentA.id}`],
+    ["POST", `/namespaces/${namespaceB.id}/agents/${agentA.id}/deploy`],
+    [
+      "PATCH",
+      `/namespaces/${namespaceB.id}/agents/${agentA.id}`,
+      { body: { configurationId: agentB.configurationId } },
+    ],
+    ["GET", `/namespaces/${namespaceB.id}/agents/${agentA.id}/revisions`],
+    ["GET", `/namespaces/${namespaceB.id}/agents/${agentA.id}/revisions/${missingRevisionId}`],
+    ["GET", `/namespaces/${namespaceB.id}/agents/${agentB.id}/revisions/${missingRevisionId}`],
+  ]) {
+    const response = await controller.request(method, path, options);
+    assert.ok(
+      [403, 404].includes(response.status),
+      `${method} ${path} must not expose cross-Namespace resources`,
+    );
+    const serialized = JSON.stringify(response.body);
+    assert.ok(!serialized.includes("private-agent-a"));
+    assert.ok(!serialized.includes("namespace-a-only"));
+  }
+
+  const original = await controller.request(
+    "GET",
+    `/namespaces/${namespaceA.id}/agents/${agentA.id}/revisions`,
+  );
+  assert.deepEqual(original.data, []);
+
+  const fixture = await createInjectedFixture();
+  const bootstrapped = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
+    body: { name: "IAM-scoped installation" },
+  });
+  assert.equal(bootstrapped.status, 201);
+
+  const tenantA = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "tenant-a" },
+  });
+  const tenantB = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "tenant-b" },
+  });
+  assert.equal(tenantA.status, 201);
+  assert.equal(tenantB.status, 201);
+
+  const tenantBConfiguration = await createInjectedConfiguration(fixture, tenantB.data.id);
+  const ownAgent = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${tenantB.data.id}/agents`,
+    { body: { name: "tenant-b-agent", configurationId: tenantBConfiguration.id } },
+  );
+  assert.equal(ownAgent.status, 201);
+
+  const { principal: reader } = await fixture.createAuthPrincipal("tenant-b-reader");
+  fixture.state.identities.push(reader);
+  fixture.state.roles.push({
+    id: "role-tenant-b-reader",
+    namespaceId: tenantB.data.id,
+    permissions: [
+      { action: "read", resourceKind: "namespace" },
+      { action: "read", resourceKind: "agent" },
+      { action: "read", resourceKind: "agent_revision" },
+    ],
+  });
+  fixture.state.bindings.push({
+    id: "binding-tenant-b-reader",
+    namespaceId: tenantB.data.id,
+    subjectKind: "identity",
+    subjectId: reader.id,
+    roleId: "role-tenant-b-reader",
+  });
+  const readerApp = fixture.createApp(reader);
+
+  const visibleNamespaces = await injectedRequest(readerApp, "GET", "/namespaces");
+  assert.equal(visibleNamespaces.status, 200);
+  assert.deepEqual(
+    visibleNamespaces.data.map((item) => item.id),
+    [tenantB.data.id],
+  );
+
+  const visibleAgent = await injectedRequest(
+    readerApp,
+    "GET",
+    `/namespaces/${tenantB.data.id}/agents/${ownAgent.data.id}`,
+  );
+  assert.equal(visibleAgent.status, 200);
+
+  const { principal: revisionReader } = await fixture.createAuthPrincipal("revision-only-reader");
+  fixture.state.identities.push(revisionReader);
+  fixture.state.roles.push({
+    id: "role-revision-only-reader",
+    namespaceId: tenantB.data.id,
+    permissions: [{ action: "read", resourceKind: "agent_revision" }],
+  });
+  fixture.state.bindings.push({
+    id: "binding-revision-only-reader",
+    namespaceId: tenantB.data.id,
+    subjectKind: "identity",
+    subjectId: revisionReader.id,
+    roleId: "role-revision-only-reader",
+  });
+  const revisionReaderApp = fixture.createApp(revisionReader);
+  const ownRevisionPath = `/namespaces/${tenantB.data.id}/agents/${ownAgent.data.id}/revisions/${missingRevisionId}`;
+
+  const parentDenied = await injectedRequest(
+    revisionReaderApp,
+    "GET",
+    `/namespaces/${tenantB.data.id}/agents/${ownAgent.data.id}`,
+  );
+  assert.equal(parentDenied.status, 403);
+
+  const exactRevision = await injectedRequest(revisionReaderApp, "GET", ownRevisionPath);
+  assert.equal(exactRevision.status, 404);
+  assert.equal(exactRevision.body.error.code, "NOT_FOUND");
+
+  const wrongParent = await injectedRequest(
+    revisionReaderApp,
+    "GET",
+    `/namespaces/${tenantA.data.id}/agents/${ownAgent.data.id}/revisions/${missingRevisionId}`,
+  );
+  assert.equal(wrongParent.status, 404);
+
+  fixture.state.roles.find((role) => role.id === "role-revision-only-reader").permissions.length =
+    0;
+  const deniedRevisionApp = fixture.createApp(revisionReader);
+  const deniedRevision = await injectedRequest(deniedRevisionApp, "GET", ownRevisionPath);
+  assert.equal(deniedRevision.status, 403);
+  const denialEvent = fixture.auditSink.events.at(-1);
+  assert.equal(denialEvent.kind, "authorization_denial");
+  assert.equal(denialEvent.action, "openclaw.agent_revisions.read");
+  assert.deepEqual(denialEvent.resource, {
+    kind: "agent_revision",
+    id: missingRevisionId,
+    namespaceId: tenantB.data.id,
+  });
+  assert.deepEqual(denialEvent.authorization, {
+    principalId: revisionReader.id,
+    action: "read",
+    resource: denialEvent.resource,
+  });
+
+  const refreshedReaderApp = fixture.createApp(reader);
+  for (const [method, pathname, options] of [
+    ["GET", `/namespaces/${tenantA.data.id}`],
+    ["GET", `/namespaces/${tenantA.data.id}/agents`],
+    [
+      "POST",
+      `/namespaces/${tenantA.data.id}/agents`,
+      { body: { name: "unauthorized-agent", configurationId: tenantBConfiguration.id } },
+    ],
+  ]) {
+    const denied = await injectedRequest(refreshedReaderApp, method, pathname, options);
+    assert.equal(denied.status, 403, `${method} ${pathname}`);
+    assert.equal(denied.body.error.code, "FORBIDDEN");
+  }
+});
+
+test("two Namespaces become independently ready and deletion tombstones only its exact target", async () => {
+  const fixture = await createInjectedFixture();
+  await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
+    body: { name: "Lifecycle installation" },
+  });
+  const namespaceA = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "lifecycle-a" },
+  });
+  const namespaceB = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "lifecycle-b" },
+  });
+  assert.equal(namespaceA.data.status, "provisioning");
+  assert.equal(namespaceB.data.status, "provisioning");
+
+  const originalConfiguration = await createInjectedConfiguration(fixture, namespaceA.data.id, {
+    model: "original",
+  });
+  const agentA = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespaceA.data.id}/agents`,
+    { body: { name: "lifecycle-agent-a", configurationId: originalConfiguration.id } },
+  );
+  assert.equal(agentA.status, 201);
+  assert.equal(agentA.data.configurationId, originalConfiguration.id);
+  const firstConfiguration = await createInjectedConfiguration(fixture, namespaceA.data.id, {
+    model: "first",
+    temperature: "0",
+  });
+  const replacedReference = await injectedRequest(
+    fixture.app,
+    "PATCH",
+    `/namespaces/${namespaceA.data.id}/agents/${agentA.data.id}`,
+    { body: { configurationId: firstConfiguration.id } },
+  );
+  assert.equal(replacedReference.status, 200);
+  assert.equal(replacedReference.data.configurationId, firstConfiguration.id);
+  assert.deepEqual(fixture.computeCalls.ensureNamespace, []);
+  const unavailable = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespaceA.data.id}/agents/${agentA.data.id}/deploy`,
+  );
+  assert.equal(unavailable.status, 409);
+  assert.equal(unavailable.body.error.code, "NAMESPACE_NOT_READY");
+
+  await fixture.controller.handleNamespaceLifecycle(
+    fixture.principal.id,
+    namespaceA.data.id,
+    "ready",
+  );
+  await fixture.controller.handleNamespaceLifecycle(
+    fixture.principal.id,
+    namespaceB.data.id,
+    "ready",
+  );
+  assert.deepEqual(fixture.computeCalls.ensureNamespace, [namespaceA.data.id, namespaceB.data.id]);
+
+  const readyDeployment = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespaceA.data.id}/agents/${agentA.data.id}/deploy`,
+  );
+  assert.equal(readyDeployment.status, 202);
+  assert.match(readyDeployment.data.id, identifier("rev"));
+  assert.deepEqual(Object.keys(readyDeployment.data).sort(), [
+    "agentId",
+    "compute",
+    "configuration",
+    "configurationGeneration",
+    "configurationId",
+    "configurationKind",
+    "createdAt",
+    "harness",
+    "id",
+    "namespaceId",
+    "revision",
+  ]);
+  assert.equal(readyDeployment.data.configurationId, firstConfiguration.id);
+  assert.equal(readyDeployment.data.configurationKind, "agent");
+  assert.equal(readyDeployment.data.configurationGeneration, 1);
+  assert.deepEqual(readyDeployment.data.configuration, { model: "first", temperature: "0" });
+  assert.deepEqual(readyDeployment.data.harness, {
+    id: "openclaw",
+    version: "1.0.0",
+    mode: "embedded",
+  });
+  assert.deepEqual(readyDeployment.data.compute, {
+    id: "compute-integration",
+    implementation: "deterministic-test",
+  });
+  assert.equal(readyDeployment.data.revision, 1);
+  assert.equal(Object.hasOwn(readyDeployment.data, "servicePrincipalId"), false);
+
+  const secondConfiguration = await createInjectedConfiguration(fixture, namespaceA.data.id, {
+    model: "second",
+    temperature: "1",
+  });
+  const nextReference = await injectedRequest(
+    fixture.app,
+    "PATCH",
+    `/namespaces/${namespaceA.data.id}/agents/${agentA.data.id}`,
+    { body: { configurationId: secondConfiguration.id } },
+  );
+  assert.equal(nextReference.status, 200);
+  const historical = await injectedRequest(
+    fixture.app,
+    "GET",
+    `/namespaces/${namespaceA.data.id}/agents/${agentA.data.id}/revisions/${readyDeployment.data.id}`,
+  );
+  assert.equal(historical.status, 200);
+  assert.deepEqual(historical.data, readyDeployment.data);
+
+  const nextDeployment = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespaceA.data.id}/agents/${agentA.data.id}/deploy`,
+  );
+  assert.equal(nextDeployment.status, 202);
+  assert.equal(nextDeployment.data.revision, 2);
+  assert.deepEqual(nextDeployment.data.configuration, { model: "second", temperature: "1" });
+  const admittedRevisions = await injectedRequest(
+    fixture.app,
+    "GET",
+    `/namespaces/${namespaceA.data.id}/agents/${agentA.data.id}/revisions`,
+  );
+  assert.deepEqual(admittedRevisions.data, [readyDeployment.data, nextDeployment.data]);
+  assert.deepEqual(fixture.computeCalls.ensureNamespace, [namespaceA.data.id, namespaceB.data.id]);
+
+  const deleting = await injectedRequest(
+    fixture.app,
+    "DELETE",
+    `/namespaces/${namespaceB.data.id}`,
+  );
+  assert.equal(deleting.status, 202);
+  assert.equal(deleting.data.status, "deleting");
+  const rejectedChild = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespaceB.data.id}/agents`,
+    { body: { name: "too-late", configurationId: firstConfiguration.id } },
+  );
+  assert.equal(rejectedChild.status, 409);
+
+  await fixture.controller.handleNamespaceLifecycle(
+    fixture.principal.id,
+    namespaceB.data.id,
+    "deleted",
+  );
+  assert.deepEqual(fixture.computeCalls.deleteNamespace, [namespaceB.data.id]);
+  const absent = await injectedRequest(fixture.app, "GET", `/namespaces/${namespaceB.data.id}`);
+  assert.equal(absent.status, 404);
+  const listed = await injectedRequest(fixture.app, "GET", "/namespaces");
+  assert.deepEqual(
+    listed.data.map(({ id }) => id),
+    [namespaceA.data.id],
+  );
+  const stillReady = await injectedRequest(fixture.app, "GET", `/namespaces/${namespaceA.data.id}`);
+  assert.equal(stillReady.data.status, "ready");
+});
+
+test("bootstrap, mutations, and denials emit attributable private audit events", async () => {
+  const fixture = await createInjectedFixture();
+  const originalIAMDriverId = fixture.iamDriver.id;
+  const installation = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
+    body: { name: "Audited installation" },
+  });
+  assert.equal(installation.status, 201);
+
+  const namespace = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "audited-namespace" },
+  });
+  assert.equal(namespace.status, 201);
+
+  const configuration = await createInjectedConfiguration(fixture, namespace.data.id);
+  const agent = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents`,
+    { body: { name: "audited-agent", configurationId: configuration.id } },
+  );
+  assert.equal(agent.status, 201);
+
+  const expectedAuditEvents = fixture.auditSink.events.length;
+  const unauthenticated = await injectedRequest(fixture.app, "GET", "/installation", {
+    identity: false,
+  });
+  assert.equal(unauthenticated.status, 401);
+  assert.equal(fixture.auditSink.events.length, expectedAuditEvents);
+
+  const permissions = fixture.state.roles[0].permissions;
+  const namespaceCreate = permissions.findIndex(
+    (entry) => entry.action === "create" && entry.resourceKind === "namespace",
+  );
+  permissions.splice(namespaceCreate, 1);
+  const denialApp = fixture.createApp();
+  const unauthorized = await injectedRequest(denialApp, "POST", "/namespaces", {
+    body: { name: "never-log-this-request-body" },
+  });
+  assert.equal(unauthorized.status, 403);
+
+  const mutationEvents = fixture.auditSink.events.filter((event) =>
+    ["bootstrap", "mutation"].includes(event.kind),
+  );
+  assert.equal(mutationEvents.length, 4);
+  assert.deepEqual(
+    mutationEvents.map((event) => [event.kind, event.resource.kind]),
+    [
+      ["bootstrap", "installation"],
+      ["mutation", "namespace"],
+      ["mutation", "configuration"],
+      ["mutation", "agent"],
+    ],
+  );
+  for (const event of mutationEvents) {
+    assert.equal(event.outcome, "success");
+    assert.equal(event.installationId, fixture.installationId);
+    assert.equal(event.actorId, fixture.principal.id);
+    assert.equal(event.actor.principalId, fixture.principal.id);
+    assert.equal(event.actor.issuer, fixture.principal.issuer);
+    assert.equal(event.actor.subject, fixture.principal.subject);
+    assert.match(event.requestId, identifier("req"));
+    assert.equal(typeof event.admissionDecisionId, "string");
+    assert.equal(event.source, "occ");
+    assert.equal(event.iamDriverId, originalIAMDriverId);
+  }
+  assert.deepEqual(
+    mutationEvents.map((event) => event.authorization),
+    [
+      {
+        principalId: fixture.principal.id,
+        action: "administer",
+        resource: {
+          kind: "installation",
+          id: fixture.installationId,
+        },
+      },
+      {
+        principalId: fixture.principal.id,
+        action: "create",
+        resource: {
+          kind: "namespace",
+          id: fixture.installationId,
+        },
+      },
+      {
+        principalId: fixture.principal.id,
+        action: "create",
+        resource: {
+          kind: "configuration",
+          id: namespace.data.id,
+          namespaceId: namespace.data.id,
+        },
+      },
+      {
+        principalId: fixture.principal.id,
+        action: "create",
+        resource: {
+          kind: "agent",
+          id: namespace.data.id,
+          namespaceId: namespace.data.id,
+        },
+      },
+    ],
+  );
+
+  const authorizationDenials = fixture.auditSink.events.filter(
+    (event) => event.kind === "authorization_denial",
+  );
+  assert.equal(authorizationDenials.length, 1);
+  assert.equal(authorizationDenials[0].outcome, "denied");
+  assert.equal(authorizationDenials[0].actor.principalId, fixture.principal.id);
+  assert.equal(authorizationDenials[0].installationId, fixture.installationId);
+  assert.equal(authorizationDenials[0].reasonCode, "AUTHORIZATION_DENIED");
+
+  const recorded = JSON.stringify(fixture.auditSink.events);
+  assert.equal(recorded.includes(fixture.session.cookie), false);
+  assert.equal(recorded.includes("never-log-this-request-body"), false);
+});
+
+test("IAM and audit dependency failures fail closed without orphaned state", async () => {
+  const bootstrapFailure = await createInjectedFixture();
+  const originalBootstrapAppend = bootstrapFailure.auditSink.append;
+  bootstrapFailure.auditSink.append = async () => {
+    throw new Error("bootstrap audit unavailable");
+  };
+  let failedBootstrap;
+  try {
+    failedBootstrap = await injectedRequest(
+      bootstrapFailure.app,
+      "POST",
+      "/installation/bootstrap",
+      { body: { name: "must-not-create-an-installation" } },
+    );
+  } finally {
+    bootstrapFailure.auditSink.append = originalBootstrapAppend;
+  }
+  assert.equal(failedBootstrap.status, 503);
+  assert.equal(failedBootstrap.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  assert.deepEqual(bootstrapFailure.auditSink.events, []);
+
+  const absentInstallation = await injectedRequest(bootstrapFailure.app, "GET", "/installation");
+  assert.equal(absentInstallation.status, 404);
+
+  const recoveredBootstrap = await injectedRequest(
+    bootstrapFailure.app,
+    "POST",
+    "/installation/bootstrap",
+    { body: { name: "recovered installation" } },
+  );
+  assert.equal(recoveredBootstrap.status, 201);
+
+  const fixture = await createInjectedFixture();
+  const bootstrapResult = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
+    body: { name: "Failure-injection installation" },
+  });
+  assert.equal(bootstrapResult.status, 201);
+
+  const originalAppend = fixture.auditSink.append;
+  fixture.auditSink.append = async () => {
+    throw new Error("sk-audit-provider-credential-123456789");
+  };
+  let failedMutation;
+  try {
+    failedMutation = await injectedRequest(fixture.app, "POST", "/namespaces", {
+      body: { name: "must-never-become-visible" },
+    });
+  } finally {
+    fixture.auditSink.append = originalAppend;
+  }
+  assert.equal(failedMutation.status, 503);
+  assert.equal(failedMutation.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  assert.equal(JSON.stringify(failedMutation.body).includes("sk-audit-provider"), false);
+
+  const unchanged = await injectedRequest(fixture.app, "GET", "/namespaces");
+  assert.equal(unchanged.status, 200);
+  assert.deepEqual(unchanged.data, []);
+  assert.equal(fixture.auditSink.events.length, 1);
+
+  const originalAuthorize = fixture.iamDriver.authorize;
+  fixture.iamDriver.authorize = async () => {
+    throw new Error("sk-iam-provider-credential-123456789");
+  };
+  let unavailable;
+  try {
+    unavailable = await injectedRequest(fixture.app, "POST", "/namespaces", {
+      body: { name: "must-never-be-authorized" },
+    });
+  } finally {
+    fixture.iamDriver.authorize = originalAuthorize;
+  }
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  assert.equal(JSON.stringify(unavailable.body).includes("sk-iam-provider"), false);
+
+  const stillUnchanged = await injectedRequest(fixture.app, "GET", "/namespaces");
+  assert.deepEqual(stillUnchanged.data, []);
+});

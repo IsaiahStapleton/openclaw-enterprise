@@ -1,0 +1,2098 @@
+import { isNonEmptyString } from "@openclaw-enterprise/utils";
+import { randomUUID } from "node:crypto";
+import Fastify, {
+  type FastifyError,
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+  type FastifySchema,
+  type HTTPMethods,
+  type InjectOptions,
+} from "fastify";
+import swagger from "@fastify/swagger";
+import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
+import ajvFormats from "ajv-formats";
+import { AuditEventFactory, type AuditSink } from "@openclaw-enterprise/audit";
+import { AuthAccountRoleNotFoundError, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
+import {
+  ErrorResponse,
+  JsonValue,
+  SecretResponse,
+  occApiRoutes,
+  type Agent,
+  type AgentRevision,
+  type AuditEvent,
+  type AuthorizationEvidence,
+  type ConfigurationDriver,
+  type ComputeDriver,
+  type HarnessExecutionMode,
+  type IAMDriver,
+  type Installation,
+  type OccApiRoute,
+  type OpenClawConfigurationDocument,
+  type PermissionAction,
+  type ResourceKind,
+  type ResourceRef,
+  type SandboxDriver,
+  type SecretDriver,
+  type SecretBindings,
+  type SecretMetadata,
+  type ServiceAccount,
+  type ServiceAccountCredential,
+} from "@openclaw-enterprise/contracts";
+import {
+  AuthorizationDeniedError,
+  DependencyUnavailableError,
+  NamespaceNotEmptyError,
+  NamespaceNotReadyError,
+  ResourceConflictError,
+  ScopeViolationError,
+  type HarnessResolver,
+  type OpenClawController,
+} from "@openclaw-enterprise/occ";
+import type { AdmittedCaller } from "./admission/admission-verifier.ts";
+import {
+  OCC_AUTH_COOKIE_PREFIX,
+  OCC_SERVICE_KEY_HEADER,
+  type ControllerAuth,
+} from "./auth/index.ts";
+import {
+  ConfigurationOwnershipError,
+  ConfigurationValidationError,
+} from "./drivers/configuration/kubernetes/index.ts";
+
+export interface DevelopmentAdmission {
+  readonly enabled: boolean;
+  readonly installationId?: string;
+  readonly trustedCidrs?: readonly string[];
+}
+
+export interface ControllerAppOptions {
+  readonly controller?: OpenClawController;
+  readonly createController?: (installation: Installation) => OpenClawController;
+  readonly iamDriver: IAMDriver;
+  readonly computeDriver?: ComputeDriver;
+  readonly configurationDriver?: ConfigurationDriver;
+  readonly secretDriver?: SecretDriver;
+  readonly sandboxDriver?: SandboxDriver;
+  readonly resolveHarness: HarnessResolver;
+  readonly auditSink: AuditSink;
+  readonly development: DevelopmentAdmission;
+  readonly maxBodyBytes?: number;
+  readonly auth: ControllerAuth;
+  readonly provisionAuthAccount?: (
+    seed: AuthPrincipalSeed,
+    auditEvent: AuditEvent,
+  ) => Promise<void>;
+  readonly auditEventFactory?: AuditEventFactory;
+}
+
+export interface ControllerApp {
+  fetch(request: Request): Promise<Response>;
+}
+
+interface RequestContext {
+  readonly actorId: string;
+  readonly issuer: string;
+  readonly subject: string;
+  readonly admissionDecisionId: string;
+  readonly operation: OccApiRoute;
+}
+
+interface ErrorDetail {
+  readonly path: string;
+  readonly code:
+    | "REQUIRED"
+    | "UNKNOWN_FIELD"
+    | "INVALID_TYPE"
+    | "INVALID_FORMAT"
+    | "INVALID_VALUE"
+    | "TOO_LONG"
+    | "TOO_DEEP";
+}
+
+interface RequiredPermission {
+  readonly action: PermissionAction;
+  readonly resourceKind: ResourceKind;
+  readonly scope: "requested" | "installation" | "namespace" | "each_returned" | "request_body";
+  readonly condition?: "associated_service_account" | "existing_namespace" | "bound_secret";
+}
+
+interface DocumentedFastifySchema extends FastifySchema {
+  readonly "x-openclaw-permissions": readonly RequiredPermission[];
+}
+
+class RequestFailure extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly details?: readonly ErrorDetail[];
+
+  constructor(status: number, code: string, message: string, details?: readonly ErrorDetail[]) {
+    super(message);
+    this.name = "RequestFailure";
+    this.status = status;
+    this.code = code;
+    if (details !== undefined) this.details = details;
+  }
+}
+
+const DEFAULT_BODY_LIMIT = 64 * 1024;
+const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+const RESOURCE_ID = {
+  namespaceId: /^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  configurationId: /^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  serviceAccountId: /^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  secretId: /^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  agentId: /^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  revisionId: /^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+} as const;
+
+function formatsPlugin(ajv: Parameters<typeof ajvFormats.default>[0]) {
+  return ajvFormats.default(ajv);
+}
+
+function failure(
+  status: number,
+  code: string,
+  message: string,
+  details?: readonly ErrorDetail[],
+): RequestFailure {
+  return new RequestFailure(status, code, message, details);
+}
+
+function ipv4(value: string): number | undefined {
+  const parts = value.split(".");
+  if (parts.length !== 4) return undefined;
+  let result = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return undefined;
+    const octet = Number(part);
+    if (octet > 255) return undefined;
+    result = (result << 8) | octet;
+  }
+  return result >>> 0;
+}
+
+function cidrContains(cidr: string, address: string): boolean {
+  const [network, prefixText] = cidr.split("/");
+  if (network === undefined || prefixText === undefined || cidr.split("/").length !== 2)
+    throw new Error("Development trusted CIDRs must use IPv4 CIDR notation.");
+  const prefix = Number(prefixText);
+  if (!/^\d+$/.test(prefixText) || !Number.isInteger(prefix) || prefix < 0 || prefix > 32)
+    throw new Error("Development trusted CIDRs must use IPv4 CIDR notation.");
+  const networkValue = ipv4(network);
+  const addressValue = ipv4(address);
+  if (networkValue === undefined)
+    throw new Error("Development trusted CIDRs must use IPv4 CIDR notation.");
+  if (addressValue === undefined) return false;
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return (networkValue & mask) === (addressValue & mask);
+}
+
+function trustedDevelopmentAddress(
+  development: DevelopmentAdmission,
+  remoteAddress: string,
+): boolean {
+  if (LOOPBACK_ADDRESSES.has(remoteAddress)) return true;
+  const cidrs = development.trustedCidrs ?? [];
+  if (cidrs.length === 0) return false;
+  const normalized = remoteAddress.startsWith("::ffff:")
+    ? remoteAddress.slice("::ffff:".length)
+    : remoteAddress;
+  return cidrs.some((cidr) => cidrContains(cidr, normalized));
+}
+
+function validateTrustedDevelopmentCidrs(development: DevelopmentAdmission): void {
+  for (const cidr of development.trustedCidrs ?? []) {
+    cidrContains(cidr, "127.0.0.1");
+  }
+}
+
+function validAuthorizationEvidence(value: unknown): value is AuthorizationEvidence {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<AuthorizationEvidence>;
+  if (candidate.identityId !== undefined && !isNonEmptyString(candidate.identityId)) return false;
+  return [
+    candidate.groupIds,
+    candidate.bindingIds,
+    candidate.roleIds,
+    candidate.restrictionIds,
+  ].every((entries) => Array.isArray(entries) && entries.every(isNonEmptyString));
+}
+
+function jsonPointer(segment: string): string {
+  return segment.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+function validateConfiguration(value: unknown, depth = 0, path = ""): void {
+  if (depth > 24)
+    throw failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.", [
+      { path, code: "TOO_DEEP" },
+    ]);
+  if (value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries())
+      validateConfiguration(entry, depth + 1, `${path}/${index}`);
+    return;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype")
+      throw failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.", [
+        { path: `${path}/${jsonPointer(key)}`, code: "INVALID_VALUE" },
+      ]);
+    validateConfiguration(entry, depth + 1, `${path}/${jsonPointer(key)}`);
+  }
+}
+
+function operationTarget(
+  operation: OccApiRoute,
+  installationId: string,
+  params: Readonly<Record<string, unknown>>,
+): ResourceRef {
+  const namespaceId = typeof params.namespaceId === "string" ? params.namespaceId : undefined;
+  const configurationId =
+    typeof params.configurationId === "string" ? params.configurationId : undefined;
+  const serviceAccountId =
+    typeof params.serviceAccountId === "string" ? params.serviceAccountId : undefined;
+  const secretId = typeof params.secretId === "string" ? params.secretId : undefined;
+  const agentId = typeof params.agentId === "string" ? params.agentId : undefined;
+  const revisionId = typeof params.revisionId === "string" ? params.revisionId : undefined;
+  if (operation.operationId === "createNamespace") return { kind: "namespace", id: installationId };
+  if (operation.operationId === "createConfiguration" && namespaceId)
+    return { kind: "configuration", id: namespaceId, namespaceId };
+  if (configurationId && namespaceId)
+    return { kind: "configuration", id: configurationId, namespaceId };
+  if (operation.operationId === "createServiceAccount" && namespaceId)
+    return { kind: "service_account", id: namespaceId, namespaceId };
+  if (serviceAccountId && namespaceId)
+    return { kind: "service_account", id: serviceAccountId, namespaceId };
+  if (operation.operationId === "createSecret" && namespaceId)
+    return { kind: "secret", id: namespaceId, namespaceId };
+  if (secretId && namespaceId) return { kind: "secret", id: secretId, namespaceId };
+  if (operation.operationId === "createAgent" && namespaceId)
+    return { kind: "agent", id: namespaceId, namespaceId };
+  if (operation.operationId === "getAgentRevision" && namespaceId && revisionId)
+    return { kind: "agent_revision", id: revisionId, namespaceId };
+  if (agentId && namespaceId) return { kind: "agent", id: agentId, namespaceId };
+  if (namespaceId) return { kind: "namespace", id: namespaceId, namespaceId };
+  return { kind: "installation", id: installationId };
+}
+
+function requiredPermissions(operation: OccApiRoute): readonly RequiredPermission[] {
+  const permission = {
+    action: operation.iamAction,
+    resourceKind: operation.resourceKind,
+  };
+
+  if (operation.operationId === "createNamespace") {
+    return [
+      { ...permission, scope: "installation" },
+      {
+        action: "administer",
+        resourceKind: "installation",
+        scope: "requested",
+        condition: "existing_namespace",
+      },
+    ];
+  }
+
+  if (
+    operation.operationId === "createConfiguration" ||
+    operation.operationId === "updateConfiguration"
+  ) {
+    return [
+      {
+        ...permission,
+        scope: operation.operationId === "createConfiguration" ? "namespace" : "requested",
+      },
+      {
+        action: "operate",
+        resourceKind: "secret",
+        scope: operation.operationId === "createConfiguration" ? "request_body" : "requested",
+        condition: "bound_secret",
+      },
+    ];
+  }
+
+  if (operation.operationId === "createSecret") {
+    return [{ ...permission, scope: "namespace" }];
+  }
+
+  if (
+    operation.operationId === "createAgent" ||
+    operation.operationId === "updateAgent" ||
+    operation.operationId === "deployAgent"
+  ) {
+    return [
+      { ...permission, scope: operation.operationId === "createAgent" ? "namespace" : "requested" },
+      { action: "read", resourceKind: "configuration", scope: "requested" },
+      {
+        action: "read",
+        resourceKind: "service_account",
+        scope: "requested",
+        condition: "associated_service_account",
+      },
+      {
+        action: "operate",
+        resourceKind: "secret",
+        scope: "requested",
+        condition: "bound_secret",
+      },
+    ];
+  }
+
+  switch (operation.authorizationTarget) {
+    case "namespace_collection":
+      return [{ ...permission, scope: "namespace" }];
+    case "namespace_candidates":
+      return [{ ...permission, scope: "each_returned" }];
+    case "namespace_and_agent_candidates":
+      return [
+        { action: "read", resourceKind: "namespace", scope: "requested" },
+        { ...permission, scope: "each_returned" },
+      ];
+    case "agent_collection":
+      return [
+        { ...permission, scope: "requested" },
+        { action: "read", resourceKind: "agent_revision", scope: "each_returned" },
+      ];
+    default:
+      return [{ ...permission, scope: "requested" }];
+  }
+}
+
+function permissionDescription(
+  permissions: readonly RequiredPermission[],
+  operation?: OccApiRoute,
+): string {
+  const names: Record<ResourceKind, string> = {
+    installation: "Installation",
+    namespace: "Namespace",
+    configuration: "Configuration",
+    service_account: "ServiceAccount",
+    secret: "Secret",
+    agent: "Agent",
+    agent_revision: "AgentRevision",
+  };
+
+  const description = permissions
+    .map(({ action, resourceKind, scope, condition }) => {
+      const name = names[resourceKind];
+      if (condition === "associated_service_account")
+        return `Requires ${action} permission on each currently associated or newly associated ${name} when present.`;
+      if (condition === "existing_namespace")
+        return `Requires ${action} permission on the ${name} when selecting an existing Kubernetes namespace.`;
+      if (condition === "bound_secret") {
+        if (operation?.operationId === "createConfiguration")
+          return `Requires ${action} permission on each ${name} supplied in request body Secret bindings.`;
+        if (operation?.operationId === "updateConfiguration")
+          return `Requires ${action} permission on each ${name} bound by the resulting Configuration.`;
+        return `Requires ${action} permission on each bound ${name} when Secret bindings are present or selected.`;
+      }
+      switch (scope) {
+        case "installation":
+          return `Requires ${action} permission for ${name} resources in the Installation.`;
+        case "namespace":
+          return `Requires ${action} permission for ${name} resources in the requested Namespace.`;
+        case "each_returned":
+          return `Only ${name} resources with individual ${action} permission are returned.`;
+        default:
+          return `Requires ${action} permission on the requested ${name}.`;
+      }
+    })
+    .join(" ");
+
+  if (operation?.operationId === "deployAgent") {
+    return `${description} Deployment also requires the owning Agent service principal to have operate permission on each bound Secret.`;
+  }
+  return description;
+}
+
+function clientServiceAccount(account: Readonly<ServiceAccount>): Record<string, unknown> {
+  return {
+    id: account.id,
+    namespaceId: account.namespaceId,
+    name: account.name,
+    ...(account.credential === undefined ? {} : { credential: account.credential }),
+  };
+}
+
+function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
+  return {
+    id: agent.id,
+    namespaceId: agent.namespaceId,
+    name: agent.name,
+    configurationId: agent.configurationId,
+    executionMode: agent.executionMode,
+    ...(agent.serviceAccountId === undefined ? {} : { serviceAccountId: agent.serviceAccountId }),
+    ...(agent.activeRevisionId === undefined ? {} : { activeRevisionId: agent.activeRevisionId }),
+    createdAt: agent.createdAt,
+  };
+}
+
+function clientSecret(secret: Readonly<SecretMetadata>): Record<string, unknown> {
+  return {
+    id: secret.id,
+    namespaceId: secret.namespaceId,
+    name: secret.name,
+    ref: secret.ref,
+  };
+}
+
+function clientRevision(revision: Readonly<AgentRevision>): Record<string, unknown> {
+  return {
+    id: revision.id,
+    namespaceId: revision.namespaceId,
+    agentId: revision.agentId,
+    revision: revision.revision,
+    configurationId: revision.configurationId,
+    configurationKind: revision.configurationKind,
+    configurationGeneration: revision.configurationGeneration,
+    configuration: revision.configuration,
+    harness: revision.harness,
+    compute: revision.compute,
+    ...(revision.secretDriverId === undefined ? {} : { secretDriverId: revision.secretDriverId }),
+    ...(revision.secretBindings === undefined ? {} : { secretBindings: revision.secretBindings }),
+    ...(revision.serviceAccount === undefined ? {} : { serviceAccount: revision.serviceAccount }),
+    createdAt: revision.createdAt,
+  };
+}
+
+function responseHeaders(reply: FastifyReply, requestId: string): void {
+  reply.header("cache-control", "no-store");
+  reply.header("content-type", "application/json; charset=utf-8");
+  reply.header("x-content-type-options", "nosniff");
+  reply.header("x-request-id", requestId);
+}
+
+function canonicalFailure(reply: FastifyReply, error: RequestFailure): void {
+  responseHeaders(reply, reply.request.id);
+  reply.status(error.status).send({
+    error: {
+      code: error.code,
+      message: error.message,
+      ...(error.details === undefined ? {} : { details: error.details }),
+    },
+    meta: { requestId: reply.request.id },
+  });
+}
+
+function validationCode(keyword: string): ErrorDetail["code"] {
+  switch (keyword) {
+    case "required":
+      return "REQUIRED";
+    case "additionalProperties":
+      return "UNKNOWN_FIELD";
+    case "type":
+      return "INVALID_TYPE";
+    case "format":
+    case "pattern":
+      return "INVALID_FORMAT";
+    case "maxLength":
+      return "TOO_LONG";
+    default:
+      return "INVALID_VALUE";
+  }
+}
+
+function validationDetails(error: FastifyError): readonly ErrorDetail[] {
+  if (!Array.isArray(error.validation)) return [];
+  return error.validation.slice(0, 32).map((detail): ErrorDetail => {
+    const parameters = detail.params as Record<string, unknown>;
+    let path = typeof detail.instancePath === "string" ? detail.instancePath : "";
+    if (detail.keyword === "required" && typeof parameters.missingProperty === "string")
+      path += `/${jsonPointer(parameters.missingProperty)}`;
+    if (
+      detail.keyword === "additionalProperties" &&
+      typeof parameters.additionalProperty === "string"
+    )
+      path += `/${jsonPointer(parameters.additionalProperty)}`;
+    return { path, code: validationCode(detail.keyword) };
+  });
+}
+
+function requestFailure(error: unknown): RequestFailure {
+  if (error instanceof RequestFailure) return error;
+  if (error instanceof ConfigurationValidationError)
+    return failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.");
+  if (error instanceof ConfigurationOwnershipError)
+    return failure(503, "DEPENDENCY_UNAVAILABLE", "A required platform dependency is unavailable.");
+  if (error instanceof NamespaceNotReadyError)
+    return failure(
+      409,
+      "NAMESPACE_NOT_READY",
+      "The requested Namespace is not ready for deployment.",
+    );
+  if (error instanceof NamespaceNotEmptyError)
+    return failure(409, "NAMESPACE_NOT_EMPTY", "The requested Namespace is not empty.");
+  if (error instanceof DependencyUnavailableError)
+    return failure(503, "DEPENDENCY_UNAVAILABLE", "A required platform dependency is unavailable.");
+  if (error instanceof ResourceConflictError)
+    return failure(409, "RESOURCE_CONFLICT", "The requested platform resource already exists.");
+  if (error instanceof ScopeViolationError)
+    return failure(404, "NOT_FOUND", "The requested platform resource was not found.");
+  if (error instanceof AuthorizationDeniedError)
+    return failure(403, "FORBIDDEN", "The exact platform operation was not authorized.");
+  if (error instanceof Error) {
+    const candidate = error as FastifyError;
+    if (error.name === "APIError") {
+      const statusCode = (error as { readonly statusCode?: unknown }).statusCode;
+      const status = typeof statusCode === "number" ? statusCode : 500;
+      if (status === 409)
+        return failure(409, "RESOURCE_CONFLICT", "The requested platform resource already exists.");
+      if (status === 400)
+        return failure(
+          400,
+          "INVALID_REQUEST",
+          "The request does not match the operation contract.",
+        );
+      if (status === 401)
+        return failure(401, "UNAUTHENTICATED", "The caller did not provide valid credentials.");
+      if (status === 403)
+        return failure(403, "FORBIDDEN", "The exact platform operation was not authorized.");
+      return failure(
+        503,
+        "DEPENDENCY_UNAVAILABLE",
+        "A required platform dependency is unavailable.",
+      );
+    }
+    if (candidate.code === "FST_ERR_CTP_BODY_TOO_LARGE")
+      return failure(413, "PAYLOAD_TOO_LARGE", "The request body exceeds the permitted size.");
+    if (candidate.code === "FST_ERR_CTP_INVALID_MEDIA_TYPE")
+      return failure(415, "UNSUPPORTED_MEDIA_TYPE", "Requests must use application/json.");
+    if (
+      candidate.code === "FST_ERR_CTP_EMPTY_JSON_BODY" ||
+      candidate.code === "FST_ERR_CTP_INVALID_CONTENT_LENGTH" ||
+      candidate.code === "FST_ERR_CTP_INVALID_JSON_BODY" ||
+      candidate.statusCode === 400
+    ) {
+      const details = validationDetails(candidate);
+      return failure(
+        400,
+        "INVALID_REQUEST",
+        "The request does not match the operation contract.",
+        details.length > 0 ? details : undefined,
+      );
+    }
+    if (error.name === "AdmissionFailure") {
+      const status =
+        candidate.statusCode === 403 || (candidate as { status?: number }).status === 403
+          ? 403
+          : 401;
+      return failure(
+        status,
+        status === 403 ? "FORBIDDEN" : "UNAUTHENTICATED",
+        status === 403
+          ? "The request did not satisfy the configured admission boundary."
+          : "The caller did not provide valid admission evidence.",
+      );
+    }
+  }
+  return failure(500, "INTERNAL_ERROR", "The platform request could not be completed.");
+}
+
+export function createFastifyApp(options: ControllerAppOptions): FastifyInstance {
+  const development = Object.freeze({ ...options.development });
+  if (
+    options.controller &&
+    development.installationId !== undefined &&
+    development.installationId !== options.controller.installation.id
+  )
+    throw new Error(
+      "The configured Installation does not match the controller-owned Installation.",
+    );
+  const bodyLimit = options.maxBodyBytes ?? DEFAULT_BODY_LIMIT;
+  if (!Number.isSafeInteger(bodyLimit) || bodyLimit < 1)
+    throw new Error("The controller request-body limit must be a positive integer.");
+  validateTrustedDevelopmentCidrs(development);
+
+  const app = Fastify({
+    bodyLimit,
+    trustProxy: false,
+    requestIdHeader: false,
+    genReqId: () => `req_${randomUUID()}`,
+    ajv: {
+      customOptions: { removeAdditional: false, coerceTypes: false, useDefaults: false },
+      plugins: [formatsPlugin],
+    },
+  }).withTypeProvider<TypeBoxTypeProvider>();
+
+  app.removeContentTypeParser("text/plain");
+  app.addSchema(JsonValue);
+  void app.register(swagger, {
+    convertConstToEnum: false,
+    openapi: {
+      openapi: "3.1.0",
+      info: {
+        title: development.enabled ? "Development OCC API" : "Internal OCC API",
+        version: "0.1.0",
+      },
+      components: {
+        securitySchemes: {
+          sessionCookie: {
+            type: "apiKey",
+            in: "cookie",
+            name: `${OCC_AUTH_COOKIE_PREFIX}.session_token`,
+          },
+          serviceApiKey: { type: "apiKey", in: "header", name: OCC_SERVICE_KEY_HEADER },
+        },
+      },
+      security: [{ sessionCookie: [] }, { serviceApiKey: [] }],
+    },
+  });
+
+  let controller = options.controller;
+  let bootstrapping = false;
+  const installationId =
+    development.installationId ?? controller?.installation.id ?? `ins_${randomUUID()}`;
+  const admissions = new WeakMap<FastifyRequest, AdmittedCaller>();
+  const contexts = new WeakMap<FastifyRequest, RequestContext>();
+  const factory = options.auditEventFactory ?? new AuditEventFactory();
+  const createAuthAccountOperation = {
+    operationId: "createAuthAccount",
+    method: "POST",
+    path: "/api/auth/accounts",
+    action: "openclaw.auth.accounts.create",
+    iamAction: "administer",
+    resourceKind: "installation",
+    authorizationTarget: "installation",
+    summary: "Create an administrator-controlled local auth account",
+    tags: ["Authentication"],
+    schema: {
+      body: {
+        type: "object",
+        additionalProperties: false,
+        required: ["email", "password", "roleId"],
+        properties: {
+          email: { type: "string", minLength: 3, maxLength: 320 },
+          password: { type: "string", minLength: 12, maxLength: 128 },
+          name: { type: "string", minLength: 1, maxLength: 200 },
+          roleId: { type: "string", minLength: 1, maxLength: 200 },
+        },
+      },
+    },
+  } as unknown as OccApiRoute;
+  const serviceKeyOperations = [
+    {
+      operationId: "createServiceKey",
+      method: "POST",
+      path: "/api/auth/service-keys",
+      action: "openclaw.auth.service-keys.create",
+      summary: "Issue a service API key",
+    },
+    {
+      operationId: "revokeServiceKey",
+      method: "DELETE",
+      path: "/api/auth/service-keys/:keyId",
+      action: "openclaw.auth.service-keys.revoke",
+      summary: "Revoke a service API key",
+    },
+  ].map((operation) => ({
+    ...operation,
+    iamAction: "administer",
+    resourceKind: "installation",
+    authorizationTarget: "installation",
+    tags: ["Authentication"],
+    schema: {},
+  })) as unknown as readonly OccApiRoute[];
+
+  function event(
+    operation: OccApiRoute,
+    request: FastifyRequest,
+    resource: ResourceRef,
+    kind: "bootstrap" | "mutation" | "authorization_denial",
+    context?: RequestContext,
+    evidence?: AuthorizationEvidence,
+    result?: { readonly outcome: "success" | "denied" | "failure"; readonly reasonCode?: string },
+    authorization?: NonNullable<AuthorizationDeniedError["authorization"]>,
+  ): AuditEvent {
+    return factory.create({
+      installationId,
+      ...(resource.namespaceId === undefined ? {} : { namespaceId: resource.namespaceId }),
+      kind,
+      source: "occ",
+      requestId: request.id,
+      ...(context === undefined
+        ? { actor: { unresolved: true } }
+        : {
+            actor: {
+              principalId: context.actorId,
+              issuer: context.issuer,
+              subject: context.subject,
+            },
+            admissionDecisionId: context.admissionDecisionId,
+            iamDriverId: selectedIAMDriver().id,
+            authorization: {
+              principalId: context.actorId,
+              action: authorization?.action ?? operation.iamAction,
+              resource:
+                authorization?.resource ??
+                operationTarget(
+                  operation,
+                  installationId,
+                  request.params as Record<string, unknown>,
+                ),
+            },
+            ...(evidence === undefined
+              ? {}
+              : {
+                  ...(evidence.restrictionIds.length > 0
+                    ? { decisionReason: "A matching Restriction denied the operation." }
+                    : {}),
+                  details: {
+                    iamEvidence: {
+                      ...(evidence.identityId === undefined
+                        ? {}
+                        : { identityId: evidence.identityId }),
+                      groupIds: evidence.groupIds,
+                      bindingIds: evidence.bindingIds,
+                      roleIds: evidence.roleIds,
+                      restrictionIds: evidence.restrictionIds,
+                    },
+                  },
+                }),
+          }),
+      action: operation.action,
+      resource,
+      outcome:
+        result?.outcome ?? (kind === "bootstrap" || kind === "mutation" ? "success" : "denied"),
+      ...(result?.reasonCode === undefined
+        ? kind === "authorization_denial"
+          ? { reasonCode: "AUTHORIZATION_DENIED" }
+          : {}
+        : { reasonCode: result.reasonCode }),
+    });
+  }
+
+  function selectedIAMDriver(): IAMDriver {
+    try {
+      const selected =
+        controller === undefined ? options.iamDriver : controller.selectedDriver("iam");
+      if (selected.capability !== "iam") throw new Error("Invalid authorization authority.");
+      return selected;
+    } catch {
+      throw dependencyUnavailable();
+    }
+  }
+
+  function dependencyUnavailable(): RequestFailure {
+    return failure(503, "DEPENDENCY_UNAVAILABLE", "A required platform dependency is unavailable.");
+  }
+
+  async function requireInstallationAdmin(
+    request: FastifyRequest,
+    operation: OccApiRoute,
+    context: RequestContext,
+  ) {
+    const target: ResourceRef = { kind: "installation", id: installationId };
+    let selected: IAMDriver;
+    let decision;
+    try {
+      selected = selectedIAMDriver();
+      decision = await selected.authorize({
+        principalId: context.actorId,
+        action: "administer",
+        resource: target,
+      });
+    } catch {
+      throw dependencyUnavailable();
+    }
+    if (
+      !decision ||
+      typeof decision.allowed !== "boolean" ||
+      decision.driverId !== selected.id ||
+      !validAuthorizationEvidence(decision.evidence)
+    )
+      throw dependencyUnavailable();
+    if (!decision.allowed) {
+      await denial(operation, request, "authorization_denial", context, decision.evidence);
+      throw failure(403, "FORBIDDEN", "The exact platform operation was not authorized.");
+    }
+    return { selected, target, decision };
+  }
+
+  async function denial(
+    operation: OccApiRoute,
+    request: FastifyRequest,
+    kind: "authorization_denial",
+    context?: RequestContext,
+    evidence?: AuthorizationEvidence,
+    authorization?: NonNullable<AuthorizationDeniedError["authorization"]>,
+  ): Promise<void> {
+    try {
+      await options.auditSink.append(
+        event(
+          operation,
+          request,
+          operationTarget(operation, installationId, request.params as Record<string, unknown>),
+          kind,
+          context,
+          evidence,
+          undefined,
+          authorization,
+        ),
+      );
+    } catch {
+      throw failure(
+        503,
+        "DEPENDENCY_UNAVAILABLE",
+        "A required platform dependency is unavailable.",
+      );
+    }
+  }
+
+  async function rejectedMutation(
+    operation: OccApiRoute,
+    request: FastifyRequest,
+    context: RequestContext,
+    reasonCode: string,
+  ): Promise<void> {
+    try {
+      await options.auditSink.append(
+        event(
+          operation,
+          request,
+          operationTarget(operation, installationId, request.params as Record<string, unknown>),
+          "mutation",
+          context,
+          undefined,
+          { outcome: "failure", reasonCode },
+        ),
+      );
+    } catch {
+      throw failure(
+        503,
+        "DEPENDENCY_UNAVAILABLE",
+        "A required platform dependency is unavailable.",
+      );
+    }
+  }
+
+  app.addHook("onRequest", async (request, reply) => {
+    responseHeaders(reply, request.id);
+    const contentLength = request.headers["content-length"];
+    if (typeof contentLength === "string" && Number(contentLength) > bodyLimit)
+      throw failure(413, "PAYLOAD_TOO_LARGE", "The request body exceeds the permitted size.");
+  });
+
+  async function admit(request: FastifyRequest, operation: OccApiRoute): Promise<void> {
+    if (
+      request.headers[OCC_SERVICE_KEY_HEADER] !== undefined &&
+      (operation === createAuthAccountOperation ||
+        operation.operationId === "bootstrapInstallation")
+    )
+      throw failure(401, "UNAUTHENTICATED", "A human controller session is required.");
+    const params = request.params as Record<string, unknown>;
+    if (Object.keys(request.query as Record<string, unknown>).length > 0)
+      throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
+    for (const [parameter, pattern] of Object.entries(RESOURCE_ID)) {
+      if (
+        params[parameter] !== undefined &&
+        (typeof params[parameter] !== "string" || !pattern.test(params[parameter] as string))
+      )
+        throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
+    }
+
+    const host = request.headers.host;
+    let hostname: string;
+    try {
+      hostname = new URL(`http://${host ?? "127.0.0.1"}`).hostname;
+    } catch {
+      hostname = "";
+    }
+    const remoteAddress = request.raw.socket.remoteAddress ?? "127.0.0.1";
+    const origin = request.headers.origin;
+    let originAllowed = true;
+    if (typeof origin === "string") {
+      try {
+        originAllowed = LOOPBACK_HOSTNAMES.has(new URL(origin).hostname);
+      } catch {
+        originAllowed = false;
+      }
+    } else if (Array.isArray(origin)) {
+      originAllowed = false;
+    }
+    const forwarded = Object.keys(request.headers).some(
+      (name) => name === "forwarded" || name === "x-real-ip" || name.startsWith("x-forwarded-"),
+    );
+    if (
+      forwarded ||
+      (development.enabled &&
+        (!LOOPBACK_HOSTNAMES.has(hostname) ||
+          !originAllowed ||
+          !trustedDevelopmentAddress(development, remoteAddress)))
+    ) {
+      throw failure(
+        403,
+        "FORBIDDEN",
+        development.enabled
+          ? "Development admission is restricted to direct loopback requests."
+          : "Production admission requires a direct request.",
+      );
+    }
+
+    let admitted: AdmittedCaller;
+    try {
+      admitted = await options.auth.admissionVerifier.verify({
+        requestId: request.id,
+        method: request.method,
+        routeId: operation.operationId,
+        requestedScope: {
+          installationId,
+          ...(typeof params.namespaceId === "string" ? { namespaceId: params.namespaceId } : {}),
+        },
+        transport: {
+          remoteAddress,
+          ...(request.raw.socket.localAddress === undefined
+            ? {}
+            : { localAddress: request.raw.socket.localAddress }),
+          trustProxy: false,
+        },
+        ...(typeof request.headers.authorization === "string"
+          ? { authorizationHeader: request.headers.authorization }
+          : {}),
+        headers: request.headers,
+      });
+    } catch (error) {
+      throw requestFailure(error);
+    }
+
+    if (
+      !admitted ||
+      !isNonEmptyString(admitted.externalIdentity?.issuer) ||
+      !isNonEmptyString(admitted.externalIdentity?.subject) ||
+      !isNonEmptyString(admitted.decisionId) ||
+      (admitted.method !== "session" && admitted.method !== "api_key") ||
+      admitted.admittedScope?.installationId !== installationId ||
+      (admitted.method === "session" &&
+        admitted.admittedScope.namespaceId !== undefined &&
+        admitted.admittedScope.namespaceId !== params.namespaceId)
+    ) {
+      await denial(operation, request, "authorization_denial");
+      throw failure(
+        503,
+        "DEPENDENCY_UNAVAILABLE",
+        "A required platform dependency is unavailable.",
+      );
+    }
+
+    admissions.set(request, admitted);
+  }
+
+  async function resolveIdentity(request: FastifyRequest, operation: OccApiRoute): Promise<void> {
+    const admitted = admissions.get(request);
+    if (!admitted)
+      throw failure(
+        503,
+        "DEPENDENCY_UNAVAILABLE",
+        "A required platform dependency is unavailable.",
+      );
+    let selected: IAMDriver;
+    let identity;
+    try {
+      selected = selectedIAMDriver();
+      identity = await selected.lookupIdentity(
+        admitted.method === "api_key"
+          ? {
+              servicePrincipalId: admitted.externalIdentity.subject,
+              ...(admitted.admittedScope.namespaceId === undefined
+                ? {}
+                : { namespaceId: admitted.admittedScope.namespaceId }),
+            }
+          : {
+              issuer: admitted.externalIdentity.issuer,
+              subject: admitted.externalIdentity.subject,
+            },
+      );
+    } catch {
+      throw failure(
+        503,
+        "DEPENDENCY_UNAVAILABLE",
+        "A required platform dependency is unavailable.",
+      );
+    }
+
+    if (
+      !identity ||
+      (admitted.method === "api_key"
+        ? identity.kind !== "service_principal" ||
+          identity.agentId !== undefined ||
+          identity.id !== admitted.externalIdentity.subject ||
+          identity.namespaceId !== admitted.admittedScope.namespaceId
+        : identity.kind !== "principal" ||
+          identity.issuer !== admitted.externalIdentity.issuer ||
+          identity.subject !== admitted.externalIdentity.subject)
+    ) {
+      await denial(operation, request, "authorization_denial");
+      throw failure(403, "FORBIDDEN", "The exact platform operation was not authorized.");
+    }
+
+    const context: RequestContext = {
+      actorId: identity.id,
+      issuer: admitted.externalIdentity.issuer,
+      subject: admitted.externalIdentity.subject,
+      admissionDecisionId: admitted.decisionId,
+      operation,
+    };
+    contexts.set(request, context);
+    if (
+      admitted.method === "api_key" &&
+      admitted.admittedScope.namespaceId !== undefined &&
+      admitted.admittedScope.namespaceId !== (request.params as Record<string, unknown>).namespaceId
+    ) {
+      await denial(operation, request, "authorization_denial", context);
+      throw failure(403, "FORBIDDEN", "The admitted Namespace does not match.");
+    }
+  }
+
+  async function perform(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    operation: OccApiRoute,
+  ): Promise<void> {
+    const context = contexts.get(request);
+    if (!context)
+      throw failure(
+        503,
+        "DEPENDENCY_UNAVAILABLE",
+        "A required platform dependency is unavailable.",
+      );
+    const params = request.params as Record<string, string>;
+    const body = request.body as Record<string, unknown> | undefined;
+    if (body !== undefined) validateConfiguration(body);
+
+    if (operation.operationId === "bootstrapInstallation") {
+      if (controller || bootstrapping)
+        throw failure(409, "INSTALLATION_EXISTS", "The deployment already owns an Installation.");
+      bootstrapping = true;
+      try {
+        const { selected, target, decision } = await requireInstallationAdmin(
+          request,
+          operation,
+          context,
+        );
+        if (!options.createController)
+          throw failure(
+            503,
+            "DEPENDENCY_UNAVAILABLE",
+            "A required platform dependency is unavailable.",
+          );
+        const installation: Installation = {
+          id: installationId,
+          name: body?.name as string,
+          createdAt: new Date().toISOString(),
+        };
+        const created = options.createController(installation);
+        created.registerDriver(selected);
+        created.selectDriver("iam", selected.id);
+        if (options.computeDriver) {
+          created.registerDriver(options.computeDriver);
+          created.selectDriver("compute", options.computeDriver.id);
+        }
+        if (options.configurationDriver) {
+          created.registerDriver(options.configurationDriver);
+          created.selectDriver("configuration", options.configurationDriver.id);
+        }
+        if (options.secretDriver) {
+          created.registerDriver(options.secretDriver);
+          created.selectDriver("secret", options.secretDriver.id);
+        }
+        if (options.sandboxDriver) {
+          created.registerDriver(options.sandboxDriver);
+          created.selectDriver("sandbox", options.sandboxDriver.id);
+        }
+        await created.transact(async (unit) => {
+          await unit.audit.append(
+            event(operation, request, target, "bootstrap", context, decision.evidence),
+          );
+        });
+        controller = created;
+        reply.status(201).send({ data: created.installation, meta: { requestId: request.id } });
+        return;
+      } finally {
+        bootstrapping = false;
+      }
+    }
+
+    if (!controller)
+      throw failure(404, "NOT_FOUND", "The requested platform resource was not found.");
+
+    if (operation.operationId === "getInstallation") {
+      reply.send({
+        data: await controller.getInstallation(context.actorId),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
+    if (operation.operationId === "createNamespace") {
+      const namespace = await controller.transact(async (unit) => {
+        const created = await controller!.createNamespace(context.actorId, {
+          name: body?.name as string,
+          ...(body?.existingNamespace === undefined
+            ? {}
+            : { existingNamespace: body.existingNamespace as string }),
+        });
+        const target: ResourceRef = {
+          kind: "namespace",
+          id: created.id,
+          namespaceId: created.id,
+        };
+        await unit.audit.append(event(operation, request, target, "mutation", context));
+        return created;
+      });
+      reply.status(201).send({ data: namespace, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "listNamespaces") {
+      reply.send({
+        data: await controller.listNamespaces(context.actorId),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
+    const namespaceId = params.namespaceId;
+    if (!namespaceId)
+      throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
+    if (operation.operationId === "getNamespace") {
+      reply.send({
+        data: await controller.getNamespace(context.actorId, namespaceId),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
+    if (operation.operationId === "deleteNamespace") {
+      const namespace = await controller.transact(async (unit) => {
+        const deleting = await controller!.deleteNamespace(context.actorId, namespaceId);
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            {
+              kind: "namespace",
+              id: deleting.id,
+              namespaceId: deleting.id,
+            },
+            "mutation",
+            context,
+          ),
+        );
+        return deleting;
+      });
+      reply.status(202).send({ data: namespace, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "createConfiguration") {
+      const configuration = await controller.transact(async (unit) => {
+        const created = await controller!.createConfiguration(context.actorId, {
+          namespaceId,
+          kind: body?.kind as "agent",
+          values: body?.values as OpenClawConfigurationDocument,
+          ...(body?.secretBindings === undefined
+            ? {}
+            : { secretBindings: body.secretBindings as SecretBindings }),
+        });
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "configuration", id: created.id, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return created;
+      });
+      reply.status(201).send({ data: configuration, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "getConfiguration") {
+      const configuration = await controller.getConfiguration(
+        context.actorId,
+        namespaceId,
+        params.configurationId as string,
+      );
+      reply.send({ data: configuration, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "updateConfiguration") {
+      const configuration = await controller.transact(async (unit) => {
+        const updated = await controller!.updateConfiguration(context.actorId, {
+          namespaceId,
+          configurationId: params.configurationId as string,
+          values: body?.values as OpenClawConfigurationDocument,
+          ...(body?.secretBindings === undefined
+            ? {}
+            : { secretBindings: body.secretBindings as SecretBindings }),
+        });
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "configuration", id: updated.id, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return updated;
+      });
+      reply.send({ data: configuration, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "deleteConfiguration") {
+      await controller.transact(async (unit) => {
+        await controller!.deleteConfiguration(
+          context.actorId,
+          namespaceId,
+          params.configurationId as string,
+        );
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "configuration", id: params.configurationId as string, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+      });
+      reply.status(204).send();
+      return;
+    }
+
+    if (operation.operationId === "createSecret") {
+      const secret = await controller.transact(async (unit) => {
+        const created = await controller!.createSecret(context.actorId, {
+          namespaceId,
+          name: body?.name as string,
+          value: body?.value as string,
+        });
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "secret", id: created.id, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return clientSecret(created);
+      });
+      reply.status(201).send({ data: secret, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "getSecret") {
+      const secret = await controller.readSecret(
+        context.actorId,
+        namespaceId,
+        params.secretId as string,
+      );
+      reply.send({ data: clientSecret(secret), meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "updateSecret") {
+      const secret = await controller.transact(async (unit) => {
+        const updated = await controller!.updateSecret(context.actorId, {
+          namespaceId,
+          secretId: params.secretId as string,
+          value: body?.value as string,
+        });
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "secret", id: updated.id, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return clientSecret(updated);
+      });
+      reply.send({ data: secret, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "deleteSecret") {
+      await controller.transact(async (unit) => {
+        await controller!.deleteSecret(context.actorId, namespaceId, params.secretId as string);
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "secret", id: params.secretId as string, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+      });
+      reply.status(204).send();
+      return;
+    }
+
+    if (operation.operationId === "createServiceAccount") {
+      const account = await controller.transact(async (unit) => {
+        const created = await controller!.createServiceAccount(context.actorId, {
+          namespaceId,
+          name: body?.name as string,
+        });
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "service_account", id: created.id, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return clientServiceAccount(created);
+      });
+      reply.status(201).send({ data: account, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "getServiceAccount") {
+      const account = await controller.getServiceAccount(
+        context.actorId,
+        namespaceId,
+        params.serviceAccountId as string,
+      );
+      reply.send({ data: clientServiceAccount(account), meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "createServiceAccountCredential") {
+      const account = await controller.transact(async (unit) => {
+        const updated = await controller!.createServiceAccountCredential(
+          context.actorId,
+          namespaceId,
+          params.serviceAccountId as string,
+        );
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "service_account", id: updated.id, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return clientServiceAccount(updated);
+      });
+      reply.status(201).send({ data: account, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "updateServiceAccountCredential") {
+      const account = await controller.transact(async (unit) => {
+        const updated = await controller!.updateServiceAccountCredential(
+          context.actorId,
+          namespaceId,
+          params.serviceAccountId as string,
+          body as unknown as ServiceAccountCredential,
+        );
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "service_account", id: updated.id, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return clientServiceAccount(updated);
+      });
+      reply.send({ data: account, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "deleteServiceAccount") {
+      await controller.transact(async (unit) => {
+        await controller!.deleteServiceAccount(
+          context.actorId,
+          namespaceId,
+          params.serviceAccountId as string,
+        );
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "service_account", id: params.serviceAccountId as string, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+      });
+      reply.status(204).send();
+      return;
+    }
+
+    if (operation.operationId === "createAgent") {
+      const agent = await controller.transact(async (unit) => {
+        const created = await controller!.createAgent(context.actorId, {
+          namespaceId,
+          name: body?.name as string,
+          configurationId: body?.configurationId as string,
+          ...(body?.executionMode === undefined
+            ? {}
+            : { executionMode: body.executionMode as HarnessExecutionMode }),
+          ...(body?.serviceAccountId === undefined
+            ? {}
+            : { serviceAccountId: body.serviceAccountId as string }),
+        });
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "agent", id: created.id, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return clientAgent(created);
+      });
+      reply.status(201).send({ data: agent, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "listAgents") {
+      const agents = await controller.listAgents(context.actorId, namespaceId);
+      reply.send({ data: agents.map(clientAgent), meta: { requestId: request.id } });
+      return;
+    }
+
+    const agentId = params.agentId;
+    if (!agentId)
+      throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
+    if (operation.operationId === "getAgent") {
+      reply.send({
+        data: clientAgent(await controller.getAgent(context.actorId, namespaceId, agentId)),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
+    if (operation.operationId === "updateAgent") {
+      const agent = await controller.transact(async (unit) => {
+        const updated = await controller!.updateAgent(context.actorId, {
+          namespaceId,
+          agentId,
+          configurationId: body?.configurationId as string,
+          ...(body?.executionMode === undefined
+            ? {}
+            : { executionMode: body.executionMode as HarnessExecutionMode }),
+          ...(body?.serviceAccountId === undefined
+            ? {}
+            : { serviceAccountId: body.serviceAccountId as string | null }),
+        });
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "agent", id: updated.id, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return clientAgent(updated);
+      });
+      reply.send({ data: agent, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "deployAgent") {
+      try {
+        const revision = await controller.transact(async (unit) => {
+          const admitted = await controller!.deployAgent(
+            context.actorId,
+            { namespaceId, agentId },
+            options.resolveHarness,
+          );
+          await unit.audit.append(
+            event(
+              operation,
+              request,
+              { kind: "agent_revision", id: admitted.id, namespaceId },
+              "mutation",
+              context,
+            ),
+          );
+          return clientRevision(admitted);
+        });
+        reply.status(202).send({ data: revision, meta: { requestId: request.id } });
+        return;
+      } catch (error) {
+        if (error instanceof NamespaceNotReadyError)
+          await rejectedMutation(operation, request, context, "NAMESPACE_NOT_READY");
+        throw error;
+      }
+    }
+
+    if (operation.operationId === "listAgentRevisions") {
+      const revisions = await controller.listRevisions(context.actorId, namespaceId, agentId);
+      reply.send({
+        data: revisions.map(clientRevision),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
+    if (operation.operationId === "getAgentRevision") {
+      const revision = await controller.getRevision(
+        context.actorId,
+        namespaceId,
+        agentId,
+        params.revisionId as string,
+      );
+      reply.send({ data: clientRevision(revision), meta: { requestId: request.id } });
+      return;
+    }
+
+    throw failure(404, "NOT_FOUND", "The requested platform resource was not found.");
+  }
+
+  void app.register(async (routes) => {
+    const meta = {
+      type: "object",
+      additionalProperties: false,
+      required: ["requestId"],
+      properties: { requestId: { type: "string" } },
+    };
+    const envelope = (data: Record<string, unknown>) => ({
+      type: "object",
+      additionalProperties: false,
+      required: ["data", "meta"],
+      properties: { data, meta },
+    });
+    const error = {
+      type: "object",
+      additionalProperties: false,
+      required: ["error", "meta"],
+      properties: {
+        error: {
+          type: "object",
+          additionalProperties: false,
+          required: ["code", "message"],
+          properties: { code: { type: "string" }, message: { type: "string" } },
+        },
+        meta,
+      },
+    };
+    const responses = (success: Record<string, unknown>, status = 200) => ({
+      [status]: { description: status === 201 ? "Created" : "OK", ...envelope(success) },
+      401: { description: "Unauthorized", ...error },
+      503: { description: "Service Unavailable", ...error },
+    });
+    const accountBody = (
+      createAuthAccountOperation.schema as {
+        readonly body: { readonly properties: Record<string, unknown> };
+      }
+    ).body;
+    const account = {
+      type: "object",
+      additionalProperties: true,
+      required: ["id", "email", "name", "principalId"],
+      properties: {
+        id: { type: "string" },
+        email: { type: "string", format: "email" },
+        name: { type: "string" },
+        principalId: { type: "string" },
+      },
+    };
+
+    for (const operation of serviceKeyOperations) {
+      const creating = operation.method === "POST";
+      const serviceKey = {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "servicePrincipalId", "name", "expiresAt", "key"],
+        properties: {
+          id: { type: "string" },
+          servicePrincipalId: { type: "string" },
+          namespaceId: { type: "string" },
+          name: { type: "string" },
+          expiresAt: { type: "string", format: "date-time" },
+          key: { type: "string" },
+        },
+      };
+      routes.route({
+        method: operation.method as HTTPMethods,
+        url: operation.path,
+        schema: {
+          operationId: operation.operationId,
+          summary: operation.summary,
+          description: creating
+            ? "Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope; creates no identity or IAM grant. The plaintext key is returned only here."
+            : "Requires a session or Installation-scoped service key with administer on the Installation. Deletes the stored Better Auth key; subsequent requests cannot authenticate with it.",
+          tags: [...operation.tags],
+          security: [{ sessionCookie: [] }, { serviceApiKey: [] }],
+          "x-openclaw-permissions": [
+            { action: "administer", resourceKind: "installation", scope: "requested" },
+          ],
+          ...(creating
+            ? {
+                body: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["servicePrincipalId", "name"],
+                  properties: {
+                    servicePrincipalId: { type: "string", minLength: 1, maxLength: 200 },
+                    namespaceId: { type: "string", pattern: RESOURCE_ID.namespaceId.source },
+                    name: { type: "string", minLength: 1, maxLength: 32, pattern: "\\S" },
+                    expiresIn: {
+                      type: "integer",
+                      minimum: 86400,
+                      maximum: 31536000,
+                      description: "Lifetime in seconds; defaults to 30 days.",
+                    },
+                  },
+                },
+              }
+            : {
+                params: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["keyId"],
+                  properties: { keyId: { type: "string", minLength: 1, maxLength: 200 } },
+                },
+              }),
+          response: {
+            ...responses(
+              creating
+                ? serviceKey
+                : {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["id", "revoked"],
+                    properties: {
+                      id: { type: "string" },
+                      revoked: { type: "boolean", const: true },
+                    },
+                  },
+              creating ? 201 : 200,
+            ),
+            400: { description: "Bad Request", ...error },
+            403: { description: "Forbidden", ...error },
+            404: { description: "Not Found", ...error },
+            409: { description: "Conflict", ...error },
+          },
+        } as DocumentedFastifySchema,
+        onRequest: async (request) => admit(request, operation),
+        preHandler: async (request) => resolveIdentity(request, operation),
+        handler: async (request, reply) => {
+          const context = contexts.get(request);
+          if (!context) throw dependencyUnavailable();
+          if (!controller)
+            throw failure(409, "RESOURCE_CONFLICT", "Bootstrap the Installation first.");
+          if (!creating && request.body !== undefined)
+            throw failure(
+              400,
+              "INVALID_REQUEST",
+              "The request does not match the operation contract.",
+            );
+          const { selected, target, decision } = await requireInstallationAdmin(
+            request,
+            operation,
+            context,
+          );
+          const audit = (key: { id: string; servicePrincipalId: string }) => {
+            const base = event(operation, request, target, "mutation", context, decision.evidence);
+            return {
+              ...base,
+              details: {
+                ...base.details,
+                serviceKeyId: key.id,
+                servicePrincipalId: key.servicePrincipalId,
+              },
+            };
+          };
+          if (creating) {
+            const body = request.body as {
+              servicePrincipalId: string;
+              namespaceId?: string;
+              name: string;
+              expiresIn?: number;
+            };
+            let principal;
+            try {
+              principal = await selected.lookupIdentity({
+                servicePrincipalId: body.servicePrincipalId,
+                ...(body.namespaceId === undefined ? {} : { namespaceId: body.namespaceId }),
+              });
+            } catch {
+              throw dependencyUnavailable();
+            }
+            if (
+              !principal ||
+              principal.kind !== "service_principal" ||
+              principal.agentId !== undefined ||
+              principal.id !== body.servicePrincipalId ||
+              principal.namespaceId !== body.namespaceId
+            )
+              throw failure(
+                400,
+                "INVALID_REQUEST",
+                "An existing non-Agent ServicePrincipal in the exact scope is required.",
+              );
+            let key;
+            try {
+              key = await options.auth.createServiceKey({
+                principal,
+                name: body.name,
+                ...(body.expiresIn === undefined ? {} : { expiresIn: body.expiresIn }),
+              });
+              await options.auditSink.append(audit(key));
+            } catch {
+              // Never return an unaudited credential; remove it if audit persistence fails.
+              if (key) await options.auth.revokeServiceKey(key).catch(() => {});
+              throw dependencyUnavailable();
+            }
+            reply.status(201).send({ data: key, meta: { requestId: request.id } });
+          } else {
+            const { keyId } = request.params as { keyId: string };
+            let key;
+            try {
+              key = await options.auth.getServiceKey(keyId);
+            } catch {
+              throw dependencyUnavailable();
+            }
+            if (!key) throw failure(404, "NOT_FOUND", "The service API key was not found.");
+            try {
+              await options.auth.revokeServiceKey(key);
+              await options.auditSink.append(audit(key));
+            } catch {
+              throw dependencyUnavailable();
+            }
+            reply.send({ data: { id: key.id, revoked: true }, meta: { requestId: request.id } });
+          }
+        },
+      });
+    }
+
+    routes.post(
+      "/api/auth/sign-in/email",
+      {
+        schema: {
+          operationId: "signInEmail",
+          summary: "Sign in with email and password",
+          description: "Authenticates a local account and issues a Better Auth session cookie.",
+          tags: ["Authentication"],
+          security: [],
+          body: {
+            type: "object",
+            additionalProperties: false,
+            required: ["email", "password"],
+            properties: {
+              email: accountBody.properties.email,
+              password: accountBody.properties.password,
+            },
+          },
+          response: responses({
+            type: "object",
+            additionalProperties: false,
+            required: ["authenticated"],
+            properties: { authenticated: { type: "boolean", const: true } },
+          }),
+        },
+      },
+      async (request, reply) => options.auth.signInEmail(request, reply),
+    );
+    routes.post(
+      "/api/auth/sign-out",
+      {
+        schema: {
+          operationId: "signOut",
+          summary: "Sign out of the current session",
+          description: "Revokes the current Better Auth session cookie.",
+          tags: ["Authentication"],
+          security: [{ sessionCookie: [] }],
+          response: responses({ type: "object", additionalProperties: true }),
+        },
+      },
+      async (request, reply) => options.auth.signOut(request, reply),
+    );
+    routes.get(
+      "/api/auth/session",
+      {
+        schema: {
+          operationId: "getAuthSession",
+          summary: "Inspect authentication without revealing session tokens",
+          description:
+            "Returns only authenticated status and public account identity, or null without a valid session; session tokens and credentials are never returned.",
+          tags: ["Authentication"],
+          security: [],
+          response: {
+            200: {
+              description: "OK",
+              ...envelope({
+                anyOf: [
+                  { type: "null" },
+                  {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["authenticated", "user"],
+                    properties: {
+                      authenticated: { type: "boolean", const: true },
+                      user: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["id", "email", "name"],
+                        properties: {
+                          id: { type: "string" },
+                          email: { type: "string", format: "email" },
+                          name: { type: "string" },
+                        },
+                      },
+                    },
+                  },
+                ],
+              }),
+            },
+            503: { description: "Service Unavailable", ...error },
+          },
+        },
+      },
+      async (request, reply) => options.auth.session(request, reply),
+    );
+    routes.post(
+      "/api/auth/accounts",
+      {
+        schema: {
+          ...createAuthAccountOperation.schema,
+          operationId: createAuthAccountOperation.operationId,
+          summary: createAuthAccountOperation.summary,
+          description:
+            "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role; public signup remains disabled.",
+          tags: [...createAuthAccountOperation.tags],
+          security: [{ sessionCookie: [] }],
+          "x-openclaw-permissions": [
+            { action: "administer", resourceKind: "installation", scope: "requested" },
+          ],
+          response: {
+            ...responses(account, 201),
+            400: { description: "Bad Request", ...error },
+            403: { description: "Forbidden", ...error },
+            409: { description: "Conflict", ...error },
+          },
+        },
+        onRequest: async (request) => admit(request, createAuthAccountOperation),
+        preValidation: async (request) => resolveIdentity(request, createAuthAccountOperation),
+      },
+      async (request, reply) => {
+        const context = contexts.get(request);
+        if (!context)
+          throw failure(
+            503,
+            "DEPENDENCY_UNAVAILABLE",
+            "A required platform dependency is unavailable.",
+          );
+        if (options.provisionAuthAccount === undefined)
+          throw failure(
+            503,
+            "DEPENDENCY_UNAVAILABLE",
+            "A required platform dependency is unavailable.",
+          );
+
+        const body = request.body as Record<string, unknown> | undefined;
+        const email = body?.email;
+        const password = body?.password;
+        const name = body?.name;
+        const roleId = body?.roleId;
+        if (
+          !isNonEmptyString(email) ||
+          !isNonEmptyString(password) ||
+          !isNonEmptyString(roleId) ||
+          (name !== undefined && !isNonEmptyString(name))
+        )
+          throw failure(
+            400,
+            "INVALID_REQUEST",
+            "The request does not match the operation contract.",
+          );
+
+        const { target, decision } = await requireInstallationAdmin(
+          request,
+          createAuthAccountOperation,
+          context,
+        );
+
+        const account = await options.auth.createAccount({
+          email,
+          password,
+          ...(name === undefined ? {} : { name }),
+        });
+        const seed = options.auth.principalSeed(account, { roleId });
+        const auditEvent = event(
+          createAuthAccountOperation,
+          request,
+          target,
+          "mutation",
+          context,
+          decision.evidence,
+        );
+        try {
+          await options.provisionAuthAccount(seed, auditEvent);
+        } catch (error) {
+          try {
+            await options.auth.deleteAccount(account);
+          } catch {
+            // The failed provisioning path still returns the original dependency error.
+          }
+          throw error instanceof RequestFailure
+            ? error
+            : error instanceof AuthAccountRoleNotFoundError
+              ? failure(
+                  400,
+                  "INVALID_REQUEST",
+                  "The request does not match the operation contract.",
+                )
+              : new DependencyUnavailableError(
+                  error instanceof Error ? error.message : "Auth account provisioning failed.",
+                );
+        }
+        reply.status(201).send({
+          data: {
+            id: account.id,
+            email: account.email,
+            name: account.name,
+            principalId: seed.principal.id,
+          },
+          meta: { requestId: request.id },
+        });
+      },
+    );
+  });
+
+  void app.register(async (routes) => {
+    routes.addSchema(ErrorResponse);
+    routes.addSchema(SecretResponse);
+    for (const operation of occApiRoutes) {
+      const permissions = requiredPermissions(operation);
+      const schema: DocumentedFastifySchema = {
+        ...operation.schema,
+        operationId: operation.operationId,
+        summary: operation.summary,
+        description: permissionDescription(permissions, operation),
+        tags: [...operation.tags],
+        "x-openclaw-permissions": permissions,
+        ...(operation.operationId === "bootstrapInstallation"
+          ? { security: [{ sessionCookie: [] }] }
+          : {}),
+      } as DocumentedFastifySchema;
+      routes.route({
+        method: operation.method as HTTPMethods,
+        url: operation.path,
+        schema,
+        onRequest: async (request) => admit(request, operation),
+        preValidation: async (request) => {
+          const hasRequestBody =
+            request.body !== undefined ||
+            Number(request.headers["content-length"] ?? 0) > 0 ||
+            request.headers["transfer-encoding"] !== undefined;
+          if (!Object.hasOwn(operation.schema, "body") && hasRequestBody)
+            throw failure(
+              400,
+              "INVALID_REQUEST",
+              "The request does not match the operation contract.",
+            );
+        },
+        preHandler: async (request) => resolveIdentity(request, operation),
+        handler: async (request, reply) => perform(request, reply, operation),
+      });
+    }
+  });
+
+  app.setNotFoundHandler(async (request, reply) => {
+    const pathname = request.url.split("?", 1)[0] ?? "";
+    const allowed = occApiRoutes
+      .filter((operation) => {
+        const pattern = operation.path.replace(/:[^/]+/g, "[^/]+");
+        return new RegExp(`^${pattern}$`).test(pathname);
+      })
+      .map((operation) => operation.method);
+    if (allowed.length > 0) {
+      reply.header("allow", [...new Set(allowed)].join(", "));
+      canonicalFailure(
+        reply,
+        failure(405, "METHOD_NOT_ALLOWED", "The requested HTTP method is not supported."),
+      );
+      return;
+    }
+    canonicalFailure(
+      reply,
+      failure(404, "NOT_FOUND", "The requested platform resource was not found."),
+    );
+  });
+
+  app.setErrorHandler(async (error, request, reply) => {
+    let mapped = requestFailure(error);
+    if (
+      error instanceof AuthorizationDeniedError &&
+      !(error instanceof DependencyUnavailableError)
+    ) {
+      const context = contexts.get(request);
+      if (context) {
+        try {
+          await denial(
+            context.operation,
+            request,
+            "authorization_denial",
+            context,
+            error.evidence,
+            error.authorization,
+          );
+        } catch (auditError) {
+          mapped = requestFailure(auditError);
+        }
+      }
+    }
+    canonicalFailure(reply, mapped);
+  });
+
+  return app;
+}
+
+export function createControllerApp(options: ControllerAppOptions): ControllerApp {
+  const app = createFastifyApp(options);
+  return {
+    async fetch(request: Request): Promise<Response> {
+      const url = new URL(request.url);
+      const headers: Record<string, string> = {};
+      request.headers.forEach((value, name) => {
+        headers[name] = value;
+      });
+      headers.host = url.host;
+      const body = request.body ? Buffer.from(await request.arrayBuffer()) : undefined;
+      const result = await app.inject({
+        method: request.method as NonNullable<InjectOptions["method"]>,
+        url: `${url.pathname}${url.search}`,
+        headers,
+        ...(body === undefined ? {} : { payload: body }),
+        remoteAddress: "127.0.0.1",
+      });
+      const convertedHeaders = new Headers();
+      for (const [name, value] of Object.entries(result.headers)) {
+        if (Array.isArray(value)) {
+          for (const entry of value) convertedHeaders.append(name, entry);
+        } else if (value !== undefined) {
+          convertedHeaders.set(name, String(value));
+        }
+      }
+      return new Response(result.statusCode === 204 ? null : new Uint8Array(result.rawPayload), {
+        status: result.statusCode,
+        headers: convertedHeaders,
+      });
+    },
+  };
+}
+
+export const createOccApi = createControllerApp;

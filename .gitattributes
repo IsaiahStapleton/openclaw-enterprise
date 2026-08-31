@@ -1,0 +1,3 @@
+# Exclude archived implementations from release archives.
+/legacy export-ignore
+/legacy/** export-ignore

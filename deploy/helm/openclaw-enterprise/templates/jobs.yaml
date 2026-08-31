@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-initialization
+  labels:
+    {{- include "openclaw.labels" (dict "root" . "component" "initialization") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "openclaw.labels" (dict "root" . "component" "initialization") | nindent 8 }}
+    spec:
+      serviceAccountName: openclaw-enterprise-initialization
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        {{- include "openclaw.podSecurity" . | nindent 8 }}
+      volumes:
+        - name: bootstrap-password-output
+          persistentVolumeClaim:
+            claimName: {{ .Values.bootstrap.password.claimName }}
+      initContainers:
+        - name: migration
+          image: {{ .Values.images.controller | quote }}
+          args: [scripts/migrate-production.mjs]
+          securityContext:
+            {{- include "openclaw.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: NODE_ENV
+              value: production
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_MIGRATION_DATABASE_URL" "secretName" .Values.database.secretName "key" .Values.database.migrationUrlKey) | nindent 12 }}
+      containers:
+        - name: bootstrap
+          image: {{ .Values.images.controller | quote }}
+          args: [scripts/bootstrap-production.mjs]
+          securityContext:
+            {{- include "openclaw.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: NODE_ENV
+              value: production
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_DATABASE_URL" "secretName" .Values.database.secretName "key" .Values.database.appUrlKey) | nindent 12 }}
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_SECRET" "secretName" .Values.auth.secretName "key" .Values.auth.secretKey) | nindent 12 }}
+            - name: OCC_AUTH_BASE_URL
+              value: {{ .Values.auth.baseUrl | quote }}
+            - name: OCC_BOOTSTRAP_ADMIN_EMAIL
+              value: {{ .Values.bootstrap.adminEmail | quote }}
+            - name: OCC_BOOTSTRAP_PASSWORD_FILE
+              value: {{ printf "%s/%s" .Values.bootstrap.password.mountPath .Values.bootstrap.password.fileName | quote }}
+            - name: OCC_BOOTSTRAP_INSTALLATION_NAME
+              value: {{ .Values.installation.name | quote }}
+          volumeMounts:
+            - name: bootstrap-password-output
+              mountPath: {{ .Values.bootstrap.password.mountPath }}

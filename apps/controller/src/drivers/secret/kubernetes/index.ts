@@ -1,0 +1,531 @@
+import {
+  asRecord,
+  isNonEmptyString,
+  numericErrorStatus,
+  sha256Hex,
+} from "@openclaw-enterprise/utils";
+import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
+import type { CoreV1Api, V1ObjectMeta, V1Secret } from "@kubernetes/client-node";
+import type {
+  JSONSchema,
+  Secret,
+  SecretBackendRef,
+  SecretDriver,
+  SecretIdentity,
+} from "@openclaw-enterprise/contracts";
+import {
+  DependencyUnavailableError,
+  ResourceConflictError,
+  ScopeViolationError,
+} from "@openclaw-enterprise/occ";
+import { resolveKubernetesNamespace } from "../../compute/kubernetes/index.ts";
+import { createKubernetesClientConfiguration } from "../../kubernetes/client.ts";
+import {
+  currentComputeAbortSignal,
+  withComputeAbortSignal,
+} from "../../compute/operation-context.ts";
+
+type KubernetesAuthentication =
+  | { readonly mode: "inCluster" }
+  | { readonly mode: "kubeconfig"; readonly kubeconfigPath: string; readonly context: string };
+
+type KubernetesRecord = Record<string, unknown>;
+
+export interface KubernetesSecretDriverOptions {
+  readonly authentication: KubernetesAuthentication;
+}
+
+interface KubernetesSecretDriverSelection {
+  readonly id?: string;
+  readonly implementation?: string;
+}
+
+export class SecretValidationError extends ScopeViolationError {}
+export class SecretOwnershipError extends ScopeViolationError {}
+export class SecretBackendUnavailableError extends DependencyUnavailableError {}
+export class SecretConflictError extends ResourceConflictError {}
+class SecretBackendMissingError extends SecretBackendUnavailableError {}
+
+const MANAGER = "openclaw-enterprise";
+const IMPLEMENTATION = "occ/kubernetes-secret";
+const SECRET_KEY = "value";
+const MAX_SECRET_VALUE_BYTES = 65_536;
+const REQUEST_TIMEOUT_MS = 10_000;
+const REQUEST_TIMEOUT_SECONDS = Math.ceil(REQUEST_TIMEOUT_MS / 1000);
+const NAMESPACE_LABEL = "openclaw.dev/namespace";
+const SECRET_LABEL = "openclaw.dev/secret";
+const NAMESPACE_ANNOTATION = "openclaw.dev/namespace-id";
+const SECRET_ANNOTATION = "openclaw.dev/secret-id";
+const SECRET_NAME_ANNOTATION = "openclaw.dev/secret-name";
+const DRIVER_ANNOTATION = "openclaw.dev/secret-driver-id";
+
+function required(value: unknown, description: string): string {
+  if (!isNonEmptyString(value)) {
+    throw new SecretValidationError(`${description} must be a nonempty string.`);
+  }
+  return value;
+}
+
+function kubernetesSecretName(identity: SecretIdentity): string {
+  return `secret-${sha256Hex(identity.namespaceId, 12)}-${sha256Hex(identity.id, 12)}-${sha256Hex(randomUUID(), 12)}`;
+}
+
+function validateIdentity(identity: SecretIdentity): void {
+  const value = asRecord(identity);
+  if (value === undefined) throw new SecretValidationError("Secret identity is required.");
+  const id = required(value.id, "Secret ID");
+  const namespaceId = required(value.namespaceId, "Secret Namespace ID");
+  required(value.name, "Secret name");
+  if (!id.startsWith("sec_"))
+    throw new SecretValidationError("Secret IDs must use the sec_ prefix.");
+  if (!namespaceId.startsWith("ns_")) {
+    throw new SecretValidationError("Secret Namespace IDs must use the ns_ prefix.");
+  }
+}
+
+function validateValue(value: string): void {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new SecretValidationError("Secret value must be a nonempty UTF-8 string.");
+  }
+  if (value.includes("\0")) throw new SecretValidationError("Secret value cannot contain NUL.");
+  if (containsUnpairedSurrogate(value)) {
+    throw new SecretValidationError("Secret value must be well-formed UTF-16 for UTF-8 storage.");
+  }
+  if (Buffer.byteLength(value, "utf8") > MAX_SECRET_VALUE_BYTES) {
+    throw new SecretValidationError("Secret value exceeds the application Secret size limit.");
+  }
+}
+
+function containsUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0xd800 || code > 0xdfff) continue;
+    if (
+      code >= 0xd800 &&
+      code <= 0xdbff &&
+      index + 1 < value.length &&
+      value.charCodeAt(index + 1) >= 0xdc00 &&
+      value.charCodeAt(index + 1) <= 0xdfff
+    ) {
+      index += 1;
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function validateBackendRef(reference: SecretBackendRef): void {
+  const value = asRecord(reference);
+  if (value === undefined) throw new SecretValidationError("Secret backend reference is required.");
+  required(value.namespaceName, "Secret backend namespace");
+  required(value.name, "Secret backend name");
+  const key = required(value.key, "Secret backend key");
+  required(value.uid, "Secret backend UID");
+  if (key !== SECRET_KEY) throw new SecretOwnershipError("Secret backend key is unsupported.");
+}
+
+function sanitizedFailure(error: unknown, action: string): Error {
+  const code = numericErrorStatus(error);
+  if (code === 404) {
+    return new SecretBackendMissingError("The Kubernetes Secret backend is unavailable.");
+  }
+  if (code === 409) {
+    return new SecretConflictError(`The Kubernetes Secret ${action} conflicted.`);
+  }
+  if (code === 401 || code === 403) {
+    return new SecretBackendUnavailableError(
+      "The Kubernetes Secret backend is not authorized for this operation.",
+    );
+  }
+  return new SecretBackendUnavailableError(`The Kubernetes Secret ${action} failed.`);
+}
+
+function timeoutFailure(action: string): Error {
+  return new SecretBackendUnavailableError(
+    `The Kubernetes Secret ${action} outcome is unknown after timeout.`,
+  );
+}
+
+function namespaceOwned(
+  metadata: V1ObjectMeta | undefined,
+  namespaceId: string,
+  expectedName: string,
+  external: boolean,
+): void {
+  const name = metadata?.name;
+  const labels = metadata?.labels;
+  const annotations = metadata?.annotations;
+  if (
+    name !== expectedName ||
+    labels?.[NAMESPACE_LABEL] !== namespaceId ||
+    annotations?.[NAMESPACE_ANNOTATION] !== namespaceId
+  ) {
+    throw new SecretOwnershipError("Refusing a Kubernetes namespace without exact OCC ownership.");
+  }
+  if (!external && labels["app.kubernetes.io/managed-by"] !== MANAGER) {
+    throw new SecretOwnershipError("Refusing an unmanaged Kubernetes namespace.");
+  }
+}
+
+export class KubernetesSecretDriver implements SecretDriver {
+  static readonly configurationSchema: JSONSchema = Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: ["authentication"],
+    properties: {
+      authentication: {
+        oneOf: [
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["mode"],
+            properties: { mode: { const: "inCluster" } },
+          },
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["mode", "kubeconfigPath", "context"],
+            properties: {
+              mode: { const: "kubeconfig" },
+              kubeconfigPath: { type: "string", minLength: 1 },
+              context: { type: "string", minLength: 1 },
+            },
+          },
+        ],
+      },
+    },
+  });
+
+  static validateConfiguration(configuration: unknown): void {
+    const value = asRecord(configuration);
+    if (value === undefined)
+      throw new SecretValidationError("Kubernetes Secret options are required.");
+    if ("clients" in value || Object.keys(value).some((key) => key !== "authentication")) {
+      throw new SecretValidationError(
+        "Injected clients and unknown Kubernetes Secret options are not supported.",
+      );
+    }
+    const authentication = asRecord(value.authentication);
+    if (authentication === undefined) {
+      throw new SecretValidationError("Explicit Kubernetes authentication is required.");
+    }
+    if (authentication.mode === "inCluster") {
+      if (Object.keys(authentication).some((key) => key !== "mode")) {
+        throw new SecretValidationError(
+          "In-cluster authentication does not accept additional options.",
+        );
+      }
+      return;
+    }
+    if (authentication.mode !== "kubeconfig") {
+      throw new SecretValidationError("An explicit Kubernetes authentication mode is required.");
+    }
+    if (
+      Object.keys(authentication).some(
+        (key) => key !== "mode" && key !== "kubeconfigPath" && key !== "context",
+      )
+    ) {
+      throw new SecretValidationError("Unknown kubeconfig authentication options are forbidden.");
+    }
+    const path = required(authentication.kubeconfigPath, "Dedicated kubeconfig path");
+    if (!isAbsolute(path)) {
+      throw new SecretValidationError("Dedicated kubeconfig path must be absolute.");
+    }
+    required(authentication.context, "Explicit Kubernetes context");
+  }
+
+  readonly id: string;
+  readonly capability = "secret" as const;
+  readonly implementation: string;
+  private readonly options: KubernetesSecretDriverOptions;
+  private client: Promise<CoreV1Api> | undefined;
+
+  constructor(
+    options: KubernetesSecretDriverOptions,
+    selection: KubernetesSecretDriverSelection = {},
+  ) {
+    KubernetesSecretDriver.validateConfiguration(options);
+    this.id = required(selection.id ?? "secret-kubernetes", "Secret Driver ID");
+    this.implementation = selection.implementation ?? IMPLEMENTATION;
+    if (this.implementation !== IMPLEMENTATION) {
+      throw new SecretValidationError("Unsupported Kubernetes Secret implementation.");
+    }
+    this.options = Object.freeze({ authentication: Object.freeze({ ...options.authentication }) });
+  }
+
+  async create(identity: SecretIdentity, value: string): Promise<SecretBackendRef> {
+    validateIdentity(identity);
+    validateValue(value);
+    const client = await this.core();
+    const namespace = await this.readyNamespace(client, identity.namespaceId);
+
+    const name = kubernetesSecretName(identity);
+    const observed = await this.request(
+      () =>
+        client.createNamespacedSecret({
+          namespace,
+          body: this.manifest(identity, namespace, name, value),
+        }),
+      "create",
+      { mutating: true },
+    );
+    return this.checkedBackendRef(observed, identity, namespace);
+  }
+
+  async update(secret: Secret, value: string): Promise<void> {
+    validateIdentity(secret);
+    validateBackendRef(secret.backendRef);
+    validateValue(value);
+    const client = await this.core();
+    const namespace = await this.readyNamespace(client, secret.namespaceId);
+    if (secret.backendRef.namespaceName !== namespace) {
+      throw new SecretOwnershipError("Secret backend namespace no longer matches placement.");
+    }
+    const existing = await this.request(
+      () => client.readNamespacedSecret({ namespace, name: secret.backendRef.name }),
+      "read",
+    );
+    this.checkedBackendRef(existing, secret, namespace, secret.backendRef);
+    const desired: V1Secret = {
+      apiVersion: "v1",
+      kind: "Secret",
+      metadata: this.retainedMetadata(existing.metadata, secret, namespace),
+      type: "Opaque",
+      immutable: false,
+      stringData: { [SECRET_KEY]: value },
+    };
+    const observed = await this.request(
+      () =>
+        client.replaceNamespacedSecret({ namespace, name: secret.backendRef.name, body: desired }),
+      "update",
+      { mutating: true },
+    );
+    this.checkedBackendRef(observed, secret, namespace, secret.backendRef);
+  }
+
+  async delete(secret: Secret): Promise<void> {
+    validateIdentity(secret);
+    validateBackendRef(secret.backendRef);
+    const client = await this.core();
+    const namespace = await this.readyNamespace(client, secret.namespaceId);
+    if (secret.backendRef.namespaceName !== namespace) {
+      throw new SecretOwnershipError("Secret backend namespace no longer matches placement.");
+    }
+    let existing: V1Secret;
+    try {
+      existing = await this.request(
+        () => client.readNamespacedSecret({ namespace, name: secret.backendRef.name }),
+        "read",
+      );
+    } catch (error) {
+      if (error instanceof SecretBackendMissingError) return;
+      throw error;
+    }
+    this.checkedBackendRef(existing, secret, namespace, secret.backendRef);
+    const resourceVersion = existing.metadata?.resourceVersion;
+    if (typeof resourceVersion !== "string" || resourceVersion.length === 0) {
+      throw new SecretOwnershipError("Secret resource version is required for delete.");
+    }
+    await this.request(
+      () =>
+        client.deleteNamespacedSecret({
+          namespace,
+          name: secret.backendRef.name,
+          body: {
+            preconditions: {
+              uid: secret.backendRef.uid,
+              resourceVersion,
+            },
+          },
+        }),
+      "delete",
+      { mutating: true },
+    );
+  }
+
+  async resolve(secret: Secret): Promise<SecretBackendRef> {
+    validateIdentity(secret);
+    validateBackendRef(secret.backendRef);
+    const client = await this.core();
+    const namespace = await this.readyNamespace(client, secret.namespaceId);
+    if (secret.backendRef.namespaceName !== namespace) {
+      throw new SecretOwnershipError("Secret backend namespace no longer matches placement.");
+    }
+    const observed = await this.request(
+      () => client.readNamespacedSecret({ namespace, name: secret.backendRef.name }),
+      "read",
+    );
+    return this.checkedBackendRef(observed, secret, namespace, secret.backendRef);
+  }
+
+  private manifest(
+    identity: SecretIdentity,
+    namespace: string,
+    name: string,
+    value: string,
+  ): V1Secret {
+    return {
+      apiVersion: "v1",
+      kind: "Secret",
+      metadata: {
+        name,
+        namespace,
+        labels: this.labels(identity),
+        annotations: this.annotations(identity),
+      },
+      immutable: false,
+      type: "Opaque",
+      stringData: { [SECRET_KEY]: value },
+    };
+  }
+
+  private labels(identity: SecretIdentity): Record<string, string> {
+    return {
+      "app.kubernetes.io/managed-by": MANAGER,
+      [NAMESPACE_LABEL]: identity.namespaceId,
+      [SECRET_LABEL]: identity.id,
+    };
+  }
+
+  private annotations(identity: SecretIdentity): Record<string, string> {
+    return {
+      [NAMESPACE_ANNOTATION]: identity.namespaceId,
+      [SECRET_ANNOTATION]: identity.id,
+      [SECRET_NAME_ANNOTATION]: identity.name,
+      [DRIVER_ANNOTATION]: this.id,
+    };
+  }
+
+  private retainedMetadata(
+    existing: V1ObjectMeta | undefined,
+    secret: Secret,
+    namespace: string,
+  ): V1ObjectMeta {
+    if (existing?.resourceVersion === undefined) {
+      throw new SecretOwnershipError("Secret resource version is required for update.");
+    }
+    return {
+      ...existing,
+      name: secret.backendRef.name,
+      namespace,
+      uid: secret.backendRef.uid,
+      resourceVersion: existing.resourceVersion,
+      labels: { ...existing.labels, ...this.labels(secret) },
+      annotations: { ...existing.annotations, ...this.annotations(secret) },
+    };
+  }
+
+  private checkedBackendRef(
+    observed: V1Secret,
+    identity: SecretIdentity,
+    namespace: string,
+    expected?: SecretBackendRef,
+  ): SecretBackendRef {
+    const metadata = observed.metadata;
+    const labels = metadata?.labels;
+    const annotations = metadata?.annotations;
+    const data = asRecord(observed.data);
+    const name = required(metadata?.name, "Secret backend name");
+    const uid = required(metadata?.uid, "Secret backend UID");
+    if (
+      observed.type !== "Opaque" ||
+      observed.immutable === true ||
+      metadata?.namespace !== namespace ||
+      labels?.["app.kubernetes.io/managed-by"] !== MANAGER ||
+      labels[NAMESPACE_LABEL] !== identity.namespaceId ||
+      labels[SECRET_LABEL] !== identity.id ||
+      annotations?.[NAMESPACE_ANNOTATION] !== identity.namespaceId ||
+      annotations[SECRET_ANNOTATION] !== identity.id ||
+      annotations[DRIVER_ANNOTATION] !== this.id ||
+      data === undefined ||
+      !Object.hasOwn(data, SECRET_KEY)
+    ) {
+      throw new SecretOwnershipError("Secret backend does not match exact OCC ownership.");
+    }
+    const resolved = Object.freeze({ namespaceName: namespace, name, key: SECRET_KEY, uid });
+    if (
+      expected !== undefined &&
+      (expected.namespaceName !== resolved.namespaceName ||
+        expected.name !== resolved.name ||
+        expected.key !== resolved.key ||
+        expected.uid !== resolved.uid)
+    ) {
+      throw new SecretOwnershipError("Secret backend identity changed.");
+    }
+    return resolved;
+  }
+
+  private async readyNamespace(client: CoreV1Api, namespaceId: string): Promise<string> {
+    let placement: { readonly name: string; readonly external: boolean };
+    try {
+      placement = await this.request(
+        () => resolveKubernetesNamespace(client, namespaceId),
+        "namespace verification",
+      );
+      const observed = await this.request(
+        () => client.readNamespace({ name: placement.name }),
+        "namespace verification",
+      );
+      namespaceOwned(observed.metadata, namespaceId, placement.name, placement.external);
+      if (
+        observed.status?.phase !== "Active" ||
+        observed.metadata?.deletionTimestamp !== undefined
+      ) {
+        throw new SecretOwnershipError("Secret storage requires a ready Kubernetes namespace.");
+      }
+    } catch (error) {
+      if (error instanceof SecretOwnershipError || error instanceof SecretValidationError)
+        throw error;
+      throw sanitizedFailure(error, "namespace verification");
+    }
+    return placement.name;
+  }
+
+  private async request<T>(
+    operation: () => Promise<T>,
+    action: string,
+    options: { readonly mutating?: boolean } = {},
+  ): Promise<T> {
+    const ownerSignal = currentComputeAbortSignal();
+    for (let attempt = 1; ; attempt += 1) {
+      ownerSignal?.throwIfAborted();
+      const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+      const signal =
+        ownerSignal === undefined ? deadline : AbortSignal.any([ownerSignal, deadline]);
+      try {
+        return await withComputeAbortSignal(signal, operation);
+      } catch (error) {
+        if (ownerSignal?.aborted) {
+          throw new SecretBackendUnavailableError(`The Kubernetes Secret ${action} was cancelled.`);
+        }
+        if (deadline.aborted) throw timeoutFailure(action);
+        const status = numericErrorStatus(error);
+        const retryable =
+          status === 429 ||
+          (status !== undefined && status >= 500) ||
+          (status === undefined &&
+            !(error instanceof SecretValidationError) &&
+            !(error instanceof SecretOwnershipError));
+        if (!retryable || options.mutating === true || attempt >= 3) {
+          throw sanitizedFailure(error, action);
+        }
+        await new Promise((resolve) => setTimeout(resolve, attempt * 25));
+      }
+    }
+  }
+
+  private async core(): Promise<CoreV1Api> {
+    if (this.client === undefined) this.client = this.createCore();
+    return this.client;
+  }
+
+  private async createCore(): Promise<CoreV1Api> {
+    const { sdk, clientConfiguration } = await createKubernetesClientConfiguration(
+      this.options.authentication,
+      (message) => new SecretValidationError(message),
+    );
+    return new sdk.CoreV1Api(clientConfiguration);
+  }
+}

@@ -1,0 +1,17 @@
+#!/bin/sh
+# OPENCLAW_ENTERPRISE_MANAGED_PRE_PUSH_HOOK
+
+set -eu
+
+repository_root="$(git rev-parse --show-toplevel)"
+cd "$repository_root"
+
+prettier_binary="$repository_root/node_modules/prettier/bin/prettier.cjs"
+if [ ! -f "$prettier_binary" ]; then
+  printf '%s\n' 'The installed Prettier executable is unavailable; refusing to push.' >&2
+  exit 1
+fi
+
+exec node "$prettier_binary" --check \
+  '{apps,packages,scripts,tests}/**/*.{ts,mjs,json}' \
+  '*.{json,yaml,yml,md}'

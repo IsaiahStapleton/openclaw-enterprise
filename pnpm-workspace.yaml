@@ -1,0 +1,8 @@
+packages:
+  - apps/controller
+  - packages/utils
+  - packages/contracts
+  - packages/occ
+  - packages/iam
+  - packages/audit
+  - "!legacy/**"

@@ -1,0 +1,22 @@
+name: openclaw-enterprise-milestone-postgres
+
+services:
+  postgres:
+    image: postgres:18.6
+    environment:
+      POSTGRES_DB: openclaw_enterprise
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: openclaw-local-admin
+    ports:
+      - "127.0.0.1:${OCC_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - occ_postgres_data:/var/lib/postgresql
+      - ./migrations/init-local.sql:/docker-entrypoint-initdb.d/00-occ-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d openclaw_enterprise"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  occ_postgres_data:
