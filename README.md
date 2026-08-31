@@ -58,11 +58,9 @@ pnpm openapi:check
 pnpm test
 ```
 
-Dependency installation also installs a [formatting pre-push hook](docs/reference/settings.md#repository-and-tooling-configuration).
 PostgreSQL, Docker, and Kubernetes integration suites require additional setup;
 see [test environment settings](docs/reference/settings.md#postgresql-test-environment) and
-[contributor instructions](AGENTS.md#running-integration-tests). The workspace,
-builds, and release archives exclude `legacy/`.
+[contributor instructions](AGENTS.md#running-integration-tests).
 
 ## Code layout
 
