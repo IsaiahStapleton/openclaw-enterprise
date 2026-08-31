@@ -61,6 +61,8 @@ Copy the embedded native configuration from [the runtime configuration helper](.
 into a complete, editable guide example. It selects `openai/<model>` with runtime
 `openclaw`, enables `gateway.http.endpoints.chatCompletions`, and preserves the
 literal `${OPENCLAW_GATEWAY_TOKEN}` reference. Shell expansion must not replace it.
+Set native `agents.defaults.skipBootstrap: true` for this disposable demo so
+first-run workspace onboarding does not replace the requested model reply.
 Model credentials never enter Configuration payloads or revision snapshots.
 
 Bound polling and report the last nonsecret state on timeout. Stop on failed/deleting

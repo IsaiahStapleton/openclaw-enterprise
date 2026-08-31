@@ -2,7 +2,10 @@
 
 Start OpenClaw Control Center (OCC) locally and read its Installation through
 an authenticated API request. This proves the controller is usable; it does
-not deploy an Agent or make a model call.
+not deploy an Agent or make a model call. To continue through an Agent
+deployment and an interactive model-backed terminal UI (TUI) session, keep the
+authenticated shell open and follow
+[Development end-to-end TUI](deploy.md#development-end-to-end-tui).
 
 You need Docker Engine with Docker Compose and `curl`. The quickstart builds a
 public local runtime image from Docker and npm; no host Node installation is
@@ -91,6 +94,9 @@ and name. Use `--cookie "$OCC_SESSION_COOKIE_JAR"` for subsequent protected
 requests. If sign-in fails after changing the configured password, the existing
 database still expects its original account password; startup does not reset it.
 See [development verification](deploy.md#verify-development) for startup errors.
+Keep this shell and cookie if you are continuing to
+[Development end-to-end TUI](deploy.md#development-end-to-end-tui); that guide
+revokes the session before launching the TUI.
 
 ## Sign out and stop
 

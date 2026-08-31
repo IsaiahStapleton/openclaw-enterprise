@@ -368,10 +368,11 @@ Kubernetes reconciliation, model credentials, or a model turn.
 
 The Docker Compose development integration exercises the supported local stack.
 It requires Docker Engine, a locally available runtime image, PostgreSQL, the
-OCC API, the worker, and a real provider response. Set
-`OCC_TEST_DOCKER_COMPUTE_REAL=1` or any `OCC_DOCKER_*_IMAGE` variable to select
-the suite; once selected, missing Docker, image, bootstrap, worker, or model
-prerequisites fail instead of skipping.
+OCC API, the worker, host Python 3 with PTY support for the TUI helper, and a
+real provider response. Set `OCC_TEST_DOCKER_COMPUTE_REAL=1` or any
+`OCC_DOCKER_*_IMAGE` variable to select the suite; once selected, missing
+Docker, image, bootstrap, worker, Python, or model prerequisites fail instead
+of skipping.
 
 | Variable                       | Requirement or default                                                                |
 | ------------------------------ | ------------------------------------------------------------------------------------- |
@@ -381,16 +382,23 @@ prerequisites fail instead of skipping.
 | `OCC_DOCKER_RUNTIME_IMAGE`     | Optional shared image fallback for both gateway and Agent.                            |
 | `OPENAI_API_KEY`               | Existing authorized provider credential for real embedded and dedicated model turns.  |
 | `OCC_TEST_OPENAI_MODEL`        | Authorized provider model; defaults to `gpt-5.1`.                                     |
+| `PYTHON`                       | Optional host Python interpreter for `tests/helpers/tui-pty.py`; defaults to `python3`. |
 
 The selected model must support Codex custom tools as well as the embedded
 OpenClaw path. `gpt-4.1` does not support the dedicated Codex request shape.
 The test generates its own Compose bridge CIDR and Configuration Driver root;
 `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` and
 `OCC_DEVELOPMENT_CONFIGURATION_ROOT` are not external test inputs.
+The embedded Docker case also proves that a fresh TUI client with an invalid
+gateway token is rejected, then uses one valid TUI process for two same-session
+model-backed replies and exits that client with Ctrl+D while the gateway remains
+ready.
 
 Missing Docker Engine access, runtime images, bootstrap, worker startup, or
-model credentials fails the Compose integration. Do not replace this path with
-controller-only shortcuts, a mocked Docker API, or readiness-only checks.
+model credentials fails the Compose integration. Missing host Python or PTY
+support fails the TUI helper before that embedded proof can pass. Do not replace
+this path with controller-only shortcuts, a mocked Docker API, or readiness-only
+checks.
 
 ### Kubernetes fixture test environment
 

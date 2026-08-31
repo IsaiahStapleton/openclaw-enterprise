@@ -539,9 +539,14 @@ async function assertInteractiveTuiConversation({ context, gateway, gatewayToken
 
 async function createAgentJourney({ request, namespaceId, mode, label }) {
   const harnessId = mode === "dedicated" ? "codex" : "openclaw";
+  const values = createHarnessConfiguration(harnessId, providerModel);
+  if (mode === "embedded") {
+    // Fresh TUI demo sessions must answer the nonce prompt before onboarding text.
+    values.agents.defaults.skipBootstrap = true;
+  }
   const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
-    values: createHarnessConfiguration(harnessId, providerModel),
+    values,
   });
   assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
   const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {

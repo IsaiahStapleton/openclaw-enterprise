@@ -27,8 +27,11 @@ docker compose ps -a
 Wait for PostgreSQL and the controller to be healthy, the migration to exit with
 code `0`, and the worker to be running. The API defaults to `http://127.0.0.1:3000`.
 Follow the [quickstart](docs/guides/quickstart.md#sign-in-and-read-the-installation)
-to sign in and make an authenticated request. A model credential is required to
-run Agent model turns, but not to start the stack.
+to sign in and make an authenticated request. To deploy an Agent and attach the
+OpenClaw terminal UI to a real model-backed runtime, continue to
+[Development end-to-end TUI](docs/guides/deploy.md#development-end-to-end-tui).
+A model credential is required to run Agent model turns, but not to start the
+stack.
 
 The local worker has Docker host access through the Docker socket. Use the
 [deployment guide](docs/guides/deploy.md) for host requirements and production

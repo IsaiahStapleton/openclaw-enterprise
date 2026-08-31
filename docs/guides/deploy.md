@@ -20,7 +20,8 @@ and first authenticated request, use the [quickstart](quickstart.md).
   Engine. For a public Docker-only build, use
   [`deploy/runtime`](../../deploy/runtime/README.md). The worker checks runtime
   image references at startup; it does not fetch them.
-- `curl` for the authenticated API check.
+- `curl` for the authenticated API check and Python 3 for JSON handling.
+- An interactive terminal for attaching the OpenClaw TUI.
 - An existing `OPENAI_API_KEY` only when deploying an Agent that makes model
   calls. Starting OCC and reading its Installation does not require a model key.
 
@@ -111,6 +112,393 @@ does not verify login or a model turn.
 For execution order and source links, see the
 [development startup flow](../flows/development-startup.md). Live Agent
 verification is described in the [Docker Compose flow](../flows/docker-compose-development.md).
+
+### Development end-to-end TUI
+
+After completing the [quickstart sign-in](quickstart.md#sign-in-and-read-the-installation),
+reuse that private session cookie to provision one embedded OpenClaw Agent,
+wait for its Docker runtime, then attach the OpenClaw terminal UI (TUI) inside
+the Agent-owned gateway container. The TUI uses the gateway configuration and
+token already injected by the Docker Compute Driver, so do not pass gateway
+tokens, API keys, `--url`, or `--token` on the command line.
+
+The runtime image must be `openclaw-enterprise-runtime:quickstart`, built from
+[`deploy/runtime`](../../deploy/runtime/README.md). The checked-in recipe pins
+OpenClaw `2026.7.1`, `@openclaw/codex` `2026.7.1-1`, and Codex `0.147.0`.
+The example defaults to model `gpt-5.1`; set `OCC_E2E_MODEL` before the
+configuration step only when your `OPENAI_API_KEY` is authorized for another
+model.
+
+Make the model credential available to the worker before deploying an Agent:
+
+```bash
+: "${OCC_URL:?Run the quickstart sign-in block first.}"
+: "${OCC_SESSION_COOKIE_JAR:?Run the quickstart sign-in block first.}"
+
+cleanup_occ_e2e() {
+  set +e
+  local sign_out_rc=0
+  if [ -n "${OCC_SESSION_COOKIE_JAR:-}" ] && [ -f "$OCC_SESSION_COOKIE_JAR" ]; then
+    curl --fail-with-body --max-time 15 --silent --show-error \
+      --cookie "$OCC_SESSION_COOKIE_JAR" --cookie-jar "$OCC_SESSION_COOKIE_JAR" \
+      --request POST "$OCC_URL/api/auth/sign-out" --output /dev/null
+    sign_out_rc="$?"
+    if [ "$sign_out_rc" -ne 0 ]; then
+      echo "OCC sign-out failed; local cookie will be removed, but the server session may still be active." >&2
+    fi
+    OCC_COOKIE_DIRECTORY="$(dirname "$OCC_SESSION_COOKIE_JAR")"
+    rm -- "$OCC_SESSION_COOKIE_JAR"
+    rmdir -- "$OCC_COOKIE_DIRECTORY" 2>/dev/null
+  fi
+  if [ -n "${OCC_E2E_DIRECTORY:-}" ] && [ -d "$OCC_E2E_DIRECTORY" ]; then
+    rm -- "$OCC_E2E_DIRECTORY/namespace.json" \
+      "$OCC_E2E_DIRECTORY/configuration.json" \
+      "$OCC_E2E_DIRECTORY/agent.json" 2>/dev/null
+    rmdir -- "$OCC_E2E_DIRECTORY" 2>/dev/null
+  fi
+  set -e
+  return "$sign_out_rc"
+}
+trap 'cleanup_occ_e2e || true' EXIT
+
+docker compose up -d --force-recreate worker
+if ! docker compose exec -T worker \
+  node -e 'process.exit((process.env.OPENAI_API_KEY || "").trim() ? 0 : 1)'; then
+  echo "Worker does not see OPENAI_API_KEY; set it in the Compose-starting shell or protected .env, then recreate the worker." >&2
+  exit 1
+fi
+```
+
+Recreate the worker when it was already running without the key. Docker Compose
+passes the Compose-starting environment and protected `.env` values to the
+worker; the worker injects the model credential only into the embedded
+gateway/Harness container that makes the model call.
+
+From the same shell used for the quickstart sign-in, create a small API helper.
+Protected OCC requests use the existing session cookie and every response must
+be the documented `{ "data": ..., "meta": ... }` envelope:
+
+```bash
+set -euo pipefail
+
+: "${OCC_URL:?Run the quickstart sign-in block first.}"
+: "${OCC_SESSION_COOKIE_JAR:?Run the quickstart sign-in block first.}"
+
+export OCC_E2E_MODEL="${OCC_E2E_MODEL:-gpt-5.1}"
+export OCC_E2E_NAME="tui-$(date +%Y%m%d%H%M%S)"
+OCC_E2E_DIRECTORY="$(mktemp -d)"
+
+json_get() {
+  python3 -c '
+import json
+import sys
+
+value = json.load(sys.stdin)
+for part in sys.argv[1].split("."):
+    value = value[part]
+print(value)
+' "$1"
+}
+
+occ_request() {
+  local method="$1"
+  local request_path="$2"
+  local body_file="${3:-}"
+  local response_file
+  local http_status
+  local curl_rc
+
+  response_file="$(mktemp)"
+  set +e
+  if [ -n "$body_file" ]; then
+    http_status="$(curl --fail-with-body --max-time 30 \
+      --silent --show-error --write-out '%{http_code}' \
+      --output "$response_file" \
+      --cookie "$OCC_SESSION_COOKIE_JAR" \
+      --request "$method" "$OCC_URL$request_path" \
+      -H 'Content-Type: application/json' \
+      --data-binary @"$body_file")"
+    curl_rc="$?"
+  else
+    http_status="$(curl --fail-with-body --max-time 30 \
+      --silent --show-error --write-out '%{http_code}' \
+      --output "$response_file" \
+      --cookie "$OCC_SESSION_COOKIE_JAR" \
+      --request "$method" "$OCC_URL$request_path")"
+    curl_rc="$?"
+  fi
+  set -e
+
+  set +e
+  python3 - "$http_status" "$curl_rc" "$response_file" <<'PY'
+import json
+import pathlib
+import sys
+
+http_status = int(sys.argv[1])
+curl_rc = int(sys.argv[2])
+body = pathlib.Path(sys.argv[3]).read_text()
+try:
+    payload = json.loads(body)
+except json.JSONDecodeError:
+    print(body, file=sys.stderr)
+    raise SystemExit(1)
+
+if http_status < 200 or http_status >= 300:
+    print(json.dumps(payload, indent=2), file=sys.stderr)
+    raise SystemExit(f"HTTP {http_status or 'unavailable'}")
+if curl_rc != 0:
+    raise SystemExit(f"curl failed with exit {curl_rc}")
+
+if "data" not in payload or "meta" not in payload:
+    print(json.dumps(payload, indent=2), file=sys.stderr)
+    raise SystemExit("OCC response did not include data and meta")
+
+print(json.dumps(payload))
+PY
+  local rc="$?"
+  set -e
+  rm -- "$response_file"
+  if [ "$rc" -ne 0 ]; then
+    cleanup_occ_e2e || true
+    return "$rc"
+  fi
+  return "$rc"
+}
+```
+
+Create a Namespace and wait until Docker Compute has provisioned its owned
+network. Stop on `failed` or `deleting`; a Namespace that is still
+`provisioning` is not ready for deployment:
+
+```bash
+python3 - "$OCC_E2E_NAME" > "$OCC_E2E_DIRECTORY/namespace.json" <<'PY'
+import json
+import sys
+
+print(json.dumps({"name": f"{sys.argv[1]}-namespace"}))
+PY
+
+NAMESPACE_RESPONSE="$(occ_request POST /namespaces "$OCC_E2E_DIRECTORY/namespace.json")"
+NAMESPACE_ID="$(printf '%s' "$NAMESPACE_RESPONSE" | json_get data.id)"
+export NAMESPACE_ID
+
+wait_for_namespace_ready() {
+  local deadline="$((SECONDS + 180))"
+  local response
+  local namespace_status
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    response="$(occ_request GET "/namespaces/$NAMESPACE_ID")"
+    namespace_status="$(printf '%s' "$response" | json_get data.status)"
+    case "$namespace_status" in
+      ready)
+        printf '%s' "$response"
+        return 0
+        ;;
+      failed|deleting)
+        printf '%s\n' "$response" >&2
+        cleanup_occ_e2e || true
+        return 1
+        ;;
+    esac
+    sleep 2
+  done
+
+  printf '%s\n' "$response" >&2
+  echo "Timed out waiting for Namespace $NAMESPACE_ID to become ready." >&2
+  cleanup_occ_e2e || true
+  return 1
+}
+
+wait_for_namespace_ready > /dev/null
+```
+
+Create the native Configuration from the same shape used by the real Docker
+integration helper. Keep `${OPENCLAW_GATEWAY_TOKEN}` literal; the Docker
+runtime resolves it from the gateway container environment. The model
+credential is not part of this payload. `skipBootstrap` keeps a fresh demo
+session focused on the model prompt instead of the packaged onboarding message:
+
+```bash
+python3 > "$OCC_E2E_DIRECTORY/configuration.json" <<'PY'
+import json
+import os
+
+model = os.environ["OCC_E2E_MODEL"]
+model_ref = f"openai/{model}"
+payload = {
+    "kind": "agent",
+    "values": {
+        "gateway": {
+            "mode": "local",
+            "bind": "lan",
+            "controlUi": {"enabled": False},
+            "auth": {"mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}"},
+            "http": {"endpoints": {"chatCompletions": {"enabled": True}}},
+        },
+        "agents": {
+            "defaults": {
+                "model": model_ref,
+                "skipBootstrap": True,
+                "models": {model_ref: {"agentRuntime": {"id": "openclaw"}}},
+            }
+        },
+        "models": {
+            "providers": {
+                "openai": {
+                    "baseUrl": "https://api.openai.com/v1",
+                    "api": "openai-responses",
+                    "models": [{"id": model, "name": model}],
+                }
+            }
+        },
+    },
+}
+print(json.dumps(payload))
+PY
+
+CONFIGURATION_RESPONSE="$(
+  occ_request POST "/namespaces/$NAMESPACE_ID/configurations" \
+    "$OCC_E2E_DIRECTORY/configuration.json"
+)"
+CONFIGURATION_ID="$(printf '%s' "$CONFIGURATION_RESPONSE" | json_get data.id)"
+export CONFIGURATION_ID
+```
+
+Create the Agent, deploy it, and wait until the admitted immutable revision is
+the Agent's `activeRevisionId`. The bodyless deploy returning HTTP `202` means
+the worker accepted reconciliation work; it does not prove that messaging is
+ready:
+
+```bash
+python3 > "$OCC_E2E_DIRECTORY/agent.json" <<'PY'
+import json
+import os
+
+payload = {
+    "name": f"{os.environ['OCC_E2E_NAME']}-agent",
+    "configurationId": os.environ["CONFIGURATION_ID"],
+    "executionMode": "embedded",
+}
+print(json.dumps(payload))
+PY
+
+AGENT_RESPONSE="$(
+  occ_request POST "/namespaces/$NAMESPACE_ID/agents" \
+    "$OCC_E2E_DIRECTORY/agent.json"
+)"
+AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | json_get data.id)"
+export AGENT_ID
+
+REVISION_RESPONSE="$(occ_request POST "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID/deploy")"
+REVISION_ID="$(printf '%s' "$REVISION_RESPONSE" | json_get data.id)"
+export REVISION_ID
+
+wait_for_agent_active() {
+  local deadline="$((SECONDS + 240))"
+  local response
+  local active_revision
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    response="$(occ_request GET "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID")"
+    active_revision="$(printf '%s' "$response" | json_get data.activeRevisionId 2>/dev/null || true)"
+    if [ "$active_revision" = "$REVISION_ID" ]; then
+      printf '%s' "$response"
+      return 0
+    fi
+    sleep 2
+  done
+
+  printf '%s\n' "$response" >&2
+  echo "Timed out waiting for Agent $AGENT_ID to activate revision $REVISION_ID." >&2
+  cleanup_occ_e2e || true
+  return 1
+}
+
+wait_for_agent_active > /dev/null
+```
+
+Discover exactly one running gateway container by the Docker labels owned by
+this Namespace, Agent, and active revision. Missing, multiple, or foreign
+matches mean the guide must stop before attaching a client:
+
+```bash
+if ! GATEWAY_CONTAINER_IDS="$(docker ps -q \
+    --filter label=org.openclaw.enterprise.managed=true \
+    --filter label=org.openclaw.enterprise.compute-driver=docker \
+    --filter label=org.openclaw.enterprise.namespace-id="$NAMESPACE_ID" \
+    --filter label=org.openclaw.enterprise.agent-id="$AGENT_ID" \
+    --filter label=org.openclaw.enterprise.revision-id="$REVISION_ID" \
+    --filter label=org.openclaw.enterprise.role=gateway
+  )"; then
+  cleanup_occ_e2e || true
+  exit 1
+fi
+export GATEWAY_CONTAINER_IDS
+
+if ! GATEWAY_CONTAINER="$(
+  python3 - <<'PY'
+import os
+import sys
+
+ids = [line.strip() for line in os.environ["GATEWAY_CONTAINER_IDS"].splitlines() if line.strip()]
+if len(ids) != 1:
+    print(f"Expected exactly one owned gateway container, found {len(ids)}.", file=sys.stderr)
+    raise SystemExit(1)
+print(ids[0])
+PY
+)"; then
+  cleanup_occ_e2e || true
+  exit 1
+fi
+export GATEWAY_CONTAINER
+
+if ! docker inspect --format '{{.Id}} {{.Name}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+    "$GATEWAY_CONTAINER"; then
+  cleanup_occ_e2e || true
+  exit 1
+fi
+```
+
+Revoke the OCC session, remove the private cookie, and clear temporary request
+files before launching the TUI. The TUI authenticates through the Agent gateway,
+not through the OCC API:
+
+```bash
+cleanup_occ_e2e
+trap - EXIT
+```
+
+Launch the TUI from a dedicated terminal. It inherits
+`OPENCLAW_CONFIG_PATH`, `OPENCLAW_GATEWAY_PORT`, and
+`OPENCLAW_GATEWAY_TOKEN` from the gateway container and stores client state in
+container-local `/tmp` instead of the host's personal OpenClaw state:
+
+```bash
+export E2E_SESSION="occ-tui-$OCC_E2E_NAME"
+export NONCE="OCC_TUI_$(date +%s)"
+export SECOND_NONCE="OCC_TUI_FOLLOWUP_$(date +%s)"
+printf 'After the first reply, send this in the same TUI: Reply exactly: %s\n' "$SECOND_NONCE"
+
+docker exec -it -e OPENCLAW_STATE_DIR=/tmp/occ-tui-client \
+  "$GATEWAY_CONTAINER" node /app/openclaw.mjs tui \
+  --session "$E2E_SESSION" --message "Reply exactly: $NONCE"
+```
+
+The first `--message` sends the initial prompt and leaves the TUI open. Verify
+that the assistant replies with `$NONCE`, then type the printed follow-up prompt
+in the same TUI process and verify the assistant replies with `$SECOND_NONCE`.
+Use Ctrl+D to exit the client after the second reply. Ctrl+D exits only the
+TUI; the Agent gateway remains running. To attach again, rediscover the active
+container with the label block above.
+
+Do not use `--local`, `chat`, or `terminal` for this proof; those commands
+select local execution in the pinned runtime. If pairing or gateway
+authentication fails, keep the error and container labels for diagnosis instead
+of adding local state or extracting tokens. For optional HTTP diagnostics, use
+the loopback gateway checks in the
+[Docker Compose development flow](../flows/docker-compose-development.md#debugging-and-verification).
 
 ### Stop development safely
 
