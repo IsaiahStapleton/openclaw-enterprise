@@ -650,6 +650,12 @@ The active workspace requires Node.js 24 or newer and pins pnpm `11.15.1` in
   executable directly without invoking a package manager or installing
   dependencies, and blocks pushes when Prettier is unavailable.
 
+Dependency installation installs the hook in Git's native hooks directory.
+Run `pnpm hooks:install` to reinstall it. Installation preserves an existing
+`core.hooksPath` setting and refuses to replace an unmanaged pre-push hook.
+The hook checks active source and root files; authored documentation also needs
+the full formatting check below.
+
 The root formatting scripts cover active source files, root Markdown, and
 authored `docs/**/*.md`. The generated API reference is excluded and verified by
 `pnpm openapi:check`. Run the complete authored-file check with:
@@ -659,5 +665,11 @@ pnpm format:check
 git diff --check
 ```
 
+After changing API routes or schemas, regenerate the API artifacts with
+`pnpm openapi:generate` and verify them with `pnpm openapi:check`. To check the
+generated Markdown against the checked-in OpenAPI contract without loading
+controller dependencies, run `node scripts/generate-occ-api-reference.mjs --check`.
+
 See the [architecture guide](../ARCHITECTURE.md) for ownership and runtime
-boundaries and the [project README](../../README.md) for the full API quickstart.
+boundaries and the [quickstart](../guides/quickstart.md) for an authenticated API
+request.
