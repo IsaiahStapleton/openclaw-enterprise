@@ -4,11 +4,14 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
 const executeFile = promisify(execFile);
+const tuiPty = fileURLToPath(new URL("../helpers/tui-pty.py", import.meta.url));
+const python = process.env.PYTHON ?? "python3";
 
 const selected =
   process.env.OCC_TEST_DOCKER_COMPUTE_REAL === "1" ||
@@ -57,6 +60,14 @@ function sanitize(text, secrets) {
     (current, secret) => (secret ? current.replaceAll(secret, "[REDACTED]") : current),
     text,
   );
+}
+
+function assertNoSecretMaterial(value, secrets, description) {
+  const serialized = JSON.stringify(value);
+  for (const secret of secrets) {
+    if (secret === undefined || secret.length === 0) continue;
+    assert.equal(serialized.includes(secret), false, description);
+  }
 }
 
 async function command(file, args, { env, timeoutMs = 120_000, secrets = [] } = {}) {
@@ -362,6 +373,13 @@ function gatewayUrl(gateway) {
   return `http://127.0.0.1:${binding.HostPort}`;
 }
 
+async function assertGatewayReady(gateway, description) {
+  const response = await fetch(new URL("/readyz", gatewayUrl(gateway)), {
+    signal: AbortSignal.timeout(30_000),
+  });
+  assert.equal(response.status, 200, `${description} must leave the gateway ready`);
+}
+
 async function invokeGateway({ networkName, gateway, gatewayToken, mode, onFailure }) {
   assertNamespaceOnlyAttachment(gateway, networkName);
   const nonce = `OCC-DOCKER-${mode.toUpperCase()}-${randomUUID()}`;
@@ -402,6 +420,123 @@ async function invokeGateway({ networkName, gateway, gatewayToken, mode, onFailu
   assert.ok(text.includes(nonce), `${mode} gateway model response must include fresh nonce`);
 }
 
+function parseTuiPtyOutput(stdout) {
+  const lines = stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  assert.ok(lines.length > 0, "TUI PTY helper must emit a JSON result");
+  return JSON.parse(lines.at(-1));
+}
+
+async function runTuiPty(args, { secrets, timeoutMs = 540_000, onFailure } = {}) {
+  try {
+    const { stdout } = await command(python, [tuiPty, ...args], {
+      timeoutMs,
+      secrets,
+    });
+    return parseTuiPtyOutput(stdout);
+  } catch (error) {
+    const diagnostics = onFailure === undefined ? "" : `\n\n${await onFailure()}`;
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${diagnostics}`);
+  }
+}
+
+function tuiDockerCommand(gateway, stateDir, args, environment = []) {
+  return [
+    "--",
+    "docker",
+    "exec",
+    "--interactive",
+    "--tty",
+    "-e",
+    `OPENCLAW_STATE_DIR=${stateDir}`,
+    ...environment.flatMap(([name, value]) => ["-e", `${name}=${value}`]),
+    gateway.Id,
+    "node",
+    "/app/openclaw.mjs",
+    "tui",
+    ...args,
+  ];
+}
+
+async function assertInvalidTokenTuiDenied({ context, gateway, gatewayToken, onFailure }) {
+  const invalidToken = `invalid-${randomUUID()}`;
+  const nonce = `OCC-TUI-DENIED-${randomUUID()}`;
+  const prompt = `Reply exactly: ${nonce}`;
+  const result = await runTuiPty(
+    [
+      "expect-failure",
+      "--nonce",
+      nonce,
+      "--prompt",
+      prompt,
+      "--timeout",
+      "60",
+      ...tuiDockerCommand(
+        gateway,
+        `/tmp/occ-tui-denied-${randomUUID()}`,
+        ["--session", `occ-tui-denied-${randomUUID()}`, "--message", prompt],
+        [["OPENCLAW_GATEWAY_TOKEN", invalidToken]],
+      ),
+    ],
+    {
+      timeoutMs: 90_000,
+      secrets: [gatewayToken, invalidToken],
+      onFailure,
+    },
+  );
+  assert.equal(result.denied, true, "fresh TUI client state must reject an invalid gateway token");
+  assertNoSecretMaterial(
+    result,
+    [gatewayToken, invalidToken],
+    "TUI denial output must not leak tokens",
+  );
+  context.diagnostic(`embedded TUI invalid-token denial:\n${result.transcriptTail.slice(-1200)}`);
+}
+
+async function assertInteractiveTuiConversation({ context, gateway, gatewayToken, onFailure }) {
+  const firstNonce = `OCC-TUI-FIRST-${randomUUID()}`;
+  const secondNonce = `OCC-TUI-SECOND-${randomUUID()}`;
+  const firstPrompt = `Reply exactly: ${firstNonce}`;
+  const secondPrompt = `Reply exactly: ${secondNonce}`;
+  const result = await runTuiPty(
+    [
+      "conversation",
+      "--first-nonce",
+      firstNonce,
+      "--first-prompt",
+      firstPrompt,
+      "--second-nonce",
+      secondNonce,
+      "--second-prompt",
+      secondPrompt,
+      "--timeout",
+      "240",
+      ...tuiDockerCommand(gateway, `/tmp/occ-tui-client-${randomUUID()}`, [
+        "--session",
+        `occ-tui-${randomUUID()}`,
+        "--message",
+        firstPrompt,
+      ]),
+    ],
+    {
+      secrets: [gatewayToken],
+      onFailure,
+    },
+  );
+  assert.equal(result.exitCode, 0, "Ctrl+D must exit the TUI client cleanly");
+  assert.match(result.firstReplyLine, new RegExp(firstNonce));
+  assert.equal(result.firstReplyLine.includes(firstPrompt), false);
+  assert.match(result.secondReplyLine, new RegExp(secondNonce));
+  assert.equal(result.secondReplyLine.includes(secondPrompt), false);
+  assertNoSecretMaterial(result, [gatewayToken], "TUI conversation output must not leak tokens");
+  context.diagnostic(
+    `embedded TUI replies:\nfirst: ${result.firstReplyLine}\nsecond: ${result.secondReplyLine}\n${result.transcriptTail.slice(-1600)}`,
+  );
+  await assertGatewayReady(gateway, "Ctrl+D after the TUI conversation");
+}
+
 async function createAgentJourney({ request, namespaceId, mode, label }) {
   const harnessId = mode === "dedicated" ? "codex" : "openclaw";
   const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
@@ -435,7 +570,7 @@ async function createAgentJourney({ request, namespaceId, mode, label }) {
 
 test(
   "Docker Compose development drives Docker Compute networks, containers, auth, cleanup, and real model turns",
-  { ...requiresDockerCompute, timeout: 720_000 },
+  { ...requiresDockerCompute, timeout: 1_200_000 },
   async (context) => {
     const providerKey = nonempty(
       process.env.OPENAI_API_KEY,
@@ -667,6 +802,28 @@ test(
       containerEnv(dedicatedGateway, "OPENCLAW_GATEWAY_TOKEN"),
       "dedicated gateway token",
     );
+    await assertInvalidTokenTuiDenied({
+      context,
+      gateway: embeddedGateway,
+      gatewayToken: embeddedToken,
+      onFailure: () => containerLogs([embeddedGateway], [embeddedToken]),
+    });
+    const [tuiGateway] = await waitForContainers(
+      [
+        [LABEL_NAMESPACE, embeddedNamespace.id],
+        [LABEL_AGENT, embedded.agent.id],
+        [LABEL_REVISION, embedded.revision.id],
+        [LABEL_ROLE, "gateway"],
+      ],
+      1,
+      "embedded OpenClaw gateway container before TUI attach",
+    );
+    await assertInteractiveTuiConversation({
+      context,
+      gateway: tuiGateway,
+      gatewayToken: embeddedToken,
+      onFailure: () => containerLogs([tuiGateway], [embeddedToken]),
+    });
     await invokeGateway({
       networkName: embeddedNetwork.Name,
       gateway: embeddedGateway,
