@@ -37,9 +37,9 @@ const LABEL_AGENT = "org.openclaw.enterprise.agent-id";
 const LABEL_REVISION = "org.openclaw.enterprise.revision-id";
 const LABEL_ROLE = "org.openclaw.enterprise.role";
 
-// Dedicated Codex app-server execution sends Codex custom tools, which require
-// the GPT-5 family on the OpenAI Responses API path.
-const providerModel = (process.env.OCC_TEST_OPENAI_MODEL ?? "gpt-5.1").replace(
+// Dedicated Codex app-server execution sends Codex custom tools, so the default
+// stays on the exact GPT-5.6 Sol API model ID.
+const providerModel = (process.env.OCC_TEST_OPENAI_MODEL ?? "gpt-5.6-sol").replace(
   /^(?:openai|codex)\//,
   "",
 );

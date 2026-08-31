@@ -125,9 +125,14 @@ tokens, API keys, `--url`, or `--token` on the command line.
 The runtime image must be `openclaw-enterprise-runtime:quickstart`, built from
 [`deploy/runtime`](../../deploy/runtime/README.md). The checked-in recipe pins
 OpenClaw `2026.7.1`, `@openclaw/codex` `2026.7.1-1`, and Codex `0.147.0`.
-The example defaults to model `gpt-5.1`; set `OCC_E2E_MODEL` before the
-configuration step only when your `OPENAI_API_KEY` is authorized for another
-model.
+The example defaults to the exact GPT-5.6 Sol API model ID `gpt-5.6-sol`;
+set `OCC_E2E_MODEL` before the configuration step only when your
+`OPENAI_API_KEY` is authorized for another model.
+The
+[OpenAI GPT-5.6 Sol model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+documents `gpt-5.6-sol` as the provider model ID; OpenClaw Configuration uses
+`openai/gpt-5.6-sol` for embedded OpenClaw and `codex/gpt-5.6-sol` for
+dedicated Codex.
 
 Make the model credential available to the worker before deploying an Agent:
 
@@ -184,7 +189,7 @@ set -euo pipefail
 : "${OCC_URL:?Run the quickstart sign-in block first.}"
 : "${OCC_SESSION_COOKIE_JAR:?Run the quickstart sign-in block first.}"
 
-export OCC_E2E_MODEL="${OCC_E2E_MODEL:-gpt-5.1}"
+export OCC_E2E_MODEL="${OCC_E2E_MODEL:-gpt-5.6-sol}"
 export OCC_E2E_NAME="tui-$(date +%Y%m%d%H%M%S)"
 OCC_E2E_DIRECTORY="$(mktemp -d)"
 
@@ -1015,7 +1020,8 @@ immutable AgentRevision to become active.
 
 For dedicated Codex, create the Agent's Namespace-scoped Configuration with
 `kind: "agent"` and a native OpenClaw configuration document equivalent to the
-following. Select a model that supports Codex custom tools, such as `gpt-5.1`.
+following. Select a model that supports Codex custom tools, such as the exact
+GPT-5.6 Sol API model ID `gpt-5.6-sol`.
 
 ```json
 {
@@ -1027,9 +1033,9 @@ following. Select a model that supports Codex custom tools, such as `gpt-5.1`.
   },
   "agents": {
     "defaults": {
-      "model": { "primary": "codex/gpt-5.1" },
+      "model": { "primary": "codex/gpt-5.6-sol" },
       "models": {
-        "codex/gpt-5.1": { "agentRuntime": { "id": "codex" } }
+        "codex/gpt-5.6-sol": { "agentRuntime": { "id": "codex" } }
       }
     }
   },
@@ -1038,7 +1044,7 @@ following. Select a model that supports Codex custom tools, such as `gpt-5.1`.
       "codex": {
         "baseUrl": "http://127.0.0.1:9",
         "api": "openai-responses",
-        "models": [{ "id": "gpt-5.1", "name": "gpt-5.1" }]
+        "models": [{ "id": "gpt-5.6-sol", "name": "gpt-5.6-sol" }]
       }
     }
   },
