@@ -22,8 +22,8 @@ adapters establish production compatibility.
 [SandboxDriver provisioning and lifecycle](13-sandbox-driver-provisioning.md).
 
 **Existing runtime validation:**
-[harness-topology-k3d-real.test.mjs](../tests/integration/harness-topology-k3d-real.test.mjs)
-and its [real-cluster helpers](../tests/helpers/kubernetes-real.mjs).
+[harness-topology-k3d-real.test.mjs](../../tests/integration/harness-topology-k3d-real.test.mjs)
+and its [real-cluster helpers](../../tests/helpers/kubernetes-real.mjs).
 
 ## Scope and prerequisites
 
@@ -274,8 +274,8 @@ deploy a dedicated Agent, then assert:
    credential files, and test-created Namespace.
 
 Extend or reuse
-[harness-topology-k3d-real.test.mjs](../tests/integration/harness-topology-k3d-real.test.mjs)
-and [kubernetes-real.mjs](../tests/helpers/kubernetes-real.mjs). The final run
+[harness-topology-k3d-real.test.mjs](../../tests/integration/harness-topology-k3d-real.test.mjs)
+and [kubernetes-real.mjs](../../tests/helpers/kubernetes-real.mjs). The final run
 must use a disposable enforcing k3d cluster, real OpenShell/OpenClaw/Codex
 images, an authorized existing model credential, and zero skipped requested
 cases. A mocked provider, readiness-only probe, fixture-generated model reply,

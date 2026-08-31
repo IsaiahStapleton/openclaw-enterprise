@@ -121,7 +121,7 @@ bounded cleanup signal so cancellation cannot suppress compensation.
 ## Related docs
 
 - [Installation Driver package loading flow](driver-plugin-loading.md)
-- [Compute Driver lifecycle implementation specification](../../specs/04-compute-driver-lifecycle-hooks.md)
+- [Compute Driver lifecycle implementation specification](../../specs/.archive/04-compute-driver-lifecycle-hooks.md)
 - [ComputeDriver contract](../reference/drivers/compute.md)
 - [Kubernetes Compute Driver](../reference/drivers/kubernetes-compute.md#selected-driver-lifecycle-hooks)
 - [Docker Compute Driver](../reference/drivers/docker-compute.md)

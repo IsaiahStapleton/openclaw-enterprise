@@ -125,19 +125,19 @@ Already-active recovery safely repeats publication and predecessor retirement be
 ## Implementation
 
 1. Keep Agent and revision contracts aligned in
-   [`packages/contracts/src/index.ts`](../packages/contracts/src/index.ts) and existing OCC state.
+   [`packages/contracts/src/index.ts`](../../packages/contracts/src/index.ts) and existing OCC state.
 2. Resolve selected-model/provider policy, one canonical approved harness, and explicit placement in
-   [`packages/occ/src/index.ts`](../packages/occ/src/index.ts) and
-   [`controller composition`](../apps/controller/src/composition).
+   [`packages/occ/src/index.ts`](../../packages/occ/src/index.ts) and
+   [`controller composition`](../../apps/controller/src/composition).
 3. Preserve worker claim fencing, guarded Kubernetes Service activation, predecessor continuity, and
-   exactly-once audit in [`worker.ts`](../apps/controller/src/worker.ts) and
-   [`Kubernetes Compute`](../apps/controller/src/drivers/compute/kubernetes/index.ts).
+   exactly-once audit in [`worker.ts`](../../apps/controller/src/worker.ts) and
+   [`Kubernetes Compute`](../../apps/controller/src/drivers/compute/kubernetes/index.ts).
 4. Start a single embedded gateway or an authenticated dedicated gateway/Codex pair through
    `local-test Compute` (historical path:
    `apps/controller/src/drivers/compute/local-test/index.ts`).
-5. Keep [Agent operator guidance](../docs/reference/agents.md),
-   [ComputeDriver contract](../docs/reference/drivers/compute.md), and
-   [execution flow](../docs/flows/harness-execution-topology.md) accurate.
+5. Keep [Agent operator guidance](../../docs/reference/agents.md),
+   [ComputeDriver contract](../../docs/reference/drivers/compute.md), and
+   [execution flow](../../docs/flows/harness-execution-topology.md) accurate.
 
 ## Verification
 

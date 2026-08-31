@@ -4,9 +4,9 @@
 
 **Status:** Implemented; pending review
 
-**Depends on:** [Production Kubernetes Controller Operation](2026-08-19-production-kubernetes-controller-operation.md), [Configuration Kind and Agent-Owned Gateways](06-configuration-kind.md)
+**Depends on:** Production Kubernetes Controller Operation, [Configuration Kind and Agent-Owned Gateways](06-configuration-kind.md)
 
-**Authority:** [OpenClaw Enterprise platform design](../docs/design.md)
+**Authority:** [OpenClaw Enterprise platform design](../../docs/design.md)
 
 ## Outcome
 

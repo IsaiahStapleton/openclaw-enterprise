@@ -207,7 +207,7 @@ These commands describe the proof hooks, not a new runtime execution record.
 - [Human password/session flow](local-password-authentication.md)
 - [Authorization reference](../reference/authorization.md)
 - [Platform identity and authority](../design.md#iam-and-authority)
-- [Service API key implementation spec](../../specs/13-service-api-keys.md)
+- [Service API key implementation spec](../../specs/.archive/13-service-api-keys.md)
 
 ## Manual Notes
 

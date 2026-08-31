@@ -17,8 +17,8 @@ per Namespace and starts the existing production OpenClaw/Codex images as
 Agent-owned containers.
 
 The driver implements the existing
-[ComputeDriver contract](../docs/reference/drivers/compute.md), preserves both
-approved [Harness topologies](../docs/flows/harness-execution-topology.md), and
+[ComputeDriver contract](../../docs/reference/drivers/compute.md), preserves both
+approved [Harness topologies](../../docs/flows/harness-execution-topology.md), and
 becomes the development default. A real authenticated model response proves the
 complete Compose-backed lifecycle. Production Kubernetes behavior is unchanged.
 
@@ -71,7 +71,7 @@ daemon/image fails explicitly. There is no in-memory server mode or fallback fak
 Without `OCC_CONFIG_PATH`, the API and worker both select `DockerComputeDriver`;
 an explicitly configured Installation still selects its existing configured
 Drivers. Reuse the
-existing [Compose PostgreSQL definition](../compose.postgres.yaml), role
+existing [Compose PostgreSQL definition](../../compose.postgres.yaml), role
 separation, and migration tooling rather than introducing a second database.
 
 The API listens on its container interface and publishes its port exclusively
@@ -105,7 +105,7 @@ references through `OCC_DOCKER_GATEWAY_IMAGE` and `OCC_DOCKER_AGENT_IMAGE`, or
 uses `OCC_DOCKER_RUNTIME_IMAGE` as their shared fallback. Missing image
 references fail; Helm placeholder values are never treated as defaults. Reuse
 native
-[runtime entrypoints](../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts)
+[runtime entrypoints](../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts)
 instead of inventing development runtime images. Provider credentials come from
 an already authorized developer environment and must not enter configuration
 snapshots, command arguments, logs, audit events, API responses, sibling Agents,
@@ -122,14 +122,14 @@ adoption contract is added.
 ## Implementation
 
 1. Add `DockerComputeDriver` under
-   [`apps/controller/src/drivers/compute/`](../apps/controller/src/drivers/compute).
+   [`apps/controller/src/drivers/compute/`](../../apps/controller/src/drivers/compute).
    Implement the four existing lifecycle methods against Docker Engine, exact
    owner labels, per-Namespace networks, both Agent-owned topologies, readiness,
    authenticated dedicated transport, scoped model credentials, and cleanup.
 2. Replace fake selection in
-   [`development-postgres.ts`](../apps/controller/src/composition/development-postgres.ts)
-   and [`worker.mjs`](../apps/controller/src/worker.mjs); remove in-memory
-   selection from [`server.mjs`](../apps/controller/src/server.mjs). Select the
+   [`development-postgres.ts`](../../apps/controller/src/composition/development-postgres.ts)
+   and [`worker.mjs`](../../apps/controller/src/worker.mjs); remove in-memory
+   selection from [`server.mjs`](../../apps/controller/src/server.mjs). Select the
    smallest persistent filesystem Configuration Driver for the API when no
    Driver configuration is provided. Keep explicitly selected Drivers and
    existing auth/IAM ownership intact.
@@ -139,15 +139,15 @@ adoption contract is added.
    explicit production-equivalent runtime image references,
    and host-loopback-only API publication. Add the smallest development image
    target and tighten Compose-aware transport checks in
-   [`server.mjs`](../apps/controller/src/server.mjs) and
-   [`index.ts`](../apps/controller/src/index.ts).
-4. Update [`README.md`](../README.md), [`docs/config.md`](../docs/reference/settings.md),
-   [`docs/controller.md`](../docs/reference/controller.md), and
-   [`docs/contracts/computedriver.md`](../docs/reference/drivers/compute.md);
+   [`server.mjs`](../../apps/controller/src/server.mjs) and
+   [`index.ts`](../../apps/controller/src/index.ts).
+4. Update [`README.md`](../../README.md), [`docs/config.md`](../../docs/reference/settings.md),
+   [`docs/controller.md`](../../docs/reference/controller.md), and
+   [`docs/contracts/computedriver.md`](../../docs/reference/drivers/compute.md);
    add a focused Docker Compute Driver guide under
-   [`docs/reference/drivers/`](../docs/reference/drivers).
+   [`docs/reference/drivers/`](../../docs/reference/drivers).
 5. Add one real Compose-backed integration journey under
-   [`tests/integration/`](../tests/integration), reusing existing session,
+   [`tests/integration/`](../../tests/integration), reusing existing session,
    deployment, Harness, and provider-response helpers instead of parallel
    fixtures or mocked Docker execution.
 

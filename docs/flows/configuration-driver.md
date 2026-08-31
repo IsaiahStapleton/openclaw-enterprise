@@ -237,8 +237,8 @@ its optional integration is skipped.
 - [Agent lifecycle](../reference/agents.md)
 - [Kubernetes Compute Driver](../reference/drivers/kubernetes-compute.md)
 - [Configuration Driver implementation specification](../../specs/.archive/03-configuration-driver.md)
-- [OpenClaw-native Configuration specification](../../specs/05-openclaw-native-configuration.md)
-- [Configuration kind and Agent-owned gateway specification](../../specs/06-configuration-kind.md)
+- [OpenClaw-native Configuration specification](../../specs/.archive/05-openclaw-native-configuration.md)
+- [Configuration kind and Agent-owned gateway specification](../../specs/.archive/06-configuration-kind.md)
 
 ## Manual Notes
 

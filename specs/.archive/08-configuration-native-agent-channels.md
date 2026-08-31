@@ -3,7 +3,7 @@
 **Date:** 2026-08-21
 **Status:** Planning
 **Owner:** Kubernetes ComputeDriver and OpenClaw gateway
-**Authority:** [Platform design](../docs/design.md) and [Configuration contract](06-configuration-kind.md)
+**Authority:** [Platform design](../../docs/design.md) and [Configuration contract](06-configuration-kind.md)
 
 ## Problem and Decision
 
@@ -65,16 +65,16 @@ Teams ingress additionally requires a separately deployed and reviewed public Bo
 
 ## Implementation
 
-1. Extend [Kubernetes ComputeDriver](../apps/controller/src/drivers/compute/kubernetes/index.ts) with
+1. Extend [Kubernetes ComputeDriver](../../apps/controller/src/drivers/compute/kubernetes/index.ts) with
    built-in Slack/Teams requirements, minimal Agent-owned gateway `secretKeyRef` credentials, and
    exact shared proxy egress.
 2. Cover supported providers, combined requirements, unsupported providers, disabled revisions, and
-   gateway isolation in [Kubernetes conformance tests](../tests/conformance/kubernetes-compute.test.mjs).
+   gateway isolation in [Kubernetes conformance tests](../../tests/conformance/kubernetes-compute.test.mjs).
 3. Retain opt-in Slack-only live proof in
-   [existing topology integration](../tests/integration/harness-topology-k3d-real.test.mjs).
+   [existing topology integration](../../tests/integration/harness-topology-k3d-real.test.mjs).
 4. Document native channel configuration, credentials, proxy behavior, Teams limitations, and Slack
-   verification in the existing [Configuration](../docs/reference/configuration.md) and
-   [Kubernetes Driver](../docs/reference/drivers/kubernetes-compute.md) guides.
+   verification in the existing [Configuration](../../docs/reference/configuration.md) and
+   [Kubernetes Driver](../../docs/reference/drivers/kubernetes-compute.md) guides.
 
 ## Verification
 

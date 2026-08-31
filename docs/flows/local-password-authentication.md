@@ -94,7 +94,7 @@ implicit permissions.
 - [Configuration reference](../reference/settings.md)
 - [IAM](../reference/authorization.md)
 - [Platform startup flow](platform-startup.md)
-- [Feature spec](../../specs/10-local-password-authentication.md)
+- [Feature spec](../../specs/.archive/10-local-password-authentication.md)
 
 ## Manual Notes
 

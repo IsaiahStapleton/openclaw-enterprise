@@ -106,7 +106,7 @@ Refresh, rotation, and automated reconciliation remain deferred.
 ## Related docs
 
 - [Service accounts](../reference/service-accounts.md)
-- [Service Account Driver specification](../../specs/11-service-account-driver.md)
+- [Service Account Driver specification](../../specs/.archive/11-service-account-driver.md)
 - [Platform design](../design.md)
 - [Kubernetes Compute Driver](../reference/drivers/kubernetes-compute.md)
 - [Native service account credential delivery](native-service-account-credential-delivery.md)

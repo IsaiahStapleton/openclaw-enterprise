@@ -117,7 +117,7 @@ complete-deletion lifecycle.
 
 ## Related docs
 
-- [Existing namespace specification](../../specs/12-kubernetes-existing-namespaces.md)
+- [Existing namespace specification](../../specs/.archive/12-kubernetes-existing-namespaces.md)
 - [Platform design](../design.md)
 - [Kubernetes Compute Driver](../reference/drivers/kubernetes-compute.md)
 - [Production Kubernetes deployment](../guides/deploy.md)

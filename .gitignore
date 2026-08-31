@@ -16,3 +16,4 @@ output/playwright/
 
 # Agent-local progress is not product source.
 .agents/
+.vscode/settings.json

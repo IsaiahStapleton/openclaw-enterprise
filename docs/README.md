@@ -1,55 +1,36 @@
-# OpenClaw Enterprise documentation
+# OpenClaw Enterprise
 
-Choose a document by the question you need to answer. Current feature contracts,
-code execution, operating procedures, and implementation history have separate
-owners; readers do not need to reconstruct current behavior from old proposals.
+OpenClaw Enterprise is the open platform for managing agents.
 
 ## Start and deploy
 
-- [Quickstart](guides/quickstart.md): start a local Installation, sign in, and
-  make an authenticated request.
-- [Deploy](guides/deploy.md): development Docker Compose and production
-  Kubernetes prerequisites, startup, verification, and cleanup.
+- [Quickstart](guides/quickstart.md): start locally, sign in, and make an authenticated request.
+- [Deploy](guides/deploy.md): configure Docker Compose or Kubernetes, verify your deployment, and troubleshoot startup.
 
-These are the only user guides maintained for now. Detailed per-feature and
-per-Driver tutorials are deferred; their supported behavior belongs in reference.
+## Architecture
 
-## Foundational documents
+- [Platform design](design.md): platform architecture and resource model.
+- [Current architecture](ARCHITECTURE.md): API, worker, storage, and Agent execution.
 
-- [Repository README](../README.md): project purpose, workspace, and contributor checks.
-- [Platform design](design.md): authoritative architectural principles,
-  resource ownership, target direction, and deferred capabilities. A target
-  capability is not a claim that it is implemented.
-- [Current architecture](ARCHITECTURE.md): implemented components, boundaries,
-  storage, and relationships. Follow its links for feature contracts and code traces.
+## Reference
 
-## Current feature reference
-
-[Reference index](reference/README.md) owns the supported feature specifications
-at this repository version. These are living documents, not RFCs or delivery plans.
-
+- [Reference index](reference/README.md): browse all features and Drivers.
 - [Namespaces](reference/namespaces.md), [Agents](reference/agents.md), and
-  [Configuration](reference/configuration.md): ownership, operations, and immutable snapshots.
-- [Kubernetes Secret Driver](reference/drivers/kubernetes-secret.md): Namespace-owned
-  Secret storage, metadata-only responses, environment bindings, and redeploy
-  behavior.
+  [Configuration](reference/configuration.md): create, organize, and configure Agents.
+- [Kubernetes Secret Driver](reference/drivers/kubernetes-secret.md): store Secrets
+  and bind them to selected Agent gateways.
 - [Authentication](reference/authentication.md),
   [Authorization](reference/authorization.md), and
-  [Service accounts](reference/service-accounts.md): identity, permissions, and credential boundaries.
+  [Service accounts](reference/service-accounts.md): sign-in, permissions, and credentials.
 - [Harness execution](reference/harness-execution.md) and
-  [Controller reconciliation](reference/controller.md): supported execution,
-  admission, lifecycle, durable work, and recovery.
+  [Controller reconciliation](reference/controller.md): runtime topology, deployment,
+  and revision activation.
 - [Security controls](reference/security.md), [settings](reference/settings.md),
-  and [generated API reference](reference/api.md): exact deployment constraints,
-  configuration inputs, and wire contracts.
-- [Driver contracts and implementations](reference/README.md#drivers):
-  capability obligations, trusted selection, and implementation-specific settings.
+  and [HTTP API](reference/api.md): access controls, deployment configuration, and request schemas.
+- [Drivers](reference/README.md#drivers): select and configure compute, configuration,
+  identity, and Secret implementations.
 
 ## Understand the code
-
-Flow docs follow a concrete entrypoint through the current source. They explain
-how the implementation realizes a contract; they do not define an alternative
-feature contract or replace deployment instructions.
 
 - [Development startup](flows/development-startup.md),
   [Docker Compose development](flows/docker-compose-development.md),
@@ -68,33 +49,6 @@ feature contract or replace deployment instructions.
   and [Driver-issued credentials](flows/service-account-driver-credential-delivery.md).
 - [Existing Kubernetes namespace placement](flows/kubernetes-existing-namespace-placement.md).
 
-## Implementation specifications
+## Implementation history
 
-[Implementation-spec index](../specs/README.md) links change proposals,
-milestones, recorded statuses, and the reference pages that own current behavior.
-Completed specifications preserve their decisions and implementation history.
-There is no separate RFC directory or process.
-
-## Maintaining the split
-
-| Document           | Update it when                                                   |
-| ------------------ | ---------------------------------------------------------------- |
-| `design.md`        | An architectural principle or target decision changes.           |
-| `ARCHITECTURE.md`  | Implemented components or their relationships change.            |
-| `reference/`       | Supported behavior, guarantees, limits, or configuration change. |
-| `flows/`           | The execution path or source ownership changes.                  |
-| `guides/`          | A startup or deployment procedure changes.                       |
-| Top-level `specs/` | A proposed change is being developed or its outcome is recorded. |
-
-An implementation PR updates affected current docs alongside the code. Reference
-pages describe the merged source at their Git revision and explicitly distinguish
-development, production, and verification-only behavior. Released snapshots come
-from the corresponding release or tag; the default branch may be newer than an
-operator's deployment. If code violates an accepted guarantee, record the defect
-or known deviation rather than silently changing the guarantee.
-
-Each rule has one authoritative home. Guides may illustrate it, flows may explain
-its enforcement, and implementation specs may link its history. Preserve Manual
-Notes and user-owned edits, and keep historical specification content intact when
-updating links after a move. Contributor verification remains in
-[AGENTS.md](../AGENTS.md#running-integration-tests).
+[Spec archive](../specs/README.md): proposals, delivery records, and recorded statuses.

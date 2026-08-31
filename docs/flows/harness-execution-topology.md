@@ -123,7 +123,7 @@ defines storage-class requirements, mounts, and final teardown.
 
 ## Related docs
 
-- [Harness execution topology implementation specification](../../specs/07-harness-execution-topology.md)
+- [Harness execution topology implementation specification](../../specs/.archive/07-harness-execution-topology.md)
 - [Platform design](../design.md#openclaw-gateways)
 - [Agent placement and deployment](../reference/agents.md#execution-mode)
 - [Controller worker](../reference/controller.md#agentrevision-lifecycle)

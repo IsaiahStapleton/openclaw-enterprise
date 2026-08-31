@@ -13,7 +13,7 @@ the association at deployment. An authorized external credential owner copies th
 credential into the existing Agent-specific Kubernetes Secret; `KubernetesComputeDriver` retains its
 existing Harness-specific `secretKeyRef` projection and never accesses Secrets.
 
-The authoritative [platform design](../docs/design.md#platform-resources) currently excludes provider
+The authoritative [platform design](../../docs/design.md#platform-resources) currently excludes provider
 accounts from platform resources. Amend it before implementation to admit native account representations
 while preserving external ownership of provider accounts, provider authorization, and credentials.
 
@@ -56,7 +56,7 @@ interface AgentRevision {
 OCC directly implements native accounts. Introduce backend selection only when a second account backend
 exists. The architectural `ResourceDriver` remains the future owner of external-provider account operations;
 native accounts require no executable Driver capability or `ServiceAccountDriver`.
-[`IAMDriver`](../packages/contracts/src/index.ts) remains authorization-only.
+[`IAMDriver`](../../packages/contracts/src/index.ts) remains authorization-only.
 
 Each Agent references at most one account; same-Namespace Agents may share an account. Account and Agent
 Namespace ownership must match. The credential reference names one Kubernetes Secret and key in the
@@ -66,7 +66,7 @@ metadata; later edits affect only future deployments. Resources and snapshots co
 
 ### Authorization and provider ownership
 
-Follow the existing [Namespace collection authorization](../packages/occ/src/index.ts):
+Follow the existing [Namespace collection authorization](../../packages/occ/src/index.ts):
 
 ```ts
 authorize(actor, "create", {
@@ -107,10 +107,10 @@ key: OPENAI_API_KEY
 This materialization is an explicit external prerequisite; OCC and Kubernetes Compute neither read nor write
 source or runtime Secrets and receive no Secret RBAC. The production materializer is an implementation gap.
 Missing source/destination materialization prevents workload readiness and revision activation; no alternate
-credential is selected. Preserve the [production Secret boundary](../docs/design.md#secret-access).
+credential is selected. Preserve the [production Secret boundary](../../docs/design.md#secret-access).
 
 Existing Harness selection and
-[Kubernetes topology](../apps/controller/src/drivers/compute/kubernetes/index.ts)
+[Kubernetes topology](../../apps/controller/src/drivers/compute/kubernetes/index.ts)
 already determine placement; no additional Harness abstraction is required:
 
 | Admitted Harness | Credential placement | Actual execution |
@@ -125,29 +125,29 @@ Represent an OAuth reference, but defer OAuth deployment and every refresh mecha
 
 ## Implementation
 
-1. Amend [`docs/design.md`](../docs/design.md) to add Namespace-owned accounts and Agent association
+1. Amend [`docs/design.md`](../../docs/design.md) to add Namespace-owned accounts and Agent association
    without expanding provider ownership or the controller's Secret boundary.
 2. Add account/API contracts, routes, credential reference, optional Agent association, and revision
-   snapshot in [`packages/contracts/src/index.ts`](../packages/contracts/src/index.ts),
-   [`api/resources.ts`](../packages/contracts/src/api/resources.ts), and
-   [`api/routes.ts`](../packages/contracts/src/api/routes.ts); regenerate OpenAPI.
+   snapshot in [`packages/contracts/src/index.ts`](../../packages/contracts/src/index.ts),
+   [`api/resources.ts`](../../packages/contracts/src/api/resources.ts), and
+   [`api/routes.ts`](../../packages/contracts/src/api/routes.ts); regenerate OpenAPI.
 3. Add account persistence and same-Namespace relationships in
-   [`postgres-schema.ts`](../packages/occ/src/state/postgres-schema.ts),
-   [`platform-state.ts`](../packages/occ/src/state/platform-state.ts), and
-   [`postgres-state.ts`](../packages/occ/src/state/postgres-state.ts).
+   [`postgres-schema.ts`](../../packages/occ/src/state/postgres-schema.ts),
+   [`platform-state.ts`](../../packages/occ/src/state/platform-state.ts), and
+   [`postgres-state.ts`](../../packages/occ/src/state/postgres-state.ts).
 4. Implement native operations, exact authorization, reference/association validation, OAuth deployment
-   rejection, and revision snapshotting in [`packages/occ/src/index.ts`](../packages/occ/src/index.ts)
-   and the existing [controller routes](../apps/controller/src/index.ts).
+   rejection, and revision snapshotting in [`packages/occ/src/index.ts`](../../packages/occ/src/index.ts)
+   and the existing [controller routes](../../apps/controller/src/index.ts).
 5. Preserve Kubernetes Compute topology and Secret projection; implement reference-driven external
    materialization using the authorized operator path in real Kubernetes integration.
-6. Update [IAM](../docs/reference/authorization.md), [Agent](../docs/reference/agents.md), and
-   [Kubernetes Compute](../docs/reference/drivers/kubernetes-compute.md); add a ServiceAccount guide linked from
-   [`docs/README.md`](../docs/README.md).
+6. Update [IAM](../../docs/reference/authorization.md), [Agent](../../docs/reference/agents.md), and
+   [Kubernetes Compute](../../docs/reference/drivers/kubernetes-compute.md); add a ServiceAccount guide linked from
+   [`docs/README.md`](../../docs/README.md).
 
 ## Verification
 
 Extend the existing provider-backed
-[`harness-topology-k3d-real.test.mjs`](../tests/integration/harness-topology-k3d-real.test.mjs) using real
+[`harness-topology-k3d-real.test.mjs`](../../tests/integration/harness-topology-k3d-real.test.mjs) using real
 OCC routes, PostgreSQL, the worker, Kubernetes, approved images, and an existing authorized model key. In
 each scenario, seed a distinct Namespace-local source Secret; create a native account; associate that
 Secret's exact persisted `{name,key}`; associate the Agent; have the authorized test operator materialize
@@ -164,7 +164,7 @@ obtain a fresh scenario-specific nonce from the actual provider response.
    no controller Secret RBAC; sibling isolation; immutable snapshots; deletion rejection while bound; and no
    tokens in responses, PostgreSQL, revisions, logs, audits, or ConfigMaps.
 
-Follow [real Kubernetes integration instructions](../AGENTS.md#running-integration-tests). Missing
+Follow [real Kubernetes integration instructions](../../AGENTS.md#running-integration-tests). Missing
 infrastructure, credentials, materialization evidence, or either real provider response is a verification gap.
 
 ## Implementation Gaps and Open Decisions

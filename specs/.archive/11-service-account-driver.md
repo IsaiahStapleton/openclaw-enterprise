@@ -13,7 +13,7 @@ associated dedicated Codex Agent. OCC owns only its provider-agnostic, Namespace
 Driver privately owns upstream identities and credential lifecycle; an injected `ChatGPTClient` owns
 provider transport and admin authentication; Kubernetes Compute stores and installs the issued token.
 
-Update the authoritative [platform design](../docs/design.md) to replace `ResourceDriver` entirely with
+Update the authoritative [platform design](../../docs/design.md) to replace `ResourceDriver` entirely with
 `ServiceAccountDriver`. Explicitly supersede the historical [native-account specification](10-native-service-accounts.md)
 where it defers provider Drivers, assigns provider operations to `ResourceDriver`, or prohibits Compute
 Secret access. Keep the historical specification unchanged.
@@ -217,44 +217,44 @@ this implementation; OCC, IAM, Compute, and Harnesses do not refresh OAuth crede
 
 ## Implementation
 
-1. Amend the authoritative [platform design](../docs/design.md): remove every `ResourceDriver` reference;
+1. Amend the authoritative [platform design](../../docs/design.md): remove every `ResourceDriver` reference;
    add `ServiceAccountDriver`, shared provider-client dependency, distinct OCC/provider account ownership,
    the approved Compute Secret boundary, dedicated Codex access-token execution, and exact tenant risks.
-   Update the current [security model](../docs/reference/security.md), [service-account guide](../docs/reference/service-accounts.md),
-   and [Kubernetes Compute guide](../docs/reference/drivers/kubernetes-compute.md) in the same implementation.
+   Update the current [security model](../../docs/reference/security.md), [service-account guide](../../docs/reference/service-accounts.md),
+   and [Kubernetes Compute guide](../../docs/reference/drivers/kubernetes-compute.md) in the same implementation.
 2. Add the generic Driver contract, generic `access_token` credential and closed response schemas,
    separate credential route, provider-free immutable revision snapshot, and generated OpenAPI in
-   [shared contracts](../packages/contracts/src/index.ts), [API routes](../packages/contracts/src/api/routes.ts),
-   [request schemas](../packages/contracts/src/api/common.ts), and
-   [response schemas](../packages/contracts/src/api/resources.ts). Update the real Fastify dispatcher and
-   account serializer in the [controller](../apps/controller/src/index.ts); implement exact OCC
+   [shared contracts](../../packages/contracts/src/index.ts), [API routes](../../packages/contracts/src/api/routes.ts),
+   [request schemas](../../packages/contracts/src/api/common.ts), and
+   [response schemas](../../packages/contracts/src/api/resources.ts). Update the real Fastify dispatcher and
+   account serializer in the [controller](../../apps/controller/src/index.ts); implement exact OCC
    authorization, selected Driver dispatch, outer-transaction compensation, and deployment admission in
-   [OCC](../packages/occ/src/index.ts).
-3. Add a new `migrations/0009_*.sql` and update [PostgreSQL schema/state](../packages/occ/src/state/postgres-schema.ts)
+   [OCC](../../packages/occ/src/index.ts).
+3. Add a new `migrations/0009_*.sql` and update [PostgreSQL schema/state](../../packages/occ/src/state/postgres-schema.ts)
    for generic credential variants, exact Namespace ownership, provider-free revision snapshots, and a
    separate driver-owned binding table containing durable upstream account, credential, Driver, and
    workspace identities. Bind each row to its exact OCC account/Namespace; share the existing outer
-   transaction. Do not alter the already shipped [0007 migration](../migrations/0007_native_service_accounts.sql).
+   transaction. Do not alter the already shipped [0007 migration](../../migrations/0007_native_service_accounts.sql).
 4. Add `ChatGPTClient` and `ChatGPTServiceAccountDriver` with private persisted bindings; extend shared
-   [Installation configuration](../apps/controller/src/composition/installation-config.ts) with optional
+   [Installation configuration](../../apps/controller/src/composition/installation-config.ts) with optional
    Driver selection, fixed ChatGPT endpoint, bounded TTL, and closed configuration validation. Initialize
-   the client only in the existing [API entrypoint](../apps/controller/src/server.mjs), and construct its
+   the client only in the existing [API entrypoint](../../apps/controller/src/server.mjs), and construct its
    Driver after API composition creates the existing PostgreSQL state and controller; leave the
-   [worker entrypoint](../apps/controller/src/worker.mjs) free of provider initialization and avoid a
+   [worker entrypoint](../../apps/controller/src/worker.mjs) free of provider initialization and avoid a
    process-role configuration switch.
-5. Extend [Kubernetes Compute](../apps/controller/src/drivers/compute/kubernetes/index.ts) for exact-account
+5. Extend [Kubernetes Compute](../../apps/controller/src/drivers/compute/kubernetes/index.ts) for exact-account
    Secret creation and direct revision-driven access-token/workspace `secretKeyRef` projection; select
    API-key versus generic access-token login in
-   [runtime entrypoints](../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts).
-6. Update production [deployment mounts](../deploy/helm/openclaw-enterprise/templates/deployments.yaml),
-   [tenant RBAC](../deploy/helm/openclaw-enterprise/templates/rbac.yaml), and
-   [NetworkPolicies](../deploy/helm/openclaw-enterprise/templates/networkpolicies.yaml). Replace existing
+   [runtime entrypoints](../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts).
+6. Update production [deployment mounts](../../deploy/helm/openclaw-enterprise/templates/deployments.yaml),
+   [tenant RBAC](../../deploy/helm/openclaw-enterprise/templates/rbac.yaml), and
+   [NetworkPolicies](../../deploy/helm/openclaw-enterprise/templates/networkpolicies.yaml). Replace existing
    assertions that prohibit all Compute Secret access with exact Namespace-limited API authorization;
    preserve existing worker/workload Secret-denial assertions.
 
 ## Verification
 
-Extend the existing real [dedicated-Harness Kubernetes integration](../tests/integration/harness-topology-k3d-real.test.mjs)
+Extend the existing real [dedicated-Harness Kubernetes integration](../../tests/integration/harness-topology-k3d-real.test.mjs)
 using actual OCC HTTP routes, PostgreSQL, selected Drivers, tenant RoleBindings, Kubernetes, approved
 OpenClaw/Codex images, an authorized real ChatGPT workspace admin key, and the real ChatGPT Admin API:
 
@@ -281,7 +281,7 @@ API-key dedicated/embedded execution. The real tenant-RBAC integration verifies 
 Secret permission and worker/workload denial of direct Secret API access using separate actual API/worker
 identities and scoped kubeconfigs; one shared identity cannot prove this isolation. It does not claim to
 prevent a trusted worker from projecting tenant Secrets through its existing Deployment authority. The separate
-[production Helm packaging test](../tests/integration/production-kubernetes-packaging.test.mjs) verifies
+[production Helm packaging test](../../tests/integration/production-kubernetes-packaging.test.mjs) verifies
 the API-only admin Secret mount and provider-egress policy; rendered-chart assertions are not live Helm
 deployment or NetworkPolicy-enforcement evidence.
 

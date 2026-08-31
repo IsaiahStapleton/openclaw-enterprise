@@ -4,12 +4,9 @@ authors:
   - Kevin Lin
 created: 2026-07-08
 last_updated: 2026-08-24
-status: draft
-issue:
-rfc_pr:
 ---
 
-# Proposal: OpenClaw as the Open Enterprise Agent Platform
+# OpenClaw as the Open Enterprise Agent Platform
 
 ## Summary
 
@@ -443,7 +440,7 @@ another authorization Driver.
 
 ## Secret access
 
-The approved [SecretDriver storage and delivery](../specs/14-secret-driver.md)
+The approved [SecretDriver storage and delivery](../specs/.archive/14-secret-driver.md)
 contract uses Installation-selected `KubernetesSecretDriver` by default. Each
 Secret belongs to one Namespace, can be created before any Agent exists, and
 uses a Namespace-unique name. Same-Namespace Agents may consume it only through

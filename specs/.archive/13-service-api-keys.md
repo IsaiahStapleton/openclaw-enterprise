@@ -3,7 +3,7 @@
 **Date:** 2026-08-28
 **Status:** Implementation complete
 **Owner:** OCC authentication and IAM
-**Current reference:** [Authentication](../docs/reference/authentication.md#service-api-keys)
+**Current reference:** [Authentication](../../docs/reference/authentication.md#service-api-keys)
 
 ## Completion record
 
@@ -27,7 +27,7 @@ can issue and revoke keys for itself or another eligible principal in that
 Installation, including implementing rotation through issue, switch, and revoke.
 No rotation daemon is introduced.
 
-The [authentication reference](../docs/reference/authentication.md#service-api-keys)
+The [authentication reference](../../docs/reference/authentication.md#service-api-keys)
 owns the current contract. Account creation and bootstrap remain restricted to
 human sessions; Namespace containment, Agent exclusion, explicit-key precedence,
 current IAM policy, and revocation/audit behavior are unchanged. Focused HTTP
@@ -48,7 +48,7 @@ resource authorization. This spec records the settled task contract and the
 implementation already reviewed in this task; the remaining milestone is PR
 delivery with independent verification.
 
-The [platform design](../docs/design.md#iam-and-authority) remains authoritative
+The [platform design](../../docs/design.md#iam-and-authority) remains authoritative
 for identities and authorization. This task supplies the previously deferred
 controller API-key authentication mechanism. It does not implement future OAG
 admission or the separate Agent workload identity exchange.
@@ -86,8 +86,8 @@ issuance; current identity scope must still match that snapshot on every use.
 
 `POST /api/auth/service-keys` returns the plaintext credential once, alongside
 the non-secret ID needed for revocation. The exact request fields and lifetime
-limits are owned by the [API reference](../docs/reference/api.md) and
-[authentication reference](../docs/reference/authentication.md#service-api-keys). Credentials
+limits are owned by the [API reference](../../docs/reference/api.md) and
+[authentication reference](../../docs/reference/authentication.md#service-api-keys). Credentials
 must not enter audit evidence or ordinary logs. If issuance audit persistence
 fails, OCC returns no credential and attempts to remove the unreturned key.
 
@@ -118,18 +118,18 @@ is needed.
 ## Implementation
 
 1. **Authentication and storage:** configure the pinned Better Auth plugin in
-   [the shared auth factory](../apps/controller/src/auth/index.ts). Use its
-   supported server calls/adapter and [plugin schema](../packages/occ/src/state/postgres-schema.ts)
-   with [SQL persistence](../migrations/0012_service_api_keys.sql).
+   [the shared auth factory](../../apps/controller/src/auth/index.ts). Use its
+   supported server calls/adapter and [plugin schema](../../packages/occ/src/state/postgres-schema.ts)
+   with [SQL persistence](../../migrations/0012_service_api_keys.sql).
 2. **Identity and request authorization:** extend the existing IAM lookup
    contract for a verified service-principal ID; use the same native policy
    evaluation and controller resource authorization. Keep the shared
    Installation-admin check for bootstrap, account provisioning, and keys in
-   [the controller](../apps/controller/src/index.ts).
+   [the controller](../../apps/controller/src/index.ts).
 3. **Delivery:** retain meaningful HTTP and PostgreSQL tests, generated API
-   artifacts, [authentication](../docs/reference/authentication.md) and
-   [authorization](../docs/reference/authorization.md) references, and the shared
-   [deployment guide](../docs/guides/deploy.md#service-api-keys-for-automation). Run disjoint code,
+   artifacts, [authentication](../../docs/reference/authentication.md) and
+   [authorization](../../docs/reference/authorization.md) references, and the shared
+   [deployment guide](../../docs/guides/deploy.md#service-api-keys-for-automation). Run disjoint code,
    simplification, documentation, and dead-code reviews before independent
    verification. Document the primary runtime path in a validated flow doc,
    then publish a ready PR and verify its current-head checks.
@@ -154,7 +154,7 @@ remaining delivery work are complete before further implementation changes.
 Run the listed focused files with `node --test <file-path>`. For the persistent
 case, set `OCC_TEST_DATABASE_URL` to the limited application-role connection
 and run `node --test tests/integration/postgres-service-api-keys.test.mjs`; use
-the existing [PostgreSQL test environment](../docs/reference/settings.md#postgresql-test-environment)
+the existing [PostgreSQL test environment](../../docs/reference/settings.md#postgresql-test-environment)
 instructions.
 
 Use the existing isolated dependency-compatible verification copy. The original

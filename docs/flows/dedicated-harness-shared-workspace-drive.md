@@ -65,7 +65,7 @@ graph TD
 
 ## Related docs
 
-- [Shared-drive specification](../../specs/12-dedicated-harness-shared-workspace-drive.md)
+- [Shared-drive specification](../../specs/.archive/12-dedicated-harness-shared-workspace-drive.md)
 - [Kubernetes Compute Driver](../reference/drivers/kubernetes-compute.md)
 
 ## Manual Notes
