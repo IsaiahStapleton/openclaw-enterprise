@@ -141,6 +141,10 @@ export async function composeProduction(config: ProductionConfig) {
       computeDriver,
       configurationDriver,
       secretDriver,
+      ...(config.drivers.gatewayAccess === undefined
+        ? {}
+        : { gatewayAccess: config.drivers.gatewayAccess }),
+      publicOrigin: config.authBaseURL,
       ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
       resolveHarness: resolveApprovedProductionHarness,
       auditSink: state.auditSink,

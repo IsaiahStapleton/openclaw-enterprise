@@ -62,9 +62,4 @@ see [Testing](docs/testing.md) for suite coverage, credentials, setup, and comma
 - [Platform design](docs/design.md) and [current architecture](docs/ARCHITECTURE.md): target design and implemented components.
 - [Feature reference](docs/reference/README.md): supported behavior and Driver contracts.
 - [Providers](docs/reference/providers.md): authenticated clients, related Drivers, and optional Agent association.
-- [HTTP API](docs/reference/api.md): routes, request and response schemas, authentication, and permissions.
-- [Spec archive](specs/README.md): proposals and implementation history, with recorded statuses.
-
-## License
-
-[MIT](LICENSE). Third-party components retain their own licenses.
+- [Agent gateway administration](docs/reference/agents.md#gateway-administration): dispatch allowlisted native gateway commands through OCC for one authorized active Kubernetes Agent.

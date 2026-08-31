@@ -19,7 +19,7 @@ procedure needs a public Docker-only OpenClaw/Codex runtime image.
 | Reference                                  | Owns                                                                                 |
 | ------------------------------------------ | ------------------------------------------------------------------------------------ |
 | [Namespaces](namespaces.md)                | Tenant identity, placement, readiness, and deletion.                                 |
-| [Agents](agents.md)                        | Agent identity, mutable selection, and immutable revisions.                          |
+| [Agents](agents.md)                        | Agent identity, mutable selection, immutable revisions, and gateway administration.  |
 | [Configuration](configuration.md)          | Native documents, generations, references, and snapshots.                            |
 | [Secrets](drivers/kubernetes-secret.md)    | Namespace-owned Secret storage, metadata-only responses, env bindings, and redeploy. |
 | [Authentication](authentication.md)        | Supported caller credentials, sessions, bootstrap, and account provisioning.         |

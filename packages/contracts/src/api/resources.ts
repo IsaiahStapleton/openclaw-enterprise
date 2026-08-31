@@ -14,6 +14,7 @@ import {
   NamespaceId,
   ProviderId,
   RevisionId,
+  GatewayCommandMethod,
   SecretBindings,
   SecretId,
   SecretReference,
@@ -189,6 +190,33 @@ export const AgentRevisionListResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const GatewayCommandDispatchResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        method: GatewayCommandMethod,
+        ok: Type.Boolean(),
+        payload: Type.Optional(Type.Ref("SafeJsonValue")),
+        error: Type.Optional(
+          Type.Object(
+            {
+              code: Type.String({ minLength: 1, maxLength: 200 }),
+              message: Type.String({ minLength: 1, maxLength: 1000 }),
+              details: Type.Optional(Type.Ref("SafeJsonValue")),
+              retryable: Type.Optional(Type.Boolean()),
+              retryAfterMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 3_600_000 })),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
 export type InstallationWire = Type.Static<typeof InstallationSchema>;
 export type NamespaceWire = Type.Static<typeof NamespaceSchema>;
 export type ConfigurationWire = Type.Static<typeof ConfigurationSchema>;
@@ -206,3 +234,4 @@ export type AgentResponse = Type.Static<typeof AgentResponse>;
 export type AgentListResponse = Type.Static<typeof AgentListResponse>;
 export type AgentRevisionResponse = Type.Static<typeof AgentRevisionResponse>;
 export type AgentRevisionListResponse = Type.Static<typeof AgentRevisionListResponse>;
+export type GatewayCommandDispatchResponse = Type.Static<typeof GatewayCommandDispatchResponse>;

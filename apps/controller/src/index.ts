@@ -25,6 +25,7 @@ import {
   type AuthorizationEvidence,
   type ConfigurationDriver,
   type ComputeDriver,
+  type DispatchGatewayCommandBody,
   type HarnessExecutionMode,
   type IAMDriver,
   type Installation,
@@ -61,6 +62,12 @@ import {
   ConfigurationOwnershipError,
   ConfigurationValidationError,
 } from "./drivers/configuration/kubernetes/index.ts";
+import {
+  ControllerGatewayUnknownOutcomeError,
+  isAllowedGatewayCommand,
+  type ControllerGatewayAccess,
+  type ControllerGatewayDispatchResult,
+} from "./gateway/contracts.ts";
 
 export interface DevelopmentAdmission {
   readonly enabled: boolean;
@@ -81,6 +88,9 @@ export interface ControllerAppOptions {
   readonly development: DevelopmentAdmission;
   readonly maxBodyBytes?: number;
   readonly auth: ControllerAuth;
+  readonly gatewayAccess?: ControllerGatewayAccess;
+  readonly gatewayRequestTimeoutMs?: number;
+  readonly publicOrigin?: string;
   readonly provisionAuthAccount?: (
     seed: AuthPrincipalSeed,
     auditEvent: AuditEvent,
@@ -608,6 +618,26 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
   const bodyLimit = options.maxBodyBytes ?? DEFAULT_BODY_LIMIT;
   if (!Number.isSafeInteger(bodyLimit) || bodyLimit < 1)
     throw new Error("The controller request-body limit must be a positive integer.");
+  const gatewayRequestTimeoutMs = options.gatewayRequestTimeoutMs ?? 30_000;
+  if (!Number.isSafeInteger(gatewayRequestTimeoutMs) || gatewayRequestTimeoutMs < 1)
+    throw new Error("The gateway request timeout must be a positive integer.");
+  let publicOrigin: string | undefined;
+  if (options.publicOrigin !== undefined) {
+    try {
+      const parsed = new URL(options.publicOrigin);
+      publicOrigin = parsed.origin;
+      if (
+        parsed.username ||
+        parsed.password ||
+        parsed.pathname !== "/" ||
+        parsed.search ||
+        parsed.hash
+      )
+        throw new Error("Invalid public origin.");
+    } catch {
+      throw new Error("The controller public origin must be an absolute origin URL.");
+    }
+  }
   validateTrustedDevelopmentCidrs(development);
 
   const app = Fastify({
@@ -781,6 +811,105 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
   function dependencyUnavailable(): RequestFailure {
     return failure(503, "DEPENDENCY_UNAVAILABLE", "A required platform dependency is unavailable.");
+  }
+
+  function requireGatewayCsrf(request: FastifyRequest): void {
+    const admitted = admissions.get(request);
+    if (admitted?.method === "api_key") return;
+    if (publicOrigin === undefined) throw dependencyUnavailable();
+    const fetchSite = request.headers["sec-fetch-site"];
+    const fetchSites =
+      fetchSite === undefined ? [] : Array.isArray(fetchSite) ? fetchSite : [fetchSite];
+    if (fetchSites.some((site) => site.toLowerCase() === "cross-site"))
+      throw failure(403, "FORBIDDEN", "The request did not satisfy the configured CSRF boundary.");
+    const origin = request.headers.origin;
+    if (typeof origin !== "string" || origin !== publicOrigin)
+      throw failure(403, "FORBIDDEN", "The request did not satisfy the configured CSRF boundary.");
+  }
+
+  function gatewayRequestSignal(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    timeoutMs: number,
+  ): { readonly signal: AbortSignal; readonly dispose: () => void } {
+    const controller = new AbortController();
+    const abort = (message: string) => {
+      if (!controller.signal.aborted) controller.abort(new Error(message));
+    };
+    const timeout = setTimeout(
+      () => abort(`The gateway command exceeded its ${timeoutMs}ms deadline.`),
+      timeoutMs,
+    );
+    timeout.unref?.();
+    const onRequestAborted = () => abort("The HTTP client disconnected before dispatch completed.");
+    const onReplyClosed = () => {
+      if (!reply.raw.writableEnded)
+        abort("The HTTP client disconnected before dispatch completed.");
+    };
+    if (request.raw.aborted) abort("The HTTP client disconnected before dispatch.");
+    request.raw.once("aborted", onRequestAborted);
+    reply.raw.once("close", onReplyClosed);
+    return {
+      signal: controller.signal,
+      dispose() {
+        clearTimeout(timeout);
+        request.raw.off("aborted", onRequestAborted);
+        reply.raw.off("close", onReplyClosed);
+      },
+    };
+  }
+
+  async function withGatewayRequestSignal<T>(
+    signal: AbortSignal,
+    operation: Promise<T>,
+    abortError: () => Error = dependencyUnavailable,
+  ): Promise<T> {
+    if (signal.aborted) throw abortError();
+    let abort: (() => void) | undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      abort = () => reject(abortError());
+      signal.addEventListener("abort", abort, { once: true });
+    });
+    try {
+      return await Promise.race([operation, aborted]);
+    } finally {
+      if (abort !== undefined) signal.removeEventListener("abort", abort);
+    }
+  }
+
+  function gatewayDispatchPayload(
+    command: DispatchGatewayCommandBody,
+    result: ControllerGatewayDispatchResult,
+  ): Record<string, unknown> {
+    if (result.ok)
+      return {
+        method: command.method,
+        ok: true,
+        ...(result.payload === undefined ? {} : { payload: result.payload }),
+      };
+    return {
+      method: command.method,
+      ok: false,
+      error: result.error,
+    };
+  }
+
+  function gatewayAuditEvent(
+    operation: OccApiRoute,
+    request: FastifyRequest,
+    resource: ResourceRef,
+    context: RequestContext,
+    command: DispatchGatewayCommandBody,
+    result?: { readonly outcome: "success" | "failure"; readonly reasonCode?: string },
+  ): AuditEvent {
+    const base = event(operation, request, resource, "mutation", context, undefined, result);
+    return {
+      ...base,
+      details: {
+        ...base.details,
+        nativeMethod: command.method,
+      },
+    };
   }
 
   async function requireInstallationAdmin(
@@ -1546,6 +1675,103 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         if (error instanceof NamespaceNotReadyError)
           await rejectedMutation(operation, request, context, "NAMESPACE_NOT_READY");
         throw error;
+      }
+    }
+
+    if (operation.operationId === "dispatchAgentGatewayCommand") {
+      const deadlineMs = gatewayRequestTimeoutMs;
+      const gatewaySignal = gatewayRequestSignal(request, reply, deadlineMs);
+      const signal = gatewaySignal.signal;
+      const deadline = new Date(Date.now() + deadlineMs);
+      try {
+        requireGatewayCsrf(request);
+        if (options.gatewayAccess === undefined) throw dependencyUnavailable();
+        const command = body as unknown as DispatchGatewayCommandBody;
+        if (!isAllowedGatewayCommand(command.method))
+          throw failure(
+            400,
+            "INVALID_REQUEST",
+            "The request does not match the operation contract.",
+          );
+        if (signal.aborted) throw dependencyUnavailable();
+        const target = { kind: "agent" as const, id: agentId, namespaceId };
+        const { agent, revision } = await withGatewayRequestSignal(
+          signal,
+          controller.getAdministeredActiveAgentRevision(context.actorId, namespaceId, agentId),
+        );
+        try {
+          await withGatewayRequestSignal(
+            signal,
+            options.auditSink.append(
+              gatewayAuditEvent(operation, request, target, context, command),
+            ),
+          );
+        } catch {
+          throw dependencyUnavailable();
+        }
+        if (signal.aborted) throw dependencyUnavailable();
+        let result: ControllerGatewayDispatchResult;
+        try {
+          result = await withGatewayRequestSignal(
+            signal,
+            options.gatewayAccess.dispatch({
+              revision,
+              command,
+              signal,
+              deadline,
+            }),
+            () =>
+              new ControllerGatewayUnknownOutcomeError(
+                "The native gateway command reached the OCC request deadline before the controller observed its outcome.",
+              ),
+          );
+        } catch (error) {
+          if (error instanceof ControllerGatewayUnknownOutcomeError) {
+            try {
+              await options.auditSink.append(
+                gatewayAuditEvent(operation, request, target, context, command, {
+                  outcome: "failure",
+                  reasonCode: "UNKNOWN_OUTCOME",
+                }),
+              );
+            } catch {
+              throw failure(503, "UNKNOWN_OUTCOME", error.message);
+            }
+            throw failure(503, "UNKNOWN_OUTCOME", error.message);
+          }
+          try {
+            await options.auditSink.append(
+              gatewayAuditEvent(operation, request, target, context, command, {
+                outcome: "failure",
+                reasonCode: "DEPENDENCY_UNAVAILABLE",
+              }),
+            );
+          } catch {
+            throw dependencyUnavailable();
+          }
+          throw dependencyUnavailable();
+        }
+        try {
+          await options.auditSink.append(
+            gatewayAuditEvent(operation, request, target, context, command, {
+              outcome: result.ok ? "success" : "failure",
+              ...(result.ok ? {} : { reasonCode: "NATIVE_REJECTION" }),
+            }),
+          );
+        } catch {
+          throw failure(
+            503,
+            "UNKNOWN_OUTCOME",
+            "The native gateway command completed, but its final audit outcome could not be persisted.",
+          );
+        }
+        reply.send({
+          data: gatewayDispatchPayload(command, result),
+          meta: { requestId: request.id },
+        });
+        return;
+      } finally {
+        gatewaySignal.dispose();
       }
     }
 

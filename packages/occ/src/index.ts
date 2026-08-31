@@ -204,6 +204,11 @@ export interface DeployAgentInput {
   readonly agentId: string;
 }
 
+export interface ActiveAgentRevisionSelection {
+  readonly agent: Readonly<Agent>;
+  readonly revision: Readonly<AgentRevision>;
+}
+
 export type ReconciliationOperation = PlatformOperation;
 
 interface RegisteredDriver {
@@ -743,6 +748,40 @@ export class OpenClawController {
           "The AgentRevision does not belong to the exact Agent and Namespace.",
         );
       return revision;
+    });
+  }
+
+  async getAdministeredActiveAgentRevision(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<ActiveAgentRevisionSelection> {
+    if (!isNonEmptyString(namespaceId))
+      throw new ScopeViolationError("The exact Namespace identity is missing.");
+    if (!isNonEmptyString(agentId))
+      throw new ScopeViolationError("The exact Agent identity is missing.");
+    await this.authorize(principalId, "administer", {
+      kind: "agent",
+      id: agentId,
+      namespaceId,
+    });
+    return this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      const agent = await state.agents.findAgent(namespace.id, agentId);
+      if (!agent)
+        throw new ScopeViolationError(
+          "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      if (!isNonEmptyString(agent.activeRevisionId))
+        throw new DependencyUnavailableError("The Agent has no active gateway revision.");
+      const revision = await state.revisions.findRevision(
+        namespace.id,
+        agent.id,
+        agent.activeRevisionId,
+      );
+      if (!revision)
+        throw new DependencyUnavailableError("The active Agent revision is unavailable.");
+      return Object.freeze({ agent, revision });
     });
   }
 

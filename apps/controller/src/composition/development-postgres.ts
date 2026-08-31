@@ -154,6 +154,8 @@ export async function composePostgresDevelopment(
       controller,
       iamDriver,
       computeDriver,
+      ...(drivers?.gatewayAccess === undefined ? {} : { gatewayAccess: drivers.gatewayAccess }),
+      publicOrigin: config.authBaseURL,
       ...(configurationDriver === undefined ? {} : { configurationDriver }),
       ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
       resolveHarness: resolveApprovedHarness,

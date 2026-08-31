@@ -142,6 +142,28 @@ authenticated, TLS-checked, read-only Kubernetes Namespace access before serving
 requests or claiming work. Installed Drivers validate their own reviewed
 configuration and implementation-specific prerequisites.
 
+Agent gateway administration is an explicit bundled Kubernetes runtime opt-in.
+Set `drivers.compute.configuration.runtime.gatewayAdministration.controllerNamespace`
+in the Installation startup YAML and set the Helm value
+`gatewayAdministration.controllerNamespace` to the same Kubernetes namespace.
+That namespace stores controller-owned OCC gateway credential Secrets. It may be
+the release namespace or a separate preexisting private namespace. The Helm
+chart grants the worker `get`, `create`, and `update` on those Secrets and the
+API `get` only; it does not grant `list` or `delete`. Tenant RoleBindings grant
+both API and worker `get` on `pods/proxy` plus read access for Services,
+EndpointSlices, Deployments, and Pods, while `pods/exec` `get` and `create` are
+worker-only for the one-shot enrollment helper. Missing or mismatched runtime
+and chart namespaces make gateway administration unavailable.
+
+Every administrable native gateway Configuration must admit the Kubernetes
+API-server-to-Pod source address through `gateway.trustedProxies`. Pin the exact
+verified source IP addresses for the target cluster path. Do not grant broad
+Pod CIDRs, copy fixture-only addresses into production, or rely on OCC to inject
+trust dynamically. Native gateway readiness uses a Pod-local Node.js HTTP probe
+against `127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz`; kubelet-originated HTTP probes
+can share the same source address without forwarded-client attribution and are
+not the administration trust source.
+
 Missing, invalid, expired, or revoked sessions or service keys return `401`; an
 authenticated Principal or ServicePrincipal without the exact existing IAM grant
 receives `403`. Neither credential grants rights without IAM. See
@@ -494,20 +516,21 @@ k3d cluster. For dedicated Codex coverage, set `OCC_TEST_OPENAI_MODEL` to an
 authorized model that supports Codex custom tools, such as `gpt-5.1`; the source
 default remains `gpt-4.1`.
 
-| Variable                               | Requirement or default                                                                                 |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `OCC_TEST_HARNESS_K3D_REAL`            | Set to `1` to explicitly opt into the real-runtime Kubernetes suite.                                   |
-| `OCC_TEST_KUBERNETES_KUBECONFIG`       | Absolute path to the dedicated disposable k3d kubeconfig.                                              |
-| `OCC_TEST_KUBERNETES_CONTEXT`          | Explicit `k3d-*` context with a verified loopback HTTPS API.                                           |
-| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`    | Imported real OpenClaw gateway image pinned with an immutable SHA-256 digest.                          |
-| `OCC_TEST_KUBERNETES_AGENT_IMAGE`      | Imported real pinned Codex runtime image with an immutable SHA-256 digest.                             |
-| `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`    | Optional shared image fallback for both gateway and Agent when it contains both real runtimes.         |
-| `OCC_TEST_KUBERNETES_CODEX_IMAGE`      | Optional legacy fallback for the Agent image when the explicit Agent image is absent.                  |
-| `OCC_TEST_KUBERNETES_OPENCLAW_VERSION` | Optional exact OpenClaw version expectation for the selected real gateway image.                       |
-| `OCC_TEST_KUBERNETES_CODEX_VERSION`    | Optional Codex image version expectation; defaults to `0.147.0`.                                       |
-| `OCC_TEST_DATABASE_URL`                | Migrated disposable loopback database named `openclaw_k8s_*`; the ordinary development database fails. |
-| `OPENAI_API_KEY`                       | Existing authorized provider credential for real embedded and dedicated model turns.                   |
-| `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-4.1`.                                                      |
+| Variable                               | Requirement or default                                                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OCC_TEST_HARNESS_K3D_REAL`            | Set to `1` to explicitly opt into the real-runtime Kubernetes suite.                                                                                    |
+| `OCC_TEST_KUBERNETES_KUBECONFIG`       | Absolute path to the dedicated disposable k3d kubeconfig.                                                                                               |
+| `OCC_TEST_KUBERNETES_CONTEXT`          | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                                                            |
+| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`    | Imported real OpenClaw gateway image pinned with an immutable SHA-256 digest.                                                                           |
+| `OCC_TEST_KUBERNETES_AGENT_IMAGE`      | Imported real pinned Codex runtime image with an immutable SHA-256 digest.                                                                              |
+| `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`    | Optional shared image fallback for both gateway and Agent when it contains both real runtimes.                                                          |
+| `OCC_TEST_KUBERNETES_CODEX_IMAGE`      | Optional legacy fallback for the Agent image when the explicit Agent image is absent.                                                                   |
+| `OCC_TEST_KUBERNETES_OPENCLAW_VERSION` | Optional exact OpenClaw version expectation for the selected real gateway image.                                                                        |
+| `OCC_TEST_KUBERNETES_CODEX_VERSION`    | Optional Codex image version expectation; defaults to `0.147.0`.                                                                                        |
+| `OCC_TEST_KUBERNETES_GATEWAY_PROXY_IP` | Exact verified API-server-to-Pod source IP admitted by native `gateway.trustedProxies`; cluster-specific and required for gateway administration proof. |
+| `OCC_TEST_DATABASE_URL`                | Migrated disposable loopback database named `openclaw_k8s_*`; the ordinary development database fails.                                                  |
+| `OPENAI_API_KEY`                       | Existing authorized provider credential for real embedded and dedicated model turns.                                                                    |
+| `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-4.1`.                                                                                                       |
 
 ### Slack test environment
 

@@ -48,7 +48,6 @@ COPY --chown=node:node packages/occ/package.json packages/occ/package.json
 COPY --chown=node:node packages/occ/src packages/occ/src
 COPY --chown=node:node packages/utils/package.json packages/utils/package.json
 COPY --chown=node:node packages/utils/src packages/utils/src
-COPY --chown=node:node apps/controller/package.json apps/controller/package.json
 COPY --chown=node:node apps/controller/src apps/controller/src
 COPY --chown=node:node migrations/[0-9]*.sql migrations/
 COPY --chown=node:node migrations/meta/_journal.json migrations/meta/_journal.json

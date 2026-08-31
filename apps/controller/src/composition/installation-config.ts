@@ -25,6 +25,7 @@ import {
   type KubernetesComputeDriverOptions,
 } from "../drivers/compute/kubernetes/index.ts";
 import { currentComputeAbortSignal } from "../drivers/compute/operation-context.ts";
+import type { ControllerGatewayAccess } from "../gateway/contracts.ts";
 import {
   KubernetesConfigurationDriver,
   type KubernetesConfigurationDriverOptions,
@@ -67,6 +68,7 @@ export interface InstallationRuntimeDrivers {
   readonly configurationDriver: ConfigurationDriver;
   readonly secretDriver: SecretDriver;
   readonly sandboxDriver?: SandboxDriver;
+  readonly gatewayAccess?: ControllerGatewayAccess;
   readonly createIAMDriver: (state: NativeIAMStateStore) => IAMDriver;
 }
 
@@ -554,6 +556,10 @@ export async function loadInstallationConfiguration(options: {
     secret.configuration as unknown as KubernetesSecretDriverOptions,
     { id: secret.id, implementation: secret.implementation },
   );
+  const gatewayAccess =
+    computePackage === undefined && computeDriver instanceof KubernetesComputeDriver
+      ? computeDriver.createGatewayAdministrationAdapter()
+      : undefined;
   const createIAMDriver = (state: NativeIAMStateStore): IAMDriver => {
     return iamPackage === undefined
       ? new NativeIAMDriver(state, { id: iam.id, implementation: iam.implementation })
@@ -573,6 +579,7 @@ export async function loadInstallationConfiguration(options: {
     computeDriver,
     configurationDriver,
     secretDriver,
+    ...(gatewayAccess === undefined ? {} : { gatewayAccess }),
     ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
     createIAMDriver,
   });

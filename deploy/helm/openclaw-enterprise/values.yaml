@@ -38,6 +38,9 @@ api:
   port: 8080
   clients: []
 
+gatewayAdministration:
+  controllerNamespace: ""
+
 cluster:
   cidr: ""
   port: 443

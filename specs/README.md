@@ -46,6 +46,7 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 | [Development end-to-end guide](15-development-end-to-end-guide.md) | Completed | [Development TUI guide](../docs/guides/deploy.md#development-end-to-end-tui); verified in `c208e48` |
 | [Feature Spec: Production interactive TUI](16-production-tui-end-to-end.md) | Completed | [Deployment guide](../docs/guides/deploy.md#attach-with-the-openclaw-tui), [production TUI flow](../docs/flows/production-tui.md) |
 | [Bootstrap administrator service account](16-bootstrap-admin-service-account.md) | Prior implementation locally verified; [recovery contract superseded](../docs/reference/authentication.md#installation-and-account-ownership); removal locally verified; PR review pending | [Authentication](../docs/reference/authentication.md), [bootstrap flow](../docs/flows/local-password-authentication.md) |
+| [Feature Spec: OCC Gateway Access](15-occ-gateway-access.md) | Implementation in progress | [Agents](../docs/reference/agents.md), [Kubernetes Compute](../docs/reference/drivers/kubernetes-compute.md) |
 
 ## Archived specifications
 

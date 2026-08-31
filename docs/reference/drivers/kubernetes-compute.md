@@ -91,6 +91,8 @@ drivers:
         gatewayStorageClassName: sqlite-block
         transportSecretPrefix: openclaw-agent-transport
         modelSecretPrefix: openclaw-agent-model
+        gatewayAdministration:
+          controllerNamespace: openclaw-system
 ```
 
 This example shows only the Compute Driver portion of the Installation
@@ -123,6 +125,18 @@ Each tenant starts with default-deny ingress and egress. Explicit policies allow
 DNS, approved gateway clients, and required communication between an Agent's
 gateway and dedicated Harness. Cross-tenant traffic, traffic between different
 Agents, Kubernetes API access, and cloud metadata access remain denied.
+
+Gateway administration does not add a gateway Service network exception. When
+enabled, the API and worker use the Kubernetes API to read the selected Service,
+EndpointSlice, Deployment, and ready owned Pod, then open a short-lived
+`pods/proxy` request with HTTP WebSocket Upgrade to that exact Pod. The worker
+additionally uses `pods/exec` only for the fixed one-shot native device
+enrollment helper. The Agent's native Configuration must pin the exact
+API-server-to-Pod source addresses in `gateway.trustedProxies`; broad Pod CIDRs,
+fixture-only addresses, and dynamically injected trust are unsupported.
+Readiness for native gateway Pods uses a Pod-local Node.js HTTP request to
+`127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz` so kubelet probe source addresses do
+not have to become trusted gateway administration proxies.
 
 Production currently permits public TCP/443 egress for model access; a
 restricted model proxy is not yet available. Channels require an approved

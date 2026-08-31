@@ -530,6 +530,102 @@ every selected Secret before deploy. Binding changes are authorized by OCC IAM;
 Kubernetes RoleBindings only allow the API to materialize backing tenant
 Secrets.
 
+### Enable gateway administration
+
+Enable OCC gateway administration only when the bundled Kubernetes Compute
+Driver is selected. The Installation startup YAML and Helm values must name the
+same controller namespace:
+
+```yaml
+# installation.yaml
+drivers:
+  compute:
+    id: compute-kubernetes
+    configuration:
+      runtime:
+        gatewayAdministration:
+          controllerNamespace: openclaw-system
+```
+
+```yaml
+# values.yaml
+gatewayAdministration:
+  controllerNamespace: openclaw-system
+```
+
+The controller namespace may be the Helm release namespace or a separate
+preexisting private namespace. It stores the internal OCC native gateway
+operator key and device token Secrets. Helm grants the worker `get`, `create`,
+and `update` on those Secrets and grants the API `get` only; neither process
+receives `list` or `delete`. If the two namespace settings differ, or if a
+separate namespace does not already exist, gateway administration remains
+unavailable.
+
+No gateway Service should be exposed for administration. OCC validates the
+current active Agent, Service, EndpointSlice, Deployment, and ready owned Pod,
+then opens a short-lived Kubernetes API `pods/proxy` request with HTTP WebSocket
+Upgrade to that exact Pod for native SDK calls. The worker alone also has
+`pods/exec` for the fixed one-shot enrollment helper. That helper approves one
+matching pending request for the generated public key, device ID, `operator`
+role, and `operator.admin` scope, or verifies the exact already paired OCC
+device. The helper supplies `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_TOKEN`
+to the OpenClaw CLI environment instead of passing caller-controlled route
+values. The verification suite sets native
+`gateway.nodes.pairing.autoApproveLocal=false` to prove the explicit approval
+path and that unrelated pending devices stay pending; production does not
+require mutating native pairing policy for this.
+
+Every administrable native gateway Configuration must set
+`gateway.auth.mode: token`, omit `gateway.roles`, and set
+`gateway.trustedProxies` to the exact Kubernetes API-server-to-Pod source IP
+addresses observed for that cluster path. Kubernetes adds forwarded-client
+headers before native sees the WebSocket Upgrade, and native rejects proxied
+requests whose source is not trusted. Verify and pin the actual source address;
+do not use broad Pod CIDRs, do not copy a fixture cluster address into
+production, and do not expect OCC to inject this trust dynamically. Gateway
+readiness is separate: the runtime uses a Pod-local Node.js probe that sends
+HTTP to `127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz`, because kubelet-originated
+HTTP probes can arrive from the same cluster source without forwarded-client
+attribution and would be rejected by native trust policy.
+
+Before treating an Agent as administrable, the worker persists the native
+device token to the controller-owned Secret, reads it back, and proves a
+token-only `status` request. A key-only credential Secret means enrollment did
+not complete. Later reconciliation must leave it terminal and unavailable until
+an operator deliberately recovers the exact native device and Secret; OCC does
+not automatically reapprove, regenerate, or clear credentials.
+Before initial enrollment, the worker pins the public device ID in
+`openclaw.dev/occ-gateway-device-id` on the Agent-owned gateway PVC. A retained
+pin with a missing Secret blocks identity regeneration. This annotation contains
+no private key or token and survives normal Pod and revision replacement.
+
+To recover a key-only, revoked, or lost gateway administration credential:
+
+1. Quiesce the controller API and worker for the affected Installation so no
+   gateway administration request or enrollment helper can race the repair.
+2. Identify the exact Agent, controller namespace, Secret name, native device
+   ID, and public key from the controller-owned credential Secret and audit
+   records. If the Secret was lost, recover the public device ID from the exact
+   Agent-owned gateway PVC annotation.
+3. Use `openclaw devices remove <device-id> --json` with authorized native
+   gateway access to remove only that exact OCC device record. Leave unrelated
+   paired and pending devices intact. On the pinned native version,
+   `devices revoke` requests only `operator.pairing` and cannot revoke an
+   `operator.admin` token; token-only revocation requires an established native
+   session whose scopes cover the target token.
+4. Delete only the matching controller-owned gateway administration Secret from
+   the controller namespace and remove only its matching public device ID pin
+   from the gateway PVC. Do not delete Agent PVCs, native Configuration,
+   workspace state, gateway Deployments, or tenant namespaces.
+5. Resume the API and worker once. If the previous deployment exhausted its
+   retry budget, request a new deployment through OCC. Reconciliation should create a fresh key,
+   approve one exact pending native device through the helper, persist the new
+   token, and prove token-only `status` before the Agent becomes
+   administrable.
+6. Verify the Agent readiness and one read-only gateway administration command.
+   If recovery stalls again, quiesce the API and worker before any further
+   manual change.
+
 ### Verify production workloads
 
 Wait for `GET /namespaces/$NAMESPACE_ID/agents/$AGENT_ID` to report the
