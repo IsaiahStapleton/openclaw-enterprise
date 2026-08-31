@@ -16,15 +16,21 @@ and first authenticated request, use the [quickstart](quickstart.md).
 ### Development prerequisites
 
 - Docker Engine with Docker Compose and permission to access its socket.
-- Approved OpenClaw gateway and Codex runtime images already loaded or pulled
-  into that Engine. The worker checks them at startup; it does not fetch them.
+- A local OpenClaw/Codex runtime image already loaded or pulled into that
+  Engine. For a public Docker-only build, use
+  [`deploy/runtime`](../../deploy/runtime/README.md). The worker checks runtime
+  image references at startup; it does not fetch them.
 - `curl` for the authenticated API check.
 - An existing `OPENAI_API_KEY` only when deploying an Agent that makes model
   calls. Starting OCC and reading its Installation does not require a model key.
 
-The gateway image must provide Node 24+ and `/app/openclaw.mjs`; dedicated
-Codex also needs the OpenClaw Codex plugin. The Agent image must provide Node
-24+ and the Codex app-server runtime. A combined image can provide both.
+The gateway image must provide Node 24.15+, `/app/openclaw.mjs`, bundled
+OpenClaw skills at `/app/skills`, and the OpenClaw Codex plugin discoverable by
+the gateway. The Agent image must provide Node 24.15+, `codex` on `PATH`, and
+the Codex app-server runtime. The checked-in runtime recipe builds one combined
+image that provides both surfaces from public packages:
+`openclaw@2026.7.1`, `@openclaw/codex@2026.7.1-1`, and
+`@openai/codex@0.147.0`.
 The [Docker Compute reference](../reference/drivers/docker-compute.md) describes
 the supported runtime boundary.
 
@@ -41,18 +47,24 @@ umask 077
 test -f .env || cp .env.example .env
 ```
 
-Set the following values in `.env`, replacing image placeholders with approved
-images that exist in Docker:
+For the public quickstart image, build the recipe and set one shared runtime
+image in `.env`:
 
-```dotenv
-OCC_DOCKER_GATEWAY_IMAGE=<approved-openclaw-gateway-image>
-OCC_DOCKER_AGENT_IMAGE=<approved-codex-agent-image>
+```bash
+docker build -f deploy/runtime/Dockerfile \
+  --tag openclaw-enterprise-runtime:quickstart \
+  deploy/runtime
 ```
 
-Alternatively, set `OCC_DOCKER_RUNTIME_IMAGE` to one image providing both
-runtimes. The individual image variables override the shared image. Keep an
-existing provider credential in your environment or protected `.env` when
-needed; do not print expanded Compose configuration containing credentials.
+```dotenv
+OCC_DOCKER_RUNTIME_IMAGE=openclaw-enterprise-runtime:quickstart
+```
+
+Alternatively, set `OCC_DOCKER_GATEWAY_IMAGE` and `OCC_DOCKER_AGENT_IMAGE` when
+you intentionally use separate images. The individual image variables override
+the shared image. Keep an existing provider credential in your environment or
+protected `.env` when needed; do not print expanded Compose configuration
+containing credentials.
 
 The defaults are API port `3000`, database port `55432`, administrator
 `admin@openclaw.local`, and password `openclaw-development-password`. Set
@@ -126,8 +138,9 @@ and storage; development defaults are not production configuration.
 
 - A dedicated Kubernetes cluster with enforcing NetworkPolicies and external
   PostgreSQL.
-- Docker for image builds, Helm and `kubectl` for the explicitly selected
-  cluster, and `curl` plus Python 3 for the sign-in example.
+- Docker for image builds, host Node.js 24+ for local image smoke tests, Helm
+  and `kubectl` for the explicitly selected cluster, and `curl` plus Python 3
+  for the sign-in example.
 - An operator-managed HTTPS endpoint that forwards to the private API from an
   approved client Pod. The chart does not install an Ingress or TLS endpoint.
 - Separately approved immutable controller, OpenClaw gateway, and Codex Agent
@@ -156,19 +169,47 @@ Build the controller image from an explicitly approved Node 24 digest:
 
 ```bash
 docker build \
-  --build-arg NODE_BASE_IMAGE='<approved-node-24-image>@sha256:<digest>' \
+  --build-arg NODE_BASE_IMAGE='node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584' \
   --tag openclaw-enterprise:reviewed .
 ```
+
+Replace the example Node digest only after approving another immutable Node 24
+base image.
+
+Verify that the built image can load the production server startup graph and
+bundled runtime assets:
+
+```bash
+OCC_TEST_PRODUCTION_IMAGE=openclaw-enterprise:reviewed \
+  node --test tests/integration/production-image-startup.test.mjs
+```
+
+This smoke test runs the image with no network and an intentionally unreachable
+PostgreSQL URL. Passing means startup reaches the expected database boundary
+without missing production modules or OpenShell proto assets. It does not
+install Helm, connect to PostgreSQL, reconcile Kubernetes, or prove a model
+turn.
 
 Before building with an external IAM, Compute, or Configuration Driver, follow
 the [Driver package installation and private-registry instructions](../reference/drivers/selection.md).
 The API and worker must use the same immutable controller image digest.
 
-The gateway image must contain Node 24+, `/app/openclaw.mjs`, and the Codex
-plugin. The Agent image must provide Node 24+ and a Codex CLI supporting
-API-key login, `login --with-access-token` with
+The gateway image must contain Node 24.15+, `/app/openclaw.mjs`, bundled
+OpenClaw skills at `/app/skills`, and the Codex plugin. The Agent image must
+provide Node 24.15+ and a Codex CLI supporting API-key login,
+`login --with-access-token` with
 `forced_chatgpt_workspace_id`, and
 capability-token-authenticated app-server WebSockets.
+The public [`deploy/runtime`](../../deploy/runtime/README.md) recipe documents
+the package inputs used for local proof; production operators must rebuild,
+scan, publish, and configure immutable registry digests before Helm install.
+Verify the runtime image before running Docker Compose or importing it into a
+cluster:
+
+```bash
+OCC_TEST_RUNTIME_IMAGE=openclaw-enterprise-runtime:quickstart \
+  node --test tests/integration/runtime-image-startup.test.mjs
+```
 
 ### Configure the Installation
 
@@ -572,7 +613,8 @@ immutable AgentRevision to become active.
 ### Configure the Agent runtime
 
 For dedicated Codex, create the Agent's Namespace-scoped Configuration with
-`kind: "agent"` and a native OpenClaw configuration document equivalent to:
+`kind: "agent"` and a native OpenClaw configuration document equivalent to the
+following. Select a model that supports Codex custom tools, such as `gpt-5.1`.
 
 ```json
 {
@@ -584,9 +626,9 @@ For dedicated Codex, create the Agent's Namespace-scoped Configuration with
   },
   "agents": {
     "defaults": {
-      "model": { "primary": "codex/gpt-4.1" },
+      "model": { "primary": "codex/gpt-5.1" },
       "models": {
-        "codex/gpt-4.1": { "agentRuntime": { "id": "codex" } }
+        "codex/gpt-5.1": { "agentRuntime": { "id": "codex" } }
       }
     }
   },
@@ -595,7 +637,7 @@ For dedicated Codex, create the Agent's Namespace-scoped Configuration with
       "codex": {
         "baseUrl": "http://127.0.0.1:9",
         "api": "openai-responses",
-        "models": [{ "id": "gpt-4.1", "name": "gpt-4.1" }]
+        "models": [{ "id": "gpt-5.1", "name": "gpt-5.1" }]
       }
     }
   },

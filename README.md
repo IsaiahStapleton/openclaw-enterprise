@@ -22,6 +22,8 @@ This release includes only the active workspace; archived applications are not i
 
 - [Quickstart](docs/guides/quickstart.md): start locally, sign in, and make an authenticated request.
 - [Deploy](docs/guides/deploy.md): development Docker Compose and production Kubernetes setup.
+- [Runtime image recipe](deploy/runtime/README.md): build the public local
+  OpenClaw/Codex image used by the quickstart and real-runtime tests.
 - [Documentation map](docs/README.md): design, current architecture, feature reference, and code flows.
 - [Kubernetes Secret Driver](docs/reference/drivers/kubernetes-secret.md): store
   Namespace-owned Secrets and bind them to selected Agent gateway environments.

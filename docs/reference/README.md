@@ -11,6 +11,8 @@ target scope can exceed the current implementation; the
 [architecture overview](../ARCHITECTURE.md) identifies implemented components.
 Use the [quickstart](../guides/quickstart.md) or [deployment guide](../guides/deploy.md)
 for procedures and [flow docs](../README.md#understand-the-code) for source execution.
+Use [`deploy/runtime`](../../deploy/runtime/README.md) when a local or test
+procedure needs a public Docker-only OpenClaw/Codex runtime image.
 
 ## Features
 

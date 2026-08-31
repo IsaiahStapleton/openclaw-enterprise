@@ -34,7 +34,9 @@ const LABEL_AGENT = "org.openclaw.enterprise.agent-id";
 const LABEL_REVISION = "org.openclaw.enterprise.revision-id";
 const LABEL_ROLE = "org.openclaw.enterprise.role";
 
-const providerModel = (process.env.OCC_TEST_OPENAI_MODEL ?? "gpt-4.1").replace(
+// Dedicated Codex app-server execution sends Codex custom tools, which require
+// the GPT-5 family on the OpenAI Responses API path.
+const providerModel = (process.env.OCC_TEST_OPENAI_MODEL ?? "gpt-5.1").replace(
   /^(?:openai|codex)\//,
   "",
 );
@@ -273,6 +275,46 @@ function hasContainerEnv(container, name) {
   return containerEnv(container, name) !== undefined;
 }
 
+function containerSecretValues(containers) {
+  const secretNames = new Set([
+    "APP_SERVER_TOKEN",
+    "CODEX_ACCESS_TOKEN",
+    "OPENAI_API_KEY",
+    "OPENCLAW_GATEWAY_TOKEN",
+  ]);
+  return containers
+    .flatMap((container) => container.Config?.Env ?? [])
+    .map((entry) => {
+      const separator = entry.indexOf("=");
+      if (separator === -1) return undefined;
+      const name = entry.slice(0, separator);
+      if (!secretNames.has(name)) return undefined;
+      return entry.slice(separator + 1);
+    })
+    .filter((value) => typeof value === "string" && value.length > 0);
+}
+
+async function containerLogs(containers, extraSecrets = []) {
+  const secrets = [...extraSecrets, ...containerSecretValues(containers)];
+  const entries = await Promise.all(
+    containers.map(async (container) => {
+      const name = container.Name ?? container.Id;
+      try {
+        const { stdout, stderr } = await docker(["logs", "--tail", "160", container.Id], {
+          timeoutMs: 60_000,
+          secrets,
+        });
+        return `Logs for ${name}:\n${sanitize(`${stdout}${stderr}`, secrets)}`;
+      } catch (error) {
+        return `Logs for ${name} unavailable: ${
+          error instanceof Error ? sanitize(error.message, secrets) : String(error)
+        }`;
+      }
+    }),
+  );
+  return entries.join("\n\n");
+}
+
 function assertNamespaceOnlyAttachment(container, networkName) {
   const networks = Object.keys(container.NetworkSettings?.Networks ?? {});
   assert.deepEqual(
@@ -320,7 +362,7 @@ function gatewayUrl(gateway) {
   return `http://127.0.0.1:${binding.HostPort}`;
 }
 
-async function invokeGateway({ networkName, gateway, gatewayToken, mode }) {
+async function invokeGateway({ networkName, gateway, gatewayToken, mode, onFailure }) {
   assertNamespaceOnlyAttachment(gateway, networkName);
   const nonce = `OCC-DOCKER-${mode.toUpperCase()}-${randomUUID()}`;
   const endpoint = new URL("/v1/chat/completions", gatewayUrl(gateway));
@@ -350,11 +392,12 @@ async function invokeGateway({ networkName, gateway, gatewayToken, mode }) {
     signal: AbortSignal.timeout(240_000),
   });
   const body = sanitize(await response.text(), [gatewayToken]);
-  assert.equal(
-    response.status,
-    200,
-    `${mode} gateway model call must succeed: ${body.slice(0, 2000)}`,
-  );
+  if (response.status !== 200) {
+    const diagnostics = onFailure === undefined ? "" : `\n\n${await onFailure()}`;
+    assert.fail(
+      `${mode} gateway model call must succeed: ${body.slice(0, 2000)}\n\n${response.status} !== 200${diagnostics}`,
+    );
+  }
   const text = JSON.parse(body).choices?.[0]?.message?.content ?? "";
   assert.ok(text.includes(nonce), `${mode} gateway model response must include fresh nonce`);
 }
@@ -629,12 +672,14 @@ test(
       gateway: embeddedGateway,
       gatewayToken: embeddedToken,
       mode: "embedded",
+      onFailure: () => containerLogs([embeddedGateway], [embeddedToken]),
     });
     await invokeGateway({
       networkName: dedicatedNetwork.Name,
       gateway: dedicatedGateway,
       gatewayToken: dedicatedToken,
       mode: "dedicated",
+      onFailure: () => containerLogs([dedicatedGateway, dedicatedAgent], [dedicatedToken]),
     });
 
     const deleted = await request("DELETE", `/namespaces/${cleanupNamespace.id}`);

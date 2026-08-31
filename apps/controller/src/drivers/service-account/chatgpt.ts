@@ -39,14 +39,22 @@ export class ChatGPTServiceAccountDriver implements ServiceAccountDriver {
   readonly capability = "service_account" as const;
   readonly implementation = "chatgpt";
   readonly id: string;
+  private readonly client: ChatGPTClient;
+  private readonly controller: OpenClawController;
+  private readonly state: PostgresPlatformState;
+  private readonly compute: CredentialStorage;
 
   constructor(
-    private readonly client: ChatGPTClient,
-    private readonly controller: OpenClawController,
-    private readonly state: PostgresPlatformState,
-    private readonly compute: CredentialStorage,
+    client: ChatGPTClient,
+    controller: OpenClawController,
+    state: PostgresPlatformState,
+    compute: CredentialStorage,
     id = "chatgpt-service-accounts",
   ) {
+    this.client = client;
+    this.controller = controller;
+    this.state = state;
+    this.compute = compute;
     this.id = id;
   }
 

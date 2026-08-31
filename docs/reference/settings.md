@@ -19,6 +19,9 @@ For packaged Kubernetes deployment, immutable image inputs, operator-provisioned
 Secrets, dedicated migration credentials, and exact network selectors, see
 [Production Kubernetes deployment](../guides/deploy.md).
 
+For a public Docker-only runtime image recipe used by the quickstart and
+real-runtime tests, see [`deploy/runtime`](../../deploy/runtime/README.md).
+
 The controller reads environment variables directly from its process. It does
 not automatically load `.env` or [`.env.example`](../../.env.example). Export values
 in your shell, pass them inline, or explicitly use Node's `--env-file` option.
@@ -81,9 +84,9 @@ security requirements.
 | `OPENCLAW_DEV_EMAIL`                  | Email address.                                                              | Selects the development administrator sign-in email; defaults to `admin@openclaw.local`.                                                                                                                          |
 | `OPENCLAW_DEV_INSTALLATION_NAME`      | `OpenClaw Local Development`.                                               | Development-only Installation name used by controller self-bootstrap when the database is fresh.                                                                                                                  |
 | `OPENCLAW_DEV_PASSWORD`               | String from `12` through `128` characters.                                  | Selects the development administrator sign-in password; defaults to `openclaw-development-password`.                                                                                                              |
-| `OCC_DOCKER_GATEWAY_IMAGE`            | Image reference.                                                            | Existing production-equivalent OpenClaw gateway image. Required unless `OCC_DOCKER_RUNTIME_IMAGE` supplies both runtimes.                                                                                         |
-| `OCC_DOCKER_AGENT_IMAGE`              | Image reference.                                                            | Existing production-equivalent Codex Agent image for dedicated execution. Required unless `OCC_DOCKER_RUNTIME_IMAGE` supplies both runtimes.                                                                      |
-| `OCC_DOCKER_RUNTIME_IMAGE`            | Image reference.                                                            | Optional shared image used for both gateway and Agent runtimes when it contains both entrypoints.                                                                                                                 |
+| `OCC_DOCKER_GATEWAY_IMAGE`            | Image reference.                                                            | Existing OpenClaw gateway image with Node 24.15+, `/app/openclaw.mjs`, bundled skills, and the Codex plugin. Required unless `OCC_DOCKER_RUNTIME_IMAGE` supplies both runtimes.                                   |
+| `OCC_DOCKER_AGENT_IMAGE`              | Image reference.                                                            | Existing Codex Agent image with Node 24.15+, `codex` on `PATH`, and `codex app-server`. Required unless `OCC_DOCKER_RUNTIME_IMAGE` supplies both runtimes.                                                        |
+| `OCC_DOCKER_RUNTIME_IMAGE`            | Image reference.                                                            | Optional shared image used for both gateway and Agent runtimes when it contains both entrypoints; the quickstart recipe builds `openclaw-enterprise-runtime:quickstart`.                                          |
 | `OPENCLAW_DEV_PORT`                   | TCP port; defaults to `3000`.                                               | Publishes the controller on host `127.0.0.1:<port>`.                                                                                                                                                              |
 | `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` | CIDR block.                                                                 | Explicit Compose bridge range admitted as local development traffic while keeping forwarded headers rejected.                                                                                                     |
 | `OCC_DEVELOPMENT_CONFIGURATION_ROOT`  | Absolute path.                                                              | Development filesystem Configuration Driver root. Compose sets `/app/.development/configurations` from the controller-only `occ_configuration_data` volume.                                                       |
@@ -198,8 +201,7 @@ Start the worker only after the controller is healthy and the Installation exist
 ```bash
 NODE_ENV=development \
 OCC_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_enterprise \
-OCC_DOCKER_GATEWAY_IMAGE=ghcr.io/example/openclaw-gateway@sha256:<digest> \
-OCC_DOCKER_AGENT_IMAGE=ghcr.io/example/codex-agent@sha256:<digest> \
+OCC_DOCKER_RUNTIME_IMAGE=openclaw-enterprise-runtime:quickstart \
 OPENAI_API_KEY=${OPENAI_API_KEY:?set OPENAI_API_KEY} \
 node apps/controller/src/worker.mjs
 ```
@@ -323,6 +325,42 @@ do not rerun it against a previous bootstrap database or point it at an
 existing development Installation. Use a dedicated disposable database for any
 other case when existing local platform state must be preserved.
 
+### Production image startup test environment
+
+[`production-image-startup.test.mjs`](../../tests/integration/production-image-startup.test.mjs)
+verifies a locally built production controller image before Helm installation.
+It runs the image with no network, deliberately points it at an unreachable
+database, checks that startup reaches that expected database boundary without
+missing bundled production modules, and verifies that the OpenShell gRPC proto
+asset is present.
+
+| Variable                    | Requirement or default                                      |
+| --------------------------- | ----------------------------------------------------------- |
+| `OCC_TEST_PRODUCTION_IMAGE` | Locally built production controller image tag; unset skips. |
+| `OCC_DOCKER_BIN`            | Optional Docker executable path; defaults to `docker`.      |
+
+This check does not prove PostgreSQL connectivity, Helm rendering, Kubernetes
+reconciliation, runtime image execution, or a model turn.
+
+### Runtime image startup test environment
+
+[`runtime-image-startup.test.mjs`](../../tests/integration/runtime-image-startup.test.mjs)
+verifies a locally built OpenClaw runtime image before Docker Compose or
+Kubernetes execution. It starts task-owned containers with the Docker Compute
+Driver gateway entrypoint, UID `1000:1000`, a read-only root filesystem, and
+tmpfs-backed `/home/node` and `/tmp`. Host Node.js 24+ is required to run the
+test.
+
+| Variable                 | Requirement or default                                 |
+| ------------------------ | ------------------------------------------------------ |
+| `OCC_TEST_RUNTIME_IMAGE` | Locally built OpenClaw runtime image tag; unset skips. |
+| `OCC_DOCKER_BIN`         | Optional Docker executable path; defaults to `docker`. |
+
+This check proves an embedded OpenClaw gateway reaches `/readyz` from a fresh
+runtime home and the bundled Codex plugin can be discovered without missing
+package dependencies. It does not prove Docker Compose orchestration,
+Kubernetes reconciliation, model credentials, or a model turn.
+
 ### Docker Compose development test environment
 
 The Docker Compose development integration exercises the supported local stack.
@@ -338,7 +376,10 @@ provider response.
 | `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` | Explicit Compose bridge range admitted as development traffic.                            |
 | `OCC_DEVELOPMENT_CONFIGURATION_ROOT`  | Filesystem Configuration Driver root; Compose sets `/app/.development/configurations`.    |
 | `OPENAI_API_KEY`                      | Existing authorized provider credential for real embedded and dedicated model turns.      |
-| `OCC_TEST_OPENAI_MODEL`               | Authorized provider model; defaults to `gpt-4.1`.                                         |
+| `OCC_TEST_OPENAI_MODEL`               | Authorized provider model; defaults to `gpt-5.1`.                                         |
+
+The selected model must support Codex custom tools as well as the embedded
+OpenClaw path. `gpt-4.1` does not support the dedicated Codex request shape.
 
 Missing Docker Engine access, runtime images, bootstrap, worker startup, or
 model credentials fails the Compose integration. Do not replace this path with

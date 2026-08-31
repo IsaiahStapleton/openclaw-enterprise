@@ -4,11 +4,28 @@ Start OpenClaw Control Center (OCC) locally and read its Installation through
 an authenticated API request. This proves the controller is usable; it does
 not deploy an Agent or make a model call.
 
-You need Docker Engine with Docker Compose, `curl`, and approved OpenClaw
-gateway and Codex runtime images already available in that Engine. The
-[deployment guide](deploy.md#development-prerequisites) defines the image
-requirements and Docker socket access risk. Run commands from the repository
-root. No host Node installation is needed for this example.
+You need Docker Engine with Docker Compose and `curl`. The quickstart builds a
+public local runtime image from Docker and npm; no host Node installation is
+needed. The [deployment guide](deploy.md#development-prerequisites) defines the
+runtime image contract and Docker socket access risk. Run commands from the
+repository root.
+
+## Build the runtime image
+
+Build the combined runtime image used by the worker for embedded OpenClaw and
+dedicated Codex Agent execution:
+
+```bash
+docker build -f deploy/runtime/Dockerfile \
+  --tag openclaw-enterprise-runtime:quickstart \
+  deploy/runtime
+```
+
+This recipe installs public `openclaw`, `@openclaw/codex`, and `@openai/codex`
+packages. It checks that `node /app/openclaw.mjs --version` and
+`codex --version` work before the image is complete. See
+[`deploy/runtime`](../../deploy/runtime/README.md) for pinned package inputs
+and production digest guidance.
 
 ## Start the local stack
 
@@ -19,11 +36,10 @@ umask 077
 test -f .env || cp .env.example .env
 ```
 
-Edit `.env` to select your existing images:
+Edit `.env` to select the local runtime image:
 
 ```dotenv
-OCC_DOCKER_GATEWAY_IMAGE=<approved-openclaw-gateway-image>
-OCC_DOCKER_AGENT_IMAGE=<approved-codex-agent-image>
+OCC_DOCKER_RUNTIME_IMAGE=openclaw-enterprise-runtime:quickstart
 ```
 
 The default administrator is `admin@openclaw.local` with password
