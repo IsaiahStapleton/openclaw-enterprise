@@ -225,4 +225,4 @@ formatting as documentation verification only.
 - [Production Kubernetes deployment](../../guides/deploy.md)
 - [Kubernetes Compute Driver](kubernetes-compute.md)
 - [Platform design](../../design.md#secret-access)
-- [SecretDriver storage and delivery spec](../../../specs/14-secret-driver.md)
+- [SecretDriver storage and delivery spec](../../../specs/.archive/14-secret-driver.md)

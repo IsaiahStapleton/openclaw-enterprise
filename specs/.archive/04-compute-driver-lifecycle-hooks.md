@@ -84,21 +84,21 @@ credentials, resolved references, placeholders, or sensitive endpoints.
 ## Implementation
 
 1. Add optional hook and launch contracts to
-   [`packages/contracts/src/index.ts`](../packages/contracts/src/index.ts).
-2. Select and wire trusted hooks through [`packages/occ/src/index.ts`](../packages/occ/src/index.ts),
-   [`installation-config.ts`](../apps/controller/src/composition/installation-config.ts), and
-   [`worker.ts`](../apps/controller/src/worker.ts).
-3. Dispatch hooks inside [`KubernetesComputeDriver`](../apps/controller/src/drivers/compute/kubernetes/index.ts)
+   [`packages/contracts/src/index.ts`](../../packages/contracts/src/index.ts).
+2. Select and wire trusted hooks through [`packages/occ/src/index.ts`](../../packages/occ/src/index.ts),
+   [`installation-config.ts`](../../apps/controller/src/composition/installation-config.ts), and
+   [`worker.ts`](../../apps/controller/src/worker.ts).
+3. Dispatch hooks inside [`KubernetesComputeDriver`](../../apps/controller/src/drivers/compute/kubernetes/index.ts)
    and `LocalTestComputeDriver` (historical path:
    `apps/controller/src/drivers/compute/local-test/index.ts`).
 4. When available, implement the OpenShell hooks inside the selected SecretBrokerDriver; require a
    real gateway and verified workload authentication before enabling production use. This step is
    deferred while the broker and gateway are absent from the selected base.
-5. Extend existing [`contract`](../tests/conformance/contracts.test.mjs),
-   [`Kubernetes compute`](../tests/conformance/kubernetes-compute.test.mjs),
-   [`controller lifecycle`](../tests/integration/controller-lifecycle.test.mjs), and
-   [`worker revision`](../tests/integration/postgres-worker-agent-revision.test.mjs) tests; update
-   [`ComputeDriver contract`](../docs/reference/drivers/compute.md) when the implementation ships.
+5. Extend existing [`contract`](../../tests/conformance/contracts.test.mjs),
+   [`Kubernetes compute`](../../tests/conformance/kubernetes-compute.test.mjs),
+   [`controller lifecycle`](../../tests/integration/controller-lifecycle.test.mjs), and
+   [`worker revision`](../../tests/integration/postgres-worker-agent-revision.test.mjs) tests; update
+   [`ComputeDriver contract`](../../docs/reference/drivers/compute.md) when the implementation ships.
 
 ## Verification
 

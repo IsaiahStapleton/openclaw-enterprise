@@ -202,7 +202,7 @@ credential at its issuer.
 
 ## Related docs
 
-- [SecretDriver implementation specification](../../specs/14-secret-driver.md)
+- [SecretDriver implementation specification](../../specs/.archive/14-secret-driver.md)
 - [Secret access architecture](../design.md#secret-access)
 - [Kubernetes deployment](../guides/deploy.md)
 - [Configuration](../reference/configuration.md)

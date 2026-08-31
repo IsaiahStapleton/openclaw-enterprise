@@ -39,7 +39,7 @@ controller exposes only the supported backend sign-in, sign-out, and session cap
 signup is disabled. Human and programmatic API clients use the same verified session mechanism.
 
 For each protected request, resolve the stable Better Auth session user ID and installation-owned
-issuer through the selected [`IAMDriver`](../packages/contracts/src/index.ts), then authorize the
+issuer through the selected [`IAMDriver`](../../packages/contracts/src/index.ts), then authorize the
 exact server-owned resource through that same driver. Email is not the authorization identity. OCC
 continues to own Principals, roles, bindings, and audit attribution; authentication never creates
 implicit permissions or replaces IAM authorization.
@@ -51,7 +51,7 @@ attributed without recording passwords, session values, or authentication secret
 
 ### Administrator bootstrap and account provisioning
 
-The existing [installation bootstrap](../scripts/bootstrap-production.mjs) creates exactly one first
+The existing [installation bootstrap](../../scripts/bootstrap-production.mjs) creates exactly one first
 administrator using the configured email and a cryptographically generated random initial password.
 It creates the matching installation-scoped Principal and existing administrator role binding, using
 the Better Auth user ID as the Principal subject. Repeated bootstrap must not silently create a second
@@ -79,19 +79,19 @@ caller-supplied identity headers or fall back to development or production beare
 ## Implementation
 
 1. Integrate Better Auth and its required PostgreSQL-backed user, credential, and session persistence
-   in the [controller](../apps/controller/src) and existing [OCC persistence](../packages/occ/src/state).
+   in the [controller](../../apps/controller/src) and existing [OCC persistence](../../packages/occ/src/state).
    Enable only backend email/password sign-in, sign-out, session handling, and supported server-side
    account creation; disable public signup.
-2. Replace controller [admission](../apps/controller/src/admission) and
-   [composition](../apps/controller/src/composition) bearer checks with verified Better Auth sessions,
+2. Replace controller [admission](../../apps/controller/src/admission) and
+   [composition](../../apps/controller/src/composition) bearer checks with verified Better Auth sessions,
    installation-owned issuer/user-ID identity lookup, and existing selected-driver IAM authorization.
-3. Extend [installation bootstrap](../scripts/bootstrap-production.mjs) to create the randomly generated
+3. Extend [installation bootstrap](../../scripts/bootstrap-production.mjs) to create the randomly generated
    first administrator, protected credential delivery, and existing administrator Principal/binding.
    Add one administrator-authorized backend capability for additional explicitly bound accounts.
 4. Remove development and production controller/API bearer settings, admission, OpenAPI security,
    examples, and packaging; retain unrelated internal Agent/app-server transport capability tokens.
-   Update the [API reference](../docs/reference/api.md), [configuration](../docs/reference/settings.md), and
-   [deployment guide](../docs/guides/deploy.md) to describe the supported session workflow.
+   Update the [API reference](../../docs/reference/api.md), [configuration](../../docs/reference/settings.md), and
+   [deployment guide](../../docs/guides/deploy.md) to describe the supported session workflow.
 
 ## Verification
 

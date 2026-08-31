@@ -58,18 +58,18 @@ deletes only the owning Agent's PVC. Embedded execution creates no shared PVC.
 
 ## Implementation
 
-1. Extend [Kubernetes Compute](../apps/controller/src/drivers/compute/kubernetes/index.ts)
+1. Extend [Kubernetes Compute](../../apps/controller/src/drivers/compute/kubernetes/index.ts)
    to create/reuse the Agent-owned PVC, render the five directional mounts, and
    delete the claim through existing gateway teardown. Add only required
-   namespaced PVC access to [worker RBAC](../deploy/helm/openclaw-enterprise/templates/rbac.yaml).
-2. Update the [gateway runtime entrypoint](../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts)
+   namespaced PVC access to [worker RBAC](../../deploy/helm/openclaw-enterprise/templates/rbac.yaml).
+2. Update the [gateway runtime entrypoint](../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts)
    to publish bundled and plugin skills; set the gateway workspace environment.
 3. Configure disposable k3d fixtures so their existing storage provisioner can
    bind `ReadWriteMany` claims. Keep storage-bootstrap mechanics in the fixture
-   and [operator documentation](../docs/reference/drivers/kubernetes-compute.md).
-4. Extend the existing [real Kubernetes integration](../tests/integration/kubernetes-compute-real.test.mjs)
-   and [real gateway/Codex k3d integration](../tests/integration/harness-topology-k3d-real.test.mjs);
-   run the existing [real Docker Compute integration](../tests/integration/docker-compute-real.test.mjs)
+   and [operator documentation](../../docs/reference/drivers/kubernetes-compute.md).
+4. Extend the existing [real Kubernetes integration](../../tests/integration/kubernetes-compute-real.test.mjs)
+   and [real gateway/Codex k3d integration](../../tests/integration/harness-topology-k3d-real.test.mjs);
+   run the existing [real Docker Compute integration](../../tests/integration/docker-compute-real.test.mjs)
    as dedicated gateway/Codex regression coverage.
 
 ## Verification
@@ -94,7 +94,7 @@ response, and verify the model credential is present only in the Codex
 container. Run it with `OCC_TEST_DOCKER_COMPUTE_REAL=1`; skipped execution,
 mocks, and readiness-only checks do not satisfy this regression.
 
-Follow the repository's [real k3d prerequisites](../AGENTS.md#running-integration-tests);
+Follow the repository's [real k3d prerequisites](../../AGENTS.md#running-integration-tests);
 mocks or skipped infrastructure-dependent checks do not satisfy this proof.
 
 ## Manual Notes

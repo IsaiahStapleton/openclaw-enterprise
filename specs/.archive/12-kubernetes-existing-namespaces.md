@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-26
 **Status:** Implemented; live Kubernetes verification requires a disposable cluster
-**Authority:** [OpenClaw Enterprise platform design](../docs/design.md)
+**Authority:** [OpenClaw Enterprise platform design](../../docs/design.md)
 
 ## Problem and Decision
 
@@ -134,9 +134,9 @@ unchanged.
 8. Real Kubernetes claims require the existing disposable-cluster integration;
    unavailable cluster infrastructure is reported as a verification gap.
 
-See the [Kubernetes Compute Driver guide](../docs/reference/drivers/kubernetes-compute.md),
-[production deployment instructions](../docs/guides/deploy.md), and
-[placement execution flow](../docs/flows/kubernetes-existing-namespace-placement.md).
+See the [Kubernetes Compute Driver guide](../../docs/reference/drivers/kubernetes-compute.md),
+[production deployment instructions](../../docs/guides/deploy.md), and
+[placement execution flow](../../docs/flows/kubernetes-existing-namespace-placement.md).
 
 ## Manual Notes
 

@@ -443,7 +443,7 @@ another authorization Driver.
 
 ## Secret access
 
-The approved [SecretDriver storage and delivery](../specs/14-secret-driver.md)
+The approved [SecretDriver storage and delivery](../specs/.archive/14-secret-driver.md)
 contract uses Installation-selected `KubernetesSecretDriver` by default. Each
 Secret belongs to one Namespace, can be created before any Agent exists, and
 uses a Namespace-unique name. Same-Namespace Agents may consume it only through

@@ -72,7 +72,9 @@ feature contract or replace deployment instructions.
 
 [Implementation-spec index](../specs/README.md) links change proposals,
 milestones, recorded statuses, and the reference pages that own current behavior.
-Completed specifications preserve their decisions and implementation history.
+All existing specifications are in the [spec archive](../specs/README.md#archived-specifications),
+preserving their decisions, recorded statuses, verification limits, and
+implementation history. Archive placement does not mark unfinished work complete.
 There is no separate RFC directory or process.
 
 ## Maintaining the split

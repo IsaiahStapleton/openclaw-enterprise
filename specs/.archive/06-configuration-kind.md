@@ -11,7 +11,7 @@ Configuration's native OpenClaw document as the sole source of Agent and gateway
 deployed Agent owns exactly one gateway, so a Namespace can contain multiple gateways. The selected
 Compute Driver deploys that gateway with its Agent; there is no Gateway Driver or Gateway resource.
 This implementation follows the Agent-owned gateway topology in the repository-local
-[platform design](../docs/design.md).
+[platform design](../../docs/design.md).
 
 The OpenClaw built-in harness is the default. A future Harness Driver's implementation discriminator
 remains independent of `Configuration.kind`. Unsupported Configuration kinds, standalone Harness
@@ -90,13 +90,13 @@ workers remain restricted to Namespace operations.
 
 ## Implementation and acceptance
 
-- Update shared [domain and API contracts](../packages/contracts/src/index.ts), generated
-  [OpenAPI](../packages/contracts/openapi/occ-api.openapi.json), and [API reference](../docs/reference/api.md).
-- Update [OCC authorization](../packages/occ/src/index.ts), [in-memory state](../packages/occ/src/state/platform-state.ts),
-  [PostgreSQL state](../packages/occ/src/state/postgres-state.ts), and the
-  [Kubernetes Configuration Driver](../apps/controller/src/drivers/configuration/kubernetes/index.ts).
-- Update [worker observations](../apps/controller/src/worker.ts), [Harness selection](../apps/controller/src/composition/production-harness.ts),
-  [Kubernetes Compute](../apps/controller/src/drivers/compute/kubernetes/index.ts), and
+- Update shared [domain and API contracts](../../packages/contracts/src/index.ts), generated
+  [OpenAPI](../../packages/contracts/openapi/occ-api.openapi.json), and [API reference](../../docs/reference/api.md).
+- Update [OCC authorization](../../packages/occ/src/index.ts), [in-memory state](../../packages/occ/src/state/platform-state.ts),
+  [PostgreSQL state](../../packages/occ/src/state/postgres-state.ts), and the
+  [Kubernetes Configuration Driver](../../apps/controller/src/drivers/configuration/kubernetes/index.ts).
+- Update [worker observations](../../apps/controller/src/worker.ts), [Harness selection](../../apps/controller/src/composition/production-harness.ts),
+  [Kubernetes Compute](../../apps/controller/src/drivers/compute/kubernetes/index.ts), and
   local-test Compute (historical path:
   `apps/controller/src/drivers/compute/local-test/index.ts`).
 - Verify missing/unknown/immutable kinds, exact-resource authorization, cross-Namespace rejection,

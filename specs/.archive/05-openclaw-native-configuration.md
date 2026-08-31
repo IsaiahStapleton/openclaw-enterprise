@@ -35,7 +35,7 @@ format, parallel SecretRef map, configuration-merging system, or plugin registry
 
 `Configuration.values` and `AgentRevision.configuration` are the same deeply
 immutable, root-object JSON document. Reuse the existing recursive
-[`SafeJsonValue` schema](../packages/contracts/src/api/common.ts) for nested
+[`SafeJsonValue` schema](../../packages/contracts/src/api/common.ts) for nested
 objects, arrays, strings, finite numbers, booleans, and null. Preserve OpenClaw field
 names and structure exactly; OCC does not flatten or recreate its application schema.
 
@@ -88,41 +88,41 @@ reserved JSON keys, or string sentinels.
 
 ## Implementation
 
-1. Update [`Configuration` and `AgentRevision`](../packages/contracts/src/index.ts),
-   [`ConfigurationValues` and request schemas](../packages/contracts/src/api/common.ts),
-   [route metadata](../packages/contracts/src/api/routes.ts),
-   [controller request casts](../apps/controller/src/index.ts), and
-   [resource responses](../packages/contracts/src/api/resources.ts). Reuse
+1. Update [`Configuration` and `AgentRevision`](../../packages/contracts/src/index.ts),
+   [`ConfigurationValues` and request schemas](../../packages/contracts/src/api/common.ts),
+   [route metadata](../../packages/contracts/src/api/routes.ts),
+   [controller request casts](../../apps/controller/src/index.ts), and
+   [resource responses](../../packages/contracts/src/api/resources.ts). Reuse
    `Type.Ref("SafeJsonValue")` and Fastify's existing schema registration.
-2. Require a root JSON object in [OCC](../packages/occ/src/index.ts) and reuse
-   existing [`immutableCopy`](../packages/utils/src/index.ts). Preserve exact IAM checks,
+2. Require a root JSON object in [OCC](../../packages/occ/src/index.ts) and reuse
+   existing [`immutableCopy`](../../packages/utils/src/index.ts). Preserve exact IAM checks,
    Configuration ownership, and immutable revision snapshots;
    remove the obsolete flat-only guard from
-   [in-memory revision state](../packages/occ/src/state/platform-state.ts).
-3. Update the [Kubernetes ConfigurationDriver](../apps/controller/src/drivers/configuration/kubernetes/index.ts)
+   [in-memory revision state](../../packages/occ/src/state/platform-state.ts).
+3. Update the [Kubernetes ConfigurationDriver](../../apps/controller/src/drivers/configuration/kubernetes/index.ts)
    to round-trip exactly one bounded `openclaw.json` ConfigMap data entry.
 4. Add the next forward migration beside
-   [`0004_configuration_driver.sql`](../migrations/0004_configuration_driver.sql)
-   and update [the PostgreSQL schema](../packages/occ/src/state/postgres-schema.ts)
+   [`0004_configuration_driver.sql`](../../migrations/0004_configuration_driver.sql)
+   and update [the PostgreSQL schema](../../packages/occ/src/state/postgres-schema.ts)
    and migration journal; drop only the obsolete flat constraint/function.
 5. Replace flat-only fixtures and add real coverage in
    API-schema tests (historical path: `tests/contracts/api-schema.test.mjs`,
    commit `ab560806dbd945436835ab092ebd10bf3e50d942`),
-   [OCC configuration conformance](../tests/conformance/configuration-occ.test.mjs),
-   [Kubernetes configuration conformance](../tests/conformance/kubernetes-configuration.test.mjs),
-   [HTTP integration](../tests/integration/configuration-controller.test.mjs),
+   [OCC configuration conformance](../../tests/conformance/configuration-occ.test.mjs),
+   [Kubernetes configuration conformance](../../tests/conformance/kubernetes-configuration.test.mjs),
+   [HTTP integration](../../tests/integration/configuration-controller.test.mjs),
    PostgreSQL integration (the historical dedicated migration test was removed;
    current persisted coverage is in
-   [PostgreSQL platform-state integration](../tests/integration/postgres-platform-state.test.mjs)),
+   [PostgreSQL platform-state integration](../../tests/integration/postgres-platform-state.test.mjs)),
    OpenAPI tests (historical path: `tests/contracts/openapi.test.mjs`,
    commit `c11ba6418d068c2cb15a1f3ecf9339eef1d2797b`), and
    API-reference tests (historical path: `tests/contracts/openapi-markdown.test.mjs`,
    commit `ab560806dbd945436835ab092ebd10bf3e50d942`).
-   Regenerate both [OpenAPI](../packages/contracts/openapi/occ-api.openapi.json)
-   and the [API reference](../docs/reference/api.md). Update the current
-   [Configuration guide](../docs/reference/configuration.md), [Agent guide](../docs/reference/agents.md), and
-   [Configuration flow](../docs/flows/configuration-driver.md); leave the
-   historical [completed ConfigurationDriver spec](.archive/03-configuration-driver.md)
+   Regenerate both [OpenAPI](../../packages/contracts/openapi/occ-api.openapi.json)
+   and the [API reference](../../docs/reference/api.md). Update the current
+   [Configuration guide](../../docs/reference/configuration.md), [Agent guide](../../docs/reference/agents.md), and
+   [Configuration flow](../../docs/flows/configuration-driver.md); leave the
+   historical [completed ConfigurationDriver spec](03-configuration-driver.md)
    unchanged.
 
 ## Verification
