@@ -38,6 +38,12 @@ moves without changing their substantive contract or Manual Notes. Historical
 commands and test paths can describe an older revision; run current verification
 from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
+## Active specifications
+
+| Implementation record | Recorded status | Current reference |
+| --- | --- | --- |
+| [Development end-to-end guide](15-development-end-to-end-guide.md) | Implementing | [Development deployment](../docs/guides/deploy.md#development); interactive guide in progress |
+
 ## Archived specifications
 
 Use the linked current references for supported behavior.
