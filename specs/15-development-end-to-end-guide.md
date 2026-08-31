@@ -1,7 +1,7 @@
 # Feature Spec: Development end-to-end guide
 
 **Date:** 2026-08-31
-**Status:** Implementing
+**Status:** Completed
 **Owner:** OCC development documentation and Docker runtime integration
 **Source baseline:** `4acfa258a5d9c1757199c83fd558ed19c8392543`
 
@@ -139,13 +139,27 @@ private mode-0600 token configuration, and the existing chat-completions request
 
 A local probe of OpenClaw 2026.7.1 verified TUI connection, normal local pairing,
 `/status`, and Ctrl+D exit with the gateway still running. It had no provider key
-or external network; the real two-message model proof remains required.
+or external network; the implementation proof below completes the model boundary.
+
+## Delivery evidence
+
+Implemented in `c208e48a46353050427ae80affc864a4895a6c8e`. Current procedures
+live in the [development TUI guide](../docs/guides/deploy.md#development-end-to-end-tui)
+and [Docker test settings](../docs/reference/settings.md#docker-compose-development-test-environment).
+The real Docker integration passed with `gpt-5.1` in 55.9 seconds, zero skips,
+including invalid-token rejection, two TUI replies, Ctrl+D, gateway readiness,
+and embedded/dedicated HTTP model turns. The exact guide also passed with a fresh
+`gpt-4.1` Agent. HTTP-error, missing-key, and missing-owned-gateway cleanup passed.
+Independent review and local verification passed. Dedicated TUI and production
+walkthroughs remain outside this specification.
 
 ## Manual Notes
 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- [2026-08-31 16:18]: Completed implementation, real two-turn TUI proof, review, and independent verification. (01a059cc-39b5-7ff1-b277-258d90fb4634 - c208e48a46353050427ae80affc864a4895a6c8e)
 
 - [2026-08-31 15:29]: Made the approved native TUI path primary and required continued interactive use until explicit exit. (01a059cc-39b5-7ff1-b277-258d90fb4634 - 4acfa258a5d9c1757199c83fd558ed19c8392543)
 - [2026-08-31 15:15]: Drafted the development provisioning and CLI model-turn guide specification. (01a059cc-39b5-7ff1-b277-258d90fb4634 - 4acfa258a5d9c1757199c83fd558ed19c8392543)
