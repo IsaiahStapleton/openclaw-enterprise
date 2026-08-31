@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-31
 
-**Status:** Implementing — code and required local/native verification complete; publication pending
+**Status:** Completed — implementation and required local/native verification complete
 
 **Owner:** OCC admission and API; bundled Kubernetes Compute implementation
 
@@ -113,7 +113,7 @@ Audit the admitted actor, Namespace, Agent, native method, OCC request ID, and d
 | Native RPC semantics survive the facade                       | Prove native success and typed rejection, plus `chat.send` accepted acknowledgment without completion claims; retrieve its resulting history. Force a sent-request disconnect/timeout and prove no second dispatch. Oversized input/output and cancellation produce bounded, correctly qualified failures.                                                                                                                                     |
 | Credentials and evidence remain isolated                      | Verify the OCC credential Secret is not mounted in workloads or copied into admitted revisions, API payloads, or logs; native token issuance/storage remains gateway-owned. Helper receives only public pin and its existing transport auth. Audit attributes dispatch to the OCC caller without native arguments/results. Verify incompatible auth profile, missing exec permission, wrong Pod ownership, and enrollment timeout fail closed. |
 
-Verification completed on 2026-08-31. TypeScript, build, workspace boundaries, OpenAPI parity, formatting, and flow validation passed. Conformance passed 176 tests with one pre-existing placeholder skip; default integration passed 91 tests with 52 unselected external-runtime skips. All three selected real Kubernetes regression cases passed without skips.
+Implementation commit: `27fa96cf22522dfc382ddd9c4f152692783c76f2`. Verification completed on 2026-08-31. TypeScript, build, workspace boundaries, OpenAPI parity, formatting, and flow validation passed. Conformance passed 176 tests with one pre-existing placeholder skip; default integration passed 91 tests with 52 unselected external-runtime skips. All three selected real Kubernetes regression cases passed without skips.
 
 Both required native scenarios passed against the production application/worker composed in-process, limited-role PostgreSQL, and real digest-pinned OpenClaw `2026.8.1` / Codex `0.150.1` Pods: partial-enrollment recovery after token-persistence RBAC failure (135.6 seconds), and the complete command, model-turn, restart, revision-replacement, revocation, credential-loss, and supplemental failure proof (307.2 seconds). The partial scenario's passing result was retained while the positive scenario was rerun after audit/revocation test-helper corrections; production code and the partial scenario were unchanged. The proof does not claim a Helm-installed controller deployment or CI success.
 
@@ -125,3 +125,5 @@ Current behavior is documented in the [Agent reference](../docs/reference/agents
 
 - 2026-08-31 11:52: Drafted separate OCC native enrollment and Agent gateway command proxy proposal for independent review. (01a04ae1-7ba7-7372-88a4-488e01f690ae — 4bf6985ebd3e746999bf270aead8921b4be7d812)
 - 2026-08-31 12:02: Applied approved review direction: defined durable enrollment ordering and terminal recovery, removed duplicate completion state and Agent-deletion scope, retained the diagnostics/files/chat allowlist, and corrected source links. (01a04ae1-7ba7-7372-88a4-488e01f690ae — 4bf6985ebd3e746999bf270aead8921b4be7d812)
+
+- 2026-08-31 15:46: Completed native gateway administration, exact rollout verification, and real Kubernetes/PostgreSQL/native failure proof; current behavior lives in the linked reference and flow documentation. (01a04ae1-7ba7-7372-88a4-488e01f690ae — 27fa96cf22522dfc382ddd9c4f152692783c76f2)
