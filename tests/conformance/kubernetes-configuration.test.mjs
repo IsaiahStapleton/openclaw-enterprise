@@ -286,9 +286,3 @@ test("the official Kubernetes client rejects ambiguous identities and insecure A
     );
   }
 });
-
-test(
-  "live Kubernetes ConfigMap CRUD and namespaced RBAC require a provisioned cluster",
-  { skip: "No explicitly provisioned Kubernetes integration cluster is available." },
-  () => {},
-);

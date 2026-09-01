@@ -23,6 +23,16 @@ async function dependencies(context, options = {}) {
   return { pool, queue, ...queueModule };
 }
 
+async function createNamespace(pool, status = "ready") {
+  const namespaceId = `ns_${randomUUID()}`;
+  await pool.query(
+    `INSERT INTO occ.namespaces (id, name, status, created_at)
+     VALUES ($1, $2, $3, clock_timestamp())`,
+    [namespaceId, `Queue integration ${randomUUID()}`, status],
+  );
+  return namespaceId;
+}
+
 async function createResources(pool, agentCount = 1) {
   const client = await pool.connect();
   const namespaceId = `ns_${randomUUID()}`;
@@ -197,30 +207,64 @@ test(
 );
 
 test(
-  "Namespace and admitted revision work share one durable queue with exact resource ownership",
+  "Namespace convergence and admitted revision work share one durable queue with exact resource ownership",
   requiresPostgres,
   async (context) => {
-    const { pool, queue } = await dependencies(context);
-    const { namespaceId, agents } = await createResources(pool);
-    const revisionId = await createQueueRevision(pool, namespaceId, agents[0]);
+    const { pool, queue } = await dependencies(context, { maxAttempts: 5 });
+    const { namespaceId: revisionNamespaceId, agents } = await createResources(pool);
+    const namespaceId = await createNamespace(pool, "provisioning");
+    const revisionId = await createQueueRevision(pool, revisionNamespaceId, agents[0]);
     const prefix = `queue-current:${randomUUID()}`;
     const revisionKey = `${prefix}:revision`;
     const namespaceKey = `${prefix}:namespace`;
     const initialTotal = await queue.pending();
 
-    await queue.enqueue(revisionWork(namespaceId, revisionKey, agents[0], revisionId));
+    await queue.enqueue(revisionWork(revisionNamespaceId, revisionKey, agents[0], revisionId));
     await queue.enqueue(namespaceWork(namespaceId, namespaceKey, new Date(1)));
 
     assert.equal(await queue.pending(), initialTotal + 2);
 
+    // Production revisions from ready tenants must not be filtered behind pending Namespace work.
     const revisionClaim = await queue.claim();
     assert.equal(revisionClaim.idempotencyKey, revisionKey);
     assert.equal(revisionClaim.revisionId, revisionId);
     await queue.complete(revisionClaim);
+    assert.equal(await queue.pending(), initialTotal + 1);
 
-    const namespaceClaim = await queue.claim();
-    assert.equal(namespaceClaim.idempotencyKey, namespaceKey);
+    // Pending Namespace convergence is progress evidence, not a worker failure budget.
+    for (let observation = 0; observation < 7; observation += 1) {
+      const namespaceClaim = await queue.claim();
+      assert.equal(namespaceClaim.idempotencyKey, namespaceKey);
+      assert.equal(namespaceClaim.attemptCount, 1);
+      await queue.defer(namespaceClaim, { code: "NAMESPACE_INCOMPLETE" });
+
+      const pending = await pool.query(
+        `SELECT state, attempt_count
+         FROM occ.controller_work
+         WHERE idempotency_key = $1`,
+        [namespaceKey],
+      );
+      assert.deepEqual(pending.rows, [{ state: "queued", attempt_count: 0 }]);
+    }
+
+    const namespaceClaim = await claimExpected(queue, namespaceKey);
     await queue.complete(namespaceClaim);
+
+    const completed = await pool.query(
+      `SELECT state, attempt_count
+       FROM occ.controller_work
+       WHERE idempotency_key = $1`,
+      [namespaceKey],
+    );
+    assert.deepEqual(completed.rows, [{ state: "succeeded", attempt_count: 1 }]);
+
+    const evidence = await pool.query(
+      `SELECT count(*)::integer AS count
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND details->>'reasonCode' = 'NAMESPACE_INCOMPLETE'`,
+      [namespaceId],
+    );
+    assert.deepEqual(evidence.rows, [{ count: 7 }]);
 
     assert.equal(await queue.pending(), initialTotal);
   },
@@ -391,6 +435,15 @@ test(
         .status,
       "ready",
     );
+    await assert.rejects(queue.defer(claim, { code: "NAMESPACE_INCOMPLETE" }), WorkClaimLostError);
+
+    const stale = await pool.query(
+      `SELECT state, attempt_count
+       FROM occ.controller_work
+       WHERE idempotency_key = $1`,
+      [idempotencyKey],
+    );
+    assert.deepEqual(stale.rows, [{ state: "claimed", attempt_count: 1 }]);
 
     await queue.recoverStale();
     await queue.complete(await claimExpected(queue, idempotencyKey));

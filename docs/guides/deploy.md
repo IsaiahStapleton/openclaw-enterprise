@@ -162,6 +162,10 @@ and storage; development defaults are not production configuration.
   [Kubernetes Compute requirements](../reference/drivers/kubernetes-compute.md#requirements).
 - Provider-managed accounts additionally require a dedicated ChatGPT admin
   Secret and one approved `/32` provider or egress-proxy address.
+- Secret-backed Configuration bindings additionally require selected IAM policy
+  grants for both the deploying actor and the consuming Agent service principal;
+  see
+  [Kubernetes Secret binding requirements](../reference/drivers/kubernetes-secret.md#bind-a-secret-to-gateway-environment).
 - Exact approved internal API client selectors and `/32` PostgreSQL/Kubernetes
   API destinations.
 
@@ -514,11 +518,16 @@ The Secret RoleBinding grants the API only tenant-local Secret `get`, `create`,
 Wait until `GET /namespaces/:namespaceId` reports `status: "ready"`. Then
 create the exact Namespace-owned base `kind: "agent"` Configuration and save
 its returned `CONFIGURATION_ID`. Store any Namespace-owned OCC Secrets that the
-runtime needs, patch the Configuration with `secretBindings` and the complete
-native document in [Configure the Agent runtime](#configure-the-agent-runtime),
-then create or update the Agent assignment and deploy. Binding and assignment
-changes require `operate` on every selected Secret, including retained bindings
-when PATCH omits `secretBindings`.
+runtime needs, then patch the Configuration with `secretBindings` and the
+complete native document in
+[Configure the Agent runtime](#configure-the-agent-runtime). Binding and
+assignment changes require caller `operate` on every selected Secret, including
+retained bindings when PATCH omits `secretBindings`.
+
+Create or update the Agent assignment, then grant its service principal
+`operate` on every bound Secret before deploying. Kubernetes RoleBindings and
+Driver YAML do not provide that grant; see
+[Kubernetes Secret binding requirements](../reference/drivers/kubernetes-secret.md#bind-a-secret-to-gateway-environment).
 
 ### Prepare each Agent
 
@@ -600,6 +609,10 @@ to `{ "source": "env", "provider": "model", "id": "OPENAI_API_KEY" }`.
 Dedicated Codex rejects this model-binding path because the separate gateway
 must not receive the model credential. See
 [Secret bindings](../reference/configuration.md#secret-bindings).
+
+Grant the Agent service principal `operate` on the bound Secret before
+`POST /namespaces/:namespaceId/agents/:agentId/deploy`; see
+[Kubernetes Secret binding requirements](../reference/drivers/kubernetes-secret.md#bind-a-secret-to-gateway-environment).
 
 The already-authorized worker can create immutable Agent-owned gateway
 ConfigMaps but has no direct Secret API permissions and cannot manage

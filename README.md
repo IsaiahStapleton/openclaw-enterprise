@@ -1,19 +1,10 @@
 # OpenClaw Enterprise
 
-A control plane for deploying and managing OpenClaw and Codex Agents.
-Run locally with Docker Compose or deploy to Kubernetes.
+<img src="docs/assets/lobster-mech-transparent.png" alt="Comic-style lobster in a mech suit" width="200" />
 
-- Group each tenant's Agents and configuration into isolated Namespaces.
-- Deploy immutable Agent revisions; configuration edits take effect on the next deployment.
-- Authenticate people and automation, authorize resource access, and audit changes and denials.
-- Choose Drivers for identity and access management (IAM), compute, and configuration storage.
-- Store Namespace-owned Secrets in Kubernetes and bind them to selected Agent gateways.
+The open control plane for deploying and managing Agents. Under active construction.
 
-The OpenClaw Control Center (OCC) provides the HTTP API. PostgreSQL stores platform
-state, and a separate worker provisions and reconciles workloads through the
-selected Compute Driver.
-
-## Run locally
+## Getting Started
 
 Requires Docker Engine and Docker Compose. Build the runtime image and create
 `.env` if it does not already exist:
@@ -59,8 +50,7 @@ pnpm test
 ```
 
 PostgreSQL, Docker, and Kubernetes integration suites require additional setup;
-see [test environment settings](docs/reference/settings.md#postgresql-test-environment) and
-[contributor instructions](AGENTS.md#running-integration-tests).
+see [Testing](docs/testing.md) for suite coverage, credentials, setup, and commands.
 
 ## Code layout
 

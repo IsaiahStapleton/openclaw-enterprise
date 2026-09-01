@@ -253,7 +253,7 @@ Codex credentials remain ephemeral. The remaining private runtime home is
 also ephemeral. Persisting these directories does not persist the entire home.
 
 Each dedicated Agent additionally receives its existing `40Gi`
-`ReadWriteMany` shared workspace claim. Workspace, legacy session sharing,
+`ReadWriteMany` shared workspace claim. Workspace, session sharing,
 generated-image exchange, and skill mounts keep their existing directional
 permissions. The dedicated Harness never receives the private gateway claim.
 Embedded Agents receive the private claim but do not create a shared claim.

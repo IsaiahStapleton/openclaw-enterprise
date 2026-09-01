@@ -2,16 +2,11 @@
 
 ## Active workspace boundary
 
-`legacy/` is excluded from this release. Do not
-edit, execute, import, build, deploy, or start its application, reconciler,
-migrations, tests, package-manager scripts, Docker images, or Helm chart unless
-a later task explicitly requests a narrowly scoped historical investigation.
-
 Approved milestones permit the active TypeScript/pnpm workspace, its selected
 controller and Driver implementations, reviewed PostgreSQL persistence, and
 production Kubernetes packaging described in the current implementation specs.
-Keep the workspace independent of archived code and do not introduce platform
-resources or deployment behavior outside those approved milestones.
+Do not introduce platform resources or deployment behavior outside those
+approved milestones.
 Do not add GitHub Actions workflows: organization push restrictions prohibit
 workflow changes in this repository.
 
@@ -22,8 +17,7 @@ emit attributable audit evidence for bootstrap, successful mutations, and
 authorization denials.
 
 Preserve Git history, registered worktrees, ignored local `.env` files, and
-existing root or nested `node_modules/` directories. Keep `legacy/` excluded
-from Docker contexts and Git release archives.
+existing root or nested `node_modules/` directories.
 
 The authoritative architecture is the repository's
 [platform design](docs/design.md).
@@ -132,6 +126,7 @@ Run all integration tests with `pnpm test:integration`, or target one case with
 `node --test tests/integration/<name>.test.mjs`. Real-runtime coverage uses the
 Docker Compose or Kubernetes integrations with explicitly selected runtime
 images and existing authorized model credentials. Follow the
+[testing guide](docs/testing.md) and
 [test environment settings](docs/reference/settings.md#docker-compose-development-test-environment)
 for each selected suite. Never substitute a fake runtime or skip a requested
 runtime integration.
@@ -146,16 +141,17 @@ disposable database using the
 pnpm db:up
 export OCC_MIGRATION_DATABASE_URL=postgresql://occ_migrator:occ-migrator-local@127.0.0.1:55432/openclaw_enterprise
 pnpm db:migrate
+unset OCC_MIGRATION_DATABASE_URL
 export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_enterprise
-export OCC_PSQL_TEST_DATABASE_URL="$OCC_TEST_DATABASE_URL"
 export OCC_PRODUCTION_WIREUP_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_production_bootstrap
 pnpm test:postgres
 ```
 
 The production-bootstrap database must be separately migrated, disposable, and
-free of an existing Installation. `OCC_PSQL_TEST_DATABASE_URL` enables the real
-production queue cases; `OCC_PRODUCTION_WIREUP_DATABASE_URL` enables the
-production bootstrap case. Omitting either variable skips its associated proof.
+free of an existing Installation. `OCC_TEST_DATABASE_URL` enables real
+PostgreSQL persistence and queue coverage; `OCC_PRODUCTION_WIREUP_DATABASE_URL`
+enables the production bootstrap case. Omitting the bootstrap URL skips only
+that associated proof.
 
 Run Kubernetes integration only against an explicitly selected, disposable k3d
 cluster with enforcing NetworkPolicies. Preserve the default kubeconfig, the
@@ -195,11 +191,12 @@ docker compose -f compose.postgres.yaml exec -T postgres \
 
 export OCC_MIGRATION_DATABASE_URL=postgresql://occ_migrator:occ-migrator-local@127.0.0.1:55432/openclaw_k8s_local
 pnpm db:migrate
+unset OCC_MIGRATION_DATABASE_URL
 export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_k8s_local
 node --test tests/integration/kubernetes-compute-real.test.mjs
 ```
 
-Both real-cluster cases must pass without skips. Partial Kubernetes setup,
+All three real-cluster fixture cases must pass without skips. Partial Kubernetes setup,
 unenforced NetworkPolicies, missing fixtures, insufficient permissions, or an
 unavailable explicitly requested cluster must fail rather than substituting a
 fake. The suite provisions its own scoped controller ServiceAccount and
@@ -221,12 +218,16 @@ export OCC_TEST_KUBERNETES_GATEWAY_IMAGE='<gateway-image>@sha256:<digest>'
 export OCC_TEST_KUBERNETES_AGENT_IMAGE='<codex-agent-image>@sha256:<digest>'
 test -n "${OPENAI_API_KEY:-}"
 export OPENAI_API_KEY
+export OCC_TEST_OPENAI_MODEL=gpt-5.1
+export OCC_TEST_SLACK_LIVE=0
 node --test tests/integration/harness-topology-k3d-real.test.mjs
 ```
 
 `OCC_TEST_KUBERNETES_KUBECONFIG` and `OCC_TEST_KUBERNETES_CONTEXT` must still
 explicitly select the disposable loopback `k3d` cluster. Set
-`OCC_TEST_OPENAI_MODEL` only when overriding its default `gpt-5.6-sol`. Import
+`OCC_TEST_OPENAI_MODEL` to an authorized custom-tool-capable model, such as
+`gpt-5.1`, when running dedicated Codex coverage; the source default is
+`gpt-4.1`. Import
 the local image tags, then configure their corresponding digest references; k3d
 does not import images by digest. Also register each immutable reference inside
 the k3s container with
@@ -234,10 +235,12 @@ the k3s container with
 otherwise Kubernetes attempts a remote pull and reports `ImagePullBackOff`.
 Optional
 `OCC_TEST_KUBERNETES_OPENCLAW_VERSION` and `OCC_TEST_KUBERNETES_CODEX_VERSION`
-assert the actual image versions; Codex defaults to `0.147.0`. The two cases
-must produce real provider-backed model responses: `embedded` OpenClaw uses
-one combined gateway/Agent Pod, and `dedicated` Codex uses
-separate gateway and authenticated app-server Pods. Both require
+assert the actual image versions; Codex defaults to `0.147.0`. The ordinary
+real-runtime suite has three cases: `dedicated` Codex, `embedded` OpenClaw with
+a persisted provider credential, and `embedded` OpenClaw with the Secret API.
+Each case must produce real provider-backed model responses. Embedded OpenClaw
+uses one combined gateway/Agent Pod; dedicated Codex uses separate gateway and
+authenticated app-server Pods. All cases require
 operator-owned Agent-specific transport/model Secrets, exact projected
 workload identity, bounded Pod-local writable runtime state, and enforced
 default-deny networking. The model key appears only in the combined embedded
@@ -249,6 +252,11 @@ Dedicated native configuration must register only its selected `codex/<model>`
 under `models.providers.codex`, with `api: "openai-responses"` and a fail-closed
 `baseUrl: "http://127.0.0.1:9"`; authenticated WebSocket execution remains in
 the Codex Agent, which alone receives the model credential.
+
+`OCC_TEST_SLACK_LIVE=1` selects the separate live Slack case and suppresses the
+ordinary three real-runtime cases. That case posts real Slack messages and waits
+for a gateway-authored reply; follow
+[the Slack testing guide](docs/testing.md#slack) before selecting it.
 
 A separate genuine production installation additionally requires the real
 Helm-installed controller and PostgreSQL, tenant-local RoleBindings, a model
@@ -270,6 +278,5 @@ establishes real-runtime outcomes.
   `docs/reference/api.md` is excluded and verified by `pnpm openapi:check`.
   Never reconcile or install dependencies as a side effect of agent
   verification; use dependency-independent Node tests if manifests changed.
-- Check root workspace isolation with `pnpm check:workspace`. Never execute
-  archived package scripts.
+- Check root workspace isolation with `pnpm check:workspace`.
 - Never run `npm run precommit`.
