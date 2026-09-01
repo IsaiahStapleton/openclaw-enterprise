@@ -537,7 +537,10 @@ and storage; development defaults are not production configuration.
 - An operator-managed HTTPS endpoint that forwards to the private API from an
   approved client Pod. The chart does not install an Ingress or TLS endpoint.
 - Separately approved immutable controller, OpenClaw gateway, and Codex Agent
-  image digests.
+  image digests. Interactive TUI attachment runs another Node process inside
+  the selected gateway Pod, so size gateway limits for both the serving gateway
+  and the temporary operator client. Use at least `1Gi` memory in the
+  interactive proof environment.
 - Operator-created Secrets for PostgreSQL application and initialization
   credentials, the trusted Installation startup YAML, and Better Auth signing
   material.
@@ -645,8 +648,8 @@ drivers:
         requireImmutableDigest: true
       resources:
         gateway:
-          requests: { cpu: 100m, memory: 128Mi }
-          limits: { cpu: 500m, memory: 256Mi }
+          requests: { cpu: 250m, memory: 512Mi }
+          limits: { cpu: 1000m, memory: 1Gi }
         agent:
           requests: { cpu: 100m, memory: 128Mi }
           limits: { cpu: 500m, memory: 256Mi }
@@ -1128,8 +1131,13 @@ Verify the response includes `OPENCLAW_OK`, indicating the real gateway
 completed an authenticated dedicated Codex WebSocket model turn or a real
 embedded OpenClaw model turn, according to its selected placement. The request
 model selects the OpenClaw Agent; its native configuration selects the
-underlying OpenAI model. Deploy a new
-immutable AgentRevision and repeat the request after revision cutover. Confirm
+underlying OpenAI model. Before creating a disposable connectivity-demo Agent,
+set `agents.defaults.skipBootstrap` to `true` in that Agent Configuration. A
+fresh native OpenClaw workspace otherwise creates first-run `BOOTSTRAP.md`
+identity guidance, and that onboarding content can replace the requested nonce
+reply. This setting only affects new workspaces for the demo Agent; existing
+workspaces that already contain bootstrap files keep their current files. Deploy
+an immutable AgentRevision and repeat the request after revision cutover. Confirm
 an authorized selected Agent connection succeeds and Agents without an admitted
 binding, plus unapproved namespace connections, are denied. The existing fixture integration test and
 Helm-rendering test do not prove these real-runtime outcomes; follow the
@@ -1138,6 +1146,107 @@ for their precise coverage boundaries. Consult
 [Kubernetes security controls](../reference/security.md) for Pod hardening, image approval,
 credential boundaries, temporary model-key/egress exceptions, and live-cluster
 verification limitations.
+
+### Attach with the OpenClaw TUI
+
+Use the native TUI only after the Agent has an active revision and the selected
+gateway Pod is Ready. The gateway Deployment and Pod use stable Agent labels
+across revision cutovers, so match the Pod to the active revision by its mounted
+immutable ConfigMap, not by a Pod revision label. Run these commands from an
+operator environment that already has `NAMESPACE_ID`, `AGENT_ID`, `REVISION_ID`,
+`TENANT_NAMESPACE`, `KUBECONFIG_FILE`, and `CONTEXT` set:
+
+```bash
+set -euo pipefail
+
+AGENT_SUFFIX="$(python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "$AGENT_ID")"
+REVISION_SUFFIX="$(python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "$REVISION_ID")"
+EXPECTED_CONFIGMAP="gateway-$AGENT_SUFFIX-rev-$REVISION_SUFFIX"
+GATEWAY_PODS_FILE="$(mktemp)"
+
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
+  -n "$TENANT_NAMESPACE" get pods -l \
+  "app.kubernetes.io/managed-by=openclaw-enterprise,openclaw.dev/workload-role=gateway,openclaw.dev/namespace=$NAMESPACE_ID,openclaw.dev/agent=$AGENT_ID" \
+  -o json > "$GATEWAY_PODS_FILE"
+
+export GATEWAY_PODS_FILE EXPECTED_CONFIGMAP
+if ! GATEWAY_POD="$(python3 -c 'import json, os, sys
+items = json.load(open(os.environ["GATEWAY_PODS_FILE"], encoding="utf-8")).get("items", [])
+def ready(pod):
+    return pod.get("status", {}).get("phase") == "Running" and any(
+        c.get("type") == "Ready" and c.get("status") == "True"
+        for c in pod.get("status", {}).get("conditions", [])
+    )
+def uses_expected_configmap(pod):
+    return any(
+        volume.get("configMap", {}).get("name") == os.environ["EXPECTED_CONFIGMAP"]
+        for volume in pod.get("spec", {}).get("volumes", [])
+    )
+matches = [pod for pod in items if ready(pod) and uses_expected_configmap(pod)]
+if len(matches) != 1:
+    sys.stderr.write(f"expected exactly one active gateway Pod, found {len(matches)}\n")
+    sys.exit(1)
+print(matches[0]["metadata"]["name"])')"; then
+  rm -- "$GATEWAY_PODS_FILE"
+  exit 1
+fi
+rm -- "$GATEWAY_PODS_FILE"
+```
+
+Revoke the OCC operator session before opening the interactive TUI unless you
+need it for another API mutation first. Gateway authentication is independent
+of the controller session:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  --cookie "$OCC_SESSION_COOKIE_JAR" --cookie-jar "$OCC_SESSION_COOKIE_JAR" \
+  --request POST "$OCC_URL/api/auth/sign-out" --output /dev/null
+rm -- "$OCC_SESSION_COOKIE_JAR"
+rmdir -- "$OCC_SESSION_DIRECTORY"
+```
+
+Start the TUI inside that exact gateway Pod. The container already has
+`OPENCLAW_CONFIG_PATH`, `OPENCLAW_GATEWAY_PORT`, and
+`OPENCLAW_GATEWAY_TOKEN`; do not pass a URL or token on the command line.
+`--message` sends the first prompt to the native agent named `main` and leaves
+the TUI open for additional operator input. That TUI-native agent name is
+separate from the OCC Namespace, Agent, and AgentRevision IDs:
+
+```bash
+E2E_SESSION="production-tui-$(date +%Y%m%d%H%M%S)"
+NONCE="$(python3 -c 'import secrets; print("OPENCLAW_TUI_" + secrets.token_hex(8))')"
+
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
+  -n "$TENANT_NAMESPACE" exec -it "$GATEWAY_POD" -c gateway -- \
+  env -u OPENAI_API_KEY OPENCLAW_STATE_DIR=/tmp/occ-tui-client \
+  node /app/openclaw.mjs tui \
+    --session "$E2E_SESSION" \
+    --message "Reply exactly: $NONCE"
+```
+
+The TUI connects to the gateway over the Pod-local WebSocket listener using the
+injected gateway token. The extra client process unsets `OPENAI_API_KEY`; model
+access stays in the serving gateway path. Normal device pairing remains
+enabled. After the first assistant response, type another nonce prompt in the
+same TUI process to verify continued interaction. Press Ctrl+D to exit the
+client; the gateway Pod and its Service remain running. After deploying another
+immutable AgentRevision,
+sign in again if needed, re-read the Agent, update `REVISION_ID` from
+`data.activeRevisionId`, discover a fresh matching gateway Pod and ConfigMap,
+then revoke the controller session and attach again.
+
+The production TUI integration test
+[`production-tui-k3d-real.test.mjs`](../../tests/integration/production-tui-k3d-real.test.mjs)
+uses the same native TUI attach path through a PTY harness. It installs the
+actual Helm chart into a disposable k3d cluster, provisions an embedded
+OpenClaw Agent through the production API using `agents.defaults.skipBootstrap`
+for the disposable connectivity demo, verifies invalid-token denial, gets two
+assistant nonce responses in one open TUI, repeats after revision cutover, and
+confirms Ctrl+D exits only the client. Set
+`OCC_TEST_PRODUCTION_TUI_KEEP=1` only for an operator rehearsal that should
+retain the owned setup; the test then writes an `attach.sh` and `proof.json` in
+its evidence directory. The default mode cleans up the Helm release and
+task-owned namespaces after the run.
 
 ### End the operator session
 
@@ -1151,6 +1260,7 @@ rm -- "$OCC_SESSION_COOKIE_JAR"
 rmdir -- "$OCC_SESSION_DIRECTORY"
 ```
 
+Skip this step if you already revoked the session before TUI attachment.
 Keep the bootstrap password and any runtime tokens in approved protected
 storage. Remove temporary credential copies according to your credential
 handling policy; do not delete the mounted bootstrap output to force a reset.
@@ -1177,7 +1287,9 @@ state verifies the existing administrator instead of generating a replacement
 password; preserve the matching configuration and signing Secret.
 
 For startup failure diagnosis and readiness behavior, see the
-[production startup flow](../flows/production-startup.md).
+[production startup flow](../flows/production-startup.md). For the runtime path
+from OCC deployment through native TUI attachment, see the
+[production TUI flow](../flows/production-tui.md).
 
 ## Service API keys for automation
 

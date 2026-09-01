@@ -15,7 +15,7 @@ const localPathConfigMapNamespace = "kube-system";
 const localPathProvisionerDeployment = "local-path-provisioner";
 const localPathStorageClass = "local-path";
 
-function kubectlArguments({ kubeconfigPath, kubernetesContext }, args) {
+export function kubectlArguments({ kubeconfigPath, kubernetesContext }, args) {
   return ["--kubeconfig", kubeconfigPath, "--context", kubernetesContext, ...args];
 }
 
@@ -24,6 +24,38 @@ async function kubectlFor(selection, ...args) {
     maxBuffer: 4 * 1024 * 1024,
   });
   return stdout;
+}
+
+export function createKubernetesClient({
+  selection,
+  kubectl = (...args) => kubectlFor(selection, ...args),
+  waitTimeoutMs = 240_000,
+  waitIntervalMs = 750,
+}) {
+  const resource = async (kind, name, namespace) => {
+    const args = ["get", kind, name, "-o", "json"];
+    if (namespace !== undefined) args.push("--namespace", namespace);
+    return JSON.parse(await kubectl(...args));
+  };
+  const resources = async (kind, namespace, ...args) =>
+    JSON.parse(await kubectl("get", kind, "--namespace", namespace, ...args, "-o", "json")).items;
+  const waitFor = async (description, operation, timeoutMs = waitTimeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const result = await operation();
+      if (result !== undefined && result !== false) return result;
+      await delay(waitIntervalMs);
+    }
+    assert.fail(`Timed out waiting for ${description}.`);
+  };
+
+  return {
+    kubectlArguments: (args) => kubectlArguments(selection, args),
+    kubectl,
+    resource,
+    resources,
+    waitFor,
+  };
 }
 
 export async function validateExplicitK3dLoopbackContext(selection) {
@@ -201,24 +233,8 @@ export function createRealKubernetesFixture({
   databaseUrl,
 }) {
   const selection = { kubeconfigPath, kubernetesContext };
-
-  function scopedKubectlArguments(args) {
-    return kubectlArguments(selection, args);
-  }
-
-  async function kubectl(...args) {
-    return kubectlFor(selection, ...args);
-  }
-
-  async function resource(kind, name, namespace) {
-    const args = ["get", kind, name, "-o", "json"];
-    if (namespace !== undefined) args.push("--namespace", namespace);
-    return JSON.parse(await kubectl(...args));
-  }
-
-  async function resources(kind, namespace) {
-    return JSON.parse(await kubectl("get", kind, "--namespace", namespace, "-o", "json")).items;
-  }
+  const kubernetes = createKubernetesClient({ selection });
+  const { kubectl } = kubernetes;
 
   async function createControllerIdentity({
     directory,
@@ -254,16 +270,6 @@ export function createRealKubernetesFixture({
       { mode: 0o600 },
     );
     return { account, authentication: { mode: "kubeconfig", kubeconfigPath: path, context } };
-  }
-
-  async function waitFor(description, operation, timeoutMs = 240_000) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const result = await operation();
-      if (result !== undefined && result !== false) return result;
-      await delay(750);
-    }
-    assert.fail(`Timed out waiting for ${description}.`);
   }
 
   async function validatePrerequisites() {
@@ -326,7 +332,7 @@ export function createRealKubernetesFixture({
   async function startPortForward(namespace, serviceName) {
     const child = spawn(
       "kubectl",
-      scopedKubectlArguments([
+      kubernetes.kubectlArguments([
         "port-forward",
         "--namespace",
         namespace,
@@ -366,12 +372,12 @@ export function createRealKubernetesFixture({
   }
 
   return {
-    kubectlArguments: scopedKubectlArguments,
+    kubectlArguments: kubernetes.kubectlArguments,
     kubectl,
-    resource,
-    resources,
+    resource: kubernetes.resource,
+    resources: kubernetes.resources,
     createControllerIdentity,
-    waitFor,
+    waitFor: kubernetes.waitFor,
     validatePrerequisites,
     provisionAgentTransportSecret,
     startPortForward,
