@@ -1,7 +1,7 @@
 # Feature Spec: Provider and related Drivers
 
 **Date:** 2026-09-01
-**Status:** Implementing approved simplifications — existing PR #8; fresh local verification pending
+**Status:** Implemented and locally verified in PR #8; live Provider proof pending
 **Owner:** OCC / controller composition
 
 ## Problem and Decision
@@ -143,13 +143,15 @@ Implementation gates: focused tests above, workspace/type checks, generated Open
 
 The approved simplification removes global startup saved-state traversal and generic Driver ownership metadata, moves revision Provider snapshots into immutable columns, and consolidates test fixtures. Provider configuration, nullable API fields, exact per-use credential checks, and API-only client construction remain. Current behavior is owned by [Providers](../docs/reference/providers.md), [Agents](../docs/reference/agents.md), and the [Provider lifecycle flow](../docs/flows/provider-driver-lifecycle.md).
 
-The earlier [implementation 118de64](https://github.com/openclaw/openclaw-enterprise/commit/118de64066c330e0828b50cdf4f2409ec22dc001) passed local verification. Fresh proof for the approved simplification is pending; earlier evidence is retained only for unchanged boundaries. Live ChatGPT account issuance, dedicated model turns, and upstream revocation remain unverified because authorized credentials/workspace and explicitly selected Kubernetes runtime fixtures are unavailable. No existing Installation state was reset or deployed.
+The simplified [implementation a635483](https://github.com/openclaw/openclaw-enterprise/commit/a635483aa62d41df7b45040b89d9edf4a3cee725) passed independent local verification: 139 conformance tests, 27 API/configuration/ServiceAccount tests, 36 PostgreSQL tests, and three production-image smoke tests. The PostgreSQL run had five explicit skips: four require a live Kubernetes ConfigurationDriver, and one requires an uninitialized singleton after an earlier case bootstrapped it. Workspace, TypeScript, formatting, OpenAPI, actual Helm rendering, flow-doc, and link checks passed. Two review passes resolved the bootstrap-fixture identity and security wording findings. Live ChatGPT account issuance, dedicated model turns, and upstream revocation remain unverified because authorized credentials/workspace and explicitly selected Kubernetes runtime fixtures are unavailable. No pre-existing Installation was reset or deployed.
 
 ## Manual Notes
 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 10:58: Completed the approved simplification, fixed review findings, and independently verified the smaller implementation; live Provider proof remains pending (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - a635483aa62d41df7b45040b89d9edf4a3cee725).
 
 - 2026-09-01 10:19: Kevin approved composition-owned Driver membership, immutable revision columns, per-use ownership checks without startup traversal, and consolidated test fixtures; implementation/verification underway (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158).
 
