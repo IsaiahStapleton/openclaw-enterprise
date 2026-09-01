@@ -23,7 +23,7 @@ Sandbox packages in trusted YAML in either mode.
 | `compute`         | [ComputeDriver](compute.md)                | Required in Installation YAML; bundled Kubernetes or installed package.                              |
 | `secret`          | [SecretDriver](kubernetes-secret.md)       | Required in trusted Kubernetes Installation YAML; bundled Kubernetes only.                           |
 | `sandbox`         | [SandboxDriver](sandbox.md)                | Optional; bundled OpenShell or installed package, and currently requires bundled Kubernetes Compute. |
-| `service_account` | [ServiceAccountDriver](service-account.md) | Optional bundled ChatGPT integration; no installed-package selector.                                 |
+| `service_account` | [ServiceAccountDriver](service-account.md) | Optional bundled ChatGPT Provider member; no installed-package selector.                             |
 
 Installed packages run unsandboxed with control-plane authority and
 access to controller credentials, database state, and Kubernetes identity.
@@ -31,6 +31,19 @@ OCC asks selected IAM to authorize operations, but malicious IAM can disregard
 persisted policy and malicious Compute can violate workload isolation. Operator
 review of installed code is the security boundary; lockfile integrity does not
 establish publisher trust.
+
+## Provider membership
+
+An Installation-scoped [Provider](../providers.md) groups an authenticated
+client with exact related Driver selections. `provider[].drivers` owns
+membership; related Drivers expose the matching `providerId` and independent
+Drivers omit it. All declared members are required and must match the selected
+registry `(capability, id)`. The bundled ChatGPT Provider requires its selected
+ServiceAccount Driver. There is no per-Agent Driver selection.
+
+Runtime Provider injection is limited to that bundled Driver. Installed factory
+arguments remain the contract below; Provider loading or injection into
+installed packages is deferred.
 
 ## Package identity and factory exports
 

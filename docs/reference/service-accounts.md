@@ -5,7 +5,8 @@ to one credential without exposing its value. It is neither a platform
 ServicePrincipal, a Kubernetes ServiceAccount, nor a provider account. Native
 accounts accept existing API-key references; an optionally selected
 `ServiceAccountDriver` can instead create and manage an upstream account while
-keeping its provider-specific identity private.
+keeping its provider-specific identity private. A managed account's private
+binding records its exact Provider, Driver, and workspace ownership.
 
 This page defines current account behavior and credential boundaries. For
 controller setup and authentication, see the [quickstart](../guides/quickstart.md)
@@ -34,51 +35,15 @@ credential/Secret reference, never provider identities or credential bytes.
 
 ## Provider selection and configuration
 
-The optional ChatGPT implementation requires an Installation-scoped integration
-and a matching `service_account` Driver selection in the trusted startup YAML:
+The optional ChatGPT implementation requires an Installation-scoped Provider
+and its matching selected `service_account` Driver. The [Provider
+reference](providers.md#installation-configuration) owns the complete YAML,
+client and membership contract, mounted key, and Helm values. The configuration
+requires durable PostgreSQL persistence.
 
-```yaml
-integrations:
-  chatgpt:
-    workspaceId: <chatgpt-workspace-id>
-    adminKeyPath: /etc/openclaw/chatgpt/admin-key
-    credentialTtlSeconds: 2592000
-
-drivers:
-  service_account:
-    id: chatgpt-service-accounts
-    configuration: {}
-```
-
-The workspace identifies the provider backend, not an OCC Namespace.
-`credentialTtlSeconds` defaults to 30 days and accepts 1–2,592,000 seconds;
-choose a smaller value when required upstream. The integration and Driver must
-be configured together and require durable PostgreSQL persistence.
-
-Production Helm values separately name the existing admin Secret mounted only
-into the controller API Pod and restrict provider egress:
-
-```yaml
-integrations:
-  chatgpt:
-    enabled: true
-    secretName: occ-chatgpt-admin
-    key: admin-key
-    providerCidr: <approved-provider-or-egress-proxy-cidr>
-```
-
-These are **Helm values**, not Installation YAML. The admin key is mounted only
-into the API Pod; `providerCidr` must identify one approved provider/proxy
-host using `/32`. The key requires
-`chatgpt.enterprise.service_account.write` and authority for the configured
-workspace; issued credentials receive only
-`chatgpt.workspace.feature.allow-codex-local-access.access`. See
-[production deployment](../guides/deploy.md) and
-[security boundaries](security.md).
-
-Both processes load the same Installation configuration; only the API
-initializes `ChatGPTClient` and `ChatGPTServiceAccountDriver`. Other capability
-Drivers may reuse that provider client.
+Both processes load nonsecret Provider definitions; only the API initializes
+`Provider<ChatGPTClient>` and injects it into `ChatGPTServiceAccountDriver`.
+The worker validates metadata without an admin credential or provider client.
 
 ## Account and credential lifecycle
 
@@ -116,15 +81,19 @@ state; the operator owns the referenced source Secret.
 
 ## Revision snapshots and credential delivery
 
-Deploying an Agent freezes the account ID, credential kind, and Secret reference
-in its immutable AgentRevision. It does not copy credential bytes into the
-revision. Later account edits do not rewrite that snapshot. A Secret reference
+Deploying an Agent freezes the account ID, credential kind, Secret reference,
+and nullable `providerId` in its immutable AgentRevision. It does not copy
+credential bytes into the revision. Later account edits do not rewrite that snapshot. A Secret reference
 is not a snapshot of the Secret's value. Before dispatch, the worker reauthorizes
 exact-account `read` for the actor who requested the deployment.
 
 ### Provider-managed access tokens
 
-For an `access_token`, only dedicated Codex execution is supported. Kubernetes
+For an `access_token`, the Agent must select the binding's exact nonnull
+`providerId`, with its selected member Driver, workspace, and issued credential.
+Admission and worker reconciliation validate that private metadata before
+workload effects; a public credential kind is not proof of ownership. Only
+dedicated Codex execution is supported. Kubernetes
 projects both keys directly from the one account-owned Secret into the exact
 Codex Pod:
 
@@ -168,7 +137,7 @@ provider, not IAM, Compute, OCC, or the Harness.
 - `404`: Account or Agent is outside its exact Namespace.
 - `409 RESOURCE_CONFLICT`: Duplicate account name, existing credential,
   referenced-account deletion, missing credential, or unsupported Harness or
-  OAuth deployment.
+  OAuth deployment, or mismatched managed Provider binding.
 - Provider denial or Kubernetes failure: Creation fails closed; compensation deletes
   only the newly created exact provider account, provider credential, or
   account-owned Secret when durable state confirms it was not committed.
@@ -210,5 +179,7 @@ requirements.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 08:47: Centralize Provider configuration and document matching Agent/revision ownership. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 
 - [2026-08-28 17:54]: Reorganize as a current feature reference; distinguish account lifecycle, immutable references, and supported credential delivery. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)

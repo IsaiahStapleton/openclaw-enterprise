@@ -553,11 +553,15 @@ cluster name, and allowed gateway-client selector with approved values:
 ```yaml
 occ:
   cluster: production-west
-integrations:
-  chatgpt:
-    workspaceId: <chatgpt-workspace-uuid>
-    adminKeyPath: /etc/openclaw/chatgpt/admin-key
-    credentialTtlSeconds: 2592000
+provider:
+  - id: openai
+    type: chatgpt
+    configuration:
+      workspaceId: <chatgpt-workspace-uuid>
+      apiKeyPath: /etc/openclaw/chatgpt/admin-key
+      credentialTtlSeconds: 2592000
+    drivers:
+      service_account: chatgpt-service-accounts
 drivers:
   configuration:
     id: config-kubernetes
@@ -626,10 +630,14 @@ Kubernetes credentials and does not give the worker or workload direct Secret
 API permission. See
 [Kubernetes Secret Driver](../reference/drivers/kubernetes-secret.md).
 
-The optional `integrations.chatgpt` and `drivers.service_account` sections must
-be configured together; omit both for native API-key installations. See
-[ChatGPT service-account configuration](../reference/service-accounts.md#provider-selection-and-configuration)
-for workspace ownership, credential lifetime, and API-only admin access.
+The optional `provider` entry and its exact `drivers.service_account` selection
+must be configured together; omit both for native API-key installations. Set an
+Agent's `providerId` to `openai` when deploying its matching managed access token.
+See [Provider configuration](../reference/providers.md#installation-configuration)
+for membership, workspace ownership, credential lifetime, and API-only admin
+access. Existing managed resources must be cleaned up through their original
+Provider before removal or workspace retargeting; see
+[safe Provider changes](../reference/providers.md#startup-identity-and-safe-provider-changes).
 
 ### Provision system Secrets and install
 
@@ -651,7 +659,7 @@ kubectl -n openclaw-system create secret generic occ-database \
 kubectl -n openclaw-system create secret generic occ-auth \
   --from-file=secret=/secure/operator/occ-auth-secret
 
-# Required only when the ChatGPT service-account integration is selected.
+# Required only when the ChatGPT Provider and ServiceAccount Driver are selected.
 kubectl -n openclaw-system create secret generic occ-chatgpt-admin \
   --from-file=admin-key=/secure/operator/occ-chatgpt-admin-key
 ```
@@ -761,15 +769,16 @@ helm upgrade --install oce deploy/helm/openclaw-enterprise \
   --set database.cidr='<postgresql-ip>/32' \
   --set cluster.cidr='<network-policy-visible-kubernetes-api-ip>/32' \
   --set cluster.port='<network-policy-visible-kubernetes-api-port>' \
-  --set integrations.chatgpt.enabled=true \
-  --set integrations.chatgpt.providerCidr='<approved-provider-or-egress-proxy-ip>/32'
+  --set provider.chatgpt.enabled=true \
+  --set provider.chatgpt.providerCidr='<approved-provider-or-egress-proxy-ip>/32'
 ```
 
-The final two settings enable the optional ChatGPT integration; omit them when
-the Installation does not select its service-account Driver. The enabled chart
-mounts the admin Secret and grants restricted provider egress only to the API;
+The final two settings enable packaging for the optional ChatGPT Provider;
+omit them when the Installation does not select its service-account Driver. The enabled chart
+mounts the admin Secret at `/etc/openclaw/chatgpt/admin-key`, matching the
+Installation `apiKeyPath`, and grants restricted provider egress only to the API;
 missing or broader provider CIDRs fail rendering. See the
-[service-account integration settings](../reference/service-accounts.md#provider-selection-and-configuration).
+[Provider packaging settings](../reference/providers.md#production-packaging-and-verification).
 
 The chart isolates its initialization Job before startup, initializes the
 singleton Installation and both administrators, writes the password and

@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: 2026-08-31
-last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
+updated: 2026-09-01
+last_updated_session: codex/01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9
 ---
 
 # Production Startup Flow
@@ -86,8 +86,9 @@ and database/Kubernetes API destinations become NetworkPolicy rules.
 
 The Installation YAML selects reviewed IAM, Compute, and Configuration
 Drivers. Optional `drivers.sandbox` selects the Sandbox Driver loaded by the
-shared composition; optional `integrations.chatgpt` plus
-`drivers.service_account` enables the API-owned provider integration. The
+shared composition. An optional `provider` array entry with `type: chatgpt`
+and its matching `drivers.service_account` selection enables the API-owned
+Provider client and its required member Driver. The
 ChatGPT provider-admin Secret and provider egress must be separately supplied
 when selected; the worker receives neither.
 
@@ -176,8 +177,9 @@ Driver must complete its cluster-access preflight before the API can serve.
 
 When trusted Installation configuration selects the ChatGPT ServiceAccount
 Driver, the API additionally loads its exact mounted administrator credential,
-constructs an Installation-scoped provider client, and registers the selected
-service-account capability. A missing credential, mismatched Driver selection,
+constructs `Provider<ChatGPTClient>`, injects it into the bundled Driver, and
+registers the selected service-account capability. Both processes validate
+stored Provider ownership and live references before accepting work. A missing credential, mismatched Driver selection,
 or Compute Driver without exact credential-storage support fails startup. The
 worker neither constructs this provider client nor receives provider-admin
 authority.
@@ -252,12 +254,14 @@ through reauthorization, infrastructure effects, and result persistence.
 
 ## Related docs
 
+- [Provider and Driver lifecycle](provider-driver-lifecycle.md)
+
 - [Deployment guide: development and production](../guides/deploy.md)
 - [Controller worker execution flow](controller-worker.md)
 - [Controller and Installation configuration](../reference/settings.md)
 - [Controller worker operation](../reference/controller.md)
 - [Kubernetes security controls](../reference/security.md)
-- [Service accounts and ChatGPT integration](../reference/service-accounts.md)
+- [Service accounts and ChatGPT Provider](../reference/service-accounts.md)
 - [Service Account Driver credential delivery](service-account-driver-credential-delivery.md)
 - [Shared platform startup flow](platform-startup.md)
 - [Development startup flow](development-startup.md)
@@ -269,6 +273,8 @@ through reauthorization, infrastructure effects, and result persistence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 
 - 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
 

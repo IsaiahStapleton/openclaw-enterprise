@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-09-01
+last_updated_session: codex/01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9
 ---
 
 # Native Service Account Credential Delivery Flow
@@ -52,6 +52,8 @@ requires current-account `read`, and replacement requires old/new `read`.
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
 For this native flow, missing or OAuth credentials fail before admission.
+`providerId: null` remains valid with an independently supplied API-key credential;
+no Provider is inferred from model configuration or the account.
 An API-key deployment
 freezes exact account identity, kind, and source reference;
 later account mutations cannot change the admitted immutable revision.
@@ -91,6 +93,8 @@ its combined gateway/Harness Pod. Each flow ends at a genuine provider response.
 
 ## Related docs
 
+- [Provider and Driver lifecycle](provider-driver-lifecycle.md)
+
 - [Native service accounts](../reference/service-accounts.md)
 - [Service Account Driver credential delivery flow](service-account-driver-credential-delivery.md)
 - [Harness execution topology flow](harness-execution-topology.md)
@@ -100,6 +104,8 @@ its combined gateway/Harness Pod. Each flow ends at a genuine provider response.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 08:47: Preserve providerless API-key execution and document Provider metadata checks before workload effects. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 
 - 2026-08-28 17:58: Updated moved feature-reference links for the documentation organization. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-24 20:03: Documented native account authorization, immutable deployment snapshot, independent exact-Secret materialization, harness-specific credential projection, and genuine dual-runtime verification. (01a03542-30ff-77a1-9967-587d55548ace - 6ff8b1b)

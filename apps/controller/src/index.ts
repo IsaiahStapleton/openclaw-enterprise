@@ -424,6 +424,7 @@ function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
     namespaceId: agent.namespaceId,
     name: agent.name,
     configurationId: agent.configurationId,
+    providerId: agent.providerId,
     executionMode: agent.executionMode,
     ...(agent.serviceAccountId === undefined ? {} : { serviceAccountId: agent.serviceAccountId }),
     ...(agent.activeRevisionId === undefined ? {} : { activeRevisionId: agent.activeRevisionId }),
@@ -449,6 +450,7 @@ function clientRevision(revision: Readonly<AgentRevision>): Record<string, unkno
     configurationId: revision.configurationId,
     configurationKind: revision.configurationKind,
     configurationGeneration: revision.configurationGeneration,
+    providerId: revision.providerId,
     configuration: revision.configuration,
     harness: revision.harness,
     compute: revision.compute,
@@ -1442,6 +1444,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           namespaceId,
           name: body?.name as string,
           configurationId: body?.configurationId as string,
+          ...(body?.providerId === undefined
+            ? {}
+            : { providerId: body.providerId as string | null }),
           ...(body?.executionMode === undefined
             ? {}
             : { executionMode: body.executionMode as HarnessExecutionMode }),
@@ -1487,6 +1492,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           namespaceId,
           agentId,
           configurationId: body?.configurationId as string,
+          ...(body?.providerId === undefined
+            ? {}
+            : { providerId: body.providerId as string | null }),
           ...(body?.executionMode === undefined
             ? {}
             : { executionMode: body.executionMode as HarnessExecutionMode }),

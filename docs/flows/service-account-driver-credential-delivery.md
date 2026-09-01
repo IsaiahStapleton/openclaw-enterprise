@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-09-01
+last_updated_session: codex/01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9
 ---
 
 # Service Account Driver Credential Delivery Flow
@@ -26,12 +26,12 @@ provider identities; Kubernetes Compute delivers the account Secret to Codex.
 
 ```mermaid
 graph TD
-  A["API initializes ChatGPT client and selected Driver"] --> B["Authorize and create OCC and provider accounts"]
+  A["API injects ChatGPT Provider into selected Driver"] --> B["Authorize and create OCC and provider accounts"]
   B --> C["Save private provider binding in OCC transaction"]
   C --> D["Authorize separate credential issuance"]
   D --> E["Create account-owned token and workspace Secret"]
   E --> F["Persist private credential ID and public Secret reference"]
-  F --> G["Authorize association and snapshot provider-neutral Agent revision"]
+  F --> G["Validate exact Provider binding and snapshot Agent revision"]
   G --> H{"Dedicated Codex"}
   H -->|no| I["Reject deployment"]
   H -->|yes| J["Project account Secret directly into Codex"]
@@ -45,8 +45,11 @@ graph TD
 `apps/controller/src/server.mjs:start`
 
 `apps/controller/src/server.mjs` reads the mounted admin credential, creates
-`ChatGPTClient`, and registers the concrete Driver after controller composition.
-The worker receives neither the admin credential nor the client.
+`Provider<ChatGPTClient>`, and passes it to the concrete Driver factory before
+registering that Driver after controller composition. The worker receives only
+nonsecret Provider metadata, never the admin credential or client. The
+[Provider lifecycle flow](provider-driver-lifecycle.md) covers membership and
+startup ownership checks.
 
 ### 2. Create the account and private provider binding
 
@@ -55,7 +58,9 @@ The worker receives neither the admin credential nor the client.
 `OpenClawController.createServiceAccount` authorizes the exact Namespace and
 allocates its `sa_*` identity. `ChatGPTServiceAccountDriver.create` creates the
 upstream account, registers rollback, and persists its private provider binding
-in the same PostgreSQL transaction.
+in the same PostgreSQL transaction, including Provider, Driver, Namespace,
+account, and workspace identity. Later issuance and deletion require that exact
+binding to match the current configured Provider.
 
 ### 3. Issue the credential and create one account Secret
 
@@ -72,8 +77,10 @@ confirmed failures compensate created provider and Kubernetes resources.
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.prepareRevision`
 
-`OpenClawController.deployAgent` authorizes account `read` and snapshots only
-its OCC identity, credential kind, and Secret reference.
+`OpenClawController.deployAgent` authorizes account `read`, validates the exact
+managed binding and matching nonnull Provider, and snapshots the account's OCC
+identity, credential kind, Secret reference, and Agent `providerId`. The worker
+repeats the metadata binding check after IAM reauthorization and before effects.
 `KubernetesComputeDriver.prepareRevision` projects the account Secret directly
 into dedicated Codex; embedded execution is rejected. The gateway receives no
 model credential, and the worker receives no direct Secret API permission.
@@ -105,6 +112,8 @@ Refresh, rotation, and automated reconciliation remain deferred.
 
 ## Related docs
 
+- [Provider and Driver lifecycle](provider-driver-lifecycle.md)
+
 - [Service accounts](../reference/service-accounts.md)
 - [Service Account Driver specification](../../specs/.archive/11-service-account-driver.md)
 - [Platform design](../design.md)
@@ -117,6 +126,8 @@ Refresh, rotation, and automated reconciliation remain deferred.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 
 - 2026-08-28 17:58: Updated moved feature-reference links for the documentation organization. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-24 23:35: Documented API-only provider integration, private transactional account and credential bindings, scoped Kubernetes Secret ownership, immutable account association, dedicated Codex token login, compensation boundaries, and genuine provider-backed verification. (01a03542-30ff-77a1-9967-587d55548ace - 51033bee121374332df2791e90e2290a5c892e5d)

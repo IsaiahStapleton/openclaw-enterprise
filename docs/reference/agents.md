@@ -34,7 +34,8 @@ A representative creation body is:
 {
   "name": "ticket-triage",
   "configurationId": "cfg_123e4567-e89b-42d3-a456-426614174000",
-  "executionMode": "dedicated"
+  "executionMode": "dedicated",
+  "providerId": null
 }
 ```
 
@@ -44,6 +45,21 @@ Agent `create` permission in that Namespace and `read` permission on the
 exact Configuration. An optional associated service account requires its own
 exact `read` permission. [Authentication](authentication.md) establishes the
 caller; [authorization](authorization.md) defines its grants.
+
+## Provider association
+
+An Agent can reference one Installation-configured [Provider](providers.md)
+through `providerId`. Create omission means `null`; PATCH omission preserves the
+saved value, while explicit `null` clears the draft reference. A nonnull ID must
+resolve to a configured Provider. No default is inferred. The nullable reference
+is returned on both Agent and AgentRevision responses.
+
+The Provider reference is independent of native model names and Harness
+selection. Providerless Agents remain supported with native API-key or
+independently supplied model credentials. A managed access token requires the
+matching Provider and private account binding at admission and reconciliation;
+see [Provider deployment checks](providers.md#agent-association-and-immutable-deployment).
+Creating an Agent does not create a provider account or issue credentials.
 
 ## Namespace ownership
 
@@ -110,10 +126,11 @@ boundaries. OCC rejects conflicting, unknown, or mode-incompatible selections
 before admitting a revision. A selected SandboxDriver currently requires
 `dedicated` Codex execution; it does not support embedded OpenClaw.
 
-An Agent update may include `executionMode` and `serviceAccountId` alongside
-its required `configurationId`; omitting either optional field preserves its
-current value, while `serviceAccountId: null` detaches the account. Existing
-revisions retain their immutable admitted placement and account association.
+An Agent update may include `executionMode`, `serviceAccountId`, and `providerId`
+alongside its required `configurationId`. Omission preserves the current value;
+`serviceAccountId: null` detaches the account and `providerId: null` clears the
+Provider. Existing revisions retain their immutable placement, account, and
+Provider association.
 See the
 [Harness execution topology flow](../flows/harness-execution-topology.md) for
 runtime selection, identity boundaries, and activation.
@@ -124,7 +141,7 @@ An Agent's `configurationId` selects exactly one native OpenClaw Configuration
 document with `kind: "agent"` in its own Namespace. A PATCH requires
 `configurationId`, exact-Agent `update`, and exact-Configuration `read`.
 For example, the body below replaces the reference and preserves the current
-execution mode and service account:
+execution mode, service account, and Provider:
 
 ```json
 {
@@ -138,8 +155,8 @@ native nested document through its own exact-resource PATCH endpoint; see
 the Agent reference or Configuration values does not queue Compute work,
 change the active revision, or mutate earlier revisions. Agent create and update
 accept a Configuration reference, optional execution mode, and optional service
-account association; they do not accept an inline configuration document or
-competing gateway settings. Multiple Agents can
+account and Provider associations; they do not accept an inline configuration
+document or competing gateway settings. Multiple Agents can
 share the same Configuration;
 each deployed Agent still owns its own gateway and stable service principal.
 
@@ -153,8 +170,8 @@ an earlier revision or make the new revision active immediately.
 The revision records the source `configurationId`, `configurationKind`, and
 `configurationGeneration`, its complete admitted native `configuration`
 document, the approved Harness identity/version/mode, selected Compute identity,
-and any associated service account's opaque credential reference. The account
-association contains no credential bytes. Native Configuration values must use
+nullable `providerId`, and any associated service account's opaque credential
+reference. The account association contains no credential bytes. Native Configuration values must use
 unresolved inline SecretRefs because the admitted document is persisted and
 returned through the API; see [secret boundaries](configuration.md#secret-boundaries).
 Nested objects and arrays are immutable.
@@ -207,6 +224,8 @@ combinations are rejected.
 
 ## Failure semantics
 
+- `400 INVALID_REQUEST`: The Provider ID is malformed or empty.
+- `404 NOT_FOUND`: The nonempty Provider ID does not name a configured Provider.
 - `401`: The session cookie is missing, invalid, expired, or revoked.
 - `403`: Your principal lacks the exact permission for the Agent or Namespace.
 - `404`: The Namespace or Agent does not exist under the requested parent.
@@ -214,7 +233,8 @@ combinations are rejected.
 - `404`: An associated service account does not belong to the Agent's Namespace.
 - `409 RESOURCE_CONFLICT`: The associated account has no credential, stores an
   unsupported OAuth credential, or uses a provider-managed access token with
-  an unsupported non-Codex or embedded Harness.
+  an unsupported non-Codex or embedded Harness, or lacks a matching Provider
+  and private managed-account binding.
 - `409 RESOURCE_CONFLICT`: Another Agent already uses that name in the same
   Namespace, or the Namespace cannot accept new Agents.
 - `409 NAMESPACE_NOT_READY`: The backing Namespace infrastructure is not ready
@@ -244,5 +264,7 @@ combinations are rejected.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 08:47: Document nullable providerId selection, immutable revision association, and managed binding admission. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 
 - [2026-08-28 17:55]: Recast as the current Agent and AgentRevision feature reference; separate procedures and correct Harness and SandboxDriver boundaries. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)

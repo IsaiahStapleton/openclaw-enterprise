@@ -30,13 +30,13 @@ spec:
               - key: {{ $.Values.installation.key }}
                 path: installation.yaml
         {{- if eq $component "api" }}
-        {{- if $.Values.integrations.chatgpt.enabled }}
-        {{- $chatgpt := $.Values.integrations.chatgpt }}
+        {{- if $.Values.provider.chatgpt.enabled }}
+        {{- $chatgpt := $.Values.provider.chatgpt }}
         {{- if or (not $chatgpt.secretName) (not $chatgpt.key) }}
-        {{- fail "integrations.chatgpt requires a dedicated admin Secret name and key" }}
+        {{- fail "provider.chatgpt requires a dedicated admin Secret name and key" }}
         {{- end }}
         {{- if or (eq $chatgpt.secretName $.Values.installation.secretName) (eq $chatgpt.secretName $.Values.database.secretName) (eq $chatgpt.secretName $.Values.auth.secretName) }}
-        {{- fail "integrations.chatgpt admin credentials must use a dedicated Secret" }}
+        {{- fail "provider.chatgpt admin credentials must use a dedicated Secret" }}
         {{- end }}
         - name: chatgpt-admin
           secret:
@@ -92,7 +92,7 @@ spec:
               mountPath: /etc/openclaw/installation
               readOnly: true
             {{- if eq $component "api" }}
-            {{- if $.Values.integrations.chatgpt.enabled }}
+            {{- if $.Values.provider.chatgpt.enabled }}
             - name: chatgpt-admin
               mountPath: /etc/openclaw/chatgpt
               readOnly: true

@@ -177,10 +177,16 @@ Secret in that namespace. Distinct identities and exact ownership checks bound
 normal operation but do not eliminate the worker's namespace-level trust;
 independently enforced workload admission is required for stronger isolation.
 
-The upstream ChatGPT admin key is read only by the API-side `ChatGPTClient`; it
+The upstream ChatGPT admin key is read only by the API-side `ChatGPTClient`
+owned by its configured [Provider](providers.md); it
 never appears in startup YAML, persistence, public account data, workload Pods,
 or the worker. Restrict provider TLS egress to the API Pod and an explicitly
 approved provider/proxy CIDR. The worker receives no provider egress exception.
+Managed account bindings carry exact Provider, Driver, and workspace identity.
+Startup, issuance/deletion, deployment, and worker reconciliation reject
+conflicting ownership; the worker reads only binding metadata and confirms
+issuance, never external IDs or secret values. Provider removal or workspace
+retargeting requires completed cleanup under the original configuration.
 The issued account credential requests only
 `chatgpt.workspace.feature.allow-codex-local-access.access`, has a maximum
 30-day configured lifetime, and is not refreshed automatically.

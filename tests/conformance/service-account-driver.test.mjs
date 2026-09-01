@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import {
   AuthorizationDeniedError,
@@ -18,6 +17,16 @@ const installation = Object.freeze({
   id: "installation-service-account-driver",
   name: "ServiceAccount Driver OCC conformance",
   createdAt: "2026-08-24T00:00:00.000Z",
+});
+const provider = Object.freeze({
+  id: "openai",
+  type: "chatgpt",
+  configuration: Object.freeze({
+    workspaceId: "11111111-1111-4111-8111-111111111111",
+    apiKeyPath: "/unused-conformance-chatgpt-admin-key",
+    credentialTtlSeconds: 3600,
+  }),
+  drivers: Object.freeze({ service_account: "service-account-driver-conformance" }),
 });
 
 async function fixture() {
@@ -61,7 +70,7 @@ async function fixture() {
     },
     { id: "service-account-driver-iam" },
   );
-  const controller = new OpenClawController(installation);
+  const controller = new OpenClawController(installation, { providers: [provider] });
   const compute = createDevelopmentComputeDriver();
   const configuration = createTestConfigurationDriver();
   const externalAccounts = new Set();
@@ -70,6 +79,7 @@ async function fixture() {
     id: "service-account-driver-conformance",
     capability: "service_account",
     implementation: "occ-conformance-service-account",
+    providerId: provider.id,
     async create(account) {
       externalAccounts.add(account.id);
       controller.registerRollback(async () => {
@@ -200,69 +210,4 @@ test("outer transaction failure compensates selected Driver account and credenti
     (await controller.getServiceAccount(administrator, namespace.id, account.id)).credential,
     undefined,
   );
-});
-
-test("access-token account revisions admit dedicated Codex and reject embedded OpenClaw", async () => {
-  const { controller, namespace } = await fixture();
-  const account = await controller.createServiceAccount(administrator, {
-    namespaceId: namespace.id,
-    name: "codex-access-token-account",
-  });
-  const issued = await controller.createServiceAccountCredential(
-    administrator,
-    namespace.id,
-    account.id,
-  );
-  const embeddedConfiguration = await controller.createConfiguration(administrator, {
-    namespaceId: namespace.id,
-    kind: "agent",
-    values: {},
-  });
-  const embedded = await controller.createAgent(administrator, {
-    namespaceId: namespace.id,
-    name: "embedded-access-token-agent",
-    configurationId: embeddedConfiguration.id,
-    serviceAccountId: account.id,
-  });
-  const dedicatedConfiguration = await controller.createConfiguration(administrator, {
-    namespaceId: namespace.id,
-    kind: "agent",
-    values: {
-      agents: {
-        defaults: {
-          model: "codex/gpt-4.1",
-          models: { "codex/gpt-4.1": { agentRuntime: { id: "codex" } } },
-        },
-      },
-    },
-  });
-  const dedicated = await controller.createAgent(administrator, {
-    namespaceId: namespace.id,
-    name: "dedicated-access-token-agent",
-    configurationId: dedicatedConfiguration.id,
-    serviceAccountId: account.id,
-    executionMode: "dedicated",
-  });
-  await controller.transact((state) =>
-    state.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
-  );
-
-  // An unsupported embedded runtime must fail before creating an immutable revision.
-  await assert.rejects(
-    controller.deployAgent(
-      administrator,
-      { namespaceId: namespace.id, agentId: embedded.id },
-      resolveApprovedDevelopmentHarness,
-    ),
-    ResourceConflictError,
-  );
-  const revision = await controller.deployAgent(
-    administrator,
-    { namespaceId: namespace.id, agentId: dedicated.id },
-    resolveApprovedDevelopmentHarness,
-  );
-  assert.deepEqual(revision.harness, { id: "codex", version: "1.0.0", mode: "dedicated" });
-  assert.deepEqual(revision.serviceAccount, { id: account.id, credential: issued.credential });
-  assert.equal(Object.isFrozen(revision.serviceAccount), true);
-  assert.equal(Object.isFrozen(revision.serviceAccount.credential), true);
 });

@@ -7,6 +7,53 @@ const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const requiresPostgres = {
   skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests.",
 };
+const providerId = "openai";
+const serviceAccountDriverId = "chatgpt-service-accounts";
+const workspaceId = "11111111-1111-4111-8111-111111111111";
+
+function providerDefinition() {
+  return {
+    id: providerId,
+    type: "chatgpt",
+    configuration: {
+      workspaceId,
+      apiKeyPath: "/unused-worker-provider-test",
+    },
+    drivers: { service_account: serviceAccountDriverId },
+  };
+}
+
+function poolWithOneProviderBindingReadFault(pool) {
+  let remainingFailures = 1;
+  return {
+    async connect() {
+      const client = await pool.connect();
+      return {
+        async query(text, values) {
+          if (
+            remainingFailures > 0 &&
+            typeof text === "string" &&
+            text.includes("FROM occ.service_account_driver_bindings AS b") &&
+            text.includes("WHERE b.namespace_id = $1 AND b.service_account_id = $2")
+          ) {
+            remainingFailures -= 1;
+            throw new Error("simulated transient Provider binding metadata read failure");
+          }
+          return client.query(text, values);
+        },
+        release() {
+          client.release();
+        },
+      };
+    },
+    query(text, values) {
+      return pool.query(text, values);
+    },
+    end() {
+      return pool.end();
+    },
+  };
+}
 
 async function waitFor(description, read, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
@@ -67,11 +114,14 @@ async function setup(context) {
     { Pool },
     { createControllerWorker },
     { createDevelopmentComputeDriver },
-    { createAuthPrincipalSeed },
+    { NativeIAMDriver, createAuthPrincipalSeed },
     { DEVELOPMENT_HARNESS_DESCRIPTOR, PRODUCTION_HARNESS_DESCRIPTOR },
     { PostgresPlatformState },
     { PostgresWorkQueue },
     { createDevelopmentIAMState },
+    { createInstallationDriverConfiguration },
+    { createTestConfigurationDriver },
+    { createTestSecretDriver },
   ] = await Promise.all([
     import("pg"),
     import("../../apps/controller/src/worker.ts"),
@@ -81,9 +131,12 @@ async function setup(context) {
     import("../../packages/occ/src/state/postgres-state.ts"),
     import("../../packages/occ/src/state/postgres-work-queue.ts"),
     import("../helpers/development-iam-state.mjs"),
+    import("../helpers/installation-driver-configuration.mjs"),
+    import("../helpers/configuration-driver.mjs"),
+    import("../helpers/secret-driver.mjs"),
   ]);
   const observerPool = new Pool({ connectionString: databaseUrl, max: 8 });
-  const workerPool = new Pool({ connectionString: databaseUrl, max: 8 });
+  const workerPool = new Pool({ connectionString: databaseUrl, max: 1 });
   const state = new PostgresPlatformState(observerPool);
   const installation = await ensureInstallation(
     state,
@@ -109,7 +162,7 @@ async function setup(context) {
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = createDevelopmentComputeDriver();
 
-  async function agent(label, executionMode = "embedded", serviceAccountId) {
+  async function agent(label, executionMode = "embedded", serviceAccountId, providerId = null) {
     const id = `agt_${randomUUID()}`;
     const configurationId = `cfg_${randomUUID()}`;
     return state.transact(async (unit) => {
@@ -125,6 +178,7 @@ async function setup(context) {
         namespaceId: namespace.id,
         name: `${label}-${randomUUID()}`,
         configurationId,
+        providerId,
         ...(serviceAccountId === undefined ? {} : { serviceAccountId }),
         executionMode,
         servicePrincipalId: `service-agent-${id}`,
@@ -160,6 +214,7 @@ async function setup(context) {
       namespaceId: namespace.id,
       agentId: owner.id,
       revision: number,
+      providerId: owner.providerId,
       configuration: { revision: String(number) },
       configurationId: owner.configurationId,
       configurationKind: "agent",
@@ -202,17 +257,51 @@ async function setup(context) {
     });
   }
 
-  function start(computeDriver, emit = () => {}, convergenceTimeoutMs) {
+  function runtimeDrivers(computeDriver, providers) {
+    const configuration = createInstallationDriverConfiguration();
+    configuration.drivers.compute.id = computeDriver.id;
+    if (providers.length > 0) {
+      configuration.provider = providers;
+      configuration.drivers.service_account = { id: providers[0].drivers.service_account };
+    }
+    return {
+      installation: configuration,
+      computeDriver,
+      configurationDriver: createTestConfigurationDriver({
+        id: configuration.drivers.configuration.id,
+      }),
+      secretDriver: createTestSecretDriver({ id: configuration.drivers.secret.id }),
+      createIAMDriver(platformState) {
+        return new NativeIAMDriver(platformState, {
+          id: configuration.drivers.iam.id,
+          implementation: "native",
+        });
+      },
+    };
+  }
+
+  function start(
+    computeDriver,
+    emit = () => {},
+    convergenceTimeoutMs,
+    providers,
+    pool = workerPool,
+  ) {
+    const drivers = providers === undefined ? undefined : runtimeDrivers(computeDriver, providers);
     worker = createControllerWorker({
-      pool: workerPool,
+      pool,
       pollIntervalMs: 15,
       leaseDurationMs: 30_000,
       maxAttempts: 5,
-      computeDriver,
+      ...(drivers === undefined ? { computeDriver } : { drivers }),
       ...(convergenceTimeoutMs === undefined ? {} : { convergenceTimeoutMs }),
       emit,
     });
     return worker.start();
+  }
+
+  async function stop() {
+    if (worker !== undefined) await worker.stop();
   }
 
   return {
@@ -228,6 +317,8 @@ async function setup(context) {
     revision,
     work,
     start,
+    stop,
+    workerPool,
   };
 }
 
@@ -257,6 +348,7 @@ test(
           namespaceId: fixture.namespace.id,
           agentId: malformedAdmission.id,
           revision: 1,
+          providerId: null,
           configuration: {},
           servicePrincipalId: malformedAdmission.servicePrincipalId,
           createdAt: new Date().toISOString(),
@@ -424,7 +516,11 @@ test(
 
     const failed = await fixture.work(candidate, "failed_permanent");
     assert.equal(failed.attempt_count, 1);
-    assert.deepEqual(effects, [], "revoked account access must prevent every Compute side effect");
+    assert.deepEqual(
+      effects.filter(({ revisionId }) => revisionId === candidate.id),
+      [],
+      "revoked account access must prevent Compute effects for its admitted revision",
+    );
 
     const active = await fixture.observerPool.query(
       "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
@@ -459,6 +555,355 @@ test(
         reason_code: "AUTHORIZATION_DENIED",
       },
     ]);
+  },
+);
+
+test(
+  "the revision worker rejects managed ServiceAccount provider mismatches before Compute",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const provider = providerDefinition();
+    const cleanup = {
+      serviceAccountIds: [],
+      agentIds: [],
+      revisionIds: [],
+    };
+
+    async function cleanupOwnProviderFixtures() {
+      if (
+        cleanup.serviceAccountIds.length === 0 &&
+        cleanup.agentIds.length === 0 &&
+        cleanup.revisionIds.length === 0
+      ) {
+        return;
+      }
+      const client = await fixture.observerPool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `UPDATE occ.controller_work
+           SET state = 'failed_permanent',
+               claim_token = NULL,
+               lease_expires_at = NULL,
+               completed_at = clock_timestamp(),
+               updated_at = clock_timestamp()
+           WHERE namespace_id = $1
+             AND revision_id = ANY($2::text[])
+             AND state IN ('queued', 'claimed')`,
+          [fixture.namespace.id, cleanup.revisionIds],
+        );
+        await client.query(
+          `UPDATE occ.agents
+           SET provider_id = NULL, service_account_id = NULL, active_revision_id = NULL
+           WHERE namespace_id = $1 AND id = ANY($2::text[])`,
+          [fixture.namespace.id, cleanup.agentIds],
+        );
+        await client.query(
+          "DELETE FROM occ.service_accounts WHERE namespace_id = $1 AND id = ANY($2::text[])",
+          [fixture.namespace.id, cleanup.serviceAccountIds],
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    async function account(label) {
+      const created = await fixture.state.transact((unit) =>
+        unit.serviceAccounts.createServiceAccount({
+          id: `sa_${randomUUID()}`,
+          namespaceId: fixture.namespace.id,
+          name: `${label}-${randomUUID()}`,
+          credential: {
+            kind: "access_token",
+            secretRef: { name: `${label}-provider-token`, key: "access-token" },
+          },
+        }),
+      );
+      cleanup.serviceAccountIds.push(created.id);
+      return created;
+    }
+
+    async function bind(account, { externalCredentialId }) {
+      await fixture.observerPool.query(
+        `INSERT INTO occ.service_account_driver_bindings
+           (service_account_id, namespace_id, provider_id, driver_id,
+            external_account_id, external_credential_id, workspace_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          account.id,
+          fixture.namespace.id,
+          provider.id,
+          provider.drivers.service_account,
+          `external-account-${randomUUID()}`,
+          externalCredentialId,
+          provider.configuration.workspaceId,
+        ],
+      );
+    }
+
+    const [validAccount, missingAgentProviderAccount, missingIssuedCredentialAccount] =
+      await Promise.all([account("valid"), account("missing-agent-provider"), account("unissued")]);
+    await Promise.all([
+      bind(validAccount, { externalCredentialId: `external-credential-${randomUUID()}` }),
+      bind(missingAgentProviderAccount, {
+        externalCredentialId: `external-credential-${randomUUID()}`,
+      }),
+      bind(missingIssuedCredentialAccount, { externalCredentialId: null }),
+    ]);
+
+    const [validOwner, missingAgentProviderOwner, missingIssuedCredentialOwner] = await Promise.all(
+      [
+        fixture.agent("valid-managed-provider", "dedicated", validAccount.id, provider.id),
+        fixture.agent("missing-agent-provider", "dedicated", missingAgentProviderAccount.id, null),
+        fixture.agent(
+          "missing-issued-provider-credential",
+          "dedicated",
+          missingIssuedCredentialAccount.id,
+          provider.id,
+        ),
+      ],
+    );
+    cleanup.agentIds.push(
+      validOwner.id,
+      missingAgentProviderOwner.id,
+      missingIssuedCredentialOwner.id,
+    );
+    const [validRevision, missingAgentProviderRevision, missingIssuedCredentialRevision] =
+      await Promise.all([
+        fixture.revision(validOwner, 1),
+        fixture.revision(missingAgentProviderOwner, 1),
+        fixture.revision(missingIssuedCredentialOwner, 1),
+      ]);
+    cleanup.revisionIds.push(
+      validRevision.id,
+      missingAgentProviderRevision.id,
+      missingIssuedCredentialRevision.id,
+    );
+
+    const effects = [];
+    try {
+      await fixture.start(
+        {
+          ...fixture.compute,
+          async bindAgent({ agent }) {
+            effects.push({ action: "bind", agentId: agent.id });
+          },
+          async prepareRevision(revision) {
+            effects.push({ action: "prepare", revisionId: revision.id });
+            return fixture.compute.prepareRevision(revision);
+          },
+        },
+        () => {},
+        undefined,
+        [provider],
+      );
+
+      // These rows represent post-admission drift: the worker must defend the
+      // effect boundary even if earlier API or Driver operations admitted stale
+      // managed provider state.
+      await Promise.all([
+        fixture.work(validRevision, "succeeded"),
+        fixture.work(missingAgentProviderRevision, "failed_permanent"),
+        fixture.work(missingIssuedCredentialRevision, "failed_permanent"),
+      ]);
+
+      assert.deepEqual(effects, [
+        { action: "bind", agentId: validOwner.id },
+        { action: "prepare", revisionId: validRevision.id },
+      ]);
+
+      const active = await fixture.observerPool.query(
+        "SELECT id, active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = ANY($2::text[])",
+        [
+          fixture.namespace.id,
+          [validOwner.id, missingAgentProviderOwner.id, missingIssuedCredentialOwner.id],
+        ],
+      );
+      const activeByAgent = new Map(
+        active.rows.map(({ id, active_revision_id }) => [id, active_revision_id]),
+      );
+      assert.equal(activeByAgent.get(validOwner.id), validRevision.id);
+      assert.equal(activeByAgent.get(missingAgentProviderOwner.id), null);
+      assert.equal(activeByAgent.get(missingIssuedCredentialOwner.id), null);
+
+      const failures = await fixture.observerPool.query(
+        `SELECT resource_id, details->>'reasonCode' AS reason_code
+         FROM occ.audit_events
+         WHERE resource_id = ANY($1::text[])
+           AND action = 'reconcile'
+           AND outcome = 'failure'
+         ORDER BY resource_id`,
+        [[missingAgentProviderRevision.id, missingIssuedCredentialRevision.id]],
+      );
+      assert.deepEqual(
+        failures.rows.map(({ reason_code }) => reason_code),
+        ["SERVICE_ACCOUNT_PROVIDER_MISMATCH", "SERVICE_ACCOUNT_PROVIDER_MISMATCH"],
+      );
+    } finally {
+      await fixture.stop();
+      await cleanupOwnProviderFixtures();
+    }
+  },
+);
+
+test(
+  "the revision worker retries transient Provider binding read failures without activating",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const fixture = await setup(context);
+    const provider = providerDefinition();
+    const cleanup = { serviceAccountIds: [], agentIds: [], revisionIds: [] };
+
+    async function cleanupOwnProviderFixtures() {
+      if (
+        cleanup.serviceAccountIds.length === 0 &&
+        cleanup.agentIds.length === 0 &&
+        cleanup.revisionIds.length === 0
+      ) {
+        return;
+      }
+      const client = await fixture.observerPool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `UPDATE occ.controller_work
+           SET state = 'failed_permanent',
+               claim_token = NULL,
+               lease_expires_at = NULL,
+               completed_at = clock_timestamp(),
+               updated_at = clock_timestamp()
+           WHERE namespace_id = $1
+             AND revision_id = ANY($2::text[])
+             AND state IN ('queued', 'claimed')`,
+          [fixture.namespace.id, cleanup.revisionIds],
+        );
+        await client.query(
+          `UPDATE occ.agents
+           SET provider_id = NULL, service_account_id = NULL, active_revision_id = NULL
+           WHERE namespace_id = $1 AND id = ANY($2::text[])`,
+          [fixture.namespace.id, cleanup.agentIds],
+        );
+        await client.query(
+          "DELETE FROM occ.service_accounts WHERE namespace_id = $1 AND id = ANY($2::text[])",
+          [fixture.namespace.id, cleanup.serviceAccountIds],
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const account = await fixture.state.transact((unit) =>
+      unit.serviceAccounts.createServiceAccount({
+        id: `sa_${randomUUID()}`,
+        namespaceId: fixture.namespace.id,
+        name: `transient-provider-read-${randomUUID()}`,
+        credential: {
+          kind: "access_token",
+          secretRef: { name: "transient-provider-token", key: "access-token" },
+        },
+      }),
+    );
+    cleanup.serviceAccountIds.push(account.id);
+    await fixture.observerPool.query(
+      `INSERT INTO occ.service_account_driver_bindings
+         (service_account_id, namespace_id, provider_id, driver_id,
+          external_account_id, external_credential_id, workspace_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        account.id,
+        fixture.namespace.id,
+        provider.id,
+        provider.drivers.service_account,
+        `external-account-${randomUUID()}`,
+        `external-credential-${randomUUID()}`,
+        provider.configuration.workspaceId,
+      ],
+    );
+    const owner = await fixture.agent(
+      "transient-provider-read",
+      "dedicated",
+      account.id,
+      provider.id,
+    );
+    cleanup.agentIds.push(owner.id);
+
+    const effects = [];
+    const events = [];
+    try {
+      await fixture.start(
+        {
+          ...fixture.compute,
+          async prepareRevision(revision) {
+            effects.push({ action: "prepare", revisionId: revision.id });
+            return fixture.compute.prepareRevision(revision);
+          },
+        },
+        (event) => events.push(event),
+        undefined,
+        [provider],
+        poolWithOneProviderBindingReadFault(fixture.workerPool),
+      );
+
+      const candidate = await fixture.revision(owner, 1);
+      cleanup.revisionIds.push(candidate.id);
+
+      const retried = await waitFor(
+        "transient Provider binding read failure retry evidence",
+        async () => {
+          const result = await fixture.observerPool.query(
+            `SELECT work.state, work.attempt_count,
+                    count(audit.id)::integer AS dependency_failures
+             FROM occ.controller_work AS work
+             LEFT JOIN occ.audit_events AS audit
+               ON audit.namespace_id = work.namespace_id
+              AND audit.resource_id = work.revision_id
+              AND audit.action = 'reconcile'
+              AND audit.details->>'reasonCode' = 'DEPENDENCY_UNAVAILABLE'
+             WHERE work.idempotency_key = $1
+             GROUP BY work.state, work.attempt_count`,
+            [candidate.idempotencyKey],
+          );
+          const row = result.rows[0];
+          if (row?.dependency_failures >= 1 && row.state !== "failed_permanent") return row;
+          return undefined;
+        },
+      );
+      assert.ok(retried.attempt_count >= 1);
+      assert.deepEqual(effects, [], "transient binding read failures must not invoke Compute");
+      assert.ok(
+        events.some(
+          ({ event, code, revisionId }) =>
+            event === "worker.completed" &&
+            code === "DEPENDENCY_UNAVAILABLE" &&
+            revisionId === candidate.id,
+        ),
+      );
+      const inactive = await fixture.observerPool.query(
+        "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+        [fixture.namespace.id, owner.id],
+      );
+      assert.equal(inactive.rows[0].active_revision_id, null);
+
+      await fixture.work(candidate, "succeeded");
+      assert.deepEqual(effects, [{ action: "prepare", revisionId: candidate.id }]);
+      const active = await fixture.observerPool.query(
+        "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+        [fixture.namespace.id, owner.id],
+      );
+      assert.equal(active.rows[0].active_revision_id, candidate.id);
+    } finally {
+      await fixture.stop();
+      await cleanupOwnProviderFixtures();
+    }
   },
 );
 

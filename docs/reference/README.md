@@ -24,6 +24,7 @@ procedure needs a public Docker-only OpenClaw/Codex runtime image.
 | [Secrets](drivers/kubernetes-secret.md)    | Namespace-owned Secret storage, metadata-only responses, env bindings, and redeploy. |
 | [Authentication](authentication.md)        | Supported caller credentials, sessions, bootstrap, and account provisioning.         |
 | [Authorization](authorization.md)          | Principals, Groups, Roles, Bindings, Restrictions, and exact-resource decisions.     |
+| [Providers](providers.md)                  | Provider configuration, related Drivers, client ownership, and Agent references.     |
 | [Service accounts](service-accounts.md)    | Account associations, credential references, issuance, and revocation boundaries.    |
 | [Harness execution](harness-execution.md)  | Runtime selection, topology, and admitted execution constraints.                     |
 | [Controller reconciliation](controller.md) | Durable lifecycle work, authorization refresh, claims, retries, and recovery.        |

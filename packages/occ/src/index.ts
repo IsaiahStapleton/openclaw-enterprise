@@ -18,6 +18,8 @@ import type {
   NamespaceDeleteResult,
   NamespaceEnsureResult,
   OpenClawConfigurationDocument,
+  ProviderDefinition,
+  ProviderRef,
   ResourceKind,
   ResourceRef,
   SandboxDriver,
@@ -47,6 +49,14 @@ import {
   ScopeViolationError,
 } from "./errors.ts";
 import {
+  assertConfiguredProvider,
+  providerDefinitionMap,
+  validateProviderDefinitions,
+  validateProviderState,
+  validateSelectedProviderDrivers,
+  validateServiceAccountProviderBinding,
+} from "./providers.ts";
+import {
   InMemoryPlatformState,
   type PlatformReadView,
   type PlatformOperation,
@@ -64,6 +74,13 @@ export {
   ResourceConflictError,
   ScopeViolationError,
 } from "./errors.ts";
+export {
+  providerDefinitionMap,
+  validateProviderDefinitions,
+  validateProviderState,
+  validateSelectedProviderDrivers,
+  validateServiceAccountProviderBinding,
+} from "./providers.ts";
 export {
   InMemoryPlatformState,
   type AgentReadRepository,
@@ -120,6 +137,7 @@ export interface ControllerOptions {
   readonly createId?: (kind: ResourceKind) => string;
   readonly state?: PlatformStateStore;
   readonly recordOperations?: boolean;
+  readonly providers?: readonly ProviderDefinition[];
 }
 
 export interface CreateNamespaceInput {
@@ -131,6 +149,7 @@ export interface CreateAgentInput {
   readonly namespaceId: string;
   readonly name: string;
   readonly configurationId: string;
+  readonly providerId?: string | null;
   readonly serviceAccountId?: string;
   readonly executionMode?: HarnessExecutionMode;
 }
@@ -139,6 +158,7 @@ export interface UpdateAgentInput {
   readonly namespaceId: string;
   readonly agentId: string;
   readonly configurationId: string;
+  readonly providerId?: string | null;
   readonly serviceAccountId?: string | null;
   readonly executionMode?: HarnessExecutionMode;
 }
@@ -489,6 +509,8 @@ export class OpenClawController {
   private readonly shouldRecordOperations: boolean;
   private readonly registry = new Map<string, RegisteredDriver>();
   private readonly selections = new Map<DriverCapability, RegisteredDriver>();
+  private readonly providers: readonly ProviderDefinition[];
+  private readonly providerMap: ReadonlyMap<string, ProviderDefinition>;
 
   constructor(installation: Installation, options: ControllerOptions = {}) {
     if (!isNonEmptyString(installation.id) || !validName(installation.name))
@@ -508,6 +530,8 @@ export class OpenClawController {
     this.identifier = options.createId;
     this.state = options.state ?? new InMemoryPlatformState();
     this.shouldRecordOperations = options.recordOperations ?? true;
+    this.providers = validateProviderDefinitions(options.providers ?? []);
+    this.providerMap = providerDefinitionMap(this.providers);
   }
 
   registerDriver(driver: Driver): Driver {
@@ -520,6 +544,7 @@ export class OpenClawController {
       !driverHasValidLifecycleHooks(driver)
     )
       throw new DriverSelectionError("The Driver does not satisfy its exact capability contract.");
+    this.validateRegisteredProviderDriver(driver);
     const key = this.driverKey(driver.capability, driver.id);
     if (this.registry.has(key))
       throw new DriverSelectionError(
@@ -564,6 +589,14 @@ export class OpenClawController {
         "The selected Driver is unavailable or no longer matches its capability.",
       );
     return selected.driver as DriverFor<Capability>;
+  }
+
+  async validateProviderConfiguration(): Promise<void> {
+    validateSelectedProviderDrivers(
+      this.providers,
+      [...this.selections.values()].map((selected) => selected.driver),
+    );
+    await validateProviderState(this.providers, this.state);
   }
 
   async getInstallation(principalId: string): Promise<Readonly<Installation>> {
@@ -1178,6 +1211,7 @@ export class OpenClawController {
     const executionMode = input.executionMode ?? "embedded";
     if (!validExecutionMode(executionMode))
       throw new ScopeViolationError("The Agent Harness execution mode is invalid.");
+    const providerId = this.providerId(input.providerId);
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "provisioning" && namespace.status !== "ready")
@@ -1222,6 +1256,7 @@ export class OpenClawController {
         namespaceId: namespace.id,
         name: input.name,
         configurationId: input.configurationId,
+        providerId,
         ...(input.serviceAccountId === undefined
           ? {}
           : { serviceAccountId: input.serviceAccountId }),
@@ -1293,6 +1328,7 @@ export class OpenClawController {
       }
       const secretBindings = this.bindings(configuration.secretBindings);
       await this.authorizeBindings(state, principalId, namespace.id, secretBindings);
+      const providerId = this.providerId(input.providerId, agent.providerId);
       this.validateModelBinding(
         secretBindings,
         input.executionMode ?? agent.executionMode,
@@ -1306,6 +1342,7 @@ export class OpenClawController {
         input.configurationId,
         input.executionMode,
         input.serviceAccountId,
+        input.providerId === undefined ? undefined : providerId,
       );
       if (!updated)
         throw new ResourceConflictError("The Agent Configuration changed during its update.");
@@ -1349,6 +1386,7 @@ export class OpenClawController {
         throw new ScopeViolationError(
           "The Agent or its service principal does not belong to the exact Namespace.",
         );
+      const providerId = this.providerId(lockedAgent.providerId);
       if (sandbox !== undefined && lockedAgent.executionMode !== "dedicated")
         throw new ScopeViolationError(
           "The selected Sandbox Driver supports only dedicated Harness execution.",
@@ -1375,6 +1413,13 @@ export class OpenClawController {
           throw new ResourceConflictError(
             "OAuth ServiceAccount credentials are not supported for deployment.",
           );
+        if (credential.kind === "access_token") {
+          validateServiceAccountProviderBinding(
+            this.providerMap,
+            providerId,
+            await state.serviceAccounts.findServiceAccountProviderBinding(namespace.id, account.id),
+          );
+        }
         serviceAccount = immutableCopy({
           id: account.id,
           credential: { kind: credential.kind, secretRef: credential.secretRef },
@@ -1470,6 +1515,7 @@ export class OpenClawController {
           namespaceId: namespace.id,
           agentId: lockedAgent.id,
           revision: previous.length + 1,
+          providerId,
           configurationId: configuration.id,
           configurationKind: configuration.kind,
           configurationGeneration: configuration.generation,
@@ -2034,6 +2080,27 @@ export class OpenClawController {
 
   private driverKey(selectedCapability: DriverCapability, driverId: string): string {
     return `${selectedCapability}\u0000${driverId}`;
+  }
+
+  private validateRegisteredProviderDriver(driver: Driver): void {
+    if (driver.providerId !== undefined) {
+      const provider = this.providerMap.get(driver.providerId);
+      if (provider === undefined)
+        throw new DriverSelectionError("A Driver declares an unknown Provider.");
+      if (driver.capability !== "service_account" || provider.drivers.service_account !== driver.id)
+        throw new DriverSelectionError("A Driver declares incompatible Provider membership.");
+      return;
+    }
+    for (const provider of this.providerMap.values()) {
+      if (driver.capability === "service_account" && provider.drivers.service_account === driver.id)
+        throw new DriverSelectionError("A Provider-owned Driver must declare its Provider.");
+    }
+  }
+
+  private providerId(value: ProviderRef | undefined, preserve?: ProviderRef): ProviderRef {
+    const providerId = value === undefined ? (preserve ?? null) : value;
+    assertConfiguredProvider(this.providerMap, providerId, "Provider");
+    return providerId;
   }
 
   private applyDriverSelection<Capability extends DriverCapability>(

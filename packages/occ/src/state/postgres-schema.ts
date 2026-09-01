@@ -171,6 +171,7 @@ export const serviceAccountDriverBindings = occSchema.table(
   {
     serviceAccountId: text("service_account_id").primaryKey(),
     namespaceId: text("namespace_id").notNull(),
+    providerId: text("provider_id").notNull(),
     driverId: text("driver_id").notNull(),
     externalAccountId: text("external_account_id").notNull(),
     externalCredentialId: text("external_credential_id"),
@@ -188,6 +189,10 @@ export const serviceAccountDriverBindings = occSchema.table(
       table.driverId,
       table.workspaceId,
       table.externalAccountId,
+    ),
+    check(
+      "service_account_driver_bindings_provider_id_valid",
+      sql`char_length(${table.providerId}) BETWEEN 1 AND 200 AND ${table.providerId} = btrim(${table.providerId})`,
     ),
     check(
       "service_account_driver_bindings_driver_id_valid",
@@ -217,6 +222,7 @@ export const agents = occSchema.table(
       .references(() => namespaces.id, { onDelete: "restrict", onUpdate: "restrict" }),
     name: collatedText("name").notNull(),
     configurationId: text("configuration_id").notNull(),
+    providerId: text("provider_id"),
     executionMode: text("execution_mode").$type<HarnessExecutionMode>().notNull(),
     servicePrincipalId: text("service_principal_id").notNull(),
     serviceAccountId: text("service_account_id"),
@@ -234,6 +240,10 @@ export const agents = occSchema.table(
     check("agents_id_format", sql`${table.id} ~ ${identifierPatterns.agent}`),
     check("agents_name_length", sql`char_length(${table.name}) BETWEEN 1 AND 200`),
     check("agents_execution_mode_valid", sql`${table.executionMode} IN ('embedded', 'dedicated')`),
+    check(
+      "agents_provider_id_valid",
+      sql`${table.providerId} IS NULL OR (char_length(${table.providerId}) BETWEEN 1 AND 200 AND ${table.providerId} = btrim(${table.providerId}) AND ${table.providerId} !~ '[[:cntrl:]]')`,
+    ),
     check(
       "agents_name_normalized",
       sql`${table.name} = btrim(${table.name}) AND ${table.name} !~ '[[:cntrl:]]'`,
@@ -357,11 +367,11 @@ export const agentRevisions = occSchema.table(
       "agent_revisions_admitted_snapshot",
       sql`(${table.admittedSpec} ?& ARRAY[
           'configuration_id', 'configuration_kind', 'configuration_generation',
-          'draft_spec', 'harness', 'compute'
+          'draft_spec', 'provider_id', 'harness', 'compute'
         ])
         AND (${table.admittedSpec}
           - 'configuration_id' - 'configuration_kind' - 'configuration_generation'
-          - 'draft_spec' - 'harness' - 'compute' - 'sandbox_driver_id'
+          - 'draft_spec' - 'provider_id' - 'harness' - 'compute' - 'sandbox_driver_id'
           - 'secret_driver_id' - 'secret_bindings' - 'service_account') = '{}'::jsonb
         AND jsonb_typeof(${table.admittedSpec}->'configuration_id') = 'string'
         AND (${table.admittedSpec}->>'configuration_id') ~ ${identifierPatterns.configuration}
@@ -372,6 +382,15 @@ export const agentRevisions = occSchema.table(
           BETWEEN 1 AND 9007199254740991
         AND mod((${table.admittedSpec}->>'configuration_generation')::numeric, 1) = 0
         AND jsonb_typeof(${table.admittedSpec}->'draft_spec') = 'object'
+        AND (
+          jsonb_typeof(${table.admittedSpec}->'provider_id') = 'null'
+          OR (
+            jsonb_typeof(${table.admittedSpec}->'provider_id') = 'string'
+            AND char_length(${table.admittedSpec}->>'provider_id') BETWEEN 1 AND 200
+            AND (${table.admittedSpec}->>'provider_id') = btrim(${table.admittedSpec}->>'provider_id')
+            AND (${table.admittedSpec}->>'provider_id') !~ '[[:cntrl:]]'
+          )
+        )
         AND jsonb_typeof(${table.admittedSpec}->'harness') = 'object'
         AND ((${table.admittedSpec}->'harness') ?& ARRAY['id', 'version', 'mode'])
         AND ((${table.admittedSpec}->'harness') - 'id' - 'version' - 'mode') = '{}'::jsonb

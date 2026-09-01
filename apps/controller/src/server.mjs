@@ -150,30 +150,39 @@ async function start() {
     ) {
       throw new Error("The selected Compute Driver cannot manage ServiceAccount credentials.");
     }
-    const integration = drivers.installation.integrations.chatgpt;
+    const providerDefinition = drivers.installation.provider.find(
+      (provider) => provider.drivers.service_account === selectedServiceAccountDriver.id,
+    );
+    if (providerDefinition === undefined) {
+      throw new Error("The selected ServiceAccount Driver requires an owning Provider.");
+    }
+    const { configuration } = providerDefinition;
     let adminKey;
     try {
-      adminKey = (await readFile(integration.adminKeyPath, "utf8")).trim();
+      adminKey = (await readFile(configuration.apiKeyPath, "utf8")).trim();
     } catch {
       throw new Error("The configured ChatGPT admin-key Secret is unavailable.");
     }
     if (adminKey.length === 0) {
       throw new Error("The mounted ChatGPT admin key must be nonempty.");
     }
-    const { ChatGPTClient } = await import("./integrations/chatgpt.ts");
+    const { ChatGPTClient } = await import("./providers/chatgpt.ts");
     const { createChatGPTServiceAccountDriverFactory } =
       await import("./drivers/service-account/chatgpt.ts");
-    const client = new ChatGPTClient({
-      workspaceId: integration.workspaceId,
-      adminKey,
-      ...(integration.credentialTtlSeconds === undefined
-        ? {}
-        : { credentialTtlSeconds: integration.credentialTtlSeconds }),
-    });
+    const provider = {
+      id: providerDefinition.id,
+      drivers: providerDefinition.drivers,
+      client: new ChatGPTClient({
+        workspaceId: configuration.workspaceId,
+        adminKey,
+        ...(configuration.credentialTtlSeconds === undefined
+          ? {}
+          : { credentialTtlSeconds: configuration.credentialTtlSeconds }),
+      }),
+    };
     serviceAccountDriverFactory = createChatGPTServiceAccountDriverFactory(
-      client,
+      provider,
       drivers.computeDriver,
-      selectedServiceAccountDriver.id,
     );
   }
   if (settings.mode === "development" && settings.databaseUrl === undefined) {

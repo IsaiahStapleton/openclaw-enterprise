@@ -278,7 +278,7 @@ The selected model credential determines how model access is configured:
 
 - **API key:** Provision the Agent's model Secret using
   `runtime.modelSecretPrefix` and the `OPENAI_API_KEY` key.
-- **Provider-issued access token:** The selected service-account integration
+- **Provider-issued access token:** The selected Provider-owned ServiceAccount Driver
   creates an account-owned Secret projected only into the dedicated Codex Pod.
 
 If channels are enabled, configure `runtime.channels.secretPrefix` and

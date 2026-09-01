@@ -42,7 +42,7 @@ document containing `occ` and required Configuration, IAM, Compute, and Secret
 Driver selections. Development without this YAML does not select the Secret
 Driver or create Namespace-owned Secret storage. PostgreSQL-backed Installations
 can also configure the optional
-[ChatGPT service-account integration](service-accounts.md#provider-selection-and-configuration);
+[ChatGPT Provider and its ServiceAccount Driver](providers.md#installation-configuration);
 only the API reads its admin Secret. See
 [Installation startup configuration](configuration.md#installation-startup-configuration)
 for the complete document shape. OCC resolves its singleton Installation internally.
@@ -128,7 +128,8 @@ endpoint.
 | `OCC_AUTH_BASE_URL` | Absolute controller base URL.                       | Defines the production Better Auth base URL and cookie origin.        |
 
 The API and worker load the same trusted startup YAML; only the API initializes
-an optional provider integration. When the bundled Kubernetes Compute
+the optional [Provider client](providers.md). Both validate Provider membership
+and stored ownership before accepting work. When the bundled Kubernetes Compute
 Driver is selected, its `drivers.compute.configuration` section contains the
 `KubernetesComputeDriverOptions` shape described in the
 [Kubernetes Compute Driver guide](drivers/kubernetes-compute.md#configuration).

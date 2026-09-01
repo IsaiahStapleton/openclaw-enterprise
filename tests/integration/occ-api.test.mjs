@@ -329,7 +329,25 @@ async function createInjectedFixture(options = {}) {
               controller = new OpenClawController(installation, {
                 state: new InMemoryPlatformState({ auditSink }),
                 recordOperations: false,
+                ...(options.providers === undefined ? {} : { providers: options.providers }),
               });
+              if (options.providers?.length) {
+                // Association alone must never provision an upstream account or credential.
+                const unexpectedProviderCall = async () => assert.fail("Unexpected Provider call");
+                controller.registerDriver({
+                  id: options.providers[0].drivers.service_account,
+                  implementation: "chatgpt",
+                  capability: "service_account",
+                  providerId: options.providers[0].id,
+                  create: unexpectedProviderCall,
+                  createCredential: unexpectedProviderCall,
+                  delete: unexpectedProviderCall,
+                });
+                controller.selectDriver(
+                  "service_account",
+                  options.providers[0].drivers.service_account,
+                );
+              }
               return controller;
             },
           }),
@@ -521,6 +539,87 @@ test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource
 
   const unchanged = await controller.request("GET", "/installation");
   assert.deepEqual(unchanged.data, installation);
+});
+
+test("Agent Provider API preserves nullable drafts and immutable revision associations", async () => {
+  const fixture = await createInjectedFixture({
+    providers: [
+      {
+        id: "openai",
+        type: "chatgpt",
+        configuration: {
+          workspaceId: "11111111-1111-4111-8111-111111111111",
+          apiKeyPath: "/unused-in-api-contract-test",
+        },
+        drivers: { service_account: "chatgpt-service-accounts" },
+      },
+    ],
+  });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "provider-api");
+  const configuration = await createConfiguration(controller, namespace.id);
+  const collection = `/namespaces/${namespace.id}/agents`;
+
+  // Exercise wire defaults and persistence through the real authenticated Fastify routes.
+  for (const [name, association] of [
+    ["omitted", {}],
+    ["null", { providerId: null }],
+    ["selected", { providerId: "openai" }],
+  ]) {
+    const result = await controller.request("POST", collection, {
+      body: { name, configurationId: configuration.id, ...association },
+    });
+    assert.equal(result.status, 201, JSON.stringify(result.body));
+    assert.equal(result.data.providerId, association.providerId ?? null);
+    const read = await controller.request("GET", `${collection}/${result.data.id}`);
+    assert.equal(read.data.providerId, association.providerId ?? null);
+  }
+
+  const agents = await controller.request("GET", collection);
+  const selected = agents.data.find((agent) => agent.name === "selected");
+  const target = `${collection}/${selected.id}`;
+  const preserved = await controller.request("PATCH", target, {
+    body: { configurationId: configuration.id },
+  });
+  assert.equal(preserved.status, 200);
+  assert.equal(preserved.data.providerId, "openai");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const revision = await controller.request("POST", `${target}/deploy`);
+  assert.equal(revision.status, 202, JSON.stringify(revision.body));
+  assert.equal(revision.data.providerId, "openai");
+
+  const cleared = await controller.request("PATCH", target, {
+    body: { configurationId: configuration.id, providerId: null },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.data.providerId, null);
+  const prior = await controller.request("GET", `${target}/revisions/${revision.data.id}`);
+  assert.equal(prior.data.providerId, "openai", "draft changes cannot rewrite admitted revisions");
+  const independent = await controller.request("POST", `${target}/deploy`);
+  assert.equal(independent.status, 202);
+  assert.equal(independent.data.providerId, null);
+
+  for (const providerId of ["", " ", "unknown", 42, [], {}]) {
+    const expectedStatus = providerId === "unknown" ? 404 : 400;
+    const invalid = await controller.request("POST", collection, {
+      body: { name: "invalid-provider", configurationId: configuration.id, providerId },
+    });
+    assert.equal(invalid.status, expectedStatus, JSON.stringify(invalid.body));
+    const invalidPatch = await controller.request("PATCH", target, {
+      body: { configurationId: configuration.id, providerId },
+    });
+    assert.equal(invalidPatch.status, expectedStatus, JSON.stringify(invalidPatch.body));
+  }
+  const unchanged = await controller.request("GET", target);
+  assert.equal(unchanged.data.providerId, null);
+  const replaced = await controller.request("PATCH", target, {
+    body: { configurationId: configuration.id, providerId: "openai" },
+  });
+  assert.equal(replaced.status, 200);
+  assert.equal(replaced.data.providerId, "openai");
 });
 
 test("native ServiceAccounts bind exact credential references and freeze Agent revision snapshots", async () => {
@@ -1548,6 +1647,7 @@ test("two Namespaces become independently ready and deletion tombstones only its
     "harness",
     "id",
     "namespaceId",
+    "providerId",
     "revision",
   ]);
   assert.equal(readyDeployment.data.configurationId, firstConfiguration.id);

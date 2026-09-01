@@ -20,8 +20,8 @@ const values = {
   "cluster.cidr": "10.43.0.1/32",
 };
 const chatgptValues = {
-  "integrations.chatgpt.enabled": "true",
-  "integrations.chatgpt.providerCidr": "198.51.100.25/32",
+  "provider.chatgpt.enabled": "true",
+  "provider.chatgpt.providerCidr": "198.51.100.25/32",
 };
 
 async function render(overrides = {}) {
@@ -277,7 +277,7 @@ test(
 );
 
 test(
-  "the optional ChatGPT integration isolates admin credentials, tenant Secrets, and provider egress to the API",
+  "the optional ChatGPT Provider isolates admin credentials, tenant Secrets, and provider egress to the API",
   tooling,
   async () => {
     const { stdout } = await render(chatgptValues);
@@ -366,20 +366,27 @@ test(
       ["broad Kubernetes API egress", { "cluster.cidr": "10.43.0.0/16" }],
       ["shared migration database credentials", { "database.migrationUrlKey": "application-url" }],
       [
-        "unrestricted ChatGPT provider egress",
-        { ...chatgptValues, "integrations.chatgpt.providerCidr": "0.0.0.0/0" },
+        "retired ChatGPT integration key",
+        {
+          "integrations.chatgpt.enabled": "true",
+          "integrations.chatgpt.providerCidr": "198.51.100.25/32",
+        },
       ],
       [
-        "ChatGPT integration without an approved provider host",
-        { ...chatgptValues, "integrations.chatgpt.providerCidr": "" },
+        "unrestricted ChatGPT provider egress",
+        { ...chatgptValues, "provider.chatgpt.providerCidr": "0.0.0.0/0" },
+      ],
+      [
+        "ChatGPT Provider without an approved provider host",
+        { ...chatgptValues, "provider.chatgpt.providerCidr": "" },
       ],
       [
         "ChatGPT admin key shared with installation configuration",
-        { ...chatgptValues, "integrations.chatgpt.secretName": "occ-installation-startup" },
+        { ...chatgptValues, "provider.chatgpt.secretName": "occ-installation-startup" },
       ],
       [
-        "ChatGPT integration without an admin Secret key",
-        { ...chatgptValues, "integrations.chatgpt.key": "" },
+        "ChatGPT Provider without an admin Secret key",
+        { ...chatgptValues, "provider.chatgpt.key": "" },
       ],
     ]) {
       // Rejection comes from the actual Helm templates, not a reimplemented test validator.

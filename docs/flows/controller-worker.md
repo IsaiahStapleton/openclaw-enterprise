@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-09-01
+last_updated_session: codex/01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9
 ---
 
 # Controller Worker Flow
@@ -141,7 +141,11 @@ an invalid Agent Principal, a changed Harness descriptor, or a different Compute
 Driver identity. `authorizeRevision()` checks current `deploy` permission and,
 when a ServiceAccount snapshot is present, current `read` permission for that
 exact ServiceAccount. Admission-time permission does not substitute for these
-checks.
+checks. The worker then resolves the revision's frozen Provider metadata and
+rechecks any managed credential's exact Provider, Driver, workspace, and issued
+account binding before Compute effects. It uses a read-only projection and has
+no Provider client or admin key. The
+[Provider lifecycle flow](provider-driver-lifecycle.md) owns these checks.
 
 Revoked actors and denied operations become permanent results before runtime
 creation. A revision older than the current active revision completes as
@@ -249,6 +253,8 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 
 ## Related docs
 
+- [Provider and Driver lifecycle](provider-driver-lifecycle.md)
+
 - [Controller reference](../reference/controller.md)
 - [Deployment guide: development and production](../guides/deploy.md)
 - [Controller settings](../reference/settings.md)
@@ -265,5 +271,7 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 08:47: Preserve providerless API-key execution and document Provider metadata checks before workload effects. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 
 - 2026-08-28 17:56: Converted the worker overview into a source-ordered execution trace covering startup, admission, lease ownership, current authorization, Compute and Sandbox delegation, activation, and retry. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)

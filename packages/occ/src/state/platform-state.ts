@@ -6,6 +6,7 @@ import type {
   Installation,
   Namespace,
   NamespaceStatus,
+  ProviderRef,
   Secret,
   SecretBindings,
   ServiceAccount,
@@ -72,6 +73,7 @@ export interface AgentRepository extends AgentReadRepository {
     configurationId: string,
     executionMode?: HarnessExecutionMode,
     serviceAccountId?: string | null,
+    providerId?: string | null,
   ): Promise<Readonly<Agent> | undefined>;
   compareAndSetActiveRevision(
     namespaceId: string,
@@ -88,6 +90,7 @@ export interface AgentRevisionReadRepository {
     revisionId: string,
   ): Promise<Readonly<AgentRevision> | undefined>;
   listRevisions(namespaceId: string, agentId: string): Promise<readonly Readonly<AgentRevision>[]>;
+  listReferencedProviderIds(): Promise<readonly ProviderRef[]>;
 }
 
 export interface AgentRevisionRepository extends AgentRevisionReadRepository {
@@ -143,6 +146,25 @@ export interface ServiceAccountReadRepository {
     namespaceId: string,
     serviceAccountId: string,
   ): Promise<Readonly<ServiceAccount> | undefined>;
+  findServiceAccountProviderBinding(
+    namespaceId: string,
+    serviceAccountId: string,
+  ): Promise<
+    | Readonly<{
+        readonly providerId: string;
+        readonly driverId: string;
+        readonly workspaceId: string;
+        readonly credentialIssued: boolean;
+      }>
+    | undefined
+  >;
+  listServiceAccountProviderBindings(): Promise<
+    readonly Readonly<{
+      readonly providerId: string;
+      readonly driverId: string;
+      readonly workspaceId: string;
+    }>[]
+  >;
 }
 
 export interface ServiceAccountRepository extends ServiceAccountReadRepository {
@@ -163,6 +185,7 @@ const serviceAccountIdentifier =
   /^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const secretName = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/;
 const secretKey = /^[-._a-zA-Z0-9]+$/;
+const providerIdentifier = /^(?!\s)(?!.*\s$)(?!.*[\x00-\x1f\x7f]).{1,200}$/;
 
 function validCredential(credential: unknown): credential is ServiceAccountCredential {
   if (
@@ -199,6 +222,8 @@ function validCredential(credential: unknown): credential is ServiceAccountCrede
 
 function assertAdmittedAgentRevision(revision: AgentRevision): void {
   if (
+    (revision.providerId !== null &&
+      (typeof revision.providerId !== "string" || !providerIdentifier.test(revision.providerId))) ||
     !/^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
       revision.configurationId,
     ) ||
@@ -770,6 +795,8 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       const account = snapshot.serviceAccounts.get(agentKey(namespaceId, serviceAccountId));
       return account === undefined ? undefined : immutableCopy(account);
     },
+    findServiceAccountProviderBinding: async () => undefined,
+    listServiceAccountProviderBindings: async () => Object.freeze([]),
     createServiceAccount: async (account) => {
       assertInitialized(snapshot);
       if (
@@ -849,6 +876,11 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       assertInitialized(snapshot);
       if (agent.executionMode !== "embedded" && agent.executionMode !== "dedicated")
         throw new ScopeViolationError("The Agent execution mode is invalid.");
+      if (
+        agent.providerId !== null &&
+        (typeof agent.providerId !== "string" || !providerIdentifier.test(agent.providerId))
+      )
+        throw new ScopeViolationError("The Agent Provider identity is invalid.");
       const namespace = await namespaces.lockNamespace(agent.namespaceId);
       if (
         namespace === undefined ||
@@ -895,9 +927,12 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       configurationId,
       executionMode,
       serviceAccountId,
+      providerId,
     ) => {
       const current = await agents.findAgent(namespaceId, agentId);
       if (!current) return undefined;
+      if (providerId !== undefined && providerId !== null && !providerIdentifier.test(providerId))
+        throw new ScopeViolationError("The Agent Provider identity is invalid.");
       if (
         executionMode !== undefined &&
         executionMode !== "embedded" &&
@@ -916,9 +951,11 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       const { serviceAccountId: previousAssociation, ...withoutAssociation } = current;
       const association =
         serviceAccountId === null ? undefined : (serviceAccountId ?? previousAssociation);
+      const nextProviderId = providerId === undefined ? current.providerId : providerId;
       const updated = immutableCopy({
         ...withoutAssociation,
         configurationId,
+        providerId: nextProviderId,
         executionMode: executionMode ?? current.executionMode,
         ...(association === undefined ? {} : { serviceAccountId: association }),
       });
@@ -962,6 +999,39 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
               .map((revision) => immutableCopy(revision))
           : [],
       ),
+    listReferencedProviderIds: async () => {
+      const providerIds: ProviderRef[] = [];
+      for (const namespace of snapshot.namespaces.values()) {
+        if (namespace.deletedAt !== undefined) continue;
+        const agents = Array.from(snapshot.agents.values()).filter(
+          (agent) => agent.namespaceId === namespace.id,
+        );
+        for (const agent of agents) {
+          providerIds.push(agent.providerId);
+          if (agent.activeRevisionId !== undefined) {
+            const active = snapshot.revisions
+              .get(agentKey(agent.namespaceId, agent.id))
+              ?.find((revision) => revision.id === agent.activeRevisionId);
+            if (active !== undefined) {
+              providerIds.push(active.providerId);
+            }
+          }
+        }
+      }
+      for (const operation of snapshot.operations) {
+        if (operation.kind !== "agent_revision") continue;
+        const revision = Array.from(snapshot.revisions.values())
+          .flat()
+          .find(
+            (candidate) =>
+              candidate.namespaceId === operation.namespaceId &&
+              candidate.id === operation.resourceId,
+          );
+        if (revision === undefined) continue;
+        providerIds.push(revision.providerId);
+      }
+      return Object.freeze(providerIds);
+    },
     createRevision: async (revision) => {
       assertInitialized(snapshot);
       assertAdmittedAgentRevision(revision);
@@ -969,6 +1039,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       if (
         owner === undefined ||
         owner.servicePrincipalId !== revision.servicePrincipalId ||
+        owner.providerId !== revision.providerId ||
         revision.serviceAccount?.id !== owner.serviceAccountId
       )
         throw new ScopeViolationError("The AgentRevision belongs to an unavailable Agent.");

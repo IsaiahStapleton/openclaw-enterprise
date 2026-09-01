@@ -55,9 +55,9 @@ async function createResources(pool, agentCount = 1) {
       );
       await client.query(
         `INSERT INTO occ.agents
-           (id, namespace_id, name, configuration_id, execution_mode, service_principal_id,
+           (id, namespace_id, name, configuration_id, provider_id, execution_mode, service_principal_id,
             created_at)
-         VALUES ($1, $2, $3, $4, 'embedded', $5, clock_timestamp())`,
+         VALUES ($1, $2, $3, $4, NULL, 'embedded', $5, clock_timestamp())`,
         [agentId, namespaceId, `Queue agent ${randomUUID()}`, configurationId, identityId],
       );
       await client.query(
@@ -89,6 +89,7 @@ async function createQueueRevision(pool, namespaceId, agentId, revisionNumber = 
     configuration_id: configuration.rows[0].configuration_id,
     configuration_kind: "agent",
     configuration_generation: 1,
+    provider_id: null,
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     compute: { id: "compute-queue", implementation: "deterministic-queue" },
   };
