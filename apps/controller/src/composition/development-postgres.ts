@@ -118,6 +118,7 @@ export async function composePostgresDevelopment(
     const controller = new OpenClawController(persistedInstallation, {
       state,
       recordOperations: true,
+      ...(drivers === undefined ? {} : { providers: drivers.installation.provider }),
     });
     controller.registerDriver(iamDriver);
     const selected = controller.selectDriver("iam", driverId);
@@ -147,6 +148,7 @@ export async function composePostgresDevelopment(
       }
     }
     serviceAccountDriverFactory?.(controller, state);
+    await controller.validateProviderConfiguration();
 
     const app = createFastifyApp({
       controller,

@@ -11,6 +11,29 @@ export const DRIVER_CAPABILITIES = Object.freeze([
 
 export type DriverCapability = (typeof DRIVER_CAPABILITIES)[number];
 
+export type ProviderType = "chatgpt";
+
+export type ProviderRef = string | null;
+
+export interface ProviderConfiguration {
+  readonly workspaceId: string;
+  readonly apiKeyPath: string;
+  readonly credentialTtlSeconds?: number;
+}
+
+export interface ProviderDefinition {
+  readonly id: string;
+  readonly type: ProviderType;
+  readonly configuration: ProviderConfiguration;
+  readonly drivers: Readonly<Record<"service_account", string>>;
+}
+
+export interface Provider<Client = unknown> {
+  readonly id: string;
+  readonly client: Client;
+  readonly drivers: Readonly<Partial<Record<DriverCapability, string>>>;
+}
+
 export const CONFIGURATION_KINDS = Object.freeze(["agent"] as const);
 
 export type ConfigurationKind = (typeof CONFIGURATION_KINDS)[number];
@@ -176,6 +199,7 @@ export interface Agent extends Scope {
   readonly namespaceId: string;
   readonly name: string;
   readonly configurationId: string;
+  readonly providerId: ProviderRef;
   readonly serviceAccountId?: string;
   readonly executionMode: HarnessExecutionMode;
   readonly servicePrincipalId: string;
@@ -197,6 +221,7 @@ export interface AgentRevision extends Scope {
   readonly namespaceId: string;
   readonly agentId: string;
   readonly revision: number;
+  readonly providerId: ProviderRef;
   readonly configurationId: string;
   readonly configurationKind: ConfigurationKind;
   readonly configurationGeneration: number;

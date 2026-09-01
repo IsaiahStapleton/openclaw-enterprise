@@ -23,6 +23,8 @@ OpenClaw Enterprise is the open platform for managing agents.
 - [Authentication](reference/authentication.md),
   [Authorization](reference/authorization.md), and
   [Service accounts](reference/service-accounts.md): sign-in, permissions, and credentials.
+- [Providers](reference/providers.md): authenticated clients, related Drivers,
+  optional Agent association, and safe configuration changes.
 - [Harness execution](reference/harness-execution.md) and
   [Controller reconciliation](reference/controller.md): runtime topology, deployment,
   and revision activation.
@@ -38,6 +40,7 @@ OpenClaw Enterprise is the open platform for managing agents.
   [production startup](flows/production-startup.md),
   [production TUI attachment](flows/production-tui.md), and
   [shared platform startup](flows/platform-startup.md).
+- [Provider and Driver lifecycle](flows/provider-driver-lifecycle.md).
 - [Controller worker](flows/controller-worker.md),
   [Harness execution topology](flows/harness-execution-topology.md), and
   [dedicated Harness shared workspace](flows/dedicated-harness-shared-workspace-drive.md).

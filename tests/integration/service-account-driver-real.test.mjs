@@ -78,9 +78,14 @@ function installationConfiguration(authentication, platformNamespace, adminKeyPa
     codexImage,
     cluster: "k3d-chatgpt-service-account-driver",
   });
-  configuration.integrations = {
-    chatgpt: { workspaceId, adminKeyPath, credentialTtlSeconds: 3_600 },
-  };
+  configuration.provider = [
+    {
+      id: "openai",
+      type: "chatgpt",
+      configuration: { workspaceId, apiKeyPath: adminKeyPath, credentialTtlSeconds: 3_600 },
+      drivers: { service_account: "chatgpt-service-accounts" },
+    },
+  ];
   configuration.drivers.service_account = { id: "chatgpt-service-accounts", configuration: {} };
   return configuration;
 }
@@ -240,7 +245,7 @@ test(
       import("../../apps/controller/src/composition/production.ts"),
       import("../../apps/controller/src/worker.ts"),
       import("../../apps/controller/src/drivers/compute/kubernetes/index.ts"),
-      import("../../apps/controller/src/integrations/chatgpt.ts"),
+      import("../../apps/controller/src/providers/chatgpt.ts"),
       import("../../apps/controller/src/drivers/service-account/chatgpt.ts"),
     ]);
 
@@ -259,12 +264,15 @@ test(
     client = new ChatGPTClient({
       workspaceId,
       adminKey: (await readFile(adminKeyPath, "utf8")).trim(),
-      credentialTtlSeconds: apiDrivers.installation.integrations.chatgpt.credentialTtlSeconds,
+      credentialTtlSeconds: apiDrivers.installation.provider[0].configuration.credentialTtlSeconds,
     });
     const serviceAccountDriverFactory = createChatGPTServiceAccountDriverFactory(
-      client,
+      {
+        id: apiDrivers.installation.provider[0].id,
+        drivers: apiDrivers.installation.provider[0].drivers,
+        client,
+      },
       apiDrivers.computeDriver,
-      "chatgpt-service-accounts",
     );
     observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
 
@@ -375,13 +383,14 @@ test(
     assert.equal(account.data.credential, undefined);
     createdServiceAccountId = account.data.id;
     const bindingQuery =
-      "SELECT external_account_id, external_credential_id, workspace_id, driver_id FROM occ.service_account_driver_bindings WHERE service_account_id = $1 AND namespace_id = $2";
+      "SELECT external_account_id, external_credential_id, workspace_id, provider_id, driver_id FROM occ.service_account_driver_bindings WHERE service_account_id = $1 AND namespace_id = $2";
     const createdBinding = await observerPool.query(bindingQuery, [account.data.id, namespaceId]);
     assert.equal(createdBinding.rowCount, 1, "the provider account binding must commit with OCC");
     externalAccountId = createdBinding.rows[0].external_account_id;
     assert.ok(externalAccountId);
     assert.equal(createdBinding.rows[0].external_credential_id, null);
     assert.equal(createdBinding.rows[0].workspace_id, workspaceId);
+    assert.equal(createdBinding.rows[0].provider_id, "openai");
     assert.equal(createdBinding.rows[0].driver_id, "chatgpt-service-accounts");
     assert.equal(JSON.stringify(account.data).includes(externalAccountId), false);
     assert.equal(JSON.stringify(account.data).includes(workspaceId), false);
@@ -431,10 +440,12 @@ test(
     const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {
       name: `chatgpt-codex-${suffix}`,
       configurationId: configuration.data.id,
+      providerId: "openai",
       executionMode: "dedicated",
       serviceAccountId: account.data.id,
     });
     assert.equal(agent.status, 201, JSON.stringify(agent.error));
+    assert.equal(agent.data.providerId, "openai");
     assert.equal(agent.data.serviceAccountId, account.data.id);
 
     // Gateway transport remains operator-owned and separate from the account's model credential.
@@ -452,6 +463,7 @@ test(
       id: account.data.id,
       credential: issued.data.credential,
     });
+    assert.equal(revision.data.providerId, "openai");
     assert.equal(JSON.stringify(revision.data).includes(externalAccountId), false);
     assert.equal(JSON.stringify(revision.data).includes(workspaceId), false);
     assert.equal(JSON.stringify(revision.data).includes(accessToken), false);

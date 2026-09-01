@@ -26,6 +26,29 @@ async function fixture(t, configuration = installation()) {
 
 function chatgptInstallation() {
   const configuration = installation();
+  configuration.provider = [
+    {
+      id: "openai",
+      type: "chatgpt",
+      configuration: {
+        workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
+        apiKeyPath: "/tmp/nonexistent-occ-chatgpt-admin-key",
+        credentialTtlSeconds: 3600,
+      },
+      drivers: {
+        service_account: "chatgpt-service-accounts",
+      },
+    },
+  ];
+  configuration.drivers.service_account = {
+    id: "chatgpt-service-accounts",
+    configuration: {},
+  };
+  return configuration;
+}
+
+function retiredChatgptInstallation() {
+  const configuration = installation();
   configuration.integrations = {
     chatgpt: {
       workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
@@ -64,13 +87,24 @@ test("shared startup loads provider metadata without reading the API-only ChatGP
     environment: { OCC_CONFIG_PATH: await fixture(t, chatgptInstallation()) },
   });
 
-  assert.deepEqual(drivers.installation.integrations, {
-    chatgpt: {
-      workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
-      adminKeyPath: "/tmp/nonexistent-occ-chatgpt-admin-key",
-      credentialTtlSeconds: 3600,
+  assert.deepEqual(drivers.installation.provider, [
+    {
+      id: "openai",
+      type: "chatgpt",
+      configuration: {
+        workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
+        apiKeyPath: "/tmp/nonexistent-occ-chatgpt-admin-key",
+        credentialTtlSeconds: 3600,
+      },
+      drivers: {
+        service_account: "chatgpt-service-accounts",
+      },
     },
-  });
+  ]);
+  assert.equal(
+    Object.hasOwn(drivers.installation.provider[0].configuration, "adminKeyPath"),
+    false,
+  );
   assert.deepEqual(drivers.installation.drivers.service_account, {
     id: "chatgpt-service-accounts",
   });
@@ -78,25 +112,62 @@ test("shared startup loads provider metadata without reading the API-only ChatGP
   assert.equal(Object.hasOwn(drivers, "chatgptClient"), false);
 });
 
-test("ChatGPT startup rejects unpaired integrations and unsafe provider configuration", async (t) => {
+test("ChatGPT startup rejects retired integrations and unsafe provider configuration", async (t) => {
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, retiredChatgptInstallation()) },
+    }),
+    /integrations is retired.*provider.*apiKeyPath/,
+  );
+
   for (const [mutate, expected] of [
-    [(value) => delete value.integrations, /must be configured together/],
-    [(value) => delete value.drivers.service_account, /must be configured together/],
-    [(value) => (value.integrations.chatgpt.workspaceId = "untrusted"), /workspace UUID/],
+    [(value) => delete value.provider, /requires an owning provider/],
+    [(value) => delete value.drivers.service_account, /requires drivers\.service_account/],
     [
-      (value) => (value.integrations.chatgpt.adminKeyPath = "relative-admin-key"),
-      /absolute mounted Secret path/,
+      (value) => delete value.provider[0].drivers.service_account,
+      /drivers\.service_account.*required/,
     ],
     [
-      (value) => (value.integrations.chatgpt.credentialTtlSeconds = 2_592_001),
+      (value) => (value.provider[0].configuration.workspaceId = "untrusted"),
+      /workspaceId.*invalid/,
+    ],
+    [
+      (value) => (value.provider[0].configuration.apiKeyPath = "relative-admin-key"),
+      /absolute mounted file path/,
+    ],
+    [
+      (value) => (value.provider[0].configuration.credentialTtlSeconds = 2_592_001),
       /between 1 and 2592000/,
     ],
     [
-      (value) => (value.integrations.chatgpt.apiKey = "plaintext-admin-key"),
-      /plaintext credential/,
+      (value) => (value.provider[0].configuration.apiKey = "plaintext-admin-key"),
+      /plaintext credential|unsupported option/,
     ],
     [
-      (value) => (value.drivers.service_account.configuration.untrusted = true),
+      (value) => (value.provider[0].configuration.adminKeyPath = "/tmp/old-admin-key"),
+      /adminKeyPath.*unsupported/,
+    ],
+    [(value) => (value.provider[0].type = "installed"), /must be chatgpt/],
+    [(value) => (value.provider[0].package = "@example/provider"), /unsupported option package/],
+    [
+      (value) => (value.provider[0].drivers.service_account = "other-service-accounts"),
+      /must match the selected drivers\.service_account\.id/,
+    ],
+    [
+      (value) => value.provider.push(structuredClone(value.provider[0])),
+      /Provider IDs must be unique/,
+    ],
+    [
+      (value) => {
+        const duplicate = structuredClone(value.provider[0]);
+        duplicate.id = "other-openai";
+        value.provider.push(duplicate);
+      },
+      /ServiceAccount Driver cannot belong to multiple Providers/,
+    ],
+    [
+      (value) => (value.drivers.service_account.configuration.providerId = "openai"),
       /unsupported option/,
     ],
   ]) {

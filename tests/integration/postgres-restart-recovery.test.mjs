@@ -55,9 +55,9 @@ async function createResources(pool, agentCount = 1) {
       );
       await client.query(
         `INSERT INTO occ.agents
-           (id, namespace_id, name, configuration_id, execution_mode, service_principal_id,
+           (id, namespace_id, name, configuration_id, provider_id, execution_mode, service_principal_id,
             created_at)
-         VALUES ($1, $2, $3, $4, 'embedded', $5, clock_timestamp())`,
+         VALUES ($1, $2, $3, $4, NULL, 'embedded', $5, clock_timestamp())`,
         [agentId, namespaceId, `Queue agent ${randomUUID()}`, configurationId, identityId],
       );
       await client.query(

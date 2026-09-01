@@ -9,11 +9,16 @@ import type {
   ConfigurationDriver,
   DriverImplementation,
   IAMDriver,
+  ProviderDefinition,
   SandboxDriver,
   SecretDriver,
 } from "@openclaw-enterprise/contracts";
 import { NativeIAMDriver, type NativeIAMStateStore } from "@openclaw-enterprise/iam";
-import type { OpenClawController, PostgresPlatformState } from "@openclaw-enterprise/occ";
+import {
+  validateProviderDefinitions,
+  type OpenClawController,
+  type PostgresPlatformState,
+} from "@openclaw-enterprise/occ";
 import { Check } from "typebox/value";
 import {
   KubernetesComputeDriver,
@@ -40,13 +45,7 @@ export interface SelectedDriverConfiguration<T = ConfigurationRecord> {
 
 export interface InstallationStartupConfiguration {
   readonly occ: { readonly cluster: string };
-  readonly integrations?: {
-    readonly chatgpt: {
-      readonly workspaceId: string;
-      readonly adminKeyPath: string;
-      readonly credentialTtlSeconds?: number;
-    };
-  };
+  readonly provider: readonly ProviderDefinition[];
   readonly drivers: {
     readonly configuration: SelectedDriverConfiguration;
     readonly iam: SelectedDriverConfiguration<ConfigurationRecord>;
@@ -94,9 +93,6 @@ interface BundledOpenShellSandboxDriverModule extends DriverImplementation {
 }
 
 const PACKAGE_NAME = /^(?:@[a-zA-Z0-9][a-zA-Z0-9._~-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._~-]*$/;
-const WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const MAX_CHATGPT_CREDENTIAL_TTL_SECONDS = 30 * 24 * 60 * 60;
-
 const FORBIDDEN_SECRET_KEY =
   /(?:password|passwd|api[_-]?key|(?:access[_-]?)?token|private[_-]?key|(?:client[_-]?)?secret|credentials?)$/i;
 const FORBIDDEN_SECRET_VALUE =
@@ -153,6 +149,29 @@ function safe(value: unknown, path: string): void {
     }
     safe(entry, `${path}.${key}`);
   }
+}
+
+function providerConfiguration(
+  value: unknown,
+  serviceAccount: InstallationStartupConfiguration["drivers"]["service_account"],
+): readonly ProviderDefinition[] {
+  const providers = validateProviderDefinitions(value ?? []);
+  if (serviceAccount !== undefined && providers.length === 0) {
+    throw new Error("drivers.service_account requires an owning provider entry with type chatgpt.");
+  }
+  for (const provider of providers) {
+    if (serviceAccount === undefined) {
+      throw new Error(
+        `provider[${provider.id}].drivers.service_account requires drivers.service_account.`,
+      );
+    }
+    if (provider.drivers.service_account !== serviceAccount.id) {
+      throw new Error(
+        `provider[${provider.id}].drivers.service_account must match the selected drivers.service_account.id.`,
+      );
+    }
+  }
+  return providers;
 }
 
 function importEntrypoint(value: unknown): string | undefined {
@@ -351,7 +370,12 @@ export async function loadInstallationConfiguration(options: {
   }
   const configuration = object(parsed, "Installation startup configuration");
   safe(configuration, "Installation startup configuration");
-  closed(configuration, ["occ", "drivers", "integrations"], "Installation startup configuration");
+  if (Object.hasOwn(configuration, "integrations")) {
+    throw new Error(
+      "integrations is retired; configure ChatGPT with provider[].configuration.apiKeyPath.",
+    );
+  }
+  closed(configuration, ["occ", "drivers", "provider"], "Installation startup configuration");
   const occ = object(configuration.occ, "occ");
   closed(occ, ["cluster"], "occ");
   const cluster = nonempty(occ.cluster, "occ.cluster");
@@ -361,46 +385,6 @@ export async function loadInstallationConfiguration(options: {
     ["configuration", "iam", "compute", "secret", "sandbox", "service_account"],
     "drivers",
   );
-
-  let integration: NonNullable<InstallationStartupConfiguration["integrations"]> | undefined;
-  if (configuration.integrations !== undefined) {
-    const integrations = object(configuration.integrations, "integrations");
-    closed(integrations, ["chatgpt"], "integrations");
-    const chatgpt = object(integrations.chatgpt, "integrations.chatgpt");
-    closed(
-      chatgpt,
-      ["workspaceId", "adminKeyPath", "credentialTtlSeconds"],
-      "integrations.chatgpt",
-    );
-    const workspaceId = nonempty(chatgpt.workspaceId, "integrations.chatgpt.workspaceId");
-    if (!WORKSPACE_ID.test(workspaceId)) {
-      throw new Error("integrations.chatgpt.workspaceId must be a valid workspace UUID.");
-    }
-    const adminKeyPath = nonempty(chatgpt.adminKeyPath, "integrations.chatgpt.adminKeyPath");
-    if (!isAbsolute(adminKeyPath)) {
-      throw new Error(
-        "integrations.chatgpt.adminKeyPath must identify an absolute mounted Secret path.",
-      );
-    }
-    const credentialTtlSeconds = chatgpt.credentialTtlSeconds;
-    if (
-      credentialTtlSeconds !== undefined &&
-      (!Number.isSafeInteger(credentialTtlSeconds) ||
-        (credentialTtlSeconds as number) < 1 ||
-        (credentialTtlSeconds as number) > MAX_CHATGPT_CREDENTIAL_TTL_SECONDS)
-    ) {
-      throw new Error("integrations.chatgpt.credentialTtlSeconds must be between 1 and 2592000.");
-    }
-    integration = Object.freeze({
-      chatgpt: Object.freeze({
-        workspaceId,
-        adminKeyPath,
-        ...(credentialTtlSeconds === undefined
-          ? {}
-          : { credentialTtlSeconds: credentialTtlSeconds as number }),
-      }),
-    });
-  }
 
   let serviceAccount: InstallationStartupConfiguration["drivers"]["service_account"];
   if (drivers.service_account !== undefined) {
@@ -413,11 +397,7 @@ export async function loadInstallationConfiguration(options: {
     closed(driverConfiguration, [], "drivers.service_account.configuration");
     serviceAccount = Object.freeze({ id: nonempty(selection.id, "drivers.service_account.id") });
   }
-  if ((integration === undefined) !== (serviceAccount === undefined)) {
-    throw new Error(
-      "drivers.service_account and integrations.chatgpt must be configured together.",
-    );
-  }
+  const providers = providerConfiguration(configuration.provider, serviceAccount);
 
   const configurationSelection = object(drivers.configuration, "drivers.configuration");
   const iamSelection = object(drivers.iam, "drivers.iam");
@@ -526,7 +506,7 @@ export async function loadInstallationConfiguration(options: {
   }
   const installation = Object.freeze({
     occ: Object.freeze({ cluster }),
-    ...(integration === undefined ? {} : { integrations: integration }),
+    provider: providers,
     drivers: Object.freeze({
       configuration: configured,
       iam,

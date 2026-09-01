@@ -23,7 +23,10 @@ The [production Kubernetes deployment guide](../guides/deploy.md#configure-the-i
 owns the complete bundled-Driver Installation example, including immutable
 images, workload isolation, and projected ServiceAccount credentials. The
 [Driver package installation guide](drivers/selection.md#select-the-installed-driver)
-owns the installed IAM, Compute, and Configuration selection contract.
+owns the installed IAM, Compute, and Configuration selection contract. The
+[Provider reference](providers.md) defines the optional `provider` array and its
+required related Driver membership. Provider configuration never enters native
+Agent Configuration documents.
 
 OCC resolves its persisted singleton Installation internally; Configuration and
 Secret Driver operations do not include Installation management. Installed
@@ -189,8 +192,9 @@ the native OpenClaw document.
 
 AgentRevisions retain their selected Compute Driver identity and immutable
 Configuration snapshot. Compute runtime settings are loaded from Installation
-startup YAML; stability across later settings changes remains an open design
-item tracked in [TODO.md](../../TODO.md).
+startup YAML and are not copied into that snapshot. See the
+[Agent revision contract](agents.md#revisions-and-deployment) for the fields
+admission freezes; immutable Configuration does not freeze all Driver settings.
 
 ## Kubernetes placement and RBAC
 
@@ -431,6 +435,8 @@ schema, controller, and SDK-fixture coverage is not live-cluster evidence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 08:47: Link Installation Provider definitions separately from native Agent Configuration. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 
 - [2026-08-28 13:56]: Consolidated Secret binding guidance and deferred Secret CRUD details to the driver reference. (01a04995-4a11-7c61-ab52-0b43f49524dc - 64e19bb)
 

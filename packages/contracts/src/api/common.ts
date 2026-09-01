@@ -20,6 +20,11 @@ export const AgentId = Type.String({ pattern: `^agt_${UUID_V4}$` });
 export const RevisionId = Type.String({ pattern: `^rev_${UUID_V4}$` });
 export const AuditId = Type.String({ pattern: `^aud_${UUID_V4}$` });
 export const RequestId = Type.String({ pattern: `^req_${UUID_V4}$` });
+export const ProviderId = Type.String({
+  minLength: 1,
+  maxLength: 200,
+  pattern: /^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$/.source,
+});
 
 export const Timestamp = Type.String({
   format: "date-time",
@@ -211,6 +216,7 @@ export const CreateAgentBody = Type.Object(
   {
     name: Name,
     configurationId: ConfigurationId,
+    providerId: Type.Optional(Type.Union([ProviderId, Type.Null()])),
     serviceAccountId: Type.Optional(ServiceAccountId),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
   },
@@ -220,6 +226,7 @@ export const CreateAgentBody = Type.Object(
 export const UpdateAgentBody = Type.Object(
   {
     configurationId: ConfigurationId,
+    providerId: Type.Optional(Type.Union([ProviderId, Type.Null()])),
     serviceAccountId: Type.Optional(Type.Union([ServiceAccountId, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
   },
@@ -310,6 +317,7 @@ export type AgentId = Type.Static<typeof AgentId>;
 export type RevisionId = Type.Static<typeof RevisionId>;
 export type AuditId = Type.Static<typeof AuditId>;
 export type RequestId = Type.Static<typeof RequestId>;
+export type ProviderId = Type.Static<typeof ProviderId>;
 export type Timestamp = Type.Static<typeof Timestamp>;
 export type Name = Type.Static<typeof Name>;
 export type Meta = Type.Static<typeof Meta>;

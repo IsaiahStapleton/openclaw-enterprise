@@ -1,4 +1,5 @@
 {{- define "openclaw.validate" -}}
+{{- if hasKey .Values "integrations" -}}{{- fail "integrations is retired; configure ChatGPT packaging under provider.chatgpt" -}}{{- end -}}
 {{- range $name, $image := .Values.images -}}
 {{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-fA-F0-9]{64}$" $image) -}}
 {{- fail (printf "images.%s must be an approved immutable SHA-256 image reference" $name) -}}

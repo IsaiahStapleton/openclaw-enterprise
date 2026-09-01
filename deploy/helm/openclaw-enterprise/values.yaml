@@ -20,7 +20,7 @@ bootstrap:
   serviceKey:
     fileName: initial-admin-service-key.json
 
-integrations:
+provider:
   chatgpt:
     enabled: false
     secretName: occ-chatgpt-admin

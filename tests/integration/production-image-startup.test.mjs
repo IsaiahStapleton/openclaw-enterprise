@@ -30,13 +30,20 @@ function workloadPeer(namespace, labels) {
 function productionInstallation(adminKeyPath) {
   return {
     occ: { cluster: "production-image-smoke" },
-    integrations: {
-      chatgpt: {
-        workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
-        adminKeyPath,
-        credentialTtlSeconds: 3600,
+    provider: [
+      {
+        id: "openai",
+        type: "chatgpt",
+        configuration: {
+          workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
+          apiKeyPath: adminKeyPath,
+          credentialTtlSeconds: 3600,
+        },
+        drivers: {
+          service_account: "chatgpt-service-accounts",
+        },
       },
-    },
+    ],
     drivers: {
       configuration: {
         id: "config-kubernetes",
@@ -123,7 +130,6 @@ function productionInstallation(adminKeyPath) {
     },
   };
 }
-
 async function runDocker(args, options = {}) {
   return execute(docker, args, {
     timeout: 20_000,

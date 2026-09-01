@@ -1,7 +1,7 @@
 ---
 created: 2026-08-20
-updated: 2026-08-31
-last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
+updated: 2026-09-01
+last_updated_session: codex/01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6
 ---
 
 # Platform Startup Flow
@@ -12,7 +12,7 @@ The OCC API and controller worker start as separate Node.js processes, resolve
 the same singleton Installation and trusted Driver selections, and coordinate
 through PostgreSQL. Each process constructs its own shared Driver instances;
 when a ServiceAccount Driver is selected, only the API additionally initializes
-its provider integration and Driver. PostgreSQL-backed development uses the
+its Provider client and Driver. PostgreSQL-backed development uses the
 Docker Compute Driver by default, while the development filesystem
 Configuration Driver is API-only. The singleton invariant is the selected Driver
 identity, not JavaScript object identity. This trace ends when the API accepts
@@ -113,10 +113,13 @@ comes from server-owned singleton state, never startup YAML.
 API and worker use matching logical Driver identities but separate instances.
 Each IAM Driver loads current persisted policy for every identity lookup and
 authorization decision. Only `server.mjs` reads the mounted ChatGPT admin key,
-constructs `ChatGPTClient`, and creates the optional ServiceAccount Driver
-factory. The worker neither initializes that provider integration nor receives
-its admin credential. Lifecycle owners remain stable, and controller Drivers
-are never exposed to tenant workloads.
+constructs `Provider<ChatGPTClient>`, and injects it into the optional
+ServiceAccount Driver factory. The worker consumes only nonsecret Provider
+metadata and never receives the client or admin credential. Startup validates
+required member selections without scanning saved Provider references. Exact
+ownership is checked when credentials or deployments are used, allowing the API
+to start so stale references can be repaired. Lifecycle owners remain stable,
+and controller Drivers are never exposed to tenant workloads.
 
 ### 3. Compose the API according to its persistence and execution mode
 
@@ -212,6 +215,8 @@ execution begins in the adjacent
 
 ## Related docs
 
+- [Provider and Driver lifecycle](provider-driver-lifecycle.md)
+
 - [Platform architecture](../ARCHITECTURE.md)
 - [Controller worker operation](../reference/controller.md)
 - [Controller and Installation configuration](../reference/settings.md)
@@ -228,6 +233,10 @@ execution begins in the adjacent
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 10:19: Validate Provider configuration at startup and exact saved ownership at use, preserving API repair access. (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158)
+
+- 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 
 - 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
 

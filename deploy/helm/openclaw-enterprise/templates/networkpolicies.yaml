@@ -67,10 +67,10 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.cluster.port }}
-{{- if .Values.integrations.chatgpt.enabled }}
-{{- $providerCidr := .Values.integrations.chatgpt.providerCidr }}
+{{- if .Values.provider.chatgpt.enabled }}
+{{- $providerCidr := .Values.provider.chatgpt.providerCidr }}
 {{- if not (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/32$" $providerCidr) }}
-{{- fail "integrations.chatgpt.providerCidr must identify exactly one approved IPv4 provider or proxy host with /32" }}
+{{- fail "provider.chatgpt.providerCidr must identify exactly one approved IPv4 provider or proxy host with /32" }}
 {{- end }}
 ---
 apiVersion: networking.k8s.io/v1

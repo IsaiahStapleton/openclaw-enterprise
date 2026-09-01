@@ -195,17 +195,19 @@ decisions.
 
 An OpenClaw Enterprise deployment owns exactly one server-selected
 `Installation`. It is the outer administrative boundary for configured
-integrations, installation-scoped IAM resources, and Namespaces. Bootstrap
+Providers, installation-scoped IAM resources, and Namespaces. Bootstrap
 creates one persistent Installation with a stable identifier; subsequent starts
 reload that same Installation, and a conflicting configured identifier fails
 closed. Platform resource writes are rejected before bootstrap completes.
 There is no multi-Installation collection or caller-selected Installation.
 Installation configuration selects server-owned Drivers,
 including the authoritative `IAMDriver` for each resource kind and the selected
-service-account, inference, compute, sandbox, secret, and messaging integrations.
-An Installation-scoped provider integration can supply a shared authenticated
-client to multiple capability-specific Drivers; neither the integration nor its
-client is a Driver or an OCC resource. The configured provider workspace is
+service-account, inference, compute, sandbox, secret, and messaging capabilities.
+An Installation-scoped `Provider` owns an authenticated client and related
+capability-specific Drivers; neither the Provider nor its client is a Driver or
+an OCC resource. Each Agent has a nullable `providerId`, copied into each
+immutable AgentRevision. Provider membership does not change model configuration
+or authorize operations. The configured provider workspace is
 provider connection context, not an OCC Namespace mapping. The selected Compute
 Driver contains each Namespace's Agent-owned gateways and
 workloads in the same exact tenant boundary. The bundled Kubernetes Driver uses
@@ -270,7 +272,7 @@ revisions.
 | `Namespace`      | Installation              | Tenant boundary for agents, configuration, messaging, secrets, policy, and runtime routing. OCC establishes its backing tenant infrastructure before contained Agents and their individually owned gateways can be deployed.                                                                                         |
 | `Configuration`  | Namespace                 | Reusable nonsecret configuration for Agents. Deployment snapshots the admitted contents into an `AgentRevision`; later edits affect only later deployments.                                                                                                                                                          |
 | `ServiceAccount` | Namespace                 | OCC-owned, provider-agnostic account with at most one opaque reference to a credential in its exact backing namespace. A selected ServiceAccountDriver privately links it to an upstream account. The account, Agent, and immutable revision never contain credential bytes or provider identity.                    |
-| `Agent`          | Namespace                 | Stable author-facing agent resource. It can reference one same-Namespace ServiceAccount and owns its revision history, at most one active revision, exactly one deployed OpenClaw gateway, and one stable OCC-created `WorkloadIdentity`.                                                                            |
+| `Agent`          | Namespace                 | Stable author-facing agent resource. It can reference one same-Namespace ServiceAccount and one Installation Provider, and owns its revision history, at most one active revision, exactly one deployed OpenClaw gateway, and one stable OCC-created `WorkloadIdentity`.                                             |
 | `AgentRevision`  | Namespace                 | Immutable snapshot of one Agent and the exact configuration, references, harness, sandbox policy, and selected runtime implementations admitted for one deployment. OCC activates it only after preparing the Agent-owned gateway and candidate workload, verifying containment, and configuring a nonserving route. |
 | `Harness`        | Installation              | Versioned agent runtime published for the Installation. Deployment pins the admitted Harness version in the revision.                                                                                                                                                                                                |
 | `Channel`        | Namespace                 | Messaging surface available to an Agent through its own Namespace-scoped OpenClaw gateway. OCC owns the Channel resource; the messaging provider independently authorizes provider operations and owns provider credentials.                                                                                         |
@@ -552,7 +554,8 @@ An `Agent` is the stable, user-configured platform resource. Its explicit
 `executionMode` is either `embedded` or `dedicated`. Its `Configuration`,
 `ServiceAccount`, `Channel`, `Secret`, and `SandboxPolicy` references belong to
 its Namespace; its native Configuration selects a Harness approved for the same
-Installation.
+Installation. Its optional `providerId` references Installation-owned Provider
+configuration; null preserves providerless Agents.
 Editing an Agent or one of its referenced resources changes only
 the inputs available to a future deployment; it does not change an existing
 `AgentRevision` or running Agent workload.
@@ -570,17 +573,21 @@ Deploying an Agent follows one path.
    path.
 4. Each separately protected reference receives its own allow decision from
    the authoritative `IAMDriver` for that exact resource.
-5. OCC validates Namespace and Installation scope for every reference.
+5. OCC validates Namespace and Installation scope for every reference. It resolves
+   the optional Provider and required related Drivers; a managed access token
+   requires the exact private Provider, Driver, workspace, account, and issued
+   credential binding.
 6. OCC verifies that the exact backing tenant infrastructure is ready and that
    the selected `SandboxDriver` supports the entire `SandboxPolicy`. For the
    bundled Kubernetes Driver, that infrastructure is the backing namespace in
    the selected cluster.
 7. OCC creates an immutable `AgentRevision` from the admitted Agent,
-   configuration, references, server-approved Harness identity/version and
+   configuration, references including nullable `providerId`, server-approved Harness identity/version and
    explicit mode, sandbox policy, and selected compute and sandbox
    implementations.
 8. OCC gives both selected Drivers the same revision, exact Namespace, and
-   stable Agent `WorkloadIdentity`.
+   stable Agent `WorkloadIdentity`. The worker rechecks Provider metadata and
+   managed credential ownership after current IAM authorization and before effects.
 9. The selected Compute Driver invokes revision-scoped `prepareRevision` to
    provision the exact Agent's configured gateway and requested topology.
    Embedded OpenClaw runs inside that gateway; dedicated Codex runs as a
@@ -672,7 +679,7 @@ Restrictions. OCC activates the revision only after that containment is
 ready. `SandboxDriver` does not provision workloads, own resources, select
 another identity, grant permissions, or replace an Agent's gateway.
 
-## Drivers and integrations
+## Drivers and Providers
 
 A **Driver** is the common integration boundary for a selected platform
 capability. OCC selects each Driver implementation through Installation
@@ -705,19 +712,21 @@ relevant Driver enforces applicable platform Restrictions, and unsupported or
 unverifiable enforcement fails closed.
 
 `ChatGPTServiceAccountDriver` is one concrete implementation of the
-`ServiceAccountDriver` capability. It receives an Installation-scoped
-`ChatGPTClient`, which owns the configured workspace, trusted provider
-transport, and mounted admin credential. Other capability-specific Drivers may
-reuse that client without granting themselves service-account authority;
-different provider operations may require separate provider authorization and
-scopes. Only the API entrypoint initializes this client and concrete Driver.
-The existing worker shares nonsecret Installation configuration but receives
-neither the admin credential nor an initialized provider client.
+`ServiceAccountDriver` capability. It receives `Provider<ChatGPTClient>`; the
+client owns the configured workspace, trusted transport, and mounted admin
+credential. `provider[].drivers` declares the exact related Driver selections,
+and composition injects the Provider into its concrete member. The generic Driver
+contract has no Provider identity field. All related Drivers are required. The current ChatGPT Provider requires the selected ServiceAccount
+Driver; installed-package Provider injection is deferred. Only the API
+entrypoint initializes the client and concrete Driver. The worker shares
+nonsecret Provider metadata but receives neither the admin credential nor a
+runtime Provider object. The [Provider reference](reference/providers.md) owns
+the current configuration and lifecycle contract.
 
 OCC authorizes account creation and credential issuance separately before any
 provider or Kubernetes side effect. The concrete Driver creates the provider
-account, then privately binds its account and workspace identifiers to the exact
-OCC account and Namespace. Credential issuance persists the provider credential
+account, then privately binds its Provider, Driver, account, and workspace
+identifiers to the exact OCC account and Namespace. Credential issuance persists the provider credential
 identifier privately for exact deletion and future rotation or reconciliation;
 the public account contains only a generic credential kind and opaque
 same-Namespace Secret reference. API-side Compute creates the account-owned
@@ -859,11 +868,12 @@ The platform preserves:
   themselves permissions.
 - **Provider-neutral service accounts:** OCC owns each exact Namespace-scoped
   account and generic credential reference. Its selected service-account Driver
-  privately owns the upstream account, credential, and workspace binding;
+  privately owns the exact Provider, Driver, upstream account, credential, and workspace binding;
   upstream authority never replaces exact OCC authorization.
 - **Immutable deployment:** an `AgentRevision` captures the exact admitted
   Agent configuration, dependencies, sandbox policy, selected Harness identity
-  and version, explicit execution mode, and runtime integrations. Editing an
+  and version, explicit execution mode, nullable Provider reference, and runtime
+  integrations. Editing an
   Agent or changing runtime integrations affects only a later deployment.
 - **Stable workload identity:** each Agent has one OCC-owned runtime identity.
   At most one revision is active, and only the exact Agent workload bound to

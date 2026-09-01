@@ -33,8 +33,11 @@ rejected.
 ## Bundled ChatGPT implementation
 
 The [ChatGPT Driver](../../../apps/controller/src/drivers/service-account/chatgpt.ts)
-is optional. Trusted startup requires `drivers.service_account` and
-`integrations.chatgpt` together. The Driver selection accepts `id` and an empty
+is an optional Installation selection. Trusted startup requires its owning
+`type: chatgpt` Provider and exact `service_account` membership together. The
+Driver receives `Provider<ChatGPTClient>` and keeps ownership private; the
+[Provider reference](../providers.md) owns membership and client construction.
+The Driver selection accepts `id` and an empty
 `configuration`; installing an arbitrary ServiceAccount package through the
 `package` selector is not currently supported.
 
@@ -48,8 +51,9 @@ Credential creation rejects a missing exact binding or an existing credential.
 Provider and Secret creation register compensation with OCC so a failed
 operation can remove resources it created. Deletion revokes the provider
 credential, removes its stored Secret, and deletes the provider account. Missing
-bindings make provider deletion a no-op; conflicting Driver or workspace
-identity fails instead of deleting a different account.
+bindings make provider deletion a no-op; conflicting Provider, Driver, or
+workspace identity fails instead of deleting a different account. Issuance and
+deletion recheck the stored binding against the configured Provider.
 
 Provider access tokens are delivered only to a dedicated Codex Harness. This
 Driver does not implement credential renewal; an expired or revoked credential

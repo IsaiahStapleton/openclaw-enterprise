@@ -50,17 +50,18 @@ Installation
         └── AgentRevision
 ```
 
-- **Installation:** The singleton platform boundary that selects its Drivers.
+- **Installation:** The singleton platform boundary that configures Providers and selects its Drivers.
+- **Provider:** Installation-owned client and related Driver configuration; not an OCC resource.
 - **Namespace:** A tenant boundary that isolates its resources and workloads.
 - **Configuration:** A Namespace-owned native OpenClaw configuration document.
 - **ServiceAccount:** A Namespace-owned provider account with an opaque
   credential reference; credential values are not returned through the API.
 - **Agent:** A Namespace-owned Agent referencing one Configuration and,
-  optionally, one ServiceAccount in the same Namespace.
+  optionally, one ServiceAccount in the same Namespace and one configured Provider.
 - **Secret:** A Namespace-owned value stored by the selected SecretDriver and
   returned through OCC as metadata only.
 - **AgentRevision:** An immutable snapshot of the Agent's Configuration,
-  Harness, Secret references, credentials, and selected Compute implementation.
+  Harness, Secret references, credentials, nullable Provider reference, and selected Compute implementation.
 
 Creating an Agent does not start a workload. Deployment creates an immutable
 revision, which the controller worker provisions asynchronously.
@@ -108,7 +109,13 @@ OCC selects the Drivers used by its Installation:
 | `ComputeDriver`        | Provision tenant infrastructure and Agent workloads.            | Bundled Docker, Kubernetes, or installed Driver. |
 | `ConfigurationDriver`  | Store Namespace-owned OpenClaw configuration documents.         | Filesystem, Kubernetes ConfigMaps, or installed. |
 | `SecretDriver`         | Store Namespace-owned Secret values and validate delivery refs. | Bundled Kubernetes Secrets.                      |
-| `ServiceAccountDriver` | Provision upstream provider accounts and their credentials.     | Optional ChatGPT integration.                    |
+| `ServiceAccountDriver` | Provision upstream provider accounts and their credentials.     | Optional ChatGPT Provider member.                |
+
+A configured [Provider](reference/providers.md) owns a client and its related
+Driver membership. Only the API constructs the ChatGPT client and injects its
+Provider into the bundled ServiceAccount Driver; the worker validates nonsecret
+metadata. Agent and revision `providerId` references are nullable. Managed
+access tokens require exact Provider, Driver, workspace, and account binding.
 
 Compute owns workload provisioning, readiness, activation, and retirement.
 Other selected Drivers can participate through bounded lifecycle hooks without

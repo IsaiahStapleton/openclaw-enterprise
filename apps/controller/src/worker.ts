@@ -17,6 +17,7 @@ import type {
   Namespace,
   NamespaceDeleteResult,
   NamespaceEnsureResult,
+  ProviderDefinition,
   SandboxDriver,
   SecretBindings,
   SecretDriver,
@@ -37,6 +38,11 @@ import {
   type PostgresPool,
   type PostgresQueryClient,
   type PostgresWorkQueueOptions,
+} from "@openclaw-enterprise/occ";
+import {
+  providerDefinitionMap,
+  validateProviderDefinitions,
+  validateServiceAccountProviderBinding,
 } from "@openclaw-enterprise/occ";
 import type { InstallationRuntimeDrivers } from "./composition/installation-config.ts";
 import { resolveApprovedHarness } from "./composition/production-harness.ts";
@@ -199,6 +205,8 @@ export class ControllerWorker {
   private readonly iam: IAMDriver;
   private readonly secretDriverId: string | undefined;
   private readonly sandbox: SandboxDriver | undefined;
+  private readonly providers: readonly ProviderDefinition[];
+  private readonly providerMap: ReadonlyMap<string, ProviderDefinition>;
   private readonly requireComputePreflight: boolean;
   private readonly pollIntervalMs: number;
   private readonly leaseDurationMs: number;
@@ -235,6 +243,8 @@ export class ControllerWorker {
     };
     this.state = new PostgresPlatformState(options.pool);
     this.queue = new PostgresWorkQueue(options.pool, this.queueOptions);
+    this.providers = validateProviderDefinitions(drivers?.installation.provider ?? []);
+    this.providerMap = providerDefinitionMap(this.providers);
     this.iamDriverId = drivers?.installation.drivers.iam.id ?? "native-iam";
     this.iam =
       drivers === undefined
@@ -600,6 +610,11 @@ export class ControllerWorker {
         await this.finalizeRevision(claim, denied);
         return;
       }
+      const provider = await this.resolveRevisionProvider(revision);
+      if (provider !== undefined) {
+        await this.finalizeRevision(claim, provider);
+        return;
+      }
       if (this.compute.bindAgent !== undefined) {
         await this.withClaimHeartbeat(claim, async () => {
           await this.compute.bindAgent!({ namespace, agent });
@@ -755,6 +770,27 @@ export class ControllerWorker {
         };
     }
     return undefined;
+  }
+
+  private async resolveRevisionProvider(
+    revision: Readonly<AgentRevision>,
+  ): Promise<RevisionDispatchResult | undefined> {
+    if (revision.providerId !== null && !this.providerMap.has(revision.providerId)) {
+      return { outcome: "permanent", code: "PROVIDER_UNAVAILABLE" };
+    }
+    if (revision.serviceAccount?.credential.kind !== "access_token") return undefined;
+    const binding = await this.state.read((view) =>
+      view.serviceAccounts.findServiceAccountProviderBinding(
+        revision.namespaceId,
+        revision.serviceAccount!.id,
+      ),
+    );
+    try {
+      validateServiceAccountProviderBinding(this.providerMap, revision.providerId, binding);
+      return undefined;
+    } catch {
+      return { outcome: "permanent", code: "SERVICE_ACCOUNT_PROVIDER_MISMATCH" };
+    }
   }
 
   private async observeRevision(
