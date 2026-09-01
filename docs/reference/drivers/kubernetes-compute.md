@@ -187,9 +187,8 @@ worker permissions keep provisioning pending; missing API permissions prevent
 Configuration access. Docker and external Compute Drivers reject
 existing-namespace selection with `409`.
 
-See [existing-namespace onboarding](../../guides/deploy.md#use-an-existing-kubernetes-namespace)
-for operator preparation, tenant ownership requirements, and Configuration
-readiness.
+See [tenant RoleBindings](../../guides/deploy.md#grant-tenant-rolebindings)
+for the required worker and API grants.
 
 Workload Pods run as nonroot, use `RuntimeDefault` seccomp, drop Linux
 capabilities, disable privilege escalation, and use read-only root filesystems.

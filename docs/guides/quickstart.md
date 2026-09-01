@@ -60,8 +60,7 @@ scripts/occ-api GET /namespaces
 On a fresh Installation, expect one Namespace named `default` with a
 server-assigned `id`. Use that ID for Namespace-scoped API paths and wait for
 `status: "ready"` before deploying an Agent. Bootstrap success does not imply
-that worker provisioning has finished. Additional Namespaces can still be
-created with `POST /namespaces`; see [Namespaces](../reference/namespaces.md).
+that worker provisioning has finished.
 
 ## Clean up and stop
 
