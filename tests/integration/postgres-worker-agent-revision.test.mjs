@@ -1,148 +1,40 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
-
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
-const requiresPostgres = {
-  skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests.",
-};
-const providerId = "openai";
-const serviceAccountDriverId = "chatgpt-service-accounts";
-const workspaceId = "11111111-1111-4111-8111-111111111111";
-
-function providerDefinition() {
-  return {
-    id: providerId,
-    type: "chatgpt",
-    configuration: {
-      workspaceId,
-      apiKeyPath: "/unused-worker-provider-test",
-    },
-    drivers: { service_account: serviceAccountDriverId },
-  };
-}
-
-function poolWithOneProviderBindingReadFault(pool) {
-  let remainingFailures = 1;
-  return {
-    async connect() {
-      const client = await pool.connect();
-      return {
-        async query(text, values) {
-          if (
-            remainingFailures > 0 &&
-            typeof text === "string" &&
-            text.includes("FROM occ.service_account_driver_bindings AS b") &&
-            text.includes("WHERE b.namespace_id = $1 AND b.service_account_id = $2")
-          ) {
-            remainingFailures -= 1;
-            throw new Error("simulated transient Provider binding metadata read failure");
-          }
-          return client.query(text, values);
-        },
-        release() {
-          client.release();
-        },
-      };
-    },
-    query(text, values) {
-      return pool.query(text, values);
-    },
-    end() {
-      return pool.end();
-    },
-  };
-}
-
-async function waitFor(description, read, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const value = await read();
-    if (value !== undefined) return value;
-    await delay(20);
-  }
-  assert.fail(`Timed out waiting for ${description}.`);
-}
-
-async function ensureInstallation(state, createDevelopmentIAMState, createAuthPrincipalSeed) {
-  const existing = await state.loadInstallation();
-  if (existing !== undefined) return existing;
-
-  const installation = {
-    id: `ins_${randomUUID()}`,
-    name: "Controller revision worker integration",
-    createdAt: new Date().toISOString(),
-  };
-  state.setBootstrapNativeIAM(
-    createDevelopmentIAMState(
-      createAuthPrincipalSeed(installation.id, "revision-worker-integration", {
-        id: `account-revision-worker-${randomUUID()}`,
-      }),
-    ),
-  );
-  await state.transact((unit) => unit.installations.createInstallation(installation));
-  return installation;
-}
-
-function authorizedPrincipal(iam) {
-  const grants = new Set(
-    iam.roles
-      .filter(({ permissions }) =>
-        permissions.some(
-          ({ action, resourceKind }) => action === "deploy" && resourceKind === "agent",
-        ),
-      )
-      .map(({ id }) => id),
-  );
-  return iam.identities.find(
-    ({ id, kind }) =>
-      kind === "principal" &&
-      iam.bindings.some(
-        (binding) =>
-          binding.subjectKind === "identity" &&
-          binding.subjectId === id &&
-          binding.namespaceId === undefined &&
-          binding.resourceKind === undefined &&
-          grants.has(binding.roleId),
-      ),
-  );
-}
+import {
+  authorizedPrincipal,
+  cleanupProviderFixtures,
+  createAccessTokenServiceAccount,
+  createProviderWorkerDrivers,
+  databaseUrl,
+  ensureInstallation,
+  poolWithOneProviderBindingReadFault,
+  providerDefinition,
+  requiresPostgres,
+  seedProviderBinding,
+  waitFor,
+} from "../helpers/postgres-provider-state.mjs";
 
 async function setup(context) {
   const [
     { Pool },
     { createControllerWorker },
     { createDevelopmentComputeDriver },
-    { NativeIAMDriver, createAuthPrincipalSeed },
     { DEVELOPMENT_HARNESS_DESCRIPTOR, PRODUCTION_HARNESS_DESCRIPTOR },
     { PostgresPlatformState },
     { PostgresWorkQueue },
-    { createDevelopmentIAMState },
-    { createInstallationDriverConfiguration },
-    { createTestConfigurationDriver },
-    { createTestSecretDriver },
   ] = await Promise.all([
     import("pg"),
     import("../../apps/controller/src/worker.ts"),
     import("../helpers/development.mjs"),
-    import("../../packages/iam/src/index.ts"),
     import("../../apps/controller/src/composition/production-harness.ts"),
     import("../../packages/occ/src/state/postgres-state.ts"),
     import("../../packages/occ/src/state/postgres-work-queue.ts"),
-    import("../helpers/development-iam-state.mjs"),
-    import("../helpers/installation-driver-configuration.mjs"),
-    import("../helpers/configuration-driver.mjs"),
-    import("../helpers/secret-driver.mjs"),
   ]);
   const observerPool = new Pool({ connectionString: databaseUrl, max: 8 });
   const workerPool = new Pool({ connectionString: databaseUrl, max: 1 });
   const state = new PostgresPlatformState(observerPool);
-  const installation = await ensureInstallation(
-    state,
-    createDevelopmentIAMState,
-    createAuthPrincipalSeed,
-  );
+  const installation = await ensureInstallation(state, "revision-worker");
   const actor = authorizedPrincipal(await state.loadNativeIAMState());
   assert.ok(actor, "persisted IAM must contain an unrestricted Agent-deploy Principal");
 
@@ -257,29 +149,6 @@ async function setup(context) {
     });
   }
 
-  function runtimeDrivers(computeDriver, providers) {
-    const configuration = createInstallationDriverConfiguration();
-    configuration.drivers.compute.id = computeDriver.id;
-    if (providers.length > 0) {
-      configuration.provider = providers;
-      configuration.drivers.service_account = { id: providers[0].drivers.service_account };
-    }
-    return {
-      installation: configuration,
-      computeDriver,
-      configurationDriver: createTestConfigurationDriver({
-        id: configuration.drivers.configuration.id,
-      }),
-      secretDriver: createTestSecretDriver({ id: configuration.drivers.secret.id }),
-      createIAMDriver(platformState) {
-        return new NativeIAMDriver(platformState, {
-          id: configuration.drivers.iam.id,
-          implementation: "native",
-        });
-      },
-    };
-  }
-
   function start(
     computeDriver,
     emit = () => {},
@@ -287,7 +156,8 @@ async function setup(context) {
     providers,
     pool = workerPool,
   ) {
-    const drivers = providers === undefined ? undefined : runtimeDrivers(computeDriver, providers);
+    const drivers =
+      providers === undefined ? undefined : createProviderWorkerDrivers(computeDriver, providers);
     worker = createControllerWorker({
       pool,
       pollIntervalMs: 15,
@@ -570,90 +440,24 @@ test(
       revisionIds: [],
     };
 
-    async function cleanupOwnProviderFixtures() {
-      if (
-        cleanup.serviceAccountIds.length === 0 &&
-        cleanup.agentIds.length === 0 &&
-        cleanup.revisionIds.length === 0
-      ) {
-        return;
-      }
-      const client = await fixture.observerPool.connect();
-      try {
-        await client.query("BEGIN");
-        await client.query(
-          `UPDATE occ.controller_work
-           SET state = 'failed_permanent',
-               claim_token = NULL,
-               lease_expires_at = NULL,
-               completed_at = clock_timestamp(),
-               updated_at = clock_timestamp()
-           WHERE namespace_id = $1
-             AND revision_id = ANY($2::text[])
-             AND state IN ('queued', 'claimed')`,
-          [fixture.namespace.id, cleanup.revisionIds],
-        );
-        await client.query(
-          `UPDATE occ.agents
-           SET provider_id = NULL, service_account_id = NULL, active_revision_id = NULL
-           WHERE namespace_id = $1 AND id = ANY($2::text[])`,
-          [fixture.namespace.id, cleanup.agentIds],
-        );
-        await client.query(
-          "DELETE FROM occ.service_accounts WHERE namespace_id = $1 AND id = ANY($2::text[])",
-          [fixture.namespace.id, cleanup.serviceAccountIds],
-        );
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw error;
-      } finally {
-        client.release();
-      }
-    }
-
     async function account(label) {
-      const created = await fixture.state.transact((unit) =>
-        unit.serviceAccounts.createServiceAccount({
-          id: `sa_${randomUUID()}`,
-          namespaceId: fixture.namespace.id,
-          name: `${label}-${randomUUID()}`,
-          credential: {
-            kind: "access_token",
-            secretRef: { name: `${label}-provider-token`, key: "access-token" },
-          },
-        }),
+      const created = await createAccessTokenServiceAccount(
+        fixture.state,
+        fixture.namespace.id,
+        label,
       );
       cleanup.serviceAccountIds.push(created.id);
       return created;
     }
 
-    async function bind(account, { externalCredentialId }) {
-      await fixture.observerPool.query(
-        `INSERT INTO occ.service_account_driver_bindings
-           (service_account_id, namespace_id, provider_id, driver_id,
-            external_account_id, external_credential_id, workspace_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          account.id,
-          fixture.namespace.id,
-          provider.id,
-          provider.drivers.service_account,
-          `external-account-${randomUUID()}`,
-          externalCredentialId,
-          provider.configuration.workspaceId,
-        ],
-      );
-    }
-
     const [validAccount, missingAgentProviderAccount, missingIssuedCredentialAccount] =
       await Promise.all([account("valid"), account("missing-agent-provider"), account("unissued")]);
     await Promise.all([
-      bind(validAccount, { externalCredentialId: `external-credential-${randomUUID()}` }),
-      bind(missingAgentProviderAccount, {
-        externalCredentialId: `external-credential-${randomUUID()}`,
+      seedProviderBinding(fixture.observerPool, validAccount),
+      seedProviderBinding(fixture.observerPool, missingAgentProviderAccount),
+      seedProviderBinding(fixture.observerPool, missingIssuedCredentialAccount, {
+        credentialIssued: false,
       }),
-      bind(missingIssuedCredentialAccount, { externalCredentialId: null }),
     ]);
 
     const [validOwner, missingAgentProviderOwner, missingIssuedCredentialOwner] = await Promise.all(
@@ -746,7 +550,7 @@ test(
       );
     } finally {
       await fixture.stop();
-      await cleanupOwnProviderFixtures();
+      await cleanupProviderFixtures(fixture.observerPool, fixture.namespace.id, cleanup);
     }
   },
 );
@@ -759,75 +563,13 @@ test(
     const provider = providerDefinition();
     const cleanup = { serviceAccountIds: [], agentIds: [], revisionIds: [] };
 
-    async function cleanupOwnProviderFixtures() {
-      if (
-        cleanup.serviceAccountIds.length === 0 &&
-        cleanup.agentIds.length === 0 &&
-        cleanup.revisionIds.length === 0
-      ) {
-        return;
-      }
-      const client = await fixture.observerPool.connect();
-      try {
-        await client.query("BEGIN");
-        await client.query(
-          `UPDATE occ.controller_work
-           SET state = 'failed_permanent',
-               claim_token = NULL,
-               lease_expires_at = NULL,
-               completed_at = clock_timestamp(),
-               updated_at = clock_timestamp()
-           WHERE namespace_id = $1
-             AND revision_id = ANY($2::text[])
-             AND state IN ('queued', 'claimed')`,
-          [fixture.namespace.id, cleanup.revisionIds],
-        );
-        await client.query(
-          `UPDATE occ.agents
-           SET provider_id = NULL, service_account_id = NULL, active_revision_id = NULL
-           WHERE namespace_id = $1 AND id = ANY($2::text[])`,
-          [fixture.namespace.id, cleanup.agentIds],
-        );
-        await client.query(
-          "DELETE FROM occ.service_accounts WHERE namespace_id = $1 AND id = ANY($2::text[])",
-          [fixture.namespace.id, cleanup.serviceAccountIds],
-        );
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw error;
-      } finally {
-        client.release();
-      }
-    }
-
-    const account = await fixture.state.transact((unit) =>
-      unit.serviceAccounts.createServiceAccount({
-        id: `sa_${randomUUID()}`,
-        namespaceId: fixture.namespace.id,
-        name: `transient-provider-read-${randomUUID()}`,
-        credential: {
-          kind: "access_token",
-          secretRef: { name: "transient-provider-token", key: "access-token" },
-        },
-      }),
+    const account = await createAccessTokenServiceAccount(
+      fixture.state,
+      fixture.namespace.id,
+      "transient-provider-read",
     );
     cleanup.serviceAccountIds.push(account.id);
-    await fixture.observerPool.query(
-      `INSERT INTO occ.service_account_driver_bindings
-         (service_account_id, namespace_id, provider_id, driver_id,
-          external_account_id, external_credential_id, workspace_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        account.id,
-        fixture.namespace.id,
-        provider.id,
-        provider.drivers.service_account,
-        `external-account-${randomUUID()}`,
-        `external-credential-${randomUUID()}`,
-        provider.configuration.workspaceId,
-      ],
-    );
+    await seedProviderBinding(fixture.observerPool, account);
     const owner = await fixture.agent(
       "transient-provider-read",
       "dedicated",
@@ -902,7 +644,7 @@ test(
       assert.equal(active.rows[0].active_revision_id, candidate.id);
     } finally {
       await fixture.stop();
-      await cleanupOwnProviderFixtures();
+      await cleanupProviderFixtures(fixture.observerPool, fixture.namespace.id, cleanup);
     }
   },
 );

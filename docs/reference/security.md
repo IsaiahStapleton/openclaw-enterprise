@@ -158,12 +158,14 @@ There are two supported model-credential paths:
   login state only in its bounded ephemeral workload volume. Embedded access
   tokens are rejected before deployment.
 
-A dedicated gateway never receives either model credential. Credential bytes
-and provider account, credential, and workspace identifiers never enter public
-OCC resources, AgentRevision snapshots, ConfigMaps, responses, or audit
-records. Provider identifiers are persisted only in the concrete Driver's
-private binding; the account-owned Secret carries the workspace solely for
-runtime authentication.
+A dedicated gateway never receives either model credential. Public OCC Agent
+and AgentRevision responses can include the configured provider ID, which is
+persisted on the mutable Agent row and immutable AgentRevision row. Credential
+bytes and upstream ChatGPT account, credential, and workspace identifiers stay
+out of public OCC resources, AgentRevision snapshots, ConfigMaps, responses,
+and audit records; the concrete Driver private binding and runtime Secret keep
+the upstream identifiers and credential material needed for runtime
+authentication.
 
 The API's dedicated controller identity receives only the tenant-local Secret
 operations needed to create, verify, and delete account-owned Secrets. Its
@@ -183,10 +185,11 @@ never appears in startup YAML, persistence, public account data, workload Pods,
 or the worker. Restrict provider TLS egress to the API Pod and an explicitly
 approved provider/proxy CIDR. The worker receives no provider egress exception.
 Managed account bindings carry exact Provider, Driver, and workspace identity.
-Startup, issuance/deletion, deployment, and worker reconciliation reject
-conflicting ownership; the worker reads only binding metadata and confirms
-issuance, never external IDs or secret values. Provider removal or workspace
-retargeting requires completed cleanup under the original configuration.
+Issuance/deletion, deployment, and worker reconciliation reject conflicting
+ownership; the worker reads only binding metadata and confirms issuance, never
+external IDs or secret values. Startup does not scan saved references. Removing
+or retargeting configuration does not adopt or revoke existing credentials;
+restore the original configuration for exact cleanup of old bindings.
 The issued account credential requests only
 `chatgpt.workspace.feature.allow-codex-local-access.access`, has a maximum
 30-day configured lifetime, and is not refreshed automatically.

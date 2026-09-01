@@ -242,7 +242,6 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
     draft_spec: AgentRevision["configuration"];
     harness: AgentRevision["harness"];
     compute: AgentRevision["compute"];
-    provider_id: AgentRevision["providerId"];
     sandbox_driver_id?: AgentRevision["sandboxDriverId"];
     service_account?: AgentRevision["serviceAccount"];
     secret_driver_id?: AgentRevision["secretDriverId"];
@@ -257,7 +256,7 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
     namespaceId: text(row, "namespace_id"),
     agentId: text(row, "agent_id"),
     revision,
-    providerId: admitted.provider_id,
+    providerId: row.provider_id === null ? null : text(row, "provider_id"),
     configurationId: admitted.configuration_id,
     configurationKind: admitted.configuration_kind,
     configurationGeneration: admitted.configuration_generation,
@@ -1291,27 +1290,6 @@ export class PostgresPlatformState implements PlatformStateStore {
               credentialIssued: found.credential_issued === true,
             });
       },
-      listServiceAccountProviderBindings: async () => {
-        const found = rows(
-          (
-            await client.query(
-              `SELECT b.provider_id, b.driver_id, b.workspace_id
-               FROM occ.service_account_driver_bindings AS b
-               JOIN occ.namespaces AS n ON n.id = b.namespace_id AND n.deleted_at IS NULL
-               ORDER BY b.namespace_id, b.service_account_id`,
-            )
-          ).rows,
-        );
-        return Object.freeze(
-          found.map((row) =>
-            immutableCopy({
-              providerId: text(row, "provider_id"),
-              driverId: text(row, "driver_id"),
-              workspaceId: text(row, "workspace_id"),
-            }),
-          ),
-        );
-      },
       lockServiceAccount: async (namespaceId, serviceAccountId) =>
         findServiceAccount(namespaceId, serviceAccountId, true),
       createServiceAccount: async (account) => {
@@ -1512,7 +1490,8 @@ export class PostgresPlatformState implements PlatformStateStore {
         const found = rows(
           (
             await client.query(
-              `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.admitted_spec,
+              `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.provider_id,
+                      r.admitted_spec,
                       r.admitted_at, a.service_principal_id
                FROM occ.agent_revisions AS r
                JOIN occ.agents AS a ON a.namespace_id = r.namespace_id AND a.id = r.agent_id
@@ -1528,7 +1507,8 @@ export class PostgresPlatformState implements PlatformStateStore {
         const found = rows(
           (
             await client.query(
-              `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.admitted_spec,
+              `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.provider_id,
+                      r.admitted_spec,
                       r.admitted_at, a.service_principal_id
                FROM occ.agent_revisions AS r
                JOIN occ.agents AS a ON a.namespace_id = r.namespace_id AND a.id = r.agent_id
@@ -1539,38 +1519,6 @@ export class PostgresPlatformState implements PlatformStateStore {
           ).rows,
         );
         return Object.freeze(found.map((row) => revisionFromRow(row)));
-      },
-      listReferencedProviderIds: async () => {
-        const found = rows(
-          (
-            await client.query(
-              `SELECT a.provider_id
-                 FROM occ.agents AS a
-                 JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
-               UNION ALL
-               SELECT r.admitted_spec->>'provider_id' AS provider_id
-                 FROM occ.agent_revisions AS r
-                 JOIN occ.agents AS a
-                   ON a.namespace_id = r.namespace_id
-                  AND a.id = r.agent_id
-                  AND a.active_revision_id = r.id
-                 JOIN occ.namespaces AS n ON n.id = r.namespace_id AND n.deleted_at IS NULL
-               UNION ALL
-               SELECT r.admitted_spec->>'provider_id' AS provider_id
-                 FROM occ.agent_revisions AS r
-                 JOIN occ.controller_work AS w
-                   ON w.namespace_id = r.namespace_id
-                  AND w.agent_id = r.agent_id
-                  AND w.revision_id = r.id
-                 JOIN occ.namespaces AS n ON n.id = r.namespace_id AND n.deleted_at IS NULL
-                WHERE w.state IN ('queued', 'claimed')
-                ORDER BY provider_id`,
-            )
-          ).rows,
-        );
-        return Object.freeze(
-          found.map((row) => (row.provider_id === null ? null : text(row, "provider_id"))),
-        );
       },
       createRevision: async (revision) => {
         await this.requireInitialized(context);
@@ -1589,19 +1537,19 @@ export class PostgresPlatformState implements PlatformStateStore {
         await validateSecretBindingsAvailable(revision.namespaceId, secretBindings);
         await client.query(
           `INSERT INTO occ.agent_revisions
-           (id, namespace_id, agent_id, revision_number, admitted_spec, admitted_at)
-           VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+           (id, namespace_id, agent_id, revision_number, provider_id, admitted_spec, admitted_at)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
           [
             revision.id,
             revision.namespaceId,
             revision.agentId,
             revision.revision,
+            revision.providerId,
             JSON.stringify({
               configuration_id: revision.configurationId,
               configuration_kind: revision.configurationKind,
               configuration_generation: revision.configurationGeneration,
               draft_spec: revision.configuration,
-              provider_id: revision.providerId,
               harness: revision.harness,
               compute: revision.compute,
               ...(revision.sandboxDriverId === undefined

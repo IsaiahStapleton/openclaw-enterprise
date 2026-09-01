@@ -1,19 +1,7 @@
 import { isAbsolute } from "node:path";
-import type {
-  Driver,
-  DriverCapability,
-  ProviderDefinition,
-  ProviderRef,
-} from "@openclaw-enterprise/contracts";
-import { DRIVER_CAPABILITIES } from "@openclaw-enterprise/contracts";
+import type { Driver, ProviderDefinition, ProviderRef } from "@openclaw-enterprise/contracts";
 import { asRecord, immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
-import {
-  DependencyUnavailableError,
-  DriverSelectionError,
-  ResourceConflictError,
-  ScopeViolationError,
-} from "./errors.ts";
-import type { PlatformStateStore } from "./state/platform-state.ts";
+import { DriverSelectionError, ResourceConflictError, ScopeViolationError } from "./errors.ts";
 
 const PROVIDER_ID = /^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).{1,200}$/;
 const WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -150,44 +138,14 @@ export function assertConfiguredProvider(
 
 export function validateSelectedProviderDrivers(
   providers: readonly ProviderDefinition[],
-  selectedDrivers: readonly Driver[],
+  selectedServiceAccountDriver: Driver | undefined,
 ): void {
-  const providerMap = providerDefinitionMap(providers);
-  const selectedByCapability = new Map<DriverCapability, Driver>();
-  for (const driver of selectedDrivers) {
-    if (!DRIVER_CAPABILITIES.includes(driver.capability)) {
-      throw new DriverSelectionError("The selected Driver capability is invalid.");
-    }
-    selectedByCapability.set(driver.capability, driver);
-    if (driver.providerId !== undefined) {
-      const provider = providerMap.get(driver.providerId);
-      if (provider === undefined) {
-        throw new DriverSelectionError("A selected Driver declares an unknown Provider.");
-      }
-      if (provider.drivers[driver.capability as "service_account"] !== driver.id) {
-        throw new DriverSelectionError(
-          "A selected Driver declares incompatible Provider membership.",
-        );
-      }
-    }
-    for (const provider of providerMap.values()) {
-      const declared = provider.drivers[driver.capability as "service_account"];
-      if (declared === driver.id && driver.providerId !== provider.id) {
-        throw new DriverSelectionError(
-          "A Provider-owned Driver must declare its owning Provider identity.",
-        );
-      }
-    }
-  }
-  for (const provider of providerMap.values()) {
-    const selected = selectedByCapability.get("service_account");
-    if (selected === undefined || selected.id !== provider.drivers.service_account) {
+  for (const provider of providers) {
+    if (
+      selectedServiceAccountDriver === undefined ||
+      selectedServiceAccountDriver.id !== provider.drivers.service_account
+    ) {
       throw new DriverSelectionError("The configured Provider requires its ServiceAccount Driver.");
-    }
-    if (selected.providerId !== provider.id) {
-      throw new DriverSelectionError(
-        "The selected ServiceAccount Driver does not match its configured Provider.",
-      );
     }
   }
 }
@@ -220,28 +178,4 @@ export function validateServiceAccountProviderBinding(
       "The managed ServiceAccount credential does not match its Provider.",
     );
   }
-}
-
-export async function validateProviderState(
-  providers: readonly ProviderDefinition[],
-  state: PlatformStateStore,
-): Promise<void> {
-  const providerMap = providerDefinitionMap(providers);
-  await state.read(async (view) => {
-    for (const providerId of await view.revisions.listReferencedProviderIds()) {
-      assertConfiguredProvider(providerMap, providerId, "Persisted Provider reference");
-    }
-    for (const binding of await view.serviceAccounts.listServiceAccountProviderBindings()) {
-      const provider = providerMap.get(binding.providerId);
-      if (
-        provider === undefined ||
-        binding.driverId !== provider.drivers.service_account ||
-        binding.workspaceId !== provider.configuration.workspaceId
-      ) {
-        throw new DependencyUnavailableError(
-          "Persisted ServiceAccount Provider binding does not match configuration.",
-        );
-      }
-    }
-  });
 }

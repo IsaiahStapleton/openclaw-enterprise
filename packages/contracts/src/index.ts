@@ -386,7 +386,6 @@ export interface Driver {
   readonly id: string;
   readonly capability: DriverCapability;
   readonly implementation: string;
-  readonly providerId?: string;
   readonly computeLifecycleHooks?: ComputeLifecycleHooks;
 }
 

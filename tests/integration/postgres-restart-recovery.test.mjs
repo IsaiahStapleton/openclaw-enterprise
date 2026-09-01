@@ -89,7 +89,6 @@ async function createQueueRevision(pool, namespaceId, agentId, revisionNumber = 
     configuration_id: configuration.rows[0].configuration_id,
     configuration_kind: "agent",
     configuration_generation: 1,
-    provider_id: null,
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     compute: { id: "compute-queue", implementation: "deterministic-queue" },
   };

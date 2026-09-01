@@ -52,7 +52,6 @@ import {
   assertConfiguredProvider,
   providerDefinitionMap,
   validateProviderDefinitions,
-  validateProviderState,
   validateSelectedProviderDrivers,
   validateServiceAccountProviderBinding,
 } from "./providers.ts";
@@ -77,7 +76,6 @@ export {
 export {
   providerDefinitionMap,
   validateProviderDefinitions,
-  validateProviderState,
   validateSelectedProviderDrivers,
   validateServiceAccountProviderBinding,
 } from "./providers.ts";
@@ -544,7 +542,6 @@ export class OpenClawController {
       !driverHasValidLifecycleHooks(driver)
     )
       throw new DriverSelectionError("The Driver does not satisfy its exact capability contract.");
-    this.validateRegisteredProviderDriver(driver);
     const key = this.driverKey(driver.capability, driver.id);
     if (this.registry.has(key))
       throw new DriverSelectionError(
@@ -592,11 +589,7 @@ export class OpenClawController {
   }
 
   async validateProviderConfiguration(): Promise<void> {
-    validateSelectedProviderDrivers(
-      this.providers,
-      [...this.selections.values()].map((selected) => selected.driver),
-    );
-    await validateProviderState(this.providers, this.state);
+    validateSelectedProviderDrivers(this.providers, this.selections.get("service_account")?.driver);
   }
 
   async getInstallation(principalId: string): Promise<Readonly<Installation>> {
@@ -2080,21 +2073,6 @@ export class OpenClawController {
 
   private driverKey(selectedCapability: DriverCapability, driverId: string): string {
     return `${selectedCapability}\u0000${driverId}`;
-  }
-
-  private validateRegisteredProviderDriver(driver: Driver): void {
-    if (driver.providerId !== undefined) {
-      const provider = this.providerMap.get(driver.providerId);
-      if (provider === undefined)
-        throw new DriverSelectionError("A Driver declares an unknown Provider.");
-      if (driver.capability !== "service_account" || provider.drivers.service_account !== driver.id)
-        throw new DriverSelectionError("A Driver declares incompatible Provider membership.");
-      return;
-    }
-    for (const provider of this.providerMap.values()) {
-      if (driver.capability === "service_account" && provider.drivers.service_account === driver.id)
-        throw new DriverSelectionError("A Provider-owned Driver must declare its Provider.");
-    }
   }
 
   private providerId(value: ProviderRef | undefined, preserve?: ProviderRef): ProviderRef {

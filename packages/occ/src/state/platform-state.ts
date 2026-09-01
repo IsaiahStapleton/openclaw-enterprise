@@ -6,7 +6,6 @@ import type {
   Installation,
   Namespace,
   NamespaceStatus,
-  ProviderRef,
   Secret,
   SecretBindings,
   ServiceAccount,
@@ -90,7 +89,6 @@ export interface AgentRevisionReadRepository {
     revisionId: string,
   ): Promise<Readonly<AgentRevision> | undefined>;
   listRevisions(namespaceId: string, agentId: string): Promise<readonly Readonly<AgentRevision>[]>;
-  listReferencedProviderIds(): Promise<readonly ProviderRef[]>;
 }
 
 export interface AgentRevisionRepository extends AgentRevisionReadRepository {
@@ -157,13 +155,6 @@ export interface ServiceAccountReadRepository {
         readonly credentialIssued: boolean;
       }>
     | undefined
-  >;
-  listServiceAccountProviderBindings(): Promise<
-    readonly Readonly<{
-      readonly providerId: string;
-      readonly driverId: string;
-      readonly workspaceId: string;
-    }>[]
   >;
 }
 
@@ -796,7 +787,6 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       return account === undefined ? undefined : immutableCopy(account);
     },
     findServiceAccountProviderBinding: async () => undefined,
-    listServiceAccountProviderBindings: async () => Object.freeze([]),
     createServiceAccount: async (account) => {
       assertInitialized(snapshot);
       if (
@@ -999,39 +989,6 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
               .map((revision) => immutableCopy(revision))
           : [],
       ),
-    listReferencedProviderIds: async () => {
-      const providerIds: ProviderRef[] = [];
-      for (const namespace of snapshot.namespaces.values()) {
-        if (namespace.deletedAt !== undefined) continue;
-        const agents = Array.from(snapshot.agents.values()).filter(
-          (agent) => agent.namespaceId === namespace.id,
-        );
-        for (const agent of agents) {
-          providerIds.push(agent.providerId);
-          if (agent.activeRevisionId !== undefined) {
-            const active = snapshot.revisions
-              .get(agentKey(agent.namespaceId, agent.id))
-              ?.find((revision) => revision.id === agent.activeRevisionId);
-            if (active !== undefined) {
-              providerIds.push(active.providerId);
-            }
-          }
-        }
-      }
-      for (const operation of snapshot.operations) {
-        if (operation.kind !== "agent_revision") continue;
-        const revision = Array.from(snapshot.revisions.values())
-          .flat()
-          .find(
-            (candidate) =>
-              candidate.namespaceId === operation.namespaceId &&
-              candidate.id === operation.resourceId,
-          );
-        if (revision === undefined) continue;
-        providerIds.push(revision.providerId);
-      }
-      return Object.freeze(providerIds);
-    },
     createRevision: async (revision) => {
       assertInitialized(snapshot);
       assertAdmittedAgentRevision(revision);

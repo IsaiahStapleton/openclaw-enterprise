@@ -339,6 +339,7 @@ export const agentRevisions = occSchema.table(
     namespaceId: text("namespace_id").notNull(),
     agentId: text("agent_id").notNull(),
     revisionNumber: bigint("revision_number", { mode: "number" }).notNull(),
+    providerId: text("provider_id"),
     admittedSpec: jsonb("admitted_spec").$type<Record<string, unknown>>().notNull(),
     admittedAt: timestamp("admitted_at", { withTimezone: true }).notNull(),
   },
@@ -362,16 +363,20 @@ export const agentRevisions = occSchema.table(
       .onDelete("restrict"),
     check("agent_revisions_id_format", sql`${table.id} ~ ${identifierPatterns.revision}`),
     check("agent_revisions_revision_positive", sql`${table.revisionNumber} > 0`),
+    check(
+      "agent_revisions_provider_id_valid",
+      sql`${table.providerId} IS NULL OR (char_length(${table.providerId}) BETWEEN 1 AND 200 AND ${table.providerId} = btrim(${table.providerId}) AND ${table.providerId} !~ '[[:cntrl:]]')`,
+    ),
     check("agent_revisions_spec_object", sql`jsonb_typeof(${table.admittedSpec}) = 'object'`),
     check(
       "agent_revisions_admitted_snapshot",
       sql`(${table.admittedSpec} ?& ARRAY[
           'configuration_id', 'configuration_kind', 'configuration_generation',
-          'draft_spec', 'provider_id', 'harness', 'compute'
+          'draft_spec', 'harness', 'compute'
         ])
         AND (${table.admittedSpec}
           - 'configuration_id' - 'configuration_kind' - 'configuration_generation'
-          - 'draft_spec' - 'provider_id' - 'harness' - 'compute' - 'sandbox_driver_id'
+          - 'draft_spec' - 'harness' - 'compute' - 'sandbox_driver_id'
           - 'secret_driver_id' - 'secret_bindings' - 'service_account') = '{}'::jsonb
         AND jsonb_typeof(${table.admittedSpec}->'configuration_id') = 'string'
         AND (${table.admittedSpec}->>'configuration_id') ~ ${identifierPatterns.configuration}
@@ -382,15 +387,6 @@ export const agentRevisions = occSchema.table(
           BETWEEN 1 AND 9007199254740991
         AND mod((${table.admittedSpec}->>'configuration_generation')::numeric, 1) = 0
         AND jsonb_typeof(${table.admittedSpec}->'draft_spec') = 'object'
-        AND (
-          jsonb_typeof(${table.admittedSpec}->'provider_id') = 'null'
-          OR (
-            jsonb_typeof(${table.admittedSpec}->'provider_id') = 'string'
-            AND char_length(${table.admittedSpec}->>'provider_id') BETWEEN 1 AND 200
-            AND (${table.admittedSpec}->>'provider_id') = btrim(${table.admittedSpec}->>'provider_id')
-            AND (${table.admittedSpec}->>'provider_id') !~ '[[:cntrl:]]'
-          )
-        )
         AND jsonb_typeof(${table.admittedSpec}->'harness') = 'object'
         AND ((${table.admittedSpec}->'harness') ?& ARRAY['id', 'version', 'mode'])
         AND ((${table.admittedSpec}->'harness') - 'id' - 'version' - 'mode') = '{}'::jsonb

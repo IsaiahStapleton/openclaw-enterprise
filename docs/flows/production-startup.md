@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
 updated: 2026-09-01
-last_updated_session: codex/01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9
+last_updated_session: codex/01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6
 ---
 
 # Production Startup Flow
@@ -178,9 +178,10 @@ Driver must complete its cluster-access preflight before the API can serve.
 When trusted Installation configuration selects the ChatGPT ServiceAccount
 Driver, the API additionally loads its exact mounted administrator credential,
 constructs `Provider<ChatGPTClient>`, injects it into the bundled Driver, and
-registers the selected service-account capability. Both processes validate
-stored Provider ownership and live references before accepting work. A missing credential, mismatched Driver selection,
-or Compute Driver without exact credential-storage support fails startup. The
+registers the selected service-account capability. A missing credential,
+mismatched Driver selection, or Compute Driver without exact credential-storage
+support fails startup. Saved Provider references are checked at use; stale
+records do not prevent startup or authorized repair through the API. The
 worker neither constructs this provider client nor receives provider-admin
 authority.
 
@@ -273,6 +274,8 @@ through reauthorization, infrastructure effects, and result persistence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 10:19: Validate Provider configuration at startup and exact saved ownership at use, preserving API repair access. (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158)
 
 - 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 

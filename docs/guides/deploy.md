@@ -635,8 +635,9 @@ must be configured together; omit both for native API-key installations. Set an
 Agent's `providerId` to `openai` when deploying its matching managed access token.
 See [Provider configuration](../reference/providers.md#installation-configuration)
 for membership, workspace ownership, credential lifetime, and API-only admin
-access. Existing managed resources must be cleaned up through their original
-Provider before removal or workspace retargeting; see
+access. Retain the original Provider configuration for exact cleanup of existing
+managed resources. Removal or retargeting leaves affected operations blocked
+until their references are repaired; see
 [safe Provider changes](../reference/providers.md#startup-identity-and-safe-provider-changes).
 
 ### Provision system Secrets and install

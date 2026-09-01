@@ -35,7 +35,7 @@ rejected.
 The [ChatGPT Driver](../../../apps/controller/src/drivers/service-account/chatgpt.ts)
 is an optional Installation selection. Trusted startup requires its owning
 `type: chatgpt` Provider and exact `service_account` membership together. The
-Driver receives `Provider<ChatGPTClient>` and declares its `providerId`; the
+Driver receives `Provider<ChatGPTClient>` and keeps ownership private; the
 [Provider reference](../providers.md) owns membership and client construction.
 The Driver selection accepts `id` and an empty
 `configuration`; installing an arbitrary ServiceAccount package through the

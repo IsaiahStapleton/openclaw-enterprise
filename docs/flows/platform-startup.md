@@ -1,7 +1,7 @@
 ---
 created: 2026-08-20
 updated: 2026-09-01
-last_updated_session: codex/01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9
+last_updated_session: codex/01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6
 ---
 
 # Platform Startup Flow
@@ -115,10 +115,11 @@ Each IAM Driver loads current persisted policy for every identity lookup and
 authorization decision. Only `server.mjs` reads the mounted ChatGPT admin key,
 constructs `Provider<ChatGPTClient>`, and injects it into the optional
 ServiceAccount Driver factory. The worker consumes only nonsecret Provider
-metadata and never receives the client or admin credential. Both processes
-validate required member selections and persisted Provider ownership before
-accepting requests or queue work. Lifecycle owners remain stable, and controller Drivers
-are never exposed to tenant workloads.
+metadata and never receives the client or admin credential. Startup validates
+required member selections without scanning saved Provider references. Exact
+ownership is checked when credentials or deployments are used, allowing the API
+to start so stale references can be repaired. Lifecycle owners remain stable,
+and controller Drivers are never exposed to tenant workloads.
 
 ### 3. Compose the API according to its persistence and execution mode
 
@@ -232,6 +233,8 @@ execution begins in the adjacent
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 10:19: Validate Provider configuration at startup and exact saved ownership at use, preserving API repair access. (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158)
 
 - 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 

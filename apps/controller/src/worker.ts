@@ -42,7 +42,6 @@ import {
 import {
   providerDefinitionMap,
   validateProviderDefinitions,
-  validateProviderState,
   validateServiceAccountProviderBinding,
 } from "@openclaw-enterprise/occ";
 import type { InstallationRuntimeDrivers } from "./composition/installation-config.ts";
@@ -317,7 +316,6 @@ export class ControllerWorker {
       throw new Error("The platform Installation must be bootstrapped before starting the worker.");
     this.installation = installation;
     validatePersistedNativeIAMState(await this.loadIAMState());
-    await validateProviderState(this.providers, this.state);
     this.attachLifecycleDrivers(this.iam);
     if (this.mode === "production") {
       const compute = this.compute as ComputeDriver & { preflight?: () => Promise<void> };

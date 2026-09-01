@@ -36,9 +36,9 @@ establish publisher trust.
 
 An Installation-scoped [Provider](../providers.md) groups an authenticated
 client with exact related Driver selections. `provider[].drivers` owns
-membership; related Drivers expose the matching `providerId` and independent
-Drivers omit it. All declared members are required and must match the selected
-registry `(capability, id)`. The bundled ChatGPT Provider requires its selected
+membership, and composition injects the Provider into the concrete member.
+The generic Driver contract has no Provider identity field. All declared members
+are required and must match the selected registry `(capability, id)`. The bundled ChatGPT Provider requires its selected
 ServiceAccount Driver. There is no per-Agent Driver selection.
 
 Runtime Provider injection is limited to that bundled Driver. Installed factory

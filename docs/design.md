@@ -715,8 +715,8 @@ unverifiable enforcement fails closed.
 `ServiceAccountDriver` capability. It receives `Provider<ChatGPTClient>`; the
 client owns the configured workspace, trusted transport, and mounted admin
 credential. `provider[].drivers` declares the exact related Driver selections,
-and each member Driver declares the matching `providerId`. All related Drivers
-are required. The current ChatGPT Provider requires the selected ServiceAccount
+and composition injects the Provider into its concrete member. The generic Driver
+contract has no Provider identity field. All related Drivers are required. The current ChatGPT Provider requires the selected ServiceAccount
 Driver; installed-package Provider injection is deferred. Only the API
 entrypoint initializes the client and concrete Driver. The worker shares
 nonsecret Provider metadata but receives neither the admin credential nor a

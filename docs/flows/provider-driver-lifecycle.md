@@ -1,203 +1,134 @@
 ---
 created: 2026-09-01
 updated: 2026-09-01
-last_updated_session: codex/01a05dc0-eaf1-74b0-820f-27166af28dec
+last_updated_session: codex/01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6
 ---
 
 # Provider and Driver lifecycle flow
 
 ## Overview
 
-Installation startup resolves a Provider's required Drivers, creates its client
-only in the API process, and validates persisted ownership before accepting work.
-An authorized Agent deployment freezes its optional Provider reference into a
-revision. The worker checks that reference and any managed credential binding
-before handing the revision to Compute. This flow stops at that handoff; the
-[credential delivery flow](service-account-driver-credential-delivery.md) covers
-token projection and Codex login.
-
-The [Provider reference](../reference/providers.md) owns configuration, nullable
-association semantics, cleanup requirements, and deferred capabilities.
+Installation composition constructs the API's Provider client and bundled
+Driver. An authorized deployment freezes an Agent's nullable Provider reference;
+the worker verifies exact credential ownership before handing it to Compute.
+This flow stops at that handoff. The [Provider reference](../reference/providers.md)
+owns configuration and policy; the [credential delivery flow](service-account-driver-credential-delivery.md)
+covers token projection and Codex login.
 
 ## Entry Points
 
-- Startup: `apps/controller/src/server.mjs:start` and the top-level
-  `apps/controller/src/worker.mjs` load the same Installation configuration.
-- API: `packages/occ/src/index.ts:OpenClawController.createAgent`, `updateAgent`,
-  and `deployAgent` admit exact Namespace-scoped requests.
-- Queue: `apps/controller/src/worker.ts:ControllerWorker` reconciles an admitted
-  AgentRevision after lease acquisition and IAM reauthorization.
-- Assumptions: the selected PostgreSQL Installation is initialized; configuration
-  declares exact Driver membership; the API has its protected mounted admin key;
-  callers have existing exact Configuration, Agent, ServiceAccount, and Secret
-  permissions. Account creation and credential issuance are separate operations.
+- Startup: `apps/controller/src/server.mjs:start` and `apps/controller/src/worker.mjs`.
+- API: `packages/occ/src/index.ts:OpenClawController.createAgent`, `updateAgent`, `deployAgent`.
+- Queue: `apps/controller/src/worker.ts:ControllerWorker`.
+- Assumptions: initialized PostgreSQL Installation, valid Driver configuration,
+  API-only mounted admin key when ChatGPT is selected, and exact caller permissions.
+  Account creation and credential issuance remain separate operations.
 
 ## Flow
 
 ```mermaid
 graph TD
-  subgraph Startup["Controller startup"]
-    A["Load Installation Provider definitions"] --> B["Validate selected member Drivers"]
-    B -->|invalid| C["Reject startup before accepting work"]
-    B -->|API| D["Build Provider client and inject bundled ServiceAccount Driver"]
-    B -->|worker| E["Retain nonsecret Provider metadata"]
+  subgraph Composition["Installation composition"]
+    A["Validate Provider and selected Driver configuration"] --> B["API builds client and injects bundled Driver"]
+    A --> C["Worker keeps nonsecret metadata"]
   end
-  subgraph Admission["OCC API"]
-    D --> V["Validate stored ownership before serving"]
-    V -->|valid| F["Authorize and save Agent with nullable providerId"]
-    V -->|invalid| C
-    F --> G["Authorize deployment and resolve saved Provider"]
-    G -->|managed token| H["Check exact Provider, Driver, workspace, account and issuance"]
-    G -->|independent credentials| I["Persist immutable revision and enqueue"]
-    H -->|match| I
-    H -->|mismatch| J["Reject admission with resource conflict"]
+  subgraph API["OCC API"]
+    B --> D["Authorize and save Agent reference"]
+    D --> E["Authorize deployment and check Provider binding"]
+    E -->|valid| F["Persist immutable revision and enqueue"]
+    E -->|invalid| G["Reject affected operation"]
   end
-  subgraph Reconciliation["Controller worker"]
-    E --> W["Validate stored ownership before polling"]
-    W -->|valid| K["Claim revision and reauthorize deployment actor"]
-    W -->|invalid| C
-    I --> K
-    K --> L["Resolve frozen Provider and recheck binding metadata"]
-    L -->|valid| M["Handoff revision to Compute"]
-    L -->|invalid| N["Fail candidate through existing recovery"]
+  subgraph Worker["Controller worker"]
+    C --> H["Claim revision and reauthorize actor"]
+    F --> H
+    H --> I["Check frozen Provider and credential ownership"]
+    I -->|valid| J["Handoff to Compute"]
+    I -->|mismatch| K["Fail candidate through existing recovery"]
+    I -->|read failure| L["Retry dependency failure"]
   end
 ```
 
 ## Execution Trace
 
-### 1. Parse Provider definitions and member selections
+### 1. Construct the API client and its member Driver
 
 `apps/controller/src/composition/installation-config.ts:loadInstallationConfiguration`
 
-The API and worker independently parse trusted `provider` definitions alongside
-ordinary Driver selections through the shared
-`packages/occ/src/providers.ts:validateProviderDefinitions`. `provider[].drivers` is the sole membership source;
-the bundled `chatgpt` definition requires its selected `service_account` member.
-The loader rejects duplicate IDs, missing or unselected related Drivers, and
-conflicting ownership. It preserves one Installation-selected Driver per
-capability and existing installed-package factory arguments.
-
-Omitting Providers or using `[]` leaves independent Drivers and providerless
-Agents available. Retired integration keys fail with a format-change hint.
-
-### 2. Establish API client ownership and validate saved identity
-
 `apps/controller/src/server.mjs:start`
 
-`apps/controller/src/composition/production.ts:composeProduction`
+The loader validates Provider definitions and the required selected
+`service_account` member. The API reads `apiKeyPath`, constructs `ChatGPTClient`,
+and injects its Provider into the bundled factory. Controller/state injection
+and Compute credential storage retain their existing lifecycle. The worker
+loads only nonsecret definitions. Neither process scans saved references at
+startup; stale records can be repaired through the API.
 
-`packages/occ/src/index.ts:OpenClawController.validateProviderConfiguration`
+### 2. Save Agent intent and manage credentials separately
 
-The API reads `apiKeyPath`, constructs the ChatGPT client, and supplies its
-`Provider<ChatGPTClient>` to the bundled ServiceAccount factory. That factory
-receives controller and PostgreSQL state later during composition; it preserves
-Compute credential-storage support. The returned Driver declares its Provider
-ID before registry use. Its client uses the fixed trusted provider endpoint,
-bounded requests, sanitized errors, and existing exact deletion behavior.
+`packages/occ/src/index.ts:OpenClawController.createAgent`, `updateAgent`
 
-The worker shares only the nonsecret definition and selected identities. It
-constructs neither a runtime Provider client nor a ServiceAccount Driver. Both
-processes validate stored managed binding identities, draft references, and
-active or nonterminal revision references against configuration before accepting
-work through `packages/occ/src/providers.ts:validateProviderState`. A missing or retargeted Provider rejects startup without adopting old
-accounts. Key or TTL changes preserve identity; historical inactive revisions
-do not prevent a cleaned-up Provider's removal.
+Exact-resource authorization precedes persistence. Create omission saves null;
+PATCH omission preserves the reference, and explicit null clears it. A nonnull
+ID must be configured. These requests make no provider call.
 
-### 3. Admit the Agent draft and bind managed credentials separately
+Separately, `apps/controller/src/drivers/service-account/chatgpt.ts:ChatGPTServiceAccountDriver`
+creates accounts and issues/deletes credentials. Its private binding records
+Provider, Driver, workspace, exact Namespace/account, and issuance identity.
+Operations recheck that binding; existing compensation and Secret storage own
+cleanup. Changing configuration cannot adopt an old account under a new owner.
 
-`packages/occ/src/index.ts:OpenClawController.createAgent`
-
-`packages/occ/src/index.ts:OpenClawController.updateAgent`
-
-Existing exact-resource authorization precedes draft persistence. A nonnull
-`providerId` must name configured metadata. Create omission saves `null`; update
-omission preserves the saved value; explicit `null` clears it. No client call,
-account creation, credential issuance, or deployment occurs here.
-
-Separately, `ChatGPTServiceAccountDriver.create` and `createCredential` in
-`apps/controller/src/drivers/service-account/chatgpt.ts` perform authorized
-provider operations. PostgreSQL stores the private Provider, Driver, workspace,
-Namespace/account binding and issued credential identity. Issuance and deletion
-recheck exact ownership. Existing transaction compensation and account-owned
-Secret storage remain responsible for cleanup.
-
-### 4. Freeze the Provider reference during deployment admission
+### 3. Freeze the revision and enqueue work
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
-Within existing admission locks, OCC authorizes the exact Agent, Configuration,
-and optional account/Secrets, then resolves the draft's saved Provider and
-required selected Drivers. `validateServiceAccountProviderBinding` in
-`packages/occ/src/providers.ts` handles managed `access_token` ownership: the private binding
-must match the Provider, selected member Driver, configured workspace, and exact
-Namespace/account, with recorded credential issuance. A missing or mismatched
-Provider rejects admission as a resource conflict. Native API-key references
-remain valid with `providerId: null`.
+Under admission locks, OCC authorizes the Agent, Configuration, account and
+Secrets, resolves its Provider, and calls `validateServiceAccountProviderBinding`
+from `packages/occ/src/providers.ts` for managed tokens. Provider, member Driver,
+workspace, exact account scope, and issuance must match; dedicated Codex is
+required. Native API-key credentials can remain providerless.
 
-OCC persists the immutable revision with `providerId`, the admitted configuration,
-Harness/Compute selections, and opaque credential reference, then enqueues work
-in the existing transaction. The API returns `202`; this means admitted and
-queued, not active. Subsequent Agent edits do not change this snapshot.
+The transaction inserts an immutable revision and queues reconciliation. The
+snapshot uses `occ.agent_revisions.provider_id`, protected by the existing
+whole-row immutability trigger. The API returns `202`; later draft edits do not
+change the admitted reference or imply candidate activation.
 
-### 5. Recheck metadata before worker effects
+### 4. Reauthorize and check metadata before Compute effects
 
-`apps/controller/src/worker.ts:ControllerWorker.processRevision`
+`apps/controller/src/worker.ts:ControllerWorker.resolveRevisionProvider`
 
-`packages/occ/src/state/platform-state.ts:ServiceAccountReadRepository.findServiceAccountProviderBinding`
+After claiming work and current IAM authorization, the worker resolves the
+frozen reference and reads `findServiceAccountProviderBinding` for the exact
+Namespace/account. Only Provider, Driver, workspace and issuance metadata leave
+the repository; upstream IDs, admin keys, and secret values remain private.
 
-After claiming work and reauthorizing its requesting actor through current IAM,
-`ControllerWorker.resolveRevisionProvider` resolves the revision's frozen Provider
-metadata. It repeats the
-managed credential ownership check through the read-only binding projection,
-which exposes only Provider, Driver, workspace, and issuance metadata. The exact
-Namespace/account scope is enforced by the repository query predicate. External
-account and credential IDs remain private; no admin key, provider call, or
-secret value crosses this boundary.
-
-Success hands the admitted revision to existing Compute reconciliation and its
-ordered lifecycle hooks. An unavailable Provider produces the permanent result
-`PROVIDER_UNAVAILABLE`. A validation mismatch in the managed binding metadata
-produces `SERVICE_ACCOUNT_PROVIDER_MISMATCH`; an unexpected metadata read failure
-uses the existing retry result, `DEPENDENCY_UNAVAILABLE`. These paths prevent
-candidate activation and follow existing finalization/recovery, preserving an
-earlier active workload where supported. Provider association adds no hook
-coordinator or credential fallback.
+Valid candidates enter Compute reconciliation. Missing Providers produce
+`PROVIDER_UNAVAILABLE`; binding mismatches produce
+`SERVICE_ACCOUNT_PROVIDER_MISMATCH`. Both use existing permanent-failure
+recovery. Unexpected metadata reads use `DEPENDENCY_UNAVAILABLE` retries.
+An earlier active workload is preserved where existing recovery supports it.
 
 ## Debugging and Verification
 
-- Startup rejection after a Provider edit: compare exact configured Provider,
-  member Driver, and workspace identity with saved bindings and live references.
-  Restore the original configuration to finish cleanup; do not retarget old
-  bindings. Follow [safe Provider changes](../reference/providers.md#startup-identity-and-safe-provider-changes).
-- Agent create/PATCH `400` or `404`: check that `providerId` is null or a known
-  nonempty ID. PATCH still requires `configurationId`.
-- Managed-token deployment conflict: verify a matching nonnull Provider, exact
-  same-Namespace account, selected member Driver, configured workspace, issued
-  credential, and dedicated Codex Harness. Credential kind alone is insufficient.
-- Compare Agent and AgentRevision reads after a draft edit: the current draft
-  changes, while the admitted revision retains its previous `providerId`.
-- Focused configuration, API, ServiceAccount, PostgreSQL, and Helm suites provide
-  local contract checks; use [testing](../testing.md) for invocation and
-  infrastructure requirements. This document records source behavior, not a
-  successful live test run. The opt-in
-  [real provider suite](../../tests/integration/service-account-driver-real.test.mjs)
-  requires authorized credentials, disposable Kubernetes/PostgreSQL, and real
-  runtime images before it can prove upstream lifecycle or a model response.
-- Inspect rendered Helm Deployments and NetworkPolicies: the API alone mounts
-  `/etc/openclaw/chatgpt/admin-key` and receives provider TCP/443 `/32` egress.
-  The Installation `apiKeyPath` must equal that mounted path.
+- A process starting does not prove every saved Provider reference is valid.
+  Repair stale drafts through the authorized API; restore original configuration
+  to clean up old managed accounts. See [Provider changes](../reference/providers.md#startup-identity-and-safe-provider-changes).
+- Agent `400`/`404`: check nullable/configured `providerId` and PATCH's required `configurationId`.
+- Managed-token `409`: verify exact binding scope, Provider/Driver/workspace,
+  issuance, and dedicated Codex. A failed candidate must not activate.
+- PostgreSQL tests verify column snapshots, isolation, stale-reference repair,
+  worker mismatch/retry and cleanup. API/Driver tests cover nullable input and
+  lifecycle behavior. [Testing](../testing.md) owns commands and prerequisites.
+- Helm/image tests verify packaging and API-only key access. They do not prove
+  live account operations or model turns; the [real provider suite](../../tests/integration/service-account-driver-real.test.mjs)
+  requires authorized credentials and selected disposable runtime infrastructure.
 
 ## Related docs
 
 - [Providers](../reference/providers.md)
-- [Agents](../reference/agents.md)
-- [Service accounts](../reference/service-accounts.md)
-- [Driver selection](../reference/drivers/selection.md)
-- [Shared platform startup](platform-startup.md)
+- [Platform startup](platform-startup.md)
 - [Production startup](production-startup.md)
 - [Controller worker](controller-worker.md)
-- [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
-- [Implementation specification](../../specs/17-provider-driver-abstraction.md)
+- [Credential delivery](service-account-driver-credential-delivery.md)
 
 ## Manual Notes
 
@@ -205,5 +136,6 @@ coordinator or credential fallback.
 
 ## Changelog
 
+- 2026-09-01 10:18: Keep ownership checks at use, remove global startup traversal, and store revision Provider references in immutable columns. (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158)
 - 2026-09-01 09:22: Narrowed worker binding projection description and separated validation mismatch from retryable metadata read failure. (01a05dc0-eaf1-74b0-820f-27166af28dec - 7baefec9779b87a18d188bbf428697f0028fd3d7)
 - 2026-09-01 08:47: Trace Provider membership, API client injection, nullable Agent admission, immutable deployment, and worker metadata checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)

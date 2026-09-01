@@ -1,272 +1,38 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
-import pg from "pg";
-import { NativeIAMDriver, createAuthPrincipalSeed } from "../../packages/iam/src/index.ts";
-import { OpenClawController, PostgresPlatformState } from "../../packages/occ/src/index.ts";
-import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
-import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
-import { createDevelopmentIAMState } from "../helpers/development-iam-state.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
-import { createInstallationDriverConfiguration } from "../helpers/installation-driver-configuration.mjs";
-import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
-import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
+import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
+import {
+  alternateWorkspaceId,
+  availablePort,
+  createAccessTokenServiceAccount,
+  createBootstrappedProviderState,
+  createProviderController,
+  createProviderFixture,
+  providerDefinition,
+  providerId,
+  requiresPostgres,
+  seedProviderBinding,
+  serviceAccountDriverId,
+  startProviderlessDevelopmentServer,
+  stopProcess,
+  waitFor,
+  workspaceId,
+} from "../helpers/postgres-provider-state.mjs";
 
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
-const requiresPostgres = {
-  skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests.",
-};
-const workspaceId = "11111111-1111-4111-8111-111111111111";
-const alternateWorkspaceId = "22222222-2222-4222-8222-222222222222";
-const providerId = "openai";
-const serviceAccountDriverId = "chatgpt-service-accounts";
-const apiKeyPath = "/etc/openclaw/chatgpt/admin-key";
-
-function providerDefinition(options = {}) {
-  return {
-    id: providerId,
-    type: "chatgpt",
-    configuration: {
-      workspaceId: options.workspaceId ?? workspaceId,
-      apiKeyPath: options.apiKeyPath ?? apiKeyPath,
-      ...(options.credentialTtlSeconds === undefined
-        ? {}
-        : { credentialTtlSeconds: options.credentialTtlSeconds }),
+async function request(origin, session, method, path, body) {
+  const response = await fetch(`${origin}${path}`, {
+    method,
+    headers: {
+      ...authenticatedHeaders(session),
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
-    drivers: { service_account: options.serviceAccountDriverId ?? serviceAccountDriverId },
-  };
-}
-
-function authorizedPrincipal(iam) {
-  const required = [
-    ["create", "configuration"],
-    ["create", "agent"],
-    ["update", "agent"],
-    ["deploy", "agent"],
-    ["read", "configuration"],
-    ["read", "service_account"],
-    ["read", "agent_revision"],
-  ];
-  const roles = new Set(
-    iam.roles
-      .filter(({ permissions }) =>
-        required.every(([action, resourceKind]) =>
-          permissions.some(
-            (permission) =>
-              permission.action === action && permission.resourceKind === resourceKind,
-          ),
-        ),
-      )
-      .map(({ id }) => id),
-  );
-  return iam.identities.find(
-    ({ id, kind }) =>
-      kind === "principal" &&
-      iam.bindings.some(
-        (binding) =>
-          binding.subjectKind === "identity" &&
-          binding.subjectId === id &&
-          binding.namespaceId === undefined &&
-          binding.resourceKind === undefined &&
-          roles.has(binding.roleId),
-      ),
-  );
-}
-
-async function waitFor(description, read, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const value = await read();
-    if (value !== undefined) return value;
-    await delay(20);
-  }
-  assert.fail(`Timed out waiting for ${description}.`);
-}
-
-async function ensureInstallation(state) {
-  const existing = await state.loadInstallation();
-  if (existing !== undefined) return existing;
-
-  const installation = {
-    id: `ins_${randomUUID()}`,
-    name: "Provider ownership PostgreSQL integration",
-    createdAt: new Date().toISOString(),
-  };
-  state.setBootstrapNativeIAM(
-    createDevelopmentIAMState(
-      createAuthPrincipalSeed(installation.id, "provider-ownership-integration", {
-        id: `account-provider-ownership-${randomUUID()}`,
-      }),
-    ),
-  );
-  await state.transact((unit) => unit.installations.createInstallation(installation));
-  return installation;
-}
-
-async function cleanupNamespaces(pool, namespaceIds) {
-  if (namespaceIds.length === 0) return;
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(
-      `UPDATE occ.controller_work
-       SET state = 'failed_permanent',
-           completed_at = clock_timestamp(),
-           claim_token = NULL,
-           lease_expires_at = NULL,
-           updated_at = clock_timestamp()
-       WHERE namespace_id = ANY($1::text[]) AND state IN ('queued', 'claimed')`,
-      [namespaceIds],
-    );
-    await client.query(
-      `UPDATE occ.agents
-       SET provider_id = NULL,
-           service_account_id = NULL,
-           active_revision_id = NULL
-       WHERE namespace_id = ANY($1::text[])`,
-      [namespaceIds],
-    );
-    await client.query("DELETE FROM occ.service_accounts WHERE namespace_id = ANY($1::text[])", [
-      namespaceIds,
-    ]);
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-function registerCoreDrivers(controller, state, options = {}) {
-  const iam = new NativeIAMDriver(state, { id: "native-iam", implementation: "native" });
-  const compute = createDevelopmentComputeDriver();
-  const configuration = createTestConfigurationDriver();
-  controller.registerDriver(iam);
-  controller.selectDriver("iam", iam.id);
-  controller.registerDriver(compute);
-  controller.selectDriver("compute", compute.id);
-  controller.registerDriver(configuration);
-  controller.selectDriver("configuration", configuration.id);
-  if (options.serviceAccountProviderId !== undefined) {
-    const driver = {
-      id: options.serviceAccountDriverId ?? serviceAccountDriverId,
-      capability: "service_account",
-      implementation: "chatgpt",
-      providerId: options.serviceAccountProviderId,
-      async create() {
-        assert.fail("The provider ownership sidecar seeds external account bindings directly.");
-      },
-      async createCredential() {
-        assert.fail("The provider ownership sidecar seeds external credentials directly.");
-      },
-      async delete() {
-        assert.fail("The provider ownership sidecar does not delete upstream accounts.");
-      },
-    };
-    controller.registerDriver(driver);
-    controller.selectDriver("service_account", driver.id);
-  }
-  return { compute, configuration };
-}
-
-function createController(fixture, options = {}) {
-  const providers = options.providers ?? [providerDefinition()];
-  const controller = new OpenClawController(fixture.installation, {
-    state: fixture.state,
-    providers,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal: AbortSignal.timeout(5_000),
   });
-  registerCoreDrivers(controller, fixture.state, {
-    serviceAccountProviderId: providers.length === 0 ? undefined : providerId,
-    serviceAccountDriverId: providers[0]?.drivers.service_account,
-  });
-  return controller;
-}
-
-async function createFixture(context) {
-  const pool = new pg.Pool({ connectionString: databaseUrl, max: 8 });
-  const workerPool = new pg.Pool({ connectionString: databaseUrl, max: 8 });
-  const state = new PostgresPlatformState(pool);
-  const namespaceIds = new Set();
-  let worker;
-
-  context.after(async () => {
-    if (worker === undefined) await workerPool.end();
-    else await worker.stop();
-    await cleanupNamespaces(pool, [...namespaceIds]);
-    await pool.end();
-  });
-
-  const installation = await ensureInstallation(state);
-  const actor = authorizedPrincipal(await state.loadNativeIAMState());
-  assert.ok(actor, "persisted IAM must contain an unrestricted provider-ownership Principal");
-
-  function track(namespace) {
-    namespaceIds.add(namespace.id);
-    return namespace;
-  }
-
-  async function cleanup(...namespaces) {
-    const ids = namespaces.filter(Boolean).map(({ id }) => id);
-    await cleanupNamespaces(pool, ids);
-    for (const id of ids) namespaceIds.delete(id);
-  }
-
-  function startWorker(options = {}) {
-    const calls = [];
-    const compute = createDevelopmentComputeDriver();
-    const providers = options.providers ?? [providerDefinition()];
-    const installation = createInstallationDriverConfiguration();
-    installation.provider = providers;
-    installation.drivers.compute.id = compute.id;
-    installation.drivers.service_account = {
-      id: providers[0]?.drivers.service_account ?? serviceAccountDriverId,
-    };
-    worker = createControllerWorker({
-      pool: workerPool,
-      drivers: {
-        installation,
-        computeDriver: {
-          ...compute,
-          async prepareRevision(revision, operationContext) {
-            calls.push({
-              action: "prepare",
-              revisionId: revision.id,
-              providerId: revision.providerId,
-            });
-            return compute.prepareRevision(revision, operationContext);
-          },
-          async retireRevision(revision) {
-            calls.push({
-              action: "retire",
-              revisionId: revision.id,
-              providerId: revision.providerId,
-            });
-            return compute.retireRevision(revision);
-          },
-        },
-        configurationDriver: createTestConfigurationDriver({
-          id: installation.drivers.configuration.id,
-        }),
-        secretDriver: createTestSecretDriver({ id: installation.drivers.secret.id }),
-        createIAMDriver(platformState) {
-          return new NativeIAMDriver(platformState, {
-            id: installation.drivers.iam.id,
-            implementation: "native",
-          });
-        },
-      },
-      pollIntervalMs: 15,
-      leaseDurationMs: 30_000,
-      maxAttempts: 5,
-      emit: () => {},
-    });
-    return { worker, calls };
-  }
-
-  return { pool, state, workerPool, installation, actor, track, cleanup, startWorker };
+  return { response, payload: await response.json() };
 }
 
 async function createReadyNamespace(fixture, label) {
@@ -286,43 +52,6 @@ async function createConfiguration(fixture, controller, namespace, harness = "co
     kind: "agent",
     values: createHarnessConfiguration(harness, "gpt-4.1"),
   });
-}
-
-async function createAccessTokenServiceAccount(fixture, namespace, label) {
-  const id = `sa_${randomUUID()}`;
-  const credential = {
-    kind: "access_token",
-    secretRef: {
-      name: `provider-${label}-${randomUUID()}`,
-      key: "OPENAI_API_KEY",
-    },
-  };
-  return fixture.state.transact(async (unit) => {
-    await unit.serviceAccounts.createServiceAccount({
-      id,
-      namespaceId: namespace.id,
-      name: `provider-${label}-${randomUUID()}`,
-    });
-    return unit.serviceAccounts.updateCredential(namespace.id, id, credential);
-  });
-}
-
-async function seedProviderBinding(fixture, account, options = {}) {
-  await fixture.pool.query(
-    `INSERT INTO occ.service_account_driver_bindings
-       (service_account_id, namespace_id, provider_id, driver_id, external_account_id,
-        external_credential_id, workspace_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [
-      account.id,
-      account.namespaceId,
-      options.providerId ?? providerId,
-      options.driverId ?? serviceAccountDriverId,
-      `external-account-${randomUUID()}`,
-      options.credentialIssued === false ? null : `external-credential-${randomUUID()}`,
-      options.workspaceId ?? workspaceId,
-    ],
-  );
 }
 
 async function waitForWork(pool, revisionId, expected) {
@@ -362,11 +91,129 @@ async function expectProviderConflict(operation, pattern) {
 }
 
 test(
+  "development API starts with stale Provider references and permits repair through Agent update",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const email = "postgres-admin@openclaw.local";
+    const password = "postgres-development-password";
+    const authSecret = "openclaw-provider-repair-auth-secret-minimum-32-bytes";
+    const fixture = await createBootstrappedProviderState(context, {
+      email,
+      password,
+      authSecret,
+      origin,
+      installationName: "PostgreSQL Provider repair integration",
+    });
+    let server = await startProviderlessDevelopmentServer(context, {
+      port,
+      origin,
+      authSecret,
+      configurationRoot: fixture.configurationRoot,
+    });
+    let session = await signInWithEmailPassword({ fetch, origin, email, password });
+
+    const namespace = await request(origin, session, "POST", "/namespaces", {
+      name: `provider-repair-${randomUUID()}`,
+    });
+    assert.equal(namespace.response.status, 201);
+    fixture.track(namespace.payload.data);
+    await fixture.state.transact((unit) =>
+      unit.namespaces.transitionNamespaceStatus(namespace.payload.data.id, "provisioning", "ready"),
+    );
+    const configuration = await request(
+      origin,
+      session,
+      "POST",
+      `/namespaces/${namespace.payload.data.id}/configurations`,
+      {
+        kind: "agent",
+        values: createHarnessConfiguration("codex", "gpt-4.1"),
+      },
+    );
+    assert.equal(configuration.response.status, 201);
+    const agent = await request(
+      origin,
+      session,
+      "POST",
+      `/namespaces/${namespace.payload.data.id}/agents`,
+      {
+        name: `provider-repair-${randomUUID()}`,
+        configurationId: configuration.payload.data.id,
+        executionMode: "dedicated",
+      },
+    );
+    assert.equal(agent.response.status, 201);
+
+    await stopProcess(server.child);
+    await fixture.pool.query(
+      "UPDATE occ.agents SET provider_id = $1 WHERE namespace_id = $2 AND id = $3",
+      [providerId, namespace.payload.data.id, agent.payload.data.id],
+    );
+
+    server = await startProviderlessDevelopmentServer(context, {
+      port,
+      origin,
+      authSecret,
+      configurationRoot: fixture.configurationRoot,
+    });
+    session = await signInWithEmailPassword({ fetch, origin, email, password });
+    const visible = await request(
+      origin,
+      session,
+      "GET",
+      `/namespaces/${namespace.payload.data.id}/agents/${agent.payload.data.id}`,
+    );
+    assert.equal(visible.response.status, 200, JSON.stringify(visible.payload));
+    assert.equal(visible.payload.data.providerId, providerId);
+
+    // Startup must allow API repair. Deploying a stale Provider reference is rejected
+    // through the API's canonical unknown-reference response before admission.
+    const deploy = await request(
+      origin,
+      session,
+      "POST",
+      `/namespaces/${namespace.payload.data.id}/agents/${agent.payload.data.id}/deploy`,
+    );
+    assert.equal(deploy.response.status, 404, JSON.stringify(deploy.payload));
+    assert.equal(deploy.payload.error.code, "NOT_FOUND");
+    await assertNoRevision(
+      fixture.pool,
+      namespace.payload.data.id,
+      agent.payload.data.id,
+      "stale Provider deployment must be rejected before an AgentRevision is persisted",
+    );
+
+    const repaired = await request(
+      origin,
+      session,
+      "PATCH",
+      `/namespaces/${namespace.payload.data.id}/agents/${agent.payload.data.id}`,
+      {
+        configurationId: configuration.payload.data.id,
+        providerId: null,
+        serviceAccountId: null,
+        executionMode: "dedicated",
+      },
+    );
+    assert.equal(repaired.response.status, 200);
+    assert.equal(repaired.payload.data.providerId, null);
+
+    const persisted = await fixture.pool.query(
+      "SELECT provider_id, service_account_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+      [namespace.payload.data.id, agent.payload.data.id],
+    );
+    assert.deepEqual(persisted.rows, [{ provider_id: null, service_account_id: null }]);
+  },
+);
+
+test(
   "PostgreSQL Provider ownership persists exact Agent associations and admits only matching managed bindings",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
-    const fixture = await createFixture(context);
-    const controller = createController(fixture);
+    const fixture = await createProviderFixture(context);
+    const controller = createProviderController(fixture);
 
     const draftNamespace = await createReadyNamespace(fixture, "drafts");
     const draftConfiguration = await createConfiguration(fixture, controller, draftNamespace);
@@ -404,8 +251,12 @@ test(
       exactNamespace,
       "openclaw",
     );
-    const account = await createAccessTokenServiceAccount(fixture, exactNamespace, "exact");
-    await seedProviderBinding(fixture, account);
+    const account = await createAccessTokenServiceAccount(
+      fixture.state,
+      exactNamespace.id,
+      "exact",
+    );
+    await seedProviderBinding(fixture.pool, account);
 
     const binding = await fixture.state.read((view) =>
       view.serviceAccounts.findServiceAccountProviderBinding(exactNamespace.id, account.id),
@@ -442,7 +293,8 @@ test(
     assert.deepEqual(calls, [{ action: "prepare", revisionId: admitted.id, providerId }]);
     const persistedRevision = await fixture.pool.query(
       `SELECT a.provider_id AS agent_provider_id,
-              r.admitted_spec->>'provider_id' AS revision_provider_id
+              r.provider_id AS revision_provider_id,
+              r.admitted_spec ? 'provider_id' AS admitted_spec_has_provider_id
        FROM occ.agents AS a
        JOIN occ.agent_revisions AS r
          ON r.namespace_id = a.namespace_id AND r.agent_id = a.id
@@ -450,7 +302,11 @@ test(
       [exactNamespace.id, dedicated.id, admitted.id],
     );
     assert.deepEqual(persistedRevision.rows, [
-      { agent_provider_id: providerId, revision_provider_id: providerId },
+      {
+        agent_provider_id: providerId,
+        revision_provider_id: providerId,
+        admitted_spec_has_provider_id: false,
+      },
     ]);
 
     const embedded = await controller.createAgent(fixture.actor.id, {
@@ -477,7 +333,7 @@ test(
       "embedded OpenClaw must be denied before a managed-account revision is persisted",
     );
 
-    const sameIdentity = createController(fixture, {
+    const sameIdentity = createProviderController(fixture, {
       providers: [
         providerDefinition({
           apiKeyPath: "/etc/openclaw/chatgpt/rotated-admin-key",
@@ -486,24 +342,6 @@ test(
       ],
     });
     await sameIdentity.validateProviderConfiguration();
-    await assert.rejects(
-      () => createController(fixture, { providers: [] }).validateProviderConfiguration(),
-      /Persisted Provider reference does not match a configured Provider/,
-    );
-    await assert.rejects(
-      () =>
-        createController(fixture, {
-          providers: [providerDefinition({ workspaceId: alternateWorkspaceId })],
-        }).validateProviderConfiguration(),
-      /Persisted ServiceAccount Provider binding does not match configuration/,
-    );
-    await assert.rejects(
-      () =>
-        createController(fixture, {
-          providers: [providerDefinition({ serviceAccountDriverId: "retargeted-service-account" })],
-        }).validateProviderConfiguration(),
-      /Persisted ServiceAccount Provider binding does not match configuration/,
-    );
 
     await controller.updateAgent(fixture.actor.id, {
       namespaceId: exactNamespace.id,
@@ -551,7 +389,7 @@ test(
       [exactNamespace.id, dedicated.id],
     );
     assert.deepEqual(activeReplacement.rows, [{ active_revision_id: replacement.id }]);
-    await createController(fixture, { providers: [] }).validateProviderConfiguration();
+    await createProviderController(fixture, { providers: [] }).validateProviderConfiguration();
 
     await fixture.cleanup(draftNamespace, exactNamespace);
 
@@ -590,11 +428,11 @@ test(
       const namespace = await createReadyNamespace(fixture, scenario.label);
       const configuration = await createConfiguration(fixture, controller, namespace);
       const brokenAccount = await createAccessTokenServiceAccount(
-        fixture,
-        namespace,
+        fixture.state,
+        namespace.id,
         scenario.label,
       );
-      await seedProviderBinding(fixture, brokenAccount, scenario.binding);
+      await seedProviderBinding(fixture.pool, brokenAccount, scenario.binding);
       const agent = await controller.createAgent(fixture.actor.id, {
         namespaceId: namespace.id,
         name: `${scenario.label}-${randomUUID()}`,
@@ -625,9 +463,9 @@ test(
     const sourceNamespace = await createReadyNamespace(fixture, "cross-namespace-source");
     const [targetConfiguration, sourceAccount] = await Promise.all([
       createConfiguration(fixture, controller, targetNamespace),
-      createAccessTokenServiceAccount(fixture, sourceNamespace, "cross-source"),
+      createAccessTokenServiceAccount(fixture.state, sourceNamespace.id, "cross-source"),
     ]);
-    await seedProviderBinding(fixture, sourceAccount);
+    await seedProviderBinding(fixture.pool, sourceAccount);
     assert.equal(
       await fixture.state.read((view) =>
         view.serviceAccounts.findServiceAccountProviderBinding(
