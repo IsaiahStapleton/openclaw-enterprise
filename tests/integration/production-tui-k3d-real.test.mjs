@@ -7,10 +7,11 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import {
+  createKubernetesClient,
   createKubernetesInstallationConfiguration,
+  kubectlArguments as buildKubectlArguments,
   kubernetesHash as hash,
   validateExplicitK3dLoopbackContext,
 } from "../helpers/kubernetes-real.mjs";
@@ -65,12 +66,6 @@ test(
         (text, credential) => text.split(credential).join("[redacted]"),
         String(value),
       );
-    const kubeArgs = [
-      "--kubeconfig",
-      selection.kubeconfigPath,
-      "--context",
-      selection.kubernetesContext,
-    ];
     const names = [system, foreign];
     let forwarding;
     let cookie;
@@ -114,20 +109,21 @@ test(
         child.stdin.on("error", () => {});
         child.stdin.end(input);
       });
-    const kubectl = (...args) => run("kubectl", [...kubeArgs, ...args]);
+    const kubectl = (...args) => run("kubectl", buildKubectlArguments(selection, args));
+    const kubernetes = createKubernetesClient({
+      selection,
+      kubectl,
+      waitTimeoutMs: 180_000,
+      waitIntervalMs: 1_000,
+    });
+    const kubeArgs = kubernetes.kubectlArguments([]);
     const apply = (object) =>
-      run("kubectl", [...kubeArgs, "apply", "-f", "-"], { input: JSON.stringify(object) });
+      run("kubectl", kubernetes.kubectlArguments(["apply", "-f", "-"]), {
+        input: JSON.stringify(object),
+      });
     const get = async (kind, name, namespace = system) =>
-      JSON.parse(await kubectl("-n", namespace, "get", kind, name, "-o", "json"));
-    const waitFor = async (label, action, timeout = 180_000) => {
-      const deadline = Date.now() + timeout;
-      while (Date.now() < deadline) {
-        const result = await action();
-        if (result) return result;
-        await delay(1000);
-      }
-      throw new Error(`Timed out: ${label}`);
-    };
+      kubernetes.resource(kind, name, namespace);
+    const { resources: resourcesFor, waitFor } = kubernetes;
     const metadata = (name, namespace = system, labels = {}) => ({
       name,
       namespace,
@@ -190,708 +186,731 @@ test(
         );
     });
 
-    for (const name of names)
+    async function installProductionControlPlane() {
+      for (const name of names)
+        await apply({
+          apiVersion: "v1",
+          kind: "Namespace",
+          metadata: { name, labels: { "oce-test": suffix } },
+        });
+      const postgresPassword = secret(),
+        migrationPassword = secret(),
+        appPassword = secret();
+      await createSecret("postgres-bootstrap", {
+        password: postgresPassword,
+        "init.sql": `CREATE ROLE occ_migrator LOGIN PASSWORD '${migrationPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nCREATE ROLE occ_app LOGIN PASSWORD '${appPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nGRANT CREATE ON DATABASE openclaw_enterprise TO occ_migrator;\nCREATE SCHEMA occ AUTHORIZATION occ_migrator;\nCREATE SCHEMA drizzle AUTHORIZATION occ_migrator;\nREVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
+      });
+      await createClaim("postgres-data");
+      await createClaim("bootstrap-password");
       await apply({
         apiVersion: "v1",
-        kind: "Namespace",
-        metadata: { name, labels: { "oce-test": suffix } },
-      });
-    const postgresPassword = secret(),
-      migrationPassword = secret(),
-      appPassword = secret();
-    await createSecret("postgres-bootstrap", {
-      password: postgresPassword,
-      "init.sql": `CREATE ROLE occ_migrator LOGIN PASSWORD '${migrationPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nCREATE ROLE occ_app LOGIN PASSWORD '${appPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nGRANT CREATE ON DATABASE openclaw_enterprise TO occ_migrator;\nCREATE SCHEMA occ AUTHORIZATION occ_migrator;\nCREATE SCHEMA drizzle AUTHORIZATION occ_migrator;\nREVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
-    });
-    await createClaim("postgres-data");
-    await createClaim("bootstrap-password");
-    await apply({
-      apiVersion: "v1",
-      kind: "Pod",
-      metadata: metadata("postgres", system, { app: "postgres" }),
-      spec: {
-        securityContext: { ...podSecurity, runAsUser: 999, runAsGroup: 999, fsGroup: 999 },
-        containers: [
-          {
-            name: "postgres",
-            image: images.postgres,
-            imagePullPolicy: "IfNotPresent",
-            securityContext,
-            resources,
-            env: [
-              { name: "POSTGRES_DB", value: "openclaw_enterprise" },
-              {
-                name: "POSTGRES_PASSWORD",
-                valueFrom: { secretKeyRef: { name: "postgres-bootstrap", key: "password" } },
+        kind: "Pod",
+        metadata: metadata("postgres", system, { app: "postgres" }),
+        spec: {
+          securityContext: { ...podSecurity, runAsUser: 999, runAsGroup: 999, fsGroup: 999 },
+          containers: [
+            {
+              name: "postgres",
+              image: images.postgres,
+              imagePullPolicy: "IfNotPresent",
+              securityContext,
+              resources,
+              env: [
+                { name: "POSTGRES_DB", value: "openclaw_enterprise" },
+                {
+                  name: "POSTGRES_PASSWORD",
+                  valueFrom: { secretKeyRef: { name: "postgres-bootstrap", key: "password" } },
+                },
+              ],
+              volumeMounts: [
+                { name: "data", mountPath: "/var/lib/postgresql" },
+                { name: "init", mountPath: "/docker-entrypoint-initdb.d", readOnly: true },
+              ],
+              readinessProbe: {
+                exec: { command: ["pg_isready", "-U", "postgres", "-d", "openclaw_enterprise"] },
+                initialDelaySeconds: 2,
+                periodSeconds: 2,
               },
-            ],
-            volumeMounts: [
-              { name: "data", mountPath: "/var/lib/postgresql" },
-              { name: "init", mountPath: "/docker-entrypoint-initdb.d", readOnly: true },
-            ],
-            readinessProbe: {
-              exec: { command: ["pg_isready", "-U", "postgres", "-d", "openclaw_enterprise"] },
-              initialDelaySeconds: 2,
-              periodSeconds: 2,
             },
-          },
-        ],
-        volumes: [
-          { name: "data", persistentVolumeClaim: { claimName: "postgres-data" } },
-          {
-            name: "init",
-            secret: {
-              secretName: "postgres-bootstrap",
-              items: [{ key: "init.sql", path: "init.sql" }],
-            },
-          },
-        ],
-      },
-    });
-    await apply({
-      apiVersion: "v1",
-      kind: "Service",
-      metadata: metadata("postgres"),
-      spec: { selector: { app: "postgres" }, ports: [{ port: 5432 }] },
-    });
-    await waitPod("postgres");
-    const postgresIP = (await get("pod", "postgres")).status.podIP;
-    const configuration = createKubernetesInstallationConfiguration({
-      authentication: { mode: "inCluster" },
-      platformNamespace: system,
-      gatewayImage: images.runtime,
-      codexImage: images.runtime,
-      cluster: `production-tui-${suffix}`,
-    });
-    await createSecret("occ-installation-startup", {
-      "installation.yaml": JSON.stringify(configuration),
-    });
-    await createSecret("occ-database", {
-      "application-url": `postgresql://occ_app:${appPassword}@postgres.${system}.svc.cluster.local:5432/openclaw_enterprise`,
-      "migration-url": `postgresql://occ_migrator:${migrationPassword}@postgres.${system}.svc.cluster.local:5432/openclaw_enterprise`,
-    });
-    await createSecret("occ-auth", { secret: secret() });
-    const endpoint = (await get("endpoints", "kubernetes", "default")).subsets[0];
-    const port = await new Promise((resolve) => {
-      const server = net.createServer();
-      server.listen(0, "127.0.0.1", () => {
-        const result = server.address().port;
-        server.close(() => resolve(result));
-      });
-    });
-    const baseURL = `https://localhost:${port}`;
-    const adminEmail = `admin-${suffix}@example.invalid`;
-    const values = {
-      images: { controller: images.controller },
-      installation: { name: `Production TUI ${suffix}` },
-      auth: { baseUrl: baseURL },
-      bootstrap: { adminEmail, password: { claimName: "bootstrap-password" } },
-      database: { cidr: `${postgresIP}/32` },
-      cluster: { cidr: `${endpoint.addresses[0].ip}/32`, port: endpoint.ports[0].port },
-      api: { clients: [{ namespace: system, podLabels: { app: "production-tui-proxy" } }] },
-      resources,
-    };
-    await writeFile(join(directory, "values.json"), JSON.stringify(values), { mode: 0o600 });
-    await run(
-      "helm",
-      [
-        "upgrade",
-        "--install",
-        release,
-        "deploy/helm/openclaw-enterprise",
-        "-n",
-        system,
-        "--kubeconfig",
-        selection.kubeconfigPath,
-        "--kube-context",
-        selection.kubernetesContext,
-        "-f",
-        join(directory, "values.json"),
-        "--wait",
-        "--timeout",
-        "300s",
-      ],
-      { timeout: 330_000 },
-    );
-    await record("Helm initialization, API and worker ready", { namespace: system });
-
-    await run("openssl", [
-      "req",
-      "-x509",
-      "-newkey",
-      "rsa:2048",
-      "-nodes",
-      "-days",
-      "2",
-      "-keyout",
-      join(directory, "tls.key"),
-      "-out",
-      join(directory, "tls.crt"),
-      "-subj",
-      "/CN=localhost",
-      "-addext",
-      "subjectAltName=DNS:localhost,IP:127.0.0.1",
-    ]);
-    await createSecret("proxy-tls", {
-      "tls.key": await readFile(join(directory, "tls.key"), "utf8"),
-      "tls.crt": await readFile(join(directory, "tls.crt"), "utf8"),
-    });
-    await apply({
-      apiVersion: "v1",
-      kind: "ConfigMap",
-      metadata: metadata("proxy-code"),
-      data: {
-        "https-proxy.mjs": await readFile("tests/fixtures/production-tui/https-proxy.mjs", "utf8"),
-      },
-    });
-    await apply({
-      apiVersion: "v1",
-      kind: "Pod",
-      metadata: metadata("operator", system, {
-        app: "production-tui-proxy",
-        "app.kubernetes.io/name": "approved-gateway-client",
-      }),
-      spec: {
-        securityContext: podSecurity,
-        containers: [
-          {
-            name: "operator",
-            image: images.node,
-            imagePullPolicy: "IfNotPresent",
-            command: ["node", "/code/https-proxy.mjs"],
-            securityContext,
-            resources,
-            env: [
-              { name: "TLS_CERT_FILE", value: "/tls/tls.crt" },
-              { name: "TLS_KEY_FILE", value: "/tls/tls.key" },
-              {
-                name: "TARGET_URL",
-                value: `http://openclaw-enterprise-api.${system}.svc.cluster.local:8080`,
+          ],
+          volumes: [
+            { name: "data", persistentVolumeClaim: { claimName: "postgres-data" } },
+            {
+              name: "init",
+              secret: {
+                secretName: "postgres-bootstrap",
+                items: [{ key: "init.sql", path: "init.sql" }],
               },
-            ],
-            volumeMounts: [
-              { name: "code", mountPath: "/code", readOnly: true },
-              { name: "tls", mountPath: "/tls", readOnly: true },
-              { name: "bootstrap", mountPath: "/bootstrap", readOnly: true },
-            ],
-            readinessProbe: { tcpSocket: { port: 8443 }, periodSeconds: 2 },
-          },
-        ],
-        volumes: [
-          { name: "code", configMap: { name: "proxy-code" } },
-          { name: "tls", secret: { secretName: "proxy-tls" } },
-          { name: "bootstrap", persistentVolumeClaim: { claimName: "bootstrap-password" } },
-        ],
-      },
-    });
-    await waitPod("operator");
-    forwarding = spawn(
-      "kubectl",
-      [
-        ...kubeArgs,
-        "-n",
-        system,
-        "port-forward",
-        "pod/operator",
-        `${port}:8443`,
-        "--address",
-        "127.0.0.1",
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    let forwardOutput = "";
-    forwarding.stdout.on("data", (data) => {
-      forwardOutput += data;
-    });
-    forwarding.stderr.on("data", (data) => {
-      forwardOutput += data;
-    });
-    await waitFor("TLS proxy forwarding", () => forwardOutput.includes("Forwarding from"));
-    const ca = await readFile(join(directory, "tls.crt"));
-    const request = (method, path, body, authenticated = true) =>
-      new Promise((resolve, reject) => {
-        const data = body === undefined ? undefined : JSON.stringify(body);
-        const req = https.request(
-          `${baseURL}${path}`,
-          {
-            method,
-            ca,
-            family: 4,
-            headers: {
-              ...(authenticated && cookie ? { cookie } : {}),
-              ...(data
-                ? { "content-type": "application/json", "content-length": Buffer.byteLength(data) }
-                : {}),
             },
-          },
-          (response) => {
-            let output = "";
-            response.on("data", (chunk) => {
-              output += chunk;
-            });
-            response.on("end", () => {
-              for (const value of secrets)
-                assert.ok(!output.includes(value), "API response leaked a protected credential");
-              resolve({
-                status: response.statusCode,
-                headers: response.headers,
-                body: output ? JSON.parse(output) : null,
-              });
-            });
-          },
-        );
-        req.on("error", reject);
-        req.setTimeout(30_000, () => req.destroy(new Error("API request timeout")));
-        req.end(data);
+          ],
+        },
       });
-    const password = (
-      await kubectl(
-        "-n",
-        system,
-        "exec",
-        "operator",
-        "--",
-        "cat",
-        "/bootstrap/initial-admin-password",
-      )
-    ).trim();
-    secrets.push(password);
-    const login = await request(
-      "POST",
-      "/api/auth/sign-in/email",
-      { email: adminEmail, password },
-      false,
-    );
-    assert.equal(login.status, 200, "production sign-in failed");
-    assert.ok(
-      login.headers["set-cookie"].some((header) => /;\s*Secure/i.test(header)),
-      "production cookie must be Secure",
-    );
-    cookie = login.headers["set-cookie"].map((header) => header.split(";")[0]).join("; ");
-    const installation = await request("GET", "/installation");
-    assert.equal(installation.status, 200);
-    await record("Authenticated production HTTPS Installation read", {
-      installationId: installation.body.data.id,
-    });
-    const api = async (method, path, body, expected = 200) => {
-      const result = await request(method, path, body);
-      assert.equal(
-        result.status,
-        expected,
-        redact(`${method} ${path}: ${JSON.stringify(result.body)}`),
-      );
-      return result.body.data;
-    };
-    assert.equal((await request("GET", "/installation", undefined, false)).status, 401);
-    const namespace = await api("POST", "/namespaces", { name: `production-tui-${suffix}` }, 201);
-    const tenant = await waitFor("backing tenant namespace", async () => {
-      const list = JSON.parse(
-        await kubectl(
-          "get",
-          "namespaces",
-          "-l",
-          `openclaw.dev/namespace=${namespace.id}`,
-          "-o",
-          "json",
-        ),
-      );
-      if (!list.items.length) return false;
-      assert.equal(list.items.length, 1);
-      assert.equal(list.items[0].metadata.annotations["openclaw.dev/namespace-id"], namespace.id);
-      return list.items[0].metadata.name;
-    });
-    names.push(tenant);
-    for (const [name, role, account] of [
-      ["worker", "worker", "worker"],
-      ["configuration", "configuration", "api"],
-      ["secrets", "api", "api"],
-    ])
       await apply({
-        apiVersion: "rbac.authorization.k8s.io/v1",
-        kind: "RoleBinding",
-        metadata: metadata(`production-tui-${name}`, tenant),
-        roleRef: {
-          apiGroup: "rbac.authorization.k8s.io",
-          kind: "ClusterRole",
-          name: `${release}-openclaw-tenant-${role}`,
-        },
-        subjects: [
-          { kind: "ServiceAccount", name: `openclaw-enterprise-${account}`, namespace: system },
-        ],
+        apiVersion: "v1",
+        kind: "Service",
+        metadata: metadata("postgres"),
+        spec: { selector: { app: "postgres" }, ports: [{ port: 5432 }] },
       });
-    await waitFor("OCC Namespace ready", async () => {
-      const current = await api("GET", `/namespaces/${namespace.id}`);
-      assert.ok(!["failed", "deleting"].includes(current.status), `Namespace ${current.status}`);
-      return current.status === "ready";
-    });
-    // A connectivity demo has no identity wizard; first-run BOOTSTRAP.md would override its nonce prompt.
-    const nativeConfiguration = createHarnessConfiguration("openclaw", model);
-    nativeConfiguration.agents.defaults.skipBootstrap = true;
-    const agentConfiguration = await api(
-      "POST",
-      `/namespaces/${namespace.id}/configurations`,
-      { kind: "agent", values: nativeConfiguration },
-      201,
-    );
-    const agent = await api(
-      "POST",
-      `/namespaces/${namespace.id}/agents`,
-      { name: `tui-${suffix}`, configurationId: agentConfiguration.id, executionMode: "embedded" },
-      201,
-    );
-    const agentHash = hash(agent.id);
-    const gatewayToken = secret();
-    await createSecret(
-      `openclaw-agent-transport-${agentHash}`,
-      { "gateway-token": gatewayToken, "app-server-token": secret() },
-      tenant,
-    );
-    await createSecret(
-      `openclaw-agent-model-${agentHash}`,
-      { OPENAI_API_KEY: process.env.OPENAI_API_KEY },
-      tenant,
-    );
-    await record("API-created Namespace ready and embedded Agent provisioned", {
-      namespaceId: namespace.id,
-      tenant,
-      agentId: agent.id,
-    });
-
-    // Both clients use real listening services; a timeout alone is not a positive control.
-    await apply({
-      apiVersion: "v1",
-      kind: "Pod",
-      metadata: metadata("unapproved", foreign),
-      spec: {
-        securityContext: podSecurity,
-        containers: [
-          {
-            name: "probe",
-            image: images.node,
-            imagePullPolicy: "IfNotPresent",
-            securityContext,
-            resources,
-            command: [
-              "node",
-              "-e",
-              "require('node:net').createServer(s=>s.end()).listen(8123,'0.0.0.0')",
-            ],
-            readinessProbe: { tcpSocket: { port: 8123 }, periodSeconds: 2 },
-          },
-        ],
-      },
-    });
-    await waitPod("unapproved", foreign);
-    const foreignIP = (await get("pod", "unapproved", foreign)).status.podIP;
-    const probe = async (podNamespace, pod, host, targetPort, container) => {
-      const code =
-        "const net=require('node:net');const s=net.createConnection({host:process.argv[1],port:Number(process.argv[2])});s.setTimeout(3000);let done=false;function end(result){if(done)return;done=true;console.log(result);s.destroy()}s.on('connect',()=>end('connected'));s.on('timeout',()=>end('timeout'));s.on('error',e=>end(e.code));";
-      return (
-        await kubectl(
-          "-n",
-          podNamespace,
-          "exec",
-          pod,
-          ...(container ? ["-c", container] : []),
-          "--",
-          "node",
-          "-e",
-          code,
-          host,
-          String(targetPort),
-        )
-      ).trim();
-    };
-    const apiService = (await get("service", "openclaw-enterprise-api")).spec.clusterIP;
-    assert.equal(await probe(system, "operator", apiService, 8080), "connected");
-    // Enforcing CNIs may REJECT immediately or DROP; the listening positive control stays live.
-    assert.ok(
-      ["timeout", "ECONNREFUSED", "EHOSTUNREACH"].includes(
-        await probe(foreign, "unapproved", apiService, 8080),
-      ),
-    );
-    assert.equal(await probe(system, "operator", apiService, 8080), "connected");
-    assert.equal(await probe(system, "operator", foreignIP, 8123), "connected");
-    await record("Production API NetworkPolicy allows operator and denies foreign namespace");
-
-    let previousPod;
-    let finalPod;
-    let finalRevision;
-    for (const round of [1, 2]) {
-      // Each bodyless deployment freezes a new immutable revision of the same Agent.
-      const revision = await api(
-        "POST",
-        `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
-        undefined,
-        202,
-      );
-      const configMap = `gateway-${agentHash}-rev-${hash(revision.id)}`;
-      await waitFor(
-        `Agent active revision ${round}`,
-        async () =>
-          (await api("GET", `/namespaces/${namespace.id}/agents/${agent.id}`)).activeRevisionId ===
-          revision.id,
-        300_000,
-      );
-      const gateway = await waitFor(`Ready gateway for revision ${round}`, async () => {
-        const list = JSON.parse(
-          await kubectl(
-            "-n",
-            tenant,
-            "get",
-            "pods",
-            "-l",
-            `app.kubernetes.io/managed-by=openclaw-enterprise,openclaw.dev/namespace=${namespace.id},openclaw.dev/agent=${agent.id},openclaw.dev/workload-role=gateway`,
-            "-o",
-            "json",
-          ),
-        );
-        const matches = list.items.filter(
-          (pod) =>
-            !pod.metadata.deletionTimestamp &&
-            pod.status.phase === "Running" &&
-            pod.status.conditions?.some(
-              (condition) => condition.type === "Ready" && condition.status === "True",
-            ) &&
-            pod.spec.volumes.some((volume) => volume.configMap?.name === configMap),
-        );
-        assert.ok(matches.length <= 1, "Ambiguous active gateway Pod");
-        return matches[0];
+      await waitPod("postgres");
+      const postgresIP = (await get("pod", "postgres")).status.podIP;
+      const configuration = createKubernetesInstallationConfiguration({
+        authentication: { mode: "inCluster" },
+        platformNamespace: system,
+        gatewayImage: images.runtime,
+        codexImage: images.runtime,
+        cluster: `production-tui-${suffix}`,
       });
-      if (previousPod)
-        assert.notEqual(
-          gateway.metadata.uid,
-          previousPod.metadata.uid,
-          "Cutover must serve the new immutable config in a new Pod",
-        );
-      previousPod = gateway;
-      finalPod = gateway.metadata.name;
-      finalRevision = revision.id;
-      const tui = (state, session, prompt, invalid = false) => [
-        ...kubeArgs,
-        "-n",
-        tenant,
-        "exec",
-        "-it",
-        gateway.metadata.name,
-        "-c",
-        "gateway",
-        "--",
-        "env",
-        "-u",
-        "OPENAI_API_KEY",
-        `OPENCLAW_STATE_DIR=${state}`,
-        ...(invalid ? [`OPENCLAW_GATEWAY_TOKEN=invalid-${suffix}`] : []),
-        "node",
-        "/app/openclaw.mjs",
-        "tui",
-        "--session",
-        session,
-        "--message",
-        prompt,
-      ];
-      if (round === 1) {
-        const nonce = `DENIED_${suffix}`;
-        const prompt = `Reply exactly: ${nonce}`;
-        const output = await run("python3", [
-          "tests/helpers/tui-pty.py",
-          "expect-failure",
-          "--nonce",
-          nonce,
-          "--prompt",
-          prompt,
-          "--timeout",
-          "60",
-          "--",
-          "kubectl",
-          ...tui(`/tmp/occ-denied-${suffix}`, `denied-${suffix}`, prompt, true),
-        ]);
-        for (const value of secrets)
-          assert.ok(!output.includes(value), "Denied TUI output leaked a credential");
-        assert.equal(JSON.parse(output).denied, true);
-        await record("Fresh-state invalid gateway token rejected");
-      }
-      const first = `TUI_${round}_A_${randomBytes(8).toString("hex")}`;
-      const second = `TUI_${round}_B_${randomBytes(8).toString("hex")}`;
-      const firstPrompt = `Reply exactly: ${first}`,
-        secondPrompt = `Reply exactly: ${second}`;
-      const output = await run(
-        "python3",
+      await createSecret("occ-installation-startup", {
+        "installation.yaml": JSON.stringify(configuration),
+      });
+      await createSecret("occ-database", {
+        "application-url": `postgresql://occ_app:${appPassword}@postgres.${system}.svc.cluster.local:5432/openclaw_enterprise`,
+        "migration-url": `postgresql://occ_migrator:${migrationPassword}@postgres.${system}.svc.cluster.local:5432/openclaw_enterprise`,
+      });
+      await createSecret("occ-auth", { secret: secret() });
+      const endpoint = (await get("endpoints", "kubernetes", "default")).subsets[0];
+      const port = await new Promise((resolve) => {
+        const server = net.createServer();
+        server.listen(0, "127.0.0.1", () => {
+          const result = server.address().port;
+          server.close(() => resolve(result));
+        });
+      });
+      const baseURL = `https://localhost:${port}`;
+      const adminEmail = `admin-${suffix}@example.invalid`;
+      const values = {
+        images: { controller: images.controller },
+        installation: { name: `Production TUI ${suffix}` },
+        auth: { baseUrl: baseURL },
+        bootstrap: { adminEmail, password: { claimName: "bootstrap-password" } },
+        database: { cidr: `${postgresIP}/32` },
+        cluster: { cidr: `${endpoint.addresses[0].ip}/32`, port: endpoint.ports[0].port },
+        api: { clients: [{ namespace: system, podLabels: { app: "production-tui-proxy" } }] },
+        resources,
+      };
+      await writeFile(join(directory, "values.json"), JSON.stringify(values), { mode: 0o600 });
+      await run(
+        "helm",
         [
-          "tests/helpers/tui-pty.py",
-          "conversation",
-          "--first-nonce",
-          first,
-          "--first-prompt",
-          firstPrompt,
-          "--second-nonce",
-          second,
-          "--second-prompt",
-          secondPrompt,
-          "--timeout",
-          "240",
-          "--",
-          "kubectl",
-          ...tui(`/tmp/occ-tui-${suffix}`, `production-${suffix}-${round}`, firstPrompt),
-        ],
-        { timeout: 550_000 },
-      );
-      for (const value of secrets)
-        assert.ok(!output.includes(value), "TUI output leaked a credential");
-      const conversation = JSON.parse(output);
-      assert.equal(conversation.exitCode, 0);
-      await writeFile(join(directory, `tui-revision-${round}.json`), output, { mode: 0o600 });
-      assert.equal(
-        (await get("pod", gateway.metadata.name, tenant)).metadata.uid,
-        gateway.metadata.uid,
-      );
-      assert.equal(
-        await kubectl(
+          "upgrade",
+          "--install",
+          release,
+          "deploy/helm/openclaw-enterprise",
           "-n",
-          tenant,
-          "exec",
-          gateway.metadata.name,
-          "-c",
-          "gateway",
-          "--",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1);console.log('ready')})",
-        ),
-        "ready\n",
+          system,
+          "--kubeconfig",
+          selection.kubeconfigPath,
+          "--kube-context",
+          selection.kubernetesContext,
+          "-f",
+          join(directory, "values.json"),
+          "--wait",
+          "--timeout",
+          "300s",
+        ],
+        { timeout: 330_000 },
       );
-      await record(
-        `Revision ${round}: two assistant replies in one TUI, Ctrl+D leaves gateway ready`,
-        {
-          revisionId: revision.id,
-          pod: gateway.metadata.name,
-          podUid: gateway.metadata.uid,
-          configMap,
-          firstReply: conversation.firstReplyLine,
-          secondReply: conversation.secondReplyLine,
+      await record("Helm initialization, API and worker ready", { namespace: system });
+
+      await run("openssl", [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-days",
+        "2",
+        "-keyout",
+        join(directory, "tls.key"),
+        "-out",
+        join(directory, "tls.crt"),
+        "-subj",
+        "/CN=localhost",
+        "-addext",
+        "subjectAltName=DNS:localhost,IP:127.0.0.1",
+      ]);
+      await createSecret("proxy-tls", {
+        "tls.key": await readFile(join(directory, "tls.key"), "utf8"),
+        "tls.crt": await readFile(join(directory, "tls.crt"), "utf8"),
+      });
+      await apply({
+        apiVersion: "v1",
+        kind: "ConfigMap",
+        metadata: metadata("proxy-code"),
+        data: {
+          "https-proxy.mjs": await readFile(
+            "tests/fixtures/production-tui/https-proxy.mjs",
+            "utf8",
+          ),
         },
-      );
-      const gatewayService = (await get("service", `gateway-${agentHash}`, tenant)).spec.clusterIP;
-      assert.equal(await probe(system, "operator", gatewayService, 8080), "connected");
-      assert.ok(
-        ["timeout", "ECONNREFUSED", "EHOSTUNREACH"].includes(
-          await probe(foreign, "unapproved", gatewayService, 8080),
-        ),
-      );
-      assert.equal(await probe(system, "operator", gatewayService, 8080), "connected");
-      assert.ok(
-        ["timeout", "ECONNREFUSED", "EHOSTUNREACH"].includes(
-          await probe(tenant, gateway.metadata.name, foreignIP, 8123, "gateway"),
-        ),
-      );
-      assert.equal(await probe(system, "operator", foreignIP, 8123), "connected");
-      await record(`Revision ${round}: gateway ingress and private egress isolation`);
-    }
-    for (const [verb, resource] of [
-      ["get", "secrets"],
-      ["create", "rolebindings"],
-    ]) {
-      const allowed = await run(
+      });
+      await apply({
+        apiVersion: "v1",
+        kind: "Pod",
+        metadata: metadata("operator", system, {
+          app: "production-tui-proxy",
+          "app.kubernetes.io/name": "approved-gateway-client",
+        }),
+        spec: {
+          securityContext: podSecurity,
+          containers: [
+            {
+              name: "operator",
+              image: images.node,
+              imagePullPolicy: "IfNotPresent",
+              command: ["node", "/code/https-proxy.mjs"],
+              securityContext,
+              resources,
+              env: [
+                { name: "TLS_CERT_FILE", value: "/tls/tls.crt" },
+                { name: "TLS_KEY_FILE", value: "/tls/tls.key" },
+                {
+                  name: "TARGET_URL",
+                  value: `http://openclaw-enterprise-api.${system}.svc.cluster.local:8080`,
+                },
+              ],
+              volumeMounts: [
+                { name: "code", mountPath: "/code", readOnly: true },
+                { name: "tls", mountPath: "/tls", readOnly: true },
+                { name: "bootstrap", mountPath: "/bootstrap", readOnly: true },
+              ],
+              readinessProbe: { tcpSocket: { port: 8443 }, periodSeconds: 2 },
+            },
+          ],
+          volumes: [
+            { name: "code", configMap: { name: "proxy-code" } },
+            { name: "tls", secret: { secretName: "proxy-tls" } },
+            { name: "bootstrap", persistentVolumeClaim: { claimName: "bootstrap-password" } },
+          ],
+        },
+      });
+      await waitPod("operator");
+      forwarding = spawn(
         "kubectl",
         [
           ...kubeArgs,
           "-n",
-          tenant,
-          "auth",
-          "can-i",
-          verb,
-          resource,
-          "--as",
-          `system:serviceaccount:${system}:openclaw-enterprise-worker`,
+          system,
+          "port-forward",
+          "pod/operator",
+          `${port}:8443`,
+          "--address",
+          "127.0.0.1",
         ],
-        { allowFailure: true },
+        { stdio: ["ignore", "pipe", "pipe"] },
       );
-      assert.equal(allowed.trim(), "no", `Worker must not ${verb} ${resource}`);
+      let forwardOutput = "";
+      forwarding.stdout.on("data", (data) => {
+        forwardOutput += data;
+      });
+      forwarding.stderr.on("data", (data) => {
+        forwardOutput += data;
+      });
+      await waitFor("TLS proxy forwarding", () => forwardOutput.includes("Forwarding from"));
+      const ca = await readFile(join(directory, "tls.crt"));
+      const request = (method, path, body, authenticated = true) =>
+        new Promise((resolve, reject) => {
+          const data = body === undefined ? undefined : JSON.stringify(body);
+          const req = https.request(
+            `${baseURL}${path}`,
+            {
+              method,
+              ca,
+              family: 4,
+              headers: {
+                ...(authenticated && cookie ? { cookie } : {}),
+                ...(data
+                  ? {
+                      "content-type": "application/json",
+                      "content-length": Buffer.byteLength(data),
+                    }
+                  : {}),
+              },
+            },
+            (response) => {
+              let output = "";
+              response.on("data", (chunk) => {
+                output += chunk;
+              });
+              response.on("end", () => {
+                for (const value of secrets)
+                  assert.ok(!output.includes(value), "API response leaked a protected credential");
+                resolve({
+                  status: response.statusCode,
+                  headers: response.headers,
+                  body: output ? JSON.parse(output) : null,
+                });
+              });
+            },
+          );
+          req.on("error", reject);
+          req.setTimeout(30_000, () => req.destroy(new Error("API request timeout")));
+          req.end(data);
+        });
+      const password = (
+        await kubectl(
+          "-n",
+          system,
+          "exec",
+          "operator",
+          "--",
+          "cat",
+          "/bootstrap/initial-admin-password",
+        )
+      ).trim();
+      secrets.push(password);
+      const login = await request(
+        "POST",
+        "/api/auth/sign-in/email",
+        { email: adminEmail, password },
+        false,
+      );
+      assert.equal(login.status, 200, "production sign-in failed");
+      assert.ok(
+        login.headers["set-cookie"].some((header) => /;\s*Secure/i.test(header)),
+        "production cookie must be Secure",
+      );
+      cookie = login.headers["set-cookie"].map((header) => header.split(";")[0]).join("; ");
+      const installation = await request("GET", "/installation");
+      assert.equal(installation.status, 200);
+      await record("Authenticated production HTTPS Installation read", {
+        installationId: installation.body.data.id,
+      });
+      const api = async (method, path, body, expected = 200) => {
+        const result = await request(method, path, body);
+        assert.equal(
+          result.status,
+          expected,
+          redact(`${method} ${path}: ${JSON.stringify(result.body)}`),
+        );
+        return result.body.data;
+      };
+      return { api, request };
     }
-    const systemPods = JSON.parse(
-      await kubectl(
-        "-n",
-        system,
-        "get",
-        "pods",
-        "-l",
-        "app.kubernetes.io/name=openclaw-enterprise",
-        "-o",
-        "json",
-      ),
-    );
-    for (const pod of systemPods.items.filter((item) => item.status.phase === "Running")) {
-      await kubectl(
-        "-n",
-        system,
-        "exec",
-        pod.metadata.name,
-        "--",
-        "node",
-        "-e",
-        "if(process.env.OPENAI_API_KEY)process.exit(1)",
+
+    async function provisionNamespaceAndAgent({ api, request }) {
+      assert.equal((await request("GET", "/installation", undefined, false)).status, 401);
+      const namespace = await api("POST", "/namespaces", { name: `production-tui-${suffix}` }, 201);
+      const tenant = await waitFor("backing tenant namespace", async () => {
+        const list = JSON.parse(
+          await kubectl(
+            "get",
+            "namespaces",
+            "-l",
+            `openclaw.dev/namespace=${namespace.id}`,
+            "-o",
+            "json",
+          ),
+        );
+        if (!list.items.length) return false;
+        assert.equal(list.items.length, 1);
+        assert.equal(list.items[0].metadata.annotations["openclaw.dev/namespace-id"], namespace.id);
+        return list.items[0].metadata.name;
+      });
+      names.push(tenant);
+      for (const [name, role, account] of [
+        ["worker", "worker", "worker"],
+        ["configuration", "configuration", "api"],
+        ["secrets", "api", "api"],
+      ])
+        await apply({
+          apiVersion: "rbac.authorization.k8s.io/v1",
+          kind: "RoleBinding",
+          metadata: metadata(`production-tui-${name}`, tenant),
+          roleRef: {
+            apiGroup: "rbac.authorization.k8s.io",
+            kind: "ClusterRole",
+            name: `${release}-openclaw-tenant-${role}`,
+          },
+          subjects: [
+            { kind: "ServiceAccount", name: `openclaw-enterprise-${account}`, namespace: system },
+          ],
+        });
+      await waitFor("OCC Namespace ready", async () => {
+        const current = await api("GET", `/namespaces/${namespace.id}`);
+        assert.ok(!["failed", "deleting"].includes(current.status), `Namespace ${current.status}`);
+        return current.status === "ready";
+      });
+      // A connectivity demo has no identity wizard; first-run BOOTSTRAP.md would override its nonce prompt.
+      const nativeConfiguration = createHarnessConfiguration("openclaw", model);
+      nativeConfiguration.agents.defaults.skipBootstrap = true;
+      const agentConfiguration = await api(
+        "POST",
+        `/namespaces/${namespace.id}/configurations`,
+        { kind: "agent", values: nativeConfiguration },
+        201,
       );
-      const logs = await kubectl(
-        "-n",
-        system,
-        "logs",
-        pod.metadata.name,
-        "--all-containers",
-        "--tail=200",
+      const agent = await api(
+        "POST",
+        `/namespaces/${namespace.id}/agents`,
+        {
+          name: `tui-${suffix}`,
+          configurationId: agentConfiguration.id,
+          executionMode: "embedded",
+        },
+        201,
       );
-      for (const value of secrets)
-        assert.ok(!logs.includes(value), "Control-plane log leaked a credential");
+      const agentHash = hash(agent.id);
+      const gatewayToken = secret();
+      await createSecret(
+        `openclaw-agent-transport-${agentHash}`,
+        { "gateway-token": gatewayToken, "app-server-token": secret() },
+        tenant,
+      );
+      await createSecret(
+        `openclaw-agent-model-${agentHash}`,
+        { OPENAI_API_KEY: process.env.OPENAI_API_KEY },
+        tenant,
+      );
+      await record("API-created Namespace ready and embedded Agent provisioned", {
+        namespaceId: namespace.id,
+        tenant,
+        agentId: agent.id,
+      });
+      return { agent, agentHash, namespace, tenant };
     }
-    const gatewayLogs = await kubectl(
-      "-n",
-      tenant,
-      "logs",
-      finalPod,
-      "-c",
-      "gateway",
-      "--tail=200",
-    );
-    for (const value of secrets)
-      assert.ok(!gatewayLogs.includes(value), "Gateway log leaked a credential");
-    await record("Worker least privilege and credential output boundaries");
-    await request("POST", "/api/auth/sign-out");
-    assert.equal((await request("GET", "/installation")).status, 401);
-    cookie = undefined;
-    await record("Operator session revoked before interactive handoff");
-    const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-    const attach = [
-      "kubectl",
+
+    async function proveProductionApiNetworkPolicy() {
+      // Both clients use real listening services; a timeout alone is not a positive control.
+      await apply({
+        apiVersion: "v1",
+        kind: "Pod",
+        metadata: metadata("unapproved", foreign),
+        spec: {
+          securityContext: podSecurity,
+          containers: [
+            {
+              name: "probe",
+              image: images.node,
+              imagePullPolicy: "IfNotPresent",
+              securityContext,
+              resources,
+              command: [
+                "node",
+                "-e",
+                "require('node:net').createServer(s=>s.end()).listen(8123,'0.0.0.0')",
+              ],
+              readinessProbe: { tcpSocket: { port: 8123 }, periodSeconds: 2 },
+            },
+          ],
+        },
+      });
+      await waitPod("unapproved", foreign);
+      const foreignIP = (await get("pod", "unapproved", foreign)).status.podIP;
+      const probe = async (podNamespace, pod, host, targetPort, container) => {
+        const code =
+          "const net=require('node:net');const s=net.createConnection({host:process.argv[1],port:Number(process.argv[2])});s.setTimeout(3000);let done=false;function end(result){if(done)return;done=true;console.log(result);s.destroy()}s.on('connect',()=>end('connected'));s.on('timeout',()=>end('timeout'));s.on('error',e=>end(e.code));";
+        return (
+          await kubectl(
+            "-n",
+            podNamespace,
+            "exec",
+            pod,
+            ...(container ? ["-c", container] : []),
+            "--",
+            "node",
+            "-e",
+            code,
+            host,
+            String(targetPort),
+          )
+        ).trim();
+      };
+      const apiService = (await get("service", "openclaw-enterprise-api")).spec.clusterIP;
+      assert.equal(await probe(system, "operator", apiService, 8080), "connected");
+      // Enforcing CNIs may REJECT immediately or DROP; the listening positive control stays live.
+      assert.ok(
+        ["timeout", "ECONNREFUSED", "EHOSTUNREACH"].includes(
+          await probe(foreign, "unapproved", apiService, 8080),
+        ),
+      );
+      assert.equal(await probe(system, "operator", apiService, 8080), "connected");
+      assert.equal(await probe(system, "operator", foreignIP, 8123), "connected");
+      await record("Production API NetworkPolicy allows operator and denies foreign namespace");
+      return { foreignIP, probe };
+    }
+
+    const nativeTuiArgv = ({ pod, state, session, message, invalidGatewayToken = false }) => [
       ...kubeArgs,
       "-n",
       tenant,
       "exec",
       "-it",
-      finalPod,
+      pod,
       "-c",
       "gateway",
       "--",
       "env",
       "-u",
       "OPENAI_API_KEY",
-      `OPENCLAW_STATE_DIR=/tmp/occ-tui-${suffix}`,
+      `OPENCLAW_STATE_DIR=${state}`,
+      ...(invalidGatewayToken ? [`OPENCLAW_GATEWAY_TOKEN=invalid-${suffix}`] : []),
       "node",
       "/app/openclaw.mjs",
       "tui",
       "--session",
-      `production-${suffix}-2`,
+      session,
+      ...(message ? ["--message", message] : []),
     ];
-    await writeFile(
-      join(directory, "attach.sh"),
-      "#!/bin/sh\nexec " + attach.map(quote).join(" ") + "\n",
-      { mode: 0o700 },
-    );
-    evidence.attachScript = join(directory, "attach.sh");
-    await record("Final production setup attachable", {
-      tenant,
-      agentId: agent.id,
-      revisionId: finalRevision,
-      pod: finalPod,
+
+    async function exerciseRevisionCutover() {
+      let previousPod;
+      let finalPod;
+      let finalRevision;
+      for (const round of [1, 2]) {
+        // Each bodyless deployment freezes a new immutable revision of the same Agent.
+        const revision = await api(
+          "POST",
+          `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+          undefined,
+          202,
+        );
+        const configMap = `gateway-${agentHash}-rev-${hash(revision.id)}`;
+        await waitFor(
+          `Agent active revision ${round}`,
+          async () =>
+            (await api("GET", `/namespaces/${namespace.id}/agents/${agent.id}`))
+              .activeRevisionId === revision.id,
+          300_000,
+        );
+        const gateway = await waitFor(`Ready gateway for revision ${round}`, async () => {
+          const pods = await resourcesFor(
+            "pods",
+            tenant,
+            "-l",
+            `app.kubernetes.io/managed-by=openclaw-enterprise,openclaw.dev/namespace=${namespace.id},openclaw.dev/agent=${agent.id},openclaw.dev/workload-role=gateway`,
+          );
+          const matches = pods.filter(
+            (pod) =>
+              !pod.metadata.deletionTimestamp &&
+              pod.status.phase === "Running" &&
+              pod.status.conditions?.some(
+                (condition) => condition.type === "Ready" && condition.status === "True",
+              ) &&
+              pod.spec.volumes.some((volume) => volume.configMap?.name === configMap),
+          );
+          assert.ok(matches.length <= 1, "Ambiguous active gateway Pod");
+          return matches[0];
+        });
+        if (previousPod)
+          assert.notEqual(
+            gateway.metadata.uid,
+            previousPod.metadata.uid,
+            "Cutover must serve the new immutable config in a new Pod",
+          );
+        previousPod = gateway;
+        finalPod = gateway.metadata.name;
+        finalRevision = revision.id;
+        if (round === 1) {
+          const nonce = `DENIED_${suffix}`;
+          const prompt = `Reply exactly: ${nonce}`;
+          const output = await run("python3", [
+            "tests/helpers/tui-pty.py",
+            "expect-failure",
+            "--nonce",
+            nonce,
+            "--prompt",
+            prompt,
+            "--timeout",
+            "60",
+            "--",
+            "kubectl",
+            ...nativeTuiArgv({
+              pod: gateway.metadata.name,
+              state: `/tmp/occ-denied-${suffix}`,
+              session: `denied-${suffix}`,
+              message: prompt,
+              invalidGatewayToken: true,
+            }),
+          ]);
+          for (const value of secrets)
+            assert.ok(!output.includes(value), "Denied TUI output leaked a credential");
+          assert.equal(JSON.parse(output).denied, true);
+          await record("Fresh-state invalid gateway token rejected");
+        }
+        const first = `TUI_${round}_A_${randomBytes(8).toString("hex")}`;
+        const second = `TUI_${round}_B_${randomBytes(8).toString("hex")}`;
+        const firstPrompt = `Reply exactly: ${first}`,
+          secondPrompt = `Reply exactly: ${second}`;
+        const output = await run(
+          "python3",
+          [
+            "tests/helpers/tui-pty.py",
+            "conversation",
+            "--first-nonce",
+            first,
+            "--first-prompt",
+            firstPrompt,
+            "--second-nonce",
+            second,
+            "--second-prompt",
+            secondPrompt,
+            "--timeout",
+            "240",
+            "--",
+            "kubectl",
+            ...nativeTuiArgv({
+              pod: gateway.metadata.name,
+              state: `/tmp/occ-tui-${suffix}`,
+              session: `production-${suffix}-${round}`,
+              message: firstPrompt,
+            }),
+          ],
+          { timeout: 550_000 },
+        );
+        for (const value of secrets)
+          assert.ok(!output.includes(value), "TUI output leaked a credential");
+        const conversation = JSON.parse(output);
+        assert.equal(conversation.exitCode, 0);
+        await writeFile(join(directory, `tui-revision-${round}.json`), output, { mode: 0o600 });
+        assert.equal(
+          (await get("pod", gateway.metadata.name, tenant)).metadata.uid,
+          gateway.metadata.uid,
+        );
+        assert.equal(
+          await kubectl(
+            "-n",
+            tenant,
+            "exec",
+            gateway.metadata.name,
+            "-c",
+            "gateway",
+            "--",
+            "node",
+            "-e",
+            "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1);console.log('ready')})",
+          ),
+          "ready\n",
+        );
+        await record(
+          `Revision ${round}: two assistant replies in one TUI, Ctrl+D leaves gateway ready`,
+          {
+            revisionId: revision.id,
+            pod: gateway.metadata.name,
+            podUid: gateway.metadata.uid,
+            configMap,
+            firstReply: conversation.firstReplyLine,
+            secondReply: conversation.secondReplyLine,
+          },
+        );
+        const gatewayService = (await get("service", `gateway-${agentHash}`, tenant)).spec
+          .clusterIP;
+        assert.equal(await probe(system, "operator", gatewayService, 8080), "connected");
+        assert.ok(
+          ["timeout", "ECONNREFUSED", "EHOSTUNREACH"].includes(
+            await probe(foreign, "unapproved", gatewayService, 8080),
+          ),
+        );
+        assert.equal(await probe(system, "operator", gatewayService, 8080), "connected");
+        assert.ok(
+          ["timeout", "ECONNREFUSED", "EHOSTUNREACH"].includes(
+            await probe(tenant, gateway.metadata.name, foreignIP, 8123, "gateway"),
+          ),
+        );
+        assert.equal(await probe(system, "operator", foreignIP, 8123), "connected");
+        await record(`Revision ${round}: gateway ingress and private egress isolation`);
+      }
+      return { pod: finalPod, revisionId: finalRevision };
+    }
+
+    async function verifyCredentialBoundariesAndPrepareHandoff(finalGateway) {
+      const { pod: finalPod, revisionId: finalRevision } = finalGateway;
+      for (const [verb, resource] of [
+        ["get", "secrets"],
+        ["create", "rolebindings"],
+      ]) {
+        const allowed = await run(
+          "kubectl",
+          [
+            ...kubeArgs,
+            "-n",
+            tenant,
+            "auth",
+            "can-i",
+            verb,
+            resource,
+            "--as",
+            `system:serviceaccount:${system}:openclaw-enterprise-worker`,
+          ],
+          { allowFailure: true },
+        );
+        assert.equal(allowed.trim(), "no", `Worker must not ${verb} ${resource}`);
+      }
+      const systemPods = await resourcesFor(
+        "pods",
+        system,
+        "-l",
+        "app.kubernetes.io/name=openclaw-enterprise",
+      );
+      for (const pod of systemPods.filter((item) => item.status.phase === "Running")) {
+        await kubectl(
+          "-n",
+          system,
+          "exec",
+          pod.metadata.name,
+          "--",
+          "node",
+          "-e",
+          "if(process.env.OPENAI_API_KEY)process.exit(1)",
+        );
+        const logs = await kubectl(
+          "-n",
+          system,
+          "logs",
+          pod.metadata.name,
+          "--all-containers",
+          "--tail=200",
+        );
+        for (const value of secrets)
+          assert.ok(!logs.includes(value), "Control-plane log leaked a credential");
+      }
+      const gatewayLogs = await kubectl(
+        "-n",
+        tenant,
+        "logs",
+        finalPod,
+        "-c",
+        "gateway",
+        "--tail=200",
+      );
+      for (const value of secrets)
+        assert.ok(!gatewayLogs.includes(value), "Gateway log leaked a credential");
+      await record("Worker least privilege and credential output boundaries");
+      await request("POST", "/api/auth/sign-out");
+      assert.equal((await request("GET", "/installation")).status, 401);
+      cookie = undefined;
+      await record("Operator session revoked before interactive handoff");
+      const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+      const attach = [
+        "kubectl",
+        ...nativeTuiArgv({
+          pod: finalPod,
+          state: `/tmp/occ-tui-${suffix}`,
+          session: `production-${suffix}-2`,
+        }),
+      ];
+      await writeFile(
+        join(directory, "attach.sh"),
+        "#!/bin/sh\nexec " + attach.map(quote).join(" ") + "\n",
+        { mode: 0o700 },
+      );
+      evidence.attachScript = join(directory, "attach.sh");
+      await record("Final production setup attachable", {
+        tenant,
+        agentId: agent.id,
+        revisionId: finalRevision,
+        pod: finalPod,
+      });
+      context.diagnostic(`Evidence directory: ${directory}`);
+    }
+
+    const { api, request } = await installProductionControlPlane();
+    const { agent, agentHash, namespace, tenant } = await provisionNamespaceAndAgent({
+      api,
+      request,
     });
-    context.diagnostic(`Evidence directory: ${directory}`);
+    const { foreignIP, probe } = await proveProductionApiNetworkPolicy();
+    const finalGateway = await exerciseRevisionCutover();
+    await verifyCredentialBoundariesAndPrepareHandoff(finalGateway);
   },
 );

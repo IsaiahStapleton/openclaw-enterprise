@@ -184,6 +184,14 @@ Ctrl+D exits only the client. Its native Configuration sets
 `agents.defaults.skipBootstrap` to `true` for the disposable demo Agent so
 first-run bootstrap guidance does not consume the nonce prompt.
 
+The test separates production installation, authenticated provisioning, and
+revision conversations into named stages. Shared scoped Kubernetes commands,
+resource lookups, and polling come from
+`tests/helpers/kubernetes-real.mjs:createKubernetesClient`; the production test
+retains its credential-redacting process runner. One `nativeTuiArgv` builder
+supplies the valid and denied TUI checks and the generated interactive attach
+script, keeping client authentication and environment handling consistent.
+
 ## Debugging and Verification
 
 - Confirm OCC activation before selecting a Pod:
@@ -243,6 +251,8 @@ first-run bootstrap guidance does not consume the nonce prompt.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 17:12: Recorded shared Kubernetes helpers and the common TUI command used by the refactored production proof. (01a059fc-1a4d-7fa2-8375-3999ef6aeff8 - 86441b7)
 
 - 2026-08-31 16:05: Updated production TUI verification to point at the implemented Helm-backed PTY integration. (01a059fc-1a4d-7fa2-8375-3999ef6aeff8 - b43cc49)
 - 2026-08-31 15:50: Documented the production embedded Agent to native TUI attachment flow. (01a059fc-1a4d-7fa2-8375-3999ef6aeff8 - b43cc49)
