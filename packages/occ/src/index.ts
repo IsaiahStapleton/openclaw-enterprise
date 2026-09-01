@@ -20,6 +20,7 @@ import type {
   OpenClawConfigurationDocument,
   ProviderDefinition,
   ProviderRef,
+  PermissionAction,
   ResourceKind,
   ResourceRef,
   SandboxDriver,
@@ -751,16 +752,33 @@ export class OpenClawController {
     });
   }
 
-  async getAdministeredActiveAgentRevision(
+  async getReadableActiveAgentRevision(
     principalId: string,
     namespaceId: string,
     agentId: string,
+  ): Promise<ActiveAgentRevisionSelection> {
+    return this.getAuthorizedActiveAgentRevision(principalId, namespaceId, agentId, "read");
+  }
+
+  async getOperableActiveAgentRevision(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<ActiveAgentRevisionSelection> {
+    return this.getAuthorizedActiveAgentRevision(principalId, namespaceId, agentId, "operate");
+  }
+
+  private async getAuthorizedActiveAgentRevision(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    action: PermissionAction,
   ): Promise<ActiveAgentRevisionSelection> {
     if (!isNonEmptyString(namespaceId))
       throw new ScopeViolationError("The exact Namespace identity is missing.");
     if (!isNonEmptyString(agentId))
       throw new ScopeViolationError("The exact Agent identity is missing.");
-    await this.authorize(principalId, "administer", {
+    await this.authorize(principalId, action, {
       kind: "agent",
       id: agentId,
       namespaceId,

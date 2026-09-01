@@ -74,21 +74,6 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, update, patch, delete]
-  - apiGroups: [""]
-    resources: [pods]
-    verbs: [get, list]
-  - apiGroups: [""]
-    resources: [pods/exec]
-    verbs: [get, create]
-  - apiGroups: [apps]
-    resources: [deployments]
-    verbs: [get, list]
-  - apiGroups: [""]
-    resources: [services]
-    verbs: [get, list]
-  - apiGroups: [discovery.k8s.io]
-    resources: [endpointslices]
-    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

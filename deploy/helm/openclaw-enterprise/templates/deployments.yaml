@@ -30,6 +30,14 @@ spec:
               - key: {{ $.Values.installation.key }}
                 path: installation.yaml
         {{- if eq $component "api" }}
+        {{- if $.Values.workspaceFiles.configMapName }}
+        - name: workspace-file-endpoints
+          configMap:
+            name: {{ $.Values.workspaceFiles.configMapName | quote }}
+            items:
+              - key: {{ required "workspaceFiles.key is required" $.Values.workspaceFiles.key | quote }}
+                path: workspace-files.yaml
+        {{- end }}
         {{- if $.Values.provider.chatgpt.enabled }}
         {{- $chatgpt := $.Values.provider.chatgpt }}
         {{- if or (not $chatgpt.secretName) (not $chatgpt.key) }}
@@ -66,6 +74,10 @@ spec:
               value: /etc/openclaw/installation/installation.yaml
             {{- include "openclaw.secretEnv" (dict "name" "OCC_DATABASE_URL" "secretName" $.Values.database.secretName "key" $.Values.database.appUrlKey) | nindent 12 }}
             {{- if eq $component "api" }}
+            {{- if $.Values.workspaceFiles.configMapName }}
+            - name: OCC_WORKSPACE_FILES_CONFIG_PATH
+              value: /etc/openclaw/workspace-files/workspace-files.yaml
+            {{- end }}
             - name: OCC_HOST
               valueFrom:
                 fieldRef:
@@ -92,6 +104,11 @@ spec:
               mountPath: /etc/openclaw/installation
               readOnly: true
             {{- if eq $component "api" }}
+            {{- if $.Values.workspaceFiles.configMapName }}
+            - name: workspace-file-endpoints
+              mountPath: /etc/openclaw/workspace-files
+              readOnly: true
+            {{- end }}
             {{- if $.Values.provider.chatgpt.enabled }}
             - name: chatgpt-admin
               mountPath: /etc/openclaw/chatgpt

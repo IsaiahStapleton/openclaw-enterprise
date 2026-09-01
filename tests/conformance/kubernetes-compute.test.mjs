@@ -387,15 +387,6 @@ test("the canonical Kubernetes runtime isolates transport and model Agent Secret
     modelSecretPrefix: "model",
   };
   assert.doesNotThrow(() => createKubernetesComputeDriver(options({ runtime })));
-  assert.equal(
-    createKubernetesComputeDriver(options()).createGatewayAdministrationAdapter(),
-    undefined,
-  );
-  assert.equal(
-    typeof createKubernetesComputeDriver(options({ runtime })).createGatewayAdministrationAdapter()
-      ?.dispatch,
-    "function",
-  );
   for (const shared of [
     {
       transportSecretPrefix: "shared",
@@ -476,82 +467,6 @@ test("account-owned Kubernetes Secrets reject invalid or foreign credentials bef
         secretRef,
       }),
       /another ServiceAccount/i,
-    );
-  }
-});
-
-test("gateway administration rejects unsupported native profiles before CLI exec work", async () => {
-  const driver = createKubernetesComputeDriver(
-    options({
-      runtime: {
-        transportSecretPrefix: "transport",
-        gatewayStorageClassName: "local-path",
-        modelSecretPrefix: "model",
-      },
-    }),
-  );
-  const revision = {
-    id: "revision-gateway-admin-profile-1",
-    namespaceId: tenant.id,
-    agentId: "agent-gateway-admin-profile",
-    revision: 1,
-    configurationId: "cfg_00000000-0000-4000-8000-000000000055",
-    configurationKind: "agent",
-    configurationGeneration: 1,
-    configuration: {
-      gateway: {
-        controlUi: { enabled: false },
-        auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
-      },
-      logging: { level: "info" },
-    },
-    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
-    compute: { id: driver.id, implementation: driver.implementation },
-    servicePrincipalId: "service-principal-gateway-admin-profile",
-    createdAt: tenant.createdAt,
-  };
-  const adapter = driver.createGatewayAdministrationAdapter();
-  assert.equal(typeof adapter?.dispatch, "function");
-
-  for (const [name, configuration, expected] of [
-    [
-      "none",
-      { ...revision.configuration, gateway: { auth: { mode: "none" } } },
-      /gateway\.auth\.mode "token"/i,
-    ],
-    [
-      "password",
-      { ...revision.configuration, gateway: { auth: { mode: "password" } } },
-      /gateway\.auth\.mode "token"/i,
-    ],
-    [
-      "missing",
-      { ...revision.configuration, gateway: { controlUi: { enabled: false } } },
-      /gateway\.auth\.mode "token"/i,
-    ],
-    [
-      "roles",
-      {
-        ...revision.configuration,
-        gateway: {
-          ...revision.configuration.gateway,
-          roles: ["operator"],
-        },
-      },
-      /gateway\.roles/i,
-    ],
-  ]) {
-    const invalid = { ...revision, configuration };
-    // Unsupported native profiles must be rejected before Pod exec setup or CLI execution.
-    await assert.rejects(
-      adapter.dispatch({
-        revision: invalid,
-        command: { method: "status" },
-        signal: AbortSignal.timeout(1_000),
-        deadline: new Date(Date.now() + 1_000),
-      }),
-      expected,
-      `dispatch ${name}`,
     );
   }
 });

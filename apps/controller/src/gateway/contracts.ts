@@ -1,55 +1,73 @@
-import { GATEWAY_COMMAND_METHODS } from "@openclaw-enterprise/contracts";
-import type {
-  AgentRevision,
-  DispatchGatewayCommandBody,
-  GatewayCommandMethod,
-  OpenClawConfigurationValue,
-} from "@openclaw-enterprise/contracts";
+import { WORKSPACE_FILE_NAMES } from "@openclaw-enterprise/contracts";
+import type { AgentRevision, WorkspaceFileName } from "@openclaw-enterprise/contracts";
 
-const ALLOWED_GATEWAY_COMMANDS = new Set<string>(GATEWAY_COMMAND_METHODS);
+const ALLOWED_WORKSPACE_FILES = new Set<string>(WORKSPACE_FILE_NAMES);
 
-export interface ControllerGatewayRpcError {
-  readonly code: string;
-  readonly message: string;
-  readonly details?: OpenClawConfigurationValue;
-  readonly retryable?: boolean;
-  readonly retryAfterMs?: number;
+export interface ControllerWorkspaceFileData {
+  readonly name: WorkspaceFileName;
+  readonly content: string;
+  readonly size?: number;
 }
 
-export interface ControllerGatewayDispatchRequest {
+export interface ControllerWorkspaceFileMetadata {
+  readonly name: WorkspaceFileName;
+  readonly size?: number;
+}
+
+export interface ControllerWorkspaceFileReadRequest {
   readonly revision: Readonly<AgentRevision>;
-  readonly command: DispatchGatewayCommandBody;
+  readonly filename: WorkspaceFileName;
+  readonly clientAddress: string;
   readonly signal: AbortSignal;
   readonly deadline: Date;
 }
 
-export type ControllerGatewayDispatchResult =
-  | {
-      readonly ok: true;
-      readonly payload?: OpenClawConfigurationValue;
-    }
-  | {
-      readonly ok: false;
-      readonly error: ControllerGatewayRpcError;
-    };
-
-export interface ControllerGatewayAccess {
-  dispatch(request: ControllerGatewayDispatchRequest): Promise<ControllerGatewayDispatchResult>;
+export interface ControllerWorkspaceFileWriteRequest extends ControllerWorkspaceFileReadRequest {
+  readonly content: string;
 }
 
-export class ControllerGatewayUnknownOutcomeError extends Error {
+export type ControllerWorkspaceFileReadResult =
+  | {
+      readonly status: "ok";
+      readonly file: ControllerWorkspaceFileData;
+    }
+  | {
+      readonly status: "missing";
+    }
+  | {
+      readonly status: "unavailable";
+    };
+
+export type ControllerWorkspaceFileWriteResult =
+  | {
+      readonly status: "ok";
+      readonly file: ControllerWorkspaceFileMetadata;
+    }
+  | {
+      readonly status: "missing";
+    }
+  | {
+      readonly status: "unavailable";
+    };
+
+export interface ControllerWorkspaceFilesAccess {
+  read(request: ControllerWorkspaceFileReadRequest): Promise<ControllerWorkspaceFileReadResult>;
+  write(request: ControllerWorkspaceFileWriteRequest): Promise<ControllerWorkspaceFileWriteResult>;
+}
+
+export class ControllerWorkspaceFileUnknownOutcomeError extends Error {
   override readonly cause: unknown;
 
   constructor(
-    message = "The native gateway command outcome is unknown.",
+    message = "The workspace file write outcome is unknown.",
     options: { readonly cause?: unknown } = {},
   ) {
     super(message);
-    this.name = "ControllerGatewayUnknownOutcomeError";
+    this.name = "ControllerWorkspaceFileUnknownOutcomeError";
     this.cause = options.cause;
   }
 }
 
-export function isAllowedGatewayCommand(method: string): method is GatewayCommandMethod {
-  return ALLOWED_GATEWAY_COMMANDS.has(method);
+export function isAllowedWorkspaceFileName(name: string): name is WorkspaceFileName {
+  return ALLOWED_WORKSPACE_FILES.has(name);
 }

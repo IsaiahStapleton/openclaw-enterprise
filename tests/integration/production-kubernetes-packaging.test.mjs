@@ -520,3 +520,56 @@ test("development packaging isolates bootstrap service key output to the bootstr
       }),
   );
 });
+
+test(
+  "operator workspace endpoints mount only into the API without widening egress",
+  tooling,
+  async () => {
+    const baseline = await resources((await render()).stdout);
+    const configured = await resources(
+      (
+        await render({
+          "workspaceFiles.configMapName": "operator-agent-endpoints",
+          "workspaceFiles.key": "endpoints.yaml",
+        })
+      ).stdout,
+    );
+    for (const component of ["api", "worker"]) {
+      const deployment = configured.find(
+        (object) =>
+          object.kind === "Deployment" &&
+          object.metadata.labels["app.kubernetes.io/component"] === component,
+      );
+      const pod = deployment.spec.template.spec;
+      const volume = pod.volumes.find(({ name }) => name === "workspace-file-endpoints");
+      const mount = pod.containers[0].volumeMounts.find(
+        ({ name }) => name === "workspace-file-endpoints",
+      );
+      const setting = pod.containers[0].env.find(
+        ({ name }) => name === "OCC_WORKSPACE_FILES_CONFIG_PATH",
+      );
+      if (component === "worker") {
+        assert.equal(volume, undefined);
+        assert.equal(mount, undefined);
+        assert.equal(setting, undefined);
+        continue;
+      }
+      assert.deepEqual(volume.configMap, {
+        name: "operator-agent-endpoints",
+        items: [{ key: "endpoints.yaml", path: "workspace-files.yaml" }],
+      });
+      assert.equal(mount.readOnly, true);
+      assert.equal(setting.value, mount.mountPath + "/workspace-files.yaml");
+    }
+    // The operator supplies the endpoint and its narrow network policy; enabling
+    // the mount must not introduce cluster-wide access or silently open egress.
+    assert.deepEqual(
+      configured.filter(({ kind }) => kind === "NetworkPolicy"),
+      baseline.filter(({ kind }) => kind === "NetworkPolicy"),
+    );
+    assert.equal(
+      configured.some(({ kind }) => kind === "ConfigMap"),
+      false,
+    );
+  },
+);

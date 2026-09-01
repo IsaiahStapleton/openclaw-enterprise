@@ -2930,186 +2930,6 @@
         ]
       }
     },
-    "/namespaces/{namespaceId}/agents/{agentId}/gateway/": {
-      "post": {
-        "description": "Requires administer permission on the requested Agent.",
-        "operationId": "dispatchAgentGatewayCommand",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "namespaceId",
-            "required": true,
-            "schema": {
-              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "agentId",
-            "required": true,
-            "schema": {
-              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "method": {
-                    "anyOf": [
-                      { "const": "health", "type": "string" },
-                      { "const": "status", "type": "string" },
-                      { "const": "config.get", "type": "string" },
-                      { "const": "config.schema.lookup", "type": "string" },
-                      { "const": "agents.list", "type": "string" },
-                      { "const": "channels.status", "type": "string" },
-                      { "const": "agents.files.list", "type": "string" },
-                      { "const": "agents.files.get", "type": "string" },
-                      { "const": "agents.files.set", "type": "string" },
-                      { "const": "chat.send", "type": "string" },
-                      { "const": "chat.history", "type": "string" },
-                      { "const": "chat.abort", "type": "string" }
-                    ]
-                  },
-                  "params": { "$ref": "#/components/schemas/def-0" }
-                },
-                "required": ["method"],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "error": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "code": { "maxLength": 200, "minLength": 1, "type": "string" },
-                            "details": { "$ref": "#/components/schemas/def-0" },
-                            "message": { "maxLength": 1000, "minLength": 1, "type": "string" },
-                            "retryAfterMs": { "maximum": 3600000, "minimum": 1, "type": "integer" },
-                            "retryable": { "type": "boolean" }
-                          },
-                          "required": ["code", "message"],
-                          "type": "object"
-                        },
-                        "method": {
-                          "anyOf": [
-                            { "const": "health", "type": "string" },
-                            { "const": "status", "type": "string" },
-                            { "const": "config.get", "type": "string" },
-                            { "const": "config.schema.lookup", "type": "string" },
-                            { "const": "agents.list", "type": "string" },
-                            { "const": "channels.status", "type": "string" },
-                            { "const": "agents.files.list", "type": "string" },
-                            { "const": "agents.files.get", "type": "string" },
-                            { "const": "agents.files.set", "type": "string" },
-                            { "const": "chat.send", "type": "string" },
-                            { "const": "chat.history", "type": "string" },
-                            { "const": "chat.abort", "type": "string" }
-                          ]
-                        },
-                        "ok": { "type": "boolean" },
-                        "payload": { "$ref": "#/components/schemas/def-0" }
-                      },
-                      "required": ["method", "ok"],
-                      "type": "object"
-                    },
-                    "meta": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "requestId": {
-                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                          "type": "string"
-                        }
-                      },
-                      "required": ["requestId"],
-                      "type": "object"
-                    }
-                  },
-                  "required": ["data", "meta"],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Default Response"
-          },
-          "400": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
-            },
-            "description": "Default Response"
-          },
-          "401": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
-            },
-            "description": "Default Response"
-          },
-          "403": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
-            },
-            "description": "Default Response"
-          },
-          "404": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
-            },
-            "description": "Default Response"
-          },
-          "409": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
-            },
-            "description": "Default Response"
-          },
-          "413": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
-            },
-            "description": "Default Response"
-          },
-          "415": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
-            },
-            "description": "Default Response"
-          },
-          "500": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
-            },
-            "description": "Default Response"
-          },
-          "503": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
-            },
-            "description": "Default Response"
-          }
-        },
-        "summary": "Dispatch an allowlisted native gateway command for one active Agent",
-        "tags": ["Agents"],
-        "x-openclaw-permissions": [
-          { "action": "administer", "resourceKind": "agent", "scope": "requested" }
-        ]
-      }
-    },
     "/namespaces/{namespaceId}/agents/{agentId}/revisions": {
       "get": {
         "description": "Requires read permission on the requested Agent. Only AgentRevision resources with individual read permission are returned.",
@@ -3644,6 +3464,264 @@
         "tags": ["Agent revisions"],
         "x-openclaw-permissions": [
           { "action": "read", "resourceKind": "agent_revision", "scope": "requested" }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}": {
+      "get": {
+        "description": "Requires read permission on the requested Agent.",
+        "operationId": "getAgentWorkspaceFile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": { "enum": ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"] }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "maxLength": 16384,
+                          "pattern": "^[^\\u0000]*$",
+                          "type": "string"
+                        },
+                        "name": { "enum": ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"] }
+                      },
+                      "required": ["name", "content"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Read an allowed workspace file from one active Agent",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "read", "resourceKind": "agent", "scope": "requested" }
+        ]
+      },
+      "put": {
+        "description": "Requires operate permission on the requested Agent.",
+        "operationId": "putAgentWorkspaceFile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": { "enum": ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"] }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "content": {
+                    "description": "Workspace file content. The controller also enforces a 16 KiB UTF-8 byte limit and rejects unpaired UTF-16 surrogates.",
+                    "maxLength": 16384,
+                    "pattern": "^[^\\u0000]*$",
+                    "type": "string"
+                  }
+                },
+                "required": ["content"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": { "enum": ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"] },
+                        "size": { "maximum": 16384, "minimum": 0, "type": "integer" }
+                      },
+                      "required": ["name"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "413": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "415": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Create or replace an allowed workspace file for one active Agent",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "operate", "resourceKind": "agent", "scope": "requested" }
         ]
       }
     },

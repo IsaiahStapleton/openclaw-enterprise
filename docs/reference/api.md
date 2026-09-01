@@ -814,17 +814,17 @@ Admit an immutable revision from the Agent's saved draft
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `POST /namespaces/{namespaceId}/agents/{agentId}/gateway/`
+### `GET /namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}`
 
-Dispatch an allowlisted native gateway command for one active Agent
+Read an allowed workspace file from one active Agent
 
-**Operation ID:** `dispatchAgentGatewayCommand`
+**Operation ID:** `getAgentWorkspaceFile`
 
-**Permissions:** Requires administer permission on the requested Agent.
+**Permissions:** Requires read permission on the requested Agent.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
-| `administer` | `agent` | `requested` |
+| `read` | `agent` | `requested` |
 
 #### Parameters
 
@@ -832,6 +832,49 @@ Dispatch an allowlisted native gateway command for one active Agent
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `name` | path | `"AGENTS.md" or "SOUL.md" or "IDENTITY.md" or "USER.md"` | Yes | — |
+
+#### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.content` | `string` | Yes | max length: 16384; pattern: `^[^\u0000]*$` |
+| `data.name` | `"AGENTS.md" or "SOUL.md" or "IDENTITY.md" or "USER.md"` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+### `PUT /namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}`
+
+Create or replace an allowed workspace file for one active Agent
+
+**Operation ID:** `putAgentWorkspaceFile`
+
+**Permissions:** Requires operate permission on the requested Agent.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `operate` | `agent` | `requested` |
+
+#### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `name` | path | `"AGENTS.md" or "SOUL.md" or "IDENTITY.md" or "USER.md"` | Yes | — |
 
 #### Request body
 
@@ -841,8 +884,7 @@ Dispatch an allowlisted native gateway command for one active Agent
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
-| `method` | `"health" or "status" or "config.get" or "config.schema.lookup" or "agents.list" or "channels.status" or "agents.files.list" or "agents.files.get" or "agents.files.set" or "chat.send" or "chat.history" or "chat.abort"` | Yes | — |
-| `params` | `SafeJsonValue` | No | — |
+| `content` | `string` | Yes | max length: 16384; pattern: `^[^\u0000]*$`; Workspace file content. The controller also enforces a 16 KiB UTF-8 byte limit and rejects unpaired UTF-16 surrogates. |
 
 #### Responses
 
@@ -864,15 +906,8 @@ Dispatch an allowlisted native gateway command for one active Agent
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `data` | `object` | Yes | — |
-| `data.error` | `object` | No | — |
-| `data.error.code` | `string` | Yes | min length: 1; max length: 200 |
-| `data.error.details` | `SafeJsonValue` | No | — |
-| `data.error.message` | `string` | Yes | min length: 1; max length: 1000 |
-| `data.error.retryAfterMs` | `integer` | No | minimum: 1; maximum: 3600000 |
-| `data.error.retryable` | `boolean` | No | — |
-| `data.method` | `"health" or "status" or "config.get" or "config.schema.lookup" or "agents.list" or "channels.status" or "agents.files.list" or "agents.files.get" or "agents.files.set" or "chat.send" or "chat.history" or "chat.abort"` | Yes | — |
-| `data.ok` | `boolean` | Yes | — |
-| `data.payload` | `SafeJsonValue` | No | — |
+| `data.name` | `"AGENTS.md" or "SOUL.md" or "IDENTITY.md" or "USER.md"` | Yes | — |
+| `data.size` | `integer` | No | minimum: 0; maximum: 16384 |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 

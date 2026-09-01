@@ -14,13 +14,13 @@ import {
   NamespaceId,
   ProviderId,
   RevisionId,
-  GatewayCommandMethod,
   SecretBindings,
   SecretId,
   SecretReference,
   ServiceAccountCredentialSchema,
   ServiceAccountId,
   Timestamp,
+  WorkspaceFileName,
 } from "./common.ts";
 
 export const InstallationSchema = Type.Object(
@@ -190,25 +190,26 @@ export const AgentRevisionListResponse = Type.Object(
   { additionalProperties: false },
 );
 
-export const GatewayCommandDispatchResponse = Type.Object(
+export const WorkspaceFileResponse = Type.Object(
   {
     data: Type.Object(
       {
-        method: GatewayCommandMethod,
-        ok: Type.Boolean(),
-        payload: Type.Optional(Type.Ref("SafeJsonValue")),
-        error: Type.Optional(
-          Type.Object(
-            {
-              code: Type.String({ minLength: 1, maxLength: 200 }),
-              message: Type.String({ minLength: 1, maxLength: 1000 }),
-              details: Type.Optional(Type.Ref("SafeJsonValue")),
-              retryable: Type.Optional(Type.Boolean()),
-              retryAfterMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 3_600_000 })),
-            },
-            { additionalProperties: false },
-          ),
-        ),
+        name: WorkspaceFileName,
+        content: Type.String({ maxLength: 16 * 1024, pattern: "^[^\\u0000]*$" }),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
+export const WorkspaceFileUpdateResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        name: WorkspaceFileName,
+        size: Type.Optional(Type.Integer({ minimum: 0, maximum: 16 * 1024 })),
       },
       { additionalProperties: false },
     ),
@@ -234,4 +235,5 @@ export type AgentResponse = Type.Static<typeof AgentResponse>;
 export type AgentListResponse = Type.Static<typeof AgentListResponse>;
 export type AgentRevisionResponse = Type.Static<typeof AgentRevisionResponse>;
 export type AgentRevisionListResponse = Type.Static<typeof AgentRevisionListResponse>;
-export type GatewayCommandDispatchResponse = Type.Static<typeof GatewayCommandDispatchResponse>;
+export type WorkspaceFileResponse = Type.Static<typeof WorkspaceFileResponse>;
+export type WorkspaceFileUpdateResponse = Type.Static<typeof WorkspaceFileUpdateResponse>;

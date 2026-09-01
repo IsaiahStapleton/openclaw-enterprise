@@ -13,6 +13,7 @@ import type {
   ServiceAccountDriverFactory,
 } from "./installation-config.ts";
 import { resolveApprovedProductionHarness } from "./production-harness.ts";
+import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 
 export interface ProductionConfig {
   readonly mode: "production";
@@ -23,6 +24,7 @@ export interface ProductionConfig {
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
   readonly serviceAccountDriverFactory?: ServiceAccountDriverFactory;
+  readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
 }
 
 export async function composeProduction(config: ProductionConfig) {
@@ -141,9 +143,6 @@ export async function composeProduction(config: ProductionConfig) {
       computeDriver,
       configurationDriver,
       secretDriver,
-      ...(config.drivers.gatewayAccess === undefined
-        ? {}
-        : { gatewayAccess: config.drivers.gatewayAccess }),
       publicOrigin: config.authBaseURL,
       ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
       resolveHarness: resolveApprovedProductionHarness,
@@ -155,6 +154,9 @@ export async function composeProduction(config: ProductionConfig) {
         installationId: persistedInstallation.id,
       },
       maxBodyBytes: 64 * 1024,
+      ...(config.workspaceFilesAccess === undefined
+        ? {}
+        : { workspaceFilesAccess: config.workspaceFilesAccess }),
     });
     app.get("/healthz", async () => ({ status: "ok" }));
     app.get("/readyz", async () => {

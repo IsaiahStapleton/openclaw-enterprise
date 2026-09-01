@@ -29,11 +29,13 @@ controller.
 The worker needs permission to manage PersistentVolumeClaims in its tenant
 namespaces. Only the controller API receives narrowly scoped Secret permissions
 for provider-issued credentials; workers and workloads do not receive direct
-Secret API access. Gateway administration additionally requires controller API
-permission to execute the fixed helper in the exact owned gateway Pod through
-`pods/exec`. Do not grant wildcard permissions, cluster-wide access to tenant
-resources, workload access to controller credentials, or permission to create or
-escalate RoleBindings.
+Secret API access. The removed gateway administration helper no longer defines
+tenant API read or `pods/exec` permissions. Future workspace-file target
+resolution is operator-configured through an API-only WSS endpoint map and does
+not require new Kubernetes API RBAC by default. Add only the permissions and
+network policy needed by the selected private proxy. Do not grant wildcard
+permissions, cluster-wide access to tenant resources, workload access to
+controller credentials, or permission to create or escalate RoleBindings.
 
 If OpenShell sandboxing is enabled, the Compute Driver's Kubernetes access is
 also used directly by the optional `SandboxDriver.ensureNamespace` hook to
@@ -127,16 +129,17 @@ DNS, approved gateway clients, and required communication between an Agent's
 gateway and dedicated Harness. Cross-tenant traffic, traffic between different
 Agents, Kubernetes API access, and cloud metadata access remain denied.
 
-Gateway administration does not add a gateway Service network exception. When an
-authorized caller uses the Agent gateway route, the API uses the Kubernetes API
-to read the selected Service, EndpointSlice, Deployment, and ready owned Pod for
-the Agent's active revision, then runs a fixed helper in that gateway container
-through `pods/exec`. The helper receives JSON stdin, calls the ordinary
-OpenClaw CLI/API against the Pod-local gateway port using the gateway's existing
-local configuration and authentication, and returns JSON. The path does not use
-`pods/proxy`, native trusted-proxy configuration, an OCC native device, or a
-controller-owned gateway credential Secret. Readiness for native gateway Pods
-uses a Pod-local Node.js HTTP request to
+The Kubernetes Compute Driver does not derive workspace-file targets from
+Services, EndpointSlices, Pods, or revisions. Agent workspace-file HTTP routes
+use the API process's optional operator endpoint map. The Helm chart can mount
+an existing ConfigMap as
+`/etc/openclaw/workspace-files/workspace-files.yaml` and set
+`OCC_WORKSPACE_FILES_CONFIG_PATH` only on the API Deployment; it does not mount
+the file into the worker and does not widen NetworkPolicies. The configured
+private proxy must authenticate OCC, expose native trusted-proxy WSS, grant the
+service identity `operator.admin`, derive forwarded client attribution from the
+actual OCC peer, and reject direct user or workload callers. Readiness for
+native gateway Pods still uses a Pod-local Node.js HTTP request to
 `127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz`.
 
 Production currently permits public TCP/443 egress for model access; a

@@ -18,7 +18,7 @@ OpenClaw Enterprise is the open platform for managing agents.
 - [Reference index](reference/README.md): browse all features and Drivers.
 - [Namespaces](reference/namespaces.md), [Agents](reference/agents.md), and
   [Configuration](reference/configuration.md): create, organize, and configure Agents.
-- [Agent gateway administration](reference/agents.md#gateway-administration): authorize and dispatch native gateway commands through OCC.
+- [Agent workspace files](reference/agents.md#workspace-files): configure the optional WSS endpoint map for the four supported native Agent workspace files.
 - [Kubernetes Secret Driver](reference/drivers/kubernetes-secret.md): store Secrets
   and bind them to selected Agent gateways.
 - [Authentication](reference/authentication.md),
@@ -54,7 +54,7 @@ OpenClaw Enterprise is the open platform for managing agents.
   [native credential delivery](flows/native-service-account-credential-delivery.md),
   and [Driver-issued credentials](flows/service-account-driver-credential-delivery.md).
 - [Existing Kubernetes namespace placement](flows/kubernetes-existing-namespace-placement.md).
-- [Gateway administration](flows/gateway-administration.md).
+- [Agent workspace files](flows/workspace-files.md).
 
 ## Implementation history
 

@@ -6,20 +6,6 @@ import {
 } from "@openclaw-enterprise/utils";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
-import {
-  ControllerGatewayUnknownOutcomeError,
-  type ControllerGatewayAccess,
-  type ControllerGatewayDispatchRequest,
-  type ControllerGatewayDispatchResult,
-} from "../../../gateway/contracts.ts";
-import {
-  buildGatewayAdministrationCliScript,
-  GATEWAY_ADMINISTRATION_REQUEST_TIMEOUT_MS,
-  GATEWAY_ADMINISTRATION_RESPONSE_MAX_BYTES,
-  gatewayAdministrationCliInput,
-  parseGatewayAdministrationCliOutput,
-} from "./gateway-administration.ts";
-import { KubernetesClientNodePodExecutor } from "./pod-exec.ts";
 import type {
   AppsV1Api,
   CoreV1Api,
@@ -172,12 +158,6 @@ interface GatewayConfigurationSnapshot {
   readonly revision: number;
   readonly revisionId: string;
   readonly annotations: Readonly<Record<string, string>>;
-}
-
-interface KubernetesGatewayTarget {
-  readonly namespace: string;
-  readonly podName: string;
-  readonly gatewayPort: number;
 }
 
 class OwnershipFailure extends Error {}
@@ -527,7 +507,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private lifecycle: ComputeLifecycleDispatcher;
   private lifecycleStarted = false;
   private apiClients: Promise<KubernetesApiClients> | undefined;
-  private readonly podExecutor: KubernetesClientNodePodExecutor;
   private patchOptions:
     ReturnType<typeof import("@kubernetes/client-node").setHeaderOptions> | undefined;
 
@@ -677,9 +656,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     this.options = options;
     this.sandboxDriver = selection.sandboxDriver;
-    this.podExecutor = new KubernetesClientNodePodExecutor(options.authentication, (message) => {
-      return new ConfigurationFailure(message);
-    });
     this.lifecycle = new ComputeLifecycleDispatcher(selection.lifecycleDrivers ?? []);
   }
 
@@ -688,13 +664,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new Error("Compute lifecycle owners cannot change after lifecycle operations begin.");
     }
     this.lifecycle = new ComputeLifecycleDispatcher(drivers);
-  }
-
-  createGatewayAdministrationAdapter(): ControllerGatewayAccess | undefined {
-    if (this.options.runtime === undefined) return undefined;
-    return {
-      dispatch: (request) => this.dispatchGatewayAdministrationCommand(request),
-    };
   }
 
   async preflight(): Promise<void> {
@@ -1589,228 +1558,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
         { mutating: true },
       );
     }
-  }
-
-  private async dispatchGatewayAdministrationCommand(
-    request: ControllerGatewayDispatchRequest,
-  ): Promise<ControllerGatewayDispatchResult> {
-    if (this.options.runtime === undefined) {
-      throw new ConfigurationFailure(
-        "Gateway administration is unsupported by this Compute Driver.",
-      );
-    }
-    this.validateGatewayAdministrationProfile(request.revision);
-    const signal = this.gatewayAdministrationSignal(
-      GATEWAY_ADMINISTRATION_REQUEST_TIMEOUT_MS,
-      request.signal,
-      request.deadline,
-    );
-    return withComputeAbortSignal(signal, async () => {
-      const target = await this.resolveCurrentGatewayTarget(request.revision);
-      let output: Awaited<ReturnType<KubernetesClientNodePodExecutor["exec"]>>;
-      try {
-        output = await this.podExecutor.exec({
-          namespace: target.namespace,
-          podName: target.podName,
-          containerName: "gateway",
-          command: ["node", "-e", buildGatewayAdministrationCliScript()],
-          stdin: gatewayAdministrationCliInput({
-            method: request.command.method,
-            ...(request.command.params === undefined ? {} : { params: request.command.params }),
-            port: target.gatewayPort,
-            timeoutMs: GATEWAY_ADMINISTRATION_REQUEST_TIMEOUT_MS,
-          }),
-          timeoutMs: GATEWAY_ADMINISTRATION_REQUEST_TIMEOUT_MS,
-          outputLimitBytes: GATEWAY_ADMINISTRATION_RESPONSE_MAX_BYTES,
-          signal,
-        });
-      } catch {
-        throw new ControllerGatewayUnknownOutcomeError(
-          "The native gateway command may have started through Kubernetes exec, but the controller could not observe its outcome.",
-        );
-      }
-      return parseGatewayAdministrationCliOutput(output.stdout);
-    });
-  }
-
-  private validateGatewayAdministrationProfile(revision: AgentRevision): void {
-    const gateway = asRecord(asRecord(revision.configuration)?.gateway);
-    if (gateway !== undefined && "roles" in gateway) {
-      throw new ConfigurationFailure(
-        "Gateway administration does not support native gateway.roles.",
-      );
-    }
-    const auth = asRecord(gateway?.auth);
-    if (auth?.mode !== "token") {
-      throw new ConfigurationFailure(
-        'Gateway administration requires native gateway.auth.mode "token".',
-      );
-    }
-  }
-
-  private gatewayAdministrationSignal(
-    timeoutMs: number,
-    callerSignal?: AbortSignal,
-    deadline?: Date,
-  ): AbortSignal {
-    const timeout = AbortSignal.timeout(timeoutMs);
-    const owner = currentComputeAbortSignal();
-    const signals = [timeout, owner, callerSignal].filter(
-      (signal): signal is AbortSignal => signal !== undefined,
-    );
-    if (deadline !== undefined) {
-      const deadlineMs = deadline.getTime() - Date.now();
-      if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
-        return AbortSignal.abort(new Error("Gateway administration request deadline expired."));
-      }
-      signals.push(AbortSignal.timeout(deadlineMs));
-    }
-    return AbortSignal.any(signals);
-  }
-
-  private async resolveCurrentGatewayTarget(
-    revision: AgentRevision,
-  ): Promise<KubernetesGatewayTarget> {
-    const { name: namespace } = await this.resolveNamespace(revision.namespaceId);
-    const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
-    const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    const service = await this.getOwned("Service", gatewayName, namespace, ownership);
-    if (service === undefined) {
-      throw new ConfigurationFailure("The Agent gateway Service is unavailable.");
-    }
-    const selector = asRecord(service.spec?.selector);
-    if (selector?.["app.kubernetes.io/name"] !== gatewayName) {
-      throw new OwnershipFailure("Refusing inactive or mismatched Agent gateway Service.");
-    }
-    const deployment = await this.getOwned("Deployment", gatewayName, namespace, ownership);
-    if (deployment === undefined || !this.deploymentReady(deployment)) {
-      throw new ConfigurationFailure("The Agent gateway Deployment is unavailable.");
-    }
-    const current = this.gatewayDeploymentRevision(deployment, gatewayName);
-    if (current.revision !== revision.revision || current.revisionId !== revision.id) {
-      throw new OwnershipFailure("Refusing stale Agent gateway Deployment.");
-    }
-    if (!(await this.gatewayReady(ownership, gatewayName, namespace))) {
-      throw new ConfigurationFailure("The Agent gateway is unavailable.");
-    }
-    const pod = await this.selectOwnedGatewayPod(revision, namespace, gatewayName, current);
-    if (pod === undefined) {
-      throw new ConfigurationFailure("The Agent gateway Pod is unavailable.");
-    }
-    const clusterIP = service.spec?.clusterIP;
-    if (!isNonEmptyString(clusterIP) || clusterIP === "None") {
-      throw new OwnershipFailure("Refusing Agent gateway Service without a private ClusterIP.");
-    }
-    return this.gatewayTargetForPod(namespace, pod);
-  }
-
-  private gatewayTargetForPod(
-    namespace: string,
-    pod: ManagedKubernetesObject<"Pod">,
-  ): KubernetesGatewayTarget {
-    return {
-      namespace,
-      podName: pod.metadata.name,
-      gatewayPort: this.options.network.gatewayPort,
-    };
-  }
-
-  private async selectOwnedGatewayPod(
-    revision: AgentRevision,
-    namespace: string,
-    gatewayName: string,
-    expected: Pick<GatewayConfigurationSnapshot, "revision" | "revisionId">,
-  ): Promise<ManagedKubernetesObject<"Pod"> | undefined> {
-    const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    const clients = await this.clients();
-    const observed = asRecord(
-      await this.request(() =>
-        clients.core.listNamespacedPod({
-          namespace,
-          labelSelector: labelsToSelector({
-            "app.kubernetes.io/name": gatewayName,
-            "openclaw.dev/agent": revision.agentId,
-            "openclaw.dev/workload-role": "gateway",
-          }),
-          timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
-        }),
-      ),
-    );
-    if (!Array.isArray(observed?.items)) {
-      throw new OwnershipFailure("Kubernetes gateway Pod discovery returned invalid resources.");
-    }
-    const ready = observed.items
-      .map((item) => this.asGatewayPod(item, namespace, gatewayName, revision, ownership, expected))
-      .filter((pod): pod is ManagedKubernetesObject<"Pod"> => pod !== undefined);
-    if (ready.length > 1) {
-      throw new OwnershipFailure("Multiple ready Pods claim the exact Agent gateway.");
-    }
-    return ready[0];
-  }
-
-  private asGatewayPod(
-    item: unknown,
-    namespace: string,
-    gatewayName: string,
-    revision: AgentRevision,
-    ownership: Ownership,
-    expected: Pick<GatewayConfigurationSnapshot, "revision" | "revisionId">,
-  ): ManagedKubernetesObject<"Pod"> | undefined {
-    const pod = asRecord(item);
-    const metadata = asRecord(pod?.metadata);
-    const status = asRecord(pod?.status);
-    if (
-      pod === undefined ||
-      metadata === undefined ||
-      typeof metadata.name !== "string" ||
-      metadata.namespace !== namespace ||
-      (pod.kind !== undefined && pod.kind !== "Pod")
-    ) {
-      throw new OwnershipFailure("Kubernetes gateway Pod discovery returned an invalid Pod.");
-    }
-    const candidate = {
-      ...pod,
-      apiVersion: typeof pod.apiVersion === "string" ? pod.apiVersion : "v1",
-      kind: "Pod",
-      metadata: { ...metadata, name: metadata.name },
-      status,
-    } as ManagedKubernetesObject<"Pod">;
-    this.verifyOwnership(candidate, ownership);
-    if (
-      candidate.metadata.labels?.["app.kubernetes.io/name"] !== gatewayName ||
-      candidate.metadata.labels?.["openclaw.dev/workload-role"] !== "gateway" ||
-      candidate.metadata.annotations?.[AGENT_REVISION_ANNOTATION] !== String(expected.revision) ||
-      candidate.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== expected.revisionId ||
-      candidate.metadata.deletionTimestamp !== undefined ||
-      status?.phase !== "Running" ||
-      !isNonEmptyString(status?.podIP)
-    ) {
-      return undefined;
-    }
-    const conditions = Array.isArray(status.conditions) ? status.conditions : [];
-    const ready = conditions.some((condition) => {
-      const record = asRecord(condition);
-      return record?.type === "Ready" && record.status === "True";
-    });
-    return ready ? candidate : undefined;
-  }
-
-  private gatewayDeploymentRevision(
-    deployment: ManagedKubernetesObject<"Deployment">,
-    gatewayName: string,
-  ): Pick<GatewayConfigurationSnapshot, "revision" | "revisionId"> {
-    const annotations = deployment.metadata.annotations ?? {};
-    const revision = Number(annotations[AGENT_REVISION_ANNOTATION]);
-    const revisionId = annotations[AGENT_REVISION_ID_ANNOTATION];
-    if (
-      !Number.isSafeInteger(revision) ||
-      revision < 1 ||
-      typeof revisionId !== "string" ||
-      revisionId.trim().length === 0
-    ) {
-      throw new OwnershipFailure(`Refusing invalid Agent gateway revision ${gatewayName}.`);
-    }
-    return { revision, revisionId };
   }
 
   private async resolveNamespace(

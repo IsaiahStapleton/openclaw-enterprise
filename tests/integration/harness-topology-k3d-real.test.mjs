@@ -1,22 +1,15 @@
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-import {
-  authenticatedHeaders,
-  createAuthenticatedControllerRequest,
-  signInToControllerApp,
-} from "../helpers/auth-session.mjs";
+import { createAuthenticatedControllerRequest } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
-import { runGatewayAdministrationFailureProofs } from "../helpers/gateway-administration-proof.mjs";
 import {
   assertGatewayModelTurn,
   configureExistingK3dLocalPathSharedFileSystem,
@@ -71,8 +64,6 @@ const sharedWorkspaceSubPaths = Object.freeze([
   "sessions",
   "workspace",
 ]);
-const execute = promisify(execFile);
-const repository = fileURLToPath(new URL("../../", import.meta.url));
 const {
   kubectlArguments,
   kubectl,
@@ -241,7 +232,7 @@ async function createScopedController(context, identifier, platformNamespace, ku
   };
 }
 
-function installationConfiguration(authentication, platformNamespace, slack, options = {}) {
+function installationConfiguration(authentication, platformNamespace, slack) {
   const configuration = createKubernetesInstallationConfiguration({
     authentication,
     platformNamespace,
@@ -273,16 +264,6 @@ function nativeConfiguration(harnessId, slack, options = {}) {
   const configuration = createHarnessConfiguration(harnessId, providerModel);
   const provider = harnessId === "codex" ? "codex" : "openai";
   configuration.models.providers[provider].models[0].input = ["text", "image"];
-  if (options.autoApproveLocal !== undefined) {
-    const nodes = configuration.gateway.nodes ?? {};
-    configuration.gateway.nodes = {
-      ...nodes,
-      pairing: {
-        ...(nodes.pairing ?? {}),
-        autoApproveLocal: options.autoApproveLocal,
-      },
-    };
-  }
   if (harnessId === "openclaw") {
     const modelEnvName = options.modelEnvName ?? "OPENAI_API_KEY";
     configuration.secrets = {
@@ -356,25 +337,6 @@ async function createOperatorSecret(namespace, name, key, credential) {
         data: { [key]: Buffer.from(credential).toString("base64") },
       }),
     );
-  });
-}
-
-async function applyKubernetesResource(document) {
-  await new Promise((resolve, reject) => {
-    const child = spawn("kubectl", kubectlArguments(["apply", "-f", "-"]), {
-      stdio: ["pipe", "ignore", "pipe"],
-    });
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr = `${stderr}${chunk.toString()}`.slice(-2048);
-    });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Kubernetes apply failed (${code}): ${stderr}`));
-    });
-    child.stdin.once("error", reject);
-    child.stdin.end(`${JSON.stringify(document)}\n`);
   });
 }
 
@@ -568,245 +530,6 @@ async function createSecretAssignmentCallerRequest({
     principalId: seed.principal.id,
     request: await createAuthenticatedControllerRequest(productionApp, credentials),
   };
-}
-
-async function createGatewayReaderCallerRequest({
-  pool,
-  productionApp,
-  installation,
-  namespaceId,
-  agentId,
-  servicePrincipalId,
-  permissions = [
-    { action: "read", resourceKind: "namespace" },
-    { action: "read", resourceKind: "agent" },
-  ],
-  roleName = "Gateway reader without administration",
-  resourceKind,
-  resourceId,
-  kind = "principal",
-  createServiceKey = false,
-  insertIdentity = true,
-}) {
-  const { createPostgresControllerAuth } = await import("../../apps/controller/src/auth/index.ts");
-  const identifier = randomUUID();
-  const credentials = {
-    email: `gateway-reader-${hash(identifier)}@example.test`,
-    password: `gateway-reader-${identifier}`,
-  };
-  const roleId = `role-gateway-reader-${identifier}`;
-  const bindingId = `binding-gateway-reader-${identifier}`;
-  const auth = await createPostgresControllerAuth({
-    mode: "development",
-    installationId: installation.id,
-    secret: authSecret,
-    baseURL: authBaseURL,
-    pool,
-    secureCookies: false,
-  });
-  let principal;
-  let request;
-  if (kind === "service_principal") {
-    principal = {
-      kind: "service_principal",
-      id: servicePrincipalId ?? `sp_${randomUUID()}`,
-      namespaceId,
-      ...(agentId === undefined ? {} : { agentId }),
-    };
-  } else {
-    const account = await auth.createAccount({
-      email: credentials.email,
-      password: credentials.password,
-      name: "OpenClaw Gateway Reader",
-    });
-    const seed = auth.principalSeed(account, { roleId });
-    principal = seed.principal;
-    request = await createAuthenticatedControllerRequestWithHeaders(productionApp, credentials);
-  }
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(
-      `INSERT INTO occ.iam_roles (id, namespace_id, name, permissions)
-       VALUES ($1, $2, $3, $4::jsonb)`,
-      [roleId, namespaceId, roleName, JSON.stringify(permissions)],
-    );
-    if (insertIdentity) {
-      await client.query(
-        `INSERT INTO occ.iam_identities (id, namespace_id, agent_id, kind, issuer, subject)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          principal.id,
-          principal.kind === "service_principal" ? (principal.namespaceId ?? null) : null,
-          principal.kind === "service_principal" ? (principal.agentId ?? null) : null,
-          principal.kind,
-          principal.kind === "principal" ? principal.issuer : null,
-          principal.kind === "principal" ? principal.subject : null,
-        ],
-      );
-    }
-    await client.query(
-      `INSERT INTO occ.iam_access_bindings
-       (id, namespace_id, identity_subject_id, group_subject_id, role_id, resource_kind, resource_id)
-       VALUES ($1, $2, $3, NULL, $4, $5, $6)`,
-      [bindingId, namespaceId, principal.id, roleId, resourceKind ?? null, resourceId ?? null],
-    );
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-
-  return {
-    principal,
-    request,
-    serviceKey:
-      createServiceKey && principal.kind === "service_principal"
-        ? await auth.createServiceKey({
-            principal,
-            name: `gateway-${hash(identifier)}`,
-          })
-        : undefined,
-  };
-}
-
-async function createAuthenticatedControllerRequestWithHeaders(app, credentials) {
-  const session = await signInToControllerApp(app, credentials);
-  return async (method, url, payload, options = {}) => {
-    const response = await app.inject({
-      method,
-      url,
-      headers: {
-        ...authenticatedHeaders(session, options.headers ?? {}),
-        host: "127.0.0.1",
-      },
-      ...(payload === undefined ? {} : { payload }),
-    });
-    return {
-      status: response.statusCode,
-      ...(response.body.length === 0 ? {} : response.json()),
-    };
-  };
-}
-
-const gatewayAdministrationChartRuleCache = new Map();
-
-async function gatewayAdministrationChartRules(platformNamespace) {
-  let cached = gatewayAdministrationChartRuleCache.get(platformNamespace);
-  if (cached !== undefined) return cached;
-  cached = renderGatewayAdministrationChartRules(platformNamespace);
-  gatewayAdministrationChartRuleCache.set(platformNamespace, cached);
-  return cached;
-}
-
-async function renderGatewayAdministrationChartRules(platformNamespace) {
-  const release = `oce-gateway-admin-${hash(platformNamespace).slice(0, 12)}`;
-  const helm = process.env.OCC_HELM_BIN ?? "helm";
-  const { stdout } = await execute(
-    helm,
-    [
-      "template",
-      release,
-      "deploy/helm/openclaw-enterprise",
-      "--namespace",
-      platformNamespace,
-      "--set",
-      `images.controller=registry.example.invalid/controller@sha256:${"a".repeat(64)}`,
-      "--set",
-      "auth.baseUrl=http://127.0.0.1",
-      "--set",
-      "auth.secretName=occ-auth",
-      "--set",
-      "auth.secretKey=secret",
-      "--set",
-      "bootstrap.adminEmail=admin@example.invalid",
-      "--set",
-      "bootstrap.password.claimName=occ-bootstrap-admin-password",
-      "--set",
-      "api.clients[0].namespace=operator-tools",
-      "--set",
-      "api.clients[0].podLabels.app=operator",
-      "--set",
-      "database.cidr=10.45.0.12/32",
-      "--set",
-      "cluster.cidr=10.43.0.1/32",
-    ],
-    { cwd: repository, maxBuffer: 2_000_000 },
-  );
-  const requireController = createRequire(
-    new URL("../../apps/controller/package.json", import.meta.url),
-  );
-  const { loadAllYaml } = await import(requireController.resolve("@kubernetes/client-node"));
-  const objects = loadAllYaml(stdout).filter(Boolean);
-  const rulesFor = (kind, name) => {
-    const object = objects.find(
-      (candidate) => candidate.kind === kind && candidate.metadata?.name === name,
-    );
-    assert.ok(object, `expected rendered ${kind} ${name}`);
-    return structuredClone(object.rules);
-  };
-  return {
-    workerTenant: rulesFor("ClusterRole", `${release}-openclaw-tenant-worker`),
-    apiTenant: rulesFor("ClusterRole", `${release}-openclaw-tenant-api`),
-  };
-}
-
-async function createRole(namespace, name, rules) {
-  await applyKubernetesResource({
-    apiVersion: "rbac.authorization.k8s.io/v1",
-    kind: "Role",
-    metadata: { namespace, name },
-    rules,
-  });
-}
-
-async function createRoleBinding(
-  namespace,
-  name,
-  roleName,
-  serviceAccountNamespace,
-  serviceAccountName,
-) {
-  await applyKubernetesResource({
-    apiVersion: "rbac.authorization.k8s.io/v1",
-    kind: "RoleBinding",
-    metadata: { namespace, name },
-    subjects: [
-      {
-        kind: "ServiceAccount",
-        namespace: serviceAccountNamespace,
-        name: serviceAccountName,
-      },
-    ],
-    roleRef: {
-      apiGroup: "rbac.authorization.k8s.io",
-      kind: "Role",
-      name: roleName,
-    },
-  });
-}
-
-async function provisionGatewayAdministrationRbac({
-  platformNamespace,
-  placement,
-  controller,
-  namespaceId,
-  agentId,
-}) {
-  const suffix = hash(`${namespaceId}\0${agentId}`);
-  const apiTenantRole = `gateway-admin-api-tenant-${suffix}`;
-  const chartRules = await gatewayAdministrationChartRules(platformNamespace);
-  await createRole(placement, apiTenantRole, chartRules.apiTenant);
-  await createRoleBinding(
-    placement,
-    `${apiTenantRole}-binding`,
-    apiTenantRole,
-    platformNamespace,
-    controller.apiAccount,
-  );
-  return { apiTenantRole };
 }
 
 async function ensureHarnessAdminPrincipal(
@@ -1094,11 +817,9 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     controller.authentication,
     platformNamespace,
     slack,
-    options,
   );
   const apiConfiguration = structuredClone(workerConfiguration);
   apiConfiguration.drivers.secret.configuration.authentication = controller.apiAuthentication;
-  apiConfiguration.drivers.compute.configuration.authentication = controller.apiAuthentication;
   await writeFile(startupPath, JSON.stringify(apiConfiguration), { mode: 0o600 });
   await writeFile(workerStartupPath, JSON.stringify(workerConfiguration), { mode: 0o600 });
   const drivers = await loadInstallationConfiguration({
@@ -1156,10 +877,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       authBaseURL,
       installationName,
     });
-    // The startup declaration has no persistent Installation ID. Standalone
-    // selected scenarios must use the identity created by bootstrap.
-    activeInstallation = await new PostgresPlatformState(observerPool).loadInstallation();
-    assert.ok(activeInstallation?.id, "bootstrap must persist the Installation identity");
   }
 
   productionApp = await composeProduction({
@@ -1170,22 +887,8 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     authBaseURL,
     drivers,
   });
-  let adminRequest = await createAuthenticatedControllerRequest(productionApp, credentials);
+  const adminRequest = await createAuthenticatedControllerRequest(productionApp, credentials);
   let request = adminRequest;
-  async function restartProductionApp() {
-    if (productionApp !== undefined) await productionApp.close();
-    productionApp = await composeProduction({
-      mode: "production",
-      host: "127.0.0.1",
-      databaseUrl,
-      authSecret,
-      authBaseURL,
-      drivers,
-    });
-    adminRequest = await createAuthenticatedControllerRequest(productionApp, credentials);
-    if (secretAssignmentPrincipalId === undefined) request = adminRequest;
-    return { productionApp, adminRequest, request };
-  }
   let secretAssignmentPrincipalId;
   const events = [];
   workerPool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
@@ -1199,25 +902,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     emit: (event) => events.push(event),
   });
   await worker.start();
-
-  async function restartProductionWorker() {
-    await worker.stop();
-    workerPool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
-    const restartedDrivers = await loadInstallationConfiguration({
-      mode: "production",
-      environment: { OCC_CONFIG_PATH: workerStartupPath },
-    });
-    worker = createControllerWorker({
-      mode: "production",
-      pool: workerPool,
-      drivers: restartedDrivers,
-      pollIntervalMs: 50,
-      leaseDurationMs: 60_000,
-      maxAttempts: 30,
-      emit: (event) => events.push(event),
-    });
-    await worker.start();
-  }
 
   const createdNamespace = await adminRequest("POST", "/namespaces", {
     name: `production-${mode}-${randomUUID()}`,
@@ -1459,7 +1143,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
         };
   const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
-    values: nativeConfiguration(harnessId, slack, options.nativeConfiguration ?? {}),
+    values: nativeConfiguration(harnessId, slack),
     ...(secretBindings === undefined ? {} : { secretBindings }),
   });
   assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
@@ -1490,16 +1174,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     assert.deepEqual(persistedAccount.data.credential, expectedCredential);
   }
   const gatewayToken = await provisionAgentTransportSecret(directory, placement, agent.data.id);
-  const gatewayAdministrationRbac =
-    options.gatewayAdministration === true
-      ? await provisionGatewayAdministrationRbac({
-          platformNamespace,
-          placement,
-          controller,
-          namespaceId,
-          agentId: agent.data.id,
-        })
-      : undefined;
   if (slack !== undefined) {
     await provisionAgentChannelSecret(directory, placement, agent.data.id, slack);
   }
@@ -1771,15 +1445,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     mode,
     placement,
     platformNamespace,
-    productionApp,
-    restartProductionApp,
-    restartProductionWorker,
-    apiComputeDriver: computeDriver,
-    workerComputeDriver: workerDrivers.computeDriver,
-    apiAuthentication: controller.apiAuthentication,
-    workerAuthentication: controller.authentication,
-    credentials,
-    installation: activeInstallation,
     approvedClient,
     controllerAccount: controller.account,
     controllerTenantRole: controller.tenantRole,
@@ -1808,7 +1473,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     },
     observerPool,
     secretApi,
-    gatewayAdministrationRbac,
   };
 }
 
@@ -2004,43 +1668,6 @@ async function assertScopedTenantPvcAccess(topology) {
   );
 }
 
-async function assertGatewayAdministrationRbacDenials(topology) {
-  const rows = [
-    [topology.controllerAccount, "create", "pods", topology.placement, undefined, "proxy"],
-    [topology.controllerAccount, "create", "pods", topology.placement, undefined, "exec"],
-    [topology.apiAccount, "create", "pods", topology.placement, undefined, "proxy"],
-  ];
-  await Promise.all(
-    rows.map(async ([accountName, verb, resource, namespace, resourceName, subresource]) => {
-      const target = resourceName === undefined ? resource : `${resource}/${resourceName}`;
-      const description = `${accountName} ${verb} ${target}${
-        subresource === undefined ? "" : ` --subresource=${subresource}`
-      } in ${namespace}`;
-      let stdout;
-      try {
-        stdout = await kubectl(
-          "auth",
-          "can-i",
-          verb,
-          target,
-          "--namespace",
-          namespace,
-          `--as=system:serviceaccount:${topology.platformNamespace}:${accountName}`,
-          ...(subresource === undefined ? [] : [`--subresource=${subresource}`]),
-        );
-      } catch (error) {
-        if (error.stdout?.trim() !== "no") throw error;
-        stdout = error.stdout;
-      }
-      assert.equal(
-        stdout.trim(),
-        "no",
-        `gateway administration RBAC unexpectedly allows ${description}`,
-      );
-    }),
-  );
-}
-
 async function assertDedicatedSharedWorkspaceResources(topology) {
   await assertScopedTenantPvcAccess(topology);
   const claimName = sharedWorkspaceClaimName(topology.agent.id);
@@ -2149,90 +1776,6 @@ async function assertConversation(topology, sessionKey, nonce) {
     );
     return user && assistant ? history : undefined;
   });
-}
-
-function gatewayAdministrationPath(topology, agent = topology.agent) {
-  return `/namespaces/${agent.namespaceId}/agents/${agent.id}/gateway/`;
-}
-
-async function dispatchOccGatewayCommand(topology, method, params, options = {}) {
-  const request = options.request ?? topology.browserRequest;
-  assert.equal(typeof request, "function", "OCC gateway command tests require an HTTP caller");
-  const response = await request(
-    "POST",
-    options.path ?? gatewayAdministrationPath(topology),
-    {
-      method,
-      ...(params === undefined ? {} : { params }),
-      ...(options.extraBody ?? {}),
-    },
-    { headers: options.headers ?? { origin: authBaseURL } },
-  );
-  assertNoSecretMaterial(
-    response,
-    options.secrets ?? [process.env.OPENAI_API_KEY, topology.gatewayToken],
-    "OCC gateway HTTP response must not expose credentials",
-  );
-  return response;
-}
-
-function assertOccGatewaySuccess(response, method) {
-  assert.equal(response.status, 200, JSON.stringify(response.error));
-  assert.equal(response.data.method, method);
-  assert.equal(response.data.ok, true, JSON.stringify(response.data.error));
-  assert.equal(Object.hasOwn(response.data, "payload"), true);
-  return response.data.payload;
-}
-
-async function assertOccConversation(topology, sessionKey, nonce) {
-  return waitFor(`OCC gateway provider transcript ${nonce}`, async () => {
-    const response = await dispatchOccGatewayCommand(topology, "chat.history", {
-      sessionKey,
-      limit: 30,
-    });
-    const history = assertOccGatewaySuccess(response, "chat.history");
-    assert.equal(
-      history.messages.some(
-        ({ role, stopReason }) => role === "assistant" && stopReason === "error",
-      ),
-      false,
-      "the actual provider turn must succeed",
-    );
-    const user = history.messages.find(
-      (message) => message.role === "user" && messageText(message).includes(nonce),
-    );
-    const assistant = history.messages.find(
-      (message) => message.role === "assistant" && messageText(message).includes(nonce),
-    );
-    return user && assistant ? history : undefined;
-  });
-}
-
-async function gatewayAuditRows(topology) {
-  const { rows } = await topology.observerPool.query(
-    `SELECT kind, outcome, details::text AS details
-       FROM occ.audit_events
-      WHERE namespace_id = $1 AND action = 'openclaw.agents.gateway.dispatch'
-      ORDER BY occurred_at ASC`,
-    [topology.agent.namespaceId],
-  );
-  return rows;
-}
-
-async function assertGatewayAuditSanitized(topology, secrets) {
-  const rows = await gatewayAuditRows(topology);
-  assert.ok(rows.length >= 2, "gateway dispatches must emit request and outcome audit evidence");
-  assertNoSecretMaterial(rows, secrets, "gateway dispatch audit evidence must not expose secrets");
-  for (const row of rows) {
-    const details = JSON.parse(row.details);
-    assert.equal(Object.hasOwn(details, "params"), false);
-    assert.equal(Object.hasOwn(details, "payload"), false);
-    assert.equal(Object.hasOwn(details, "result"), false);
-    // Admission denials do not claim a native dispatch. Only admitted
-    // mutation records carry the selected native method.
-    if (row.kind === "mutation") assert.equal(typeof details.nativeMethod, "string");
-  }
-  return rows;
 }
 
 async function inspectGatewayPersistence(topology, imageDigest, sessionKey) {
@@ -3810,375 +3353,6 @@ async function assertDedicatedSharedWorkspaceRuntime(context, topology, claim, p
     `dedicated shared workspace PVC persisted across restart and revision: ${claim.metadata.name}`,
   );
 }
-
-test(
-  "OCC gateway administration dispatches real Kubernetes gateway commands through the active Agent HTTP route",
-  { ...requiresProductionCluster, timeout: 1_200_000 },
-  async (context) => {
-    const topology = await arrangeProductionTopology(context, "dedicated", undefined, {
-      gatewayAdministration: true,
-    });
-    assert.ok(topology.harnessPod, "gateway administration coverage uses dedicated Codex topology");
-    topology.browserRequest = await createAuthenticatedControllerRequestWithHeaders(
-      topology.productionApp,
-      topology.credentials,
-    );
-    await assertGatewayAdministrationRbacDenials(topology);
-
-    const status = assertOccGatewaySuccess(
-      await dispatchOccGatewayCommand(topology, "status"),
-      "status",
-    );
-    assert.equal(typeof status, "object", "native status must return a real payload");
-    // Exercise every approved read method against the real native gateway,
-    // so the allowlist stays tied to the supported runtime contract.
-    for (const [method, params] of [
-      ["health", {}],
-      ["config.get", {}],
-      ["config.schema.lookup", { path: "gateway.bind" }],
-      ["agents.list", {}],
-      ["channels.status", { probe: false }],
-      ["agents.files.list", { agentId: "main" }],
-    ]) {
-      const payload = assertOccGatewaySuccess(
-        await dispatchOccGatewayCommand(topology, method, params),
-        method,
-      );
-      assert.equal(typeof payload, "object", `${method} must return its native payload`);
-    }
-
-    await runGatewayAdministrationFailureProofs(topology, {
-      dispatchOccGatewayCommand,
-      assertOccGatewaySuccess,
-      diagnostic: (message) => context.diagnostic(message),
-    });
-
-    // Recompose the production API from the same PostgreSQL/Kubernetes state;
-    // established native access must not depend on an API process's memory.
-    Object.assign(topology, await topology.restartProductionApp());
-    topology.browserRequest = await createAuthenticatedControllerRequestWithHeaders(
-      topology.productionApp,
-      topology.credentials,
-    );
-    assertOccGatewaySuccess(await dispatchOccGatewayCommand(topology, "status"), "status");
-
-    // A ready endpoint is insufficient when its Pod claims another revision.
-    // Changing only this annotation preserves the live process and endpoint,
-    // so the denial specifically exercises OCC's owned-Pod selection.
-    await kubectl(
-      "annotate",
-      "pod",
-      topology.gatewayPod.metadata.name,
-      "--namespace",
-      topology.placement,
-      `openclaw.dev/agent-revision-id=rev_${randomUUID()}`,
-      "--overwrite",
-    );
-    try {
-      const wrongPod = await dispatchOccGatewayCommand(topology, "status");
-      assert.equal(wrongPod.status, 503);
-    } finally {
-      await kubectl(
-        "annotate",
-        "pod",
-        topology.gatewayPod.metadata.name,
-        "--namespace",
-        topology.placement,
-        `openclaw.dev/agent-revision-id=${topology.revision.id}`,
-        "--overwrite",
-      );
-    }
-    assertOccGatewaySuccess(await dispatchOccGatewayCommand(topology, "status"), "status");
-
-    const fileName = "USER.md";
-    const fileContent = `OCC gateway administration file proof ${randomUUID()}\n`;
-    const write = assertOccGatewaySuccess(
-      await dispatchOccGatewayCommand(topology, "agents.files.set", {
-        agentId: "main",
-        name: fileName,
-        content: fileContent,
-      }),
-      "agents.files.set",
-    );
-    assert.equal(write.file.name, fileName);
-    assert.equal(write.file.content, fileContent);
-    const read = assertOccGatewaySuccess(
-      await dispatchOccGatewayCommand(topology, "agents.files.get", {
-        agentId: "main",
-        name: fileName,
-      }),
-      "agents.files.get",
-    );
-    assert.equal(read.file.name, fileName);
-    assert.equal(read.file.content, fileContent);
-
-    const nativeRejection = await dispatchOccGatewayCommand(topology, "agents.files.set", {
-      agentId: "main",
-      name: `invalid-${randomUUID()}.txt`,
-    });
-    assert.equal(nativeRejection.status, 200, JSON.stringify(nativeRejection.error));
-    assert.equal(nativeRejection.data.method, "agents.files.set");
-    assert.equal(nativeRejection.data.ok, false);
-    assert.equal(typeof nativeRejection.data.error.code, "string");
-    assert.equal(typeof nativeRejection.data.error.message, "string");
-
-    const sessionKey = `agent:main:occ-gateway-admin-${randomUUID()}`;
-    const nonce = `OCC-GATEWAY-ADMIN-${randomUUID()}`;
-    const send = assertOccGatewaySuccess(
-      await dispatchOccGatewayCommand(topology, "chat.send", {
-        sessionKey,
-        idempotencyKey: randomUUID(),
-        message: `Reply with exactly ${nonce}. Do not use tools.`,
-      }),
-      "chat.send",
-    );
-    assert.ok(
-      JSON.stringify(send).includes("accepted") || JSON.stringify(send).includes("run"),
-      "chat.send must return the native first response rather than waiting for completion",
-    );
-    await assertOccConversation(topology, sessionKey, nonce);
-    // Aborting an already completed run is a safe native no-op; its result
-    // still proves the admitted abort method reaches the owned gateway.
-    const abort = assertOccGatewaySuccess(
-      await dispatchOccGatewayCommand(topology, "chat.abort", { sessionKey }),
-      "chat.abort",
-    );
-    assert.equal(abort.aborted, false);
-
-    const pathname = gatewayAdministrationPath(topology);
-    const serviceKeyRequest = async (key, body, options = {}) => {
-      const response = await topology.productionApp.inject({
-        method: "POST",
-        url: options.path ?? pathname,
-        headers: {
-          host: "127.0.0.1",
-          "x-api-key": key,
-          ...(options.headers ?? {}),
-        },
-        payload: body,
-        remoteAddress: "127.0.0.1",
-      });
-      const parsed = {
-        status: response.statusCode,
-        ...(response.body.length === 0 ? {} : response.json()),
-      };
-      assertNoSecretMaterial(
-        parsed,
-        options.secrets ?? [process.env.OPENAI_API_KEY, topology.gatewayToken],
-        "service API-key gateway response must not expose credentials",
-      );
-      return parsed;
-    };
-    const missingOrigin = await topology.browserRequest("POST", pathname, { method: "status" });
-    assert.equal(missingOrigin.status, 403);
-    const wrongOrigin = await topology.browserRequest(
-      "POST",
-      pathname,
-      { method: "status" },
-      { headers: { origin: "http://attacker.example" } },
-    );
-    assert.equal(wrongOrigin.status, 403);
-    const extraBody = await dispatchOccGatewayCommand(topology, "status", undefined, {
-      extraBody: { targetUrl: "ws://127.0.0.1:1" },
-    });
-    assert.equal(extraBody.status, 400);
-    const unsupportedMethod = await dispatchOccGatewayCommand(topology, "config.patch", {});
-    assert.equal(unsupportedMethod.status, 400);
-
-    const inactive = await topology.browserRequest(
-      "POST",
-      `/namespaces/${topology.agent.namespaceId}/agents`,
-      {
-        name: `inactive-gateway-admin-${randomUUID()}`,
-        configurationId: topology.agent.configurationId,
-        executionMode: "dedicated",
-        ...(topology.agent.serviceAccountId === undefined
-          ? {}
-          : { serviceAccountId: topology.agent.serviceAccountId }),
-      },
-      { headers: { origin: authBaseURL } },
-    );
-    assert.equal(inactive.status, 201, JSON.stringify(inactive.error));
-    const inactiveGateway = await dispatchOccGatewayCommand(topology, "status", undefined, {
-      path: gatewayAdministrationPath(topology, inactive.data),
-    });
-    assert.equal(inactiveGateway.status, 503);
-
-    const readerRequest = await createGatewayReaderCallerRequest({
-      pool: topology.observerPool,
-      productionApp: topology.productionApp,
-      installation: topology.installation,
-      namespaceId: topology.agent.namespaceId,
-    });
-    const forbidden = await dispatchOccGatewayCommand(topology, "status", undefined, {
-      request: readerRequest.request,
-    });
-    assert.equal(forbidden.status, 403);
-    const operateOnly = await createGatewayReaderCallerRequest({
-      pool: topology.observerPool,
-      productionApp: topology.productionApp,
-      installation: topology.installation,
-      namespaceId: topology.agent.namespaceId,
-      permissions: [
-        { action: "read", resourceKind: "namespace" },
-        { action: "read", resourceKind: "agent" },
-        { action: "operate", resourceKind: "agent" },
-      ],
-      roleName: "Gateway operate without administration",
-      resourceKind: "agent",
-      resourceId: topology.agent.id,
-    });
-    const operateForbidden = await dispatchOccGatewayCommand(topology, "status", undefined, {
-      request: operateOnly.request,
-    });
-    assert.equal(operateForbidden.status, 403);
-
-    // API-key callers skip browser CSRF but still use exact IAM and admitted Namespace scope.
-    const serviceApi = await createGatewayReaderCallerRequest({
-      pool: topology.observerPool,
-      productionApp: topology.productionApp,
-      installation: topology.installation,
-      namespaceId: topology.agent.namespaceId,
-      kind: "service_principal",
-      createServiceKey: true,
-      permissions: [{ action: "administer", resourceKind: "agent" }],
-      roleName: "Gateway service API exact Agent administrator",
-      resourceKind: "agent",
-      resourceId: topology.agent.id,
-    });
-    assertOccGatewaySuccess(
-      await serviceKeyRequest(serviceApi.serviceKey.key, { method: "status" }),
-      "status",
-    );
-    const invalidApiKey = await topology.browserRequest(
-      "POST",
-      pathname,
-      { method: "status" },
-      { headers: { "x-api-key": `invalid-${randomUUID()}`, origin: authBaseURL } },
-    );
-    assert.equal(
-      invalidApiKey.status,
-      401,
-      "invalid service API key must not fall through to the human session",
-    );
-    const otherNamespace = await topology.request("POST", "/namespaces", {
-      name: `gateway-cross-namespace-${randomUUID()}`,
-    });
-    assert.equal(otherNamespace.status, 201, JSON.stringify(otherNamespace.error));
-    const crossNamespaceApi = await createGatewayReaderCallerRequest({
-      pool: topology.observerPool,
-      productionApp: topology.productionApp,
-      installation: topology.installation,
-      namespaceId: otherNamespace.data.id,
-      kind: "service_principal",
-      createServiceKey: true,
-      permissions: [{ action: "administer", resourceKind: "agent" }],
-      roleName: "Cross-Namespace gateway service API administrator",
-      // Grant administration inside the caller's own Namespace. A binding
-      // directly naming a foreign Agent is invalid at the database boundary.
-    });
-    const crossNamespaceForbidden = await serviceKeyRequest(crossNamespaceApi.serviceKey.key, {
-      method: "status",
-    });
-    assert.equal(crossNamespaceForbidden.status, 403);
-    const foreignAgentApi = await createGatewayReaderCallerRequest({
-      pool: topology.observerPool,
-      productionApp: topology.productionApp,
-      installation: topology.installation,
-      namespaceId: topology.agent.namespaceId,
-      kind: "service_principal",
-      createServiceKey: true,
-      permissions: [{ action: "administer", resourceKind: "agent" }],
-      roleName: "Foreign-Agent gateway service API administrator",
-      resourceKind: "agent",
-      resourceId: inactive.data.id,
-    });
-    const foreignAgentForbidden = await serviceKeyRequest(foreignAgentApi.serviceKey.key, {
-      method: "status",
-    });
-    assert.equal(foreignAgentForbidden.status, 403);
-    const agentPrincipalApi = await createGatewayReaderCallerRequest({
-      pool: topology.observerPool,
-      productionApp: topology.productionApp,
-      installation: topology.installation,
-      namespaceId: topology.agent.namespaceId,
-      agentId: topology.agent.id,
-      // The public Agent response intentionally omits its workload principal.
-      servicePrincipalId: topology.persistedAgent.servicePrincipalId,
-      kind: "service_principal",
-      createServiceKey: true,
-      insertIdentity: false,
-      permissions: [{ action: "administer", resourceKind: "agent" }],
-      roleName: "Agent-owned gateway service principal administrator",
-      resourceKind: "agent",
-      resourceId: topology.agent.id,
-    });
-    const agentPrincipalForbidden = await serviceKeyRequest(agentPrincipalApi.serviceKey.key, {
-      method: "status",
-    });
-    assert.equal(agentPrincipalForbidden.status, 403);
-
-    const beforeGatewayUid = topology.gatewayPod.metadata.uid;
-    await kubectl(
-      "delete",
-      "pod",
-      topology.gatewayPod.metadata.name,
-      "--namespace",
-      topology.placement,
-      "--wait=true",
-      "--timeout=120s",
-    );
-    topology.gatewayPod = await waitForReadyGatewayPod(
-      topology,
-      topology.revision.id,
-      beforeGatewayUid,
-    );
-    assertOccGatewaySuccess(await dispatchOccGatewayCommand(topology, "status"), "status");
-
-    const secondRevision = await topology.request(
-      "POST",
-      `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/deploy`,
-    );
-    assert.equal(secondRevision.status, 202, JSON.stringify(secondRevision.error));
-    assert.notEqual(secondRevision.data.id, topology.revision.id);
-    await waitFor(`gateway-admin revision ${secondRevision.data.id} activation`, async () => {
-      const observation = await topology.request(
-        "GET",
-        `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}`,
-      );
-      assert.equal(observation.status, 200);
-      return observation.data.activeRevisionId === secondRevision.data.id
-        ? observation.data
-        : undefined;
-    });
-    await waitFor(`gateway-admin worker completion of ${secondRevision.data.id}`, () =>
-      topology.events.find(
-        (event) =>
-          event.event === "worker.completed" &&
-          event.revisionId === secondRevision.data.id &&
-          event.outcome === "success",
-      ),
-    );
-    topology.gatewayPod = await waitForReadyGatewayPod(
-      topology,
-      secondRevision.data.id,
-      topology.gatewayPod.metadata.uid,
-    );
-    topology.revision = secondRevision.data;
-    assertOccGatewaySuccess(await dispatchOccGatewayCommand(topology, "status"), "status");
-
-    const auditRows = await assertGatewayAuditSanitized(topology, [
-      process.env.OPENAI_API_KEY,
-      topology.gatewayToken,
-      fileContent,
-    ]);
-    assert.ok(
-      auditRows.some((row) => JSON.parse(row.details).nativeMethod === "chat.send"),
-      "audit evidence must identify the admitted native method without native arguments",
-    );
-  },
-);
-
 test(
   "production dedicated Codex preserves gateway SQLite conversations and retained images across Pod replacement",
   { ...requiresProductionCluster, timeout: 1_200_000 },

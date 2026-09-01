@@ -530,35 +530,94 @@ every selected Secret before deploy. Binding changes are authorized by OCC IAM;
 Kubernetes RoleBindings only allow the API to materialize backing tenant
 Secrets.
 
-### Enable gateway administration
+### Agent workspace files
 
-Enable OCC gateway administration only when the bundled Kubernetes Compute
-Driver is selected and the packaged Helm RBAC has been applied. No Installation
-startup YAML field, Helm controller-namespace value, native trusted-proxy IP, or
-gateway administration credential Secret is required for this path.
+OCC Agent workspace file access is opt-in. `GET` and
+`PUT /namespaces/:namespaceId/agents/:agentId/workspace/files/:name` read and
+replace the four supported native files for one Enterprise Agent when the API
+process has an operator-owned endpoint map. Without a configured map, unmapped
+Agent, offline proxy, or unavailable native gateway, the routes fail closed with
+`503 DEPENDENCY_UNAVAILABLE`.
 
-No gateway Service should be exposed for administration. For each request, OCC
-validates the current active Agent, Service, EndpointSlice, Deployment, and one
-ready owned gateway Pod. The controller API then runs a fixed helper in that
-gateway container through Kubernetes `pods/exec`. The helper receives bounded
-JSON on stdin, calls the ordinary OpenClaw CLI/API against the Pod-local gateway
-port using the gateway's existing local configuration and authentication, emits
-captured JSON, and exits. It is not an arbitrary shell, remote native client,
-device enrollment hook, or reusable Pod startup process.
+The route contract is intentionally narrow: only `AGENTS.md`, `SOUL.md`,
+`IDENTITY.md`, and `USER.md` can be read or replaced. It is not a generic native
+RPC surface, CLI exec bridge, chat path, configuration editor, or full native
+administration UI. OCC stores no file bytes in PostgreSQL, provides no
+compare-and-swap update field, and does not replay writes after an unknown
+provider outcome.
 
-The API ServiceAccount needs tenant-local read access for the selected Service,
-EndpointSlice, Deployment, and Pod plus `pods/exec` permission for the fixed
-helper. Workloads never receive OCC private keys, controller Kubernetes
-credentials, or controller-owned gateway administration tokens. Missing exec
-permission, multiple ready gateway Pods, stopped Agents, inactive revisions,
-and ownership mismatches fail before native dispatch.
+Create the endpoint file outside the repository with owner-only permissions:
 
-Verify gateway administration with one read-only command after the Agent is
-active. A successful `chat.send` response means native accepted and started the
-chat request; it does not prove completion. Use `chat.history` to inspect the
-assistant reply. `config.get` responses omit the native
-`sourceConfigBeforeMigrations` snapshot because that field can contain
-unredacted migrated secret material.
+```yaml
+endpoints:
+  - namespaceId: ns_123e4567-e89b-42d3-a456-426614174000
+    agentId: agt_123e4567-e89b-42d3-a456-426614174000
+    url: wss://agent-files.example.internal/openclaw
+    nativeAgentId: main
+    identity: occ-workspace-files
+    userHeader: x-openclaw-operator
+    tlsFingerprint: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+The file must contain only the top-level `endpoints` array. Each `url` must be
+`wss://` and must not contain embedded credentials, a query, or a fragment.
+`tlsFingerprint` is optional; when present, use the exact 64-character
+hexadecimal certificate fingerprint. OCC reads the file once during API startup,
+fails startup on invalid YAML or invalid endpoint shape, and does not reload the
+file. Restart the API after changing mappings.
+
+The operator owns the assertion that each URL and `nativeAgentId` belong to the
+exact Enterprise Agent named by `namespaceId` and `agentId`. OCC does not add a
+Driver API, database schema, worker setting, per-revision native attestation, or
+automatic egress broadening for this route.
+
+The private TLS proxy must accept OCC only. It must authenticate the OCC source,
+forward the configured trusted identity header only after that authentication,
+derive `x-forwarded-for` from the actual OCC peer connection, and reject direct
+browser or workload callers. Do not forward caller-supplied `x-forwarded-for`
+blindly. Native trusted-proxy configuration must grant the service identity
+`operator.admin`; OCC still enforces user-facing Agent `read` and `operate`
+before contacting the proxy. Native rejects all-loopback forwarded addresses, so
+loopback development needs a genuine non-loopback OCC-to-proxy connection such
+as a separate proxy container. Do not use a fake IP, bypass TLS, or expose a
+global ingress to make local testing pass. Use a normal CA trusted by Node.js,
+`NODE_EXTRA_CA_CERTS`, or `tlsFingerprint`; certificate issuance, renewal, and
+network trust remain operator responsibilities.
+
+For production, create an existing ConfigMap in the controller namespace and ask
+Helm to mount only that key into the API Deployment:
+
+```bash
+kubectl -n openclaw-system create configmap occ-workspace-files \
+  --from-file=workspace-files.yaml=/secure/operator/workspace-files.yaml
+
+helm upgrade --install oce deploy/helm/openclaw-enterprise \
+  --namespace openclaw-system \
+  --set workspaceFiles.configMapName=occ-workspace-files \
+  --set workspaceFiles.key=workspace-files.yaml
+```
+
+The chart mounts the file read-only at
+`/etc/openclaw/workspace-files/workspace-files.yaml` and sets
+`OCC_WORKSPACE_FILES_CONFIG_PATH` only on the API Deployment. It does not mount
+the file into the worker, create the ConfigMap, add Kubernetes RBAC, or widen
+NetworkPolicies. Add exact network policy only when your private proxy needs it.
+
+For Docker Compose development, keep the checked-in `compose.yaml` unchanged and
+use an operator-owned override file:
+
+```yaml
+services:
+  controller:
+    environment:
+      OCC_WORKSPACE_FILES_CONFIG_PATH: /etc/openclaw/workspace-files/workspace-files.yaml
+    volumes:
+      - /secure/operator/workspace-files.yaml:/etc/openclaw/workspace-files/workspace-files.yaml:ro
+```
+
+This still requires a real private TLS proxy with non-loopback OCC attribution.
+A ready container or successful model-turn check is not workspace-file proof
+until the four-file route reads and writes through that configured WSS path.
 
 ### Verify production workloads
 

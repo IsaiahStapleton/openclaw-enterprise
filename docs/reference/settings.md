@@ -119,15 +119,16 @@ cluster must enforce NetworkPolicies. Do not expose the listener through an
 Ingress, Gateway API route, `NodePort`, `LoadBalancer`, `hostNetwork`, or public
 endpoint.
 
-| Variable            | Required value or format                            | Behavior                                                              |
-| ------------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
-| `NODE_ENV`          | Exactly `production`.                               | Enables durable production controller composition.                    |
-| `OCC_HOST`          | One explicit Pod interface IP address.              | Wildcard addresses and implicit hostnames are rejected.               |
-| `OCC_PORT`          | Decimal integer from `1` through `65535`.           | Selects the internal listener port exposed by the operator's Service. |
-| `OCC_DATABASE_URL`  | Explicit PostgreSQL application-role URL.           | Must connect to the already migrated controller database.             |
-| `OCC_CONFIG_PATH`   | Absolute path to trusted Installation startup YAML. | Selects Configuration, IAM, Compute, and optional account Drivers.    |
-| `OCC_AUTH_SECRET`   | Mounted high-entropy Better Auth secret.            | Signs and verifies session material without logging it.               |
-| `OCC_AUTH_BASE_URL` | Absolute controller base URL.                       | Defines the production Better Auth base URL and cookie origin.        |
+| Variable                          | Required value or format                                        | Behavior                                                                                                                 |
+| --------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `NODE_ENV`                        | Exactly `production`.                                           | Enables durable production controller composition.                                                                       |
+| `OCC_HOST`                        | One explicit Pod interface IP address.                          | Wildcard addresses and implicit hostnames are rejected.                                                                  |
+| `OCC_PORT`                        | Decimal integer from `1` through `65535`.                       | Selects the internal listener port exposed by the operator's Service.                                                    |
+| `OCC_DATABASE_URL`                | Explicit PostgreSQL application-role URL.                       | Must connect to the already migrated controller database.                                                                |
+| `OCC_CONFIG_PATH`                 | Absolute path to trusted Installation startup YAML.             | Selects Configuration, IAM, Compute, and optional account Drivers.                                                       |
+| `OCC_AUTH_SECRET`                 | Mounted high-entropy Better Auth secret.                        | Signs and verifies session material without logging it.                                                                  |
+| `OCC_AUTH_BASE_URL`               | Absolute controller base URL.                                   | Defines the production Better Auth base URL and cookie origin.                                                           |
+| `OCC_WORKSPACE_FILES_CONFIG_PATH` | Optional absolute path to trusted workspace-file endpoint YAML. | Enables API-only Agent workspace file access when present; omitted routes fail closed with `503 DEPENDENCY_UNAVAILABLE`. |
 
 The API and worker load the same trusted startup YAML; only the API initializes
 the optional [Provider client](providers.md). Both validate Provider membership
@@ -142,23 +143,35 @@ authenticated, TLS-checked, read-only Kubernetes Namespace access before serving
 requests or claiming work. Installed Drivers validate their own reviewed
 configuration and implementation-specific prerequisites.
 
-Agent gateway administration is supported only by the bundled Kubernetes Compute
-Driver. It has no Installation startup YAML field and no controller-namespace
-credential Secret. The packaged Helm chart must grant the controller API
-read access for Services, EndpointSlices, Deployments, and Pods, plus `pods/exec`
-permission for the fixed gateway administration helper in tenant namespaces.
-Missing API exec permission, a stopped or unready Agent, or mismatched
-Kubernetes ownership makes gateway administration unavailable before native
-dispatch.
+Agent workspace file routes are enabled only by the API process. The optional
+`OCC_WORKSPACE_FILES_CONFIG_PATH` file is read once at startup, must be absolute,
+and must contain only a top-level `endpoints` array:
 
-Every administrable native gateway must keep its ordinary local CLI/API
-configuration available inside the gateway container. The helper receives
-bounded JSON on stdin, calls the gateway over the Pod-local port with the
-gateway's existing local authentication, captures JSON, and exits. No native
-trusted-proxy allowlist, gateway administration proxy IP, OCC device enrollment,
-token Secret, or PVC identity pin is configured for this path. Native gateway
-readiness still uses a Pod-local Node.js HTTP probe against
-`127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz`.
+```yaml
+endpoints:
+  - namespaceId: ns_123e4567-e89b-42d3-a456-426614174000
+    agentId: agt_123e4567-e89b-42d3-a456-426614174000
+    url: wss://agent-files.example.internal/openclaw
+    nativeAgentId: main
+    identity: occ-workspace-files
+    userHeader: x-openclaw-operator
+    tlsFingerprint: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+The `url` must be `wss://` and must not contain embedded credentials, a query,
+or a fragment. `tlsFingerprint` is optional; when present, it must be one
+64-character hexadecimal certificate fingerprint. Invalid configuration fails
+startup; changes require an API restart. Unmapped, offline, or rejected targets
+return `503 DEPENDENCY_UNAVAILABLE`.
+
+This file is an operator assertion, not a Driver API, database schema, worker
+setting, or per-revision native attestation. The operator owns the URL,
+`nativeAgentId`, private TLS proxy, certificate trust, native trusted-proxy
+configuration, and any exact network access needed for OCC to reach the proxy.
+Current runtime defaults still use plain in-cluster `ws://` plus token-based
+gateway or Codex transport; those defaults are not enough for no-device-auth
+workspace file access. Do not add Kubernetes RBAC or automatic egress broadening
+solely for this route.
 
 Missing, invalid, expired, or revoked sessions or service keys return `401`; an
 authenticated Principal or ServicePrincipal without the exact existing IAM grant
@@ -212,11 +225,12 @@ replace, or regenerate output; see [recovery](../guides/deploy.md#recover-an-inc
 
 ## Optional controller environment
 
-| Variable                | Default or behavior when omitted                                                                     | Validation and scope                                                                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `OCC_DATABASE_URL`      | Compose supplies PostgreSQL. Manual host-process debugging should also set the application-role URL. | Must use a `postgresql:` or `postgres:` URL and the application role for the supported development path.      |
-| `OCC_CONFIG_PATH`       | Optional in development; required in production.                                                     | Must be an absolute path to trusted, closed-schema Installation startup YAML whenever present.                |
-| `OCC_DATABASE_POOL_MAX` | The installed PostgreSQL client's default: `10`.                                                     | Must be a positive safe integer. Applies to the PostgreSQL connection pool; it is validated whenever present. |
+| Variable                          | Default or behavior when omitted                                                                     | Validation and scope                                                                                                                                            |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OCC_DATABASE_URL`                | Compose supplies PostgreSQL. Manual host-process debugging should also set the application-role URL. | Must use a `postgresql:` or `postgres:` URL and the application role for the supported development path.                                                        |
+| `OCC_CONFIG_PATH`                 | Optional in development; required in production.                                                     | Must be an absolute path to trusted, closed-schema Installation startup YAML whenever present.                                                                  |
+| `OCC_WORKSPACE_FILES_CONFIG_PATH` | Optional.                                                                                            | Absolute trusted endpoint-map YAML read once by the API process; see [required production controller environment](#required-production-controller-environment). |
+| `OCC_DATABASE_POOL_MAX`           | The installed PostgreSQL client's default: `10`.                                                     | Must be a positive safe integer. Applies to the PostgreSQL connection pool; it is validated whenever present.                                                   |
 
 OCC resolves the one persisted Installation internally; no startup environment
 variable or YAML field supplies its identifier. The stable ID remains visible
@@ -503,20 +517,16 @@ or model turn. A separate real-runtime lane below provides model-turn proof.
 
 [`harness-topology-k3d-real.test.mjs`](../../tests/integration/harness-topology-k3d-real.test.mjs)
 is independently opt-in. Set `OCC_TEST_HARNESS_K3D_REAL=1` or explicitly select
-a real runtime image to enable the ordinary four-case suite. Once selected,
+a real runtime image to enable the ordinary runtime suite. Once selected,
 missing cluster, image, database, credential, or NetworkPolicy prerequisites
-fail instead of skipping. The ordinary suite verifies one OCC gateway
-administration case, dedicated Codex, embedded OpenClaw with a persisted
-provider credential, and embedded OpenClaw with the Secret API through real
-Enterprise gateways on an explicitly selected disposable k3d cluster. For
-dedicated Codex coverage, set `OCC_TEST_OPENAI_MODEL` to an authorized model
-that supports Codex custom tools, such as `gpt-5.1`; the source default remains
-`gpt-4.1`.
-
-The gateway administration case also requires `helm` on `PATH`, or an existing
-executable selected by `OCC_HELM_BIN`. It renders the checked-in chart's RBAC
-rules and applies them to the disposable controller identity; it does not
-install the chart or deploy its controller workloads.
+fail instead of skipping. The ordinary suite verifies dedicated Codex, embedded
+OpenClaw with a persisted provider credential, and embedded OpenClaw with the
+Secret API through real Enterprise gateways on an explicitly selected disposable
+k3d cluster. It does not prove Agent workspace-file production wiring until an
+operator endpoint map, private TLS proxy, and real Agent runtime are tested
+together. For dedicated Codex coverage, set `OCC_TEST_OPENAI_MODEL` to an
+authorized model that supports Codex custom tools, such as `gpt-5.1`; the source
+default remains `gpt-4.1`.
 
 | Variable                               | Requirement or default                                                                                 |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -536,7 +546,7 @@ install the chart or deploy its controller workloads.
 ### Slack test environment
 
 `OCC_TEST_SLACK_LIVE=1` selects the separate live Slack case and suppresses the
-ordinary four-case suite. The Slack case uses the same production k3d,
+ordinary runtime suite. The Slack case uses the same production k3d,
 PostgreSQL, image, and model-turn prerequisites, then posts a real message and
 waits for a gateway-authored reply. It does not delete the Slack messages it
 creates.

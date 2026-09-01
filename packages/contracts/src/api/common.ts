@@ -84,23 +84,18 @@ export const RevisionParams = Type.Object(
   { additionalProperties: false },
 );
 
-export const GATEWAY_COMMAND_METHODS = Object.freeze([
-  "health",
-  "status",
-  "config.get",
-  "config.schema.lookup",
-  "agents.list",
-  "channels.status",
-  "agents.files.list",
-  "agents.files.get",
-  "agents.files.set",
-  "chat.send",
-  "chat.history",
-  "chat.abort",
+export const WORKSPACE_FILE_NAMES = Object.freeze([
+  "AGENTS.md",
+  "SOUL.md",
+  "IDENTITY.md",
+  "USER.md",
 ] as const);
 
-export const GatewayCommandMethod = Type.Union(
-  GATEWAY_COMMAND_METHODS.map((method) => Type.Literal(method)),
+export const WorkspaceFileName = Type.Enum([...WORKSPACE_FILE_NAMES]);
+
+export const WorkspaceFileParams = Type.Object(
+  { namespaceId: NamespaceId, agentId: AgentId, name: WorkspaceFileName },
+  { additionalProperties: false },
 );
 
 export const JsonValue = Type.Union(
@@ -252,8 +247,15 @@ export const UpdateAgentBody = Type.Object(
   { additionalProperties: false },
 );
 
-export const DispatchGatewayCommandBody = Type.Object(
-  { method: GatewayCommandMethod, params: Type.Optional(Type.Ref("SafeJsonValue")) },
+export const UpdateWorkspaceFileBody = Type.Object(
+  {
+    content: Type.String({
+      maxLength: 16 * 1024,
+      pattern: "^[^\\u0000]*$",
+      description:
+        "Workspace file content. The controller also enforces a 16 KiB UTF-8 byte limit and rejects unpaired UTF-16 surrogates.",
+    }),
+  },
   { additionalProperties: false },
 );
 
@@ -355,7 +357,8 @@ export type ServiceAccountParams = Type.Static<typeof ServiceAccountParams>;
 export type SecretParams = Type.Static<typeof SecretParams>;
 export type AgentParams = Type.Static<typeof AgentParams>;
 export type RevisionParams = Type.Static<typeof RevisionParams>;
-export type GatewayCommandMethod = Type.Static<typeof GatewayCommandMethod>;
+export type WorkspaceFileName = Type.Static<typeof WorkspaceFileName>;
+export type WorkspaceFileParams = Type.Static<typeof WorkspaceFileParams>;
 export type ConfigurationValues = Type.Static<typeof ConfigurationValues>;
 export type CreateSecretBody = Type.Static<typeof CreateSecretBody>;
 export type UpdateSecretBody = Type.Static<typeof UpdateSecretBody>;
@@ -370,7 +373,7 @@ export type UpdateServiceAccountCredentialBody = Type.Static<
 >;
 export type CreateAgentBody = Type.Static<typeof CreateAgentBody>;
 export type UpdateAgentBody = Type.Static<typeof UpdateAgentBody>;
-export type DispatchGatewayCommandBody = Type.Static<typeof DispatchGatewayCommandBody>;
+export type UpdateWorkspaceFileBody = Type.Static<typeof UpdateWorkspaceFileBody>;
 export type ErrorDetail = Type.Static<typeof ErrorDetail>;
 export type ErrorResponse = Type.Static<typeof ErrorResponse>;
 export type ErrorCode = (typeof ERROR_CODES)[number];

@@ -27,6 +27,10 @@ provider:
     key: admin-key
     providerCidr: ""
 
+workspaceFiles:
+  configMapName: ""
+  key: workspace-files.yaml
+
 database:
   secretName: occ-database
   appUrlKey: application-url

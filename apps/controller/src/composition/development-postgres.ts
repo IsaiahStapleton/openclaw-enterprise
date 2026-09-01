@@ -21,6 +21,7 @@ import type {
   ServiceAccountDriverFactory,
 } from "./installation-config.ts";
 import { resolveApprovedHarness } from "./production-harness.ts";
+import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 
 export interface PostgresDevelopmentConfig {
   readonly mode: "development";
@@ -30,6 +31,7 @@ export interface PostgresDevelopmentConfig {
   readonly authBaseURL: string;
   readonly poolMax?: number;
   readonly trustedDevelopmentBridgeCidr?: string;
+  readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
 }
 
 export type PostgresDevelopmentRuntimeOptions =
@@ -154,7 +156,6 @@ export async function composePostgresDevelopment(
       controller,
       iamDriver,
       computeDriver,
-      ...(drivers?.gatewayAccess === undefined ? {} : { gatewayAccess: drivers.gatewayAccess }),
       publicOrigin: config.authBaseURL,
       ...(configurationDriver === undefined ? {} : { configurationDriver }),
       ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
@@ -171,6 +172,9 @@ export async function composePostgresDevelopment(
           : { trustedCidrs: [config.trustedDevelopmentBridgeCidr] }),
       },
       maxBodyBytes: 64 * 1024,
+      ...(config.workspaceFilesAccess === undefined
+        ? {}
+        : { workspaceFilesAccess: config.workspaceFilesAccess }),
     });
     app.get("/healthz", async () => ({ status: "ok" }));
     app.get("/readyz", async () => {
