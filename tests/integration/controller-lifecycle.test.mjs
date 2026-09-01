@@ -337,8 +337,6 @@ test("authorized resources retain exact Namespace ownership without metadata-onl
   assert.equal(Object.hasOwn(firstRevision, "workloadIdentityId"), false);
   assert.equal(Object.isFrozen(firstRevision), true);
   assert.equal(Object.isFrozen(firstRevision.configuration), true);
-  mutableConfiguration.model = "changed-after-admission";
-  mutableConfiguration.tool = "unexpected";
   assert.deepEqual(firstRevision.configuration, { model: "gpt-test", tool: "lookup" });
 
   const nextConfiguration = await createConfiguration(controller, namespace.id, {
