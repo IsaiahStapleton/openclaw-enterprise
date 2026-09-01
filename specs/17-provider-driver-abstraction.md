@@ -1,7 +1,7 @@
 # Feature Spec: Provider and related Drivers
 
 **Date:** 2026-09-01
-**Status:** Implementing — approved design; verification and PR delivery pending
+**Status:** Implemented — local verification passed; live Provider verification pending
 **Owner:** OCC / controller composition
 
 ## Problem and Decision
@@ -138,13 +138,21 @@ For the initial format change, use the approved clean development-state transiti
 | Existing provider calls and credential delivery still work | Retain conformance plus authorized service-account-driver-real coverage: create, issue, dedicated Codex delivery, revoke/delete and rollback; no admin key in worker/gateway/revisions/logs. Missing credentials must be reported as a proof gap. |
 | Integration format fully removed and clean state transition enforced | Startup rejects old configuration/persisted formats; Helm render checks exact Secret path, API-only mounts/egress and `/32`; verify a fresh database through normal initialization and recreation. Scoped search excludes historical specs and generic test/integration terminology. |
 
-Implementation gates: focused tests above, workspace/type checks, generated OpenAPI checks, and scoped formatting. This spec-only task does not claim those implementation or live-runtime proofs have run.
+Implementation gates: focused tests above, workspace/type checks, generated OpenAPI checks, and scoped formatting. Delivery evidence and remaining proof limits are recorded below.
+
+## Delivery Record
+
+The implementation adds Provider contracts and configuration, Agent/revision persistence and API fields, exact managed-credential checks, API-only client construction, and Helm configuration. Current behavior is owned by [Providers](../docs/reference/providers.md), [Agents](../docs/reference/agents.md), and the [Provider lifecycle flow](../docs/flows/provider-driver-lifecycle.md).
+
+Local evidence covers authenticated API behavior, application-role PostgreSQL ownership and worker lifecycle, actual Helm rendering, and the packaged controller image. Independent local verification passed for [implementation 118de64](https://github.com/openclaw/openclaw-enterprise/commit/118de64066c330e0828b50cdf4f2409ec22dc001), with no unresolved major review findings. Live ChatGPT account issuance, dedicated model turns, and upstream revocation remain unverified because authorized credentials/workspace and explicitly selected Kubernetes runtime fixtures are unavailable. No existing Installation state was reset or deployed.
 
 ## Manual Notes
 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 09:41: Implemented Provider configuration and Driver ownership, nullable Agent associations, immutable revisions, startup/admission/worker checks, and current reference/flow docs; independent local verification passed, live Provider proof remains pending (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 118de64066c330e0828b50cdf4f2409ec22dc001).
 
 - 2026-09-01 08:19: Applied Kevin's approved review direction: required client and bundled pairing, scoped injection, cleanup guard, exact Helm shape, and clean development-state transition; specification only (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d).
 - 2026-09-01 07:43: Draft Provider contract and source-grounded migration proposal; awaiting independent reviews and user direction (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d).
