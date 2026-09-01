@@ -166,6 +166,23 @@ function ensureEmailPassword(input: Record<string, unknown>): { email: string; p
   return { email, password };
 }
 
+function requireTrustedBrowserOrigin(request: FastifyRequest, expectedOrigin: string): void {
+  const origin = request.headers.origin;
+  if (Array.isArray(origin)) {
+    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+  }
+  if (origin !== undefined) {
+    if (origin !== expectedOrigin) {
+      throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    }
+    return;
+  }
+
+  if (request.headers["sec-fetch-site"] === "cross-site") {
+    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+  }
+}
+
 function accountName(input: ProvisionAuthAccountInput): string {
   return input.name?.trim() || input.email.trim();
 }
@@ -347,6 +364,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     throw new Error("OCC_AUTH_SECRET must contain at least 256 bits of secret material.");
   if (!validHttpBaseURL(options.baseURL)) throw new Error("OCC_AUTH_BASE_URL must be an HTTP URL.");
 
+  const expectedBrowserOrigin = new URL(options.baseURL).origin;
   const issuer = betterAuthIssuer(options.installationId);
   const auth = betterAuth<BetterAuthOptions & { plugins: ReturnType<typeof apiKey>[] }>({
     appName: "OpenClaw Enterprise Controller",
@@ -459,6 +477,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       request,
       reply,
       () => {
+        // Better Auth server API calls skip origin middleware without a Request context.
+        requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
         const body = ensureEmailPassword(authBody(request));
         return api.signInEmail({
           body: { ...body, rememberMe: true },
@@ -477,13 +497,16 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await sendAuthEndpoint(
       request,
       reply,
-      () =>
-        api.signOut({
+      () => {
+        // Better Auth server API calls skip origin middleware without a Request context.
+        requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
+        return api.signOut({
           headers: authHeaders(request.headers),
           asResponse: false,
           returnHeaders: true,
           returnStatus: true,
-        }),
+        });
+      },
       (response) => response,
       "The controller session could not be revoked.",
     );

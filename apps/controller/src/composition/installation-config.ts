@@ -10,6 +10,7 @@ import type {
   DriverImplementation,
   IAMDriver,
   ProviderDefinition,
+  ProviderSummary,
   SandboxDriver,
   SecretDriver,
 } from "@openclaw-enterprise/contracts";
@@ -172,6 +173,19 @@ function providerConfiguration(
     }
   }
   return providers;
+}
+
+export function providerSummariesFromDefinitions(
+  providers: readonly ProviderDefinition[],
+): readonly ProviderSummary[] {
+  return Object.freeze(
+    providers.map((provider) =>
+      Object.freeze({
+        id: provider.id,
+        type: provider.type,
+      }),
+    ),
+  );
 }
 
 function importEntrypoint(value: unknown): string | undefined {

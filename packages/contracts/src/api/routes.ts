@@ -29,6 +29,7 @@ import {
   InstallationResponse,
   NamespaceListResponse,
   NamespaceResponse,
+  ProviderListResponse,
   ServiceAccountResponse,
 } from "./resources.ts";
 
@@ -96,6 +97,21 @@ export const occApiRoutes = [
     schema: {
       querystring: EmptyQuery,
       response: { 200: InstallationResponse, ...readErrors },
+    },
+  },
+  {
+    operationId: "listProviders",
+    method: "GET",
+    path: "/providers",
+    action: "openclaw.providers.list",
+    iamAction: "administer",
+    resourceKind: "installation",
+    authorizationTarget: "installation",
+    summary: "List configured Providers",
+    tags: ["Providers"],
+    schema: {
+      querystring: EmptyQuery,
+      response: { 200: ProviderListResponse, ...readErrors },
     },
   },
   {
