@@ -17,6 +17,8 @@ bootstrap:
     claimName: ""
     mountPath: /var/lib/openclaw/bootstrap
     fileName: initial-admin-password
+  serviceKey:
+    fileName: initial-admin-service-key.json
 
 integrations:
   chatgpt:

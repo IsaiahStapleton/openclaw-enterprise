@@ -62,6 +62,21 @@ async function resources(manifests) {
   return parsed.trim().split("\n").map(JSON.parse);
 }
 
+async function composeConfiguration() {
+  const { stdout } = await execute(
+    "docker",
+    ["compose", "--file", "compose.yaml", "--env-file", "/dev/null", "config", "--format", "json"],
+    {
+      cwd: repository,
+      env: {
+        PATH: process.env.PATH,
+      },
+      maxBuffer: 2_000_000,
+    },
+  );
+  return JSON.parse(stdout);
+}
+
 test(
   "the production Helm chart renders private least-privilege runtime and ordered bootstrap",
   tooling,
@@ -88,6 +103,7 @@ test(
     const initialization = selected("Job", "initialization");
     const pod = initialization.spec.template.spec;
     assert.equal(pod.automountServiceAccountToken, false);
+    assert.equal(pod.securityContext.fsGroupChangePolicy, "OnRootMismatch");
     assert.equal(pod.initContainers[0].name, "migration");
     assert.equal(pod.containers[0].name, "bootstrap");
     assert.ok(pod.initContainers[0].env.some(({ name }) => name === "OCC_MIGRATION_DATABASE_URL"));
@@ -119,6 +135,13 @@ test(
         ({ name, value }) =>
           name === "OCC_BOOTSTRAP_PASSWORD_FILE" &&
           value === "/var/lib/openclaw/bootstrap/initial-admin-password",
+      ),
+    );
+    assert.ok(
+      pod.containers[0].env.some(
+        ({ name, value }) =>
+          name === "OCC_BOOTSTRAP_SERVICE_KEY_FILE" &&
+          value === "/var/lib/openclaw/bootstrap/initial-admin-service-key.json",
       ),
     );
     assert.ok(
@@ -328,6 +351,13 @@ test(
       ["missing Better Auth secret", { "auth.secretName": "" }],
       ["missing bootstrap admin email", { "bootstrap.adminEmail": "" }],
       ["missing bootstrap password claim", { "bootstrap.password.claimName": "" }],
+      ["nested bootstrap password file", { "bootstrap.password.fileName": "nested/password" }],
+      ["missing bootstrap service key file", { "bootstrap.serviceKey.fileName": "" }],
+      ["nested bootstrap service key file", { "bootstrap.serviceKey.fileName": "nested/key.json" }],
+      [
+        "shared bootstrap output file",
+        { "bootstrap.serviceKey.fileName": "initial-admin-password" },
+      ],
       ["unrestricted client namespace", { "api.clients[0].namespace": "" }],
       ["broad database egress", { "database.cidr": "0.0.0.0/0" }],
       ["broad Kubernetes API egress", { "cluster.cidr": "10.43.0.0/16" }],
@@ -358,3 +388,43 @@ test(
     }
   },
 );
+
+test("development packaging isolates bootstrap service key output to the controller", async () => {
+  const configuration = await composeConfiguration();
+  const { controller, migrate, worker } = configuration.services;
+  assert.ok(controller);
+  assert.ok(migrate);
+  assert.ok(worker);
+
+  assert.equal(
+    controller.environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE,
+    "/var/lib/openclaw/bootstrap/initial-admin-service-key.json",
+  );
+  assert.equal(migrate.environment?.OCC_BOOTSTRAP_SERVICE_KEY_FILE, undefined);
+  assert.equal(worker.environment?.OCC_BOOTSTRAP_SERVICE_KEY_FILE, undefined);
+
+  assert.ok(configuration.volumes.occ_bootstrap_data);
+  assert.deepEqual(
+    controller.volumes.filter(({ target }) => target === "/var/lib/openclaw/bootstrap"),
+    [
+      {
+        type: "volume",
+        source: "occ_bootstrap_data",
+        target: "/var/lib/openclaw/bootstrap",
+        volume: {},
+      },
+    ],
+  );
+  assert.ok(
+    migrate.volumes === undefined ||
+      migrate.volumes.every(({ source, target }) => {
+        return source !== "occ_bootstrap_data" && target !== "/var/lib/openclaw/bootstrap";
+      }),
+  );
+  assert.ok(
+    worker.volumes === undefined ||
+      worker.volumes.every(({ source, target }) => {
+        return source !== "occ_bootstrap_data" && target !== "/var/lib/openclaw/bootstrap";
+      }),
+  );
+});

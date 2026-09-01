@@ -83,12 +83,14 @@ docker compose logs --tail=50 controller worker
 
 Compose builds the controller image, starts PostgreSQL, initializes the
 database, then starts the API and worker. On an empty database, the API creates
-the administrator and singleton Installation automatically. Do not submit a
-second bootstrap request.
+the human and service administrators and singleton Installation automatically.
+It stores the initial service API key on the controller-only `occ_bootstrap_data`
+volume; [retrieve it after startup succeeds](#retrieve-the-bootstrap-service-key).
+Do not submit a second bootstrap request.
 
-PostgreSQL and native Configuration documents live in separate named volumes.
-Restarting with those volumes preserves the Installation, administrator,
-configuration, and revision history. Changing `OPENCLAW_DEV_PASSWORD` after
+PostgreSQL, native Configuration documents, and bootstrap output live in
+separate named volumes. Restarting preserves the Installation, administrators,
+credentials, configuration, and revision history. Changing `OPENCLAW_DEV_PASSWORD` after
 bootstrap does not change the stored account password.
 
 ### Verify development
@@ -511,13 +513,13 @@ the loopback gateway checks in the
 docker compose down
 ```
 
-This stops the Compose services and preserves both named data volumes. It does
+This stops the Compose services and preserves all three named data volumes. It does
 not remove Agent containers and tenant networks created separately by Docker
 Compute. Inspect resources carrying
 `org.openclaw.enterprise.compute-driver=docker` and their exact Namespace and
 Agent ownership before any manual cleanup. Do not run a broad Docker prune.
 `docker compose down --volumes` permanently deletes this stack's database and
-Configuration volumes; use it only when deliberately discarding the entire
+Configuration and bootstrap-key volumes; use it only when deliberately discarding the entire
 local Installation, after separately accounting for its runtime workloads.
 
 ## Production
@@ -545,7 +547,7 @@ and storage; development defaults are not production configuration.
   credentials, the trusted Installation startup YAML, and Better Auth signing
   material.
 - An operator-created protected PersistentVolumeClaim for the generated
-  bootstrap administrator password.
+  bootstrap administrator password and service-key JSON.
 - A StorageClass for every gateway's private `10Gi` RWO disk, backed by local
   or cloud block storage rather than NFS/SMB. Set
   `runtime.gatewayStorageClassName` to its reviewed name (`sqlite-block` below
@@ -725,17 +727,94 @@ kubectl -n openclaw-system create secret generic occ-chatgpt-admin \
 
 The migration URL must identify the separate database migrator role; the
 application URL must identify the less-privileged application role. The Better
-Auth secret signs controller API session material. Also create the protected
-PersistentVolumeClaim named by `bootstrap.password.claimName`; the
-initialization Job writes the generated first-administrator password there and
-fails if the output file already exists during first bootstrap. A previously
-bootstrapped Installation is verified without replacing its administrator or
-password. Use exact database and Kubernetes API
-destinations. Determine the API address and port visible to NetworkPolicy
-enforcement after service-address translation: in the validated k3d topology,
-the correct destination was the Kubernetes API endpoint on TCP `6443`, not its
-`10.43.0.1:443` Service address. Other clusters may use different endpoint
-addresses or ports.
+Auth secret signs controller API session material. Use exact database and
+Kubernetes API destinations. Determine the API address and port visible to
+NetworkPolicy enforcement after service-address translation: in the validated
+k3d topology, the correct destination was the Kubernetes API endpoint on TCP
+`6443`, not its `10.43.0.1:443` Service address. Other clusters may use
+different endpoint addresses or ports.
+
+#### Prepare the fresh bootstrap output PVC
+
+Before the first Helm install, create the protected PersistentVolumeClaim named
+by `bootstrap.password.claimName` and prepare its mounted root. The
+initialization Job writes the generated administrator password and service-key
+JSON there as UID/GID `1000` with mode `0600`; the mounted root must already be
+a real directory owned by UID/GID `1000` with mode `0700`. Existing output files
+cause fresh bootstrap to fail. A previously bootstrapped Installation is
+verified without replacing accounts, keys, or output, so use this preparation
+workflow only for a fresh, empty claim.
+
+```bash
+export OCC_SYSTEM_NAMESPACE='openclaw-system'
+export OCC_BOOTSTRAP_PVC='occ-bootstrap-admin-password'
+export OCC_BOOTSTRAP_PREP_IMAGE='<approved-controller-or-node>@sha256:<digest>'
+
+kubectl -n "$OCC_SYSTEM_NAMESPACE" apply -f - <<YAML
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${OCC_BOOTSTRAP_PVC}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: <protected-rwo-storage-class>
+  resources:
+    requests:
+      storage: 1Gi
+YAML
+
+kubectl -n "$OCC_SYSTEM_NAMESPACE" apply -f - <<YAML
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bootstrap-output-prepare
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: prepare
+      image: ${OCC_BOOTSTRAP_PREP_IMAGE}
+      command:
+        - node
+        - -e
+        - "const fs=require('node:fs');const root='/var/lib/openclaw/bootstrap';for(const name of ['initial-admin-password','initial-admin-service-key.json']){const path=root+'/'+name;if(fs.existsSync(path))throw new Error(name+' already exists on fresh bootstrap PVC')}fs.chownSync(root,1000,1000);fs.chmodSync(root,0o700);const s=fs.statSync(root);console.log(JSON.stringify({uid:s.uid,gid:s.gid,mode:s.mode&0o777}));"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add: [CHOWN, FOWNER]
+          drop: [ALL]
+      volumeMounts:
+        - name: output
+          mountPath: /var/lib/openclaw/bootstrap
+  volumes:
+    - name: output
+      persistentVolumeClaim:
+        claimName: ${OCC_BOOTSTRAP_PVC}
+YAML
+
+kubectl -n "$OCC_SYSTEM_NAMESPACE" wait \
+  --for=jsonpath='{.status.phase}'=Succeeded pod/bootstrap-output-prepare \
+  --timeout=120s
+kubectl -n "$OCC_SYSTEM_NAMESPACE" logs pod/bootstrap-output-prepare
+kubectl -n "$OCC_SYSTEM_NAMESPACE" delete pod bootstrap-output-prepare
+```
+
+The prepare log must be exactly `{"uid":1000,"gid":1000,"mode":448}`. If the
+Pod fails because either initial output file exists, stop and inspect whether
+the claim already contains live bootstrap credentials. Do not delete or
+overwrite the mounted files to force a reset.
+
+If cluster policy forbids a root preparation Pod, use the storage administrator
+or provider workflow for the same bounded operation: create the volume, set the
+mounted root to UID/GID `1000` and mode `0700`, verify that
+`initial-admin-password` and `initial-admin-service-key.json` are absent, then
+mount it for Helm. Keep the cluster policy unchanged; do not broaden Pod
+Security or rely on a recursive `fsGroup` mount to make the claim writable.
 
 ```bash
 helm upgrade --install oce deploy/helm/openclaw-enterprise \
@@ -762,8 +841,8 @@ missing or broader provider CIDRs fail rendering. See the
 [service-account integration settings](../reference/service-accounts.md#provider-selection-and-configuration).
 
 The chart isolates its initialization Job before startup, initializes the
-singleton Installation, writes the generated administrator password to the
-protected PVC path, and starts separately identified private API and worker
+singleton Installation and both administrators, writes the password and
+service-key JSON to the protected PVC, and starts separately identified private API and worker
 Deployments. The API exposes `/healthz` and database-backed `/readyz`; worker
 readiness expires when real queue-health observations stop.
 
@@ -783,7 +862,10 @@ kubectl -n openclaw-system rollout status \
 Use your approved protected-storage access to retrieve the initial password
 from the bootstrap PVC, at `/var/lib/openclaw/bootstrap/initial-admin-password`
 by default. Keep the local copy owner-readable only; never print the password
-or copy it into a command argument. Set `OCC_URL` to the HTTPS endpoint configured
+or copy it into a command argument. Retrieve the sibling
+`initial-admin-service-key.json` through the same protected-storage access when
+needed for automation. A completed Job container is not an exec endpoint.
+Set `OCC_URL` to the HTTPS endpoint configured
 as `auth.baseUrl` and run these commands from an authorized client environment:
 
 ```bash
@@ -1261,7 +1343,7 @@ rmdir -- "$OCC_SESSION_DIRECTORY"
 ```
 
 Skip this step if you already revoked the session before TUI attachment.
-Keep the bootstrap password and any runtime tokens in approved protected
+Keep the bootstrap password, service key, and runtime tokens in approved protected
 storage. Remove temporary credential copies according to your credential
 handling policy; do not delete the mounted bootstrap output to force a reset.
 
@@ -1283,8 +1365,8 @@ Retain the database, bootstrap storage, and operator-owned tenant resources
 until their retention and recovery requirements are satisfied. Helm hook
 resources may also remain. Never delete a shared namespace or run broad
 resource deletion to clear this Installation. Reinstallation with retained
-state verifies the existing administrator instead of generating a replacement
-password; preserve the matching configuration and signing Secret.
+state verifies the existing administrator without issuing a replacement password
+or key; preserve the matching configuration, signing Secret, and bootstrap output.
 
 For startup failure diagnosis and readiness behavior, see the
 [production startup flow](../flows/production-startup.md). For the runtime path
@@ -1304,10 +1386,99 @@ key with current IAM `administer` authority can use the
 [service-administrator variant](#manage-keys-with-a-service-administrator).
 These commands require `curl` and Python 3.
 
-First provision a non-Agent ServicePrincipal and its exact grants through the
-selected IAM authority. The controller has no public IAM-management API. See
+Fresh bootstrap already supplies a service administrator and initial key; use
+[its protected output](#retrieve-the-bootstrap-service-key) directly. For another
+identity, first provision a non-Agent ServicePrincipal and exact grants through
+the selected IAM authority. The controller has no public IAM-management API. See
 the [authentication reference](../reference/authentication.md#service-api-keys)
 for eligibility, request fields, scope, expiration, and failure behavior.
+
+### Retrieve the bootstrap service key
+
+Wait for confirmed successful startup; file existence alone does not prove a
+committed Installation. In development, copy the file into a new private local
+directory without printing its contents:
+
+```bash
+umask 077
+export OCC_SERVICE_KEY_DIRECTORY="$(mktemp -d)"
+export OCC_SERVICE_KEY_FILE="$OCC_SERVICE_KEY_DIRECTORY/initial-admin-service-key.json"
+docker compose cp \
+  controller:/var/lib/openclaw/bootstrap/initial-admin-service-key.json \
+  "$OCC_SERVICE_KEY_FILE"
+chmod 600 "$OCC_SERVICE_KEY_FILE"
+```
+
+For production, wait for the initialization Job to succeed, retrieve the file
+from the existing bootstrap PVC using approved storage access, and set
+`OCC_SERVICE_KEY_FILE` to the owner-readable local copy. The default path inside
+the PVC mount is `/var/lib/openclaw/bootstrap/initial-admin-service-key.json`.
+Neither worker nor API mounts that production PVC. Reader storage access must
+preserve the files' owner-only permissions; avoid mounts that recursively change
+ownership or group permissions through `fsGroup`.
+
+The JSON is an issuance response with `data.key`, non-secret key/principal IDs,
+expiry, and `meta.installationId`. Set `OCC_URL` to the running API as above and
+verify an Installation read without putting the key in command arguments:
+
+```bash
+set -o pipefail
+python3 -c 'import json, os, pathlib, sys
+key = json.loads(pathlib.Path(os.environ["OCC_SERVICE_KEY_FILE"]).read_text())["data"]["key"]
+sys.stdout.write("x-api-key: " + key + "\n")' |
+  curl --fail --silent --show-error --header @- "$OCC_URL/installation"
+```
+
+Expect HTTP `200` and the Installation matching `meta.installationId`. The
+service administrator has the [same Role as the initial human](../reference/authorization.md#supported-policy-surface),
+including Namespace creation/read, and the initial key expires after 30 days.
+Import it into your credential store and retain its key/principal IDs. An
+unattended installer waits for startup success, then retries failed import from
+the same file. It never reruns bootstrap to issue another key. Remove delivery
+copies according to storage policy; protect backups and exclude files from
+diagnostics. Never enable shell tracing or curl verbose/trace output.
+
+### Recover an incomplete bootstrap
+
+A bootstrap failure can leave Better Auth accounts, key hashes, or output
+without committed Installation/IAM state. Stop the failed attempt before repair.
+For an uncertain commit or development bootstrap `5xx`/missing response, preserve
+all credentials and output: the database may already have committed.
+
+Use approved database access to confirm the original transaction has finished,
+then compare the attempt's Installation, human, service-principal, and key IDs
+with the singleton Installation and current IAM/key records. A different
+Installation is not proof this attempt succeeded. If the database is unavailable,
+keep the outcome unresolved. Do not infer success from files or delete output
+to force a retry.
+
+With a confirmed noncommitted attempt, remove only proven orphan accounts/keys
+and quarantine only that attempt's output in protected storage before restarting.
+Cleanup is best effort; preserve safe IDs and paths from failure diagnostics
+for operator repair. With a matching committed seed, retain its credentials
+and use normal recovery below. A losing concurrent development startup must
+exit; a later whole-startup retry reloads the winner's persisted state.
+
+### Recover a lost or exposed service key
+
+With retained IDs, sign in as the human administrator, revoke the old key through
+`DELETE /api/auth/service-keys/:keyId`, then [issue a replacement](#issue-a-service-key)
+for the recorded service principal, omitting `namespaceId`. Save the new response
+privately. Expiry or revocation does not require another identity.
+
+If the file and IDs are both lost, there is no discovery endpoint. An operator
+must inspect non-secret `occ.apikey` fields (`id`, `reference_id`, `name`,
+`metadata`, `expires_at`), matching `reference_id` to `occ.iam_identities.id`,
+and verify the Installation metadata, non-Agent identity, and current
+`occ.iam_access_bindings`/`occ.iam_roles` authority. Do not export the key column,
+password hashes, sessions, or complete table dumps. The `bootstrap-admin` name
+is only a label; confirm exact IDs and ownership before revocation or repair.
+
+If IAM authority was removed, key issuance does not restore it. Losing every
+administrator credential requires operator recovery; bootstrap is never a reset.
+After exposure, also investigate and revoke any additional keys that the
+administrator issued: revocation does not cascade. For planned rotation,
+[issue, switch, verify, then revoke](#revoke-or-rotate-a-service-key).
 
 ### Issue a service key
 

@@ -1,7 +1,7 @@
 ---
 created: 2026-08-20
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-08-31
+last_updated_session: codex/01a05a69-3fbe-7441-9e6d-20394758cf94
 ---
 
 # Platform Startup Flow
@@ -135,8 +135,14 @@ exact-resource-authorized API routes.
 
 Development with `OCC_DATABASE_URL` instead calls
 [`composePostgresDevelopment`](../../apps/controller/src/composition/development-postgres.ts)
-and can bootstrap a missing Installation through the API. When `OCC_CONFIG_PATH`
-is absent, it registers the bundled Docker Compute Driver and filesystem
+and bootstraps a missing Installation through internal sign-in and the existing
+API. Fresh native-IAM setup adds human and service administrators and persists a
+private initial-key file before the OCC commit. Only a confirmed fresh `201`
+permits startup; concurrent losers fail, and uncertain outcomes preserve output
+for operator verification. Production performs the same identity/key setup in
+its initialization script before this composition. The
+[bootstrap flow](local-password-authentication.md) owns those details.
+When `OCC_CONFIG_PATH` is absent, it registers the bundled Docker Compute Driver and filesystem
 Configuration Driver, which writes native documents under
 `OCC_DEVELOPMENT_CONFIGURATION_ROOT`. Compose always supplies PostgreSQL for
 the supported development path.
@@ -223,6 +229,8 @@ execution begins in the adjacent
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 
 - 2026-08-28 21:20: Removed local-test Compute Driver startup references; retain Docker and Kubernetes runtime ownership. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 3ec166eb5fae39ed0f51ffb5ebd93338c4a2db94)
 - 2026-08-28 17:58: Updated moved feature-reference links for the documentation organization. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)

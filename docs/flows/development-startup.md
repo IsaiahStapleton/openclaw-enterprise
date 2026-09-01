@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-08-31
+last_updated_session: codex/01a05a69-3fbe-7441-9e6d-20394758cf94
 ---
 
 # Development Startup Flow
@@ -41,7 +41,7 @@ graph TD
     subgraph API["PostgreSQL-backed OCC API"]
         C --> D["Compose Better Auth and filesystem Configuration"]
         D --> E{"Installation already exists?"}
-        E -->|no| F["Provision the administrator and bootstrap once"]
+        E -->|no| F["Provision both administrators, save private key, and bootstrap once"]
         E -->|yes| G["Reload persisted Installation and IAM state"]
         F --> H["Publish the API only on host loopback"]
         G --> H
@@ -103,11 +103,24 @@ filesystem Driver owns native Configuration documents. The worker and Agent
 workloads never receive that configuration volume.
 
 On a fresh database, the controller provisions `OPENCLAW_DEV_EMAIL` and
-`OPENCLAW_DEV_PASSWORD`, signs in internally, and calls the existing
-authenticated bootstrap route with `OPENCLAW_DEV_INSTALLATION_NAME`. This
-happens once before normal serving. Reusing existing Compose volumes reloads
-the Installation without replacing its account, password, IAM policy, or
-existing revision history.
+`OPENCLAW_DEV_PASSWORD` and adds a non-Agent service administrator to the native
+IAM seed with a separate binding to the same Role. Better Auth issues its initial
+key, then the controller syncs the private JSON output at
+`OCC_BOOTSTRAP_SERVICE_KEY_FILE`. Compose mounts `occ_bootstrap_data` only into
+the controller at `/var/lib/openclaw/bootstrap`; the development image prepares
+that directory for UID/GID 1000 with mode `0700`. Direct development requires an
+explicit private absolute output path.
+
+The controller signs in internally and calls the existing authenticated bootstrap
+route with `OPENCLAW_DEV_INSTALLATION_NAME`. Only `201` permits serving; a losing
+`409` closes the application/pool and fails startup. A later whole-startup retry
+reloads persisted state. A `5xx` or missing response preserves credentials/output
+for operator verification. See the [bootstrap flow](local-password-authentication.md#2-issue-private-output-then-commit-through-the-existing-entry-point)
+for commit and cleanup boundaries.
+
+Reusing existing Compose volumes reloads the Installation without replacing
+accounts, keys, password, IAM policy, output, or revision history. Missing or
+expired credentials do not cause regeneration.
 
 ### 4. Become ready and start the independent worker
 
@@ -187,6 +200,8 @@ development.` means the application-role PostgreSQL connection is missing.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 
 - 2026-08-28 17:54: Separated startup execution from operator setup and sign-in instructions, linking the deployment guide and quickstart. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-26 23:13: Replaced the removed in-memory path with PostgreSQL-only Docker Compose startup, automatic Installation bootstrap, filesystem configuration, and Docker-backed worker ownership. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 02638f10ed52b413d41378ae0f6b45ca19b8b149)

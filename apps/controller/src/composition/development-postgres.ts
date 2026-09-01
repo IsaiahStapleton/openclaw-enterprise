@@ -9,10 +9,12 @@ import type {
   Installation,
 } from "@openclaw-enterprise/contracts";
 import {
+  createBootstrapAdministratorSeed,
   NativeIAMDriver,
   validateAuthAccountPrincipalSeed,
   validatePersistedNativeIAMState,
   type AuthPrincipalSeed,
+  type BootstrapAdministratorSeed,
   type NativeIAMState,
 } from "@openclaw-enterprise/iam";
 import { OpenClawController, PostgresPlatformState } from "@openclaw-enterprise/occ";
@@ -24,6 +26,12 @@ import type {
   InstallationRuntimeDrivers,
   ServiceAccountDriverFactory,
 } from "./installation-config.ts";
+import {
+  bootstrapOutputPath,
+  removeAttemptBootstrapFile,
+  writeProtectedBootstrapJson,
+  type BootstrapOutputFile,
+} from "./bootstrap-output.ts";
 import { resolveApprovedHarness } from "./production-harness.ts";
 
 export interface DevelopmentConfig {
@@ -41,6 +49,7 @@ export interface PostgresDevelopmentConfig extends Omit<DevelopmentConfig, "inst
   readonly databaseUrl: string;
   readonly poolMax?: number;
   readonly bootstrapInstallationName?: string;
+  readonly bootstrapServiceKeyFile?: string;
 }
 
 export type PostgresDevelopmentRuntimeOptions =
@@ -57,15 +66,33 @@ export function createDevelopmentDockerComputeDriver(
   return createDockerDevelopmentComputeDriverFromEnv(environment);
 }
 
-export function createDevelopmentIAMState(seed: AuthPrincipalSeed): NativeIAMState {
+export function createDevelopmentIAMState(
+  seed: AuthPrincipalSeed | BootstrapAdministratorSeed,
+): NativeIAMState {
+  const servicePrincipals = "servicePrincipal" in seed ? [seed.servicePrincipal] : [];
   return Object.freeze({
-    identities: Object.freeze([seed.principal]),
+    identities: Object.freeze([seed.principal, ...servicePrincipals]),
     groups: Object.freeze([]),
     memberships: Object.freeze([]),
     roles: Object.freeze([...seed.roles]),
     bindings: Object.freeze([...seed.bindings]),
     restrictions: Object.freeze([]),
   });
+}
+
+class DevelopmentBootstrapFailure extends Error {
+  readonly statusCode?: number;
+  readonly uncertain: boolean;
+
+  constructor(
+    message: string,
+    options: { readonly statusCode?: number; readonly uncertain?: boolean },
+  ) {
+    super(message);
+    this.name = "DevelopmentBootstrapFailure";
+    if (options.statusCode !== undefined) this.statusCode = options.statusCode;
+    this.uncertain = options.uncertain ?? false;
+  }
 }
 
 async function bootstrapDevelopmentInstallation(
@@ -91,27 +118,43 @@ async function bootstrapDevelopmentInstallation(
     remoteAddress: "127.0.0.1",
   });
   if (signIn.statusCode < 200 || signIn.statusCode >= 300) {
-    throw new Error(`Development administrator sign-in failed with HTTP ${signIn.statusCode}.`);
+    throw new DevelopmentBootstrapFailure(
+      `Development administrator sign-in failed with HTTP ${signIn.statusCode}.`,
+      { statusCode: signIn.statusCode },
+    );
   }
   const cookie = cookieHeaderFromSetCookie(signIn.headers["set-cookie"]);
   if (cookie.length === 0) {
     throw new Error("Development administrator sign-in did not return a session cookie.");
   }
 
-  const bootstrap = await app.inject({
-    method: "POST",
-    url: "/installation/bootstrap",
-    headers: {
-      host,
-      origin,
-      cookie,
-      "content-type": "application/json",
-    },
-    payload: JSON.stringify({ name: installationName }),
-    remoteAddress: "127.0.0.1",
-  });
-  if (bootstrap.statusCode !== 201 && bootstrap.statusCode !== 409) {
-    throw new Error(`Development Installation bootstrap failed with HTTP ${bootstrap.statusCode}.`);
+  let bootstrap;
+  try {
+    bootstrap = await app.inject({
+      method: "POST",
+      url: "/installation/bootstrap",
+      headers: {
+        host,
+        origin,
+        cookie,
+        "content-type": "application/json",
+      },
+      payload: JSON.stringify({ name: installationName }),
+      remoteAddress: "127.0.0.1",
+    });
+  } catch (error) {
+    throw new DevelopmentBootstrapFailure(
+      error instanceof Error
+        ? error.message
+        : "Development Installation bootstrap did not return a response.",
+      { uncertain: true },
+    );
+  }
+  if (bootstrap.statusCode !== 201) {
+    throw new DevelopmentBootstrapFailure(
+      `Development Installation bootstrap failed with HTTP ${bootstrap.statusCode}.`,
+      { statusCode: bootstrap.statusCode, uncertain: bootstrap.statusCode >= 500 },
+    );
   }
 }
 
@@ -149,16 +192,60 @@ export async function composePostgresDevelopment(
       pool,
       secureCookies: false,
     });
+    const computeDriver = options.computeDriver ?? createDevelopmentDockerComputeDriver();
+    const sandboxDriver = drivers?.sandboxDriver;
+    const configurationDriver =
+      options.configurationDriver ??
+      ("installation" in options
+        ? options.configurationDriver
+        : createFilesystemDevelopmentConfigurationDriverFromEnv());
     let initialIAMState: NativeIAMState | undefined;
     let bootstrapAccount: AuthenticatedAccount | undefined;
+    let bootstrapServiceKey: Awaited<ReturnType<typeof auth.createServiceKey>> | undefined;
+    let bootstrapServiceKeyOutput: BootstrapOutputFile | undefined;
+    let bootstrapServiceKeyFile: string | undefined;
     if (persistedInstallation === undefined) {
-      const account = await auth.createAccount({
-        email: development.adminEmail,
-        password: development.adminPassword,
-        name: "OpenClaw Administrator",
-      });
-      bootstrapAccount = account;
-      initialIAMState = createDevelopmentIAMState(auth.principalSeed(account));
+      if (config.bootstrapInstallationName === undefined) {
+        const account = await auth.createAccount({
+          email: development.adminEmail,
+          password: development.adminPassword,
+          name: "OpenClaw Administrator",
+        });
+        bootstrapAccount = account;
+        initialIAMState = createDevelopmentIAMState(auth.principalSeed(account));
+      } else {
+        bootstrapServiceKeyFile = bootstrapOutputPath(
+          config.bootstrapServiceKeyFile ?? "",
+          "OCC_BOOTSTRAP_SERVICE_KEY_FILE",
+        );
+        try {
+          const account = await auth.createAccount({
+            email: development.adminEmail,
+            password: development.adminPassword,
+            name: "OpenClaw Administrator",
+          });
+          bootstrapAccount = account;
+          const seed = createBootstrapAdministratorSeed(installationId, auth.issuer, account);
+          bootstrapServiceKey = await auth.createServiceKey({
+            principal: seed.servicePrincipal,
+            name: "bootstrap-admin",
+          });
+          bootstrapServiceKeyOutput = await writeProtectedBootstrapJson(bootstrapServiceKeyFile, {
+            data: bootstrapServiceKey,
+            meta: { installationId },
+          });
+          initialIAMState = createDevelopmentIAMState(seed);
+        } catch (error) {
+          if (bootstrapServiceKey !== undefined) {
+            await auth.revokeServiceKey(bootstrapServiceKey).catch(() => {});
+          }
+          if (bootstrapAccount !== undefined) {
+            await auth.deleteAccount(bootstrapAccount).catch(() => {});
+          }
+          await removeAttemptBootstrapFile(bootstrapServiceKeyOutput);
+          throw error;
+        }
+      }
       state.setBootstrapNativeIAM(initialIAMState);
     }
     const iamState =
@@ -178,19 +265,12 @@ export async function composePostgresDevelopment(
     if (bootstrapPrincipal === undefined || bootstrapPrincipal.kind !== "principal") {
       throw new Error("The configured development administrator is absent from native IAM policy.");
     }
-    const computeDriver = options.computeDriver ?? createDevelopmentDockerComputeDriver();
-    const sandboxDriver = drivers?.sandboxDriver;
     const principal = await iamDriver.lookupIdentity({
       issuer: bootstrapPrincipal.issuer,
       subject: bootstrapPrincipal.subject,
     });
     if (!principal || principal.kind !== "principal" || principal.id !== bootstrapPrincipal.id)
       throw new Error("The configured development Principal is absent from persisted IAM policy.");
-    const configurationDriver =
-      options.configurationDriver ??
-      ("installation" in options
-        ? options.configurationDriver
-        : createFilesystemDevelopmentConfigurationDriverFromEnv());
     const provisionAuthAccount = async (seed: AuthPrincipalSeed, auditEvent: AuditEvent) => {
       const current = await state.loadNativeIAMState(installationId);
       validateAuthAccountPrincipalSeed(seed, current, installationId);
@@ -282,9 +362,14 @@ export async function composePostgresDevelopment(
         await bootstrapDevelopmentInstallation(app, development, config.bootstrapInstallationName);
       } catch (error) {
         try {
-          if (bootstrapAccount !== undefined && (await state.loadInstallation()) === undefined) {
+          const uncertain = error instanceof DevelopmentBootstrapFailure ? error.uncertain : true;
+          if (!uncertain && bootstrapServiceKey !== undefined) {
+            await auth.revokeServiceKey(bootstrapServiceKey);
+          }
+          if (!uncertain && bootstrapAccount !== undefined) {
             await auth.deleteAccount(bootstrapAccount);
           }
+          if (!uncertain) await removeAttemptBootstrapFile(bootstrapServiceKeyOutput);
         } finally {
           await app.close();
         }

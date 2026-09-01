@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-08-28
-last_updated_session: codex/01a04927-11d8-7083-a4b7-9f3124559d82
+updated: 2026-08-31
+last_updated_session: codex/01a05a69-3fbe-7441-9e6d-20394758cf94
 ---
 
 # Service API Keys Flow
@@ -15,7 +15,10 @@ administrator can later revoke it. This flow follows a
 Namespace reader from issuance through `GET /namespaces/:namespaceId` to
 revocation. It stops at the OCC resource response or the credential's deletion
 and audit result; provisioning IAM identities and Agent workload credentials
-remain separate lifecycles.
+remain separate lifecycles. Fresh native-IAM bootstrap provisions the initial
+service administrator and calls the same key helper, delivering its response to
+protected storage rather than an HTTP issuance response. That separate entry and
+commit boundary is traced in the [bootstrap flow](local-password-authentication.md).
 
 Better Auth owns key material and persistence. The selected IAM Driver owns
 identity lookup and authorization. A key fixes the identity's Installation and
@@ -214,6 +217,8 @@ These commands describe the proof hooks, not a new runtime execution record.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 
 - 2026-08-28 20:17: Allow human or service administrators with current Installation authority to issue and revoke keys. (codex/01a04927-11d8-7083-a4b7-9f3124559d82 - d4b5b01d02cf68a89965f7c00a0fc7d0dcec18d8)
 

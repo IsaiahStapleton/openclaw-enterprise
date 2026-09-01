@@ -39,8 +39,9 @@ unless `OCC_CONFIG_PATH` explicitly selects another trusted Driver set.
 
 Development self-bootstrap is controller-owned and fresh-database-only. When
 no Installation exists, the controller provisions the configured development
-administrator account, signs in with `OPENCLAW_DEV_EMAIL` and
-`OPENCLAW_DEV_PASSWORD`, calls the existing authenticated bootstrap route, and
+human administrator and a non-Agent service administrator sharing the same Role.
+It saves the initial service key to private controller-only output, signs in with
+`OPENCLAW_DEV_EMAIL` and `OPENCLAW_DEV_PASSWORD`, calls the existing authenticated bootstrap route, and
 creates the first Installation with `OPENCLAW_DEV_INSTALLATION_NAME`. Reusing
 existing Compose volumes keeps the previous Installation, IAM policy, audit
 records, queued work, Configuration documents, and active revisions; development
@@ -49,8 +50,9 @@ password, or print one. Production bootstrap is separate and writes a generated
 password to `OCC_BOOTSTRAP_PASSWORD_FILE`.
 
 `docker compose down` keeps the `occ_postgres_data` and
-`occ_configuration_data` named volumes. `docker compose down --volumes` deletes
-both.
+`occ_configuration_data` named volumes and the controller-only `occ_bootstrap_data`
+volume containing the initial service-key JSON. `docker compose down --volumes`
+deletes all three. See [bootstrap delivery and recovery](../authentication.md#installation-and-account-ownership).
 
 ## Namespace lifecycle
 

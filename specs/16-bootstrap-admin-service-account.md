@@ -1,7 +1,7 @@
 # Feature Design: Bootstrap administrator service account
 
 **Date:** 2026-08-31  
-**Status:** Proposed; specification complete, implementation not started  
+**Status:** Implemented and locally verified; PR review pending\
 **Owner:** OCC bootstrap, authentication, and native IAM  
 **Source baseline:** `openclaw/openclaw-enterprise` `main` at `b43cc49c45fa6275e79985be0eabb517743c6a23`  
 **Affected references:** [Authentication](../docs/reference/authentication.md), [Authorization](../docs/reference/authorization.md), [Settings](../docs/reference/settings.md)
@@ -12,7 +12,7 @@ Fresh bootstrap creates the human administrator and one Installation-scoped serv
 
 The service identity is a non-Agent IAM `ServicePrincipal`, with no human login, email, password, session, Namespace, or Agent owner. Namespace [ServiceAccount resources](../docs/reference/service-accounts.md) instead supply upstream workload credentials. The operator owns the delivered credential; native IAM owns identity and permissions; Better Auth owns key generation, hashing, expiry, and revocation.
 
-This is a proposed implementation under [the platform design](../docs/design.md). It retains current startup entry points and native IAM provisioning. A shared transaction coordinator, auth/OCC atomicity, receipt table or migration, recovery endpoint, startup rewrite, external-IAM bootstrap, extra startup-YAML mounting, automatic rotation, and existing-installation backfill are out of scope. No feature or live credential is created by this specification.
+This specification records the approved implementation under [the platform design](../docs/design.md). It retains current startup entry points and native IAM provisioning. A shared transaction coordinator, auth/OCC atomicity, receipt table or migration, recovery endpoint, startup rewrite, external-IAM bootstrap, extra startup-YAML mounting, automatic rotation, and existing-installation backfill are out of scope. Local disposable bootstrap verification is recorded below; no production rollout is included.
 
 ## Current state and evidence
 
@@ -98,7 +98,7 @@ Selected defaults are no existing-installation backfill and the existing 30-day 
 
 ## Detailed File Plan
 
-All entries describe future implementation; current references remain unchanged until behavior ships.
+The original file plan below is implemented in this change; the linked current references, guides, and flows describe the resulting behavior.
 
 | File | Expected change |
 | --- | --- |
@@ -133,13 +133,21 @@ Validate first on disposable PostgreSQL/Compose, then a selected disposable Helm
 - **Integration:** Reruns preserve IDs/key/file bytes, older installations remain unchanged, and expiry/revocation/removal never resurrects credentials. Race fresh starts with same/different output paths; one seed wins, the loser fails/closes, cleanup leaves the winner intact, and a whole-startup retry reloads it. Fault an ambiguous commit and prove no credential deletion even when acknowledgement is lost.
 - **Manual:** Verify Compose UID 1000 volume/copy permissions and actual Job/PVC retrieval, human sign-in, first key request, saved-ID loss recovery and lost-file/IDs operator recovery, planned rotation/revocation, and unattended import only after success. Rendered Helm alone does not prove PVC permissions; unavailable runtime prerequisites remain explicit gaps.
 
-Use focused real integration tests, `pnpm test:postgres`, `pnpm typecheck`, and `pnpm check:workspace` after implementation. This specification edit needs only link and whitespace checks; no runtime tests or live provisioning.
+Use focused real integration tests, `pnpm test:postgres`, `pnpm typecheck`, and `pnpm check:workspace` after implementation. The implementation also validates actual Compose output/copy behavior and a disposable initialization Job/PVC; production deployment remains outside this change.
+
+## Implementation verification
+
+Local validation passed for the implemented bootstrap contract: 31 PostgreSQL tests (five documented skips), eight standalone worker tests, 140 conformance tests, and TypeScript, formatting, workspace, OpenAPI, and flow-document checks. Actual Compose and initialization Job/PVC proofs cover private delivery, human/service access, rotation and revocation, retry preservation, and file permissions. Three review rounds resolved the PVC procedure and shared PostgreSQL fixture issues.
+
+The broader non-live integration run had 92 passes, 57 infrastructure skips, and one unchanged Driver-package fixture failure: pnpm's release-age policy queries unpublished local fixture packages on npm and receives 404. Package policy was retained. Full production TUI/model execution and a production rollout are outside this verification.
 
 ## Manual Notes
 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- [2026-08-31 18:06]: Implement both bootstrap paths, protected credential output, shared administrator policy, packaging, and current documentation; final review and verification are in progress. (01a05a3d-526f-7553-8cd8-070bd1847acb - 0797098)
 
 - [2026-08-31 17:33]: Apply approved simplification: retain existing bootstrap flows, share the administrator Role, deliver a private key file, and use scoped cleanup with operator recovery for partial or uncertain outcomes. (01a05a3d-526f-7553-8cd8-070bd1847acb - b43cc49)
 - [2026-08-31 17:04]: Resolve independent review by adding all three owning startup flow documents and a documentation-parity acceptance criterion. (01a05a3d-526f-7553-8cd8-070bd1847acb)

@@ -83,8 +83,9 @@ requests and limits, defaulting to `100m` CPU/`128Mi` memory requests and
 The controller worker declares a bounded writable `emptyDir` for its readiness
 marker. Installation startup YAML, Better Auth signing material, and other
 mounted controller Secret data remain read-only. The initialization Job writes
-the generated bootstrap administrator password only to its operator-provided
-password output volume.
+the generated bootstrap password and service-key JSON only to its operator-provided
+protected output volume. Neither output is mounted into the API, worker, or tenant
+Pods. See [bootstrap credential handling](authentication.md#installation-and-account-ownership).
 A configured ChatGPT admin key
 is mounted read-only only in the API Pod; the worker, initialization Job, and
 tenant Pods never receive it.

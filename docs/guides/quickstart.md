@@ -58,8 +58,11 @@ docker compose ps -a
 
 Wait for PostgreSQL and the controller to be healthy and the worker to remain
 running. The `migrate` service should exit with code `0`. On a new database,
-OCC automatically creates the first administrator and singleton Installation.
-Do not call the bootstrap endpoint again.
+OCC automatically creates the singleton Installation, human administrator, and
+service administrator. Its initial service API key stays in a private JSON file
+on a controller-only volume. Do not call the bootstrap endpoint again. After
+startup succeeds, follow [retrieve the bootstrap service key](deploy.md#retrieve-the-bootstrap-service-key)
+if you need automation access.
 
 ## Sign in and read the Installation
 
@@ -111,7 +114,7 @@ rmdir -- "$OCC_SESSION_DIRECTORY"
 docker compose down
 ```
 
-Stopping Compose preserves the database and Configuration volumes. Do not add
+Stopping Compose preserves the database, Configuration, and bootstrap-key volumes. Do not add
 `--volumes` unless you intend to erase them. For environment configuration and
 production installation, continue to [Deploy OpenClaw Enterprise](deploy.md).
 For supported resource operations, see the [feature reference](../reference/README.md).

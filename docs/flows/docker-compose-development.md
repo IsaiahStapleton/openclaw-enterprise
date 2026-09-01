@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-08-31
-last_updated_session: codex/01a059f9-e5cc-7b01-9479-0c5087f5e58f
+last_updated_session: codex/01a05a69-3fbe-7441-9e6d-20394758cf94
 ---
 
 # Docker Compose Development Flow
@@ -89,18 +89,22 @@ worker never use the migrator or PostgreSQL administrator URL.
 `apps/controller/src/index.ts:perform`
 
 On a fresh database, the controller provisions the configured development
-administrator account before sign-in. It then signs in through Better Auth with
+human administrator and adds the service administrator to the native IAM seed.
+It issues and saves the initial key on the controller-only `occ_bootstrap_data`
+volume before sign-in. It then signs in through Better Auth with
 the development account inputs and calls the existing authenticated bootstrap
 API to create the singleton Installation. Existing Compose volumes keep their
 persisted Installation, administrator, IAM policy, audit events, queued work,
 Configuration documents, and revisions; the controller does not re-bootstrap an
-existing database.
+existing database. Fresh startup requires HTTP `201`; a losing `409` closes the
+application, and `5xx`/missing responses preserve artifacts for operator verification.
+The [bootstrap flow](local-password-authentication.md) owns that failure boundary.
 
 Development self-bootstrap uses `OPENCLAW_DEV_EMAIL`,
 `OPENCLAW_DEV_PASSWORD`, and `OPENCLAW_DEV_INSTALLATION_NAME`, or their
 defaults. It does not generate or print a one-time password. Production
 bootstrap is the separate protected flow that writes a generated password to
-`OCC_BOOTSTRAP_PASSWORD_FILE`.
+`OCC_BOOTSTRAP_PASSWORD_FILE` and the service-key JSON to its protected sibling.
 
 ### 3. The API admits only local development traffic
 
@@ -268,6 +272,7 @@ PostgreSQL and can be retried by the worker.
 
 ## Changelog
 
+- 2026-08-31 17:45: Align bootstrap identity and protected service-key storage with the current startup path. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 - 2026-08-31 15:40: Added the compact development TUI runtime trace and two-turn verification boundary. (01a059f9-e5cc-7b01-9479-0c5087f5e58f - 3a04cee)
 - 2026-08-28 17:54: Clarified the Docker workload execution boundary and linked operator setup, quickstart, and worker traces. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-25 10:13: Removed the deleted bootstrap sidecar/script from the Compose flow and documented controller-owned fresh-database self-bootstrap. (01a03630-cd9f-7352-9e64-1d30de98c7dd - c56867448b187304723d20043dd5a0e184736ef2)

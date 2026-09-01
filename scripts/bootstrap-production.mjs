@@ -1,10 +1,16 @@
-import { constants } from "node:fs";
-import { open, unlink } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { dirname } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { createPostgresControllerAuth } from "../apps/controller/src/auth/index.ts";
+import {
+  bootstrapOutputPath,
+  removeAttemptBootstrapFile,
+  writeProtectedBootstrapFile,
+  writeProtectedBootstrapJson,
+} from "../apps/controller/src/composition/bootstrap-output.ts";
+import { createBootstrapAdministratorSeed } from "../packages/iam/src/index.ts";
 import { OpenClawController, PostgresPlatformState } from "../packages/occ/src/index.ts";
+import { PostgresCommitOutcomeUnknownError } from "../packages/occ/src/state/postgres-state.ts";
 
 const requireControllerDependency = createRequire(
   new URL("../apps/controller/package.json", import.meta.url),
@@ -45,10 +51,17 @@ function authBaseURL(raw) {
 }
 
 function passwordOutputPath(raw) {
-  if (!isAbsolute(raw)) {
-    throw new Error("OCC_BOOTSTRAP_PASSWORD_FILE must identify an absolute output path.");
+  return bootstrapOutputPath(raw, "OCC_BOOTSTRAP_PASSWORD_FILE");
+}
+
+function serviceKeyOutputPath(raw, passwordPath) {
+  const path = bootstrapOutputPath(raw, "OCC_BOOTSTRAP_SERVICE_KEY_FILE");
+  if (path === passwordPath || dirname(path) !== dirname(passwordPath)) {
+    throw new Error(
+      "OCC_BOOTSTRAP_SERVICE_KEY_FILE must be a distinct sibling of OCC_BOOTSTRAP_PASSWORD_FILE.",
+    );
   }
-  return raw;
+  return path;
 }
 
 function randomPassword() {
@@ -87,15 +100,27 @@ async function createCredentialUser(controllerAuth, email, password) {
 async function deleteCredentialUser(controllerAuth, userId) {
   try {
     await controllerAuth.deleteAccount({ id: userId });
-  } catch {
-    // The bootstrap failure path still reports the original error below.
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : "Bootstrap administrator cleanup failed.";
   }
 }
 
-async function openProtectedPasswordFile(path) {
-  const handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
-  await handle.chmod(0o600);
-  return handle;
+async function revokeServiceKey(controllerAuth, key) {
+  try {
+    await controllerAuth.revokeServiceKey(key);
+    return undefined;
+  } catch {
+    return "Bootstrap service key cleanup failed.";
+  }
+}
+
+function cleanupFailure(kind, id, error) {
+  return {
+    kind,
+    id,
+    error,
+  };
 }
 
 const authConfig = {
@@ -107,16 +132,23 @@ if (authConfig.secret.length < 32) {
 }
 const adminEmail = normalizeEmail(required("OCC_BOOTSTRAP_ADMIN_EMAIL"));
 const passwordPath = passwordOutputPath(required("OCC_BOOTSTRAP_PASSWORD_FILE"));
+let bootstrapFailureDetails;
 
-function authorizationFor(controllerAuth, userId) {
-  const seed = controllerAuth.principalSeed({ id: userId });
+function authorizationFor(controllerAuth, installationId, userId) {
+  const seed = createBootstrapAdministratorSeed(installationId, controllerAuth.issuer, {
+    id: userId,
+  });
   return {
-    identities: [seed.principal],
-    groups: [],
-    memberships: [],
-    roles: seed.roles,
-    bindings: seed.bindings,
-    restrictions: [],
+    state: {
+      identities: [seed.principal, seed.servicePrincipal],
+      groups: [],
+      memberships: [],
+      roles: seed.roles,
+      bindings: seed.bindings,
+      restrictions: [],
+    },
+    servicePrincipal: seed.servicePrincipal,
+    principal: seed.principal,
   };
 }
 
@@ -172,14 +204,19 @@ try {
     }
     process.stdout.write(`${JSON.stringify({ event: "installation.already-bootstrapped" })}\n`);
   } else {
+    const serviceKeyPath = serviceKeyOutputPath(
+      required("OCC_BOOTSTRAP_SERVICE_KEY_FILE"),
+      passwordPath,
+    );
     let auth;
     let user;
-    let passwordHandle;
-    let passwordFileCreated = false;
+    let serviceKey;
+    let passwordOutput;
+    let serviceKeyOutput;
+    let attempt;
+    const cleanupFailures = [];
     const password = randomPassword();
     try {
-      passwordHandle = await openProtectedPasswordFile(passwordPath);
-      passwordFileCreated = true;
       const installation = {
         id: `ins_${randomUUID()}`,
         name: required("OCC_BOOTSTRAP_INSTALLATION_NAME"),
@@ -187,14 +224,26 @@ try {
       };
       auth = await createAuth(pool, authConfig, installation.id);
       user = await createCredentialUser(auth, adminEmail, password);
-      await passwordHandle.writeFile(`${password}\n`, { encoding: "utf8" });
-      await passwordHandle.sync();
-      await passwordHandle.close();
-      passwordHandle = undefined;
-
-      const authorization = authorizationFor(auth, user.id);
-      const principal = authorization.identities[0];
-      state.setBootstrapNativeIAM(authorization);
+      const authorization = authorizationFor(auth, installation.id, user.id);
+      serviceKey = await auth.createServiceKey({
+        principal: authorization.servicePrincipal,
+        name: "bootstrap-admin",
+      });
+      attempt = {
+        installationId: installation.id,
+        principalId: authorization.principal.id,
+        servicePrincipalId: authorization.servicePrincipal.id,
+        serviceKeyId: serviceKey.id,
+        serviceKeyExpiresAt: serviceKey.expiresAt,
+        passwordFile: passwordPath,
+        serviceKeyFile: serviceKeyPath,
+      };
+      passwordOutput = await writeProtectedBootstrapFile(passwordPath, `${password}\n`);
+      serviceKeyOutput = await writeProtectedBootstrapJson(serviceKeyPath, {
+        data: serviceKey,
+        meta: { installationId: installation.id },
+      });
+      state.setBootstrapNativeIAM(authorization.state);
       const controller = new OpenClawController(installation, { state, recordOperations: true });
       await controller.transact(async (unit) => {
         await unit.audit.append({
@@ -202,39 +251,57 @@ try {
           installationId: installation.id,
           occurredAt: new Date().toISOString(),
           kind: "bootstrap",
-          actorId: principal.id,
+          actorId: authorization.principal.id,
           source: "occ",
           action: "administer",
           resource: { kind: "installation", id: installation.id },
           outcome: "success",
-          details: { kind: "bootstrap", source: "production-installation-job" },
+          details: {
+            kind: "bootstrap",
+            source: "production-installation-job",
+            servicePrincipalId: authorization.servicePrincipal.id,
+            serviceKeyId: serviceKey.id,
+          },
         });
       });
     } catch (error) {
-      if (passwordHandle !== undefined) {
-        try {
-          await passwordHandle.close();
-        } catch {
-          // The original bootstrap error is reported below.
+      const uncertain = error instanceof PostgresCommitOutcomeUnknownError;
+      if (!uncertain) {
+        if (auth !== undefined && serviceKey !== undefined) {
+          const failure = await revokeServiceKey(auth, serviceKey);
+          if (failure !== undefined) {
+            cleanupFailures.push(cleanupFailure("service_key", serviceKey.id, failure));
+          }
+        }
+        if (auth !== undefined && user !== undefined) {
+          const failure = await deleteCredentialUser(auth, user.id);
+          if (failure !== undefined) {
+            cleanupFailures.push(cleanupFailure("auth_account", user.id, failure));
+          }
+        }
+        for (const file of [passwordOutput, serviceKeyOutput]) {
+          const failure = await removeAttemptBootstrapFile(file);
+          if (failure !== undefined) cleanupFailures.push(failure);
         }
       }
-      if (auth !== undefined && user !== undefined) await deleteCredentialUser(auth, user.id);
-      if (passwordFileCreated) {
-        try {
-          await unlink(passwordPath);
-        } catch {
-          // The original bootstrap error is reported below.
-        }
-      }
+      bootstrapFailureDetails = { uncertain, attempt, cleanupFailures };
       throw error;
     }
-    process.stdout.write(`${JSON.stringify({ event: "installation.bootstrapped" })}\n`);
+    process.stdout.write(`${JSON.stringify({ event: "installation.bootstrapped", ...attempt })}\n`);
   }
 } catch (error) {
   process.stderr.write(
     `${JSON.stringify({
-      event: "installation.bootstrap-failed",
+      event: bootstrapFailureDetails?.uncertain
+        ? "installation.bootstrap-outcome-uncertain"
+        : "installation.bootstrap-failed",
       error: error instanceof Error ? error.message : "Installation bootstrap failed.",
+      ...(bootstrapFailureDetails?.attempt === undefined
+        ? {}
+        : { attempt: bootstrapFailureDetails.attempt }),
+      ...((bootstrapFailureDetails?.cleanupFailures?.length ?? 0) === 0
+        ? {}
+        : { cleanupFailures: bootstrapFailureDetails.cleanupFailures }),
     })}\n`,
   );
   process.exitCode = 1;

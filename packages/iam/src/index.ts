@@ -17,6 +17,7 @@ import {
   type ResourceRef,
   type Restriction,
   type Role,
+  type ServicePrincipal,
 } from "@openclaw-enterprise/contracts";
 
 export interface NativeIAMState {
@@ -43,11 +44,45 @@ export interface AuthPrincipalSeed {
   readonly bindings: readonly AccessBinding[];
 }
 
+export interface BootstrapAdministratorSeed extends AuthPrincipalSeed {
+  readonly servicePrincipal: ServicePrincipal;
+}
+
 export class AuthAccountRoleNotFoundError extends Error {
   constructor(roleId: string) {
     super(`The requested auth account Role ${roleId} does not exist.`);
     this.name = "AuthAccountRoleNotFoundError";
   }
+}
+
+/** Fresh bootstrap creates both administrator identities against one shared Role. */
+export function createBootstrapAdministratorSeed(
+  installationId: string,
+  issuer: string,
+  account: { readonly id: string },
+): BootstrapAdministratorSeed {
+  const human = createAuthPrincipalSeed(installationId, issuer, account);
+  const administratorRole = human.roles[0];
+  if (administratorRole === undefined) {
+    throw new Error("Bootstrap administrator seed requires an administrator Role.");
+  }
+  const servicePrincipal: ServicePrincipal = {
+    kind: "service_principal",
+    id: `spn_${randomUUID()}`,
+  };
+  return {
+    ...human,
+    servicePrincipal,
+    bindings: [
+      ...human.bindings,
+      {
+        id: `binding_bootstrap_service_admin_${randomUUID()}`,
+        subjectKind: "identity",
+        subjectId: servicePrincipal.id,
+        roleId: administratorRole.id,
+      },
+    ],
+  };
 }
 
 /** IAM owns the Principal, administrator permissions, and exact account Role binding. */

@@ -140,6 +140,9 @@ function configuration() {
       "OPENCLAW_DEV_INSTALLATION_NAME",
       DEFAULT_DEV_INSTALLATION_NAME,
     ),
+    ...(process.env.OCC_BOOTSTRAP_SERVICE_KEY_FILE === undefined
+      ? {}
+      : { bootstrapServiceKeyFile: process.env.OCC_BOOTSTRAP_SERVICE_KEY_FILE }),
     ...(trustedDevelopmentBridgeCidr === undefined ? {} : { trustedDevelopmentBridgeCidr }),
   });
 }

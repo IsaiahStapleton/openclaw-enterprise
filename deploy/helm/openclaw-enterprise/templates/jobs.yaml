@@ -20,6 +20,7 @@ spec:
       restartPolicy: Never
       securityContext:
         {{- include "openclaw.podSecurity" . | nindent 8 }}
+        fsGroupChangePolicy: OnRootMismatch
       volumes:
         - name: bootstrap-password-output
           persistentVolumeClaim:
@@ -55,6 +56,8 @@ spec:
               value: {{ .Values.bootstrap.adminEmail | quote }}
             - name: OCC_BOOTSTRAP_PASSWORD_FILE
               value: {{ printf "%s/%s" .Values.bootstrap.password.mountPath .Values.bootstrap.password.fileName | quote }}
+            - name: OCC_BOOTSTRAP_SERVICE_KEY_FILE
+              value: {{ printf "%s/%s" .Values.bootstrap.password.mountPath .Values.bootstrap.serviceKey.fileName | quote }}
             - name: OCC_BOOTSTRAP_INSTALLATION_NAME
               value: {{ .Values.installation.name | quote }}
           volumeMounts:

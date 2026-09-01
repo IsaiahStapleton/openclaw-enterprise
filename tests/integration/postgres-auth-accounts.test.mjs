@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import pg from "pg";
 import { AuditEventFactory } from "../../packages/audit/src/index.ts";
@@ -9,6 +12,8 @@ import { createTestConfigurationDriver } from "../helpers/configuration-driver.m
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
+const adminEmail = "postgres-admin@openclaw.local";
+const adminPassword = "postgres-development-password";
 const requiresPostgres = {
   skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests.",
 };
@@ -73,6 +78,112 @@ async function fetchFromInjectedApp(app, request) {
 }
 
 test(
+  "fresh PostgreSQL development bootstrap writes a usable administrator service key",
+  requiresPostgres,
+  async (context) => {
+    const observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+    const outputDirectory = await mkdtemp(join(tmpdir(), "openclaw-development-bootstrap-key-"));
+    let app;
+    context.after(async () => {
+      if (app !== undefined) await app.close();
+      await observerPool.end();
+      await rm(outputDirectory, { recursive: true, force: true });
+    });
+
+    const state = new PostgresPlatformState(observerPool);
+    if ((await state.loadInstallation()) !== undefined) {
+      context.skip(
+        "The PostgreSQL development bootstrap service-key proof requires a fresh database.",
+      );
+      return;
+    }
+
+    const bootstrapServiceKeyFile = join(outputDirectory, "initial-admin-service-key.json");
+    const config = {
+      mode: "development",
+      host: "127.0.0.1",
+      databaseUrl,
+      adminEmail,
+      adminPassword,
+      authBaseURL: "http://127.0.0.1",
+      authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
+      bootstrapInstallationName: "PostgreSQL development bootstrap service key",
+      bootstrapServiceKeyFile,
+    };
+    app = await composePostgresDevelopment(config, {
+      configurationDriver: createTestConfigurationDriver(),
+    });
+
+    const installation = await state.loadInstallation();
+    assert.ok(installation, "automatic development bootstrap must commit an Installation");
+    const iam = await state.loadNativeIAMState(installation.id);
+    const human = installationPrincipal(iam);
+    assert.ok(human, "automatic development bootstrap must retain a human administrator");
+    const servicePrincipal = iam.identities.find(
+      (identity) =>
+        identity.kind === "service_principal" &&
+        identity.namespaceId === undefined &&
+        identity.agentId === undefined,
+    );
+    assert.ok(
+      servicePrincipal,
+      "automatic development bootstrap must create a service administrator",
+    );
+    const humanBinding = iam.bindings.find(
+      (binding) => binding.subjectKind === "identity" && binding.subjectId === human.id,
+    );
+    const serviceBinding = iam.bindings.find(
+      (binding) => binding.subjectKind === "identity" && binding.subjectId === servicePrincipal.id,
+    );
+    assert.ok(humanBinding);
+    assert.ok(serviceBinding);
+    assert.equal(serviceBinding.roleId, humanBinding.roleId);
+    assert.equal(serviceBinding.namespaceId, undefined);
+    assert.equal(serviceBinding.resourceKind, undefined);
+
+    const outputStatus = await stat(bootstrapServiceKeyFile);
+    assert.equal(outputStatus.mode & 0o777, 0o600);
+    const output = JSON.parse(await readFile(bootstrapServiceKeyFile, "utf8"));
+    assert.equal(output.meta.installationId, installation.id);
+    assert.equal(output.data.servicePrincipalId, servicePrincipal.id);
+    assert.equal(output.data.name, "bootstrap-admin");
+    assert.match(output.data.key, /^occ_/);
+    const stored = await observerPool.query(
+      "SELECT key, reference_id, metadata FROM occ.apikey WHERE id = $1",
+      [output.data.id],
+    );
+    assert.equal(stored.rowCount, 1);
+    assert.notEqual(stored.rows[0].key, output.data.key);
+    assert.equal(stored.rows[0].reference_id, servicePrincipal.id);
+    assert.deepEqual(JSON.parse(stored.rows[0].metadata), { installationId: installation.id });
+
+    const authorized = await app.inject({
+      method: "GET",
+      url: "/installation",
+      headers: { "x-api-key": output.data.key, host: "127.0.0.1" },
+    });
+    assert.equal(authorized.statusCode, 200, authorized.body);
+    assert.equal(authorized.json().data.id, installation.id);
+    const queuedWork = await observerPool.query(
+      "SELECT count(*)::integer AS count FROM occ.controller_work",
+    );
+    assert.equal(queuedWork.rows[0].count, 0);
+
+    const session = await signInWithEmailPassword({
+      fetch: (request) => fetchFromInjectedApp(app, request),
+      email: config.adminEmail,
+      password: config.adminPassword,
+    });
+    const humanAuthorized = await app.inject({
+      method: "GET",
+      url: "/installation",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+    });
+    assert.equal(humanAuthorized.statusCode, 200, humanAuthorized.body);
+  },
+);
+
+test(
   "PostgreSQL auth account provisioning is visible to another controller without rebuilding IAM Driver",
   requiresPostgres,
   async (context) => {
@@ -89,8 +200,8 @@ test(
       mode: "development",
       host: "127.0.0.1",
       databaseUrl,
-      adminEmail: "postgres-local-admin@openclaw.local",
-      adminPassword: "postgres-local-development-password",
+      adminEmail,
+      adminPassword,
       authBaseURL: "http://127.0.0.1",
       authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
     };
@@ -100,8 +211,8 @@ test(
 
     const session = await signInWithEmailPassword({
       fetch: (request) => fetchFromInjectedApp(appA, request),
-      email: "postgres-local-admin@openclaw.local",
-      password: "postgres-local-development-password",
+      email: adminEmail,
+      password: adminPassword,
     });
     const state = new PostgresPlatformState(observerPool);
     let installation = await state.loadInstallation();
@@ -230,8 +341,8 @@ test(
         mode: "development",
         host: "127.0.0.1",
         databaseUrl,
-        adminEmail: "postgres-local-admin@openclaw.local",
-        adminPassword: "postgres-local-development-password",
+        adminEmail,
+        adminPassword,
         authBaseURL: "http://127.0.0.1",
         authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
       },
@@ -243,8 +354,8 @@ test(
 
     const session = await signInWithEmailPassword({
       fetch: (request) => fetchFromInjectedApp(app, request),
-      email: "postgres-local-admin@openclaw.local",
-      password: "postgres-local-development-password",
+      email: adminEmail,
+      password: adminPassword,
     });
     const state = new PostgresPlatformState(observerPool);
     let installation = await state.loadInstallation();

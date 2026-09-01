@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-08-31
+last_updated_session: codex/01a05a69-3fbe-7441-9e6d-20394758cf94
 ---
 
 # Production Startup Flow
@@ -11,7 +11,7 @@ last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
 Start the production OpenClaw Control Center (OCC) through its reviewed
 Kubernetes Helm chart. Operators first supply approved images, trusted Driver
 configuration, separate database credentials, a Better Auth signing secret,
-and protected storage for the first administrator password. Helm then runs the
+and protected storage for the first password and service key. Helm then runs the
 Installation initialization Job and starts separate internal-only API and
 controller-worker Deployments. An optional ChatGPT ServiceAccount Driver keeps
 its provider-admin credential and provider client in the API only. This flow
@@ -31,7 +31,7 @@ chart and controller processes execute after those inputs are supplied.
   `apps/controller/src/worker.ts:ControllerWorker.start`.
 - Assumptions: An enforcing Kubernetes cluster, external PostgreSQL, approved
   digest-pinned images, operator-managed startup/database/authentication
-  Secrets, an existing protected password-output PersistentVolumeClaim, and
+  Secrets, an existing protected bootstrap-output PersistentVolumeClaim, and
   exact approved network destinations and client selectors.
 
 ## Flow
@@ -40,13 +40,13 @@ chart and controller processes execute after those inputs are supplied.
 graph TD
     subgraph Operator["Operator-owned production inputs"]
         A["Provide approved images, startup YAML, and protected Secrets"]
-        B["Provide an existing protected administrator-password volume"]
+        B["Provide an existing protected bootstrap-output volume"]
     end
 
     subgraph Initialization["Helm initialization Job"]
         C["Run initialization with the isolated database migrator role"]
-        D["Bootstrap the singleton Installation and administrator account"]
-        E["Write the generated password once to protected storage"]
+        D["Prepare human and service administrators"]
+        E["Write private password/key files; commit Installation and IAM"]
     end
 
     subgraph API["Private OCC API Deployment"]
@@ -81,7 +81,7 @@ graph TD
 The [canonical Helm chart](../../deploy/helm/openclaw-enterprise) consumes
 operator-supplied immutable images, trusted Installation YAML, separate
 application/migrator database credentials, authentication settings, and an
-existing protected administrator-password volume. Exact API-client selectors
+existing protected bootstrap-output volume. Exact API-client selectors
 and database/Kubernetes API destinations become NetworkPolicy rules.
 
 The Installation YAML selects reviewed IAM, Compute, and Configuration
@@ -97,7 +97,7 @@ are validated before either controller process becomes ready. The production
 API remains behind an internal `ClusterIP` Service and a default-deny
 NetworkPolicy; the chart does not create a public entrypoint.
 
-### 2. Run isolated initialization and bootstrap the administrator
+### 2. Run isolated initialization and bootstrap both administrators
 
 `deploy/helm/openclaw-enterprise/templates/jobs.yaml:8`
 
@@ -105,19 +105,29 @@ Helm first runs its `pre-install,pre-upgrade` initialization Job. Its init
 container receives only the dedicated database-migrator credential; the
 following bootstrap container receives the lower-privilege application
 credential, Better Auth configuration, first administrator email, singleton
-Installation name, and protected password-output path.
+Installation name, and protected password/service-key output paths.
 
 [`scripts/bootstrap-production.mjs`](../../scripts/bootstrap-production.mjs)
-creates the first Better Auth account, its exact installation-scoped IAM
-Principal and administrator binding, and the singleton Installation. It writes
-the generated password exactly once with owner-only permissions to the existing
-operator-owned volume; an existing output file, inconsistent prior account, or
-incorrect IAM identity fails closed. Password values are never returned,
-logged, or copied into a Kubernetes Secret by OCC.
+creates the human Better Auth account and native IAM seed with a non-Agent
+service administrator bound to the same Role. It issues the initial service key
+through Better Auth, writes and syncs both private files on the existing PVC,
+then commits the Installation/IAM/audit transaction. Better Auth persistence is
+independent of that transaction. An existing output file, unsafe directory,
+inconsistent account, or incorrect IAM identity fails closed.
+
+`bootstrap.serviceKey.fileName` selects the key basename beside the password;
+only this bootstrap container mounts their PVC. The Job uses
+`fsGroupChangePolicy: OnRootMismatch` so retry mounts preserve existing `0600`
+files instead of recursively adding group permissions. Known failures attempt cleanup
+of only attempt-owned artifacts; unknown COMMIT outcomes preserve them and fail
+for operator verification. Follow the [bootstrap flow](local-password-authentication.md)
+for the credential and failure boundaries. Neither secret appears in logs,
+bootstrap responses, audit, or chart-created Kubernetes Secrets.
 
 Repeated initialization accepts the existing Installation only when the exact
-configured administrator account and IAM Principal still match. The API and
-worker are not production-ready until initialization succeeds.
+configured administrator account and IAM Principal still match, without issuing
+keys or changing output. The API and worker are not production-ready until
+initialization succeeds.
 
 ### 3. Launch separate production API and worker Deployments
 
@@ -227,8 +237,8 @@ through reauthorization, infrastructure effects, and result persistence.
   password and retain the Better Auth session cookie. Missing or invalid
   sessions return `401`; authenticated callers without exact IAM permissions
   return `403`.
-- A failing initialization Job commonly indicates a missing protected password
-  volume, existing password output, incorrect database role, invalid
+- A failing initialization Job commonly indicates missing or unsafe protected
+  storage, existing password/key output, incorrect database role, invalid
   authentication origin, or administrator/IAM mismatch. API or worker startup
   can also reject missing trusted Driver configuration or unavailable
   Kubernetes access.
@@ -257,6 +267,8 @@ through reauthorization, infrastructure effects, and result persistence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 
 - 2026-08-28 17:54: Separated Helm execution from the deployment walkthrough and included optional Sandbox Driver startup ownership. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-26 23:13: Documented optional ChatGPT ServiceAccount integration, dedicated provider-admin credentials, API-only initialization, and restricted provider egress. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 02638f10ed52b413d41378ae0f6b45ca19b8b149)

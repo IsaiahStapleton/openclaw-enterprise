@@ -23,7 +23,10 @@ COPY --chown=node:node packages packages
 COPY --chown=node:node apps/controller apps/controller
 COPY --chown=node:node migrations migrations
 COPY --chown=node:node scripts scripts
-RUN mkdir -p /app/.development/configurations && chown -R node:node /app/.development
+RUN mkdir -p /app/.development/configurations /var/lib/openclaw/bootstrap \
+    && chown -R node:node /app/.development \
+    && chown 1000:1000 /var/lib/openclaw/bootstrap \
+    && chmod 0700 /var/lib/openclaw/bootstrap
 
 USER node
 ENTRYPOINT ["node"]

@@ -90,6 +90,7 @@ security requirements.
 | `OPENCLAW_DEV_PORT`                   | TCP port; defaults to `3000`.                                               | Publishes the controller on host `127.0.0.1:<port>`.                                                                                                                                                              |
 | `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` | CIDR block.                                                                 | Explicit Compose bridge range admitted as local development traffic while keeping forwarded headers rejected.                                                                                                     |
 | `OCC_DEVELOPMENT_CONFIGURATION_ROOT`  | Absolute path.                                                              | Development filesystem Configuration Driver root. Compose sets `/app/.development/configurations` from the controller-only `occ_configuration_data` volume.                                                       |
+| `OCC_BOOTSTRAP_SERVICE_KEY_FILE`      | Private absolute output path, required on fresh direct development startup. | Compose supplies `/var/lib/openclaw/bootstrap/initial-admin-service-key.json` on its controller-only volume. Existing Installations do not issue or replace output.                                               |
 | `OPENAI_API_KEY`                      | Existing authorized provider credential.                                    | Used only by the Agent-owned combined embedded container or dedicated Codex container for real model turns; never print or commit it.                                                                             |
 
 Generate `OCC_AUTH_SECRET` with `openssl rand -hex 32`; do not commit it, log
@@ -138,30 +139,37 @@ authenticated Principal or ServicePrincipal without the exact existing IAM grant
 receives `403`. Neither credential grants rights without IAM. See
 [Authentication](authentication.md#service-api-keys) for service-key issuance,
 scope, and revocation, and the [deployment guide](../guides/deploy.md#service-api-keys-for-automation)
-for the procedure; no additional environment variables are required.
+for the procedure. Normal issuance and verification require no additional
+settings; initial-key delivery uses the bootstrap settings below.
 Auth-secret rotation takes effect after
 replacing the mounted Secret and restarting the process.
 
 ### Production Installation bootstrap environment
 
 The packaged Helm initialization Job creates the singleton Installation and
-first administrator before starting the API or worker. Its separate migration
+human and service administrators before starting the API or worker. Its separate migration
 init container receives only `OCC_MIGRATION_DATABASE_URL`; the bootstrap
 container receives the application-role `OCC_DATABASE_URL`, Better Auth
 settings, and the following bootstrap settings.
 
-| Variable                          | Required value or format                                                      |
-| --------------------------------- | ----------------------------------------------------------------------------- |
-| `OCC_AUTH_SECRET`                 | Same mounted Better Auth secret used by the API.                              |
-| `OCC_AUTH_BASE_URL`               | Same absolute Better Auth base URL used by the API.                           |
-| `OCC_BOOTSTRAP_ADMIN_EMAIL`       | Email address for the first administrator account.                            |
-| `OCC_BOOTSTRAP_PASSWORD_FILE`     | New file path on protected operator-owned storage for the generated password. |
-| `OCC_BOOTSTRAP_INSTALLATION_NAME` | Nonempty display name used when creating the Installation.                    |
+| Variable                          | Required value or format                                                                                |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `OCC_AUTH_SECRET`                 | Same mounted Better Auth secret used by the API.                                                        |
+| `OCC_AUTH_BASE_URL`               | Same absolute Better Auth base URL used by the API.                                                     |
+| `OCC_BOOTSTRAP_ADMIN_EMAIL`       | Email address for the first administrator account.                                                      |
+| `OCC_BOOTSTRAP_PASSWORD_FILE`     | New file path on protected operator-owned storage for the generated password.                           |
+| `OCC_BOOTSTRAP_INSTALLATION_NAME` | Nonempty display name used when creating the Installation.                                              |
+| `OCC_BOOTSTRAP_SERVICE_KEY_FILE`  | New private absolute JSON path; on fresh production bootstrap, a distinct sibling of the password file. |
 
 Repeated bootstrap preserves the existing Installation only when the exact
 administrator account and IAM identity still match; a mismatch fails closed.
-The password file is written exactly once with owner-only permissions and must
-not already exist.
+On fresh bootstrap, both files are created exclusively with mode `0600`; their
+parent directory must be private and neither destination may already exist.
+Helm sets the key path from `bootstrap.password.mountPath` and
+`bootstrap.serviceKey.fileName` (default `initial-admin-service-key.json`). The
+key filename must be a simple basename distinct from `bootstrap.password.fileName`.
+Both use the existing `bootstrap.password.claimName` PVC. Reruns do not inspect,
+replace, or regenerate output; see [recovery](../guides/deploy.md#recover-an-incomplete-bootstrap).
 
 ## Optional controller environment
 
@@ -279,8 +287,10 @@ Compose keeps relational OCC metadata in the `occ_postgres_data` named volume
 and native development Configuration documents in the `occ_configuration_data`
 named volume. The configuration volume is mounted only into the controller at
 `/app/.development/configurations`; it is not mounted into the worker or
-runtime containers. `docker compose down` retains both named volumes, while
-`docker compose down --volumes` deletes both.
+runtime containers. Initial service-key output uses a third controller-only
+volume, `occ_bootstrap_data`, at `/var/lib/openclaw/bootstrap`.
+`docker compose down` retains all three volumes; `docker compose down --volumes`
+deletes them, including the initial credential delivery copy.
 
 ### Migration environment
 
@@ -297,12 +307,14 @@ directory, the `occ` application schema, and
 
 ### PostgreSQL test environment
 
-| Variable                             | Required by                           | Behavior                                                                                                                       |
-| ------------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `OCC_TEST_DATABASE_URL`              | Real PostgreSQL integration tests.    | Must use an initialized application-role database. General PostgreSQL and queue cases are skipped when absent.                 |
-| `OCC_MIGRATION_DATABASE_URL`         | `db:migrate` setup before tests.      | Uses the separate migrator role for schema and migration-history ownership; the test process should use application-role URLs. |
-| `OCC_PRODUCTION_WIREUP_DATABASE_URL` | Production bootstrap integration.     | Uses a separately migrated, disposable, initially empty application-role database; the production bootstrap skips when absent. |
-| `OCC_TEST_KUBERNETES_CONFIGURATION`  | Optional live Configuration coverage. | Set to `1` only when the PostgreSQL integration also has an explicitly configured live Kubernetes Configuration Driver.        |
+| Variable                                       | Required by                                | Behavior                                                                                                                                                                                   |
+| ---------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OCC_TEST_DATABASE_URL`                        | Real PostgreSQL integration tests.         | Must use an initialized application-role database. General PostgreSQL and queue cases are skipped when absent.                                                                             |
+| `OCC_MIGRATION_DATABASE_URL`                   | `db:migrate` setup before tests.           | Uses the separate migrator role for schema and migration-history ownership; the test process should use application-role URLs.                                                             |
+| `OCC_PRODUCTION_WIREUP_DATABASE_URL`           | Production bootstrap integration.          | Uses a separately migrated, disposable, initially empty application-role database; the production bootstrap skips when absent.                                                             |
+| `OCC_BOOTSTRAP_FAILURE_DATABASE_URL`           | Bootstrap race and uncertain-commit tests. | Application-role URL for a migrated, disposable loopback database named `openclaw_failures_*`. The suite resets its tables; skipped when absent.                                           |
+| `OCC_BOOTSTRAP_FAILURE_MIGRATION_DATABASE_URL` | Bootstrap failure fixture setup/reset.     | Optional for the local `occ_app` fixture, which uses `occ_migrator` and its local test password; otherwise required. Must target the same host, port, and database as the application URL. |
+| `OCC_TEST_KUBERNETES_CONFIGURATION`            | Optional live Configuration coverage.      | Set to `1` only when the PostgreSQL integration also has an explicitly configured live Kubernetes Configuration Driver.                                                                    |
 
 The production-bootstrap integration must use a separately migrated,
 disposable database without an existing Installation. Once both required
@@ -323,10 +335,22 @@ PostgreSQL service, then migrated with `OCC_MIGRATION_DATABASE_URL` pointed at
 that disposable database. See the
 [PostgreSQL testing guide](../testing.md#postgresql) for the full setup sequence.
 
-The bootstrap integration creates its own exact Installation and administrator;
+The bootstrap integration creates its own exact Installation and administrators;
 do not rerun it against a previous bootstrap database or point it at an
 existing development Installation. Use a dedicated disposable database for any
 other case when existing local platform state must be preserved.
+
+The [bootstrap failure suite](../../tests/integration/postgres-bootstrap-failures.test.mjs)
+requires a separate migrated `openclaw_failures_*` database on loopback. Its
+migration-role fixture installs a temporary delay trigger and resets tables
+between cases; run it without any other process using that database. Production
+bootstrap and development composition still run with the application role.
+After preparing that disposable database using the existing PostgreSQL setup:
+
+```bash
+OCC_BOOTSTRAP_FAILURE_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_failures_local \
+  node --test tests/integration/postgres-bootstrap-failures.test.mjs
+```
 
 ### Production image startup test environment
 

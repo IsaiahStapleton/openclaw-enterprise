@@ -142,6 +142,7 @@ test(
           resources: { requests: { storage: "1Gi" } },
         },
       });
+    const protectedBootstrapFiles = ["initial-admin-password", "initial-admin-service-key.json"];
     const podSecurity = {
       runAsNonRoot: true,
       runAsUser: 1000,
@@ -156,6 +157,11 @@ test(
     };
     const waitPod = (name, namespace = system) =>
       kubectl("-n", namespace, "wait", "--for=condition=Ready", `pod/${name}`, "--timeout=180s");
+    const assertProtectedBootstrapFileModes = (stats, label) => {
+      for (const file of protectedBootstrapFiles) {
+        assert.equal(stats[file]?.mode, 0o600, `${label}: ${file} must stay owner-readable only`);
+      }
+    };
 
     context.after(async () => {
       forwarding?.kill("SIGTERM");
@@ -202,6 +208,53 @@ test(
       });
       await createClaim("postgres-data");
       await createClaim("bootstrap-password");
+      await apply({
+        apiVersion: "v1",
+        kind: "Pod",
+        metadata: metadata("bootstrap-password-prepare"),
+        spec: {
+          restartPolicy: "Never",
+          automountServiceAccountToken: false,
+          securityContext: {
+            runAsUser: 0,
+            runAsGroup: 0,
+            seccompProfile: { type: "RuntimeDefault" },
+          },
+          containers: [
+            {
+              name: "prepare",
+              image: images.controller,
+              imagePullPolicy: "IfNotPresent",
+              command: [
+                "node",
+                "-e",
+                "const fs=require('node:fs');const root='/var/lib/openclaw/bootstrap';for(const name of ['initial-admin-password','initial-admin-service-key.json']){if(fs.existsSync(`${root}/${name}`))throw new Error(`${name} already exists on fresh bootstrap PVC`)}fs.chownSync(root,1000,1000);fs.chmodSync(root,0o700);const s=fs.statSync(root);console.log(JSON.stringify({uid:s.uid,gid:s.gid,mode:s.mode&0o777}));",
+              ],
+              securityContext: {
+                allowPrivilegeEscalation: false,
+                capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER"] },
+              },
+              resources,
+              volumeMounts: [{ name: "bootstrap", mountPath: "/var/lib/openclaw/bootstrap" }],
+            },
+          ],
+          volumes: [
+            { name: "bootstrap", persistentVolumeClaim: { claimName: "bootstrap-password" } },
+          ],
+        },
+      });
+      await waitFor("fresh bootstrap PVC preparation", async () => {
+        const pod = await get("pod", "bootstrap-password-prepare");
+        assert.notEqual(pod.status.phase, "Failed", "bootstrap PVC preparation Pod failed");
+        return pod.status.phase === "Succeeded";
+      });
+      assert.deepEqual(
+        JSON.parse((await kubectl("-n", system, "logs", "bootstrap-password-prepare")).trim()),
+        { uid: 1000, gid: 1000, mode: 0o700 },
+      );
+      await record("Fresh bootstrap PVC root prepared for UID 1000 output", {
+        claimName: "bootstrap-password",
+      });
       await apply({
         apiVersion: "v1",
         kind: "Pod",
@@ -352,7 +405,7 @@ test(
           "app.kubernetes.io/name": "approved-gateway-client",
         }),
         spec: {
-          securityContext: podSecurity,
+          securityContext: { ...podSecurity, fsGroupChangePolicy: "OnRootMismatch" },
           containers: [
             {
               name: "operator",
@@ -385,6 +438,21 @@ test(
         },
       });
       await waitPod("operator");
+      const bootstrapFileStats = async () =>
+        JSON.parse(
+          await kubectl(
+            "-n",
+            system,
+            "exec",
+            "operator",
+            "--",
+            "node",
+            "-e",
+            "const fs=require('node:fs');const root='/bootstrap';const result={};for(const name of ['initial-admin-password','initial-admin-service-key.json']){const s=fs.statSync(`${root}/${name}`);result[name]={uid:s.uid,gid:s.gid,mode:s.mode&0o777}}console.log(JSON.stringify(result));",
+          ),
+        );
+      const beforeRetrievalStats = await bootstrapFileStats();
+      assertProtectedBootstrapFileModes(beforeRetrievalStats, "before retrieval");
       forwarding = spawn(
         "kubectl",
         [
@@ -459,6 +527,22 @@ test(
         )
       ).trim();
       secrets.push(password);
+      const serviceKeyOutput = JSON.parse(
+        await kubectl(
+          "-n",
+          system,
+          "exec",
+          "operator",
+          "--",
+          "cat",
+          "/bootstrap/initial-admin-service-key.json",
+        ),
+      );
+      assert.equal(typeof serviceKeyOutput.data?.key, "string");
+      secrets.push(serviceKeyOutput.data.key);
+      const afterRetrievalStats = await bootstrapFileStats();
+      assert.deepEqual(afterRetrievalStats, beforeRetrievalStats);
+      assertProtectedBootstrapFileModes(afterRetrievalStats, "after retrieval");
       const login = await request(
         "POST",
         "/api/auth/sign-in/email",
@@ -473,6 +557,8 @@ test(
       cookie = login.headers["set-cookie"].map((header) => header.split(";")[0]).join("; ");
       const installation = await request("GET", "/installation");
       assert.equal(installation.status, 200);
+      assert.equal(serviceKeyOutput.meta?.installationId, installation.body.data.id);
+      await record("Protected bootstrap output files remain 0600 through retrieval");
       await record("Authenticated production HTTPS Installation read", {
         installationId: installation.body.data.id,
       });
