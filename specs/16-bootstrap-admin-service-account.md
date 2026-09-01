@@ -147,6 +147,8 @@ The broader non-live integration run had 92 passes, 57 infrastructure skips, and
 
 ## Changelog
 
+- [2026-08-31 19:04]: Complete implementation and local verification in `9da1e4c`; resolve PVC and PostgreSQL fixture review findings; retain the documented unrelated package-policy test failure and await PR review. (01a05a3d-526f-7553-8cd8-070bd1847acb - 9da1e4c)
+
 - [2026-08-31 18:06]: Implement both bootstrap paths, protected credential output, shared administrator policy, packaging, and current documentation; final review and verification are in progress. (01a05a3d-526f-7553-8cd8-070bd1847acb - 0797098)
 
 - [2026-08-31 17:33]: Apply approved simplification: retain existing bootstrap flows, share the administrator Role, deliver a private key file, and use scoped cleanup with operator recovery for partial or uncertain outcomes. (01a05a3d-526f-7553-8cd8-070bd1847acb - b43cc49)
