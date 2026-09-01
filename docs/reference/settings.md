@@ -516,6 +516,11 @@ k3d cluster. For dedicated Codex coverage, set `OCC_TEST_OPENAI_MODEL` to an
 authorized model that supports Codex custom tools, such as `gpt-5.1`; the source
 default remains `gpt-4.1`.
 
+The gateway administration cases also require `helm` on `PATH`, or an existing
+executable selected by `OCC_HELM_BIN`. They render the checked-in chart's RBAC
+rules and apply them to the disposable controller identities; they do not
+install the chart or deploy its controller workloads.
+
 | Variable                               | Requirement or default                                                                                                                                  |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OCC_TEST_HARNESS_K3D_REAL`            | Set to `1` to explicitly opt into the real-runtime Kubernetes suite.                                                                                    |

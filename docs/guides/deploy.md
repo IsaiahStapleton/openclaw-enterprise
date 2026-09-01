@@ -603,10 +603,11 @@ To recover a key-only, revoked, or lost gateway administration credential:
 
 1. Quiesce the controller API and worker for the affected Installation so no
    gateway administration request or enrollment helper can race the repair.
-2. Identify the exact Agent, controller namespace, Secret name, native device
-   ID, and public key from the controller-owned credential Secret and audit
-   records. If the Secret was lost, recover the public device ID from the exact
-   Agent-owned gateway PVC annotation.
+2. Identify the exact Agent, controller namespace, and Secret name. Read its
+   native device ID from the exact Agent-owned gateway PVC annotation. The
+   credential Secret stores the private key; the public key and device ID are
+   derived from it and are not stored as separate Secret fields. Do not print
+   the private key or device token during recovery.
 3. Use `openclaw devices remove <device-id> --json` with authorized native
    gateway access to remove only that exact OCC device record. Leave unrelated
    paired and pending devices intact. On the pinned native version,

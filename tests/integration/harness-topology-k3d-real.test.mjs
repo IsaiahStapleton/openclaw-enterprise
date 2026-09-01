@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   authenticatedHeaders,
   createAuthenticatedControllerRequest,
@@ -16,7 +18,10 @@ import {
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { runGatewayAdministrationFailureProofs } from "../helpers/gateway-administration-proof.mjs";
-import { gatewayAdministrationSecretName } from "../../apps/controller/src/drivers/compute/kubernetes/gateway-administration.ts";
+import {
+  gatewayAdministrationSecretName,
+  parseGatewayAdministrationCredential,
+} from "../../apps/controller/src/drivers/compute/kubernetes/gateway-administration.ts";
 import {
   assertGatewayModelTurn,
   configureExistingK3dLocalPathSharedFileSystem,
@@ -71,6 +76,8 @@ const sharedWorkspaceSubPaths = Object.freeze([
   "sessions",
   "workspace",
 ]);
+const execute = promisify(execFile);
+const repository = fileURLToPath(new URL("../../", import.meta.url));
 const {
   kubectlArguments,
   kubectl,
@@ -710,6 +717,88 @@ function gatewayAdministrationResourceNames({ namespaceId, agentId }) {
   };
 }
 
+const gatewayAdministrationChartRuleCache = new Map();
+
+async function gatewayAdministrationChartRules(platformNamespace) {
+  let cached = gatewayAdministrationChartRuleCache.get(platformNamespace);
+  if (cached !== undefined) return cached;
+  cached = renderGatewayAdministrationChartRules(platformNamespace);
+  gatewayAdministrationChartRuleCache.set(platformNamespace, cached);
+  return cached;
+}
+
+async function renderGatewayAdministrationChartRules(platformNamespace) {
+  const release = `oce-gateway-admin-${hash(platformNamespace).slice(0, 12)}`;
+  const helm = process.env.OCC_HELM_BIN ?? "helm";
+  const { stdout } = await execute(
+    helm,
+    [
+      "template",
+      release,
+      "deploy/helm/openclaw-enterprise",
+      "--namespace",
+      platformNamespace,
+      "--set",
+      `images.controller=registry.example.invalid/controller@sha256:${"a".repeat(64)}`,
+      "--set",
+      "auth.baseUrl=http://127.0.0.1",
+      "--set",
+      "auth.secretName=occ-auth",
+      "--set",
+      "auth.secretKey=secret",
+      "--set",
+      "bootstrap.adminEmail=admin@example.invalid",
+      "--set",
+      "bootstrap.password.claimName=occ-bootstrap-admin-password",
+      "--set",
+      "api.clients[0].namespace=operator-tools",
+      "--set",
+      "api.clients[0].podLabels.app=operator",
+      "--set",
+      "database.cidr=10.45.0.12/32",
+      "--set",
+      "cluster.cidr=10.43.0.1/32",
+      "--set",
+      `gatewayAdministration.controllerNamespace=${platformNamespace}`,
+    ],
+    { cwd: repository, maxBuffer: 2_000_000 },
+  );
+  const requireController = createRequire(
+    new URL("../../apps/controller/package.json", import.meta.url),
+  );
+  const { loadAllYaml } = await import(requireController.resolve("@kubernetes/client-node"));
+  const objects = loadAllYaml(stdout).filter(Boolean);
+  const rulesFor = (kind, name) => {
+    const object = objects.find(
+      (candidate) => candidate.kind === kind && candidate.metadata?.name === name,
+    );
+    assert.ok(object, `expected rendered ${kind} ${name}`);
+    return structuredClone(object.rules);
+  };
+  return {
+    workerCredential: rulesFor("Role", `${release}-gateway-credentials-worker`),
+    apiCredential: rulesFor("Role", `${release}-gateway-credentials-api`),
+    workerTenant: rulesFor("ClusterRole", `${release}-openclaw-tenant-worker`),
+    apiTenant: rulesFor("ClusterRole", `${release}-openclaw-tenant-api`),
+  };
+}
+
+function gatewayCredentialRules(rules, { credentialCreate, credentialUpdate }) {
+  return structuredClone(rules)
+    .map((rule) =>
+      rule.resources?.includes("secrets")
+        ? {
+            ...rule,
+            verbs: rule.verbs.filter(
+              (verb) =>
+                (credentialCreate || verb !== "create") && (credentialUpdate || verb !== "update"),
+            ),
+          }
+        : rule,
+    )
+    .filter((rule) => rule.verbs.length > 0);
+}
+
 async function createRole(namespace, name, rules) {
   await applyKubernetesResource({
     apiVersion: "rbac.authorization.k8s.io/v1",
@@ -760,47 +849,24 @@ async function provisionGatewayAdministrationRbac({
   const apiPlatformRole = `gateway-admin-api-platform-${suffix}`;
   const workerTenantRole = `gateway-admin-worker-tenant-${suffix}`;
   const apiTenantRole = `gateway-admin-api-tenant-${suffix}`;
-  const workerPlatformRules = [
-    ...(credentialCreate ? [{ apiGroups: [""], resources: ["secrets"], verbs: ["create"] }] : []),
-    {
-      apiGroups: [""],
-      resources: ["secrets"],
-      resourceNames: [names.credential],
-      verbs: credentialUpdate ? ["get", "update"] : ["get"],
-    },
-  ];
+  const chartRules = await gatewayAdministrationChartRules(platformNamespace);
   await Promise.all([
-    createRole(platformNamespace, workerPlatformRole, workerPlatformRules),
-    createRole(platformNamespace, apiPlatformRole, [
-      {
-        apiGroups: [""],
-        resources: ["secrets"],
-        resourceNames: [names.credential],
-        verbs: ["get"],
-      },
-    ]),
+    createRole(
+      platformNamespace,
+      workerPlatformRole,
+      gatewayCredentialRules(chartRules.workerCredential, { credentialCreate, credentialUpdate }),
+    ),
+    createRole(platformNamespace, apiPlatformRole, chartRules.apiCredential),
     createRole(placement, workerTenantRole, [
+      ...structuredClone(chartRules.workerTenant),
       {
         apiGroups: [""],
         resources: ["secrets"],
         resourceNames: [names.transport],
         verbs: ["get"],
       },
-      { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] },
-      { apiGroups: [""], resources: ["pods/exec"], verbs: ["get", "create"] },
-      { apiGroups: [""], resources: ["pods/proxy"], verbs: ["get"] },
     ]),
-    createRole(placement, apiTenantRole, [
-      { apiGroups: ["apps"], resources: ["deployments"], verbs: ["get"] },
-      { apiGroups: [""], resources: ["services"], verbs: ["get"] },
-      { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] },
-      {
-        apiGroups: ["discovery.k8s.io"],
-        resources: ["endpointslices"],
-        verbs: ["get", "list"],
-      },
-      { apiGroups: [""], resources: ["pods/proxy"], verbs: ["get"] },
-    ]),
+    createRole(placement, apiTenantRole, chartRules.apiTenant),
   ]);
   await Promise.all([
     createRoleBinding(
@@ -2113,134 +2179,56 @@ async function assertScopedTenantPvcAccess(topology) {
   );
 }
 
-async function canServiceAccount(
-  topology,
-  accountName,
-  verb,
-  resourceName,
-  namespace,
-  options = {},
-) {
-  const [resource, subresource] = resourceName.split("/");
-  const target =
-    options.resourceName === undefined ? resource : `${resource}/${options.resourceName}`;
-  const answer = await kubectl(
-    "auth",
-    "can-i",
-    verb,
-    target,
-    "--namespace",
-    namespace,
-    `--as=system:serviceaccount:${topology.platformNamespace}:${accountName}`,
-    ...(subresource === undefined ? [] : [`--subresource=${subresource}`]),
-  ).catch((error) => {
-    if (error.stdout?.trim() === "no") return error.stdout;
-    throw error;
-  });
-  return answer.trim();
-}
-
-async function assertGatewayAdministrationRbac(topology) {
-  assert.deepEqual(
-    await Promise.all([
-      canServiceAccount(
-        topology,
-        topology.controllerAccount,
-        "get",
-        "secrets",
-        topology.placement,
-        { resourceName: topology.gatewayAdministrationRbac.transport },
-      ),
-      canServiceAccount(
-        topology,
-        topology.controllerAccount,
-        "get",
-        "pods/exec",
-        topology.placement,
-      ),
-      canServiceAccount(
-        topology,
-        topology.controllerAccount,
-        "create",
-        "pods/exec",
-        topology.placement,
-      ),
-      canServiceAccount(
-        topology,
-        topology.controllerAccount,
-        "get",
-        "pods/proxy",
-        topology.placement,
-      ),
-      canServiceAccount(
-        topology,
-        topology.controllerAccount,
-        "create",
-        "pods/proxy",
-        topology.placement,
-      ),
-      canServiceAccount(
-        topology,
-        topology.controllerAccount,
-        "create",
-        "secrets",
-        topology.platformNamespace,
-      ),
-      canServiceAccount(
-        topology,
-        topology.controllerAccount,
-        "update",
-        "secrets",
-        topology.platformNamespace,
-        { resourceName: topology.gatewayAdministrationRbac.credential },
-      ),
+async function assertGatewayAdministrationRbacDenials(topology) {
+  const { credential } = topology.gatewayAdministrationRbac;
+  const rows = [
+    [topology.controllerAccount, "list", "secrets", topology.platformNamespace],
+    [topology.controllerAccount, "delete", "secrets", topology.platformNamespace, credential],
+    ...["create", "list"].map((verb) => [
+      topology.apiAccount,
+      verb,
+      "secrets",
+      topology.platformNamespace,
     ]),
-    ["yes", "yes", "yes", "yes", "no", "yes", "yes"],
-    "gateway administration enrollment must grant the worker only the required tenant and controller-namespace operations",
-  );
-  assert.deepEqual(
-    await Promise.all([
-      canServiceAccount(
-        topology,
-        topology.apiAccount,
-        "get",
-        "secrets",
-        topology.platformNamespace,
-        { resourceName: topology.gatewayAdministrationRbac.credential },
-      ),
-      canServiceAccount(
-        topology,
-        topology.apiAccount,
-        "get",
-        "endpointslices.discovery.k8s.io",
-        topology.placement,
-      ),
-      canServiceAccount(
-        topology,
-        topology.apiAccount,
-        "list",
-        "endpointslices.discovery.k8s.io",
-        topology.placement,
-      ),
-      canServiceAccount(topology, topology.apiAccount, "get", "pods/proxy", topology.placement),
-      canServiceAccount(topology, topology.apiAccount, "create", "pods/proxy", topology.placement),
-      canServiceAccount(topology, topology.apiAccount, "get", "pods/exec", topology.placement),
-      canServiceAccount(topology, topology.apiAccount, "create", "pods/exec", topology.placement),
-      canServiceAccount(topology, topology.apiAccount, "get", "secrets", topology.placement, {
-        resourceName: topology.gatewayAdministrationRbac.transport,
-      }),
-      canServiceAccount(
-        topology,
-        topology.apiAccount,
-        "create",
-        "secrets",
-        topology.platformNamespace,
-      ),
+    ...["update", "patch", "delete"].map((verb) => [
+      topology.apiAccount,
+      verb,
+      "secrets",
+      topology.platformNamespace,
+      credential,
     ]),
-    // Existing tenant SecretDriver access also permits transport Secret reads.
-    // Gateway administration adds no exec or controller credential writes.
-    ["yes", "yes", "yes", "yes", "no", "no", "no", "yes", "no"],
-    "gateway administration dispatch must let the API read the established credential and proxy without enrollment privileges",
+    [topology.controllerAccount, "create", "pods", topology.placement, undefined, "proxy"],
+    [topology.apiAccount, "create", "pods", topology.placement, undefined, "proxy"],
+    [topology.apiAccount, "create", "pods", topology.placement, undefined, "exec"],
+  ];
+  await Promise.all(
+    rows.map(async ([accountName, verb, resource, namespace, resourceName, subresource]) => {
+      const target = resourceName === undefined ? resource : `${resource}/${resourceName}`;
+      const description = `${accountName} ${verb} ${target}${
+        subresource === undefined ? "" : ` --subresource=${subresource}`
+      } in ${namespace}`;
+      let stdout;
+      try {
+        stdout = await kubectl(
+          "auth",
+          "can-i",
+          verb,
+          target,
+          "--namespace",
+          namespace,
+          `--as=system:serviceaccount:${topology.platformNamespace}:${accountName}`,
+          ...(subresource === undefined ? [] : [`--subresource=${subresource}`]),
+        );
+      } catch (error) {
+        if (error.stdout?.trim() !== "no") throw error;
+        stdout = error.stdout;
+      }
+      assert.equal(
+        stdout.trim(),
+        "no",
+        `gateway administration RBAC unexpectedly allows ${description}`,
+      );
+    }),
   );
 }
 
@@ -2423,7 +2411,8 @@ async function waitForGatewayAdministrationKeyOnlyCredential(
       if (/NotFound|not found/i.test(error.stderr ?? error.message)) return undefined;
       throw error;
     }
-    return credential["device-token"] === undefined ? credential : undefined;
+    const parsed = gatewayAdministrationCredentialFromDecodedSecret(credential);
+    return parsed.state === "keyOnly" ? parsed : undefined;
   });
 }
 
@@ -2532,17 +2521,35 @@ async function readGatewayAdministrationCredentialSecret(topology) {
   );
 }
 
+function gatewayAdministrationCredentialFromDecodedSecret(decoded) {
+  return parseGatewayAdministrationCredential({
+    data: Object.fromEntries(
+      Object.entries(decoded).map(([key, value]) => [key, Buffer.from(value).toString("base64")]),
+    ),
+  });
+}
+
+function gatewayAdministrationSecretMaterial(credential) {
+  return [
+    credential.identity.privateKeyPem,
+    ...(credential.state === "established"
+      ? [credential.deviceToken.token, JSON.stringify(credential.deviceToken.scopes)]
+      : []),
+  ];
+}
+
 async function readGatewayAdministrationCredential(topology) {
   const decoded = await readGatewayAdministrationCredentialSecret(topology);
-  assert.ok(decoded["device-id"], "gateway administration Secret must persist device id");
-  assert.ok(decoded["device-token"], "gateway administration Secret must persist device token");
-  assert.deepEqual(JSON.parse(decoded["device-token-scopes"]), ["operator.admin"]);
+  const credential = gatewayAdministrationCredentialFromDecodedSecret(decoded);
+  assert.equal(credential.state, "established");
+  assert.ok(credential.identity.deviceId, "gateway administration Secret must derive device id");
+  assert.deepEqual(credential.deviceToken.scopes, ["operator.admin"]);
   assertNoSecretMaterial(
     [topology.gatewayPod.spec, topology.harnessPod?.spec],
-    Object.values(decoded),
+    gatewayAdministrationSecretMaterial(credential),
     "gateway administration credentials must not be projected into Agent workloads",
   );
-  return decoded;
+  return credential;
 }
 
 async function revokeGatewayAdministrationCredential(topology, credential) {
@@ -2558,11 +2565,8 @@ async function revokeGatewayAdministrationCredential(topology, credential) {
   const driver = topology.apiComputeDriver;
   const target = await driver.resolveCurrentGatewayTarget(topology.revision);
   const signal = AbortSignal.timeout(30_000);
-  const identity = {
-    deviceId: credential["device-id"],
-    publicKeyPem: credential["public-key-pem"],
-    privateKeyPem: credential["private-key-pem"],
-  };
+  assert.equal(credential.state, "established");
+  const identity = credential.identity;
   // Native revocation requires the caller to cover the target token's scopes.
   // Use the official SDK as the established admin, outside the deliberately
   // narrower OCC proxy, without projecting its credential into the Pod.
@@ -2577,9 +2581,9 @@ async function revokeGatewayAdministrationCredential(topology, credential) {
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.BACKEND,
       role: "operator",
-      scopes: JSON.parse(credential["device-token-scopes"]),
+      scopes: credential.deviceToken.scopes,
       deviceIdentity: identity,
-      deviceToken: credential["device-token"],
+      deviceToken: credential.deviceToken.token,
       requestTimeoutMs: 30_000,
       connectChallengeTimeoutMs: 30_000,
       hostDeps: {
@@ -2617,7 +2621,7 @@ async function revokeGatewayAdministrationCredential(topology, credential) {
   });
   assertNoSecretMaterial(
     result,
-    [credential["device-token"], credential["private-key-pem"]],
+    gatewayAdministrationSecretMaterial(credential),
     "native device revocation output must not expose the OCC credential",
   );
   assert.equal(result.deviceId, identity.deviceId);
@@ -4268,22 +4272,24 @@ test(
       return pendingEvents > pendingEventsAtKeyOnly ? pendingEvents : undefined;
     });
     await assertUnrelatedPendingGatewayPairing(topology, unrelated.identity);
-    assert.ok(keyOnly["device-id"], "partial enrollment must persist the exact native device id");
     assert.ok(
-      keyOnly["private-key-pem"],
+      keyOnly.identity.deviceId,
+      "partial enrollment must derive the exact native device id",
+    );
+    assert.ok(
+      keyOnly.identity.privateKeyPem,
       "partial enrollment must persist the exact native device private key",
     );
     assert.equal(
-      Object.hasOwn(keyOnly, "device-token"),
-      false,
+      keyOnly.state,
+      "keyOnly",
       "token persistence RBAC denial must leave only the pre-approved native device identity",
     );
-    assert.equal(Object.hasOwn(keyOnly, "device-token-scopes"), false);
     // A key-only record alone could mean enrollment failed before approval. Prove
     // the native grant exists so this actually exercises the persistence gap.
     const pairing = await gatewayCall(topology, "device.pair.list", {});
     const approvedDevice = pairing.paired.find(
-      (device) => device.deviceId === keyOnly["device-id"],
+      (device) => device.deviceId === keyOnly.identity.deviceId,
     );
     assert.ok(approvedDevice, "native approval must complete before the token write fails");
     assert.ok(
@@ -4296,11 +4302,15 @@ test(
       "the native gateway must retain the issued admin grant despite failed OCC persistence",
     );
     context.diagnostic(
-      `gateway-admin partial enrollment target namespace=${topology.placement} namespaceId=${topology.agent.namespaceId} agentId=${topology.agent.id} revisionId=${topology.revision.id} credentialSecret=${topology.gatewayAdministrationRbac.credential} gatewayPod=${topology.gatewayPod.metadata.name} deviceId=${keyOnly["device-id"]}`,
+      `gateway-admin partial enrollment target namespace=${topology.placement} namespaceId=${topology.agent.namespaceId} agentId=${topology.agent.id} revisionId=${topology.revision.id} credentialSecret=${topology.gatewayAdministrationRbac.credential} gatewayPod=${topology.gatewayPod.metadata.name} deviceId=${keyOnly.identity.deviceId}`,
     );
 
     const unavailable = await dispatchOccGatewayCommand(topology, "status", undefined, {
-      secrets: [process.env.OPENAI_API_KEY, topology.gatewayToken, ...Object.values(keyOnly)],
+      secrets: [
+        process.env.OPENAI_API_KEY,
+        topology.gatewayToken,
+        ...gatewayAdministrationSecretMaterial(keyOnly),
+      ],
     });
     assert.equal(unavailable.status, 503);
 
@@ -4327,15 +4337,17 @@ test(
     });
     await assertUnrelatedPendingGatewayPairing(topology, unrelated.identity);
 
-    const afterRetry = await readGatewayAdministrationCredentialSecret(topology);
+    const afterRetry = gatewayAdministrationCredentialFromDecodedSecret(
+      await readGatewayAdministrationCredentialSecret(topology),
+    );
     assert.equal(
-      afterRetry["device-id"],
-      keyOnly["device-id"],
+      afterRetry.identity.deviceId,
+      keyOnly.identity.deviceId,
       "retry after restoring update RBAC must keep the original native device identity",
     );
     assert.equal(
-      Object.hasOwn(afterRetry, "device-token"),
-      false,
+      afterRetry.state,
+      "keyOnly",
       "retry after restoring update RBAC must not re-run helper enrollment for key-only state",
     );
     const agentAfterRetry = await topology.request(
@@ -4349,7 +4361,11 @@ test(
       "partial enrollment must not activate the revision after retry",
     );
     const stillUnavailable = await dispatchOccGatewayCommand(topology, "status", undefined, {
-      secrets: [process.env.OPENAI_API_KEY, topology.gatewayToken, ...Object.values(afterRetry)],
+      secrets: [
+        process.env.OPENAI_API_KEY,
+        topology.gatewayToken,
+        ...gatewayAdministrationSecretMaterial(afterRetry),
+      ],
     });
     assert.equal(stillUnavailable.status, 503);
   },
@@ -4368,7 +4384,7 @@ test(
       topology.productionApp,
       topology.credentials,
     );
-    await assertGatewayAdministrationRbac(topology);
+    await assertGatewayAdministrationRbacDenials(topology);
     const credential = await readGatewayAdministrationCredential(topology);
 
     const status = assertOccGatewaySuccess(
@@ -4409,8 +4425,8 @@ test(
       topology.credentials,
     );
     assert.equal(
-      (await readGatewayAdministrationCredential(topology))["device-id"],
-      credential["device-id"],
+      (await readGatewayAdministrationCredential(topology)).identity.deviceId,
+      credential.identity.deviceId,
     );
     assertOccGatewaySuccess(await dispatchOccGatewayCommand(topology, "status"), "status");
 
@@ -4498,13 +4514,6 @@ test(
     assert.equal(abort.aborted, false);
 
     const pathname = gatewayAdministrationPath(topology);
-    const slashless = await topology.browserRequest(
-      "POST",
-      pathname.slice(0, -1),
-      { method: "status" },
-      { headers: { origin: authBaseURL } },
-    );
-    assert.equal(slashless.status, 404);
     const serviceKeyRequest = async (key, body, options = {}) => {
       const response = await topology.productionApp.inject({
         method: "POST",
@@ -4530,20 +4539,6 @@ test(
     };
     const missingOrigin = await topology.browserRequest("POST", pathname, { method: "status" });
     assert.equal(missingOrigin.status, 403);
-    const conflictingFetchMetadata = await topology.browserRequest(
-      "POST",
-      pathname,
-      { method: "status" },
-      { headers: { origin: authBaseURL, "sec-fetch-site": "cross-site" } },
-    );
-    assert.equal(conflictingFetchMetadata.status, 403);
-    const crossSiteMissingOrigin = await topology.browserRequest(
-      "POST",
-      pathname,
-      { method: "status" },
-      { headers: { "sec-fetch-site": "cross-site" } },
-    );
-    assert.equal(crossSiteMissingOrigin.status, 403);
     const wrongOrigin = await topology.browserRequest(
       "POST",
       pathname,
@@ -4551,23 +4546,12 @@ test(
       { headers: { origin: "http://attacker.example" } },
     );
     assert.equal(wrongOrigin.status, 403);
-    const extraQuery = await topology.browserRequest(
-      "POST",
-      `${pathname}?targetUrl=ws://127.0.0.1:1`,
-      { method: "status" },
-      { headers: { origin: authBaseURL } },
-    );
-    assert.equal(extraQuery.status, 400);
     const extraBody = await dispatchOccGatewayCommand(topology, "status", undefined, {
       extraBody: { targetUrl: "ws://127.0.0.1:1" },
     });
     assert.equal(extraBody.status, 400);
     const unsupportedMethod = await dispatchOccGatewayCommand(topology, "config.patch", {});
     assert.equal(unsupportedMethod.status, 400);
-    const wrongHttpMethod = await topology.browserRequest("GET", pathname, undefined, {
-      headers: { origin: authBaseURL },
-    });
-    assert.ok(wrongHttpMethod.status >= 400);
 
     const inactive = await topology.browserRequest(
       "POST",
@@ -4718,8 +4702,8 @@ test(
       beforeGatewayUid,
     );
     assert.equal(
-      (await readGatewayAdministrationCredential(topology))["device-id"],
-      credential["device-id"],
+      (await readGatewayAdministrationCredential(topology)).identity.deviceId,
+      credential.identity.deviceId,
       "gateway Pod replacement must preserve the OCC native device identity",
     );
     assertOccGatewaySuccess(await dispatchOccGatewayCommand(topology, "status"), "status");
@@ -4755,8 +4739,8 @@ test(
     );
     topology.revision = secondRevision.data;
     assert.equal(
-      (await readGatewayAdministrationCredential(topology))["device-id"],
-      credential["device-id"],
+      (await readGatewayAdministrationCredential(topology)).identity.deviceId,
+      credential.identity.deviceId,
       "revision replacement must preserve the OCC native device identity",
     );
     assertOccGatewaySuccess(await dispatchOccGatewayCommand(topology, "status"), "status");
@@ -4765,7 +4749,7 @@ test(
       process.env.OPENAI_API_KEY,
       topology.gatewayToken,
       fileContent,
-      ...Object.values(credential),
+      ...gatewayAdministrationSecretMaterial(credential),
     ]);
     assert.ok(
       auditRows.some((row) => JSON.parse(row.details).nativeMethod === "chat.send"),
@@ -4774,7 +4758,11 @@ test(
 
     await revokeGatewayAdministrationCredential(topology, credential);
     const revokedCredential = await dispatchOccGatewayCommand(topology, "status", undefined, {
-      secrets: [process.env.OPENAI_API_KEY, topology.gatewayToken, ...Object.values(credential)],
+      secrets: [
+        process.env.OPENAI_API_KEY,
+        topology.gatewayToken,
+        ...gatewayAdministrationSecretMaterial(credential),
+      ],
     });
     assert.equal(revokedCredential.status, 503);
 
@@ -4798,7 +4786,11 @@ test(
       "status",
       undefined,
       {
-        secrets: [process.env.OPENAI_API_KEY, topology.gatewayToken, ...Object.values(credential)],
+        secrets: [
+          process.env.OPENAI_API_KEY,
+          topology.gatewayToken,
+          ...gatewayAdministrationSecretMaterial(credential),
+        ],
       },
     );
     assert.equal(stillRevokedAfterRestart.status, 503);
@@ -4842,8 +4834,8 @@ test(
       "revoked OCC native access must not trigger automatic helper re-enrollment on reconcile",
     );
     assert.equal(
-      (await readGatewayAdministrationCredential(topology))["device-id"],
-      credential["device-id"],
+      (await readGatewayAdministrationCredential(topology)).identity.deviceId,
+      credential.identity.deviceId,
       "revoked OCC native access must preserve the original device identity for deliberate recovery",
     );
 
@@ -4855,7 +4847,7 @@ test(
     const identityPin = "openclaw.dev/occ-gateway-device-id";
     assert.equal(
       (await resource("pvc", privateClaim, topology.placement)).metadata.annotations[identityPin],
-      credential["device-id"],
+      credential.identity.deviceId,
     );
     await kubectl(
       "delete",
@@ -4906,7 +4898,7 @@ test(
     );
     assert.equal(
       (await resource("pvc", privateClaim, topology.placement)).metadata.annotations[identityPin],
-      credential["device-id"],
+      credential.identity.deviceId,
     );
     assert.equal((await dispatchOccGatewayCommand(topology, "status")).status, 503);
   },

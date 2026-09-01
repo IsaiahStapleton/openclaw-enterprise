@@ -4,13 +4,12 @@ import {
   NATIVE_GATEWAY_OPERATOR_ROLE,
   NATIVE_GATEWAY_OPERATOR_SCOPES,
   normalizeOpenClawGatewayNativeOperatorScopes,
+  openClawGatewayNativeDeviceIdentityFromPrivateKey,
   type OpenClawGatewayNativeDeviceIdentity,
   type OpenClawGatewayNativeTokenRecord,
 } from "../../../gateway/native-client.ts";
 
 const PRIVATE_KEY_KEY = "private-key-pem";
-const PUBLIC_KEY_KEY = "public-key-pem";
-const DEVICE_ID_KEY = "device-id";
 const DEVICE_TOKEN_KEY = "device-token";
 const DEVICE_TOKEN_SCOPES_KEY = "device-token-scopes";
 const DEFAULT_SECRET_PREFIX = "occ-gateway-admin";
@@ -61,8 +60,6 @@ export function gatewayAdministrationSecretStringData(
 ): Record<string, string> {
   return {
     [PRIVATE_KEY_KEY]: credential.identity.privateKeyPem,
-    [PUBLIC_KEY_KEY]: credential.identity.publicKeyPem,
-    [DEVICE_ID_KEY]: credential.identity.deviceId,
     ...(credential.state === "established"
       ? {
           [DEVICE_TOKEN_KEY]: credential.deviceToken.token,
@@ -75,11 +72,9 @@ export function gatewayAdministrationSecretStringData(
 export function parseGatewayAdministrationCredential(secret: {
   readonly data?: Record<string, string>;
 }): GatewayAdministrationCredential {
-  const identity = {
-    privateKeyPem: requiredSecretString(secret, PRIVATE_KEY_KEY),
-    publicKeyPem: requiredSecretString(secret, PUBLIC_KEY_KEY),
-    deviceId: requiredSecretString(secret, DEVICE_ID_KEY),
-  };
+  const identity = openClawGatewayNativeDeviceIdentityFromPrivateKey(
+    requiredSecretString(secret, PRIVATE_KEY_KEY),
+  );
   const token = optionalSecretString(secret, DEVICE_TOKEN_KEY);
   const scopesJson = optionalSecretString(secret, DEVICE_TOKEN_SCOPES_KEY);
   if (token === undefined && scopesJson === undefined) return { state: "keyOnly", identity };

@@ -574,82 +574,65 @@ test("Agent gateway command records sanitized dispatch dependency failures befor
   assert.equal(Object.hasOwn(gatewayAudits[1].details, "payload"), false);
 });
 
-test("Agent gateway command bounds active revision lookup by the request deadline", async () => {
-  const dispatches = [];
-  const fixture = await createFixture({
-    gatewayAccess: {
-      async dispatch(dispatch) {
-        dispatches.push(dispatch);
-        return { ok: true, payload: { ready: true } };
+test("Agent gateway command bounds pre-dispatch work by the request deadline", async () => {
+  const cases = [
+    {
+      name: "active revision lookup",
+      arrange(fixture) {
+        fixture.controller.getAdministeredActiveAgentRevision = async () => new Promise(() => {});
       },
     },
-    gatewayRequestTimeoutMs: 5,
-    publicOrigin: "http://127.0.0.1",
-  });
-  await bootstrap(fixture);
-  const { namespace, agent } = await createActiveGatewayAgent(fixture);
-  fixture.controller.getAdministeredActiveAgentRevision = async () => new Promise(() => {});
-
-  const startedAt = Date.now();
-  const result = await request(
-    fixture.app,
-    `/namespaces/${namespace.id}/agents/${agent.id}/gateway/`,
     {
-      body: { method: "status" },
-      headers: { origin: "http://127.0.0.1" },
-    },
-  );
-  const elapsedMs = Date.now() - startedAt;
-
-  assert.equal(result.response.status, 503);
-  assert.equal(result.payload.error.code, "DEPENDENCY_UNAVAILABLE");
-  assert.ok(elapsedMs < 2_000, `expected request deadline to bound lookup, took ${elapsedMs}ms`);
-  assert.equal(dispatches.length, 0);
-  const gatewayAudits = fixture.auditSink.events.filter(
-    (event) => event.action === "openclaw.agents.gateway.dispatch",
-  );
-  assert.equal(gatewayAudits.length, 0);
-});
-
-test("Agent gateway command bounds initial audit persistence by the request deadline", async () => {
-  const dispatches = [];
-  const fixture = await createFixture({
-    gatewayAccess: {
-      async dispatch(dispatch) {
-        dispatches.push(dispatch);
-        return { ok: true, payload: { ready: true } };
+      name: "initial audit persistence",
+      arrange(fixture) {
+        const append = fixture.auditSink.append.bind(fixture.auditSink);
+        fixture.auditSink.append = async (event) => {
+          if (event.action === "openclaw.agents.gateway.dispatch") return new Promise(() => {});
+          await append(event);
+        };
       },
     },
-    gatewayRequestTimeoutMs: 5,
-    publicOrigin: "http://127.0.0.1",
-  });
-  await bootstrap(fixture);
-  const { namespace, agent } = await createActiveGatewayAgent(fixture);
-  const append = fixture.auditSink.append.bind(fixture.auditSink);
-  fixture.auditSink.append = async (event) => {
-    if (event.action === "openclaw.agents.gateway.dispatch") return new Promise(() => {});
-    await append(event);
-  };
+  ];
 
-  const startedAt = Date.now();
-  const result = await request(
-    fixture.app,
-    `/namespaces/${namespace.id}/agents/${agent.id}/gateway/`,
-    {
-      body: { method: "status" },
-      headers: { origin: "http://127.0.0.1" },
-    },
-  );
-  const elapsedMs = Date.now() - startedAt;
+  for (const deadlineCase of cases) {
+    const dispatches = [];
+    const fixture = await createFixture({
+      gatewayAccess: {
+        async dispatch(dispatch) {
+          dispatches.push(dispatch);
+          return { ok: true, payload: { ready: true } };
+        },
+      },
+      gatewayRequestTimeoutMs: 5,
+      publicOrigin: "http://127.0.0.1",
+    });
+    await bootstrap(fixture);
+    const { namespace, agent } = await createActiveGatewayAgent(fixture);
+    deadlineCase.arrange(fixture);
 
-  assert.equal(result.response.status, 503);
-  assert.equal(result.payload.error.code, "DEPENDENCY_UNAVAILABLE");
-  assert.ok(elapsedMs < 2_000, `expected request deadline to bound audit, took ${elapsedMs}ms`);
-  assert.equal(dispatches.length, 0);
-  const gatewayAudits = fixture.auditSink.events.filter(
-    (event) => event.action === "openclaw.agents.gateway.dispatch",
-  );
-  assert.equal(gatewayAudits.length, 0);
+    const startedAt = Date.now();
+    const result = await request(
+      fixture.app,
+      `/namespaces/${namespace.id}/agents/${agent.id}/gateway/`,
+      {
+        body: { method: "status" },
+        headers: { origin: "http://127.0.0.1" },
+      },
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(result.response.status, 503, deadlineCase.name);
+    assert.equal(result.payload.error.code, "DEPENDENCY_UNAVAILABLE", deadlineCase.name);
+    assert.ok(
+      elapsedMs < 2_000,
+      `expected request deadline to bound ${deadlineCase.name}, took ${elapsedMs}ms`,
+    );
+    assert.equal(dispatches.length, 0, deadlineCase.name);
+    const gatewayAudits = fixture.auditSink.events.filter(
+      (event) => event.action === "openclaw.agents.gateway.dispatch",
+    );
+    assert.equal(gatewayAudits.length, 0, deadlineCase.name);
+  }
 });
 
 test("Agent gateway command bounds native dispatch by the request deadline as an unknown outcome", async () => {

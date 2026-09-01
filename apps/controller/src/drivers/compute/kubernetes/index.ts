@@ -585,6 +585,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private lifecycleStarted = false;
   private apiClients: Promise<KubernetesApiClients> | undefined;
   private readonly podExecutor: KubernetesClientNodePodExecutor;
+  private readonly gatewayAdministration: KubernetesGatewayAdministrationOptions | undefined;
   private patchOptions:
     ReturnType<typeof import("@kubernetes/client-node").setHeaderOptions> | undefined;
   private jsonPatchOptions:
@@ -744,6 +745,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     this.options = options;
     this.sandboxDriver = selection.sandboxDriver;
+    this.gatewayAdministration =
+      options.runtime?.gatewayAdministration === undefined
+        ? undefined
+        : this.parseGatewayAdministrationOptions(options.runtime.gatewayAdministration);
     this.podExecutor = new KubernetesClientNodePodExecutor(options.authentication, (message) => {
       return new ConfigurationFailure(message);
     });
@@ -1854,8 +1859,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   private gatewayAdministrationOptions(): KubernetesGatewayAdministrationOptions | undefined {
-    const options = this.options.runtime?.gatewayAdministration;
-    if (options === undefined) return undefined;
+    return this.gatewayAdministration;
+  }
+
+  private parseGatewayAdministrationOptions(
+    options: KubernetesGatewayAdministrationOptions,
+  ): KubernetesGatewayAdministrationOptions {
     try {
       return validateGatewayAdministrationOptions(options);
     } catch (error) {
@@ -2056,10 +2065,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     options: KubernetesGatewayAdministrationOptions,
     ownership: Ownership,
   ): Promise<GatewayAdministrationCredential | undefined> {
-    const name = gatewayAdministrationSecretName({
-      namespaceId: ownership.namespaceId,
-      agentId: required(ownership.agentId, "Gateway administration Agent ID"),
-    });
+    const name = this.gatewayAdministrationCredentialSecretName(ownership);
     const secret = await this.getOwned("Secret", name, options.controllerNamespace, ownership);
     if (secret === undefined) return undefined;
     try {
@@ -2075,10 +2081,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     identity: GatewayAdministrationCredential["identity"],
     deviceToken: OpenClawGatewayNativeTokenRecord,
   ): Promise<GatewayAdministrationCredential> {
-    const name = gatewayAdministrationSecretName({
-      namespaceId: ownership.namespaceId,
-      agentId: required(ownership.agentId, "Gateway administration Agent ID"),
-    });
+    const name = this.gatewayAdministrationCredentialSecretName(ownership);
     const credential: GatewayAdministrationCredential = {
       state: "established",
       identity,
@@ -2134,6 +2137,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("Gateway administration credential token was not persisted.");
     }
     return stored;
+  }
+
+  private gatewayAdministrationCredentialSecretName(ownership: Ownership): string {
+    return gatewayAdministrationSecretName({
+      namespaceId: ownership.namespaceId,
+      agentId: required(ownership.agentId, "Gateway administration Agent ID"),
+    });
   }
 
   private async gatewayTransportToken(revision: AgentRevision, namespace: string): Promise<string> {
@@ -2236,11 +2246,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       expected ?? current,
     );
     if (pod === undefined) return undefined;
-    return {
-      namespace,
-      podName: pod.metadata.name,
-      gatewayPort: this.options.network.gatewayPort,
-    };
+    return this.gatewayTargetForPod(namespace, pod);
   }
 
   private async resolveCurrentGatewayTarget(
@@ -2276,6 +2282,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (!isNonEmptyString(clusterIP) || clusterIP === "None") {
       throw new OwnershipFailure("Refusing Agent gateway Service without a private ClusterIP.");
     }
+    return this.gatewayTargetForPod(namespace, pod);
+  }
+
+  private gatewayTargetForPod(
+    namespace: string,
+    pod: ManagedKubernetesObject<"Pod">,
+  ): KubernetesGatewayTarget {
     return {
       namespace,
       podName: pod.metadata.name,

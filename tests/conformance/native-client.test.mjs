@@ -14,6 +14,7 @@ import {
   connectOpenClawGatewayNativeWithBootstrap,
   createOpenClawGatewayNativeDeviceIdentity,
   deriveDeviceIdFromPublicKeyRaw,
+  openClawGatewayNativeDeviceIdentityFromPrivateKey,
   publicKeyRawBase64UrlFromPem,
   requestOpenClawGatewayNative,
   signOpenClawGatewayNativePayload,
@@ -38,6 +39,10 @@ test("native identity generation creates a real Ed25519 key and rejects mismatch
 
   const rawPublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   assert.equal(identity.deviceId, deriveDeviceIdFromPublicKeyRaw(rawPublicKey));
+  assert.deepEqual(
+    openClawGatewayNativeDeviceIdentityFromPrivateKey(identity.privateKeyPem),
+    identity,
+  );
 
   const payload = "v3|device|openclaw-enterprise|backend|operator|operator.admin|1||nonce||";
   const signature = signOpenClawGatewayNativePayload(identity.privateKeyPem, payload);
@@ -232,38 +237,19 @@ test("bootstrap enrollment does not run a second manual pairing barrier", async 
   }
 });
 
-test("bootstrap enrollment rejects hello-ok without operator admin approval", async () => {
-  const identity = createOpenClawGatewayNativeDeviceIdentity();
-  const gateway = await startLoopbackGateway({
-    helloAuth: { role: "operator", scopes: ["operator.read"], deviceToken },
-  });
-  try {
-    await assert.rejects(
-      connectOpenClawGatewayNativeWithBootstrap({
-        url: gateway.url,
-        identity,
-        sharedToken,
-      }),
-      OpenClawGatewayNativeEnrollmentError,
-    );
-    assert.equal(gateway.connectParams.length, 1);
-    assert.equal(gateway.connectParams[0].auth.token, sharedToken);
-  } finally {
-    await gateway.close();
-  }
-});
-
-test("bootstrap enrollment rejects non-exact operator admin scope grants", async () => {
+test("bootstrap enrollment rejects hello-ok without exact operator admin approval", async () => {
   const cases = [
+    { name: "wrong role", role: "viewer", scopes: ["operator.admin"] },
+    { name: "narrow grant", role: "operator", scopes: ["operator.read"] },
     { name: "broader grant", scopes: ["operator.admin", "operator.read"] },
     { name: "duplicate grant", scopes: ["operator.admin", "operator.admin"] },
     { name: "malformed grant", scopes: ["operator.admin", " "] },
   ];
 
-  for (const { name, scopes } of cases) {
+  for (const { name, role = "operator", scopes } of cases) {
     const identity = createOpenClawGatewayNativeDeviceIdentity();
     const gateway = await startLoopbackGateway({
-      helloAuth: { role: "operator", scopes, deviceToken },
+      helloAuth: { role, scopes, deviceToken },
     });
     try {
       await assert.rejects(

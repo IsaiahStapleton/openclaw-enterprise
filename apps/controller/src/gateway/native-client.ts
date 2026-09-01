@@ -67,13 +67,6 @@ type NativeClientCreateOptions = OpenClawGatewayNativeBaseOptions & {
   sharedToken?: string;
 };
 
-type NativeGatewayDeadline = {
-  readonly signal: AbortSignal;
-  readonly dispose: () => void;
-  readonly remainingMs: () => number;
-  readonly throwIfAborted: () => void;
-};
-
 export type OpenClawGatewayNativeBaseOptions = {
   url: string;
   identity: OpenClawGatewayNativeDeviceIdentity;
@@ -128,9 +121,20 @@ function assertAllowedOpenClawGatewayNativeMethod(
 }
 
 export function createOpenClawGatewayNativeDeviceIdentity(): OpenClawGatewayNativeDeviceIdentity {
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }) as string;
+  const { privateKey } = generateKeyPairSync("ed25519");
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
+  return openClawGatewayNativeDeviceIdentityFromPrivateKey(privateKeyPem);
+}
+
+export function openClawGatewayNativeDeviceIdentityFromPrivateKey(
+  privateKeyPem: string,
+): OpenClawGatewayNativeDeviceIdentity {
+  const privateKey = createPrivateKey(privateKeyPem);
+  assertEd25519Key(privateKey, "private key");
+  const publicKeyPem = createPublicKey(privateKey).export({
+    type: "spki",
+    format: "pem",
+  }) as string;
   const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
   return {
     deviceId: deriveDeviceIdFromPublicKeyRaw(publicKeyRaw),
@@ -216,18 +220,13 @@ export async function connectOpenClawGatewayNativeWithBootstrap(
   validateOpenClawGatewayNativeDeviceIdentity(options.identity);
   assertNonEmpty(options.sharedToken, "native gateway shared token");
 
-  const deadline = createNativeGatewayDeadline({
-    timeoutMs: NATIVE_GATEWAY_ENROLLMENT_TIMEOUT_MS,
-    timeoutMessage: `native gateway enrollment timed out after ${NATIVE_GATEWAY_ENROLLMENT_TIMEOUT_MS}ms`,
-    abortMessage: "native gateway enrollment wait aborted",
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-  });
+  const signal = nativeGatewaySignal(options.signal, NATIVE_GATEWAY_ENROLLMENT_TIMEOUT_MS);
 
   let pairingApprovalUsed = false;
   try {
     for (;;) {
       try {
-        return await connectOpenClawGatewayNativeBootstrapAttempt(options, deadline);
+        return await connectOpenClawGatewayNativeBootstrapAttempt(options, signal);
       } catch (error) {
         if (
           pairingApprovalUsed ||
@@ -237,9 +236,9 @@ export async function connectOpenClawGatewayNativeWithBootstrap(
           throw error;
         }
         pairingApprovalUsed = true;
-        deadline.throwIfAborted();
-        await waitForGatewayNativePairingApproval(options.waitForPairingApproval, deadline.signal);
-        deadline.throwIfAborted();
+        signal.throwIfAborted();
+        await waitForGatewayNativePairingApproval(options.waitForPairingApproval, signal);
+        signal.throwIfAborted();
       }
     }
   } catch (error) {
@@ -247,16 +246,14 @@ export async function connectOpenClawGatewayNativeWithBootstrap(
       "native gateway bootstrap enrollment did not return a durable device token",
       error,
     );
-  } finally {
-    deadline.dispose();
   }
 }
 
 async function connectOpenClawGatewayNativeBootstrapAttempt(
   options: OpenClawGatewayNativeBootstrapOptions,
-  deadline: NativeGatewayDeadline,
+  signal: AbortSignal,
 ): Promise<OpenClawGatewayNativeTokenRecord> {
-  const tokenWaiter = createGatewayNativeWaiter<OpenClawGatewayNativeTokenRecord>(deadline.signal);
+  const tokenWaiter = createGatewayNativeWaiter<OpenClawGatewayNativeTokenRecord>(signal);
   let capturedToken: OpenClawGatewayNativeTokenRecord | undefined;
   const client = createGatewayNativeClient({
     ...options,
@@ -297,7 +294,7 @@ async function connectOpenClawGatewayNativeBootstrapAttempt(
   });
 
   try {
-    deadline.throwIfAborted();
+    signal.throwIfAborted();
     client.start();
     return await tokenWaiter.promise;
   } finally {
@@ -321,13 +318,8 @@ export async function requestOpenClawGatewayNative(
     "native gateway device token scopes",
   );
 
-  const deadline = createNativeGatewayDeadline({
-    timeoutMs: NATIVE_GATEWAY_REQUEST_TIMEOUT_MS,
-    timeoutMessage: `native gateway request timed out before ${options.request.method} completed`,
-    abortMessage: `native gateway request wait aborted for ${options.request.method}`,
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-  });
-  const helloWaiter = createGatewayNativeWaiter<HelloOk>(deadline.signal);
+  const signal = nativeGatewaySignal(options.signal, NATIVE_GATEWAY_REQUEST_TIMEOUT_MS);
+  const helloWaiter = createGatewayNativeWaiter<HelloOk>(signal);
   const client = createGatewayNativeClient({
     ...options,
     deviceToken: options.deviceToken,
@@ -354,15 +346,14 @@ export async function requestOpenClawGatewayNative(
   let requestSent = false;
 
   try {
-    deadline.throwIfAborted();
+    signal.throwIfAborted();
     client.start();
     await helloWaiter.promise;
-    deadline.throwIfAborted();
-    const requestTimeoutMs = deadline.remainingMs();
+    signal.throwIfAborted();
     const payload = await client.request(options.request.method, options.request.params, {
       expectFinal: false,
-      timeoutMs: requestTimeoutMs,
-      signal: deadline.signal,
+      timeoutMs: NATIVE_GATEWAY_REQUEST_TIMEOUT_MS,
+      signal,
       onSent: () => {
         requestSent = true;
       },
@@ -401,7 +392,6 @@ export async function requestOpenClawGatewayNative(
     }
     throw error;
   } finally {
-    deadline.dispose();
     await stopGatewayNativeClient(client);
   }
 }
@@ -544,40 +534,12 @@ function createGatewayNativeWaiter<T>(signal: AbortSignal): {
   };
 }
 
-function createNativeGatewayDeadline(options: {
-  timeoutMs: number;
-  signal?: AbortSignal;
-  timeoutMessage: string;
-  abortMessage: string;
-}): NativeGatewayDeadline {
-  const controller = new AbortController();
-  const startedAt = Date.now();
-  const timeout = setTimeout(() => {
-    controller.abort(new Error(options.timeoutMessage));
-  }, options.timeoutMs);
-  timeout.unref?.();
-  const abort = () => {
-    controller.abort(options.signal?.reason ?? new Error(options.abortMessage));
-  };
-  if (options.signal?.aborted === true) abort();
-  else options.signal?.addEventListener("abort", abort, { once: true });
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      clearTimeout(timeout);
-      options.signal?.removeEventListener("abort", abort);
-    },
-    remainingMs: () => {
-      const remaining = options.timeoutMs - (Date.now() - startedAt);
-      if (remaining <= 0) controller.abort(new Error(options.timeoutMessage));
-      return Math.max(1, remaining);
-    },
-    throwIfAborted: () => {
-      if (controller.signal.aborted) {
-        throw controller.signal.reason ?? new Error(options.abortMessage);
-      }
-    },
-  };
+function nativeGatewaySignal(
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number,
+): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return callerSignal === undefined ? timeout : AbortSignal.any([callerSignal, timeout]);
 }
 
 async function stopGatewayNativeClient(client: GatewayClient): Promise<void> {

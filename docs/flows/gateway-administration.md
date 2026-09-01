@@ -98,8 +98,9 @@ kubelet node address is also an explicitly trusted API proxy source.
 
 The credential Secret is named from the Namespace and Agent IDs and is stored
 in `runtime.gatewayAdministration.controllerNamespace`. It contains the OCC
-Ed25519 private key, public key, device ID, and, after successful enrollment,
-the native device token and scopes. A newly created key-only record is the only
+Ed25519 private key and, after successful enrollment, the native device token
+and scopes. The public key and device ID are derived from the private key when
+the Secret is read. A newly created key-only record is the only
 state that may start first-time enrollment. An existing key-only record is a
 terminal incomplete enrollment state until explicit operator recovery.
 Before sending the first handshake, the worker pins the public device ID in
@@ -222,5 +223,6 @@ response envelope.
 
 ## Changelog
 
+- 2026-08-31 16:49: Documented canonical private-key storage with derived native identity; the independent PVC identity pin remains unchanged. (cody/01a04ae1-7ba7-7372-88a4-488e01f690ae - f2e164c)
 - 2026-08-31 12:52: Corrected the native SDK pin and documented manual pairing pause, single helper barrier, and one reconnect under the enrollment deadline. (cody/01a04ae1-7ba7-7372-88a4-488e01f690ae - 61542d0)
 - 2026-08-31 12:41: Documented bundled Kubernetes native gateway enrollment, controller-owned token readiness, Agent-scoped dispatch, and unknown-outcome handling. (cody/01a04ae1-7ba7-7372-88a4-488e01f690ae - 61542d0)

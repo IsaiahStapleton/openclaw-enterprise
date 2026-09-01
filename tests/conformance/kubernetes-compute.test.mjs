@@ -13,6 +13,7 @@ import {
 import {
   gatewayAdministrationSecretName,
   gatewayAdministrationSecretStringData,
+  parseGatewayAdministrationCredential,
 } from "../../apps/controller/src/drivers/compute/kubernetes/gateway-administration.ts";
 import { createOpenClawGatewayNativeDeviceIdentity } from "../../apps/controller/src/gateway/native-client.ts";
 
@@ -68,8 +69,8 @@ function base64StringData(data) {
   );
 }
 
-function secretDataValue(secret, key) {
-  return Buffer.from(secret.data[key], "base64").toString("utf8");
+function parsedGatewayAdministrationCredential(secret) {
+  return parseGatewayAdministrationCredential(secret);
 }
 
 function labelsToSelectorForTest(labels) {
@@ -2160,7 +2161,7 @@ test("gateway administration device pins prevent native identity regeneration", 
           assert.deepEqual(body[2], {
             op: "add",
             path: "/metadata/annotations/openclaw.dev~1occ-gateway-device-id",
-            value: secretDataValue(secret, "device-id"),
+            value: parsedGatewayAdministrationCredential(secret).identity.deviceId,
           });
           if (failPinPatch) {
             if (replacementReadbackAfterFailedPinPatch) {
