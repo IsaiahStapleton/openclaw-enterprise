@@ -2,16 +2,11 @@
 
 ## Active workspace boundary
 
-`legacy/` is excluded from this release. Do not
-edit, execute, import, build, deploy, or start its application, reconciler,
-migrations, tests, package-manager scripts, Docker images, or Helm chart unless
-a later task explicitly requests a narrowly scoped historical investigation.
-
 Approved milestones permit the active TypeScript/pnpm workspace, its selected
 controller and Driver implementations, reviewed PostgreSQL persistence, and
 production Kubernetes packaging described in the current implementation specs.
-Keep the workspace independent of archived code and do not introduce platform
-resources or deployment behavior outside those approved milestones.
+Do not introduce platform resources or deployment behavior outside those
+approved milestones.
 Do not add GitHub Actions workflows: organization push restrictions prohibit
 workflow changes in this repository.
 
@@ -22,8 +17,7 @@ emit attributable audit evidence for bootstrap, successful mutations, and
 authorization denials.
 
 Preserve Git history, registered worktrees, ignored local `.env` files, and
-existing root or nested `node_modules/` directories. Keep `legacy/` excluded
-from Docker contexts and Git release archives.
+existing root or nested `node_modules/` directories.
 
 The authoritative architecture is the repository's
 [platform design](docs/design.md).
@@ -284,6 +278,5 @@ establishes real-runtime outcomes.
   `docs/reference/api.md` is excluded and verified by `pnpm openapi:check`.
   Never reconcile or install dependencies as a side effect of agent
   verification; use dependency-independent Node tests if manifests changed.
-- Check root workspace isolation with `pnpm check:workspace`. Never execute
-  archived package scripts.
+- Check root workspace isolation with `pnpm check:workspace`.
 - Never run `npm run precommit`.

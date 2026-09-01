@@ -10,8 +10,8 @@ and Better Auth session authentication. Both development and production
 support reviewed bundled and installed IAM, Compute, Sandbox, and Configuration
 Drivers. Production and explicit `OCC_CONFIG_PATH` Kubernetes startup
 configurations select the bundled Secret Driver for Namespace-owned Secret storage.
-Default Compose/PostgreSQL development without trusted startup YAML keeps the
-legacy local path and does not enable Namespace-owned Secret storage.
+Default Compose/PostgreSQL development without trusted startup YAML does not
+enable Namespace-owned Secret storage.
 PostgreSQL-backed Installations may additionally select the bundled ChatGPT
 Service Account Driver.
 
@@ -705,8 +705,8 @@ no environment-variable overrides.
 The active workspace requires Node.js 24 or newer and pins pnpm `11.15.1` in
 [`package.json`](../../package.json). Repository-wide settings are defined in:
 
-- [`pnpm-workspace.yaml`](../../pnpm-workspace.yaml): one controller application,
-  five platform packages, and an explicit `legacy/**` exclusion.
+- [`pnpm-workspace.yaml`](../../pnpm-workspace.yaml): one controller application
+  and five platform packages.
 - [`tsconfig.base.json`](../../tsconfig.base.json): strict TypeScript,
   `NodeNext` modules, ES2022 output, and declaration generation.
 - [`tsconfig.json`](../../tsconfig.json): the six active TypeScript project

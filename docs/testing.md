@@ -109,7 +109,7 @@ pnpm test:conformance
 pnpm test:integration
 ```
 
-`check:workspace` checks the active workspace and exclusion of `legacy/`.
+`check:workspace` checks the active workspace.
 The test scripts above run the same canonical workspace verification before
 their selected Node.js tests. `openapi:check` compares generated routes and both
 API artifacts with the checked-in versions. `typecheck` and `build` currently

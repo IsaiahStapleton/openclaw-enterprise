@@ -746,9 +746,8 @@ subject to immediate revocation.
 
 Capability directories contain Driver implementations; shared provider clients
 are Installation-scoped integration dependencies rather than Driver
-capabilities. Packages own platform contracts and state, applications provide
-control-plane product entry points, and archived implementations are excluded
-from release snapshots.
+capabilities. Packages own platform contracts and state; applications provide
+control-plane product entry points.
 
 ```text
 apps/
