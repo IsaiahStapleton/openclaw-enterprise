@@ -42,6 +42,7 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 | Implementation record | Recorded status | Current reference |
 | --- | --- | --- |
+| [Bootstrap default Namespace](19-bootstrap-default-namespace.md) | Implementing; PR #11 swarm gates | [Namespaces](../docs/reference/namespaces.md#initial-namespace) |
 | [Provider and related Drivers](17-provider-driver-abstraction.md) | Implemented and locally verified in PR #8; live Provider proof pending | [Providers](../docs/reference/providers.md), [Agents](../docs/reference/agents.md), [ServiceAccount Driver](../docs/reference/drivers/service-account.md) |
 | [Development end-to-end guide](15-development-end-to-end-guide.md) | Completed | [Development TUI guide](../docs/guides/deploy.md#development-end-to-end-tui); verified in `c208e48` |
 | [Feature Spec: Production interactive TUI](16-production-tui-end-to-end.md) | Completed | [Deployment guide](../docs/guides/deploy.md#attach-with-the-openclaw-tui), [production TUI flow](../docs/flows/production-tui.md) |
