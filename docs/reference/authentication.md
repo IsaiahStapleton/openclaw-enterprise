@@ -11,8 +11,9 @@ This page defines the currently supported authentication behavior. For a
 working sign-in procedure, see
 [human administrator sign-in](../guides/deploy.md#sign-in-as-a-human-administrator).
 For non-Agent automation, see the [service-key procedure](../guides/deploy.md#service-api-keys-for-automation).
-There is no login UI. Public signup, OIDC, and bearer credentials are not
-supported controller API authentication paths.
+The [platform console](console.md) provides email/password login at `/console/`
+and uses these same session endpoints. Public signup, OIDC, and bearer
+credentials are not supported controller API authentication paths.
 
 ## Installation and account ownership
 
@@ -82,6 +83,15 @@ an error does not establish whether the transaction committed. Operators must
 resolve that outcome before manual repair, or explicitly reset an identified
 disposable Installation. See [incomplete bootstrap recovery](../guides/deploy.md#recover-an-incomplete-bootstrap).
 File existence alone is not proof of successful initialization.
+
+## Browser request origin
+
+Browser sign-in and sign-out requests must use the origin configured by
+`OCC_AUTH_BASE_URL`. An explicit untrusted or malformed `Origin` is rejected
+before password verification or session revocation. A request marked
+`Sec-Fetch-Site: cross-site` without an Origin is also rejected. Rejection leaves
+an existing session intact. Command-line clients that send neither browser
+header keep the documented sign-in/sign-out flow.
 
 ## Session lifecycle
 

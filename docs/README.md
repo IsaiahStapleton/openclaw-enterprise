@@ -15,6 +15,9 @@ OpenClaw Enterprise is the open platform for managing agents.
 
 ## Reference
 
+- [Platform console](reference/console.md): sign in and browse accessible Agents,
+  Providers, and Namespaces at `/console/`.
+
 - [Reference index](reference/README.md): browse all features and Drivers.
 - [Namespaces](reference/namespaces.md), [Agents](reference/agents.md), and
   [Configuration](reference/configuration.md): create, organize, and configure Agents.
@@ -40,7 +43,8 @@ OpenClaw Enterprise is the open platform for managing agents.
   [production startup](flows/production-startup.md),
   [production TUI attachment](flows/production-tui.md), and
   [shared platform startup](flows/platform-startup.md).
-- [Provider and Driver lifecycle](flows/provider-driver-lifecycle.md).
+- [Platform console requests](flows/platform-console.md) and
+  [Provider and Driver lifecycle](flows/provider-driver-lifecycle.md).
 - [Controller worker](flows/controller-worker.md),
   [Harness execution topology](flows/harness-execution-topology.md), and
   [dedicated Harness shared workspace](flows/dedicated-harness-shared-workspace-drive.md).

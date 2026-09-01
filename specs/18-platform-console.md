@@ -1,14 +1,15 @@
 # Feature Spec: Platform console bootstrap
 
 **Date:** 2026-09-01
-**Status:** Proposed — read-only resource UI
+**Status:** Implemented — read-only resource UI
 **Owner:** OCC console / controller
+**Current reference:** [Platform console](../docs/reference/console.md)
 
 ## Problem and Decision
 
 Add a small controller-hosted browser console for login, Namespace selection, and existing-resource lists, following the [platform design](../docs/design.md). Use static HTML/CSS and a small browser module; independent frontend tooling is unnecessary for this phase.
 
-Source baseline: fetched `origin/main` **`b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d`**. The [workspace](../pnpm-workspace.yaml) and [authentication reference](../docs/reference/authentication.md#session-lifecycle) contain an existing backend but no active console. Provider discovery is proposed below, not baseline behavior. This document specifies future implementation only.
+Source baseline: fetched `origin/main` **`b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d`**. The [workspace](../pnpm-workspace.yaml) and [authentication reference](../docs/reference/authentication.md#session-lifecycle) contain an existing backend but no active console. Provider discovery is proposed below, not baseline behavior. Implementation base: `origin/main` `a222ae3182a3dfd7dd8cd56c34f20b0e9b5ed09e`, integrated in `97911d3`; the Provider abstraction is present there. Provider discovery and the console remain the work defined here.
 
 ![UI wireframe reference](assets/18-platform-console-wireframe-reference.png)
 
@@ -56,7 +57,7 @@ Use one shared state model: loading retains heading/scope without old rows; auth
 
 ### Provider dependency
 
-Provider configuration and creation will be API-managed in the subsequent creation spec. This phase reads validated, loaded operator configuration after verifying the accepted, landed [Provider abstraction at `a635483`](https://github.com/openclaw/openclaw-enterprise/blob/a635483aa62d41df7b45040b89d9edf4a3cee725/specs/17-provider-driver-abstraction.md). That proposal is active branch work, absent from this baseline; dirty checkout proposals are not shipped evidence. Do not synthesize Providers from legacy `integrations.chatgpt` or Agents.
+Provider configuration and creation will be API-managed in the subsequent creation spec. This phase reads validated, loaded operator configuration after verifying the accepted, landed [Provider abstraction at `a635483`](https://github.com/openclaw/openclaw-enterprise/blob/a635483aa62d41df7b45040b89d9edf4a3cee725/specs/17-provider-driver-abstraction.md). The abstraction is present at the implementation base above; its source and [current reference](../docs/reference/providers.md) govern integration. Dirty checkout proposals are not shipped evidence. Do not synthesize Providers from legacy `integrations.chatgpt` or Agents.
 
 Proposed `GET /providers` returns `{data:[{id,type}],meta:{requestId}}` using ordinary API success/error envelopes and Installation authorization before disclosure. Controller composition explicitly passes safe summaries of loaded Provider definitions. No secrets, credentials, paths, clients, full configuration, upstream calls, reloads, or new storage. “Configured” makes no health/activation claim. Authorized `[]` is valid; absent wiring or unavailable configuration/IAM is an error. Real Provider discovery is required for completion, though other views can proceed independently.
 
@@ -69,19 +70,24 @@ Proposed `GET /providers` returns `{data:[{id,type}],meta:{requestId}}` using or
 
 ## Verification
 
-Acceptance requires later implementation evidence:
+Acceptance outcomes:
 
 - **Browser:** real login/session/logout routes, reload/Back and safe returns; keyboard/click/narrow-layout menus, Settings, Refresh, selectable IDs, and generic recovery. Exercise all shared states, failed logout, two-Namespace delayed success/error races, access revocation, and expiry. Confirm global scope persists, no stale private content, no create/detail affordances or fetches, and only authentication uses POST.
 - **API/IAM:** real supported resource setup proves list filtering and Namespace read requirements. Test Provider Installation-admin versus Namespace-only access, exact safe projection, authorized empty versus unavailable, canonical envelopes, and no writes/upstream calls. Verify trusted-origin rejection, secure production cookies, and no credentials in browser storage/URLs.
 - **Static/build:** build/typecheck/workspace checks, packaged browser refresh, correct HTML/asset MIME, asset-only exposure, API JSON 404/405, and existing API/security suites.
+
+Implementation verification (2026-09-01): 42 API/security tests, build/typecheck, workspace, formatting, generated API checks, and packaged-image checks passed. Computer use in Chrome exercised the browser acceptance outcomes against real controller/auth/IAM routes with in-memory persistence and transport-only fault injection. The automated Playwright suite remains available but was not run; browser verification followed the requested computer-use method. No production deployment or live Provider/runtime verification is claimed.
 
 ## Manual Notes
 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
 - 2026-09-01 11:59: Recorded the user's decision that Provider configuration and creation will be API-managed; retained read-only discovery in this bootstrap spec and deferred the creation contract to the subsequent spec. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 - 2026-09-01 11:54: Narrowed this spec to UI bootstrap and existing-resource lists at user request; deferred all creation UI and removed the Provider write-ownership decision. Defined minimal read-only Provider discovery. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 - 2026-09-01 10:59: Proposed the platform console from the supplied wireframe and current source, separating Provider branch dependencies and deferred detail screens. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 - 2026-09-01 13:08: Simplified the bootstrap scope to controller-hosted static assets, shared contracts and states, selectable IDs, generic route recovery, and three proof groups; preserved read-only boundaries and deferred creation/detail screens. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 - 2026-09-01 13:13: Added the supplied UI wireframe as an embedded reference, retained the earlier image, and kept creation/detail annotations outside the bootstrap scope. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
+- 2026-09-01 13:18: Started implementation on dev/kevinlin/platform-console after integrating the landed Provider abstraction at a222ae3; retained the approved read-only console scope. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - 97911d361ac02ddf561e46c8af0864ad66a6df45)
+- 2026-09-01 15:04: Completed the read-only console, safe Provider discovery, source/docs review fixes, and local API/image/computer-use verification. Corrected the browser fixture to expire Date-valued auth sessions; creation and detail screens remain deferred. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - 97911d361ac02ddf561e46c8af0864ad66a6df45)

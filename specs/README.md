@@ -42,8 +42,8 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 | Implementation record | Recorded status | Current reference |
 | --- | --- | --- |
-| [Platform console bootstrap](18-platform-console.md) | Proposed; read-only resource lists | [Authentication](../docs/reference/authentication.md), [Agents](../docs/reference/agents.md), [Namespaces](../docs/reference/namespaces.md); console not implemented |
 | [Provider and related Drivers](17-provider-driver-abstraction.md) | Implemented and locally verified in PR #8; live Provider proof pending | [Providers](../docs/reference/providers.md), [Agents](../docs/reference/agents.md), [ServiceAccount Driver](../docs/reference/drivers/service-account.md) |
+| [Platform console bootstrap](18-platform-console.md) | Implemented; read-only resource lists | [Platform console](../docs/reference/console.md), [Providers](../docs/reference/providers.md), [Authentication](../docs/reference/authentication.md) |
 | [Development end-to-end guide](15-development-end-to-end-guide.md) | Completed | [Development TUI guide](../docs/guides/deploy.md#development-end-to-end-tui); verified in `c208e48` |
 | [Feature Spec: Production interactive TUI](16-production-tui-end-to-end.md) | Completed | [Deployment guide](../docs/guides/deploy.md#attach-with-the-openclaw-tui), [production TUI flow](../docs/flows/production-tui.md) |
 | [Bootstrap administrator service account](16-bootstrap-admin-service-account.md) | Prior implementation locally verified; [recovery contract superseded](../docs/reference/authentication.md#installation-and-account-ownership); removal locally verified; PR review pending | [Authentication](../docs/reference/authentication.md), [bootstrap flow](../docs/flows/local-password-authentication.md) |
