@@ -374,14 +374,14 @@ real provider response. Set `OCC_TEST_DOCKER_COMPUTE_REAL=1` or any
 Docker, image, bootstrap, worker, Python, or model prerequisites fail instead
 of skipping.
 
-| Variable                       | Requirement or default                                                                |
-| ------------------------------ | ------------------------------------------------------------------------------------- |
-| `OCC_TEST_DOCKER_COMPUTE_REAL` | Set to `1` to explicitly opt into the real Docker Compute proof.                      |
-| `OCC_DOCKER_GATEWAY_IMAGE`     | Existing production-equivalent OpenClaw gateway image; defaults to the runtime image. |
-| `OCC_DOCKER_AGENT_IMAGE`       | Existing production-equivalent Codex Agent image; defaults to the runtime image.      |
-| `OCC_DOCKER_RUNTIME_IMAGE`     | Optional shared image fallback for both gateway and Agent.                            |
-| `OPENAI_API_KEY`               | Existing authorized provider credential for real embedded and dedicated model turns.  |
-| `OCC_TEST_OPENAI_MODEL`        | Authorized provider model; defaults to exact API model ID `gpt-5.6-sol`.              |
+| Variable                       | Requirement or default                                                                  |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
+| `OCC_TEST_DOCKER_COMPUTE_REAL` | Set to `1` to explicitly opt into the real Docker Compute proof.                        |
+| `OCC_DOCKER_GATEWAY_IMAGE`     | Existing production-equivalent OpenClaw gateway image; defaults to the runtime image.   |
+| `OCC_DOCKER_AGENT_IMAGE`       | Existing production-equivalent Codex Agent image; defaults to the runtime image.        |
+| `OCC_DOCKER_RUNTIME_IMAGE`     | Optional shared image fallback for both gateway and Agent.                              |
+| `OPENAI_API_KEY`               | Existing authorized provider credential for real embedded and dedicated model turns.    |
+| `OCC_TEST_OPENAI_MODEL`        | Authorized provider model; defaults to exact API model ID `gpt-5.6-sol`.                |
 | `PYTHON`                       | Optional host Python interpreter for `tests/helpers/tui-pty.py`; defaults to `python3`. |
 
 The selected model must support Codex custom tools as well as the embedded
