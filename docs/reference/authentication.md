@@ -50,14 +50,17 @@ Only the initialization Job mounts it; `bootstrap.password.fileName` and
 See [initial-key retrieval](../guides/deploy.md#retrieve-the-bootstrap-service-key)
 and [bootstrap recovery](../guides/deploy.md#recover-an-incomplete-bootstrap).
 
-Development Compose instead provisions the configured `OPENCLAW_DEV_EMAIL` and
+The shared `scripts/bootstrap-installation.mjs` initializer runs after migration
+and before either API or worker startup in Compose and Helm. Development
+provisions the configured `OPENCLAW_DEV_EMAIL` and
 `OPENCLAW_DEV_PASSWORD` on a fresh database, using the defaults in
 [settings](settings.md#required-development-controller-environment), and
 bootstraps the Installation before serving requests. It does not generate a
 password output file or rotate an existing account's password. Compose stores
-the service-key JSON on the controller-only `occ_bootstrap_data` volume;
-direct development startup requires an explicit private key-file path.
-The [quickstart](../guides/quickstart.md) uses the human development account.
+the service-key JSON on the bootstrap-only `occ_bootstrap_data` volume. The API
+and worker do not mount it. Direct development runs the same initializer with
+an explicit private key-file path before starting the API or worker.
+The [quickstart](../guides/quickstart.md) uses the service key for its API check.
 
 An already-bootstrapped Installation receives no new identity, grants, key, or
 output, including installations created before initial-key delivery existed.

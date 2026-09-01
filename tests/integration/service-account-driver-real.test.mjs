@@ -4,10 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import {
-  bootstrapControllerInstallation,
-  createAuthenticatedControllerRequest,
-} from "../helpers/auth-session.mjs";
+import { createAuthenticatedControllerRequest } from "../helpers/auth-session.mjs";
+import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import {
   assertGatewayModelTurn,
@@ -230,7 +228,6 @@ test(
       { default: pg },
       { PostgresPlatformState },
       { loadInstallationConfiguration },
-      { composePostgresDevelopment },
       { composeProduction },
       { createControllerWorker },
       { kubernetesNamespaceName },
@@ -240,7 +237,6 @@ test(
       import("pg"),
       import("../../packages/occ/src/state/postgres-state.ts"),
       import("../../apps/controller/src/composition/installation-config.ts"),
-      import("../../apps/controller/src/composition/development-postgres.ts"),
       import("../../apps/controller/src/composition/production.ts"),
       import("../../apps/controller/src/worker.ts"),
       import("../../apps/controller/src/drivers/compute/kubernetes/index.ts"),
@@ -280,24 +276,14 @@ test(
         "refusing to modify a database Installation not owned by this disposable proof",
       );
     } else {
-      const bootstrap = await composePostgresDevelopment(
-        {
-          mode: "development",
-          host: "127.0.0.1",
-          databaseUrl,
-          adminEmail: adminCredentials.email,
-          adminPassword: adminCredentials.password,
-          authSecret,
-          authBaseURL,
-        },
-        apiDrivers,
-        serviceAccountDriverFactory,
-      );
-      try {
-        await bootstrapControllerInstallation(bootstrap, adminCredentials, installationName);
-      } finally {
-        await bootstrap.close();
-      }
+      await ensureDevelopmentBootstrap(context, {
+        databaseUrl,
+        email: adminCredentials.email,
+        password: adminCredentials.password,
+        authSecret,
+        authBaseURL,
+        installationName,
+      });
     }
 
     productionApp = await composeProduction({

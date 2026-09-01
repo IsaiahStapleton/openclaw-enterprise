@@ -10,6 +10,8 @@ import { PostgresPlatformState } from "../../packages/occ/src/state/postgres-sta
 import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
+import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
+import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const adminEmail = "postgres-admin@openclaw.local";
@@ -103,14 +105,46 @@ test(
       mode: "development",
       host: "127.0.0.1",
       databaseUrl,
-      adminEmail,
-      adminPassword,
       authBaseURL: "http://127.0.0.1",
       authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
-      bootstrapInstallationName: "PostgreSQL development bootstrap service key",
-      bootstrapServiceKeyFile,
     };
+    await assert.rejects(
+      composePostgresDevelopment(config, {
+        computeDriver: createDevelopmentComputeDriver(),
+        configurationDriver: createTestConfigurationDriver(),
+      }),
+      /must be bootstrapped before development startup/,
+    );
+    assert.equal(
+      await state.loadInstallation(),
+      undefined,
+      "rejected development startup must not create an Installation",
+    );
+    const rejectedStartupAuthRows = await observerPool.query(`
+      SELECT
+        (SELECT count(*)::integer FROM occ."user") AS users,
+        (SELECT count(*)::integer FROM occ.account) AS accounts,
+        (SELECT count(*)::integer FROM occ.session) AS sessions,
+        (SELECT count(*)::integer FROM occ.apikey) AS api_keys
+    `);
+    assert.deepEqual(rejectedStartupAuthRows.rows[0], {
+      users: 0,
+      accounts: 0,
+      sessions: 0,
+      api_keys: 0,
+    });
+    await ensureDevelopmentBootstrap(context, {
+      databaseUrl,
+      directory: outputDirectory,
+      email: adminEmail,
+      password: adminPassword,
+      authSecret: config.authSecret,
+      authBaseURL: config.authBaseURL,
+      installationName: "PostgreSQL development bootstrap service key",
+      serviceKeyFile: "initial-admin-service-key.json",
+    });
     app = await composePostgresDevelopment(config, {
+      computeDriver: createDevelopmentComputeDriver(),
       configurationDriver: createTestConfigurationDriver(),
     });
 
@@ -171,8 +205,8 @@ test(
 
     const session = await signInWithEmailPassword({
       fetch: (request) => fetchFromInjectedApp(app, request),
-      email: config.adminEmail,
-      password: config.adminPassword,
+      email: adminEmail,
+      password: adminPassword,
     });
     const humanAuthorized = await app.inject({
       method: "GET",
@@ -200,12 +234,19 @@ test(
       mode: "development",
       host: "127.0.0.1",
       databaseUrl,
-      adminEmail,
-      adminPassword,
       authBaseURL: "http://127.0.0.1",
       authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
     };
+    await ensureDevelopmentBootstrap(context, {
+      databaseUrl,
+      email: adminEmail,
+      password: adminPassword,
+      authSecret: config.authSecret,
+      authBaseURL: config.authBaseURL,
+      installationName: "PostgreSQL account provisioning",
+    });
     appA = await composePostgresDevelopment(config, {
+      computeDriver: createDevelopmentComputeDriver(),
       configurationDriver: createTestConfigurationDriver(),
     });
 
@@ -215,21 +256,13 @@ test(
       password: adminPassword,
     });
     const state = new PostgresPlatformState(observerPool);
-    let installation = await state.loadInstallation();
-    if (installation === undefined) {
-      const bootstrap = await appA.inject({
-        method: "POST",
-        url: "/installation/bootstrap",
-        headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
-        payload: { name: "PostgreSQL account provisioning" },
-      });
-      assert.equal(bootstrap.statusCode, 201, bootstrap.body);
-      installation = bootstrap.json().data;
-    }
+    const installation = await state.loadInstallation();
+    assert.ok(installation, "development bootstrap subprocess must initialize the Installation");
 
     // Controller B starts before the account exists. Its selected IAM Driver must observe
     // the later rows through live policy reads, not through a replacement from controller A.
     appB = await composePostgresDevelopment(config, {
+      computeDriver: createDevelopmentComputeDriver(),
       configurationDriver: createTestConfigurationDriver(),
     });
 
@@ -336,21 +369,26 @@ test(
       await observerPool.end();
     });
 
-    app = await composePostgresDevelopment(
-      {
-        mode: "development",
-        host: "127.0.0.1",
-        databaseUrl,
-        adminEmail,
-        adminPassword,
-        authBaseURL: "http://127.0.0.1",
-        authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
-      },
-      {
-        auditEventFactory: new AuditEventFactory({ idGenerator: () => auditId }),
-        configurationDriver: createTestConfigurationDriver(),
-      },
-    );
+    const config = {
+      mode: "development",
+      host: "127.0.0.1",
+      databaseUrl,
+      authBaseURL: "http://127.0.0.1",
+      authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
+    };
+    await ensureDevelopmentBootstrap(context, {
+      databaseUrl,
+      email: adminEmail,
+      password: adminPassword,
+      authSecret: config.authSecret,
+      authBaseURL: config.authBaseURL,
+      installationName: "PostgreSQL account audit rollback",
+    });
+    app = await composePostgresDevelopment(config, {
+      auditEventFactory: new AuditEventFactory({ idGenerator: () => auditId }),
+      computeDriver: createDevelopmentComputeDriver(),
+      configurationDriver: createTestConfigurationDriver(),
+    });
 
     const session = await signInWithEmailPassword({
       fetch: (request) => fetchFromInjectedApp(app, request),
@@ -358,17 +396,8 @@ test(
       password: adminPassword,
     });
     const state = new PostgresPlatformState(observerPool);
-    let installation = await state.loadInstallation();
-    if (installation === undefined) {
-      const bootstrap = await app.inject({
-        method: "POST",
-        url: "/installation/bootstrap",
-        headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
-        payload: { name: "PostgreSQL account audit rollback" },
-      });
-      assert.equal(bootstrap.statusCode, 201, bootstrap.body);
-      installation = bootstrap.json().data;
-    }
+    const installation = await state.loadInstallation();
+    assert.ok(installation, "development bootstrap subprocess must initialize the Installation");
 
     const iamBefore = await state.loadNativeIAMState(installation.id);
     const role = iamBefore.roles.find((candidate) =>

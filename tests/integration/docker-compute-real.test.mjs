@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
@@ -32,7 +32,9 @@ const DEFAULT_RUNTIME_IMAGE = "oce-harness-real:pr26-compatible-runtime";
 const COMPOSE_FILE = "compose.yaml";
 const INTERNAL_API_PORT = "3000";
 const BOOTSTRAP_SERVICE_KEY_PATH = "/var/lib/openclaw/bootstrap/initial-admin-service-key.json";
+const OCC_API_SCRIPT = "scripts/occ-api";
 const LABEL_COMPOSE_PROJECT = "com.docker.compose.project";
+const LABEL_COMPOSE_SERVICE = "com.docker.compose.service";
 const LABEL_MANAGED = "org.openclaw.enterprise.managed";
 const LABEL_DRIVER = "org.openclaw.enterprise.compute-driver";
 const LABEL_NAMESPACE = "org.openclaw.enterprise.namespace-id";
@@ -233,6 +235,24 @@ async function idsByNamespace(namespaceIds, baseArgs) {
   ).flat();
 }
 
+async function composeServiceContainer(project, service) {
+  const ids = await dockerLines([
+    "ps",
+    "-aq",
+    ...labelFilters([
+      [LABEL_COMPOSE_PROJECT, project],
+      [LABEL_COMPOSE_SERVICE, service],
+    ]),
+  ]);
+  assert.equal(ids.length, 1, `Compose service ${service} must have exactly one container`);
+  const [container] = await dockerJson(["inspect", ids[0]]);
+  return container;
+}
+
+function hasMountDestination(container, destination) {
+  return (container.Mounts ?? []).some((mount) => mount.Destination === destination);
+}
+
 function serviceKeyHeaders(serviceKey) {
   assert.equal(typeof serviceKey, "string", "an OCC service key is required");
   assert.ok(serviceKey.length > 0, "an OCC service key is required");
@@ -265,10 +285,25 @@ function apiClient(baseUrl, serviceKey) {
 
 async function copyBootstrapServiceKey({ project, env, outputDirectory, secrets }) {
   const localFile = join(outputDirectory, "initial-admin-service-key.json");
-  await docker(
-    composeArguments(project, "cp", [`controller:${BOOTSTRAP_SERVICE_KEY_PATH}`, localFile]),
-    { env, timeoutMs: 60_000, secrets },
+  const bootstrap = await composeServiceContainer(project, "bootstrap");
+  assert.equal(
+    hasMountDestination(bootstrap, "/var/lib/openclaw/bootstrap"),
+    true,
+    "bootstrap service must mount the private bootstrap output volume",
   );
+  assert.equal(
+    hasMountDestination(
+      await composeServiceContainer(project, "controller"),
+      "/var/lib/openclaw/bootstrap",
+    ),
+    false,
+    "controller service must not mount the private bootstrap output volume",
+  );
+  await docker(["cp", `${bootstrap.Id}:${BOOTSTRAP_SERVICE_KEY_PATH}`, localFile], {
+    env,
+    timeoutMs: 60_000,
+    secrets,
+  });
   await chmod(localFile, 0o600);
   const outputStatus = await stat(localFile);
   assert.equal(outputStatus.mode & 0o777, 0o600);
@@ -280,6 +315,28 @@ async function copyBootstrapServiceKey({ project, env, outputDirectory, secrets 
   assert.equal(typeof output.data?.servicePrincipalId, "string");
   assert.equal(output.data?.name, "bootstrap-admin");
   return { localFile, output };
+}
+
+async function occApi({ baseUrl, serviceKeyFile, method, path, body, outputDirectory, secrets }) {
+  let bodyFile;
+  if (body !== undefined) {
+    bodyFile = join(outputDirectory, `${method.toLowerCase()}-${randomUUID()}.json`);
+    await writeFile(bodyFile, `${JSON.stringify(body)}\n`, { mode: 0o600 });
+  }
+  const { stdout } = await command(
+    OCC_API_SCRIPT,
+    [method, path, ...(bodyFile === undefined ? [] : [bodyFile])],
+    {
+      env: {
+        ...process.env,
+        OCC_URL: baseUrl,
+        OCC_SERVICE_KEY_FILE: serviceKeyFile,
+      },
+      timeoutMs: 60_000,
+      secrets,
+    },
+  );
+  return JSON.parse(stdout.trim());
 }
 
 function sqlLiteral(value) {
@@ -383,13 +440,13 @@ async function assertRuntimeDatabaseEvidence({
 
 async function assertComposeLogsDoNotLeakBootstrapServiceKey({ project, env, serviceKey }) {
   const { stdout, stderr } = await docker(
-    composeArguments(project, "logs", ["--no-color", "controller", "worker"]),
+    composeArguments(project, "logs", ["--no-color", "bootstrap", "controller", "worker"]),
     { env, timeoutMs: 60_000, secrets: [serviceKey] },
   );
   assertNoSecretMaterial(
     `${stdout}${stderr}`,
     [serviceKey],
-    "controller and worker logs must not leak the bootstrap service key",
+    "bootstrap, controller, and worker logs must not leak the bootstrap service key",
   );
 }
 
@@ -801,6 +858,26 @@ test(
     });
     const serviceKey = serviceKeyOutput.data.key;
     assert.equal(serviceKeyOutput.meta.installationId.startsWith("ins_"), true);
+    const helperInstallation = await occApi({
+      baseUrl,
+      serviceKeyFile,
+      method: "GET",
+      path: "/installation",
+      outputDirectory: bootstrapDirectory,
+      secrets: [...composeSecrets, serviceKey],
+    });
+    assert.equal(helperInstallation.data.id, serviceKeyOutput.meta.installationId);
+    const helperNamespace = await occApi({
+      baseUrl,
+      serviceKeyFile,
+      method: "POST",
+      path: "/namespaces",
+      body: { name: `cleanup-${project}` },
+      outputDirectory: bootstrapDirectory,
+      secrets: [...composeSecrets, serviceKey],
+    });
+    assert.equal(helperNamespace.data.status, "provisioning");
+    namespaceIds.push(helperNamespace.data.id);
     await rm(serviceKeyFile);
     await assert.rejects(
       stat(serviceKeyFile),
@@ -841,7 +918,7 @@ test(
     assert.equal(forwarded.status, 403, JSON.stringify(forwarded));
 
     const namespaces = [];
-    for (const label of ["embedded", "dedicated", "cleanup"]) {
+    for (const label of ["embedded", "dedicated"]) {
       const created = await request("POST", "/namespaces", {
         name: `${label}-${project}`,
       });
@@ -853,6 +930,7 @@ test(
       namespaceIds.push(created.data.id);
       namespaces.push(created.data);
     }
+    namespaces.push(helperNamespace.data);
     await Promise.all(
       namespaces.map((namespace) =>
         waitFor(`Namespace ${namespace.id} to become ready`, async () => {

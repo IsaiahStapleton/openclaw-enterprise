@@ -57,10 +57,11 @@ docker compose ps -a
 ```
 
 Wait for PostgreSQL and the controller to be healthy and the worker to remain
-running. The `migrate` service should exit with code `0`. On a new database,
-OCC automatically creates the singleton Installation, human administrator, and
-service administrator. Its initial service API key stays in a private JSON file
-on a controller-only volume. Do not call the bootstrap endpoint again. After
+running. The `migrate` and `bootstrap` services should both exit with code `0`.
+On a new database, the initializer creates the singleton Installation and both
+administrators before the API starts. Its initial service API key stays in a
+private JSON file on a bootstrap-only volume. Do not call the bootstrap endpoint
+again. After
 startup succeeds, retrieve that key for the API check below.
 
 ## Read the Installation with the bootstrap service key
@@ -72,8 +73,9 @@ export OCC_URL="http://$(docker compose port controller 3000)"
 ```
 
 Follow [Retrieve the bootstrap service key](deploy.md#retrieve-the-bootstrap-service-key)
-to copy the JSON from the controller-only volume into a private local directory,
-define `occ_api`, and run `occ_api GET /installation`. The helper reads
+to copy the JSON from the bootstrap-only volume into a private local directory,
+then run `scripts/occ-api GET /installation` from the repository root. The helper
+reads
 `data.key` and sends it as `x-api-key` without exposing the key in process
 arguments or terminal output.
 
@@ -111,10 +113,10 @@ operations, see the [feature reference](../reference/README.md).
 
 Use this optional human sign-in for key recovery, key issuance with human
 authority, or account-only APIs. The deployment and TUI path above uses the
-bootstrap service key. After the controller is healthy, this command uses the
-running controller's configured development credentials, JSON-encodes them,
-and sends them through standard input. The session cookie stays in a unique,
-private temporary directory.
+bootstrap service key. After the controller is healthy, enter the original
+configured development credentials at the prompts below. Python JSON-encodes
+them and pipes them directly to curl; the password is hidden during entry.
+The session cookie stays in a unique, private temporary directory.
 
 ```bash
 set -o pipefail
@@ -123,11 +125,15 @@ export OCC_URL="http://$(docker compose port controller 3000)"
 OCC_SESSION_DIRECTORY="$(mktemp -d)"
 export OCC_SESSION_COOKIE_JAR="$OCC_SESSION_DIRECTORY/cookies"
 
-docker compose exec -T controller node --input-type=module -e '
-  process.stdout.write(JSON.stringify({
-    email: process.env.OPENCLAW_DEV_EMAIL,
-    password: process.env.OPENCLAW_DEV_PASSWORD,
-  }));
+python3 -c '
+import getpass
+import json
+import sys
+
+print("Administrator email: ", end="", file=sys.stderr, flush=True)
+email = sys.stdin.readline().strip()
+password = getpass.getpass("Administrator password: ")
+print(json.dumps({"email": email, "password": password}))
 ' | curl --fail-with-body --silent --show-error \
   --cookie-jar "$OCC_SESSION_COOKIE_JAR" \
   "$OCC_URL/api/auth/sign-in/email" \

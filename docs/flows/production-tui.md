@@ -57,8 +57,8 @@ graph TD
 
 After the initialization Job completes successfully, the operator retrieves
 `initial-admin-service-key.json` from its protected output PVC. Neither the API
-nor worker mounts that PVC. The deployment guide
-[`occ_api` helper](../guides/deploy.md#retrieve-the-bootstrap-service-key) reads
+nor worker mounts that PVC. The checked-in
+[`scripts/occ-api` helper](../../scripts/occ-api) reads
 `data.key` into a private temporary header file, sends `x-api-key`, and first
 verifies `GET /installation`. The API validates the key, resolves the
 Installation-scoped service principal, and applies its current IAM grants; an
@@ -212,11 +212,11 @@ script, keeping client authentication and environment handling consistent.
 - Confirm OCC activation before selecting a Pod:
 
   ```bash
-  occ_api GET "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID"
+  scripts/occ-api GET "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID"
   ```
 
-  Use the operator shell with the guide's `occ_api` helper and protected key
-  file. Expect `data.activeRevisionId` to equal the intended revision ID.
+  Run from the repository root with `OCC_URL` and `OCC_SERVICE_KEY_FILE` set in
+  the operator shell. Expect `data.activeRevisionId` to equal the intended revision ID.
 
 - Confirm the selected gateway mounts the active immutable ConfigMap:
 
@@ -265,6 +265,8 @@ script, keeping client authentication and environment handling consistent.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 20:34: Use the checked-in operator API helper for service-key requests. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
 
 - 2026-08-31 19:14: Document bootstrap service-key API access and operator credential cleanup for the TUI path. (codex/01a05a3d-526f-7553-8cd8-070bd1847acb - 06c4bccb95543d3d545d011e72074f805f339aa8)
 

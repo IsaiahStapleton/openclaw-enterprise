@@ -17,6 +17,23 @@ const requireControllerDependency = createRequire(
 );
 const pg = requireControllerDependency("pg");
 
+const DEFAULT_BETTER_AUTH_BASE_URL = "http://127.0.0.1:3000";
+const DEFAULT_DEV_ADMIN_EMAIL = "admin@openclaw.local";
+const DEFAULT_DEV_ADMIN_PASSWORD = "openclaw-development-password";
+const DEFAULT_DEV_INSTALLATION_NAME = "OpenClaw Local Development";
+
+function parseMode(mode, args) {
+  if (args.length !== 0) {
+    throw new Error(
+      "Usage: NODE_ENV=development|production node scripts/bootstrap-installation.mjs",
+    );
+  }
+  if (mode !== "development" && mode !== "production") {
+    throw new Error("NODE_ENV must explicitly select development or production mode.");
+  }
+  return mode;
+}
+
 function required(name) {
   const value = process.env[name];
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -25,15 +42,23 @@ function required(name) {
   return value;
 }
 
-function normalizeEmail(raw) {
+function optional(name, fallback) {
+  const value = process.env[name] ?? fallback;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${name} must be explicitly configured.`);
+  }
+  return value;
+}
+
+function normalizeEmail(raw, name) {
   const email = raw.trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    throw new Error("OCC_BOOTSTRAP_ADMIN_EMAIL must contain a valid administrator email.");
+    throw new Error(`${name} must contain a valid administrator email.`);
   }
   return email;
 }
 
-function authBaseURL(raw) {
+function authBaseURL(raw, mode) {
   let parsed;
   try {
     parsed = new URL(raw);
@@ -41,11 +66,19 @@ function authBaseURL(raw) {
     throw new Error("OCC_AUTH_BASE_URL must contain an absolute URL.");
   }
   if (
+    mode === "production" &&
     parsed.protocol !== "https:" &&
     parsed.hostname !== "127.0.0.1" &&
     parsed.hostname !== "localhost"
   ) {
     throw new Error("OCC_AUTH_BASE_URL must be HTTPS except for loopback development tests.");
+  }
+  if (
+    mode === "development" &&
+    ((parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      !["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname))
+  ) {
+    throw new Error("Development OCC_AUTH_BASE_URL must identify a loopback HTTP(S) URL.");
   }
   return parsed.toString().replace(/\/$/, "");
 }
@@ -56,7 +89,10 @@ function passwordOutputPath(raw) {
 
 function serviceKeyOutputPath(raw, passwordPath) {
   const path = bootstrapOutputPath(raw, "OCC_BOOTSTRAP_SERVICE_KEY_FILE");
-  if (path === passwordPath || dirname(path) !== dirname(passwordPath)) {
+  if (
+    passwordPath !== undefined &&
+    (path === passwordPath || dirname(path) !== dirname(passwordPath))
+  ) {
     throw new Error(
       "OCC_BOOTSTRAP_SERVICE_KEY_FILE must be a distinct sibling of OCC_BOOTSTRAP_PASSWORD_FILE.",
     );
@@ -68,14 +104,75 @@ function randomPassword() {
   return randomBytes(32).toString("base64url");
 }
 
+function modeConfig(mode) {
+  const authConfig = {
+    secret: optional(
+      "OCC_AUTH_SECRET",
+      mode === "development" ? "openclaw-development-auth-secret-minimum-32-bytes" : undefined,
+    ),
+    baseURL: authBaseURL(
+      optional(
+        "OCC_AUTH_BASE_URL",
+        mode === "development" ? DEFAULT_BETTER_AUTH_BASE_URL : undefined,
+      ),
+      mode,
+    ),
+  };
+  if (authConfig.secret.length < 32) {
+    throw new Error("OCC_AUTH_SECRET must be at least 32 characters.");
+  }
+
+  if (mode === "production") {
+    return {
+      mode,
+      databaseUrl: required("OCC_DATABASE_URL"),
+      auth: authConfig,
+      adminEmail: normalizeEmail(
+        required("OCC_BOOTSTRAP_ADMIN_EMAIL"),
+        "OCC_BOOTSTRAP_ADMIN_EMAIL",
+      ),
+    };
+  }
+
+  return {
+    mode,
+    databaseUrl: required("OCC_DATABASE_URL"),
+    auth: authConfig,
+    adminEmail: normalizeEmail(
+      optional("OPENCLAW_DEV_EMAIL", DEFAULT_DEV_ADMIN_EMAIL),
+      "OPENCLAW_DEV_EMAIL",
+    ),
+  };
+}
+
+function freshBootstrapConfig(config) {
+  if (config.mode === "production") {
+    const passwordPath = passwordOutputPath(required("OCC_BOOTSTRAP_PASSWORD_FILE"));
+    return {
+      password: randomPassword(),
+      installationName: required("OCC_BOOTSTRAP_INSTALLATION_NAME"),
+      passwordPath,
+      serviceKeyPath: serviceKeyOutputPath(
+        required("OCC_BOOTSTRAP_SERVICE_KEY_FILE"),
+        passwordPath,
+      ),
+    };
+  }
+  return {
+    password: optional("OPENCLAW_DEV_PASSWORD", DEFAULT_DEV_ADMIN_PASSWORD),
+    installationName: optional("OPENCLAW_DEV_INSTALLATION_NAME", DEFAULT_DEV_INSTALLATION_NAME),
+    serviceKeyPath: serviceKeyOutputPath(required("OCC_BOOTSTRAP_SERVICE_KEY_FILE")),
+  };
+}
+
 async function createAuth(pool, config, installationId) {
   return createPostgresControllerAuth({
-    mode: "production",
+    mode: config.mode,
     installationId,
-    baseURL: config.baseURL,
-    secret: config.secret,
+    baseURL: config.auth.baseURL,
+    secret: config.auth.secret,
     pool,
-    secureCookies: !config.baseURL.startsWith("http://"),
+    secureCookies: config.mode === "production" && !config.auth.baseURL.startsWith("http://"),
   });
 }
 
@@ -122,17 +219,6 @@ function cleanupFailure(kind, id, error) {
     error,
   };
 }
-
-const authConfig = {
-  secret: required("OCC_AUTH_SECRET"),
-  baseURL: authBaseURL(required("OCC_AUTH_BASE_URL")),
-};
-if (authConfig.secret.length < 32) {
-  throw new Error("OCC_AUTH_SECRET must be at least 32 characters.");
-}
-const adminEmail = normalizeEmail(required("OCC_BOOTSTRAP_ADMIN_EMAIL"));
-const passwordPath = passwordOutputPath(required("OCC_BOOTSTRAP_PASSWORD_FILE"));
-let bootstrapFailureDetails;
 
 function authorizationFor(controllerAuth, installationId, userId) {
   const seed = createBootstrapAdministratorSeed(installationId, controllerAuth.issuer, {
@@ -183,13 +269,17 @@ function administratorPrincipal(state, issuer, userId) {
     : undefined;
 }
 
-const pool = new pg.Pool({ connectionString: required("OCC_DATABASE_URL") });
+let bootstrapFailureDetails;
+let pool;
+
 try {
+  const config = modeConfig(parseMode(process.env.NODE_ENV, process.argv.slice(2)));
+  pool = new pg.Pool({ connectionString: config.databaseUrl });
   const state = new PostgresPlatformState(pool);
   const existing = await state.loadInstallation();
   if (existing !== undefined) {
-    const auth = await createAuth(pool, authConfig, existing.id);
-    const user = await findCredentialUser(auth, adminEmail);
+    const auth = await createAuth(pool, config, existing.id);
+    const user = await findCredentialUser(auth, config.adminEmail);
     if (user === null) {
       throw new Error(
         "The existing Installation does not contain the configured administrator account.",
@@ -204,10 +294,7 @@ try {
     }
     process.stdout.write(`${JSON.stringify({ event: "installation.already-bootstrapped" })}\n`);
   } else {
-    const serviceKeyPath = serviceKeyOutputPath(
-      required("OCC_BOOTSTRAP_SERVICE_KEY_FILE"),
-      passwordPath,
-    );
+    const freshConfig = freshBootstrapConfig(config);
     let auth;
     let user;
     let serviceKey;
@@ -215,15 +302,14 @@ try {
     let serviceKeyOutput;
     let attempt;
     const cleanupFailures = [];
-    const password = randomPassword();
     try {
       const installation = {
         id: `ins_${randomUUID()}`,
-        name: required("OCC_BOOTSTRAP_INSTALLATION_NAME"),
+        name: freshConfig.installationName,
         createdAt: new Date().toISOString(),
       };
-      auth = await createAuth(pool, authConfig, installation.id);
-      user = await createCredentialUser(auth, adminEmail, password);
+      auth = await createAuth(pool, config, installation.id);
+      user = await createCredentialUser(auth, config.adminEmail, freshConfig.password);
       const authorization = authorizationFor(auth, installation.id, user.id);
       serviceKey = await auth.createServiceKey({
         principal: authorization.servicePrincipal,
@@ -235,11 +321,18 @@ try {
         servicePrincipalId: authorization.servicePrincipal.id,
         serviceKeyId: serviceKey.id,
         serviceKeyExpiresAt: serviceKey.expiresAt,
-        passwordFile: passwordPath,
-        serviceKeyFile: serviceKeyPath,
+        ...(freshConfig.passwordPath === undefined
+          ? {}
+          : { passwordFile: freshConfig.passwordPath }),
+        serviceKeyFile: freshConfig.serviceKeyPath,
       };
-      passwordOutput = await writeProtectedBootstrapFile(passwordPath, `${password}\n`);
-      serviceKeyOutput = await writeProtectedBootstrapJson(serviceKeyPath, {
+      if (freshConfig.passwordPath !== undefined) {
+        passwordOutput = await writeProtectedBootstrapFile(
+          freshConfig.passwordPath,
+          `${freshConfig.password}\n`,
+        );
+      }
+      serviceKeyOutput = await writeProtectedBootstrapJson(freshConfig.serviceKeyPath, {
         data: serviceKey,
         meta: { installationId: installation.id },
       });
@@ -258,7 +351,10 @@ try {
           outcome: "success",
           details: {
             kind: "bootstrap",
-            source: "production-installation-job",
+            source:
+              config.mode === "production"
+                ? "production-installation-job"
+                : "development-installation-job",
             servicePrincipalId: authorization.servicePrincipal.id,
             serviceKeyId: serviceKey.id,
           },
@@ -306,5 +402,5 @@ try {
   );
   process.exitCode = 1;
 } finally {
-  await pool.end();
+  await pool?.end();
 }

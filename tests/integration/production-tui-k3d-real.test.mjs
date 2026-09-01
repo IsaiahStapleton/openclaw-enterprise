@@ -557,35 +557,22 @@ test(
       assert.deepEqual(afterRetrievalStats, beforeRetrievalStats);
       assertProtectedBootstrapFileModes(afterRetrievalStats, "after retrieval");
 
-      const guideOccApiFunction = async () => {
-        const guide = await readFile("docs/guides/deploy.md", "utf8");
-        const blockStart = guide.indexOf("```bash\nset -euo pipefail\numask 077\n\nocc_api() (");
-        assert.notEqual(blockStart, -1, "Deploy guide occ_api block not found");
-        const scriptStart = blockStart + "```bash\n".length;
-        const scriptEnd = guide.indexOf("\nocc_api GET /installation\n```", scriptStart);
-        assert.notEqual(scriptEnd, -1, "Deploy guide occ_api invocation not found");
-        return guide.slice(scriptStart, scriptEnd);
-      };
       const runGuideOccApi = async (method, path, body) => {
         const bodyFile =
           body === undefined ? undefined : join(directory, `guide-body-${method}.json`);
         if (bodyFile) await writeFile(bodyFile, JSON.stringify(body), { mode: 0o600 });
-        const script = join(directory, `guide-occ-api-${method}.sh`);
-        await writeFile(
-          script,
-          `${await guideOccApiFunction()}\nocc_api ${shellQuote(method)} ${shellQuote(path)}${
-            bodyFile ? ` ${shellQuote(bodyFile)}` : ""
-          }\n`,
-          { mode: 0o700 },
-        );
-        const output = await run("bash", [script], {
-          env: {
-            OCC_URL: baseURL,
-            OCC_SERVICE_KEY_FILE: localServiceKeyFile,
-            CURL_CA_BUNDLE: join(directory, "tls.crt"),
-            OPENAI_API_KEY: undefined,
+        const output = await run(
+          "scripts/occ-api",
+          [method, path, ...(bodyFile ? [bodyFile] : [])],
+          {
+            env: {
+              OCC_URL: baseURL,
+              OCC_SERVICE_KEY_FILE: localServiceKeyFile,
+              CURL_CA_BUNDLE: join(directory, "tls.crt"),
+              OPENAI_API_KEY: undefined,
+            },
           },
-        });
+        );
         for (const value of secrets)
           assert.ok(!output.includes(value), "Guide output leaked a credential");
         return JSON.parse(output);

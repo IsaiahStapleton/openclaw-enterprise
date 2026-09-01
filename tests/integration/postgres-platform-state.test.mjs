@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { verifyPlatformStateStoreContract } from "../conformance/platform-state-store.contract.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
+import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const entrypoint = fileURLToPath(new URL("../../apps/controller/src/server.mjs", import.meta.url));
@@ -55,6 +59,18 @@ async function stopController(child) {
 
 async function startController(context) {
   const port = await availablePort();
+  const configurationRoot = await mkdtemp(join(tmpdir(), "openclaw-postgres-configurations-"));
+  context.after(async () => {
+    await rm(configurationRoot, { recursive: true, force: true });
+  });
+  await ensureDevelopmentBootstrap(context, {
+    databaseUrl,
+    email: adminEmail,
+    password: adminPassword,
+    authSecret,
+    authBaseURL: `http://127.0.0.1:${port}`,
+    installationName: "PostgreSQL platform state integration",
+  });
   const child = spawn(process.execPath, [entrypoint], {
     cwd: repository,
     env: {
@@ -65,8 +81,8 @@ async function startController(context) {
       OCC_DATABASE_URL: databaseUrl,
       OCC_AUTH_BASE_URL: `http://127.0.0.1:${port}`,
       OCC_AUTH_SECRET: authSecret,
-      OPENCLAW_DEV_EMAIL: adminEmail,
-      OPENCLAW_DEV_PASSWORD: adminPassword,
+      OCC_DEVELOPMENT_CONFIGURATION_ROOT: configurationRoot,
+      OCC_DOCKER_RUNTIME_IMAGE: "openclaw-enterprise-runtime:not-used-by-postgres-platform-state",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -110,8 +126,6 @@ function spawnWorker(context) {
       OCC_WORKER_LEASE_DURATION_MS: "5000",
       OCC_AUTH_BASE_URL: "http://127.0.0.1",
       OCC_AUTH_SECRET: authSecret,
-      OPENCLAW_DEV_EMAIL: adminEmail,
-      OPENCLAW_DEV_PASSWORD: adminPassword,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

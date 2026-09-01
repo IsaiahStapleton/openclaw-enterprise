@@ -71,7 +71,9 @@ The API authenticates requests, resolves caller identity, authorizes access to
 exact resources, and records resource changes. PostgreSQL stores platform
 state, IAM policy, controller work, and attributable audit evidence.
 
-Fresh native-IAM bootstrap creates human and non-Agent service administrators
+Compose and Helm run one shared initializer after database migration and before
+API/worker startup. Both processes load initialized state; only the initializer
+mounts credential output. Fresh native-IAM bootstrap creates human and non-Agent service administrators
 with separate bindings to the same Role. Better Auth owns their credentials;
 bootstrap delivers the initial service key through protected storage. Auth
 persistence and the Installation/IAM commit are separate, so uncertain outcomes

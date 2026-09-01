@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-08-31
-last_updated_session: codex/01a05a69-3fbe-7441-9e6d-20394758cf94
+last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
 ---
 
 # Bootstrap and Local Password Authentication Flow
@@ -12,16 +12,17 @@ Fresh native-IAM bootstrap creates human and service administrators, delivers
 the initial service key through protected storage, and commits their shared Role
 and separate bindings with the Installation. Production also delivers a generated
 human password; development uses its configured password. This flow follows both
-bootstrap entry points into human sign-in and exact IAM authorization. Ongoing
+environment modes of the shared initializer into human sign-in and exact IAM
+authorization. Ongoing
 service-key verification, rotation, and revocation continue in the
 [service API key flow](service-api-keys.md).
 
 ## Entry Points
 
-- Trigger: `node scripts/bootstrap-production.mjs`, fresh development startup,
-  `POST /api/auth/sign-in/email`, or a protected controller request.
-- Source: [`scripts/bootstrap-production.mjs:randomPassword`](../../scripts/bootstrap-production.mjs),
-  [`apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`](../../apps/controller/src/composition/development-postgres.ts),
+- Trigger: `node scripts/bootstrap-installation.mjs` with `NODE_ENV=development`
+  or `production`, `POST /api/auth/sign-in/email`, or a protected controller request.
+- Source: [`scripts/bootstrap-installation.mjs`](../../scripts/bootstrap-installation.mjs),
+  [`apps/controller/src/auth/index.ts:createControllerAuth`](../../apps/controller/src/auth/index.ts),
   and [`apps/controller/src/index.ts:createFastifyApp`](../../apps/controller/src/index.ts).
 - Assumptions: Migrated PostgreSQL, configured Better Auth, native IAM bootstrap,
   protected output storage, disabled public signup, and exact IAM authorization.
@@ -32,7 +33,7 @@ service-key verification, rotation, and revocation continue in the
 
 ```mermaid
 graph TD
-  subgraph Bootstrap["Production script or development composition"]
+  subgraph Bootstrap["Shared installation initializer"]
     A["Load Installation"] -->|Existing| B["Verify persisted identity; retain credentials"]
     A -->|Fresh| C["Create human and native IAM seed with service administrator"]
     C --> D["Better Auth persists service-key hash"]
@@ -57,12 +58,11 @@ graph TD
 
 ### 1. Load state and create the fresh administrator identities
 
-[`scripts/bootstrap-production.mjs:randomPassword`](../../scripts/bootstrap-production.mjs)
-and [`apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`](../../apps/controller/src/composition/development-postgres.ts)
-first load the singleton Installation. Existing Installations retain the current
-administrator verification path and return without issuing keys, touching output,
-or repairing identity/grant changes. This includes Installations created before
-service-administrator bootstrap existed.
+[`scripts/bootstrap-installation.mjs`](../../scripts/bootstrap-installation.mjs)
+first loads the singleton Installation. Existing Installations verify the
+configured administrator's immutable account/IAM identity and return without
+issuing keys, touching output, or repairing identity/grant changes. This includes
+Installations created before service-administrator bootstrap existed.
 
 For fresh setup, production creates a Better Auth account with a random password;
 development creates the configured `OPENCLAW_DEV_EMAIL`/`OPENCLAW_DEV_PASSWORD`
@@ -73,7 +73,7 @@ the human, using a separate unrestricted binding. The
 owns the exact action matrix. Additional-account provisioning does not create
 another service administrator.
 
-### 2. Issue private output, then commit through the existing entry point
+### 2. Issue private output, then commit the Installation
 
 [`apps/controller/src/auth/index.ts:createServiceKey`](../../apps/controller/src/auth/index.ts) persists a Better
 Auth key named `bootstrap-admin` with the default 30-day expiry, scoped to this
@@ -84,21 +84,24 @@ startup does not expose the application until bootstrap succeeds.
 [`bootstrap-output.ts:writeProtectedBootstrapFile`](../../apps/controller/src/composition/bootstrap-output.ts)
 creates owner-only output exclusively and syncs it before OCC commit. The JSON
 contains the key response and attempt Installation ID; production also writes its
-password file on the same protected PVC. Development writes to its controller-only
-volume or explicit direct-startup path. No plaintext reaches logs, audit, HTTP
+password file on the same protected PVC. Development writes to its bootstrap-only
+volume or explicit direct-initialization path. No plaintext reaches logs, audit, HTTP
 bootstrap responses, or the worker.
 
-Production commits the Installation/IAM/audit through its controller transaction.
-Development retains internal sign-in and `POST /installation/bootstrap`; only
-`201` completes a fresh startup. A `409` closes the losing application and pool.
-A later whole-startup retry reloads the winner rather than serving generated
-loser IDs. Singleton database constraints select at most one committed seed.
+Both modes commit Installation/IAM/audit through the same controller
+transaction. The initializer owns one attempt scope for account creation, key
+issuance, output, and commit. The API subsequently loads committed state without
+signing into itself or calling `POST /installation/bootstrap`; that public
+endpoint remains human-session-only and does not issue bootstrap credentials.
+Singleton database constraints select at most one committed seed. A losing
+initializer fails; a later complete retry reloads the winner's state.
 
-Known failures attempt cleanup only of this attempt's recorded auth IDs and
-exclusively created files; replaced or preexisting output is preserved. Unknown
-production COMMIT outcomes, and development `5xx`/missing bootstrap responses,
-preserve accounts, keys, and output and fail startup. Abrupt termination can
-also leave orphan auth state or partial files. The operator confirms the original
+Known failures attempt each cleanup independently for this attempt's recorded
+auth IDs and exclusively created files; replaced or preexisting output is
+preserved. Cleanup failures report safe IDs and paths without skipping the
+remaining cleanup actions. `PostgresCommitOutcomeUnknownError` preserves all
+accounts, keys, and output and fails initialization. Abrupt termination can also
+leave orphan auth state or partial files. The operator confirms the original
 transaction has finished and compares exact attempt IDs before repair; file
 existence or another Installation is insufficient. Recovery is
 [manual](../guides/deploy.md#recover-an-incomplete-bootstrap), with no coordinator,
@@ -150,7 +153,7 @@ implicit permissions.
   an unconfigured/skipped suite is not runtime proof.
 - `node --test tests/integration/postgres-bootstrap-failures.test.mjs` with
   `OCC_BOOTSTRAP_FAILURE_DATABASE_URL` exercises concurrent production attempts
-  and preserves both entry points' credentials when a test fault discards the
+  and preserves both environment modes' credentials when a test fault discards the
   acknowledgement after a real COMMIT. The suite resets a dedicated loopback
   database; see [its settings](../reference/settings.md#postgresql-test-environment).
 - Verify copied output is `0600` without printing it; use a key-authenticated
@@ -178,6 +181,8 @@ implicit permissions.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
 
 - 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 

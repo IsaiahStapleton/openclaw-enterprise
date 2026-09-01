@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
 updated: 2026-08-31
-last_updated_session: codex/01a05a69-3fbe-7441-9e6d-20394758cf94
+last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
 ---
 
 # Production Startup Flow
@@ -107,7 +107,8 @@ following bootstrap container receives the lower-privilege application
 credential, Better Auth configuration, first administrator email, singleton
 Installation name, and protected password/service-key output paths.
 
-[`scripts/bootstrap-production.mjs`](../../scripts/bootstrap-production.mjs)
+[`scripts/bootstrap-installation.mjs`](../../scripts/bootstrap-installation.mjs)
+runs with `NODE_ENV=production`, using the same initializer as development. It
 creates the human Better Auth account and native IAM seed with a non-Agent
 service administrator bound to the same Role. It issues the initial service key
 through Better Auth, writes and syncs both private files on the existing PVC,
@@ -267,6 +268,8 @@ through reauthorization, infrastructure effects, and result persistence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
 
 - 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 

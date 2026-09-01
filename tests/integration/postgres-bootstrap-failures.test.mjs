@@ -1,23 +1,23 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import pg from "pg";
 import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
-import { installPostgresCommitAcknowledgementFault } from "../fixtures/postgres-commit-ack-fault.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+import {
+  developmentBootstrapEnvironment,
+  productionBootstrapEnvironment,
+  runBootstrapInstallation,
+} from "../helpers/bootstrap-installation.mjs";
 
 const failureDatabaseUrl = process.env.OCC_BOOTSTRAP_FAILURE_DATABASE_URL;
-const repository = fileURLToPath(new URL("../../", import.meta.url));
 const commitAcknowledgementFaultFixture = fileURLToPath(
   new URL("../fixtures/postgres-commit-ack-fault.mjs", import.meta.url),
 );
-const run = promisify(execFile);
 const requiresFailurePostgres = {
   skip: failureDatabaseUrl
     ? false
@@ -105,9 +105,45 @@ async function withPool(databaseUrl, operation) {
 async function resetFailureDatabase() {
   validatedFailureDatabaseUrl();
   await withPool(migratorDatabaseUrl(), async (pool) => {
+    await pool.query("DROP TRIGGER IF EXISTS bootstrap_apikey_delete_failure ON occ.apikey");
+    await pool.query("DROP FUNCTION IF EXISTS occ.bootstrap_apikey_delete_failure()");
+    await pool.query("DROP TRIGGER IF EXISTS bootstrap_known_failure ON occ.installation");
+    await pool.query("DROP FUNCTION IF EXISTS occ.bootstrap_known_failure()");
     await pool.query("DROP TRIGGER IF EXISTS bootstrap_failure_delay ON occ.installation");
     await pool.query("DROP FUNCTION IF EXISTS occ.bootstrap_failure_delay()");
     await pool.query(`TRUNCATE ${RESET_TABLES} RESTART IDENTITY CASCADE`);
+  });
+}
+
+async function installKnownFailureCleanupFault() {
+  validatedFailureDatabaseUrl();
+  await withPool(migratorDatabaseUrl(), async (pool) => {
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION occ.bootstrap_known_failure() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'forced bootstrap insert failure';
+      END;
+      $$
+    `);
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION occ.bootstrap_apikey_delete_failure() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'forced service key cleanup failure';
+      END;
+      $$
+    `);
+    await pool.query(`
+      CREATE TRIGGER bootstrap_known_failure
+      BEFORE INSERT ON occ.installation
+      FOR EACH ROW EXECUTE FUNCTION occ.bootstrap_known_failure()
+    `);
+    await pool.query(`
+      CREATE TRIGGER bootstrap_apikey_delete_failure
+      BEFORE DELETE ON occ.apikey
+      FOR EACH ROW EXECUTE FUNCTION occ.bootstrap_apikey_delete_failure()
+    `);
   });
 }
 
@@ -165,50 +201,28 @@ async function privateOutputDirectory(prefix) {
 }
 
 function productionEnvironment({ databaseUrl = failureDatabaseUrl, directory, email, name }) {
-  return {
-    ...process.env,
-    OCC_DATABASE_URL: databaseUrl,
-    OCC_AUTH_SECRET: "bootstrap-failure-auth-secret-at-least-32-bytes",
-    OCC_AUTH_BASE_URL: "http://127.0.0.1:0",
-    OCC_BOOTSTRAP_ADMIN_EMAIL: email,
-    OCC_BOOTSTRAP_PASSWORD_FILE: join(directory, "initial-admin-password"),
-    OCC_BOOTSTRAP_SERVICE_KEY_FILE: join(directory, "initial-admin-service-key.json"),
-    OCC_BOOTSTRAP_INSTALLATION_NAME: name,
-  };
+  return productionBootstrapEnvironment({
+    databaseUrl,
+    directory,
+    email,
+    authSecret: "bootstrap-failure-auth-secret-at-least-32-bytes",
+    installationName: name,
+  });
 }
 
-function developmentConfiguration({ directory, email, name }) {
-  return {
-    mode: "development",
-    host: "127.0.0.1",
+function developmentEnvironment({ directory, email, name }) {
+  return developmentBootstrapEnvironment({
     databaseUrl: failureDatabaseUrl,
-    poolMax: 2,
-    adminEmail: email,
-    adminPassword: "postgres-local-development-password",
-    authBaseURL: "http://127.0.0.1",
+    directory,
+    email,
+    password: "postgres-local-development-password",
     authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
-    bootstrapInstallationName: name,
-    bootstrapServiceKeyFile: join(directory, "initial-admin-service-key.json"),
-  };
+    installationName: name,
+  });
 }
 
 async function runProductionBootstrap(environment) {
-  try {
-    const result = await run(process.execPath, ["scripts/bootstrap-production.mjs"], {
-      cwd: repository,
-      env: environment,
-      timeout: 20_000,
-      maxBuffer: 1024 * 1024,
-    });
-    return { ok: true, stdout: result.stdout, stderr: result.stderr };
-  } catch (error) {
-    return {
-      ok: false,
-      stdout: error.stdout ?? "",
-      stderr: error.stderr ?? "",
-      message: error instanceof Error ? error.message : "bootstrap failed",
-    };
-  }
+  return runBootstrapInstallation(environment);
 }
 
 function jsonLines(output) {
@@ -216,6 +230,10 @@ function jsonLines(output) {
     .split(/\r?\n/)
     .filter((line) => line.trim().startsWith("{"))
     .map((line) => JSON.parse(line));
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function passiveComputeDriver() {
@@ -315,7 +333,7 @@ for (const sharedOutput of [false, true]) {
 }
 
 test(
-  "concurrent development bootstrap compositions reject the loser and reload the committed winner",
+  "concurrent development bootstrap subprocesses reject the loser and reload the committed winner",
   requiresFailurePostgres,
   async (context) => {
     await resetFailureDatabase();
@@ -333,38 +351,33 @@ test(
       );
     });
 
-    const configurations = directories.map((directory, index) =>
-      developmentConfiguration({
+    const environments = directories.map((directory, index) =>
+      developmentEnvironment({
         directory,
         email: `development-race-${index}-${randomUUID()}@openclaw.local`,
         name: `Development bootstrap race ${index}`,
       }),
     );
-    const results = await Promise.allSettled(
-      configurations.map((config) =>
-        composePostgresDevelopment(config, {
-          computeDriver: passiveComputeDriver(),
-          configurationDriver: createTestConfigurationDriver(),
-        }),
-      ),
+    const results = await Promise.all(environments.map((env) => runBootstrapInstallation(env)));
+    const fulfilled = results.filter(
+      (result) =>
+        result.ok &&
+        jsonLines(result.stdout).some((line) => line.event === "installation.bootstrapped"),
     );
-    const fulfilled = results.filter((result) => result.status === "fulfilled");
-    const rejected = results.filter((result) => result.status === "rejected");
+    const rejected = results.filter((result) => !fulfilled.includes(result));
     assert.equal(fulfilled.length, 1, JSON.stringify(results));
     assert.equal(rejected.length, 1, JSON.stringify(results));
-    assert.equal(rejected[0].reason.name, "DevelopmentBootstrapFailure");
-    assert.match(rejected[0].reason.message, /HTTP 409/);
+    assert.match(rejected[0].stderr, /installation\.bootstrap-failed/);
 
-    const winnerApp = fulfilled[0].value;
-    apps.push(winnerApp);
-    const winnerIndex = results.findIndex((result) => result.status === "fulfilled");
+    const winnerIndex = results.findIndex((result) => fulfilled.includes(result));
     const loserIndex = winnerIndex === 0 ? 1 : 0;
     const winnerOutputBytes = await readFile(
-      configurations[winnerIndex].bootstrapServiceKeyFile,
+      environments[winnerIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE,
       "utf8",
     );
+    const winnerOutputDigest = sha256(winnerOutputBytes);
     const winnerOutput = JSON.parse(winnerOutputBytes);
-    assert.equal(await exists(configurations[loserIndex].bootstrapServiceKeyFile), false);
+    assert.equal(await exists(environments[loserIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE), false);
 
     const counts = await rowCounts();
     assert.deepEqual(counts, {
@@ -377,14 +390,24 @@ test(
       users: 1,
     });
 
-    const reloaded = await composePostgresDevelopment(configurations[winnerIndex], {
-      computeDriver: passiveComputeDriver(),
-      configurationDriver: createTestConfigurationDriver(),
-    });
+    const reloaded = await composePostgresDevelopment(
+      {
+        mode: "development",
+        host: "127.0.0.1",
+        databaseUrl: failureDatabaseUrl,
+        poolMax: 2,
+        authBaseURL: environments[winnerIndex].OCC_AUTH_BASE_URL,
+        authSecret: environments[winnerIndex].OCC_AUTH_SECRET,
+      },
+      {
+        computeDriver: passiveComputeDriver(),
+        configurationDriver: createTestConfigurationDriver(),
+      },
+    );
     apps.push(reloaded);
     assert.equal(
-      await readFile(configurations[winnerIndex].bootstrapServiceKeyFile, "utf8"),
-      winnerOutputBytes,
+      sha256(await readFile(environments[winnerIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8")),
+      winnerOutputDigest,
     );
     const installation = await reloaded.inject({
       method: "GET",
@@ -450,47 +473,86 @@ test(
 );
 
 test(
-  "development bootstrap preserves credentials on a 5xx response from an unknown COMMIT outcome",
+  "known bootstrap failures keep cleaning independent artifacts and report safe diagnostics",
   requiresFailurePostgres,
   async (context) => {
     await resetFailureDatabase();
-    const directory = await privateOutputDirectory("openclaw-bootstrap-unknown-development-");
-    const restoreCommitFault = installPostgresCommitAcknowledgementFault();
+    await installKnownFailureCleanupFault();
+    const directory = await privateOutputDirectory("openclaw-bootstrap-known-failure-");
     context.after(async () => {
-      restoreCommitFault();
       await resetFailureDatabase();
       await rm(directory, { recursive: true, force: true });
     });
 
-    const bootstrapServiceKeyFile = join(directory, "initial-admin-service-key.json");
-    await assert.rejects(
-      composePostgresDevelopment(
-        {
-          mode: "development",
-          host: "127.0.0.1",
-          databaseUrl: failureDatabaseUrl,
-          poolMax: 2,
-          adminEmail: `bootstrap-development-${randomUUID()}@openclaw.local`,
-          adminPassword: "postgres-local-development-password",
-          authBaseURL: "http://127.0.0.1",
-          authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
-          bootstrapInstallationName: "Bootstrap unknown development",
-          bootstrapServiceKeyFile,
-        },
-        {
-          computeDriver: passiveComputeDriver(),
-          configurationDriver: createTestConfigurationDriver(),
-        },
-      ),
-      (error) => {
-        assert.equal(error.name, "DevelopmentBootstrapFailure");
-        assert.match(error.message, /HTTP 503/);
-        return true;
-      },
+    const environment = productionEnvironment({
+      directory,
+      email: `bootstrap-cleanup-${randomUUID()}@example.test`,
+      name: "Bootstrap cleanup diagnostics",
+    });
+    const result = await runProductionBootstrap(environment);
+    assert.equal(result.ok, false);
+    const failure = jsonLines(result.stderr).find(
+      (line) => line.event === "installation.bootstrap-failed",
     );
+    assert.ok(failure, result.stderr);
+    assert.equal(failure.cleanupFailures.length, 1);
+    assert.deepEqual(failure.cleanupFailures[0], {
+      kind: "service_key",
+      id: failure.attempt.serviceKeyId,
+      error: "Bootstrap service key cleanup failed.",
+    });
+    assert.doesNotMatch(result.stderr, /^occ_/m);
+    assert.equal(await exists(environment.OCC_BOOTSTRAP_PASSWORD_FILE), false);
+    assert.equal(await exists(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE), false);
 
-    assert.equal(await exists(bootstrapServiceKeyFile), true);
-    const serviceKeyOutput = JSON.parse(await readFile(bootstrapServiceKeyFile, "utf8"));
+    const counts = await rowCounts();
+    assert.deepEqual(counts, {
+      installations: 0,
+      bootstrap_audits: 0,
+      principals: 0,
+      service_principals: 0,
+      bindings: 0,
+      service_keys: 1,
+      users: 0,
+    });
+  },
+);
+
+test(
+  "development bootstrap preserves credentials when COMMIT acknowledgement is lost",
+  requiresFailurePostgres,
+  async (context) => {
+    await resetFailureDatabase();
+    const directory = await privateOutputDirectory("openclaw-bootstrap-unknown-development-");
+    context.after(async () => {
+      await resetFailureDatabase();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const environment = developmentEnvironment({
+      directory,
+      email: `bootstrap-development-${randomUUID()}@openclaw.local`,
+      name: "Bootstrap unknown development",
+    });
+    environment.NODE_OPTIONS = [
+      process.env.NODE_OPTIONS,
+      `--import=${commitAcknowledgementFaultFixture}`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    environment.OCC_TEST_POSTGRES_COMMIT_ACK_FAULT = "installation-bootstrap";
+    const result = await runBootstrapInstallation(environment);
+    assert.equal(result.ok, false);
+    const failure = jsonLines(result.stderr).find(
+      (line) => line.event === "installation.bootstrap-outcome-uncertain",
+    );
+    assert.ok(failure, result.stderr);
+    assert.equal(failure.attempt.serviceKeyFile, environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE);
+
+    assert.equal(await exists(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE), true);
+    const serviceKeyOutput = JSON.parse(
+      await readFile(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8"),
+    );
     const counts = await rowCounts();
     assert.deepEqual(counts, {
       installations: 1,

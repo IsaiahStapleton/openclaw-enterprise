@@ -7,10 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  bootstrapControllerInstallation,
-  createAuthenticatedControllerRequest,
-} from "../helpers/auth-session.mjs";
+import { createAuthenticatedControllerRequest } from "../helpers/auth-session.mjs";
+import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import {
   assertGatewayModelTurn,
@@ -799,7 +797,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     { PostgresPlatformState },
     { createPostgresControllerAuth },
     { loadInstallationConfiguration },
-    { composePostgresDevelopment },
     { composeProduction },
     { createControllerWorker },
     { kubernetesNamespaceName },
@@ -808,7 +805,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     import("../../packages/occ/src/state/postgres-state.ts"),
     import("../../apps/controller/src/auth/index.ts"),
     import("../../apps/controller/src/composition/installation-config.ts"),
-    import("../../apps/controller/src/composition/development-postgres.ts"),
     import("../../apps/controller/src/composition/production.ts"),
     import("../../apps/controller/src/worker.ts"),
     import("../../apps/controller/src/drivers/compute/kubernetes/index.ts"),
@@ -839,7 +835,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   let activeInstallation = installation;
   let workerPool;
   let worker;
-  let developmentApp;
   let productionApp;
   let placement;
   let forwarding;
@@ -848,7 +843,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     if (worker !== undefined) await worker.stop();
     else if (workerPool !== undefined) await workerPool.end();
     if (productionApp !== undefined) await productionApp.close();
-    if (developmentApp !== undefined) await developmentApp.close();
     await observerPool.end();
     if (placement !== undefined) {
       await kubectl(
@@ -875,21 +869,14 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     context.diagnostic(`reusing pre-initialized Installation ${activeInstallation.id}`);
   } else {
     // Bootstrap only establishes persistent IAM; every actual deployment uses production API/worker.
-    developmentApp = await composePostgresDevelopment(
-      {
-        mode: "development",
-        host: "127.0.0.1",
-        databaseUrl,
-        adminEmail: credentials.email,
-        adminPassword: credentials.password,
-        authSecret,
-        authBaseURL,
-      },
-      drivers,
-    );
-    await bootstrapControllerInstallation(developmentApp, credentials, installationName);
-    await developmentApp.close();
-    developmentApp = undefined;
+    await ensureDevelopmentBootstrap(context, {
+      databaseUrl,
+      email: credentials.email,
+      password: credentials.password,
+      authSecret,
+      authBaseURL,
+      installationName,
+    });
   }
 
   productionApp = await composeProduction({

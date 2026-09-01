@@ -69,8 +69,8 @@ ready. An Agent can be created while its Namespace is `provisioning`; deploying
 an Agent requires the Namespace to be `ready`.
 
 The separate [controller worker](controller.md) processes Namespace lifecycle
-work when the API uses PostgreSQL. Compose starts it after authenticated
-bootstrap; host-process debugging starts it independently because the API does
+work when the API uses PostgreSQL. Compose starts it after initialization and
+API readiness; host-process debugging starts it independently because the API does
 not embed the worker. Its default PostgreSQL-backed development Compute Driver
 creates one Docker network per Namespace. An explicitly selected
 [Kubernetes Compute Driver](drivers/kubernetes-compute.md) instead provisions

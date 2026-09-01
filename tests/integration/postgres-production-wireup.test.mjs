@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -24,6 +24,10 @@ const requireControllerDependency = createRequire(
 const adminEmail = "admin@example.test";
 const authSecret = "production-wireup-auth-secret-at-least-32-bytes";
 const authBaseURL = "http://127.0.0.1:0";
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 function createPassiveComputeDriver() {
   return {
@@ -72,6 +76,7 @@ test(
   async () => {
     const environment = {
       ...process.env,
+      NODE_ENV: "production",
       OCC_DATABASE_URL: databaseUrl,
       OCC_AUTH_SECRET: authSecret,
       OCC_AUTH_BASE_URL: authBaseURL,
@@ -94,7 +99,7 @@ test(
     try {
       // Run the actual production Job; the generated credential is handed off only via the
       // protected operator-selected file.
-      const bootstrapped = await run(process.execPath, ["scripts/bootstrap-production.mjs"], {
+      const bootstrapped = await run(process.execPath, ["scripts/bootstrap-installation.mjs"], {
         cwd: repository,
         env: environment,
       });
@@ -111,40 +116,80 @@ test(
       const passwordStat = await stat(environment.OCC_BOOTSTRAP_PASSWORD_FILE);
       assert.equal(passwordStat.mode & 0o777, 0o600);
       const password = (await readFile(environment.OCC_BOOTSTRAP_PASSWORD_FILE, "utf8")).trim();
+      const passwordDigest = sha256(password);
       assert.match(password, /^[A-Za-z0-9_-]{43}$/);
       assert.notEqual(password, adminEmail);
       assert.notEqual(password, authSecret);
       const serviceKeyStat = await stat(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE);
       assert.equal(serviceKeyStat.mode & 0o777, 0o600);
       const serviceKeyBytes = await readFile(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8");
+      const serviceKeyDigest = sha256(serviceKeyBytes);
       const serviceKeyOutput = JSON.parse(serviceKeyBytes);
       assert.equal(serviceKeyOutput.data.name, "bootstrap-admin");
       assert.match(serviceKeyOutput.data.servicePrincipalId, /^spn_/);
       assert.match(serviceKeyOutput.data.key, /^occ_/);
       assert.equal(serviceKeyOutput.meta.installationId.startsWith("ins_"), true);
-      assert.doesNotMatch(bootstrapped.stdout, new RegExp(password));
-      assert.doesNotMatch(bootstrapped.stdout, new RegExp(serviceKeyOutput.data.key));
-      assert.doesNotMatch(bootstrapped.stderr, new RegExp(password));
-      assert.doesNotMatch(bootstrapped.stderr, new RegExp(serviceKeyOutput.data.key));
+      assert.equal(
+        bootstrapped.stdout.includes(password),
+        false,
+        "stdout must not contain password",
+      );
+      assert.equal(
+        bootstrapped.stdout.includes(serviceKeyOutput.data.key),
+        false,
+        "stdout must not contain service key",
+      );
+      assert.equal(
+        bootstrapped.stderr.includes(password),
+        false,
+        "stderr must not contain password",
+      );
+      assert.equal(
+        bootstrapped.stderr.includes(serviceKeyOutput.data.key),
+        false,
+        "stderr must not contain service key",
+      );
 
       // Helm upgrades and Job retries must not rotate the bootstrap credential.
-      const repeated = await run(process.execPath, ["scripts/bootstrap-production.mjs"], {
+      const repeated = await run(process.execPath, ["scripts/bootstrap-installation.mjs"], {
         cwd: repository,
         env: environment,
       });
       assert.match(repeated.stdout, /installation\.already-bootstrapped/);
       assert.equal(
-        (await readFile(environment.OCC_BOOTSTRAP_PASSWORD_FILE, "utf8")).trim(),
-        password,
+        sha256((await readFile(environment.OCC_BOOTSTRAP_PASSWORD_FILE, "utf8")).trim()),
+        passwordDigest,
       );
       assert.equal(
-        await readFile(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8"),
-        serviceKeyBytes,
+        sha256(await readFile(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8")),
+        serviceKeyDigest,
+      );
+      const {
+        OCC_BOOTSTRAP_INSTALLATION_NAME,
+        OCC_BOOTSTRAP_PASSWORD_FILE,
+        OCC_BOOTSTRAP_SERVICE_KEY_FILE,
+        ...existingOnlyEnvironment
+      } = environment;
+      assert.equal(OCC_BOOTSTRAP_INSTALLATION_NAME.length > 0, true);
+      assert.equal(OCC_BOOTSTRAP_PASSWORD_FILE.length > 0, true);
+      assert.equal(OCC_BOOTSTRAP_SERVICE_KEY_FILE.length > 0, true);
+      const existingOnly = await run(process.execPath, ["scripts/bootstrap-installation.mjs"], {
+        cwd: repository,
+        env: existingOnlyEnvironment,
+      });
+      assert.match(existingOnly.stdout, /installation\.already-bootstrapped/);
+      assert.equal(
+        sha256((await readFile(environment.OCC_BOOTSTRAP_PASSWORD_FILE, "utf8")).trim()),
+        passwordDigest,
+      );
+      assert.equal(
+        sha256(await readFile(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8")),
+        serviceKeyDigest,
       );
 
       // A different configured administrator must not silently adopt the existing Installation.
       await assert.rejects(
-        run(process.execPath, ["scripts/bootstrap-production.mjs"], {
+        run(process.execPath, ["scripts/bootstrap-installation.mjs"], {
           cwd: repository,
           env: { ...environment, OCC_BOOTSTRAP_ADMIN_EMAIL: "different-admin@example.test" },
         }),

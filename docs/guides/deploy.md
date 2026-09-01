@@ -81,12 +81,13 @@ docker compose ps -a
 docker compose logs --tail=50 controller worker
 ```
 
-Compose builds the controller image, starts PostgreSQL, initializes the
-database, then starts the API and worker. On an empty database, the API creates
-the human and service administrators and singleton Installation automatically.
-It stores the initial service API key on the controller-only `occ_bootstrap_data`
-volume; [retrieve it after startup succeeds](#retrieve-the-bootstrap-service-key).
-Do not submit a second bootstrap request.
+Compose builds the controller image and runs PostgreSQL → `migrate` →
+`bootstrap` → API → worker. Both one-shot services must exit with code `0`.
+On an empty database, the shared initializer creates the administrators and
+singleton Installation and saves the initial service API key on the
+bootstrap-only `occ_bootstrap_data` volume. The API and worker load committed
+state without mounting that volume. [Retrieve the key after initialization succeeds](#retrieve-the-bootstrap-service-key);
+do not submit a second bootstrap request.
 
 PostgreSQL, native Configuration documents, and bootstrap output live in
 separate named volumes. Restarting preserves the Installation, administrators,
@@ -95,21 +96,22 @@ bootstrap does not change the stored account password.
 
 ### Verify development
 
-Expect the `migrate` service to exit successfully, PostgreSQL and the controller
-to be healthy, and the worker to remain running. Logs should contain API
+Expect the `migrate` and `bootstrap` services to exit successfully, PostgreSQL
+and the controller to be healthy, and the worker to remain running. Logs should contain API
 `listening`, then `worker.started` with Compute Driver
 `compute-docker-development`, followed by `worker.health`. Follow
 [quickstart API check](quickstart.md#read-the-installation-with-the-bootstrap-service-key)
 to verify that the bootstrap administrator service key can read `/installation`;
 the Compose health probe alone does not verify API authorization or a model turn.
 
-| Symptom                                | Check                                                                                                                                           |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Controller or worker exits immediately | Inspect its `startup-error` or `worker.startup-error` log; confirm both images are configured.                                                  |
-| Worker cannot find an image            | Load or pull that approved image into the same Docker Engine before restarting the worker.                                                      |
-| Docker access denied                   | Verify the worker's socket mount and Engine permissions; never add the socket to the API.                                                       |
-| API key returns `401`                  | Check key expiration or revocation; use [human administrator recovery](quickstart.md#sign-in-and-read-the-installation) to issue a replacement. |
-| API port or bridge conflicts           | Select a free `OPENCLAW_DEV_PORT` or nonoverlapping `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` before starting.                                      |
+| Symptom                                | Check                                                                                                                                                                             |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Initializer fails                      | Inspect `docker compose logs bootstrap`; confirm its database/auth settings and protected output permissions, then follow [bootstrap recovery](#recover-an-incomplete-bootstrap). |
+| Controller or worker exits immediately | Inspect its `startup-error` or `worker.startup-error` log; confirm both images are configured.                                                                                    |
+| Worker cannot find an image            | Load or pull that approved image into the same Docker Engine before restarting the worker.                                                                                        |
+| Docker access denied                   | Verify the worker's socket mount and Engine permissions; never add the socket to the API.                                                                                         |
+| API key returns `401`                  | Check key expiration or revocation; use [human administrator recovery](quickstart.md#sign-in-and-read-the-installation) to issue a replacement.                                   |
+| API port or bridge conflicts           | Select a free `OPENCLAW_DEV_PORT` or nonoverlapping `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` before starting.                                                                        |
 
 For execution order and source links, see the
 [development startup flow](../flows/development-startup.md). Live Agent
@@ -118,7 +120,7 @@ verification is described in the [Docker Compose flow](../flows/docker-compose-d
 ### Development end-to-end TUI
 
 After completing the [quickstart API check](quickstart.md#read-the-installation-with-the-bootstrap-service-key),
-reuse the protected bootstrap service-key file and `occ_api` helper to provision
+reuse the protected bootstrap service-key file and `scripts/occ-api` helper to provision
 one embedded OpenClaw Agent,
 wait for its Docker runtime, then attach the OpenClaw terminal UI (TUI) inside
 the Agent-owned gateway container. The TUI uses the gateway configuration and
@@ -173,7 +175,7 @@ passes the Compose-starting environment and protected `.env` values to the
 worker; the worker injects the model credential only into the embedded
 gateway/Harness container that makes the model call.
 
-Continue in the same shell with the `occ_api` helper from
+Continue in the same shell with the `scripts/occ-api` helper from
 [bootstrap key retrieval](#retrieve-the-bootstrap-service-key). It reads the
 protected key file for each request and checks the documented
 `{ "data": ..., "meta": ... }` envelope:
@@ -214,7 +216,7 @@ import sys
 print(json.dumps({"name": f"{sys.argv[1]}-namespace"}))
 PY
 
-NAMESPACE_RESPONSE="$(occ_api POST /namespaces "$OCC_E2E_DIRECTORY/namespace.json")"
+NAMESPACE_RESPONSE="$(scripts/occ-api POST /namespaces "$OCC_E2E_DIRECTORY/namespace.json")"
 NAMESPACE_ID="$(printf '%s' "$NAMESPACE_RESPONSE" | json_get data.id)"
 export NAMESPACE_ID
 
@@ -224,7 +226,7 @@ wait_for_namespace_ready() {
   local namespace_status
 
   while [ "$SECONDS" -lt "$deadline" ]; do
-    response="$(occ_api GET "/namespaces/$NAMESPACE_ID")"
+    response="$(scripts/occ-api GET "/namespaces/$NAMESPACE_ID")"
     namespace_status="$(printf '%s' "$response" | json_get data.status)"
     case "$namespace_status" in
       ready)
@@ -294,7 +296,7 @@ print(json.dumps(payload))
 PY
 
 CONFIGURATION_RESPONSE="$(
-  occ_api POST "/namespaces/$NAMESPACE_ID/configurations" \
+  scripts/occ-api POST "/namespaces/$NAMESPACE_ID/configurations" \
     "$OCC_E2E_DIRECTORY/configuration.json"
 )"
 CONFIGURATION_ID="$(printf '%s' "$CONFIGURATION_RESPONSE" | json_get data.id)"
@@ -320,13 +322,13 @@ print(json.dumps(payload))
 PY
 
 AGENT_RESPONSE="$(
-  occ_api POST "/namespaces/$NAMESPACE_ID/agents" \
+  scripts/occ-api POST "/namespaces/$NAMESPACE_ID/agents" \
     "$OCC_E2E_DIRECTORY/agent.json"
 )"
 AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | json_get data.id)"
 export AGENT_ID
 
-REVISION_RESPONSE="$(occ_api POST "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID/deploy")"
+REVISION_RESPONSE="$(scripts/occ-api POST "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID/deploy")"
 REVISION_ID="$(printf '%s' "$REVISION_RESPONSE" | json_get data.id)"
 export REVISION_ID
 
@@ -336,7 +338,7 @@ wait_for_agent_active() {
   local active_revision
 
   while [ "$SECONDS" -lt "$deadline" ]; do
-    response="$(occ_api GET "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID")"
+    response="$(scripts/occ-api GET "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID")"
     active_revision="$(printf '%s' "$response" | json_get data.activeRevisionId 2>/dev/null || true)"
     if [ "$active_revision" = "$REVISION_ID" ]; then
       printf '%s' "$response"
@@ -397,7 +399,7 @@ fi
 ```
 
 Remove the temporary local service-key copy and request files before launching
-the TUI. This does not revoke the service key or delete its controller-owned
+the TUI. This does not revoke the service key or delete its initializer-owned
 bootstrap output. The TUI uses the Agent gateway token; never copy the OCC API
 key into its environment, arguments, configuration, or workload:
 
@@ -801,7 +803,7 @@ export OCC_URL='https://<internal-occ-host>'
 ```
 
 Complete [bootstrap key retrieval](#retrieve-the-bootstrap-service-key), including
-its `occ_api` definition and `occ_api GET /installation` check, then keep that
+its `scripts/occ-api GET /installation` check, then keep that
 shell open for provisioning below. Expect HTTP `200` and the singleton
 Installation matching the key file's `meta.installationId`. Health and readiness
 alone do not prove authenticated API access. OCC accepts the service key in
@@ -812,7 +814,7 @@ for [recovery and account-only APIs](#sign-in-as-a-human-administrator).
 
 #### Use a driver-managed Kubernetes namespace
 
-Use `occ_api POST /namespaces namespace-request.json` from the authenticated
+Use `scripts/occ-api POST /namespaces namespace-request.json` from the authenticated
 operator shell to create the platform Namespace; save its returned identifier as
 `NAMESPACE_ID`. The worker creates the exact owned Kubernetes namespace before
 the platform Namespace can become ready. Wait until that backing namespace
@@ -938,7 +940,7 @@ the placement matching its native Harness. Dedicated Codex explicitly uses
 For production built-in OpenClaw, use `executionMode: "embedded"` and native
 `agentRuntime: { "id": "openclaw" }`; omitted placement also defaults to
 `embedded`. Send either body to `POST /namespaces/:namespaceId/agents` using
-`occ_api POST "/namespaces/$NAMESPACE_ID/agents" agent-request.json`. Update existing Agents through
+`scripts/occ-api POST "/namespaces/$NAMESPACE_ID/agents" agent-request.json`. Update existing Agents through
 `PATCH /namespaces/:namespaceId/agents/:agentId` with both the required
 `configurationId` and selected `executionMode`. Mismatched Harness/mode pairs
 fail before deployment. See
@@ -1221,7 +1223,7 @@ enabled. After the first assistant response, type another nonce prompt in the
 same TUI process to verify continued interaction. Press Ctrl+D to exit the
 client; the gateway Pod and its Service remain running. After deploying another
 immutable AgentRevision,
-use `occ_api GET "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID"` to re-read the
+use `scripts/occ-api GET "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID"` to re-read the
 Agent, update `REVISION_ID` from `data.activeRevisionId`, discover a fresh
 matching gateway Pod and ConfigMap, then attach again. If you removed the local
 key copy, retrieve it from protected storage first; if it expired or was revoked,
@@ -1317,12 +1319,14 @@ export OCC_SERVICE_KEY_DIRECTORY="$(mktemp -d)"
 export OCC_SERVICE_KEY_FILE="$OCC_SERVICE_KEY_DIRECTORY/initial-admin-service-key.json"
 ```
 
-For development, copy the file from the controller-only Compose volume without
-printing its contents:
+For development, confirm the `bootstrap` service is `Exited (0)` in
+`docker compose ps -a`, then copy from that stopped container without printing
+the file. Only the initializer mounts this volume:
 
 ```bash
+docker compose ps -a bootstrap
 docker compose cp \
-  controller:/var/lib/openclaw/bootstrap/initial-admin-service-key.json \
+  bootstrap:/var/lib/openclaw/bootstrap/initial-admin-service-key.json \
   "$OCC_SERVICE_KEY_FILE"
 ```
 
@@ -1346,83 +1350,15 @@ expiry, and `meta.installationId`. Set `OCC_URL` to the running loopback API in
 development or the approved HTTPS endpoint in production. Keep shell tracing
 and curl verbose/trace output disabled.
 
-Define this helper once in the operator shell. `occ_api METHOD /path
-[JSON_BODY_FILE]` reads the protected JSON, writes an owner-readable temporary
-header file, and passes only its path to curl. It removes temporary request
-artifacts after each call, preserves the source key file, and rejects failed
-HTTP requests or invalid response envelopes. Do not use it for key issuance,
+Run the checked-in [operator helper](../../scripts/occ-api) from the repository
+root. `scripts/occ-api METHOD /path [JSON_BODY_FILE]` reads `OCC_URL` and the
+protected `OCC_SERVICE_KEY_FILE`, passes a private temporary header file to
+curl, and validates the response. It removes temporary request artifacts after
+each call and preserves the source key file. Do not use it for key issuance,
 whose one-time response must go directly to protected storage as shown below.
 
 ```bash
-set -euo pipefail
-umask 077
-
-occ_api() (
-  set -euo pipefail
-  umask 077
-  : "${OCC_URL:?Set the approved OCC API URL.}"
-  : "${OCC_SERVICE_KEY_FILE:?Retrieve the bootstrap service key first.}"
-  method="$1"
-  request_path="$2"
-  body_file="${3:-}"
-  request_directory="$(mktemp -d)"
-  trap 'rm -f -- "$request_directory/header" "$request_directory/response"; rmdir -- "$request_directory"' EXIT
-
-  python3 - "$OCC_SERVICE_KEY_FILE" "$request_directory/header" <<'PYHEADER'
-import json
-import pathlib
-import sys
-
-key = json.loads(pathlib.Path(sys.argv[1]).read_text())["data"]["key"]
-if not isinstance(key, str) or not key.strip() or "\r" in key or "\n" in key:
-    raise SystemExit("Invalid service-key file")
-pathlib.Path(sys.argv[2]).write_text("x-api-key: " + key + "\n")
-PYHEADER
-
-  set +e
-  if [ -n "$body_file" ]; then
-    http_status="$(curl --fail-with-body --max-time 30 \
-      --silent --show-error --write-out '%{http_code}' \
-      --output "$request_directory/response" \
-      --header @"$request_directory/header" \
-      --request "$method" "$OCC_URL$request_path" \
-      -H 'Content-Type: application/json' --data-binary @"$body_file")"
-    curl_rc="$?"
-  else
-    http_status="$(curl --fail-with-body --max-time 30 \
-      --silent --show-error --write-out '%{http_code}' \
-      --output "$request_directory/response" \
-      --header @"$request_directory/header" \
-      --request "$method" "$OCC_URL$request_path")"
-    curl_rc="$?"
-  fi
-  set -e
-
-  python3 - "$http_status" "$curl_rc" "$request_directory/response" <<'PYRESPONSE'
-import json
-import pathlib
-import sys
-
-http_status = int(sys.argv[1] or 0)
-curl_rc = int(sys.argv[2])
-response_file = pathlib.Path(sys.argv[3])
-body = response_file.read_text() if response_file.exists() else ""
-try:
-    payload = json.loads(body)
-except json.JSONDecodeError:
-    raise SystemExit(f"Invalid OCC response (HTTP {http_status}, curl exit {curl_rc})")
-if http_status < 200 or http_status >= 300:
-    print(json.dumps(payload, indent=2), file=sys.stderr)
-    raise SystemExit(f"HTTP {http_status or 'unavailable'}")
-if curl_rc != 0:
-    raise SystemExit(f"curl failed with exit {curl_rc}")
-if not isinstance(payload, dict) or "data" not in payload or "meta" not in payload:
-    raise SystemExit("OCC response did not include data and meta")
-print(json.dumps(payload))
-PYRESPONSE
-)
-
-occ_api GET /installation
+scripts/occ-api GET /installation
 ```
 
 Expect HTTP `200` with response `data.id` matching `meta.installationId` in the
@@ -1438,7 +1374,7 @@ diagnostics. Never enable shell tracing or curl verbose/trace output.
 
 A bootstrap failure can leave Better Auth accounts, key hashes, or output
 without committed Installation/IAM state. Stop the failed attempt before repair.
-For an uncertain commit or development bootstrap `5xx`/missing response, preserve
+For an uncertain commit, preserve
 all credentials and output: the database may already have committed.
 
 Use approved database access to confirm the original transaction has finished,
@@ -1452,8 +1388,8 @@ With a confirmed noncommitted attempt, remove only proven orphan accounts/keys
 and quarantine only that attempt's output in protected storage before restarting.
 Cleanup is best effort; preserve safe IDs and paths from failure diagnostics
 for operator repair. With a matching committed seed, retain its credentials
-and use normal recovery below. A losing concurrent development startup must
-exit; a later whole-startup retry reloads the winner's persisted state.
+and use normal recovery below. A losing concurrent initializer must
+exit; a later initialization retry reloads the winner's persisted state.
 
 ### Recover a lost or exposed service key
 
@@ -1547,14 +1483,14 @@ its non-secret `data.id` identifies the key for later revocation.
 ### Use a service key
 
 Replace the Namespace placeholder with the Namespace authorized for this
-principal. Use the [shared `occ_api` helper](#retrieve-the-bootstrap-service-key)
+principal. Use the [shared `scripts/occ-api` helper](#retrieve-the-bootstrap-service-key)
 with `OCC_SERVICE_KEY_FILE` pointing to the protected issuance response. The
 helper reads `data.key` without exposing it in command arguments or terminal
 output. Keep shell tracing and curl verbose/trace output disabled.
 
 ```bash
 export OCC_NAMESPACE_ID='<namespace-id>'
-occ_api GET "/namespaces/$OCC_NAMESPACE_ID"
+scripts/occ-api GET "/namespaces/$OCC_NAMESPACE_ID"
 ```
 
 Expect HTTP `200` and the authorized Namespace. If the request fails, use the

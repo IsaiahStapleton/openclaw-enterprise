@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import {
   configureExistingK3dLocalPathSharedFileSystem,
   validateExplicitK3dLoopbackContext,
@@ -1509,15 +1510,26 @@ test(
       );
     });
 
+    const authSecret = "kubernetes-integration-auth-secret-32-bytes";
+    const authBaseURL = "http://127.0.0.1";
+    if (previous === undefined) {
+      await ensureDevelopmentBootstrap(context, {
+        databaseUrl,
+        email: adminCredentials.email,
+        password: adminCredentials.password,
+        authSecret,
+        authBaseURL,
+        installationName: "OpenClaw Kubernetes integration",
+      });
+    }
+
     app = await composePostgresDevelopment(
       {
         mode: "development",
         host: "127.0.0.1",
         databaseUrl,
-        adminEmail: adminCredentials.email,
-        adminPassword: adminCredentials.password,
-        authSecret: "kubernetes-integration-auth-secret-32-bytes",
-        authBaseURL: "http://127.0.0.1",
+        authSecret,
+        authBaseURL,
       },
       { computeDriver: driver, configurationDriver },
     );
@@ -1535,13 +1547,6 @@ test(
         ...(payload === undefined ? {} : { payload }),
       });
       return { status: response.statusCode, ...response.json() };
-    }
-
-    if (previous === undefined) {
-      const bootstrap = await request("POST", "/installation/bootstrap", {
-        name: "OpenClaw Kubernetes integration",
-      });
-      assert.equal(bootstrap.status, 201);
     }
 
     async function startWorker() {

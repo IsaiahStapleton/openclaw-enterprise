@@ -53,7 +53,7 @@ COPY --chown=node:node apps/controller/src apps/controller/src
 COPY --chown=node:node migrations/[0-9]*.sql migrations/
 COPY --chown=node:node migrations/meta/_journal.json migrations/meta/_journal.json
 COPY --chown=node:node scripts/migrate-production.mjs scripts/migrate-production.mjs
-COPY --chown=node:node scripts/bootstrap-production.mjs scripts/bootstrap-production.mjs
+COPY --chown=node:node scripts/bootstrap-installation.mjs scripts/bootstrap-installation.mjs
 COPY --chown=node:node scripts/production-healthcheck.mjs scripts/production-healthcheck.mjs
 
 USER node

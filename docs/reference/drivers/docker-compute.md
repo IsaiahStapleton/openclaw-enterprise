@@ -1,9 +1,9 @@
 # Docker Compute Driver
 
 `DockerComputeDriver` is the default local development Compute Driver. The
-Docker Compose development stack starts PostgreSQL, migrations, the OCC API
-with a filesystem-backed Configuration Driver, and the worker; the controller
-self-bootstraps fresh databases, and the worker uses this driver to create real
+Docker Compose development stack runs PostgreSQL, migrations, and the shared
+initializer before starting the OCC API and worker. The API uses filesystem
+Configuration; the worker uses this driver to create real
 Docker networks and runtime containers for Namespaces and AgentRevisions.
 
 This driver is a development runtime. Production continues to use the
@@ -37,22 +37,17 @@ port. The API and worker share the same application-role database connection
 and select `compute-docker-development` with implementation `docker-local`
 unless `OCC_CONFIG_PATH` explicitly selects another trusted Driver set.
 
-Development self-bootstrap is controller-owned and fresh-database-only. When
-no Installation exists, the controller provisions the configured development
-human administrator and a non-Agent service administrator sharing the same Role.
-It saves the initial service key to private controller-only output, signs in with
-`OPENCLAW_DEV_EMAIL` and `OPENCLAW_DEV_PASSWORD`, calls the existing authenticated bootstrap route, and
-creates the first Installation with `OPENCLAW_DEV_INSTALLATION_NAME`. Reusing
-existing Compose volumes keeps the previous Installation, IAM policy, audit
-records, queued work, Configuration documents, and active revisions; development
-bootstrap does not rotate the existing administrator password, generate a new
-password, or print one. Production bootstrap is separate and writes a generated
-password to `OCC_BOOTSTRAP_PASSWORD_FILE`.
+Compose runs the shared initializer after migration and before the API or
+worker. Fresh setup creates the configured human administrator, service
+administrator, and singleton Installation; existing state is retained. Only
+the initializer mounts the protected initial-key output volume. The
+[authentication reference](../authentication.md#installation-and-account-ownership)
+owns credential creation and recovery; the
+[development startup flow](../../flows/development-startup.md) traces ordering.
 
-`docker compose down` keeps the `occ_postgres_data` and
-`occ_configuration_data` named volumes and the controller-only `occ_bootstrap_data`
-volume containing the initial service-key JSON. `docker compose down --volumes`
-deletes all three. See [bootstrap delivery and recovery](../authentication.md#installation-and-account-ownership).
+`docker compose down` keeps `occ_postgres_data`, `occ_configuration_data`, and
+the bootstrap-only `occ_bootstrap_data` volume. `docker compose down --volumes`
+deletes all three, including the initial service-key JSON.
 
 ## Namespace lifecycle
 

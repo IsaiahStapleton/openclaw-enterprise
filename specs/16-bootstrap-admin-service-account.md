@@ -8,21 +8,27 @@
 
 ## Goal and scope
 
-Fresh bootstrap creates the human administrator and one Installation-scoped service administrator. Extend the existing native IAM seed and issue a 30-day service API key through existing authentication code. Deliver it in a **private JSON file** on the production password PVC or a controller-only development volume.
+Fresh bootstrap creates the human administrator and one Installation-scoped service administrator. Extend the existing native IAM seed and issue a 30-day service API key through existing authentication code. Deliver it in a **private JSON file** on the production password PVC or a bootstrap-only development volume.
 
 The service identity is a non-Agent IAM `ServicePrincipal`, with no human login, email, password, session, Namespace, or Agent owner. Namespace [ServiceAccount resources](../docs/reference/service-accounts.md) instead supply upstream workload credentials. The operator owns the delivered credential; native IAM owns identity and permissions; Better Auth owns key generation, hashing, expiry, and revocation.
 
-This specification records the approved implementation under [the platform design](../docs/design.md). It retains current startup entry points and native IAM provisioning. A shared transaction coordinator, auth/OCC atomicity, receipt table or migration, recovery endpoint, startup rewrite, external-IAM bootstrap, extra startup-YAML mounting, automatic rotation, and existing-installation backfill are out of scope. Local disposable bootstrap verification is recorded below; no production rollout is included.
+This active, unshipped specification records the approved implementation under [the platform design](../docs/design.md). The user-approved simplification replaces the earlier retained-entrypoint decision with one initializer for Compose and Helm: migrate → initialize administrators and credentials → start API/worker. Native IAM provisioning and the public human-only bootstrap endpoint remain. A shared transaction coordinator, auth/OCC atomicity, receipt table or migration, recovery endpoint, external-IAM bootstrap, extra startup-YAML mounting, automatic rotation, and existing-installation backfill remain out of scope. Local verification of the shared-initializer revision and its predecessor is recorded below. No production rollout is included.
 
 ## Current state and evidence
 
-| Area | Baseline behavior and source |
+The predecessor implementation at `b6f213c` had separate production-script and
+development-composition bootstrap owners. Development created credentials,
+constructed Fastify, signed into itself, and submitted HTTP bootstrap; production
+committed directly. Both tracked credential output and cleanup. The shared
+initializer removes that duplication and the internal HTTP error boundary.
+
+| Area | Selected owner and source |
 | --- | --- |
-| Production | [Bootstrap script](../scripts/bootstrap-production.mjs#L154) creates the human and exclusive `0600` password file before committing Installation/IAM/audit; existing installations validate the configured human. Its unconditional compensation can delete credentials after an uncertain commit. |
-| Development | [PostgreSQL composition](../apps/controller/src/composition/development-postgres.ts#L140) creates the human and IAM seed, then internally signs in and calls [HTTP bootstrap](../apps/controller/src/index.ts#L1065). Its [internal caller](../apps/controller/src/composition/development-postgres.ts#L71) currently treats `409` as success. |
-| Policy | [Native IAM seed](../packages/iam/src/index.ts#L54) creates the human, admin Role, and broad binding. [Authorization](../packages/iam/src/index.ts#L470) enforces explicit permissions and deny Restrictions; an Installation-resource-only binding excludes descendant Namespace operations. |
-| Keys | [Issuance API](../apps/controller/src/index.ts#L1689) requires an existing service principal and Installation administration. The [auth wrapper](../apps/controller/src/auth/index.ts#L247) uses pinned Better Auth `1.6.11`, hashed storage, `occ_` keys, 30-day defaults, `x-api-key` verification, and deletion for revocation. |
-| Persistence and delivery | [PostgreSQL transactions](../packages/occ/src/state/postgres-state.ts#L758) distinguish unknown COMMIT outcomes. The [Helm Job](../deploy/helm/openclaw-enterprise/templates/jobs.yaml#L8) already mounts a protected password PVC; [Compose](../compose.yaml#L28) has no key-output mount. No login UI exists. |
+| Initialization | [`scripts/bootstrap-installation.mjs`](../scripts/bootstrap-installation.mjs) handles both environment modes, private output, commit, and failure cleanup. |
+| API startup | [Development composition](../apps/controller/src/composition/development-postgres.ts) and [production composition](../apps/controller/src/composition/production.ts) require initialized state. |
+| Identity and keys | [Native IAM](../packages/iam/src/index.ts) owns the shared administrator Role and bindings; the [auth wrapper](../apps/controller/src/auth/index.ts) owns Better Auth key issuance and verification. |
+| Persistence and delivery | [PostgreSQL transactions](../packages/occ/src/state/postgres-state.ts) distinguish unknown COMMIT outcomes; [private output](../apps/controller/src/composition/bootstrap-output.ts) protects attempt-owned files. |
+| Packaging and operator access | [Compose](../compose.yaml) and the [Helm Job](../deploy/helm/openclaw-enterprise/templates/jobs.yaml) run initialization before serving; [`scripts/occ-api`](../scripts/occ-api) sends protected operator requests. |
 
 ## Requirements -> Design Mapping
 
@@ -30,11 +36,12 @@ This specification records the approved implementation under [the platform desig
 | --- | --- |
 | Both administrator identities with exact authority | Extend the fresh native IAM seed; share the human administrator Role. |
 | Private initial delivery | Existing auth helper, exclusive owner-only JSON, existing PVC or dedicated development volume. |
-| Reruns and concurrency | Existing singleton constraints; close/fail losing startup, then reload on a whole-startup retry. |
+| Reruns and concurrency | Existing singleton constraints; fail the losing initializer, then reload on a complete initialization retry. |
+| One startup mechanism | Shared initializer after migration; API/worker only load initialized state. |
 | Failure recovery | Attempt-owned best-effort cleanup for known failures; preserve uncertain outcomes for operator verification. |
 | Lifecycle and existing installations | Existing issue/revoke APIs; no backfill, regeneration, or resurrection. |
 
-## Proposed design
+## Selected design
 
 ### Identity and permission scope
 
@@ -57,21 +64,21 @@ Installation administrators manage credentials through existing APIs, including 
 
 ### Bootstrap sequence and failure behavior
 
-1. Load persisted Installation state as today. If already bootstrapped, retain existing administrator verification and return without issuing keys or touching output, including installations predating this feature. Missing files, expired/revoked keys, or removed identities/grants never trigger regeneration or repair.
+1. Run `scripts/bootstrap-installation.mjs` after migration with `NODE_ENV=development` or `production`, application-role PostgreSQL, and Better Auth settings. Load persisted Installation state. If already bootstrapped, retain existing administrator verification and return without issuing keys or touching output, including installations predating this feature. Missing files, expired/revoked keys, or removed identities/grants never trigger regeneration or repair.
 2. For fresh native-IAM bootstrap, validate private absolute output paths, create the human as today, and extend its seed with the service identity/binding. Call existing `auth.createServiceKey` for that identity with Installation scope, `bootstrap-admin`, and a 30-day lifetime.
 3. Write and fsync the private key file before the existing Installation/IAM/audit commit; production also retains its password-file write. Better Auth persists independently: the key may authenticate before OCC commits, but cannot authorize normal OCC operations without its committed identity/binding. Do not start serving until confirmed bootstrap success.
-4. Production uses its existing controller transaction. Development keeps internal sign-in and `/installation/bootstrap`; only `201` completes fresh startup. On `409`, close the application and pool and fail the whole startup. A later whole-startup retry reloads the winner's persisted Installation/IAM instead of serving with the loser's generated IDs.
+4. Both modes use the same direct controller transaction and one attempt scope. API and worker startup require the committed Installation and IAM state; development no longer constructs Fastify or signs into itself to bootstrap. A losing initializer exits unsuccessfully. A later complete initialization retry reloads the winner's persisted Installation/IAM instead of serving generated loser IDs. The public `POST /installation/bootstrap` route remains human-session-only and does not issue bootstrap credentials.
 5. Existing singleton database constraints select at most one committed Installation/IAM seed. Concurrent attempts can temporarily create independent auth records and files. After a known losing commit, best-effort cleanup removes only that attempt's recorded user/key IDs and files it exclusively created; never the winner's or preexisting resources.
 
-Ordinary failures before OCC commit use the same scoped cleanup and return failure. Retain handles/identity checks sufficient to avoid deleting replaced files. Report cleanup failures with safe IDs and paths so an operator can repair them; do not retry issuance over existing output or adopt users by email/name.
+Ordinary failures before OCC commit use the same scoped cleanup and return failure. Attempt each cleanup independently even when an earlier cleanup fails. Retain handles/identity checks sufficient to avoid deleting replaced files. Report cleanup failures with safe IDs and paths so an operator can repair them; do not retry issuance over existing output or adopt users by email/name.
 
-An **unknown commit outcome** preserves all accounts, keys, and output and stops for operator verification. Production preserves `PostgresCommitOutcomeUnknownError`; development conservatively treats bootstrap `5xx` or a missing response as uncertain because HTTP currently collapses the underlying error. Existence of any Installation is not proof that this attempt committed. Compare the recorded attempt Installation/principal IDs with authoritative Installation/IAM/key state, and confirm the original transaction has finished before deciding cleanup. Database unavailability remains unresolved; no destructive compensation or automatic retry runs.
+An **unknown commit outcome** preserves all accounts, keys, and output and stops for operator verification. Both modes preserve `PostgresCommitOutcomeUnknownError` directly; there is no internal HTTP translation of the commit outcome. Existence of any Installation is not proof that this attempt committed. Compare the recorded attempt Installation/principal IDs with authoritative Installation/IAM/key state, and confirm the original transaction has finished before deciding cleanup. Database unavailability remains unresolved; no destructive compensation or automatic retry runs.
 
 Abrupt termination can leave auth accounts, key hashes, or partial output without a committed IAM seed. Operator repair is an accepted tradeoff: establish the transaction outcome, identify this attempt's orphan IDs, remove only proven orphans, quarantine stale output privately, then rerun. When the matching seed committed, retain its credentials and use normal recovery if output was lost. File existence alone never proves bootstrap success.
 
 ### Private delivery and recovery
 
-Use path-only `OCC_BOOTSTRAP_SERVICE_KEY_FILE`, required on fresh direct startup. Production requires a distinct sibling of `OCC_BOOTSTRAP_PASSWORD_FILE`. A small shared file helper can reuse the script's exclusive-create pattern: reject unsafe parents/symlinks and existing destinations, open with `O_EXCL`, enforce `0600`, write complete JSON, and fsync file and parent directory before OCC commit. The protected directory is writable only by the runtime identity and trusted storage administrators. Never overwrite output.
+Use path-only `OCC_BOOTSTRAP_SERVICE_KEY_FILE`, required on fresh direct initialization. Production requires a distinct sibling of `OCC_BOOTSTRAP_PASSWORD_FILE`. The protected file helper uses the exclusive-create pattern: reject unsafe parents/symlinks and existing destinations, open with `O_EXCL`, enforce `0600`, write complete JSON, and fsync file and parent directory before OCC commit. The protected directory is writable only by the runtime identity and trusted storage administrators. Never overwrite output.
 
 Use the existing response-compatible shape so [service-key client examples](../docs/guides/deploy.md#use-a-service-key) can consume `data.key`:
 
@@ -82,8 +89,8 @@ Use the existing response-compatible shape so [service-key client examples](../d
 | Entry point | Delivery and user experience |
 | --- | --- |
 | Production/Helm | Add `bootstrap.serviceKey.fileName`, default `initial-admin-service-key.json`, under the existing password mount; validate a distinct simple basename and pass the full path. Only bootstrap mounts the PVC. Retrieve via approved PVC/storage access after Job success; a completed container is not an exec endpoint. |
-| Development Compose | Add controller-only named volume `occ_bootstrap_data` at `/var/lib/openclaw/bootstrap`, set the key path there, and initialize/chown the mount directory to UID/GID 1000 with mode `0700` in the development image. After successful startup, copy the file with `docker compose cp` to an operator-owned `0700` directory under `umask 077`, then enforce local `0600`. |
-| Direct development | Require an explicit private absolute key-file path on fresh startup; keep configured human password behavior. |
+| Development Compose | The one-shot `bootstrap` service follows `migrate` and alone mounts `occ_bootstrap_data` at `/var/lib/openclaw/bootstrap`. The development image prepares UID/GID 1000 and `0700`. After confirmed exit `0`, use `docker compose cp bootstrap:/var/lib/openclaw/bootstrap/initial-admin-service-key.json` to copy into an operator-owned `0700` directory under `umask 077`, then enforce local `0600`. API/worker do not mount bootstrap output. |
+| Direct development | Run the shared initializer before API/worker startup with an explicit private absolute key-file path, `OPENCLAW_DEV_EMAIL`, `OPENCLAW_DEV_PASSWORD`, and `OPENCLAW_DEV_INSTALLATION_NAME` or their existing defaults. It writes no password file. |
 | Unattended installer | Wait for confirmed script/Job/startup success, import the file into existing credential storage, retain key/principal IDs, then remove delivery copies according to policy. Import failures retry the same file without issuing another key. |
 
 “One-time disclosure” means one generated output and no server-side plaintext retrieval; the file remains readable until removed. Bootstrap emits safe outcome/Installation/principal/key IDs, expiry and path only. Never place secrets in stdout/stderr, process arguments, HTTP bootstrap responses, audit, manifests, or image layers. Redact `x-api-key` in request logs and exclude output from diagnostics. Operators own protection of copied files, backups, snapshots, and crash dumps. First-use proof is a key-authenticated Installation read and Namespace create/read.
@@ -92,32 +99,33 @@ Lost or exposed token with retained IDs: sign in as the human, revoke the old ID
 
 ## Delivery alternatives, tradeoffs, and open questions
 
-Protected files fit both existing entry points and unattended import. Stdout/Job logs expose retained plaintext; an HTTP/UI channel misses production's script path. A Kubernetes Secret or external vault integration adds credentials, permissions and another failure boundary. Existing issue/revoke APIs suffice after setup. The selected file design accepts operator-managed retention and occasional orphan repair in exchange for avoiding a coordinator, recovery schema, and new API.
+Protected files fit both deployment environments and unattended import. Stdout/Job logs expose retained plaintext; an HTTP/UI channel misses production's script path. A Kubernetes Secret or external vault integration adds credentials, permissions and another failure boundary. Existing issue/revoke APIs suffice after setup. The selected file design accepts operator-managed retention and occasional orphan repair in exchange for avoiding a coordinator, recovery schema, and new API.
 
 Selected defaults are no existing-installation backfill and the existing 30-day key lifetime. Whether a later opt-in provisioning tool, different lifetime, or named vault integration is needed remains separate product work; none blocks this design.
 
 ## Detailed File Plan
 
-The original file plan below is implemented in this change; the linked current references, guides, and flows describe the resulting behavior.
+The file plan includes the approved shared-initializer revision; verification must follow the final source changes.
 
 | File | Expected change |
 | --- | --- |
 | `packages/iam/src/index.ts` | Extend fresh bootstrap seed with the service identity and same-Role broad binding; leave additional human-account provisioning unchanged. |
-| `apps/controller/src/composition/bootstrap-output.ts` (new) | Small protected JSON file writer and attempt-owned file cleanup shared by the two entry points; no coordinator or credential issuance logic. |
-| `scripts/bootstrap-production.mjs` | Extend seed, call existing key helper, write sibling output, record safe attempt IDs, and scope compensation to known failures. |
-| `apps/controller/src/composition/development-postgres.ts`, `apps/controller/src/server.mjs` | Pass output path; extend fresh seed/key/output; preserve internal sign-in/bootstrap, close/fail on `409`, and preserve uncertain outcomes. |
-| `compose.yaml`, `Dockerfile`, `.env.example` | Controller-only output volume/path, development image directory ownership/mode, and direct-startup path documentation. |
+| `apps/controller/src/composition/bootstrap-output.ts` | Retain protected JSON output and attempt-owned file cleanup. |
+| `scripts/bootstrap-installation.mjs` | Replace the production-only filename with a common environment-selected initializer owning seed, issuance, output, commit, and scoped cleanup. |
+| `apps/controller/src/composition/development-postgres.ts`, `apps/controller/src/server.mjs` | Remove internal HTTP bootstrap and credential creation; require and load initialized state. |
+| `compose.yaml`, `Dockerfile`, `.env.example` | Run bootstrap after migration; mount output only into initializer; retain protected image directory ownership/mode and document direct initialization. |
 | `deploy/helm/openclaw-enterprise/values.yaml`, `templates/jobs.yaml`, `templates/_helpers.tpl` | Key basename/path setting and validation using the existing PVC; no extra mounts, API credentials, or RBAC. |
 | `docs/reference/{authentication,authorization,settings}.md`, `docs/guides/{quickstart,deploy}.md` | Publish bootstrap identity, output retrieval, permissions, rerun, and manual recovery contracts. |
-| `docs/flows/{local-password-authentication,service-api-keys,development-startup,production-startup,platform-startup}.md`, `docs/ARCHITECTURE.md` | Explain the retained entry points, added seed/key/file steps, independent auth persistence, and failure boundaries. |
+| `docs/flows/{local-password-authentication,service-api-keys,development-startup,production-startup,platform-startup}.md`, `docs/ARCHITECTURE.md` | Explain initializer ownership, startup ordering, independent auth persistence, and failure boundaries. |
+| `scripts/occ-api`, deployment/TUI guides and live tests | Share one Bash/curl/Python operator helper; remove executable helper duplication in Markdown and test scraping. |
 | `tests/integration/{postgres-production-wireup,postgres-auth-accounts,postgres-service-api-keys,service-api-keys,production-kubernetes-packaging}.test.mjs`, focused bootstrap/file-helper tests | Verify the acceptance criteria below using real storage and entry points where relevant. |
 
 ## Planning & Milestones
 
 ### Milestone 1: Fresh bootstrap with privately delivered administrator key
 
-**Shipped functionality:** Both supported fresh startup paths provision both administrators and a usable private credential, with rerun and manual recovery behavior documented.
-**Tasks:** Extend seed; wire existing auth issuance and private output into both paths; correct loser/uncertain cleanup; configure volume/PVC output; update owning docs.
+**Delivery outcome:** Both supported fresh startup paths provision both administrators and a usable private credential, with rerun and manual recovery behavior documented.
+**Tasks:** Share initialization and attempt cleanup; make API/worker load-only; order Compose/Helm after migration; isolate credential mounts; check in the operator helper; synchronize references, flows, and tests.
 **Verification:** Complete the unit, integration, and manual criteria below before shipping code, chart, and docs together.
 
 ## Rollout Plan
@@ -130,16 +138,22 @@ Validate first on disposable PostgreSQL/Compose, then a selected disposable Helm
 
 - **Unit:** Fresh-only seed shares the exact Role and permission matrix; private JSON is complete, `0600`, fsynced, and rejects existing files/symlinks/unsafe parents without overwrite. Known-failure cleanup touches only attempt-owned files/IDs; uncertain outcomes preserve them.
 - **Integration:** Real fresh development and production paths create one committed Installation, human, service principal and usable key; prove Installation and Namespace operations plus Restriction/removed-binding denial. Confirm hashed storage and no secret leakage through logs, audit, HTTP bootstrap, or packaging.
-- **Integration:** Reruns preserve IDs/key/file bytes, older installations remain unchanged, and expiry/revocation/removal never resurrects credentials. Race fresh starts with same/different output paths; one seed wins, the loser fails/closes, cleanup leaves the winner intact, and a whole-startup retry reloads it. Fault an ambiguous commit and prove no credential deletion even when acknowledgement is lost.
+- **Integration:** Reruns preserve IDs/key/file bytes, older installations remain unchanged, and expiry/revocation/removal never resurrects credentials. Race fresh starts with same/different output paths; one seed wins, the loser exits unsuccessfully, cleanup leaves the winner intact, and a whole-startup retry reloads it. Fault an ambiguous commit and prove no credential deletion even when acknowledgement is lost.
 - **Manual:** Verify Compose UID 1000 volume/copy permissions and actual Job/PVC retrieval, human sign-in, first key request, saved-ID loss recovery and lost-file/IDs operator recovery, planned rotation/revocation, and unattended import only after success. Rendered Helm alone does not prove PVC permissions; unavailable runtime prerequisites remain explicit gaps.
 
 Use focused real integration tests, `pnpm test:postgres`, `pnpm typecheck`, and `pnpm check:workspace` after implementation. The implementation also validates actual Compose output/copy behavior and a disposable initialization Job/PVC; production deployment remains outside this change.
 
 ## Implementation verification
 
-Local validation passed for the implemented bootstrap contract: 31 PostgreSQL tests (five documented skips), eight standalone worker tests, 140 conformance tests, and TypeScript, formatting, workspace, OpenAPI, and flow-document checks. Actual Compose and initialization Job/PVC proofs cover private delivery, human/service access, rotation and revocation, retry preservation, and file permissions. Three review rounds resolved the PVC procedure and shared PostgreSQL fixture issues.
+**Shared-initializer revision:** Local verification passed: 32 PostgreSQL tests with no failures and five documented skips, eight standalone worker tests without skips, 140 conformance tests, four packaging tests, TypeScript, workspace, OpenAPI, formatting, and documentation checks. One PostgreSQL skip is an already-bootstrapped guard after the fresh-bootstrap case; four require the separate live Kubernetes Configuration Driver. The PostgreSQL suite covers both production race variants, the development race, unknown COMMIT preservation in both modes, and independent known-failure cleanup diagnostics. A focused fresh-database rerun also verifies that API startup fails before initialization.
 
-The development and production deployment paths now use the bootstrap service key instead of operator cookies. Both selected real E2E suites passed without skips: Compose covered embedded and dedicated gateway model replies and a two-turn TUI session; production Helm on disposable k3d covered trusted HTTPS provisioning, two-turn TUI sessions before and after revision cutover, network denial, least privilege, and credential-output boundaries. The literal documented `occ_api` helper completed Installation reads and Namespace creation against both live APIs. Guide links, shell syntax, and the two affected flow-document validators passed.
+Both selected live suites passed without skips: development Compose passed its complete model/TUI flow in 128.8 seconds; production Helm on disposable k3d passed in 158.7 seconds, including TUI model turns before and after revision cutover, network denial, and private credential boundaries. Both exercised the checked-in `scripts/occ-api` helper for `GET /installation` and Namespace creation against actual APIs. Development also verified protected key retrieval from the stopped initializer container. These live runs preceded the subsequent IPv6 loopback allowlist correction; two focused real-entrypoint tests passed for that correction.
+
+The broader non-live integration run had 94 passes, 58 selector-dependent skips, and one unchanged Driver-package fixture failure: the release-age policy requests unpublished local fixture packages from npm and receives 404. The two IPv6 tests are included in those 94 passes; package policy was retained. The PR remains unmerged, and no production rollout is included.
+
+**Predecessor verification at `b6f213c`:** Local validation passed for the earlier bootstrap contract: 31 PostgreSQL tests (five documented skips), eight standalone worker tests, 140 conformance tests, and TypeScript, formatting, workspace, OpenAPI, and flow-document checks. Actual Compose and initialization Job/PVC proofs cover private delivery, human/service access, rotation and revocation, retry preservation, and file permissions. Three review rounds resolved the PVC procedure and shared PostgreSQL fixture issues.
+
+The predecessor development and production deployment paths used the bootstrap service key instead of operator cookies. Both selected real E2E suites passed without skips: Compose covered embedded and dedicated gateway model replies and a two-turn TUI session; production Helm on disposable k3d covered trusted HTTPS provisioning, two-turn TUI sessions before and after revision cutover, network denial, least privilege, and credential-output boundaries. The literal documented `occ_api` helper completed Installation reads and Namespace creation against both live APIs. Guide links, shell syntax, and the two affected flow-document validators passed.
 
 The broader non-live integration run had 92 passes, 57 infrastructure skips, and one unchanged Driver-package fixture failure: pnpm's release-age policy queries unpublished local fixture packages on npm and receives 404. Package policy was retained. Production rollout remains outside this verification.
 
@@ -148,6 +162,10 @@ The broader non-live integration run had 92 passes, 57 infrastructure skips, and
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- [2026-08-31 21:00]: Verify the shared initializer with both complete live model/TUI flows, PostgreSQL failure and startup coverage, worker/conformance/packaging checks, and the checked-in operator helper; retain the unrelated package-fixture 404 and PR review boundary. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213c)
+
+- [2026-08-31 20:34]: Reopen the active specification for the user-approved shared initializer, initializer-only credential mount, and checked-in operator helper; repeat verification after implementation. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213c)
 
 - [2026-08-31 19:44]: Rebase against `main` at `76bf269` without conflicts; switch development and production operator guides to bootstrap service-key authentication and verify both complete live model/TUI flows, including literal guide-helper requests. (01a05a3d-526f-7553-8cd8-070bd1847acb - 06c4bcc)
 

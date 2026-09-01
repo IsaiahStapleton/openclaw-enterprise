@@ -10,7 +10,7 @@ last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
 
 `docker compose up --build` starts the supported local OpenClaw Enterprise
 development environment. Compose owns PostgreSQL, migrations, idempotent
-controller-owned bootstrap for fresh databases, the OCC API with a
+shared initialization for fresh databases, the OCC API with a
 filesystem-backed Configuration Driver, and the worker. The worker selects the
 Docker Compute Driver and starts real OpenClaw/Codex runtime containers for
 authorized Namespace and AgentRevision work. The development TUI path attaches
@@ -44,8 +44,8 @@ readiness; this trace continues through Docker workload creation and cleanup.
 graph TD
   A["docker compose up --build"] --> B["PostgreSQL starts on a persistent local volume"]
   B --> C["Migration job applies occ schema with migrator role"]
-  C --> D["Controller composes Better Auth, PostgreSQL, config volume, and dev admin account"]
-  D --> E["Controller signs in and bootstraps a fresh Installation through the existing route"]
+  C --> D["Shared initializer creates or verifies the Installation"]
+  D --> E["API loads persisted Installation, IAM, and Configuration"]
   E --> F["OCC API listens and becomes healthy"]
   F --> G["Worker starts with compute-docker-development"]
   F --> H["Operator reads Installation and provisions with bootstrap service key"]
@@ -82,30 +82,18 @@ The migration service waits for PostgreSQL, connects with
 `OCC_MIGRATION_DATABASE_URL`, and applies Drizzle migrations. The API and
 worker never use the migrator or PostgreSQL administrator URL.
 
-### 2. The controller self-bootstraps fresh development databases
+### 2. Initialize before starting the API or worker
 
-`apps/controller/src/server.mjs:start`,
-`apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`,
-`apps/controller/src/composition/development-postgres.ts:bootstrapDevelopmentInstallation`,
-`apps/controller/src/index.ts:perform`
+`compose.yaml:services.bootstrap`, `scripts/bootstrap-installation.mjs`
 
-On a fresh database, the controller provisions the configured development
-human administrator and adds the service administrator to the native IAM seed.
-It issues and saves the initial key on the controller-only `occ_bootstrap_data`
-volume before sign-in. It then signs in through Better Auth with
-the development account inputs and calls the existing authenticated bootstrap
-API to create the singleton Installation. Existing Compose volumes keep their
-persisted Installation, administrator, IAM policy, audit events, queued work,
-Configuration documents, and revisions; the controller does not re-bootstrap an
-existing database. Fresh startup requires HTTP `201`; a losing `409` closes the
-application, and `5xx`/missing responses preserve artifacts for operator verification.
-The [bootstrap flow](local-password-authentication.md) owns that failure boundary.
-
-Development self-bootstrap uses `OPENCLAW_DEV_EMAIL`,
-`OPENCLAW_DEV_PASSWORD`, and `OPENCLAW_DEV_INSTALLATION_NAME`, or their
-defaults. It does not generate or print a one-time password. Production
-bootstrap is the separate protected flow that writes a generated password to
-`OCC_BOOTSTRAP_PASSWORD_FILE` and the service-key JSON to its protected sibling.
+After migration exits `0`, Compose runs the shared initializer with development
+inputs. It creates fresh human/service administrators, writes the initial key
+to its private volume, and commits the singleton Installation, IAM, and audit.
+Existing Installations retain their credentials and output. Only the initializer
+mounts `occ_bootstrap_data`; the API and worker load committed state after
+initializer success. The [development startup flow](development-startup.md)
+owns startup ordering and the [bootstrap flow](local-password-authentication.md)
+owns credentials, concurrent attempts, and failure recovery.
 
 ### 3. The API admits only local development traffic
 
@@ -124,7 +112,7 @@ remain rejected. The API uses the application-role PostgreSQL URL and never
 receives the Docker socket.
 
 After successful bootstrap, the operator retrieves the private service-key JSON
-from the controller-only volume and reads `/installation` with `x-api-key` before
+from the bootstrap-only volume and reads `/installation` with `x-api-key` before
 provisioning. `apps/controller/src/auth/index.ts:ControllerAdmissionVerifier.verify`
 validates that key and maps it to the Installation-scoped service administrator;
 current IAM policy still authorizes each resource operation. An invalid, expired,
@@ -196,7 +184,7 @@ network.
 The [deployment guide](../guides/deploy.md#development-end-to-end-tui) owns the
 service-key-authenticated provisioning commands, Docker label selection, and
 cleanup of the temporary local key copy. Cleanup does not revoke the key or
-remove its controller-owned bootstrap output. After that guide has selected the active embedded gateway container,
+remove its shared initialization output. After that guide has selected the active embedded gateway container,
 `docker exec -it` starts `node /app/openclaw.mjs tui` in that same container.
 
 The Docker driver has already written the gateway configuration to
@@ -242,7 +230,7 @@ PostgreSQL and can be retried by the worker.
 
 - `docker compose up --build` should show PostgreSQL readiness, migration
   completion, API listening on `127.0.0.1:${OPENCLAW_DEV_PORT:-3000}`,
-  controller-owned fresh-database bootstrap, and `worker.started` with
+  fresh-database initialization, and `worker.started` with
   `computeDriverId` set to `compute-docker-development`.
 - `docker network ls --filter label=org.openclaw.enterprise.compute-driver=docker`
   should show one owned network for each ready development Namespace.
@@ -282,6 +270,8 @@ PostgreSQL and can be retried by the worker.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
 
 - 2026-08-31 19:14: Document bootstrap service-key API access and operator credential cleanup for the TUI path. (codex/01a05a3d-526f-7553-8cd8-070bd1847acb - 06c4bccb95543d3d545d011e72074f805f339aa8)
 
