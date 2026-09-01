@@ -1,7 +1,8 @@
 # Feature Spec: Production interactive TUI
 
 **Date:** 2026-08-31
-**Status:** Implemented; PR review pending
+**Status:** Completed
+**Implementation PR:** [Production interactive TUI #3](https://github.com/openclaw/openclaw-enterprise/pull/3)
 **Owner:** Production deployment documentation and Kubernetes integration
 **Source baseline:** `b43cc49c45fa6275e79985be0eabb517743c6a23`
 
@@ -130,6 +131,8 @@ proves the production installation path, not deployment to a remote shared clust
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- [2026-08-31 18:03]: Recorded completed implementation and the verified production Helm/TUI proof for PR #3 after integrating the merged development guide. (01a059fc-1a4d-7fa2-8375-3999ef6aeff8 - dd8aea5)
 
 - [2026-08-31 16:22]: Verified the production Helm/TUI journey and selected explicit bootstrap-free demo configuration; implementation awaits PR review. (01a059fc-1a4d-7fa2-8375-3999ef6aeff8 - de8a4390e7dfe0576647c1355a9ea1f0e94d789f)
 
