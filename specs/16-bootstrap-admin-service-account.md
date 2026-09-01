@@ -1,10 +1,30 @@
 # Feature Design: Bootstrap administrator service account
 
 **Date:** 2026-08-31  
-**Status:** Implemented and locally verified; PR review pending\
+**Status:** Bootstrap recovery guarantees superseded; removal locally verified; PR review pending\
 **Owner:** OCC bootstrap, authentication, and native IAM  
 **Source baseline:** `openclaw/openclaw-enterprise` `main` at `b43cc49c45fa6275e79985be0eabb517743c6a23`  
 **Affected references:** [Authentication](../docs/reference/authentication.md), [Authorization](../docs/reference/authorization.md), [Settings](../docs/reference/settings.md)
+
+> The bootstrap recovery guarantees below are historical and are superseded by
+> [the current authentication reference](../docs/reference/authentication.md#installation-and-account-ownership).
+> The user-approved removal replaces automatic recovery with one attempt that
+> preserves created artifacts after any error. The earlier design and recorded
+> test results remain unchanged below.
+>
+> **Removal verification:** Fresh Compose (138.6 seconds) and Helm/k3d (163.5
+> seconds) each passed 1/1 with no failures or skips, exercising private output,
+> protected retrieval, helper GET/POST requests, model/TUI execution, production
+> revision cutover, and network boundaries. TypeScript, format, workspace, and
+> five output/packaging tests passed; independent reviews were clear.
+>
+> The first full PostgreSQL run had 30 passes, two stale event-label assertion
+> failures, and five previously documented skips. After correcting those
+> assertions, all six failure tests passed without skips. This verifies 32
+> distinct PostgreSQL cases across runs, not one clean full-suite run. The
+> unchanged earlier 140 conformance tests, eight worker tests, and broader
+> integration result (94 passes, one baseline fixture failure, 58 skips) were
+> reused and were not rerun for this removal.
 
 ## Goal and scope
 
@@ -162,6 +182,10 @@ The broader non-live integration run had 92 passes, 57 infrastructure skips, and
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- [2026-08-31 22:41]: Verify the user-approved removal of automatic bootstrap recovery through fresh Compose/Helm model/TUI flows, corrected PostgreSQL failure coverage, output/packaging checks, and independent review; retain prior results as historical evidence and leave PR review pending. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440) (NOT_IN_SPEC)
+
+- [2026-08-31 22:29]: Remove automatic bootstrap cleanup and retries by user approval; current behavior is owned by the authentication reference, and removal verification is pending. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440) (NOT_IN_SPEC)
 
 - [2026-08-31 21:00]: Verify the shared initializer with both complete live model/TUI flows, PostgreSQL failure and startup coverage, worker/conformance/packaging checks, and the checked-in operator helper; retain the unrelated package-fixture 404 and PR review boundary. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213c)
 

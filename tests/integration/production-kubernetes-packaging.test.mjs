@@ -101,6 +101,7 @@ test(
       assert.ok(selected("ServiceAccount", component));
     }
     const initialization = selected("Job", "initialization");
+    assert.equal(initialization.spec.backoffLimit, 0);
     const pod = initialization.spec.template.spec;
     assert.equal(pod.automountServiceAccountToken, false);
     assert.equal(pod.securityContext.fsGroupChangePolicy, "OnRootMismatch");

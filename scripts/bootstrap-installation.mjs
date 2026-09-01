@@ -4,13 +4,11 @@ import { createRequire } from "node:module";
 import { createPostgresControllerAuth } from "../apps/controller/src/auth/index.ts";
 import {
   bootstrapOutputPath,
-  removeAttemptBootstrapFile,
   writeProtectedBootstrapFile,
   writeProtectedBootstrapJson,
 } from "../apps/controller/src/composition/bootstrap-output.ts";
 import { createBootstrapAdministratorSeed } from "../packages/iam/src/index.ts";
 import { OpenClawController, PostgresPlatformState } from "../packages/occ/src/index.ts";
-import { PostgresCommitOutcomeUnknownError } from "../packages/occ/src/state/postgres-state.ts";
 
 const requireControllerDependency = createRequire(
   new URL("../apps/controller/package.json", import.meta.url),
@@ -194,32 +192,6 @@ async function createCredentialUser(controllerAuth, email, password) {
   return Object.freeze({ id: user.id, email: user.email, name: user.name });
 }
 
-async function deleteCredentialUser(controllerAuth, userId) {
-  try {
-    await controllerAuth.deleteAccount({ id: userId });
-    return undefined;
-  } catch (error) {
-    return error instanceof Error ? error.message : "Bootstrap administrator cleanup failed.";
-  }
-}
-
-async function revokeServiceKey(controllerAuth, key) {
-  try {
-    await controllerAuth.revokeServiceKey(key);
-    return undefined;
-  } catch {
-    return "Bootstrap service key cleanup failed.";
-  }
-}
-
-function cleanupFailure(kind, id, error) {
-  return {
-    kind,
-    id,
-    error,
-  };
-}
-
 function authorizationFor(controllerAuth, installationId, userId) {
   const seed = createBootstrapAdministratorSeed(installationId, controllerAuth.issuer, {
     id: userId,
@@ -269,7 +241,7 @@ function administratorPrincipal(state, issuer, userId) {
     : undefined;
 }
 
-let bootstrapFailureDetails;
+let bootstrapAttempt;
 let pool;
 
 try {
@@ -295,109 +267,75 @@ try {
     process.stdout.write(`${JSON.stringify({ event: "installation.already-bootstrapped" })}\n`);
   } else {
     const freshConfig = freshBootstrapConfig(config);
-    let auth;
-    let user;
-    let serviceKey;
-    let passwordOutput;
-    let serviceKeyOutput;
-    let attempt;
-    const cleanupFailures = [];
-    try {
-      const installation = {
-        id: `ins_${randomUUID()}`,
-        name: freshConfig.installationName,
-        createdAt: new Date().toISOString(),
-      };
-      auth = await createAuth(pool, config, installation.id);
-      user = await createCredentialUser(auth, config.adminEmail, freshConfig.password);
-      const authorization = authorizationFor(auth, installation.id, user.id);
-      serviceKey = await auth.createServiceKey({
-        principal: authorization.servicePrincipal,
-        name: "bootstrap-admin",
-      });
-      attempt = {
-        installationId: installation.id,
-        principalId: authorization.principal.id,
-        servicePrincipalId: authorization.servicePrincipal.id,
-        serviceKeyId: serviceKey.id,
-        serviceKeyExpiresAt: serviceKey.expiresAt,
-        ...(freshConfig.passwordPath === undefined
-          ? {}
-          : { passwordFile: freshConfig.passwordPath }),
-        serviceKeyFile: freshConfig.serviceKeyPath,
-      };
-      if (freshConfig.passwordPath !== undefined) {
-        passwordOutput = await writeProtectedBootstrapFile(
-          freshConfig.passwordPath,
-          `${freshConfig.password}\n`,
-        );
-      }
-      serviceKeyOutput = await writeProtectedBootstrapJson(freshConfig.serviceKeyPath, {
-        data: serviceKey,
-        meta: { installationId: installation.id },
-      });
-      state.setBootstrapNativeIAM(authorization.state);
-      const controller = new OpenClawController(installation, { state, recordOperations: true });
-      await controller.transact(async (unit) => {
-        await unit.audit.append({
-          id: `aud_${randomUUID()}`,
-          installationId: installation.id,
-          occurredAt: new Date().toISOString(),
-          kind: "bootstrap",
-          actorId: authorization.principal.id,
-          source: "occ",
-          action: "administer",
-          resource: { kind: "installation", id: installation.id },
-          outcome: "success",
-          details: {
-            kind: "bootstrap",
-            source:
-              config.mode === "production"
-                ? "production-installation-job"
-                : "development-installation-job",
-            servicePrincipalId: authorization.servicePrincipal.id,
-            serviceKeyId: serviceKey.id,
-          },
-        });
-      });
-    } catch (error) {
-      const uncertain = error instanceof PostgresCommitOutcomeUnknownError;
-      if (!uncertain) {
-        if (auth !== undefined && serviceKey !== undefined) {
-          const failure = await revokeServiceKey(auth, serviceKey);
-          if (failure !== undefined) {
-            cleanupFailures.push(cleanupFailure("service_key", serviceKey.id, failure));
-          }
-        }
-        if (auth !== undefined && user !== undefined) {
-          const failure = await deleteCredentialUser(auth, user.id);
-          if (failure !== undefined) {
-            cleanupFailures.push(cleanupFailure("auth_account", user.id, failure));
-          }
-        }
-        for (const file of [passwordOutput, serviceKeyOutput]) {
-          const failure = await removeAttemptBootstrapFile(file);
-          if (failure !== undefined) cleanupFailures.push(failure);
-        }
-      }
-      bootstrapFailureDetails = { uncertain, attempt, cleanupFailures };
-      throw error;
+    const installation = {
+      id: `ins_${randomUUID()}`,
+      name: freshConfig.installationName,
+      createdAt: new Date().toISOString(),
+    };
+    bootstrapAttempt = {
+      installationId: installation.id,
+      ...(freshConfig.passwordPath === undefined ? {} : { passwordFile: freshConfig.passwordPath }),
+      serviceKeyFile: freshConfig.serviceKeyPath,
+    };
+    const auth = await createAuth(pool, config, installation.id);
+    const user = await createCredentialUser(auth, config.adminEmail, freshConfig.password);
+    bootstrapAttempt = { ...bootstrapAttempt, authAccountId: user.id };
+    const authorization = authorizationFor(auth, installation.id, user.id);
+    bootstrapAttempt = {
+      ...bootstrapAttempt,
+      principalId: authorization.principal.id,
+      servicePrincipalId: authorization.servicePrincipal.id,
+    };
+    const serviceKey = await auth.createServiceKey({
+      principal: authorization.servicePrincipal,
+      name: "bootstrap-admin",
+    });
+    bootstrapAttempt = {
+      ...bootstrapAttempt,
+      serviceKeyId: serviceKey.id,
+      serviceKeyExpiresAt: serviceKey.expiresAt,
+    };
+    if (freshConfig.passwordPath !== undefined) {
+      await writeProtectedBootstrapFile(freshConfig.passwordPath, `${freshConfig.password}\n`);
     }
-    process.stdout.write(`${JSON.stringify({ event: "installation.bootstrapped", ...attempt })}\n`);
+    await writeProtectedBootstrapJson(freshConfig.serviceKeyPath, {
+      data: serviceKey,
+      meta: { installationId: installation.id },
+    });
+    state.setBootstrapNativeIAM(authorization.state);
+    const controller = new OpenClawController(installation, { state, recordOperations: true });
+    await controller.transact(async (unit) => {
+      await unit.audit.append({
+        id: `aud_${randomUUID()}`,
+        installationId: installation.id,
+        occurredAt: new Date().toISOString(),
+        kind: "bootstrap",
+        actorId: authorization.principal.id,
+        source: "occ",
+        action: "administer",
+        resource: { kind: "installation", id: installation.id },
+        outcome: "success",
+        details: {
+          kind: "bootstrap",
+          source:
+            config.mode === "production"
+              ? "production-installation-job"
+              : "development-installation-job",
+          servicePrincipalId: authorization.servicePrincipal.id,
+          serviceKeyId: serviceKey.id,
+        },
+      });
+    });
+    process.stdout.write(
+      `${JSON.stringify({ event: "installation.bootstrapped", ...bootstrapAttempt })}\n`,
+    );
   }
 } catch (error) {
   process.stderr.write(
     `${JSON.stringify({
-      event: bootstrapFailureDetails?.uncertain
-        ? "installation.bootstrap-outcome-uncertain"
-        : "installation.bootstrap-failed",
+      event: "installation.bootstrap-failed",
       error: error instanceof Error ? error.message : "Installation bootstrap failed.",
-      ...(bootstrapFailureDetails?.attempt === undefined
-        ? {}
-        : { attempt: bootstrapFailureDetails.attempt }),
-      ...((bootstrapFailureDetails?.cleanupFailures?.length ?? 0) === 0
-        ? {}
-        : { cleanupFailures: bootstrapFailureDetails.cleanupFailures }),
+      ...(bootstrapAttempt === undefined ? {} : { attempt: bootstrapAttempt }),
     })}\n`,
   );
   process.exitCode = 1;

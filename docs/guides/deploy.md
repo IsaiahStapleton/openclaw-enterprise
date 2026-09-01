@@ -1372,24 +1372,30 @@ diagnostics. Never enable shell tracing or curl verbose/trace output.
 
 ### Recover an incomplete bootstrap
 
-A bootstrap failure can leave Better Auth accounts, key hashes, or output
-without committed Installation/IAM state. Stop the failed attempt before repair.
-For an uncertain commit, preserve
-all credentials and output: the database may already have committed.
+Bootstrap makes one attempt. On any error, `installation.bootstrap-failed`
+reports available non-secret IDs and paths and the process exits unsuccessfully.
+The initializer leaves created accounts, keys, and files in place, including
+partial output. The Helm Job does not retry automatically. Stop the failed
+attempt and preserve its diagnostics and protected storage before repair.
 
 Use approved database access to confirm the original transaction has finished,
 then compare the attempt's Installation, human, service-principal, and key IDs
 with the singleton Installation and current IAM/key records. A different
-Installation is not proof this attempt succeeded. If the database is unavailable,
-keep the outcome unresolved. Do not infer success from files or delete output
-to force a retry.
+Installation or an output file is not proof this attempt succeeded. If the
+database is unavailable, keep the outcome unresolved: the transaction may have
+committed. Do not delete output or wipe state automatically after an error.
 
-With a confirmed noncommitted attempt, remove only proven orphan accounts/keys
-and quarantine only that attempt's output in protected storage before restarting.
-Cleanup is best effort; preserve safe IDs and paths from failure diagnostics
-for operator repair. With a matching committed seed, retain its credentials
-and use normal recovery below. A losing concurrent initializer must
-exit; a later initialization retry reloads the winner's persisted state.
+With a confirmed noncommitted attempt, manually remove only proven orphan
+accounts/keys and quarantine only that attempt's output in protected storage.
+With a matching committed seed, retain its credentials and use normal recovery
+below. A losing concurrent attempt can leave its own auth records or files;
+inspect those separately from the committed winner.
+
+For an explicitly identified disposable Installation, an operator can instead
+deliberately reset its dedicated database and credential storage. This is an
+explicit operator action, not a bootstrap fallback. Only start another attempt
+after completing the chosen repair or reset; existing accounts and output are
+never adopted or overwritten to make a retry succeed.
 
 ### Recover a lost or exposed service key
 

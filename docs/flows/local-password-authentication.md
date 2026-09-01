@@ -33,19 +33,16 @@ service-key verification, rotation, and revocation continue in the
 
 ```mermaid
 graph TD
-  subgraph Bootstrap["Shared installation initializer"]
+  subgraph Bootstrap["Shared installation initializer: one attempt"]
     A["Load Installation"] -->|Existing| B["Verify persisted identity; retain credentials"]
     A -->|Fresh| C["Create human and native IAM seed with service administrator"]
     C --> D["Better Auth persists service-key hash"]
     D --> E["Sync private key JSON and production password file"]
-  end
-  subgraph Commit["Existing OCC bootstrap transaction"]
     E --> F["Commit Installation, IAM seed, and audit"]
-    F -->|Confirmed| G["Complete startup"]
-    F -->|Known failure| H["Fail; clean only attempt-owned artifacts"]
-    F -->|Uncertain| I["Fail; preserve artifacts for operator verification"]
-    B --> G
   end
+  F --> G["Complete startup"]
+  B --> G
+  Bootstrap -->|Any error| H["Exit unsuccessfully; retain artifacts for manual repair"]
   subgraph Request["Human controller request"]
     G --> J["Sign in and receive session cookie"]
     J --> K["Resolve current IAM identity and exact authority"]
@@ -94,18 +91,22 @@ issuance, output, and commit. The API subsequently loads committed state without
 signing into itself or calling `POST /installation/bootstrap`; that public
 endpoint remains human-session-only and does not issue bootstrap credentials.
 Singleton database constraints select at most one committed seed. A losing
-initializer fails; a later complete retry reloads the winner's state.
+initializer fails and retains its created artifacts for operator inspection.
 
-Known failures attempt each cleanup independently for this attempt's recorded
-auth IDs and exclusively created files; replaced or preexisting output is
-preserved. Cleanup failures report safe IDs and paths without skipping the
-remaining cleanup actions. `PostgresCommitOutcomeUnknownError` preserves all
-accounts, keys, and output and fails initialization. Abrupt termination can also
-leave orphan auth state or partial files. The operator confirms the original
-transaction has finished and compares exact attempt IDs before repair; file
-existence or another Installation is insufficient. Recovery is
-[manual](../guides/deploy.md#recover-an-incomplete-bootstrap), with no coordinator,
-receipt table, recovery endpoint, or automatic reissue.
+Any error ends the single initialization attempt with
+`installation.bootstrap-failed`, available non-secret IDs and paths, and a
+nonzero exit. Created accounts, keys, and files remain; even a partially written
+file is preserved. The initializer neither distinguishes failure types to select
+cleanup nor automatically revokes, deletes, retries, repairs, or resets state.
+The Helm initialization Job uses `backoffLimit: 0`.
+
+The operator confirms the original transaction has finished and compares exact
+attempt IDs before manual repair; file existence or another Installation is
+insufficient. An uncertain commit can already have persisted the seed, so an
+error never authorizes an automatic wipe. A deliberate reset must identify the
+disposable Installation and its dedicated storage. The
+[recovery procedure](../guides/deploy.md#recover-an-incomplete-bootstrap) owns
+those operator actions.
 
 After confirmed success, the operator retrieves/imports the existing file and
 retains its non-secret IDs. Lost output does not trigger regeneration; normal
@@ -148,7 +149,7 @@ implicit permissions.
   Its fresh development bootstrap case additionally verifies the service identity,
   protected output, and key access; it skips when an Installation already exists.
 - `node --test tests/integration/bootstrap-output.test.mjs` covers exclusive
-  output, rejected unsafe paths, and removal of only the attempt-owned file.
+  output and rejected unsafe paths. Failed writes retain any created file.
   Database cases require the [disposable PostgreSQL setup](../reference/settings.md#postgresql-test-environment);
   an unconfigured/skipped suite is not runtime proof.
 - `node --test tests/integration/postgres-bootstrap-failures.test.mjs` with
@@ -159,7 +160,7 @@ implicit permissions.
 - Verify copied output is `0600` without printing it; use a key-authenticated
   `GET /installation` and Namespace create/read to check current authority.
   A `401` indicates credential rejection; `403` indicates identity/scope/policy
-  denial. Preserve uncertain bootstrap artifacts and compare safe IDs through
+  denial. Preserve failed bootstrap artifacts and compare safe IDs through
   [operator recovery](../guides/deploy.md#recover-an-incomplete-bootstrap).
 - `pnpm typecheck`, `pnpm format:check`, and `pnpm check:workspace` validate source
   and workspace structure. Compose/PVC permission checks require real runtime
@@ -181,6 +182,8 @@ implicit permissions.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
 
 - 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
 

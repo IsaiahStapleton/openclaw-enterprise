@@ -66,8 +66,18 @@ An already-bootstrapped Installation receives no new identity, grants, key, or
 output, including installations created before initial-key delivery existed.
 Restarting does not replace missing files, expired/revoked keys, removed service
 identities, or removed grants. Use normal issuance/revocation for credential
-recovery and rotation. Bootstrap and Better Auth persistence are not atomic;
-uncertain commits preserve credentials for operator verification.
+recovery and rotation.
+
+Bootstrap makes one attempt. Any error emits `installation.bootstrap-failed`
+with available non-secret IDs and paths, then exits unsuccessfully. Created
+accounts, keys, and files remain, including partial output from a failed write.
+Bootstrap does not automatically revoke, delete, retry, repair, or reset them.
+The Helm initialization Job uses `backoffLimit: 0` and does not retry a failed
+attempt. Better Auth persistence and the Installation/IAM commit are separate;
+an error does not establish whether the transaction committed. Operators must
+resolve that outcome before manual repair, or explicitly reset an identified
+disposable Installation. See [incomplete bootstrap recovery](../guides/deploy.md#recover-an-incomplete-bootstrap).
+File existence alone is not proof of successful initialization.
 
 ## Session lifecycle
 
@@ -271,6 +281,8 @@ do not prove a production installation; their commands and required
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 22:29: Define single-attempt bootstrap failure handling with retained artifacts, no automatic recovery, and manual operator repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
 
 - 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 

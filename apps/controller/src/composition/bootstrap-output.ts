@@ -1,24 +1,13 @@
 import { constants } from "node:fs";
-import { lstat, open, unlink } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import type { ServiceKey } from "../auth/index.ts";
-
-export interface BootstrapOutputFile {
-  readonly path: string;
-  readonly dev: number;
-  readonly ino: number;
-}
 
 export interface BootstrapServiceKeyOutput {
   readonly data: ServiceKey & { readonly key: string };
   readonly meta: {
     readonly installationId: string;
   };
-}
-
-export interface BootstrapCleanupFailure {
-  readonly path: string;
-  readonly error: string;
 }
 
 export function bootstrapOutputPath(value: string, name: string): string {
@@ -31,10 +20,7 @@ export function bootstrapOutputPath(value: string, name: string): string {
   return value;
 }
 
-export async function writeProtectedBootstrapFile(
-  path: string,
-  contents: string,
-): Promise<BootstrapOutputFile> {
+export async function writeProtectedBootstrapFile(path: string, contents: string): Promise<void> {
   const parent = dirname(path);
   const parentStatus = await lstat(parent);
   if (!parentStatus.isDirectory() || parentStatus.isSymbolicLink()) {
@@ -49,55 +35,21 @@ export async function writeProtectedBootstrapFile(
     constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
     0o600,
   );
-  let output: BootstrapOutputFile | undefined;
   try {
     await handle.chmod(0o600);
-    const status = await handle.stat();
-    output = { path, dev: status.dev, ino: status.ino };
     await handle.writeFile(contents, { encoding: "utf8" });
     await handle.sync();
-  } catch (error) {
+  } finally {
     await handle.close();
-    await removeAttemptBootstrapFile(output);
-    await syncDirectory(parent);
-    throw error;
   }
-  try {
-    await handle.close();
-    await syncDirectory(parent);
-  } catch (error) {
-    await removeAttemptBootstrapFile(output);
-    throw error;
-  }
-  return output;
+  await syncDirectory(parent);
 }
 
 export async function writeProtectedBootstrapJson(
   path: string,
   payload: BootstrapServiceKeyOutput,
-): Promise<BootstrapOutputFile> {
-  return writeProtectedBootstrapFile(path, `${JSON.stringify(payload)}\n`);
-}
-
-export async function removeAttemptBootstrapFile(
-  file: BootstrapOutputFile | undefined,
-): Promise<BootstrapCleanupFailure | undefined> {
-  if (file === undefined) return undefined;
-  try {
-    const status = await lstat(file.path);
-    if (!status.isFile() || status.dev !== file.dev || status.ino !== file.ino) {
-      return undefined;
-    }
-    await unlink(file.path);
-    await syncDirectory(dirname(file.path));
-    return undefined;
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
-    return {
-      path: file.path,
-      error: error instanceof Error ? error.message : "Bootstrap output cleanup failed.",
-    };
-  }
+): Promise<void> {
+  await writeProtectedBootstrapFile(path, `${JSON.stringify(payload)}\n`);
 }
 
 async function syncDirectory(path: string): Promise<void> {

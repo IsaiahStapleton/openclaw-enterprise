@@ -162,7 +162,9 @@ The packaged Helm initialization Job creates the singleton Installation and
 human and service administrators before starting the API or worker. Its separate migration
 init container receives only `OCC_MIGRATION_DATABASE_URL`; the bootstrap
 container receives the application-role `OCC_DATABASE_URL`, Better Auth
-settings, and the following bootstrap settings.
+settings, and the following bootstrap settings. The Job sets `backoffLimit: 0`;
+failed initialization requires [manual repair](../guides/deploy.md#recover-an-incomplete-bootstrap)
+before another attempt.
 
 | Variable                          | Required value or format                                                                                |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------- |

@@ -5,7 +5,6 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   bootstrapOutputPath,
-  removeAttemptBootstrapFile,
   writeProtectedBootstrapFile,
 } from "../../apps/controller/src/composition/bootstrap-output.ts";
 
@@ -40,19 +39,4 @@ test("protected bootstrap output rejects relative paths, existing files, symlink
     writeProtectedBootstrapFile(join(publicDirectory, "key.json"), "secret"),
     /private to the runtime identity/,
   );
-});
-
-test("attempt cleanup removes only the exact bootstrap file created by this attempt", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "openclaw-bootstrap-output-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const path = join(directory, "attempt.json");
-  const output = await writeProtectedBootstrapFile(path, "first");
-  assert.equal(await removeAttemptBootstrapFile(output), undefined);
-  await assert.rejects(readFile(path, "utf8"), /ENOENT/);
-
-  const replaced = await writeProtectedBootstrapFile(path, "owned");
-  await rm(path);
-  await writeFile(path, "replacement", { mode: 0o600 });
-  assert.equal(await removeAttemptBootstrapFile(replaced), undefined);
-  assert.equal(await readFile(path, "utf8"), "replacement");
 });

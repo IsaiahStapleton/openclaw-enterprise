@@ -84,7 +84,7 @@ Fresh initialization provisions `OPENCLAW_DEV_EMAIL`/`OPENCLAW_DEV_PASSWORD`,
 adds a non-Agent service administrator to the native IAM seed, issues its
 initial key, syncs private output, and commits Installation/IAM/audit directly.
 The [bootstrap flow](local-password-authentication.md) owns commit, concurrency,
-and attempt-owned cleanup. Existing Installations retain accounts, credentials,
+and manual repair after a failed attempt. Existing Installations retain accounts, credentials,
 output, IAM policy, and revision history; missing or expired keys never trigger
 regeneration.
 
@@ -191,6 +191,8 @@ development.` means the application-role PostgreSQL connection is missing.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
 
 - 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
 

@@ -118,11 +118,12 @@ inconsistent account, or incorrect IAM identity fails closed.
 
 `bootstrap.serviceKey.fileName` selects the key basename beside the password;
 only this bootstrap container mounts their PVC. The Job uses
-`fsGroupChangePolicy: OnRootMismatch` so retry mounts preserve existing `0600`
-files instead of recursively adding group permissions. Known failures attempt cleanup
-of only attempt-owned artifacts; unknown COMMIT outcomes preserve them and fail
-for operator verification. Follow the [bootstrap flow](local-password-authentication.md)
-for the credential and failure boundaries. Neither secret appears in logs,
+`fsGroupChangePolicy: OnRootMismatch` so later mounts preserve existing `0600`
+files instead of recursively adding group permissions. `backoffLimit: 0` prevents
+automatic Job retries. Any initializer error preserves created accounts, keys,
+and files, emits `installation.bootstrap-failed`, and exits unsuccessfully.
+Follow the [bootstrap flow](local-password-authentication.md) for manual repair
+and the credential boundaries. Neither secret appears in logs,
 bootstrap responses, audit, or chart-created Kubernetes Secrets.
 
 Repeated initialization accepts the existing Installation only when the exact
@@ -268,6 +269,8 @@ through reauthorization, infrastructure effects, and result persistence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
 
 - 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
 

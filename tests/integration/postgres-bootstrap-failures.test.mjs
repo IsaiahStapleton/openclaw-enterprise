@@ -105,8 +105,6 @@ async function withPool(databaseUrl, operation) {
 async function resetFailureDatabase() {
   validatedFailureDatabaseUrl();
   await withPool(migratorDatabaseUrl(), async (pool) => {
-    await pool.query("DROP TRIGGER IF EXISTS bootstrap_apikey_delete_failure ON occ.apikey");
-    await pool.query("DROP FUNCTION IF EXISTS occ.bootstrap_apikey_delete_failure()");
     await pool.query("DROP TRIGGER IF EXISTS bootstrap_known_failure ON occ.installation");
     await pool.query("DROP FUNCTION IF EXISTS occ.bootstrap_known_failure()");
     await pool.query("DROP TRIGGER IF EXISTS bootstrap_failure_delay ON occ.installation");
@@ -115,7 +113,7 @@ async function resetFailureDatabase() {
   });
 }
 
-async function installKnownFailureCleanupFault() {
+async function installKnownInstallationFailure() {
   validatedFailureDatabaseUrl();
   await withPool(migratorDatabaseUrl(), async (pool) => {
     await pool.query(`
@@ -127,22 +125,9 @@ async function installKnownFailureCleanupFault() {
       $$
     `);
     await pool.query(`
-      CREATE OR REPLACE FUNCTION occ.bootstrap_apikey_delete_failure() RETURNS trigger
-      LANGUAGE plpgsql AS $$
-      BEGIN
-        RAISE EXCEPTION 'forced service key cleanup failure';
-      END;
-      $$
-    `);
-    await pool.query(`
       CREATE TRIGGER bootstrap_known_failure
       BEFORE INSERT ON occ.installation
       FOR EACH ROW EXECUTE FUNCTION occ.bootstrap_known_failure()
-    `);
-    await pool.query(`
-      CREATE TRIGGER bootstrap_apikey_delete_failure
-      BEFORE DELETE ON occ.apikey
-      FOR EACH ROW EXECUTE FUNCTION occ.bootstrap_apikey_delete_failure()
     `);
   });
 }
@@ -293,12 +278,16 @@ for (const sharedOutput of [false, true]) {
       const failed = results.filter((result) => !successful.includes(result));
       assert.equal(successful.length, 1, JSON.stringify(results));
       assert.equal(failed.length, 1, JSON.stringify(results));
-      assert.match(failed[0].stderr, /installation\.bootstrap-failed/);
+      const failedEvent = jsonLines(failed[0].stderr).find(
+        (line) => line.event === "installation.bootstrap-failed",
+      );
+      assert.ok(failedEvent, failed[0].stderr);
 
       const winner = jsonLines(successful[0].stdout).find(
         (line) => line.event === "installation.bootstrapped",
       );
       assert.ok(winner);
+      const loserCreatedServiceKey = failedEvent.attempt?.serviceKeyId !== undefined;
       const counts = await rowCounts();
       assert.deepEqual(counts, {
         installations: 1,
@@ -306,18 +295,19 @@ for (const sharedOutput of [false, true]) {
         principals: 1,
         service_principals: 1,
         bindings: 2,
-        service_keys: 1,
-        users: 1,
+        service_keys: loserCreatedServiceKey ? 2 : 1,
+        users: loserCreatedServiceKey ? 2 : 1,
       });
 
       const winnerIndex = environments.findIndex(
         (environment) => environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE === winner.serviceKeyFile,
       );
       assert.notEqual(winnerIndex, -1);
-      assert.equal(await exists(environments[winnerIndex].OCC_BOOTSTRAP_PASSWORD_FILE), true);
-      assert.equal(await exists(environments[winnerIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE), true);
+      const outputEnvironment = sharedOutput ? environments[0] : environments[winnerIndex];
+      assert.equal(await exists(outputEnvironment.OCC_BOOTSTRAP_PASSWORD_FILE), true);
+      assert.equal(await exists(outputEnvironment.OCC_BOOTSTRAP_SERVICE_KEY_FILE), true);
       const output = JSON.parse(
-        await readFile(environments[winnerIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8"),
+        await readFile(outputEnvironment.OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8"),
       );
       assert.equal(output.meta.installationId, winner.installationId);
       assert.equal(output.data.servicePrincipalId, winner.servicePrincipalId);
@@ -325,8 +315,11 @@ for (const sharedOutput of [false, true]) {
 
       for (const [index, environment] of environments.entries()) {
         if (index === winnerIndex || sharedOutput) continue;
-        assert.equal(await exists(environment.OCC_BOOTSTRAP_PASSWORD_FILE), false);
-        assert.equal(await exists(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE), false);
+        assert.equal(await exists(environment.OCC_BOOTSTRAP_PASSWORD_FILE), loserCreatedServiceKey);
+        assert.equal(
+          await exists(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE),
+          loserCreatedServiceKey,
+        );
       }
     },
   );
@@ -367,7 +360,10 @@ test(
     const rejected = results.filter((result) => !fulfilled.includes(result));
     assert.equal(fulfilled.length, 1, JSON.stringify(results));
     assert.equal(rejected.length, 1, JSON.stringify(results));
-    assert.match(rejected[0].stderr, /installation\.bootstrap-failed/);
+    const rejectedEvent = jsonLines(rejected[0].stderr).find(
+      (line) => line.event === "installation.bootstrap-failed",
+    );
+    assert.ok(rejectedEvent, rejected[0].stderr);
 
     const winnerIndex = results.findIndex((result) => fulfilled.includes(result));
     const loserIndex = winnerIndex === 0 ? 1 : 0;
@@ -377,7 +373,11 @@ test(
     );
     const winnerOutputDigest = sha256(winnerOutputBytes);
     const winnerOutput = JSON.parse(winnerOutputBytes);
-    assert.equal(await exists(environments[loserIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE), false);
+    const loserCreatedServiceKey = rejectedEvent.attempt?.serviceKeyId !== undefined;
+    assert.equal(
+      await exists(environments[loserIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE),
+      loserCreatedServiceKey,
+    );
 
     const counts = await rowCounts();
     assert.deepEqual(counts, {
@@ -386,8 +386,8 @@ test(
       principals: 1,
       service_principals: 1,
       bindings: 2,
-      service_keys: 1,
-      users: 1,
+      service_keys: loserCreatedServiceKey ? 2 : 1,
+      users: loserCreatedServiceKey ? 2 : 1,
     });
 
     const reloaded = await composePostgresDevelopment(
@@ -416,6 +416,20 @@ test(
     });
     assert.equal(installation.statusCode, 200, installation.body);
     assert.equal(installation.json().data.id, winnerOutput.meta.installationId);
+    if (loserCreatedServiceKey) {
+      const loserOutput = JSON.parse(
+        await readFile(environments[loserIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8"),
+      );
+      assert.equal(loserOutput.meta.installationId, rejectedEvent.attempt.installationId);
+      assert.equal(loserOutput.data.servicePrincipalId, rejectedEvent.attempt.servicePrincipalId);
+      assert.equal(loserOutput.data.id, rejectedEvent.attempt.serviceKeyId);
+      const rejectedInstallation = await reloaded.inject({
+        method: "GET",
+        url: "/installation",
+        headers: { "x-api-key": loserOutput.data.key, host: "127.0.0.1" },
+      });
+      assert.ok([401, 403].includes(rejectedInstallation.statusCode), rejectedInstallation.body);
+    }
   },
 );
 
@@ -445,9 +459,10 @@ test(
     const result = await runProductionBootstrap(environment);
     assert.equal(result.ok, false);
     const failure = jsonLines(result.stderr).find(
-      (line) => line.event === "installation.bootstrap-outcome-uncertain",
+      (line) => line.event === "installation.bootstrap-failed",
     );
     assert.ok(failure, result.stderr);
+    assert.match(failure.error, /commit outcome is unknown/);
     assert.equal(failure.attempt.passwordFile, environment.OCC_BOOTSTRAP_PASSWORD_FILE);
     assert.equal(failure.attempt.serviceKeyFile, environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE);
 
@@ -473,11 +488,11 @@ test(
 );
 
 test(
-  "known bootstrap failures keep cleaning independent artifacts and report safe diagnostics",
+  "known bootstrap failures preserve created artifacts and report safe diagnostics",
   requiresFailurePostgres,
   async (context) => {
     await resetFailureDatabase();
-    await installKnownFailureCleanupFault();
+    await installKnownInstallationFailure();
     const directory = await privateOutputDirectory("openclaw-bootstrap-known-failure-");
     context.after(async () => {
       await resetFailureDatabase();
@@ -495,15 +510,17 @@ test(
       (line) => line.event === "installation.bootstrap-failed",
     );
     assert.ok(failure, result.stderr);
-    assert.equal(failure.cleanupFailures.length, 1);
-    assert.deepEqual(failure.cleanupFailures[0], {
-      kind: "service_key",
-      id: failure.attempt.serviceKeyId,
-      error: "Bootstrap service key cleanup failed.",
-    });
+    assert.equal("cleanupFailures" in failure, false);
     assert.doesNotMatch(result.stderr, /^occ_/m);
-    assert.equal(await exists(environment.OCC_BOOTSTRAP_PASSWORD_FILE), false);
-    assert.equal(await exists(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE), false);
+    assert.equal(failure.attempt.passwordFile, environment.OCC_BOOTSTRAP_PASSWORD_FILE);
+    assert.equal(failure.attempt.serviceKeyFile, environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE);
+    assert.equal(await exists(environment.OCC_BOOTSTRAP_PASSWORD_FILE), true);
+    assert.equal(await exists(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE), true);
+    const serviceKeyOutput = JSON.parse(
+      await readFile(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8"),
+    );
+    assert.equal(serviceKeyOutput.meta.installationId, failure.attempt.installationId);
+    assert.equal(serviceKeyOutput.data.id, failure.attempt.serviceKeyId);
 
     const counts = await rowCounts();
     assert.deepEqual(counts, {
@@ -513,7 +530,7 @@ test(
       service_principals: 0,
       bindings: 0,
       service_keys: 1,
-      users: 0,
+      users: 1,
     });
   },
 );
@@ -544,9 +561,10 @@ test(
     const result = await runBootstrapInstallation(environment);
     assert.equal(result.ok, false);
     const failure = jsonLines(result.stderr).find(
-      (line) => line.event === "installation.bootstrap-outcome-uncertain",
+      (line) => line.event === "installation.bootstrap-failed",
     );
     assert.ok(failure, result.stderr);
+    assert.match(failure.error, /commit outcome is unknown/);
     assert.equal(failure.attempt.serviceKeyFile, environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE);
 
     assert.equal(await exists(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE), true);

@@ -138,7 +138,7 @@ Development with `OCC_DATABASE_URL` instead calls
 and loads the initialized Installation and current IAM state. In both modes,
 [`scripts/bootstrap-installation.mjs`](../../scripts/bootstrap-installation.mjs)
 runs before composition; the API and worker fail if that state is absent.
-Credential creation, private delivery, and commit/cleanup decisions belong to
+Credential creation, private delivery, and failure handling belong to
 the [bootstrap flow](local-password-authentication.md).
 
 When `OCC_CONFIG_PATH` is absent, it registers the bundled Docker Compute Driver and filesystem
@@ -228,6 +228,8 @@ execution begins in the adjacent
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
 
 - 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
 
