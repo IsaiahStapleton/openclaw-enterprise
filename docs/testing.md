@@ -30,17 +30,17 @@ override that selection behavior.
 
 Each linked section contains the setup requirements and commands for that suite.
 
-| Suite                    | What it verifies                                                                                                            | Setup and commands                                                        |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Local API and lifecycle  | HTTP routes, authentication, startup, worker behavior, Driver packages, and local process boundaries.                       | [Local checks](#local-checks)                                             |
-| PostgreSQL               | Real persistence, constraints, authentication, API keys, Secret metadata, queue claims, recovery, and production bootstrap. | [PostgreSQL](#postgresql)                                                 |
-| Images and Helm          | Built controller modules, runtime startup, and rendered production packaging.                                               | [Images and Helm](#images-and-helm)                                       |
-| Docker Compose           | Real PostgreSQL, API, worker, isolated containers, and embedded OpenClaw plus dedicated Codex model turns.                  | [Docker Compose model turns](#docker-compose-model-turns)                 |
-| Kubernetes HTTP fixture  | Real Kubernetes API, RBAC, ownership, revision routing, namespace preservation, and enforced NetworkPolicies.               | [Kubernetes HTTP fixture](#kubernetes-http-fixture)                       |
-| Kubernetes real runtimes | Dedicated Codex, embedded OpenClaw, shared workspace, and Secret API delivery, rotation, and authorization.                 | [Kubernetes model turns and Secrets](#kubernetes-model-turns-and-secrets) |
-| Slack                    | Actual Socket Mode ingress and a gateway-authored reply through dedicated Codex.                                            | [Slack](#slack)                                                           |
-| ChatGPT service accounts | Actual provider account creation, credential issuance, exact Agent delivery, and a model turn.                              | [ChatGPT service accounts](#chatgpt-service-accounts)                     |
-| OpenShell Sandbox        | Provider-owned dedicated Harness execution and filesystem/network enforcement through real tools.                           | [OpenShell Sandbox](#openshell-sandbox)                                   |
+| Suite                    | What it verifies                                                                                                                        | Setup and commands                                                        |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Local API and lifecycle  | HTTP routes, authentication, startup, worker behavior, Driver packages, and local process boundaries.                                   | [Local checks](#local-checks)                                             |
+| PostgreSQL               | Real persistence, constraints, authentication, API keys, Secret metadata, queue claims, recovery, and production bootstrap.             | [PostgreSQL](#postgresql)                                                 |
+| Images and Helm          | Built controller modules, runtime startup, and rendered production packaging.                                                           | [Images and Helm](#images-and-helm)                                       |
+| Docker Compose           | Real PostgreSQL, API, worker, isolated containers, and embedded OpenClaw plus dedicated Codex model turns.                              | [Docker Compose model turns](#docker-compose-model-turns)                 |
+| Kubernetes HTTP fixture  | Real Kubernetes API, RBAC, ownership, revision routing, namespace preservation, and enforced NetworkPolicies.                           | [Kubernetes HTTP fixture](#kubernetes-http-fixture)                       |
+| Kubernetes real runtimes | Dedicated Codex, embedded OpenClaw, OCC gateway administration, shared workspace, and Secret API delivery, rotation, and authorization. | [Kubernetes model turns and Secrets](#kubernetes-model-turns-and-secrets) |
+| Slack                    | Actual Socket Mode ingress and a gateway-authored reply through dedicated Codex.                                                        | [Slack](#slack)                                                           |
+| ChatGPT service accounts | Actual provider account creation, credential issuance, exact Agent delivery, and a model turn.                                          | [ChatGPT service accounts](#chatgpt-service-accounts)                     |
+| OpenShell Sandbox        | Provider-owned dedicated Harness execution and filesystem/network enforcement through real tools.                                       | [OpenShell Sandbox](#openshell-sandbox)                                   |
 
 ## Requirements and credentials
 
@@ -318,8 +318,16 @@ OCC_TEST_KUBERNETES_CONTEXT=k3d-oce
 OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_k8s_local
 OCC_TEST_KUBERNETES_GATEWAY_IMAGE=<gateway-image>@sha256:<digest>
 OCC_TEST_KUBERNETES_AGENT_IMAGE=<codex-image>@sha256:<digest>
+OCC_TEST_KUBERNETES_GATEWAY_PROXY_IP=<verified-apiserver-to-pod-source-ip>
 OCC_TEST_OPENAI_MODEL=gpt-5.1
 ```
+
+The gateway administration cases also require `helm` on `PATH`, or an existing
+Helm executable selected with `OCC_HELM_BIN`. The proxy IP is the exact observed
+API-server-to-Pod source address for your disposable cluster path; do not copy a
+fixture-only address into operator instructions. See
+[Kubernetes Compute Driver networking](reference/drivers/kubernetes-compute.md#networking)
+for the trusted-proxy deployment boundary.
 
 Run the ordinary runtime cases independently of Slack:
 
@@ -328,11 +336,22 @@ OCC_TEST_HARNESS_K3D_REAL=1 OCC_TEST_SLACK_LIVE=0 \
   node --env-file="$TEST_ENV_FILE" --test tests/integration/harness-topology-k3d-real.test.mjs
 ```
 
-Three cases must pass: dedicated Codex, embedded OpenClaw with a persisted
-service-account credential, and embedded OpenClaw using the Secret API. The
-last case verifies native SecretRefs, exact grants and denial, shared Secrets,
-rotation, and redeployment. It prepares those Secrets and grants itself. The
-independent Slack case is expected to skip in this run.
+To run only the gateway administration coverage after the full prerequisites are
+ready, target the case names:
+
+```sh
+OCC_TEST_HARNESS_K3D_REAL=1 OCC_TEST_SLACK_LIVE=0 \
+  node --env-file="$TEST_ENV_FILE" --test --test-name-pattern="OCC gateway administration" tests/integration/harness-topology-k3d-real.test.mjs
+```
+
+Five non-Slack cases must pass: two OCC gateway administration cases, dedicated
+Codex, embedded OpenClaw with a persisted service-account credential, and
+embedded OpenClaw using the Secret API. The gateway administration cases verify
+key-only enrollment recovery after token-persistence RBAC failure and real
+Kubernetes gateway command dispatch through the active Agent HTTP route. The
+Secret API case verifies native SecretRefs, exact grants and denial, shared
+Secrets, rotation, and redeployment. It prepares those Secrets and grants
+itself. The independent Slack case is expected to skip in this run.
 
 This suite uses the real production API and worker in the Node test process.
 It does not install the controller with Helm. Missing selected-suite
@@ -357,7 +376,7 @@ OCC_TEST_SLACK_LIVE=1 \
 This posts real Slack messages and leaves them in the channel. It verifies the
 reply and exact runtime/session evidence. The sender bot must differ from the
 Agent bot; its credential remains with the test runner. This selection skips
-the three ordinary runtime cases, so run both selections for complete Harness
+the five ordinary runtime cases, so run both selections for complete Harness
 coverage. See [Slack test settings](reference/settings.md#slack-test-environment).
 
 ## ChatGPT service accounts

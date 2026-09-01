@@ -507,14 +507,15 @@ or model turn. A separate real-runtime lane below provides model-turn proof.
 
 [`harness-topology-k3d-real.test.mjs`](../../tests/integration/harness-topology-k3d-real.test.mjs)
 is independently opt-in. Set `OCC_TEST_HARNESS_K3D_REAL=1` or explicitly select
-a real runtime image to enable the ordinary three-case suite. Once selected,
+a real runtime image to enable the ordinary five-case suite. Once selected,
 missing cluster, image, database, credential, or NetworkPolicy prerequisites
-fail instead of skipping. The ordinary suite verifies dedicated Codex, embedded
-OpenClaw with a persisted provider credential, and embedded OpenClaw with the
-Secret API through real Enterprise gateways on an explicitly selected disposable
-k3d cluster. For dedicated Codex coverage, set `OCC_TEST_OPENAI_MODEL` to an
-authorized model that supports Codex custom tools, such as `gpt-5.1`; the source
-default remains `gpt-4.1`.
+fail instead of skipping. The ordinary suite verifies two OCC gateway
+administration cases, dedicated Codex, embedded OpenClaw with a persisted
+provider credential, and embedded OpenClaw with the Secret API through real
+Enterprise gateways on an explicitly selected disposable k3d cluster. For
+dedicated Codex coverage, set `OCC_TEST_OPENAI_MODEL` to an authorized model
+that supports Codex custom tools, such as `gpt-5.1`; the source default remains
+`gpt-4.1`.
 
 The gateway administration cases also require `helm` on `PATH`, or an existing
 executable selected by `OCC_HELM_BIN`. They render the checked-in chart's RBAC
@@ -540,7 +541,7 @@ install the chart or deploy its controller workloads.
 ### Slack test environment
 
 `OCC_TEST_SLACK_LIVE=1` selects the separate live Slack case and suppresses the
-ordinary three-case suite. The Slack case uses the same production k3d,
+ordinary five-case suite. The Slack case uses the same production k3d,
 PostgreSQL, image, and model-turn prerequisites, then posts a real message and
 waits for a gateway-authored reply. It does not delete the Slack messages it
 creates.

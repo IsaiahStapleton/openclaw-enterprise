@@ -216,6 +216,7 @@ export OCC_TEST_HARNESS_K3D_REAL=1
 k3d image import '<local-gateway-image-tag>' '<local-codex-agent-image-tag>' -c oce
 export OCC_TEST_KUBERNETES_GATEWAY_IMAGE='<gateway-image>@sha256:<digest>'
 export OCC_TEST_KUBERNETES_AGENT_IMAGE='<codex-agent-image>@sha256:<digest>'
+export OCC_TEST_KUBERNETES_GATEWAY_PROXY_IP='%KUBERNETES_API_PROXY_IP'
 test -n "${OPENAI_API_KEY:-}"
 export OPENAI_API_KEY
 export OCC_TEST_OPENAI_MODEL=gpt-5.1
@@ -236,11 +237,16 @@ otherwise Kubernetes attempts a remote pull and reports `ImagePullBackOff`.
 Optional
 `OCC_TEST_KUBERNETES_OPENCLAW_VERSION` and `OCC_TEST_KUBERNETES_CODEX_VERSION`
 assert the actual image versions; Codex defaults to `0.147.0`. The ordinary
-real-runtime suite has three cases: `dedicated` Codex, `embedded` OpenClaw with
-a persisted provider credential, and `embedded` OpenClaw with the Secret API.
-Each case must produce real provider-backed model responses. Embedded OpenClaw
-uses one combined gateway/Agent Pod; dedicated Codex uses separate gateway and
-authenticated app-server Pods. All cases require
+real-runtime suite has five cases: two OCC gateway administration cases,
+`dedicated` Codex, `embedded` OpenClaw with a persisted provider credential,
+and `embedded` OpenClaw with the Secret API. The gateway administration cases
+also require `helm` on `PATH`, or an executable selected by `OCC_HELM_BIN`, and
+the exact observed API-server-to-Pod source IP in
+`OCC_TEST_KUBERNETES_GATEWAY_PROXY_IP`; do not copy fixture-only addresses into
+operator instructions. Each case must produce real provider-backed model
+responses or real gateway command evidence. Embedded OpenClaw uses one combined
+gateway/Agent Pod; dedicated Codex uses separate gateway and authenticated
+app-server Pods. All cases require
 operator-owned Agent-specific transport/model Secrets, exact projected
 workload identity, bounded Pod-local writable runtime state, and enforced
 default-deny networking. The model key appears only in the combined embedded
@@ -254,7 +260,7 @@ under `models.providers.codex`, with `api: "openai-responses"` and a fail-closed
 the Codex Agent, which alone receives the model credential.
 
 `OCC_TEST_SLACK_LIVE=1` selects the separate live Slack case and suppresses the
-ordinary three real-runtime cases. That case posts real Slack messages and waits
+ordinary five real-runtime cases. That case posts real Slack messages and waits
 for a gateway-authored reply; follow
 [the Slack testing guide](docs/testing.md#slack) before selecting it.
 
