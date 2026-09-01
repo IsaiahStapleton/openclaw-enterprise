@@ -65,34 +65,6 @@ test("the singleton platform resource model keeps Namespace ownership explicit",
   for (const unsupported of ["provider", "driver", "gateway", "claw", "", undefined]) {
     assert.equal(isResourceKind(unsupported), false);
   }
-
-  const installation = {
-    id: "installation-a",
-    name: "Enterprise",
-    createdAt: "2026-08-15T00:00:00.000Z",
-  };
-  const namespace = {
-    id: "namespace-a",
-    name: "Support",
-    status: "ready",
-    createdAt: installation.createdAt,
-  };
-  const agent = {
-    id: "agent-a",
-    namespaceId: namespace.id,
-    name: "Support agent",
-    configurationId: "configuration-a",
-    executionMode: "embedded",
-    servicePrincipalId: "service-principal-agent-a",
-    createdAt: installation.createdAt,
-  };
-
-  assert.equal(Object.hasOwn(namespace, "installationId"), false);
-  assert.equal(Object.hasOwn(agent, "installationId"), false);
-  assert.equal(agent.namespaceId, namespace.id);
-  assert.equal(agent.configurationId, "configuration-a");
-  assert.equal(agent.executionMode, "embedded");
-  assert.equal(agent.servicePrincipalId, "service-principal-agent-a");
 });
 
 test("an admitted AgentRevision is a detached and deeply immutable deployment snapshot", () => {

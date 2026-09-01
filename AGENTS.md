@@ -149,15 +149,15 @@ export OCC_MIGRATION_DATABASE_URL=postgresql://occ_migrator:occ-migrator-local@1
 pnpm db:migrate
 unset OCC_MIGRATION_DATABASE_URL
 export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_enterprise
-export OCC_PSQL_TEST_DATABASE_URL="$OCC_TEST_DATABASE_URL"
 export OCC_PRODUCTION_WIREUP_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_production_bootstrap
 pnpm test:postgres
 ```
 
 The production-bootstrap database must be separately migrated, disposable, and
-free of an existing Installation. `OCC_PSQL_TEST_DATABASE_URL` enables the real
-production queue cases; `OCC_PRODUCTION_WIREUP_DATABASE_URL` enables the
-production bootstrap case. Omitting either variable skips its associated proof.
+free of an existing Installation. `OCC_TEST_DATABASE_URL` enables real
+PostgreSQL persistence and queue coverage; `OCC_PRODUCTION_WIREUP_DATABASE_URL`
+enables the production bootstrap case. Omitting the bootstrap URL skips only
+that associated proof.
 
 Run Kubernetes integration only against an explicitly selected, disposable k3d
 cluster with enforcing NetworkPolicies. Preserve the default kubeconfig, the

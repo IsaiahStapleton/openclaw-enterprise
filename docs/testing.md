@@ -4,24 +4,20 @@ Choose a suite by the behavior you need to verify. Local conformance and API
 tests need no provider credentials. PostgreSQL, image, Kubernetes, and real
 model tests require the setup below. Run commands from the repository root.
 
-## Choose a test
+## Run tests
 
-| Suite                    | What it verifies                                                                                                                                 | Run                                                                                             |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| Conformance              | Contracts, IAM scope, audit hygiene, resource lifecycle, Secret bindings, credential projection, and Driver behavior with bounded fixtures.      | `pnpm test:conformance`                                                                         |
-| Local integration        | HTTP routes, authentication, startup, worker behavior, Driver packages, and local process boundaries. Infrastructure cases skip unless selected. | `pnpm test:integration` in an unconfigured test environment; see [local checks](#local-checks). |
-| PostgreSQL               | Real persistence, constraints, authentication, API keys, Secret metadata, queue claims, recovery, and production bootstrap.                      | [PostgreSQL](#postgresql)                                                                       |
-| Images and Helm          | Built controller modules, runtime startup, and rendered production packaging.                                                                    | [Images and Helm](#images-and-helm)                                                             |
-| Docker Compose           | Real PostgreSQL, API, worker, isolated containers, and embedded OpenClaw plus dedicated Codex model turns.                                       | [Docker Compose model turns](#docker-compose-model-turns)                                       |
-| Kubernetes HTTP fixture  | Real Kubernetes API, RBAC, ownership, revision routing, namespace preservation, and enforced NetworkPolicies.                                    | [Kubernetes HTTP fixture](#kubernetes-http-fixture)                                             |
-| Kubernetes real runtimes | Dedicated Codex, embedded OpenClaw, shared workspace, and Secret API delivery, rotation, and authorization.                                      | [Kubernetes model turns and Secrets](#kubernetes-model-turns-and-secrets)                       |
-| Slack                    | Actual Socket Mode ingress and a gateway-authored reply through dedicated Codex.                                                                 | [Slack](#slack)                                                                                 |
-| ChatGPT service accounts | Actual provider account creation, credential issuance, exact Agent delivery, and a model turn.                                                   | [ChatGPT service accounts](#chatgpt-service-accounts)                                           |
-| OpenShell Sandbox        | Provider-owned dedicated Harness execution and filesystem/network enforcement through real tools.                                                | [OpenShell Sandbox](#openshell-sandbox)                                                         |
+| Command                 | Tests selected                                                            |
+| ----------------------- | ------------------------------------------------------------------------- |
+| `pnpm test`             | All conformance and integration tests.                                    |
+| `pnpm test:conformance` | Conformance tests only.                                                   |
+| `pnpm test:integration` | Integration tests only, including infrastructure and real-runtime suites. |
 
 `pnpm test` selects every conformance and integration file. A green result can
 include skipped infrastructure tests; it is not proof that every integration
 ran. Run prepared infrastructure suites by exact filename, one suite at a time.
+The `pnpm test`, `pnpm test:conformance`, `pnpm test:integration`, and
+`pnpm test:postgres` scripts run `scripts/verify-workspace-boundary.mjs` before
+the Node.js test runner.
 
 Keep their variables scoped to a subshell or one test process. In particular,
 the OpenShell suite detects **any** configured test database, Kubernetes context,
@@ -29,6 +25,22 @@ or runtime image as selection, then requires its explicit opt-in and full setup.
 Running `pnpm test:integration` after exporting only `OCC_TEST_DATABASE_URL` can
 therefore fail in OpenShell. Setting `OCC_TEST_OPENSHELL_K3D_REAL=0` does not
 override that selection behavior.
+
+## Integration Tests
+
+Each linked section contains the setup requirements and commands for that suite.
+
+| Suite                    | What it verifies                                                                                                            | Setup and commands                                                        |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Local API and lifecycle  | HTTP routes, authentication, startup, worker behavior, Driver packages, and local process boundaries.                       | [Local checks](#local-checks)                                             |
+| PostgreSQL               | Real persistence, constraints, authentication, API keys, Secret metadata, queue claims, recovery, and production bootstrap. | [PostgreSQL](#postgresql)                                                 |
+| Images and Helm          | Built controller modules, runtime startup, and rendered production packaging.                                               | [Images and Helm](#images-and-helm)                                       |
+| Docker Compose           | Real PostgreSQL, API, worker, isolated containers, and embedded OpenClaw plus dedicated Codex model turns.                  | [Docker Compose model turns](#docker-compose-model-turns)                 |
+| Kubernetes HTTP fixture  | Real Kubernetes API, RBAC, ownership, revision routing, namespace preservation, and enforced NetworkPolicies.               | [Kubernetes HTTP fixture](#kubernetes-http-fixture)                       |
+| Kubernetes real runtimes | Dedicated Codex, embedded OpenClaw, shared workspace, and Secret API delivery, rotation, and authorization.                 | [Kubernetes model turns and Secrets](#kubernetes-model-turns-and-secrets) |
+| Slack                    | Actual Socket Mode ingress and a gateway-authored reply through dedicated Codex.                                            | [Slack](#slack)                                                           |
+| ChatGPT service accounts | Actual provider account creation, credential issuance, exact Agent delivery, and a model turn.                              | [ChatGPT service accounts](#chatgpt-service-accounts)                     |
+| OpenShell Sandbox        | Provider-owned dedicated Harness execution and filesystem/network enforcement through real tools.                           | [OpenShell Sandbox](#openshell-sandbox)                                   |
 
 ## Requirements and credentials
 
@@ -98,13 +110,14 @@ pnpm test:integration
 ```
 
 `check:workspace` checks the active workspace and exclusion of `legacy/`.
-`openapi:check` compares generated routes and both API artifacts with the checked-in
-versions. `typecheck` and `build` currently invoke the same TypeScript build command.
+The test scripts above run the same canonical workspace verification before
+their selected Node.js tests. `openapi:check` compares generated routes and both
+API artifacts with the checked-in versions. `typecheck` and `build` currently
+invoke the same TypeScript build command.
 
 The [conformance tests](../tests/conformance/) cover domain rules and selected
 Driver contracts. Kubernetes conformance tests use fixtures and rendered
-resources; they do not exercise a live cluster. One Kubernetes Configuration
-conformance placeholder is always skipped.
+resources; they do not exercise a live cluster.
 
 The local [integration tests](../tests/integration/) include these groups:
 
@@ -128,9 +141,9 @@ node --test --test-name-pattern='part of the test name' tests/integration/secret
 
 ## PostgreSQL
 
-Requires Docker Compose and host `psql` for the production queue cases. Use
-disposable databases: tests can initialize or change singleton platform state.
-The production bootstrap database must be migrated and contain no Installation.
+Requires Docker Compose. Use disposable databases: tests can initialize or
+change singleton platform state. The production bootstrap database must be
+migrated and contain no Installation.
 
 The following creates three new databases: general tests, production bootstrap,
 and Kubernetes. If any name already exists, choose a new test name and update
@@ -155,23 +168,23 @@ pnpm db:up
 ```
 
 Compose provisions the local `occ_migrator` and `occ_app` roles. Run migrations
-as `occ_migrator` and the tests as the less-privileged `occ_app`:
+as `occ_migrator` and the tests as the less-privileged `occ_app`. Queue coverage
+uses `OCC_TEST_DATABASE_URL` with the other `pg.Pool`-backed PostgreSQL tests;
+production bootstrap still needs its own URL:
 
 ```sh
 (
   export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_test_local
-  export OCC_PSQL_TEST_DATABASE_URL="$OCC_TEST_DATABASE_URL"
   export OCC_PRODUCTION_WIREUP_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_bootstrap_local
   pnpm test:postgres
   node --test tests/integration/compute-singleton-worker.test.mjs
 )
 ```
 
-The three URLs select different coverage. Omitting the general URL skips most
-persistence tests; omitting `OCC_PSQL_TEST_DATABASE_URL` skips the production
-queue cases; omitting `OCC_PRODUCTION_WIREUP_DATABASE_URL` skips production
-bootstrap. `test:postgres` does not include the singleton-worker file, hence the
-second command.
+The two PostgreSQL URLs select different coverage. Omitting the general URL
+skips most persistence tests, including queue coverage; omitting
+`OCC_PRODUCTION_WIREUP_DATABASE_URL` skips production bootstrap. `test:postgres`
+does not include the singleton-worker file, hence the second command.
 
 Four optional live Configuration cases additionally require
 `OCC_TEST_KUBERNETES_CONFIGURATION=1` and an already configured live Kubernetes
@@ -396,8 +409,8 @@ proof. Missing prerequisites after selection fail rather than skip.
 Read the test runner's pass, failure, and skip counts. Record the selected files,
 commit, nonsecret image digests/model, and which optional cases were enabled.
 Do not report a skipped model turn, database case, or cluster case as verified.
-Keep the conformance placeholder, optional live Configuration cases, and mutually
-exclusive Slack selection distinct from missing prerequisites.
+Keep optional live Configuration cases and mutually exclusive Slack selection
+distinct from missing prerequisites.
 
 Tests normally clean up their own temporary processes, resources, and files.
 Kubernetes suites leave the selected cluster and database in place. After all

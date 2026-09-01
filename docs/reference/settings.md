@@ -297,13 +297,12 @@ directory, the `occ` application schema, and
 
 ### PostgreSQL test environment
 
-| Variable                             | Required by                              | Behavior                                                                                                                       |
-| ------------------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `OCC_TEST_DATABASE_URL`              | Real PostgreSQL integration tests.       | Must use an initialized application-role database. General PostgreSQL cases are skipped when absent.                           |
-| `OCC_MIGRATION_DATABASE_URL`         | `db:migrate` setup before tests.         | Uses the separate migrator role for schema and migration-history ownership; the test process should use application-role URLs. |
-| `OCC_PSQL_TEST_DATABASE_URL`         | Production controller queue integration. | Uses a migrated application-role database and requires host `psql` on `PATH`; production queue cases are skipped when absent.  |
-| `OCC_PRODUCTION_WIREUP_DATABASE_URL` | Production bootstrap integration.        | Uses a separately migrated, disposable, initially empty application-role database; the production bootstrap skips when absent. |
-| `OCC_TEST_KUBERNETES_CONFIGURATION`  | Optional live Configuration coverage.    | Set to `1` only when the PostgreSQL integration also has an explicitly configured live Kubernetes Configuration Driver.        |
+| Variable                             | Required by                           | Behavior                                                                                                                       |
+| ------------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `OCC_TEST_DATABASE_URL`              | Real PostgreSQL integration tests.    | Must use an initialized application-role database. General PostgreSQL and queue cases are skipped when absent.                 |
+| `OCC_MIGRATION_DATABASE_URL`         | `db:migrate` setup before tests.      | Uses the separate migrator role for schema and migration-history ownership; the test process should use application-role URLs. |
+| `OCC_PRODUCTION_WIREUP_DATABASE_URL` | Production bootstrap integration.     | Uses a separately migrated, disposable, initially empty application-role database; the production bootstrap skips when absent. |
+| `OCC_TEST_KUBERNETES_CONFIGURATION`  | Optional live Configuration coverage. | Set to `1` only when the PostgreSQL integration also has an explicitly configured live Kubernetes Configuration Driver.        |
 
 The production-bootstrap integration must use a separately migrated,
 disposable database without an existing Installation. Once both required
@@ -312,16 +311,16 @@ connections:
 
 ```bash
 export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_enterprise
-export OCC_PSQL_TEST_DATABASE_URL="$OCC_TEST_DATABASE_URL"
 export OCC_PRODUCTION_WIREUP_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_production_bootstrap
 
 node --test --test-concurrency=1 \
   tests/integration/postgres-*.test.mjs
 ```
 
-The production queue and bootstrap cases can be prepared from the host with
-`psql` or the Compose PostgreSQL service, then migrated with
-`OCC_MIGRATION_DATABASE_URL` pointed at each disposable database. See the
+The production queue coverage now uses `OCC_TEST_DATABASE_URL` with the other
+PostgreSQL tests. The bootstrap database can be prepared with the Compose
+PostgreSQL service, then migrated with `OCC_MIGRATION_DATABASE_URL` pointed at
+that disposable database. See the
 [PostgreSQL testing guide](../testing.md#postgresql) for the full setup sequence.
 
 The bootstrap integration creates its own exact Installation and administrator;

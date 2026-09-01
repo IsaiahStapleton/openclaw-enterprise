@@ -1,5 +1,7 @@
 # OpenClaw Enterprise
 
+<img src="docs/assets/lobster-mech-transparent.png" alt="Comic-style lobster in a mech suit" width="200" />
+
 A control plane for deploying and managing OpenClaw and Codex Agents.
 Run locally with Docker Compose or deploy to Kubernetes.
 
