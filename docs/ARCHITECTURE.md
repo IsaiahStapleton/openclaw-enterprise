@@ -7,7 +7,7 @@ This document describes the current implementation. The
 [platform design](design.md) defines the authoritative target architecture;
 capabilities described there are not necessarily implemented. Current supported
 behavior is owned by the [feature reference](reference/README.md), procedures by
-the [two guides](README.md#start-and-deploy), and source execution by
+the [guides](README.md#start-and-deploy), and source execution by
 [flow docs](README.md#understand-the-code).
 
 ## System overview
