@@ -42,6 +42,7 @@ import {
 } from "@openclaw-enterprise/contracts";
 import {
   AuthorizationDeniedError,
+  BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   DependencyUnavailableError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
@@ -1105,6 +1106,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           created.selectDriver("sandbox", options.sandboxDriver.id);
         }
         await created.transact(async (unit) => {
+          await created.createNamespace(context.actorId, {
+            name: BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+          });
           await unit.audit.append(
             event(operation, request, target, "bootstrap", context, decision.evidence),
           );

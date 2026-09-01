@@ -207,7 +207,7 @@ the worker binds its tenant identity before the platform Namespace becomes
 `ready`. Wait for readiness before creating the first Configuration; an
 external Namespace that is still provisioning rejects its creation with `409`.
 See
-[existing-namespace setup](../guides/deploy.md#use-an-existing-kubernetes-namespace).
+[Kubernetes namespace requirements](drivers/kubernetes-compute.md#namespaces-and-isolation).
 Its data contains exactly one entry:
 
 ```json

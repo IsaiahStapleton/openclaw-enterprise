@@ -318,13 +318,10 @@ docker compose exec -T worker \
   node -e 'process.exit((process.env.OPENAI_API_KEY || "").trim() ? 0 : 1)'
 ```
 
-Create a development Namespace and save its server-generated ID:
+Select the initial `default` Namespace and save its server-generated ID:
 
 ```bash
-OCC_E2E_DIRECTORY="$(mktemp -d)"
-printf '{"name":"tui-development"}\n' > "$OCC_E2E_DIRECTORY/namespace.json"
-NAMESPACE_RESPONSE="$(scripts/occ-api POST /namespaces "$OCC_E2E_DIRECTORY/namespace.json")"
-NAMESPACE_ID="$(printf '%s' "$NAMESPACE_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+NAMESPACE_ID="$(scripts/occ-api GET /namespaces | python3 -c 'import json,sys; matches=[n for n in json.load(sys.stdin)["data"] if n["name"] == "default"]; assert len(matches) == 1, "Expected one bootstrap-created default Namespace"; print(matches[0]["id"])')"
 export NAMESPACE_ID
 ```
 
@@ -379,31 +376,23 @@ line.
 
 #### Use a driver-managed Kubernetes namespace
 
-Create a platform Namespace with `scripts/occ-api POST /namespaces
-namespace-request.json`. The worker creates the backing Kubernetes namespace and
-marks it with `openclaw.dev/namespace-id=$NAMESPACE_ID`. Wait until
-`GET /namespaces/$NAMESPACE_ID` reports `ready` before creating Configurations.
-
-#### Use an existing Kubernetes namespace
-
-Before `POST /namespaces`, dedicate an existing Active Kubernetes namespace,
-remove foreign NetworkPolicies, and mark the operator-owned lifecycle:
+Fresh bootstrap creates a platform Namespace named `default`. Read
+`scripts/occ-api GET /namespaces` and select its server-assigned ID as
+`NAMESPACE_ID`. The worker creates
+the backing Kubernetes namespace and labels it with
+`openclaw.dev/namespace=$NAMESPACE_ID`. This is separate from Kubernetes'
+built-in `default` namespace. Once the worker has created it, discover and
+export its name for the tenant RoleBindings:
 
 ```bash
-kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
-  label namespace "$TENANT_NAMESPACE" \
-  pod-security.kubernetes.io/enforce=restricted \
-  pod-security.kubernetes.io/audit=restricted \
-  pod-security.kubernetes.io/warn=restricted
-kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
-  annotate namespace "$TENANT_NAMESPACE" \
-  openclaw.dev/namespace-lifecycle=external
+TENANT_NAMESPACE="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
+  get namespaces -l "openclaw.dev/namespace=$NAMESPACE_ID" -o json | \
+  python3 -c 'import json,sys; items=json.load(sys.stdin)["items"]; assert len(items) == 1, "Expected one backing Namespace; check worker provisioning"; print(items[0]["metadata"]["name"])')" && export TENANT_NAMESPACE
 ```
 
-Submit `{"name":"customer-support","existingNamespace":"customer-support-prod"}`
-to `POST /namespaces`. Docker or external Compute installations reject
-`existingNamespace` with `409`. Missing, duplicate, foreign, or partial tenant
-markers fail closed; deletion preserves externally owned namespaces.
+If no backing namespace is found, check the worker logs and repeat discovery
+after creation. Complete the tenant RoleBindings below, then wait until
+`GET /namespaces/$NAMESPACE_ID` reports `ready` before creating Configurations.
 
 #### Grant tenant RoleBindings
 
@@ -431,8 +420,8 @@ bound Secrets.
 Prepare Agent deployment after the Namespace is ready. The operator shell must
 have `OCC_URL`, `OCC_SERVICE_KEY_FILE`, `NAMESPACE_ID`,
 `TENANT_NAMESPACE`, `KUBECONFIG_FILE`, and `CONTEXT` set. `TENANT_NAMESPACE`
-is the Kubernetes namespace created by the driver or the existing namespace
-accepted during [Namespace preparation](#prepare-each-namespace).
+is the Kubernetes namespace created by the driver during
+[Namespace preparation](#prepare-each-namespace).
 
 ### Configure the Agent runtime
 

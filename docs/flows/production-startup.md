@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
 updated: 2026-09-01
-last_updated_session: codex/01a05e87-6c64-7960-b9c2-f444d4a3d737
+last_updated_session: codex/01a05ef1-ee29-7941-80f2-448bb0789969
 ---
 
 # Production Startup Flow
@@ -103,7 +103,14 @@ and protected output paths.
 
 `scripts/bootstrap-installation.mjs` creates or verifies the singleton
 Installation, human administrator, service administrator, IAM seed, audit
-evidence, and initial service key. It writes password and service-key files only
+evidence, and initial service key. On fresh bootstrap, it creates the initial
+`default` Namespace through `OpenClawController.createNamespace`, authorized
+as the bootstrap Principal. The Namespace and its queued reconciliation commit
+with Installation/IAM state and bootstrap audit; existing Installations receive
+no new Namespace. The worker later provisions normal Driver-owned infrastructure;
+operators still provide the tenant RoleBindings described in the deployment
+guide. The platform name does not select Kubernetes' `default` namespace.
+It writes password and service-key files only
 from the bootstrap container to the protected PVC. Existing output, unsafe
 storage permissions, inconsistent accounts, or mismatched IAM identity fail the
 Job; Helm failure does not imply the database hook was rolled back.
@@ -178,6 +185,8 @@ tenant deployment and TUI procedures run.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 14:51: Document initial default Namespace creation and unchanged repeat-bootstrap behavior. (codex/01a05ef1-ee29-7941-80f2-448bb0789969 - 872fa544c98bb7ad11b2d92d777e49229ececbf5)
 
 - 2026-09-01 12:58: Trace production bootstrap-volume preparation, Helm startup, and authenticated Installation proof. (codex/01a05e87-6c64-7960-b9c2-f444d4a3d737 - bdb846c38d5dae6085a8841f720c93068ba8ad15)
 - 2026-09-01 10:19: Validate Provider configuration at startup and exact saved ownership at use, preserving API repair access. (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158)

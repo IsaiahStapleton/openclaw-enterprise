@@ -14,6 +14,7 @@ import { createTestConfigurationDriver } from "../helpers/configuration-driver.m
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { createInstallationDriverConfiguration } from "../helpers/installation-driver-configuration.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
+import { BOOTSTRAP_DEFAULT_NAMESPACE_NAME } from "../../packages/occ/src/index.ts";
 
 const databaseUrl = process.env.OCC_PRODUCTION_WIREUP_DATABASE_URL;
 const repository = fileURLToPath(new URL("../../", import.meta.url));
@@ -27,6 +28,18 @@ const authBaseURL = "http://127.0.0.1:0";
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+async function defaultNamespaceRows(pool) {
+  return (
+    await pool.query(
+      `SELECT namespace.id, namespace.name, namespace.status, work.idempotency_key
+       FROM occ.namespaces AS namespace
+       JOIN occ.controller_work AS work ON work.namespace_id = namespace.id
+       WHERE namespace.name = $1`,
+      [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
+    )
+  ).rows;
 }
 
 function createPassiveComputeDriver() {
@@ -112,6 +125,15 @@ test(
         "SELECT count(*)::integer AS count FROM occ.session",
       );
       assert.equal(bootstrapSessions.rows[0].count, 0);
+      const defaultNamespace = await defaultNamespaceRows(pool);
+      assert.equal(defaultNamespace.length, 1);
+      assert.match(defaultNamespace[0].id, /^ns_/);
+      assert.equal(defaultNamespace[0].name, BOOTSTRAP_DEFAULT_NAMESPACE_NAME);
+      assert.equal(defaultNamespace[0].status, "provisioning");
+      assert.equal(
+        defaultNamespace[0].idempotency_key,
+        `namespace:${defaultNamespace[0].id}:reconcile:ready`,
+      );
 
       const passwordStat = await stat(environment.OCC_BOOTSTRAP_PASSWORD_FILE);
       assert.equal(passwordStat.mode & 0o777, 0o600);
@@ -156,6 +178,7 @@ test(
         env: environment,
       });
       assert.match(repeated.stdout, /installation\.already-bootstrapped/);
+      assert.deepEqual(await defaultNamespaceRows(pool), defaultNamespace);
       assert.equal(
         sha256((await readFile(environment.OCC_BOOTSTRAP_PASSWORD_FILE, "utf8")).trim()),
         passwordDigest,
@@ -178,6 +201,7 @@ test(
         env: existingOnlyEnvironment,
       });
       assert.match(existingOnly.stdout, /installation\.already-bootstrapped/);
+      assert.deepEqual(await defaultNamespaceRows(pool), defaultNamespace);
       assert.equal(
         sha256((await readFile(environment.OCC_BOOTSTRAP_PASSWORD_FILE, "utf8")).trim()),
         passwordDigest,
@@ -345,6 +369,69 @@ test(
           ...(response.status === 204 ? {} : { data: (await response.json()).data }),
         };
       }
+
+      const defaultConfiguration = await request(
+        "POST",
+        `/namespaces/${defaultNamespace[0].id}/configurations`,
+        {
+          kind: "agent",
+          values: { model: "preserved-default" },
+        },
+      );
+      assert.equal(defaultConfiguration.status, 201);
+      const defaultAgent = await request("POST", `/namespaces/${defaultNamespace[0].id}/agents`, {
+        name: `default-agent-${randomUUID()}`,
+        configurationId: defaultConfiguration.data.id,
+      });
+      assert.equal(defaultAgent.status, 201);
+      const persistedDefaultNamespace = await request(
+        "GET",
+        `/namespaces/${defaultNamespace[0].id}`,
+      );
+      assert.equal(persistedDefaultNamespace.status, 200);
+      const persistedDefaultConfiguration = await request(
+        "GET",
+        `/namespaces/${defaultNamespace[0].id}/configurations/${defaultConfiguration.data.id}`,
+      );
+      assert.equal(persistedDefaultConfiguration.status, 200);
+      assert.deepEqual(persistedDefaultConfiguration.data.values, {
+        model: "preserved-default",
+      });
+      const persistedDefaultAgent = await request(
+        "GET",
+        `/namespaces/${defaultNamespace[0].id}/agents/${defaultAgent.data.id}`,
+      );
+      assert.equal(persistedDefaultAgent.status, 200);
+      assert.equal(persistedDefaultAgent.data.configurationId, defaultConfiguration.data.id);
+      const repeatAfterUserState = await run(
+        process.execPath,
+        ["scripts/bootstrap-installation.mjs"],
+        {
+          cwd: repository,
+          env: existingOnlyEnvironment,
+        },
+      );
+      assert.match(repeatAfterUserState.stdout, /installation\.already-bootstrapped/);
+      assert.deepEqual(await defaultNamespaceRows(pool), defaultNamespace);
+      assert.deepEqual(
+        await request("GET", `/namespaces/${defaultNamespace[0].id}`),
+        persistedDefaultNamespace,
+      );
+      assert.deepEqual(
+        await request(
+          "GET",
+          `/namespaces/${defaultNamespace[0].id}/configurations/${defaultConfiguration.data.id}`,
+        ),
+        persistedDefaultConfiguration,
+      );
+      assert.deepEqual(
+        await request(
+          "GET",
+          `/namespaces/${defaultNamespace[0].id}/agents/${defaultAgent.data.id}`,
+        ),
+        persistedDefaultAgent,
+      );
+
       const namespace = await request("POST", "/namespaces", {
         name: `production-service-account-${randomUUID()}`,
       });

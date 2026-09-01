@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
 updated: 2026-09-01
-last_updated_session: codex/01a05e87-6c64-7960-b9c2-f444d4a3d737
+last_updated_session: codex/01a05ef1-ee29-7941-80f2-448bb0789969
 ---
 
 # Development Startup Flow
@@ -82,8 +82,12 @@ does not invoke migration or bootstrap directly.
 
 Fresh bootstrap creates the development human administrator, the non-Agent
 service administrator, the singleton Installation, native IAM seed, audit
-evidence, and the initial service-key response. Existing Installations retain
-their accounts, keys, IAM policy, configuration, and revision history. Missing,
+evidence, and the initial service-key response. The bootstrap Principal creates
+the initial `default` Namespace through `OpenClawController.createNamespace`;
+its `provisioning` state and queued reconciliation commit with the Installation
+and audit. The worker later provisions backing infrastructure through the
+selected Compute Driver. Existing Installations retain their Namespaces,
+accounts, keys, IAM policy, configuration, and revision history. Missing,
 expired, or revoked keys do not trigger another bootstrap issue.
 
 ### 3. Wait for API and worker readiness
@@ -163,6 +167,8 @@ cannot export variables into the caller's shell.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 14:51: Document initial default Namespace creation and unchanged repeat-bootstrap behavior. (codex/01a05ef1-ee29-7941-80f2-448bb0789969 - 872fa544c98bb7ad11b2d92d777e49229ececbf5)
 
 - 2026-09-01 12:58: Trace the helper-driven development startup path and authenticated Installation proof. (codex/01a05e87-6c64-7960-b9c2-f444d4a3d737 - bdb846c38d5dae6085a8841f720c93068ba8ad15)
 - 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
