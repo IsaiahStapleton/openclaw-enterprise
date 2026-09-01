@@ -1,7 +1,7 @@
 # Feature Spec: Bootstrap default Namespace
 
 **Date:** 2026-09-01
-**Status:** Implementing — behavior is implemented in PR #11; swarm review and verification remain.
+**Status:** Completed — implemented and locally verified in PR #11; merge and deployment are outside this task.
 **Owner:** OpenClaw Control Center
 
 ## Problem and Decision
@@ -14,9 +14,10 @@ This records the user-approved task implemented in
 [PR #11](https://github.com/openclaw/openclaw-enterprise/pull/11), initially at
 `4e454bde137f6a2d37ca750ae07c303b4286ac4b` over upstream
 `872fa544c98bb7ad11b2d92d777e49229ececbf5`. The implementation predates this
-specification; the remaining work is the requested swarm delivery gates.
-The [platform design](../docs/design.md) remains authoritative, and
-[Namespaces](../docs/reference/namespaces.md#initial-namespace) owns current behavior.
+specification. The subsequent swarm pass reviewed the contract, simplified
+repeated test assertions, and independently verified the applicable evidence.
+The [platform design](../../docs/design.md) remains authoritative, and
+[Namespaces](../../docs/reference/namespaces.md#initial-namespace) owns current behavior.
 
 ## Scope
 
@@ -50,21 +51,21 @@ The [platform design](../docs/design.md) remains authoritative, and
    intact. Repeated HTTP bootstrap retains its `409` response.
 6. Authorization failure or an uncommitted platform transaction does not leave
    a partial Namespace/work item. An ambiguous commit still requires the
-   [existing recovery procedure](../docs/guides/deploy.md#recover-an-incomplete-bootstrap).
+   [existing recovery procedure](../../docs/guides/deploy.md#recover-an-incomplete-bootstrap).
    Concurrent initializers use existing singleton/transaction constraints.
 
 ## Implementation
 
-1. Reuse the shared `default` name in [OCC](../packages/occ/src/index.ts), and
+1. Reuse the shared `default` name in [OCC](../../packages/occ/src/index.ts), and
    invoke normal Namespace creation inside the CLI and HTTP bootstrap transactions
-   in [the initializer](../scripts/bootstrap-installation.mjs) and
-   [the API](../apps/controller/src/index.ts).
+   in [the initializer](../../scripts/bootstrap-installation.mjs) and
+   [the API](../../apps/controller/src/index.ts).
 2. Keep tests at the supported HTTP, native IAM, PostgreSQL, and worker boundaries.
    Preserve distinct authorization, concurrency, rollback, retry, and configured
    Namespace-state evidence; remove redundant branch-only setup/assertions.
 3. Update the quickstart, deployment guide, current reference, and
-   [development](../docs/flows/development-startup.md) and
-   [production](../docs/flows/production-startup.md) startup flows. Users discover
+   [development](../../docs/flows/development-startup.md) and
+   [production](../../docs/flows/production-startup.md) startup flows. Users discover
    the platform ID through `GET /namespaces`; Kubernetes operators discover the
    backing namespace by its existing `openclaw.dev/namespace` label before RBAC.
 4. Complete independent code, simplification, docs, and dead-code reviews;
@@ -93,4 +94,5 @@ fixture-backed API tests do not establish those outcomes.
 
 ## Changelog
 
+- 2026-09-01 15:26: Complete the scoped implementation and independent swarm verification; archive this implementation record and retain the Namespace reference as current behavior. (01a05ef1-ee29-7941-80f2-448bb0789969 - eb311f6cf40a424937f6d4fa1c458f4a1dbc171b)
 - 2026-09-01 15:08: Record the approved default-Namespace contract and remaining swarm gates after the initial implementation. (01a05ef1-ee29-7941-80f2-448bb0789969 - 4e454bde137f6a2d37ca750ae07c303b4286ac4b)
