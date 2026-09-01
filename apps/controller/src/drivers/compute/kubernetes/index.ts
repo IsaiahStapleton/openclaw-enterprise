@@ -157,6 +157,7 @@ interface GatewayConfigurationSnapshot {
   readonly name: string;
   readonly revision: number;
   readonly revisionId: string;
+  readonly usesTrustedProxyAuth: boolean;
   readonly annotations: Readonly<Record<string, string>>;
 }
 
@@ -2278,6 +2279,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
       name: `gateway-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`,
       revision: revision.revision,
       revisionId: revision.id,
+      usesTrustedProxyAuth:
+        asRecord(asRecord(revision.configuration.gateway)?.auth)?.mode === "trusted-proxy",
       annotations: {
         "openclaw.dev/configuration-id": revision.configurationId,
         "openclaw.dev/configuration-kind": revision.configurationKind,
@@ -2902,8 +2905,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
             value: `ws://agent-${suffix}:${AGENT_TRANSPORT_PORT}`,
           });
         }
+        // Native trusted-proxy authentication rejects a simultaneously configured shared token.
+        if (configuration?.usesTrustedProxyAuth !== true) {
+          variables.push(
+            secret("OPENCLAW_GATEWAY_TOKEN", runtime.transportSecretPrefix, GATEWAY_TOKEN_KEY),
+          );
+        }
         variables.push(
-          secret("OPENCLAW_GATEWAY_TOKEN", runtime.transportSecretPrefix, GATEWAY_TOKEN_KEY),
           { name: "OPENCLAW_STATE_DIR", value: "/home/node/.openclaw" },
           { name: "OPENCLAW_GATEWAY_PORT", value: String(this.options.network.gatewayPort) },
         );

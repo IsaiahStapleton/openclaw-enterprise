@@ -30,17 +30,18 @@ override that selection behavior.
 
 Each linked section contains the setup requirements and commands for that suite.
 
-| Suite                    | What it verifies                                                                                                                                         | Setup and commands                                                        |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Local API and lifecycle  | HTTP routes, authentication, startup, worker behavior, Driver packages, and local process boundaries.                                                    | [Local checks](#local-checks)                                             |
-| PostgreSQL               | Real persistence, constraints, authentication, API keys, Secret metadata, queue claims, recovery, and production bootstrap.                              | [PostgreSQL](#postgresql)                                                 |
-| Images and Helm          | Built controller modules, runtime startup, and rendered production packaging.                                                                            | [Images and Helm](#images-and-helm)                                       |
-| Docker Compose           | Real PostgreSQL, API, worker, isolated containers, and embedded OpenClaw plus dedicated Codex model turns.                                               | [Docker Compose model turns](#docker-compose-model-turns)                 |
-| Kubernetes HTTP fixture  | Real Kubernetes API, RBAC, ownership, revision routing, namespace preservation, and enforced NetworkPolicies.                                            | [Kubernetes HTTP fixture](#kubernetes-http-fixture)                       |
-| Kubernetes real runtimes | Dedicated Codex, embedded OpenClaw, shared workspace, and Secret API delivery, rotation, and authorization. Workspace-file end-to-end proof is separate. | [Kubernetes model turns and Secrets](#kubernetes-model-turns-and-secrets) |
-| Slack                    | Actual Socket Mode ingress and a gateway-authored reply through dedicated Codex.                                                                         | [Slack](#slack)                                                           |
-| ChatGPT service accounts | Actual provider account creation, credential issuance, exact Agent delivery, and a model turn.                                                           | [ChatGPT service accounts](#chatgpt-service-accounts)                     |
-| OpenShell Sandbox        | Provider-owned dedicated Harness execution and filesystem/network enforcement through real tools.                                                        | [OpenShell Sandbox](#openshell-sandbox)                                   |
+| Suite                    | What it verifies                                                                                                                                           | Setup and commands                                                        |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Local API and lifecycle  | HTTP routes, authentication, startup, worker behavior, Driver packages, and local process boundaries.                                                      | [Local checks](#local-checks)                                             |
+| PostgreSQL               | Real persistence, constraints, authentication, API keys, Secret metadata, queue claims, recovery, and production bootstrap.                                | [PostgreSQL](#postgresql)                                                 |
+| Images and Helm          | Built controller modules, runtime startup, and rendered production packaging.                                                                              | [Images and Helm](#images-and-helm)                                       |
+| Docker Compose           | Real PostgreSQL, API, worker, isolated containers, and embedded OpenClaw plus dedicated Codex model turns.                                                 | [Docker Compose model turns](#docker-compose-model-turns)                 |
+| Docker workspace files   | Real PostgreSQL, Docker Compute, embedded OpenClaw, OCC workspace-file routes, test-only trusted-proxy WSS, and container-runtime file loss after restart. | [Docker workspace-files proof](#docker-workspace-files-proof)             |
+| Kubernetes HTTP fixture  | Real Kubernetes API, RBAC, ownership, revision routing, namespace preservation, and enforced NetworkPolicies.                                              | [Kubernetes HTTP fixture](#kubernetes-http-fixture)                       |
+| Kubernetes real runtimes | Dedicated Codex, embedded OpenClaw, shared workspace, Secret API delivery, rotation, authorization, and focused workspace-file proof.                      | [Kubernetes model turns and Secrets](#kubernetes-model-turns-and-secrets) |
+| Slack                    | Actual Socket Mode ingress and a gateway-authored reply through dedicated Codex.                                                                           | [Slack](#slack)                                                           |
+| ChatGPT service accounts | Actual provider account creation, credential issuance, exact Agent delivery, and a model turn.                                                             | [ChatGPT service accounts](#chatgpt-service-accounts)                     |
+| OpenShell Sandbox        | Provider-owned dedicated Harness execution and filesystem/network enforcement through real tools.                                                          | [OpenShell Sandbox](#openshell-sandbox)                                   |
 
 ## Requirements and credentials
 
@@ -61,7 +62,7 @@ directories with lifecycle scripts disabled.
 | `OPENAI_API_KEY`                                                        | Docker, ordinary Kubernetes runtime tests, Slack, and OpenShell. | An existing authorized provider credential with access to the selected model.                                                                                                 |
 | `OCC_TEST_CHATGPT_ADMIN_KEY_PATH` and `OCC_TEST_CHATGPT_WORKSPACE_ID`   | Real ChatGPT service-account test.                               | A protected file containing an authorized workspace admin key, plus its exact workspace ID. The test issues the Agent's credential itself; it does not need `OPENAI_API_KEY`. |
 | `SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`, `OCC_TEST_SLACK_SENDER_BOT_TOKEN` | Slack test only.                                                 | An existing Socket Mode app, its bot, and a distinct sender bot in the same workspace and test channel.                                                                       |
-| Application-role database URLs                                          | PostgreSQL and Kubernetes integrations.                          | The disposable local databases prepared below. The documented local passwords are development fixtures, not production credentials.                                           |
+| Application-role database URLs                                          | PostgreSQL, Docker workspace-files, and Kubernetes integrations. | The disposable local databases prepared below. The documented local passwords are development fixtures, not production credentials.                                           |
 | Dedicated kubeconfig                                                    | Kubernetes integrations.                                         | The disposable cluster prepared below, with authority to provision the test's scoped resources and RBAC.                                                                      |
 
 Tests generate their own local login credentials, session secrets, transport
@@ -258,6 +259,55 @@ an image rather than relying on the test's historical local-image fallback.
 See [Docker test settings](reference/settings.md#docker-compose-development-test-environment)
 for separate gateway and Agent images.
 
+## Docker workspace-files proof
+
+Requires Docker Engine, the `openssl` CLI, the built runtime image, a migrated disposable
+PostgreSQL database, and `OPENAI_API_KEY` in a private environment file or the
+calling shell. Use an authorized custom-tool-capable model. The test requires
+`OCC_TEST_DATABASE_URL` and either `OCC_DOCKER_GATEWAY_IMAGE` or
+`OCC_DOCKER_RUNTIME_IMAGE`. It uses the selected runtime image for the
+test-only operator TLS proxy.
+
+Prepare a dedicated migrated database, then run the focused file with the
+workspace-files selector. If the database already exists, choose a new disposable
+name and update both URLs.
+
+```sh
+pnpm db:up
+
+docker compose -f compose.postgres.yaml exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
+  -c 'CREATE DATABASE openclaw_workspace_files_docker'
+docker compose -f compose.postgres.yaml exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U postgres -d openclaw_workspace_files_docker \
+  -c 'GRANT CREATE ON DATABASE openclaw_workspace_files_docker TO occ_migrator; CREATE SCHEMA occ AUTHORIZATION occ_migrator; CREATE SCHEMA drizzle AUTHORIZATION occ_migrator; REVOKE CREATE ON SCHEMA public FROM PUBLIC;'
+OCC_MIGRATION_DATABASE_URL=postgresql://occ_migrator:occ-migrator-local@127.0.0.1:55432/openclaw_workspace_files_docker \
+  pnpm db:migrate
+
+OCC_TEST_WORKSPACE_FILES_DOCKER_REAL=1 \
+OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_workspace_files_docker \
+OCC_DOCKER_GATEWAY_IMAGE=openclaw-enterprise-runtime:test \
+OCC_TEST_OPENAI_MODEL=gpt-5.1 \
+  node --env-file="$TEST_ENV_FILE" --test tests/integration/workspace-files-docker-real.test.mjs
+```
+
+The proof writes `AGENTS.md` only through OCC's public `PUT
+/namespaces/:namespaceId/agents/:agentId/workspace/files/:name` route, reads it
+back through OCC, and then asks a fresh native trusted-proxy session for the
+marker. The marker is absent from the model prompt and the native session key,
+so a matching response must come from the workspace file. Docker Compute mounts
+the gateway's `/home/node` on tmpfs; after `docker restart` of the exact gateway
+container, the proof expects the workspace file to be gone and the OCC read to
+return `404`. Do not cite this Docker development proof as file persistence
+across restart or container recreation.
+
+The operator proxy helper used by this proof is test-only infrastructure. It
+generates an ephemeral one-day certificate, publishes a loopback WSS port,
+forwards to the native gateway over the Docker network, derives
+`x-forwarded-for` from the actual Docker peer, and records connection stats. It
+is not production exec transport and does not remove the production requirement
+for an operator-managed private TLS proxy.
+
 ## Kubernetes HTTP fixture
 
 Requires Docker, k3d, `kubectl`, and the migrated `openclaw_k8s_local` database
@@ -322,10 +372,31 @@ OCC_TEST_OPENAI_MODEL=gpt-5.1
 ```
 
 Workspace-file route conformance, native WSS client coverage, and Helm
-packaging coverage are separate from the production Kubernetes runtime suite.
-The runtime suite must not be cited as Docker, Kubernetes, Helm, or production
-workspace-file end-to-end proof until an operator endpoint map, private TLS
-proxy, and real Agent runtime are tested together.
+packaging coverage are separate from the ordinary production Kubernetes runtime
+suite. Do not cite the ordinary runtime command as Docker, Kubernetes, Helm, or
+production workspace-file end-to-end proof unless the focused workspace-files
+case also ran with an operator endpoint map, private TLS proxy, and real Agent
+runtime.
+
+Run the focused workspace-files case against the same prepared cluster,
+database, images, and private environment file:
+
+```sh
+OCC_TEST_HARNESS_K3D_REAL=1 OCC_TEST_SLACK_LIVE=0 \
+  node --env-file="$TEST_ENV_FILE" --test \
+    --test-name-pattern 'operator-configured WSS workspace files' \
+    tests/integration/harness-topology-k3d-real.test.mjs
+```
+
+This case writes `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md` only
+through OCC `PUT` workspace-file routes, reads each file back through OCC, and
+then asks a fresh native trusted-proxy session for the marker from `AGENTS.md`.
+It replaces the gateway Pod, starts a replacement test-only operator TLS proxy,
+and repeats the OCC reads plus native marker proof against the new gateway Pod.
+The case proves the four workspace files persisted on the Kubernetes gateway
+PVC across Pod replacement for the selected dedicated topology; it does not
+install the production controller with Helm or provide production exec
+transport.
 
 Run the ordinary runtime cases independently of Slack:
 

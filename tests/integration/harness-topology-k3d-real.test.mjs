@@ -7,7 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { createAuthenticatedControllerRequest } from "../helpers/auth-session.mjs";
+import {
+  authenticatedHeaders,
+  createAuthenticatedControllerRequest,
+  signInToControllerApp,
+} from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import {
@@ -17,6 +21,10 @@ import {
   createRealKubernetesFixture,
   kubernetesHash as hash,
 } from "../helpers/kubernetes-real.mjs";
+import {
+  requestNativeGatewayModelTurn,
+  startOperatorWorkspaceGatewayProxy,
+} from "../helpers/operator-workspace-gateway.mjs";
 
 const kubeconfigPath = process.env.OCC_TEST_KUBERNETES_KUBECONFIG;
 const kubernetesContext = process.env.OCC_TEST_KUBERNETES_CONTEXT;
@@ -264,6 +272,13 @@ function nativeConfiguration(harnessId, slack, options = {}) {
   const configuration = createHarnessConfiguration(harnessId, providerModel);
   const provider = harnessId === "codex" ? "codex" : "openai";
   configuration.models.providers[provider].models[0].input = ["text", "image"];
+  if (options.gatewayAuth !== undefined) {
+    configuration.gateway = {
+      ...configuration.gateway,
+      auth: options.gatewayAuth.auth,
+      trustedProxies: options.gatewayAuth.trustedProxies,
+    };
+  }
   if (harnessId === "openclaw") {
     const modelEnvName = options.modelEnvName ?? "OPENAI_API_KEY";
     configuration.secrets = {
@@ -338,6 +353,67 @@ async function createOperatorSecret(namespace, name, key, credential) {
       }),
     );
   });
+}
+
+async function captureCommand(command, args, options = {}) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout = `${stdout}${chunk.toString()}`.slice(-4096);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-4096);
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolve(stdout);
+      else reject(new Error(`${command} failed (${code}): ${stderr}`));
+    });
+  });
+}
+
+async function dockerNetworkGatewayAddress(network) {
+  const stdout = await captureCommand("docker", [
+    "network",
+    "inspect",
+    network,
+    "--format",
+    "{{(index .IPAM.Config 0).Gateway}}",
+  ]);
+  const address = stdout.trim();
+  assert.notEqual(isIP(address), 0, `Docker network ${network} must expose a gateway IP`);
+  return address;
+}
+
+async function loadWorkspaceFilesAccessForEndpoint(context, topology, target) {
+  const { loadWorkspaceFilesAccess } =
+    await import("../../apps/controller/src/composition/workspace-files.ts");
+  const path = join(topology.directory, `workspace-files-${hash(randomUUID())}.yaml`);
+  await writeFile(
+    path,
+    JSON.stringify({
+      endpoints: [
+        {
+          namespaceId: topology.agent.namespaceId,
+          agentId: topology.agent.id,
+          url: target.url,
+          nativeAgentId: "main",
+          identity: target.identity,
+          userHeader: target.userHeader,
+          tlsFingerprint: target.tlsFingerprint,
+        },
+      ],
+    }),
+    { mode: 0o600 },
+  );
+  context.after(async () => rm(path, { force: true }));
+  return loadWorkspaceFilesAccess(path);
 }
 
 function assertNoSecretMaterial(value, secrets, description) {
@@ -879,14 +955,20 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     });
   }
 
-  productionApp = await composeProduction({
+  const productionConfig = {
     mode: "production",
     host: "127.0.0.1",
     databaseUrl,
     authSecret,
     authBaseURL,
     drivers,
-  });
+  };
+  async function restartProductionApp(extraOptions = {}) {
+    if (productionApp !== undefined) await productionApp.close();
+    productionApp = await composeProduction({ ...productionConfig, ...extraOptions });
+    return productionApp;
+  }
+  productionApp = await restartProductionApp();
   const adminRequest = await createAuthenticatedControllerRequest(productionApp, credentials);
   let request = adminRequest;
   let secretAssignmentPrincipalId;
@@ -1143,7 +1225,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
         };
   const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
-    values: nativeConfiguration(harnessId, slack),
+    values: nativeConfiguration(harnessId, slack, options.nativeOptions),
     ...(secretBindings === undefined ? {} : { secretBindings }),
   });
   assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
@@ -1470,6 +1552,36 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       forwarding?.stop();
       forwarding = await startPortForward(placement, gatewayServiceName);
       return forwarding.url;
+    },
+    async createControllerRequestWithWorkspaceFiles(workspaceFilesAccess) {
+      const app = await restartProductionApp({ workspaceFilesAccess });
+      const session = await signInToControllerApp(app, credentials);
+      await app.listen({ host: "127.0.0.1", port: 0 });
+      const address = app.server.address();
+      assert.ok(address && typeof address === "object", "production app must expose a TCP address");
+      const base = `http://127.0.0.1:${address.port}`;
+      return async (method, pathname, payload) => {
+        const response = await fetch(`${base}${pathname}`, {
+          method,
+          headers: {
+            ...authenticatedHeaders(session),
+            origin: authBaseURL,
+            ...(payload === undefined ? {} : { "content-type": "application/json" }),
+          },
+          ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+          signal: AbortSignal.timeout(120_000),
+        });
+        const body = await response.text();
+        assertNoSecretMaterial(
+          body,
+          [process.env.OPENAI_API_KEY, gatewayToken],
+          "workspace-files controller response must not expose credentials",
+        );
+        return {
+          status: response.status,
+          ...(body.length === 0 ? {} : JSON.parse(body)),
+        };
+      };
     },
     observerPool,
     secretApi,
@@ -3353,6 +3465,185 @@ async function assertDedicatedSharedWorkspaceRuntime(context, topology, claim, p
     `dedicated shared workspace PVC persisted across restart and revision: ${claim.metadata.name}`,
   );
 }
+
+async function startOperatorProxyForTopology(context, topology, { identity, userHeader }) {
+  const forwarding = await startPortForward(topology.placement, topology.gatewayServiceName);
+  context.after(() => forwarding.stop());
+  const targetUrl = new URL(forwarding.url);
+  targetUrl.hostname = "host.docker.internal";
+  const proxy = await startOperatorWorkspaceGatewayProxy({
+    name: `oce-k3d-workspace-files-${hash(topology.agent.id)}`,
+    dockerNetwork: "bridge",
+    targetUrl: targetUrl.toString(),
+    userHeader,
+    identity,
+    allowedClientIps: [await dockerNetworkGatewayAddress("bridge")],
+    image: gatewayImage,
+  });
+  context.after(async () => proxy.close());
+  return proxy;
+}
+
+async function assertOperatorWorkspaceFilesThroughOcc(context, topology, proxy, target) {
+  const marker = `occ-agents-${hash(randomUUID())}`;
+  const files = new Map([
+    [
+      "AGENTS.md",
+      `When asked for the configured workspace marker, reply exactly ${marker} and no other text.\n`,
+    ],
+    ["SOUL.md", `Operator workspace soul proof ${randomUUID()}.\n`],
+    ["IDENTITY.md", `Operator workspace identity proof ${randomUUID()}.\n`],
+    ["USER.md", `Operator workspace user proof ${randomUUID()}.\n`],
+  ]);
+  const access = await loadWorkspaceFilesAccessForEndpoint(context, topology, {
+    ...target,
+    url: proxy.url,
+    tlsFingerprint: proxy.tlsFingerprint,
+  });
+  const request = await topology.createControllerRequestWithWorkspaceFiles(access);
+  const basePath = `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/workspace/files`;
+  for (const [name, content] of files) {
+    const written = await request("PUT", `${basePath}/${name}`, { content });
+    assert.equal(written.status, 200, JSON.stringify(written.error));
+    assert.deepEqual(written.data, { name, size: Buffer.byteLength(content, "utf8") });
+  }
+  for (const [name, content] of files) {
+    const observed = await request("GET", `${basePath}/${name}`);
+    assert.equal(observed.status, 200, JSON.stringify(observed.error));
+    assert.deepEqual(observed.data, { name, content });
+  }
+  const turn = await requestNativeGatewayModelTurn({
+    url: proxy.url,
+    tlsFingerprint: proxy.tlsFingerprint,
+    identity: target.identity,
+    userHeader: target.userHeader,
+    expectedMarker: marker,
+  });
+  assertNoSecretMaterial(
+    turn.content,
+    [topology.gatewayToken, process.env.OPENAI_API_KEY],
+    "workspace-file model proof must not expose credentials",
+  );
+  const stats = await proxy.stats();
+  assert.ok(
+    stats.connections.length >= files.size + 1,
+    "operator proxy must observe OCC file calls and the native model proof",
+  );
+  assert.equal(
+    stats.connections.every((connection) => connection.accepted === true),
+    true,
+    "operator proxy must reject no calls during the admitted proof",
+  );
+  assert.equal(
+    stats.connections.every(
+      (connection) =>
+        connection.forwardedFor === connection.remoteAddress && isIP(connection.forwardedFor) !== 0,
+    ),
+    true,
+    "operator proxy must derive forwarded attribution from the actual OCC peer",
+  );
+  return { marker, files };
+}
+
+async function assertOperatorWorkspaceFilesPersistThroughGatewayReplacement(
+  context,
+  topology,
+  proxy,
+  target,
+  proof,
+) {
+  await proxy.close();
+  const previousGatewayUid = topology.gatewayPod.metadata.uid;
+  await kubectl(
+    "delete",
+    "pod",
+    topology.gatewayPod.metadata.name,
+    "--namespace",
+    topology.placement,
+    "--wait=true",
+    "--timeout=120s",
+  );
+  topology.gatewayPod = await waitForReadyGatewayPod(
+    topology,
+    topology.revision.id,
+    previousGatewayUid,
+  );
+  const replacementProxy = await startOperatorProxyForTopology(context, topology, target);
+  const access = await loadWorkspaceFilesAccessForEndpoint(context, topology, {
+    ...target,
+    url: replacementProxy.url,
+    tlsFingerprint: replacementProxy.tlsFingerprint,
+  });
+  const request = await topology.createControllerRequestWithWorkspaceFiles(access);
+  const basePath = `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/workspace/files`;
+  for (const [name, content] of proof.files) {
+    const observed = await request("GET", `${basePath}/${name}`);
+    assert.equal(observed.status, 200, JSON.stringify(observed.error));
+    assert.deepEqual(observed.data, { name, content });
+  }
+  const turn = await requestNativeGatewayModelTurn({
+    url: replacementProxy.url,
+    tlsFingerprint: replacementProxy.tlsFingerprint,
+    identity: target.identity,
+    userHeader: target.userHeader,
+    expectedMarker: proof.marker,
+  });
+  assertNoSecretMaterial(
+    turn.content,
+    [topology.gatewayToken, process.env.OPENAI_API_KEY],
+    "replacement workspace-file model proof must not expose credentials",
+  );
+  const stats = await replacementProxy.stats();
+  assert.ok(
+    stats.connections.length >= proof.files.size + 1,
+    "replacement operator proxy must observe persisted OCC file reads and the native model proof",
+  );
+  assert.equal(
+    stats.connections.every((connection) => connection.accepted === true),
+    true,
+    "replacement operator proxy must reject no calls during the admitted proof",
+  );
+}
+
+test(
+  "production dedicated Codex consumes operator-configured WSS workspace files through OCC",
+  { ...requiresProductionCluster, timeout: 900_000 },
+  async (context) => {
+    const identity = `occ-workspace-files-${hash(randomUUID())}`;
+    const userHeader = "x-openclaw-operator-identity";
+    const topology = await arrangeProductionTopology(context, "dedicated", undefined, {
+      nativeOptions: {
+        gatewayAuth: {
+          auth: {
+            mode: "trusted-proxy",
+            identityScopes: { [identity]: ["operator.admin"] },
+            trustedProxy: { userHeader, allowUsers: [identity], allowLoopback: true },
+          },
+          trustedProxies: ["127.0.0.1"],
+        },
+      },
+    });
+    const proxy = await startOperatorProxyForTopology(context, topology, {
+      identity,
+      userHeader,
+    });
+    const proof = await assertOperatorWorkspaceFilesThroughOcc(context, topology, proxy, {
+      identity,
+      userHeader,
+    });
+    await assertOperatorWorkspaceFilesPersistThroughGatewayReplacement(
+      context,
+      topology,
+      proxy,
+      {
+        identity,
+        userHeader,
+      },
+      proof,
+    );
+  },
+);
+
 test(
   "production dedicated Codex preserves gateway SQLite conversations and retained images across Pod replacement",
   { ...requiresProductionCluster, timeout: 1_200_000 },

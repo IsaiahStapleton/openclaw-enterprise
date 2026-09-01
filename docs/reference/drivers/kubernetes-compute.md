@@ -138,8 +138,12 @@ an existing ConfigMap as
 the file into the worker and does not widen NetworkPolicies. The configured
 private proxy must authenticate OCC, expose native trusted-proxy WSS, grant the
 service identity `operator.admin`, derive forwarded client attribution from the
-actual OCC peer, and reject direct user or workload callers. Readiness for
-native gateway Pods still uses a Pod-local Node.js HTTP request to
+actual OCC peer, and reject direct user or workload callers. When an Agent's
+native Configuration explicitly selects `gateway.auth.mode: "trusted-proxy"`,
+the Driver omits automatic `OPENCLAW_GATEWAY_TOKEN` projection because native
+OpenClaw rejects trusted-proxy auth with a simultaneous gateway token. Token
+mode remains the default behavior. Readiness for native gateway Pods still uses
+a Pod-local Node.js HTTP request to
 `127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz`.
 
 Production currently permits public TCP/443 egress for model access; a
@@ -291,8 +295,11 @@ is not currently a supported API operation.
 
 Before deploying an Agent, provision its Agent-specific transport Secret using
 the configured `runtime.transportSecretPrefix`. The Secret name appends the
-first 12 hexadecimal characters of `sha256(agentId)` and contains
-`gateway-token`; dedicated Agents additionally require `app-server-token`.
+first 12 hexadecimal characters of `sha256(agentId)`. Token-mode gateways use
+`gateway-token`; dedicated Agents additionally require `app-server-token`. When
+native Configuration explicitly selects `gateway.auth.mode: "trusted-proxy"`,
+the generated Secret may still contain a `gateway-token` key, but the Driver
+does not project it into the gateway environment.
 
 The selected model credential determines how model access is configured:
 

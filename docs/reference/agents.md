@@ -123,15 +123,21 @@ authenticate the source before forwarding the trusted identity header, derive
 trusting caller-supplied forwarded headers. Native trusted-proxy configuration
 must grant that service identity `operator.admin`; OCC still enforces the
 caller-facing Agent `read` and `operate` permissions before reaching the proxy.
-Native rejects all-loopback forwarded addresses, so loopback development needs a
-real non-loopback OCC-to-proxy connection such as a separate proxy container,
-not a fake IP or TLS bypass. The operator supplies the trust chain through the
-Node.js trust store, `NODE_EXTRA_CA_CERTS`, or the pinned fingerprint. OCC does
-not manage certificate issuance, renewal, proxy deployment, or network trust.
+Native OpenClaw 2026.8.1-b9d rejects `gateway.auth.mode: "trusted-proxy"` when
+`gateway.auth.token` is also present, so the native Configuration used for this
+endpoint must omit `gateway.auth.token`. Native rejects all-loopback forwarded
+addresses, so loopback development needs a real non-loopback OCC-to-proxy
+connection such as a separate proxy container, not a fake IP or TLS bypass. The
+operator supplies the trust chain through the Node.js trust store,
+`NODE_EXTRA_CA_CERTS`, or the pinned fingerprint. OCC does not manage
+certificate issuance, renewal, proxy deployment, or network trust.
 
 See the [workspace files flow](../flows/workspace-files.md) for the endpoint
-map, proxy boundary, and request flow. The generated [HTTP API](api.md) owns the
-wire schema.
+map, proxy boundary, request flow, and runtime storage limits. Docker
+development runtimes keep the native workspace under `/home/node` tmpfs, so
+files last only for the container runtime; the current persisted-file proof is
+Kubernetes gateway PVC storage across gateway Pod replacement. The generated
+[HTTP API](api.md) owns the wire schema.
 
 ## Namespace ownership
 

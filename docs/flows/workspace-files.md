@@ -122,10 +122,15 @@ identity header and must derive `x-forwarded-for` from the actual OCC peer
 connection. It must not trust user-supplied forwarded headers or accept direct
 browser and workload callers. Native trusted-proxy configuration must grant the
 service identity `operator.admin`; OCC still enforces user-facing Agent `read`
-or `operate` before contacting the proxy. Native rejects all-loopback forwarded
-addresses, so local development needs a real non-loopback OCC-to-proxy
-connection such as a separate proxy container. OCC does not supply a fake IP,
-bypass TLS, require global ingress, or manage certificate issuance and renewal.
+or `operate` before contacting the proxy. Native OpenClaw 2026.8.1-b9d rejects
+`gateway.auth.mode: "trusted-proxy"` when `gateway.auth.token` is also present,
+so trusted-proxy native Configuration must omit `gateway.auth.token`. Docker and
+Kubernetes Compute omit automatic `OPENCLAW_GATEWAY_TOKEN` projection for that
+explicit mode; token-mode gateways keep the existing automatic token behavior.
+Native rejects all-loopback forwarded addresses, so local development needs a
+real non-loopback OCC-to-proxy connection such as a separate proxy container.
+OCC does not supply a fake IP, bypass TLS, require global ingress, or manage
+certificate issuance and renewal.
 
 ### 5. Responses preserve the narrow file boundary
 
@@ -135,6 +140,9 @@ Reads return `{ name, content }` and re-check the 16 KiB response content limit.
 Writes return `{ name, size }` using the accepted request content size. OCC does
 not store file bytes in PostgreSQL, does not expose native file revision or
 compare-and-swap fields, and does not list or delete files through this shim.
+Docker development runtimes store the native workspace under `/home/node` tmpfs,
+so those files last only for the container runtime. The current persisted-file
+proof is the Kubernetes gateway PVC path across gateway Pod replacement.
 
 Write audit events record only resource, authorization, outcome, reason code
 when present, and `workspaceFileName`. Audit details omit file contents. If a
@@ -173,6 +181,8 @@ write is sent and the provider outcome becomes unknown, OCC returns
 ## Changelog
 
 - 2026-09-01 12:03: Documented the operator-configured endpoint map, API startup loading, Helm ConfigMap mount, and private WSS proxy boundary. (NOT_IN_SPEC)
+- 2026-09-01 12:03: Added the trusted-proxy native Configuration precondition that omits gateway auth tokens and recorded Docker/Kubernetes automatic token projection omission for that explicit mode. (NOT_IN_SPEC)
+- 2026-09-01 12:03: Clarified Docker tmpfs workspace lifetime and Kubernetes PVC workspace-file persistence proof boundaries. (NOT_IN_SPEC)
 - 2026-09-01 13:24: Replaced the superseded generic gateway administration flow with the current four-file workspace route and recorded the missing WSS target provisioning gap. (NOT_IN_SPEC)
 - 2026-09-01 08:38: Replaced the superseded native-device enrollment flow with the current fixed CLI execution path through Kubernetes exec. (cody/01a05d9c-4cb5-7602-8df5-56d7f8309f44 - 7b4a819f02d6950e8cc2a2e08eb29c2f668493ad)
 - 2026-08-31 16:49: Documented canonical private-key storage with derived native identity; the independent PVC identity pin remains unchanged. (cody/01a04ae1-7ba7-7372-88a4-488e01f690ae - f2e164c)

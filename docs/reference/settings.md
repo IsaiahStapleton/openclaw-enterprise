@@ -164,10 +164,31 @@ or a fragment. `tlsFingerprint` is optional; when present, it must be one
 startup; changes require an API restart. Unmapped, offline, or rejected targets
 return `503 DEPENDENCY_UNAVAILABLE`.
 
+The matching native Configuration uses the same trusted identity values and
+omits any gateway token:
+
+```yaml
+gateway:
+  trustedProxies:
+    - <private-proxy-source-ip>
+  auth:
+    mode: trusted-proxy
+    trustedProxy:
+      userHeader: x-openclaw-operator
+      allowUsers:
+        - occ-workspace-files
+    identityScopes:
+      occ-workspace-files:
+        - operator.admin
+```
+
 This file is an operator assertion, not a Driver API, database schema, worker
 setting, or per-revision native attestation. The operator owns the URL,
 `nativeAgentId`, private TLS proxy, certificate trust, native trusted-proxy
 configuration, and any exact network access needed for OCC to reach the proxy.
+The native Configuration for this path must use `gateway.auth.mode:
+"trusted-proxy"` and omit `gateway.auth.token`; native OpenClaw 2026.8.1-b9d
+rejects a trusted-proxy gateway when a token is configured at the same time.
 Current runtime defaults still use plain in-cluster `ws://` plus token-based
 gateway or Codex transport; those defaults are not enough for no-device-auth
 workspace file access. Do not add Kubernetes RBAC or automatic egress broadening

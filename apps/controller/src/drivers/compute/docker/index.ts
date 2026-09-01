@@ -9,7 +9,7 @@ import type {
   NamespaceDeleteResult,
   NamespaceEnsureResult,
 } from "@openclaw-enterprise/contracts";
-import { immutableCopy, isNonEmptyString, sha256Hex } from "@openclaw-enterprise/utils";
+import { asRecord, immutableCopy, isNonEmptyString, sha256Hex } from "@openclaw-enterprise/utils";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import {
@@ -409,7 +409,10 @@ export class DockerComputeDriver implements ComputeDriver {
         OPENCLAW_CONFIG_JSON: configuration,
         OPENCLAW_CONFIG_PATH: CONFIGURATION_DOCUMENT,
         OPENCLAW_GATEWAY_PORT: String(GATEWAY_PORT),
-        OPENCLAW_GATEWAY_TOKEN: randomBytes(32).toString("hex"),
+        // Native trusted-proxy authentication rejects a simultaneously configured shared token.
+        ...(asRecord(asRecord(revision.configuration.gateway)?.auth)?.mode === "trusted-proxy"
+          ? {}
+          : { OPENCLAW_GATEWAY_TOKEN: randomBytes(32).toString("hex") }),
         OPENCLAW_STATE_DIR: "/home/node/.openclaw",
         HOME: "/home/node",
       },

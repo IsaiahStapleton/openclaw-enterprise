@@ -479,7 +479,11 @@ AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(j
 export AGENT_ID
 ```
 
-Create the tenant transport Secret using the Agent ID suffix:
+Create the tenant transport Secret using the Agent ID suffix. Token-mode
+gateways use `gateway-token`; dedicated Codex also uses `app-server-token`.
+For native `gateway.auth.mode: "trusted-proxy"`, omit `gateway.auth.token`.
+The Secret may still contain `gateway-token`, but Compute does not project
+`OPENCLAW_GATEWAY_TOKEN` for that explicit mode.
 
 ```bash
 umask 077
@@ -566,6 +570,25 @@ hexadecimal certificate fingerprint. OCC reads the file once during API startup,
 fails startup on invalid YAML or invalid endpoint shape, and does not reload the
 file. Restart the API after changing mappings.
 
+Configure the native gateway for trusted-proxy authentication with matching
+identity values. This native Configuration fragment shows only the relevant
+fields:
+
+```yaml
+gateway:
+  trustedProxies:
+    - <private-proxy-source-ip>
+  auth:
+    mode: trusted-proxy
+    trustedProxy:
+      userHeader: x-openclaw-operator
+      allowUsers:
+        - occ-workspace-files
+    identityScopes:
+      occ-workspace-files:
+        - operator.admin
+```
+
 The operator owns the assertion that each URL and `nativeAgentId` belong to the
 exact Enterprise Agent named by `namespaceId` and `agentId`. OCC does not add a
 Driver API, database schema, worker setting, per-revision native attestation, or
@@ -577,12 +600,18 @@ derive `x-forwarded-for` from the actual OCC peer connection, and reject direct
 browser or workload callers. Do not forward caller-supplied `x-forwarded-for`
 blindly. Native trusted-proxy configuration must grant the service identity
 `operator.admin`; OCC still enforces user-facing Agent `read` and `operate`
-before contacting the proxy. Native rejects all-loopback forwarded addresses, so
-loopback development needs a genuine non-loopback OCC-to-proxy connection such
-as a separate proxy container. Do not use a fake IP, bypass TLS, or expose a
-global ingress to make local testing pass. Use a normal CA trusted by Node.js,
-`NODE_EXTRA_CA_CERTS`, or `tlsFingerprint`; certificate issuance, renewal, and
-network trust remain operator responsibilities.
+before contacting the proxy. The native Configuration for this path must set
+`gateway.auth.mode: "trusted-proxy"` and omit `gateway.auth.token`; native
+OpenClaw 2026.8.1-b9d rejects trusted-proxy auth when a token is configured at
+the same time. Docker and Kubernetes Compute omit automatic
+`OPENCLAW_GATEWAY_TOKEN` projection for that explicit mode, while default token
+mode continues to receive the automatic gateway token. Native rejects
+all-loopback forwarded addresses, so loopback development needs a genuine
+non-loopback OCC-to-proxy connection such as a separate proxy container. Do not
+use a fake IP, bypass TLS, or expose a global ingress to make local testing
+pass. Use a normal CA trusted by Node.js, `NODE_EXTRA_CA_CERTS`, or
+`tlsFingerprint`; certificate issuance, renewal, and network trust remain
+operator responsibilities.
 
 For production, create an existing ConfigMap in the controller namespace and ask
 Helm to mount only that key into the API Deployment:

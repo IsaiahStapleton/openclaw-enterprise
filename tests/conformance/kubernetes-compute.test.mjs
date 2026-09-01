@@ -1572,10 +1572,38 @@ test("revision lifecycle rejects another driver or missing identity before clust
     name: `model-${agentHash.slice(0, 12)}`,
     key: "OPENAI_API_KEY",
   });
-  assert.ok(environment.OPENCLAW_GATEWAY_TOKEN);
+  assert.deepEqual(environment.OPENCLAW_GATEWAY_TOKEN.valueFrom.secretKeyRef, {
+    name: `transport-${agentHash.slice(0, 12)}`,
+    key: "gateway-token",
+  });
   assert.equal(environment.HOME.value, "/home/node");
   assert.equal(environment.APP_SERVER_TOKEN, undefined);
   assert.equal(environment.APP_SERVER_URL, undefined);
+
+  const trustedProxyRevision = {
+    ...embeddedRevision,
+    id: "revision-a-embedded-trusted-proxy",
+    configuration: {
+      ...embeddedRevision.configuration,
+      gateway: { auth: { mode: "trusted-proxy" } },
+    },
+  };
+  const trustedProxyGateway = production.deployment(
+    `gateway-${agentHash.slice(0, 12)}-trusted-proxy`,
+    { namespaceId: tenant.id, agentId: revision.agentId },
+    namespace,
+    "openclaw-enterprise/gateway-fixture:local",
+    `agent-${agentHash.slice(0, 12)}`,
+    "gateway",
+    {},
+    production.gatewayConfiguration(trustedProxyRevision),
+    true,
+    revision.servicePrincipalId,
+  );
+  const trustedProxyEnvironment = Object.fromEntries(
+    trustedProxyGateway.spec.template.spec.containers[0].env.map((entry) => [entry.name, entry]),
+  );
+  assert.equal(trustedProxyEnvironment.OPENCLAW_GATEWAY_TOKEN, undefined);
 
   const policies = production.agentNetworkPolicies(embeddedRevision, namespace);
   assert.equal(policies.length, 1);
