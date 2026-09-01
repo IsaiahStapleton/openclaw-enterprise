@@ -90,9 +90,9 @@ command-line arguments. For the ChatGPT admin key, use its dedicated file-path
 option as shown below.
 
 Model suites make real provider requests. Set `OCC_TEST_OPENAI_MODEL` explicitly
-to an authorized model that supports Codex custom tools; the examples use
-`gpt-5.1`. Docker defaults to `gpt-5.1`, OpenShell to `gpt-5.6-sol`, and the
-Kubernetes Harness and ChatGPT account suites currently default to `gpt-4.1`.
+to an authorized model that supports Codex custom tools; the Kubernetes examples
+use `gpt-5.1`. Docker defaults to `gpt-5.6-sol`, OpenShell to `gpt-5.6-sol`, and
+the Kubernetes Harness and ChatGPT account suites currently default to `gpt-4.1`.
 The latter default does not support the documented dedicated Codex request
 shape; override it when running those suites.
 
@@ -233,22 +233,24 @@ or `yq` skips this suite; unset image selectors skip the image smokes.
 
 ## Docker Compose model turns
 
-Requires Docker Engine, Compose, the built runtime image, and an exported
-`OPENAI_API_KEY` or a private environment file supplying it. The suite creates
-and migrates its own Compose database; the separate PostgreSQL setup above is
-not required.
+Requires Docker Engine, Compose, the built runtime image, host Python 3 with
+PTY support, and an exported `OPENAI_API_KEY` or a private environment file
+supplying it. The suite creates and migrates its own Compose database; the
+separate PostgreSQL setup above is not required.
 
 ```sh
 OCC_TEST_DOCKER_COMPUTE_REAL=1 \
 OCC_DOCKER_RUNTIME_IMAGE=openclaw-enterprise-runtime:test \
-OCC_TEST_OPENAI_MODEL=gpt-5.1 \
+OCC_TEST_OPENAI_MODEL=gpt-5.6-sol \
   node --test tests/integration/docker-compute-real.test.mjs
 ```
 
 Both the embedded and dedicated paths must produce provider-backed responses.
-The test also checks authentication, isolation, and Agent deletion. It generates
-its own Compose project, ports, network range, and local administrator, then
-removes its project volumes and labelled containers/networks.
+The test also checks authentication, isolation, Agent deletion, invalid-token
+TUI rejection, two same-session TUI replies, and Ctrl+D TUI exit while the
+gateway remains ready. It generates its own Compose project, ports, network
+range, and local administrator, then removes its project volumes and labelled
+containers/networks.
 
 An image selector also enables the suite without the opt-in flag. Missing
 Docker, images, or the model credential then fails the run. Explicitly select

@@ -26,7 +26,7 @@ affected guides and flows in the implementation PR. A later substantial change
 gets a new implementation specification; do not rewrite the original decision to
 match it. Small fixes need not create a new specification.
 
-All existing implementation records are archived, including unfinished proposals
+Earlier implementation records are archived, including unfinished proposals
 and records awaiting review. Archive placement preserves filenames, milestone
 directory structure, recorded statuses, and verification limits; it does not mark
 work complete or establish release availability.
@@ -37,6 +37,12 @@ availability claims. Links in historical documents may be maintained after file
 moves without changing their substantive contract or Manual Notes. Historical
 commands and test paths can describe an older revision; run current verification
 from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
+
+## Active specifications
+
+| Implementation record | Recorded status | Current reference |
+| --- | --- | --- |
+| [Development end-to-end guide](15-development-end-to-end-guide.md) | Completed | [Development TUI guide](../docs/guides/deploy.md#development-end-to-end-tui); verified in `c208e48` |
 
 ## Archived specifications
 

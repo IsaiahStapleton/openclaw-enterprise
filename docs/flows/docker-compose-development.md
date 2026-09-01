@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-08-31
+last_updated_session: codex/01a059f9-e5cc-7b01-9479-0c5087f5e58f
 ---
 
 # Docker Compose Development Flow
@@ -13,8 +13,11 @@ development environment. Compose owns PostgreSQL, migrations, idempotent
 controller-owned bootstrap for fresh databases, the OCC API with a
 filesystem-backed Configuration Driver, and the worker. The worker selects the
 Docker Compute Driver and starts real OpenClaw/Codex runtime containers for
-authorized Namespace and AgentRevision work. This flow stops after the worker
-has reconciled Docker-backed runtimes and cleanup for development resources.
+authorized Namespace and AgentRevision work. The development TUI path attaches
+inside the Agent-owned gateway container and uses that container's inherited
+gateway configuration to reach the live Agent runtime. This flow stops after the
+worker has reconciled Docker-backed runtimes, the TUI client has exited, and
+cleanup for development resources is understood.
 
 Use the [deployment guide](../guides/deploy.md) for setup and shutdown and the
 [quickstart](../guides/quickstart.md) for authenticated API commands. The
@@ -30,8 +33,10 @@ readiness; this trace continues through Docker workload creation and cleanup.
   `occ_postgres_data`; the controller can write `occ_configuration_data` at
   `/app/.development/configurations`; runtime images are supplied through
   `OCC_DOCKER_GATEWAY_IMAGE` and `OCC_DOCKER_AGENT_IMAGE` or shared
-  `OCC_DOCKER_RUNTIME_IMAGE`; `OPENAI_API_KEY` exists for real model turns; the
-  API is published only on host loopback.
+  `OCC_DOCKER_RUNTIME_IMAGE`; `OPENAI_API_KEY` is present in the
+  Compose-starting environment or protected `.env` before the worker starts;
+  the API is published only on host loopback; the TUI runs from an interactive
+  terminal attached with `docker exec -it`.
 
 ## Flow
 
@@ -51,7 +56,12 @@ graph TD
   K -->|dedicated Codex| M["Start gateway plus authenticated Codex container"]
   L --> N["Real provider response proves execution"]
   M --> N
-  I --> O["Retire revisions and delete owned Namespace resources"]
+  L --> O["docker exec starts openclaw.mjs tui in the gateway container"]
+  O --> P["TUI reads inherited gateway config and isolated client state"]
+  P --> Q["TUI sends chat.send over localhost gateway WebSocket"]
+  Q --> R["Gateway streams native session events and renders the model reply"]
+  R --> S["Ctrl+D exits the TUI client; gateway remains ready"]
+  I --> T["Retire revisions and delete owned Namespace resources"]
 ```
 
 ## Execution Trace
@@ -164,7 +174,42 @@ Agent containers. Workload containers do not receive the Docker socket,
 controller credentials, host homes, SSH-agent sockets, or another Namespace's
 network.
 
-### 7. Cleanup removes only owned development resources
+### 7. The TUI client starts inside the embedded gateway container
+
+`apps/controller/src/drivers/compute/docker/index.ts:GATEWAY_RUNTIME_ENTRYPOINT`,
+`apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`,
+`tests/integration/docker-compute-real.test.mjs:tuiDockerCommand`
+
+The [deployment guide](../guides/deploy.md#development-end-to-end-tui) owns the
+authenticated provisioning commands, Docker label selection, and OCC cookie
+cleanup. After that guide has selected the active embedded gateway container,
+`docker exec -it` starts `node /app/openclaw.mjs tui` in that same container.
+
+The Docker driver has already written the gateway configuration to
+`OPENCLAW_CONFIG_PATH`, started `/app/openclaw.mjs gateway` on
+`OPENCLAW_GATEWAY_PORT`, and injected `OPENCLAW_GATEWAY_TOKEN` into the gateway
+container. The TUI process inherits those values. The guide overrides only
+`OPENCLAW_STATE_DIR` so the client uses temporary container-local state instead
+of the gateway's persisted `/home/node/.openclaw` state.
+
+### 8. The TUI turn travels through the local gateway session
+
+`tests/integration/docker-compute-real.test.mjs:assertInteractiveTuiConversation`,
+`tests/integration/harness-topology-k3d-real.test.mjs:gatewayCall`,
+`tests/integration/harness-topology-k3d-real.test.mjs:transcript_events`
+
+From inside the gateway container, the TUI authenticates to the gateway over the
+container-local gateway endpoint. The TUI sends the first prompt as a native
+session message; the gateway handles it through the same `chat.send` path used
+by the runtime proof hooks, streams session events, persists transcript rows,
+and renders the model-backed assistant reply in the terminal.
+
+The same TUI process accepts the follow-up prompt in the same session. Ctrl+D
+closes the client process after the second rendered reply. It does not stop the
+gateway process, delete the Agent runtime, or retire the AgentRevision; the
+Docker integration asserts the gateway remains ready after client exit.
+
+### 9. Cleanup removes only owned development resources
 
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`
 
@@ -189,6 +234,12 @@ PostgreSQL and can be retried by the worker.
 - `docker ps --filter label=org.openclaw.enterprise.compute-driver=docker`
   should show one embedded gateway container or a dedicated gateway plus Codex
   container for deployed revisions.
+- The deployment guide owns gateway discovery and OCC cookie cleanup before TUI
+  attach; this flow records the selected container's runtime path after that
+  operator procedure completes.
+- `tests/integration/docker-compute-real.test.mjs:assertInteractiveTuiConversation`
+  should reject an invalid gateway token, produce two model-backed replies in
+  one TUI session, exit the client with Ctrl+D, and leave the gateway ready.
 - The Docker Compose integration test must perform an authenticated API
   deployment through the worker and receive a real provider response containing
   a fresh nonce for both embedded and dedicated topologies. It may invoke the
@@ -200,6 +251,7 @@ PostgreSQL and can be retried by the worker.
 ## Related docs
 
 - [Deployment guide: development and production](../guides/deploy.md)
+- [Deployment guide: development end-to-end TUI](../guides/deploy.md#development-end-to-end-tui)
 - [Quickstart](../guides/quickstart.md)
 - [Development startup flow](development-startup.md)
 - [Controller worker execution flow](controller-worker.md)
@@ -216,6 +268,7 @@ PostgreSQL and can be retried by the worker.
 
 ## Changelog
 
+- 2026-08-31 15:40: Added the compact development TUI runtime trace and two-turn verification boundary. (01a059f9-e5cc-7b01-9479-0c5087f5e58f - 3a04cee)
 - 2026-08-28 17:54: Clarified the Docker workload execution boundary and linked operator setup, quickstart, and worker traces. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-25 10:13: Removed the deleted bootstrap sidecar/script from the Compose flow and documented controller-owned fresh-database self-bootstrap. (01a03630-cd9f-7352-9e64-1d30de98c7dd - c56867448b187304723d20043dd5a0e184736ef2)
 - 2026-08-25 08:46: Clarified that Docker E2E verification may invoke gateways through Namespace networking or published loopback ports. (01a03630-cd9f-7352-9e64-1d30de98c7dd - 949e57ba008486c7ad60978df79dc53cce31bee9)
