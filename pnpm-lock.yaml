@@ -62,12 +62,6 @@ importers:
       '@openclaw-enterprise/utils':
         specifier: workspace:*
         version: link:../../packages/utils
-      '@openclaw/gateway-client':
-        specifier: 2026.8.1-beta.3
-        version: 2026.8.1-beta.3
-      '@openclaw/gateway-protocol':
-        specifier: 2026.8.1-beta.3
-        version: 2026.8.1-beta.3
       ajv-formats:
         specifier: 3.0.1
         version: 3.0.1(ajv@8.20.0)
@@ -731,14 +725,6 @@ packages:
   '@noble/hashes@2.3.0':
     resolution: {integrity: sha512-oN+QwyX7VSHotibwubG3kpzbwKrfnyR6OOO+3Nk/53ADL7FmgHHz4TgrbaYKvvOw09u6QTx0oiH1cNCIOuN0CQ==}
     engines: {node: '>= 20.19.0'}
-
-  '@openclaw/gateway-client@2026.8.1-beta.3':
-    resolution: {integrity: sha512-KypvHZiiY1VM4RQrdTyT2wsNMvaxETnpWmwX7meIFz5koMnFuxatnXnn1/xPHzHTQip93GGYoMH2tnDkJrfhfg==}
-    engines: {node: '>=22.19.0'}
-
-  '@openclaw/gateway-protocol@2026.8.1-beta.3':
-    resolution: {integrity: sha512-qLXAqCnIq4Cmmhh6ReI4Th34XJ4TYMhOthymZ5GP37zNMRua/P7TJZL6fQGyr61pA6B/dglePxhuvQgjyoqjMg==}
-    engines: {node: '>=22.19.0'}
 
   '@opentelemetry/semantic-conventions@1.43.0':
     resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
@@ -1560,18 +1546,6 @@ packages:
       utf-8-validate:
         optional: true
 
-  ws@8.21.1:
-    resolution: {integrity: sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==}
-    engines: {node: '>=10.0.0'}
-    peerDependencies:
-      bufferutil: ^4.0.1
-      utf-8-validate: '>=5.0.2'
-    peerDependenciesMeta:
-      bufferutil:
-        optional: true
-      utf-8-validate:
-        optional: true
-
   xtend@4.0.2:
     resolution: {integrity: sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ==}
     engines: {node: '>=0.4'}
@@ -1981,19 +1955,6 @@ snapshots:
   '@noble/ciphers@2.3.0': {}
 
   '@noble/hashes@2.3.0': {}
-
-  '@openclaw/gateway-client@2026.8.1-beta.3':
-    dependencies:
-      '@openclaw/gateway-protocol': 2026.8.1-beta.3
-      ipaddr.js: 2.4.0
-      ws: 8.21.1
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-
-  '@openclaw/gateway-protocol@2026.8.1-beta.3':
-    dependencies:
-      typebox: 1.3.6
 
   '@opentelemetry/semantic-conventions@1.43.0': {}
 
@@ -2739,8 +2700,6 @@ snapshots:
   wrappy@1.0.2: {}
 
   ws@8.21.0: {}
-
-  ws@8.21.1: {}
 
   xtend@4.0.2: {}
 

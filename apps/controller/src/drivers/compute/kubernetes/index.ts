@@ -7,32 +7,19 @@ import {
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
 import {
+  ControllerGatewayUnknownOutcomeError,
   type ControllerGatewayAccess,
   type ControllerGatewayDispatchRequest,
   type ControllerGatewayDispatchResult,
 } from "../../../gateway/contracts.ts";
 import {
-  connectOpenClawGatewayNativeWithBootstrap,
-  createOpenClawGatewayNativeDeviceIdentity,
-  NATIVE_GATEWAY_ENROLLMENT_TIMEOUT_MS,
-  NATIVE_GATEWAY_OPERATOR_SCOPES,
-  NATIVE_GATEWAY_REQUEST_TIMEOUT_MS,
-  publicKeyRawBase64UrlFromPem,
-  requestOpenClawGatewayNative,
-  type OpenClawGatewayNativeTokenRecord,
-} from "../../../gateway/native-client.ts";
-import {
-  buildGatewayAdministrationHelperScript,
-  gatewayAdministrationHelperInput,
-  gatewayAdministrationSecretName,
-  gatewayAdministrationSecretStringData,
-  parseGatewayAdministrationCredential,
-  validateGatewayAdministrationOptions,
-  type GatewayAdministrationCredential,
-  type KubernetesGatewayAdministrationOptions,
+  buildGatewayAdministrationCliScript,
+  GATEWAY_ADMINISTRATION_REQUEST_TIMEOUT_MS,
+  GATEWAY_ADMINISTRATION_RESPONSE_MAX_BYTES,
+  gatewayAdministrationCliInput,
+  parseGatewayAdministrationCliOutput,
 } from "./gateway-administration.ts";
 import { KubernetesClientNodePodExecutor } from "./pod-exec.ts";
-import { openKubernetesGatewayPodProxy } from "./pod-proxy.ts";
 import type {
   AppsV1Api,
   CoreV1Api,
@@ -149,7 +136,6 @@ export interface KubernetesComputeDriverOptions {
     readonly transportSecretPrefix: string;
     readonly modelSecretPrefix: string;
     readonly gatewayStorageClassName: string;
-    readonly gatewayAdministration?: KubernetesGatewayAdministrationOptions;
     readonly channels?: {
       readonly secretPrefix: string;
       readonly proxyUrl: string;
@@ -194,16 +180,6 @@ interface KubernetesGatewayTarget {
   readonly gatewayPort: number;
 }
 
-interface GatewayAdministrationDevicePin {
-  readonly namespace: string;
-  readonly name: string;
-  readonly uid: string;
-  readonly resourceVersion: string;
-  readonly namespaceId: string;
-  readonly agentId: string;
-  readonly deviceId?: string;
-}
-
 class OwnershipFailure extends Error {}
 class ConfigurationFailure extends Error {}
 
@@ -216,7 +192,6 @@ const CONFIGURATION_VOLUME = "openclaw-configuration";
 const AGENT_REVISION_ANNOTATION = "openclaw.dev/agent-revision";
 const AGENT_REVISION_ID_ANNOTATION = "openclaw.dev/agent-revision-id";
 const APPLY_CONTENT_TYPE = "application/apply-patch+yaml";
-const JSON_PATCH_CONTENT_TYPE = "application/json-patch+json";
 const REQUEST_TIMEOUT_MS = 10_000;
 const AGENT_TRANSPORT_PORT = 18_790;
 const AGENT_TRANSPORT_TOKEN_KEY = "app-server-token";
@@ -229,7 +204,6 @@ const CODEX_CHATGPT_WORKSPACE_ID = "CODEX_CHATGPT_WORKSPACE_ID";
 const RUNTIME_STATE_VOLUME_SIZE = "1Gi";
 const GATEWAY_PRIVATE_STATE_VOLUME = "openclaw-gateway-state";
 const GATEWAY_PRIVATE_STATE_SIZE = "10Gi";
-const OCC_GATEWAY_DEVICE_ID_ANNOTATION = "openclaw.dev/occ-gateway-device-id";
 const GATEWAY_PRIVATE_STATE_CATEGORIES = Object.freeze([
   ["state", "/home/node/.openclaw/state"],
   ["agent", "/home/node/.openclaw/agents/main/agent"],
@@ -350,29 +324,6 @@ function labelsToSelector(labels: Readonly<Record<string, string>>): string {
   return Object.entries(labels)
     .map(([key, value]) => `${key}=${value}`)
     .join(",");
-}
-
-function encodeSecretData(data: Readonly<Record<string, string>>): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(data).map(([key, value]) => [key, Buffer.from(value).toString("base64")]),
-  );
-}
-
-function decodeSecretValue(
-  secret: ManagedKubernetesObject<"Secret">,
-  key: string,
-  description: string,
-): string {
-  const encoded = secret.data?.[key];
-  if (!isNonEmptyString(encoded)) {
-    throw new ConfigurationFailure(`${description} is missing.`);
-  }
-  const decoded = Buffer.from(encoded, "base64").toString("utf8");
-  return required(decoded, description);
-}
-
-function jsonPointerSegment(value: string): string {
-  return value.replaceAll("~", "~0").replaceAll("/", "~1");
 }
 
 function channelProxy(value: unknown): { address: string; port: number } {
@@ -554,14 +505,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
           transportSecretPrefix: { type: "string" },
           modelSecretPrefix: { type: "string" },
           gatewayStorageClassName: { type: "string", minLength: 1 },
-          gatewayAdministration: {
-            type: "object",
-            required: ["controllerNamespace"],
-            additionalProperties: false,
-            properties: {
-              controllerNamespace: { type: "string", minLength: 1 },
-            },
-          },
           channels: {
             type: "object",
             required: ["secretPrefix", "proxyUrl"],
@@ -585,10 +528,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private lifecycleStarted = false;
   private apiClients: Promise<KubernetesApiClients> | undefined;
   private readonly podExecutor: KubernetesClientNodePodExecutor;
-  private readonly gatewayAdministration: KubernetesGatewayAdministrationOptions | undefined;
   private patchOptions:
-    ReturnType<typeof import("@kubernetes/client-node").setHeaderOptions> | undefined;
-  private jsonPatchOptions:
     ReturnType<typeof import("@kubernetes/client-node").setHeaderOptions> | undefined;
 
   static validateConfiguration(configuration: unknown): void {
@@ -696,8 +636,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       );
     }
     if (options.runtime !== undefined) {
-      const { transportSecretPrefix, modelSecretPrefix, channels, gatewayAdministration } =
-        options.runtime;
+      const { transportSecretPrefix, modelSecretPrefix, channels } = options.runtime;
       required(transportSecretPrefix, "Agent transport Secret name prefix");
       required(modelSecretPrefix, "Agent model Secret name prefix");
       required(options.runtime.gatewayStorageClassName, "SQLite-compatible gateway storage class");
@@ -717,13 +656,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
           throw new ConfigurationFailure("Agent channel credentials must remain separate.");
         }
         channelProxy(channels.proxyUrl);
-      }
-      if (gatewayAdministration !== undefined) {
-        try {
-          validateGatewayAdministrationOptions(gatewayAdministration);
-        } catch (error) {
-          throw new ConfigurationFailure(error instanceof Error ? error.message : String(error));
-        }
       }
     }
   }
@@ -745,10 +677,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     this.options = options;
     this.sandboxDriver = selection.sandboxDriver;
-    this.gatewayAdministration =
-      options.runtime?.gatewayAdministration === undefined
-        ? undefined
-        : this.parseGatewayAdministrationOptions(options.runtime.gatewayAdministration);
     this.podExecutor = new KubernetesClientNodePodExecutor(options.authentication, (message) => {
       return new ConfigurationFailure(message);
     });
@@ -763,7 +691,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   createGatewayAdministrationAdapter(): ControllerGatewayAccess | undefined {
-    if (this.options.runtime?.gatewayAdministration === undefined) return undefined;
+    if (this.options.runtime === undefined) return undefined;
     return {
       dispatch: (request) => this.dispatchGatewayAdministrationCommand(request),
     };
@@ -1049,9 +977,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (sandboxDriver !== undefined && embedded) {
       throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
     }
-    if (this.options.runtime?.gatewayAdministration !== undefined) {
-      this.validateGatewayAdministrationProfile(revision);
-    }
     if (revision.serviceAccount?.credential.kind === "access_token") {
       if (embedded || this.options.runtime === undefined) {
         throw new ConfigurationFailure(
@@ -1258,16 +1183,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       } else if (!(await this.gatewayReady(gatewayOwnership, gatewayName, namespace))) {
         return result;
       }
-      if (
-        !(await this.prepareGatewayAdministration(
-          revision,
-          namespace,
-          gatewayName,
-          gatewayOwnership,
-        ))
-      ) {
-        return result;
-      }
       if (embedded) return { ...result, ready: true };
       await this.reconcile(
         {
@@ -1437,16 +1352,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (!(await this.gatewayReady(gatewayOwnership, gatewayName, namespace))) {
         throw new Error("The exact AgentRevision gateway is not ready.");
       }
-      if (
-        !(await this.verifyPreparedGatewayAdministration(
-          revision,
-          namespace,
-          gatewayName,
-          gatewayOwnership,
-        ))
-      ) {
-        throw new Error("Gateway administration is unavailable.");
-      }
       return;
     }
     const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
@@ -1509,16 +1414,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     if (!(await this.gatewayReady(gatewayOwnership, gatewayName, namespace))) {
       throw new Error("The exact AgentRevision gateway is not ready.");
-    }
-    if (
-      !(await this.verifyPreparedGatewayAdministration(
-        revision,
-        namespace,
-        gatewayName,
-        gatewayOwnership,
-      ))
-    ) {
-      throw new Error("Gateway administration is unavailable.");
     }
     for (const policy of this.agentNetworkPolicies(revision, namespace)) {
       await this.reconcile(policy, gatewayOwnership, namespace);
@@ -1696,180 +1591,46 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
-  private async prepareGatewayAdministration(
-    revision: AgentRevision,
-    namespace: string,
-    gatewayName: string,
-    ownership: Ownership,
-  ): Promise<boolean> {
-    const options = this.gatewayAdministrationOptions();
-    if (options === undefined) return true;
-    this.validateGatewayAdministrationProfile(revision);
-    if (options.controllerNamespace === namespace) {
-      throw new ConfigurationFailure(
-        "Gateway credentials must remain outside the Agent namespace.",
-      );
-    }
-    const signal = this.gatewayAdministrationSignal(NATIVE_GATEWAY_ENROLLMENT_TIMEOUT_MS);
-    return withComputeAbortSignal(signal, async () => {
-      const target = await this.resolveGatewayBootstrapTarget(
-        revision,
-        namespace,
-        gatewayName,
-        ownership,
-      );
-      if (target === undefined) return false;
-      const devicePin = await this.readGatewayAdministrationDevicePin(
-        revision,
-        namespace,
-        ownership,
-      );
-      const record = await this.readOrCreateGatewayAdministrationCredential(
-        options,
-        ownership,
-        devicePin,
-      );
-      if (record.credential.state === "established") {
-        return this.verifyGatewayAdministrationCredential(target, record.credential, signal);
-      }
-      if (!record.created) return false;
-
-      const gatewayToken = await this.gatewayTransportToken(revision, namespace);
-      const helperUrl = this.gatewayLocalPodUrl(target);
-      const helper = this.podExecutor.exec({
-        namespace: target.namespace,
-        podName: target.podName,
-        containerName: "gateway",
-        command: ["node", "-e", buildGatewayAdministrationHelperScript()],
-        stdin: gatewayAdministrationHelperInput({
-          url: helperUrl,
-          gatewayToken,
-          identity: record.credential.identity,
-          publicKey: publicKeyRawBase64UrlFromPem(record.credential.identity.publicKeyPem),
-          timeoutMs: NATIVE_GATEWAY_ENROLLMENT_TIMEOUT_MS,
-        }),
-        timeoutMs: NATIVE_GATEWAY_ENROLLMENT_TIMEOUT_MS,
-        signal,
-      });
-      const enrollment = this.withGatewayPodProxy(target, signal, (url) =>
-        connectOpenClawGatewayNativeWithBootstrap({
-          url,
-          identity: record.credential.identity,
-          sharedToken: gatewayToken,
-          waitForPairingApproval: async () => {
-            await helper;
-          },
-          signal,
-        }),
-      );
-      const outcomes = await Promise.allSettled([helper, enrollment]);
-      const [helperOutcome, enrollmentOutcome] = outcomes;
-      if (helperOutcome.status !== "fulfilled" || enrollmentOutcome.status !== "fulfilled") {
-        return false;
-      }
-      const capturedToken = enrollmentOutcome.value;
-      const credential = await this.storeGatewayAdministrationToken(
-        options,
-        ownership,
-        record.credential.identity,
-        capturedToken,
-      );
-      if (credential.state !== "established") return false;
-      return this.verifyGatewayAdministrationCredential(target, credential, signal);
-    });
-  }
-
-  private async verifyPreparedGatewayAdministration(
-    revision: AgentRevision,
-    namespace: string,
-    gatewayName: string,
-    ownership: Ownership,
-  ): Promise<boolean> {
-    const options = this.gatewayAdministrationOptions();
-    if (options === undefined) return true;
-    this.validateGatewayAdministrationProfile(revision);
-    if (options.controllerNamespace === namespace) {
-      throw new ConfigurationFailure(
-        "Gateway credentials must remain outside the Agent namespace.",
-      );
-    }
-    const signal = this.gatewayAdministrationSignal(NATIVE_GATEWAY_REQUEST_TIMEOUT_MS);
-    return withComputeAbortSignal(signal, async () => {
-      const target = await this.resolveGatewayBootstrapTarget(
-        revision,
-        namespace,
-        gatewayName,
-        ownership,
-        { revision: revision.revision, revisionId: revision.id },
-      );
-      if (target === undefined) return false;
-      const devicePin = await this.readGatewayAdministrationDevicePin(
-        revision,
-        namespace,
-        ownership,
-      );
-      const credential = await this.readGatewayAdministrationCredential(options, ownership);
-      if (credential?.state !== "established") return false;
-      this.verifyGatewayAdministrationDevicePin(devicePin, credential.identity.deviceId);
-      return this.verifyGatewayAdministrationCredential(target, credential, signal);
-    });
-  }
-
   private async dispatchGatewayAdministrationCommand(
     request: ControllerGatewayDispatchRequest,
   ): Promise<ControllerGatewayDispatchResult> {
-    const options = this.gatewayAdministrationOptions();
-    if (options === undefined) {
+    if (this.options.runtime === undefined) {
       throw new ConfigurationFailure(
         "Gateway administration is unsupported by this Compute Driver.",
       );
     }
     this.validateGatewayAdministrationProfile(request.revision);
     const signal = this.gatewayAdministrationSignal(
-      NATIVE_GATEWAY_REQUEST_TIMEOUT_MS,
+      GATEWAY_ADMINISTRATION_REQUEST_TIMEOUT_MS,
       request.signal,
       request.deadline,
     );
     return withComputeAbortSignal(signal, async () => {
       const target = await this.resolveCurrentGatewayTarget(request.revision);
-      if (options.controllerNamespace === target.namespace) {
-        throw new ConfigurationFailure(
-          "Gateway credentials must remain outside the Agent namespace.",
-        );
-      }
-      const credential = await this.readGatewayAdministrationCredential(options, {
-        namespaceId: request.revision.namespaceId,
-        agentId: request.revision.agentId,
-      });
-      if (credential?.state !== "established") {
-        throw new ConfigurationFailure("Gateway administration credentials are unavailable.");
-      }
-      return this.withGatewayPodProxy(target, signal, async (url) => {
-        const result = await requestOpenClawGatewayNative({
-          url,
-          identity: credential.identity,
-          deviceToken: credential.deviceToken.token,
-          scopes: credential.deviceToken.scopes,
-          request: request.command,
+      let output: Awaited<ReturnType<KubernetesClientNodePodExecutor["exec"]>>;
+      try {
+        output = await this.podExecutor.exec({
+          namespace: target.namespace,
+          podName: target.podName,
+          containerName: "gateway",
+          command: ["node", "-e", buildGatewayAdministrationCliScript()],
+          stdin: gatewayAdministrationCliInput({
+            method: request.command.method,
+            ...(request.command.params === undefined ? {} : { params: request.command.params }),
+            port: target.gatewayPort,
+            timeoutMs: GATEWAY_ADMINISTRATION_REQUEST_TIMEOUT_MS,
+          }),
+          timeoutMs: GATEWAY_ADMINISTRATION_REQUEST_TIMEOUT_MS,
+          outputLimitBytes: GATEWAY_ADMINISTRATION_RESPONSE_MAX_BYTES,
           signal,
         });
-        return result as ControllerGatewayDispatchResult;
-      });
+      } catch {
+        throw new ControllerGatewayUnknownOutcomeError(
+          "The native gateway command may have started through Kubernetes exec, but the controller could not observe its outcome.",
+        );
+      }
+      return parseGatewayAdministrationCliOutput(output.stdout);
     });
-  }
-
-  private gatewayAdministrationOptions(): KubernetesGatewayAdministrationOptions | undefined {
-    return this.gatewayAdministration;
-  }
-
-  private parseGatewayAdministrationOptions(
-    options: KubernetesGatewayAdministrationOptions,
-  ): KubernetesGatewayAdministrationOptions {
-    try {
-      return validateGatewayAdministrationOptions(options);
-    } catch (error) {
-      throw new ConfigurationFailure(error instanceof Error ? error.message : String(error));
-    }
   }
 
   private validateGatewayAdministrationProfile(revision: AgentRevision): void {
@@ -1905,348 +1666,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       signals.push(AbortSignal.timeout(deadlineMs));
     }
     return AbortSignal.any(signals);
-  }
-
-  private async readOrCreateGatewayAdministrationCredential(
-    options: KubernetesGatewayAdministrationOptions,
-    ownership: Ownership,
-    devicePin: GatewayAdministrationDevicePin,
-  ): Promise<{
-    readonly credential: GatewayAdministrationCredential;
-    readonly created: boolean;
-  }> {
-    const existing = await this.readGatewayAdministrationCredential(options, ownership);
-    if (existing !== undefined) {
-      this.verifyGatewayAdministrationDevicePin(devicePin, existing.identity.deviceId);
-      return { credential: existing, created: false };
-    }
-    if (devicePin.deviceId !== undefined) {
-      throw new ConfigurationFailure(
-        "Gateway administration credential is missing for the pinned native device.",
-      );
-    }
-    const identity = createOpenClawGatewayNativeDeviceIdentity();
-    const credential: GatewayAdministrationCredential = { state: "keyOnly", identity };
-    const name = gatewayAdministrationSecretName({
-      namespaceId: ownership.namespaceId,
-      agentId: required(ownership.agentId, "Gateway administration Agent ID"),
-    });
-    const clients = await this.clients();
-    try {
-      await this.request(
-        () =>
-          clients.core.createNamespacedSecret({
-            namespace: options.controllerNamespace,
-            body: {
-              ...this.manifest("v1", "Secret", name, ownership, options.controllerNamespace),
-              type: "Opaque",
-              stringData: gatewayAdministrationSecretStringData(credential),
-            },
-          }),
-        { mutating: true },
-      );
-    } catch (error) {
-      if (numericErrorStatus(error) !== 409) throw error;
-      const current = await this.readGatewayAdministrationCredential(options, ownership);
-      if (current === undefined) throw error;
-      this.verifyGatewayAdministrationDevicePin(devicePin, current.identity.deviceId);
-      return { credential: current, created: false };
-    }
-    const created = await this.readGatewayAdministrationCredential(options, ownership);
-    if (created === undefined || created.identity.deviceId !== identity.deviceId) {
-      throw new ConfigurationFailure(
-        "Gateway administration credential Secret changed during creation.",
-      );
-    }
-    await this.writeGatewayAdministrationDevicePin(devicePin, identity.deviceId);
-    return { credential: created, created: true };
-  }
-
-  private async readGatewayAdministrationDevicePin(
-    revision: AgentRevision,
-    namespace: string,
-    ownership: Ownership,
-  ): Promise<GatewayAdministrationDevicePin> {
-    const desired = this.gatewayPrivateStateClaim(revision.agentId, ownership, namespace);
-    const claim = await this.getOwned(
-      "PersistentVolumeClaim",
-      desired.metadata.name,
-      namespace,
-      ownership,
-    );
-    if (claim === undefined) {
-      throw new ConfigurationFailure("Gateway private state claim is unavailable.");
-    }
-    this.verifyPersistentVolumeClaim(claim, desired);
-    const uid = required(claim.metadata.uid, "Gateway private state claim UID");
-    const resourceVersion = required(
-      claim.metadata.resourceVersion,
-      "Gateway private state claim resource version",
-    );
-    const deviceId = claim.metadata.annotations?.[OCC_GATEWAY_DEVICE_ID_ANNOTATION];
-    if (deviceId !== undefined && !isNonEmptyString(deviceId)) {
-      throw new ConfigurationFailure("Gateway administration native device pin is invalid.");
-    }
-    return {
-      namespace,
-      name: desired.metadata.name,
-      uid,
-      resourceVersion,
-      namespaceId: ownership.namespaceId,
-      agentId: required(ownership.agentId, "Gateway administration Agent ID"),
-      ...(deviceId === undefined ? {} : { deviceId }),
-    };
-  }
-
-  private verifyGatewayAdministrationDevicePin(
-    pin: GatewayAdministrationDevicePin,
-    deviceId: string,
-  ): void {
-    if (pin.deviceId === undefined) {
-      throw new ConfigurationFailure(
-        "Gateway administration credential is missing its native device pin.",
-      );
-    }
-    if (pin.deviceId !== deviceId) {
-      throw new ConfigurationFailure(
-        "Gateway administration credential does not match the pinned native device.",
-      );
-    }
-  }
-
-  private async writeGatewayAdministrationDevicePin(
-    pin: GatewayAdministrationDevicePin,
-    deviceId: string,
-  ): Promise<void> {
-    const clients = await this.clients();
-    const verifyReadback = async () => {
-      const current = await this.getOwned("PersistentVolumeClaim", pin.name, pin.namespace, {
-        namespaceId: pin.namespaceId,
-        agentId: pin.agentId,
-      });
-      return (
-        current?.metadata.uid === pin.uid &&
-        current.metadata.annotations?.[OCC_GATEWAY_DEVICE_ID_ANNOTATION] === deviceId
-      );
-    };
-    try {
-      await this.request(
-        () =>
-          clients.core.patchNamespacedPersistentVolumeClaim(
-            {
-              name: pin.name,
-              namespace: pin.namespace,
-              body: [
-                { op: "test", path: "/metadata/uid", value: pin.uid },
-                { op: "test", path: "/metadata/resourceVersion", value: pin.resourceVersion },
-                {
-                  op: "add",
-                  path: `/metadata/annotations/${jsonPointerSegment(
-                    OCC_GATEWAY_DEVICE_ID_ANNOTATION,
-                  )}`,
-                  value: deviceId,
-                },
-              ],
-            },
-            this.jsonPatchOptions,
-          ),
-        { mutating: true },
-      );
-    } catch (error) {
-      if (await verifyReadback()) return;
-      throw error;
-    }
-    if (!(await verifyReadback())) {
-      throw new ConfigurationFailure("Gateway administration native device pin was not persisted.");
-    }
-  }
-
-  private async readGatewayAdministrationCredential(
-    options: KubernetesGatewayAdministrationOptions,
-    ownership: Ownership,
-  ): Promise<GatewayAdministrationCredential | undefined> {
-    const name = this.gatewayAdministrationCredentialSecretName(ownership);
-    const secret = await this.getOwned("Secret", name, options.controllerNamespace, ownership);
-    if (secret === undefined) return undefined;
-    try {
-      return parseGatewayAdministrationCredential(secret);
-    } catch (error) {
-      throw new ConfigurationFailure(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  private async storeGatewayAdministrationToken(
-    options: KubernetesGatewayAdministrationOptions,
-    ownership: Ownership,
-    identity: GatewayAdministrationCredential["identity"],
-    deviceToken: OpenClawGatewayNativeTokenRecord,
-  ): Promise<GatewayAdministrationCredential> {
-    const name = this.gatewayAdministrationCredentialSecretName(ownership);
-    const credential: GatewayAdministrationCredential = {
-      state: "established",
-      identity,
-      deviceToken,
-    };
-    const data = encodeSecretData(gatewayAdministrationSecretStringData(credential));
-    const secret = await this.getOwned("Secret", name, options.controllerNamespace, ownership);
-    if (secret === undefined || secret.metadata.resourceVersion === undefined) {
-      throw new ConfigurationFailure("Gateway administration credential Secret is unavailable.");
-    }
-    if (parseGatewayAdministrationCredential(secret).identity.deviceId !== identity.deviceId) {
-      throw new ConfigurationFailure("Gateway administration identity changed during enrollment.");
-    }
-    const resourceVersion = secret.metadata.resourceVersion;
-    const manifest = this.manifest("v1", "Secret", name, ownership, options.controllerNamespace);
-    const clients = await this.clients();
-    try {
-      await this.request(
-        () =>
-          clients.core.replaceNamespacedSecret({
-            name,
-            namespace: options.controllerNamespace,
-            body: {
-              ...manifest,
-              metadata: {
-                ...manifest.metadata,
-                resourceVersion,
-              },
-              type: "Opaque",
-              data,
-            },
-          }),
-        { mutating: true },
-      );
-    } catch (error) {
-      const current = await this.readGatewayAdministrationCredential(options, ownership);
-      if (
-        current?.state === "established" &&
-        current.identity.deviceId === identity.deviceId &&
-        current.deviceToken.token === deviceToken.token &&
-        current.deviceToken.scopes.includes(NATIVE_GATEWAY_OPERATOR_SCOPES[0])
-      ) {
-        return current;
-      }
-      throw error;
-    }
-    const stored = await this.readGatewayAdministrationCredential(options, ownership);
-    if (
-      stored?.state !== "established" ||
-      stored.identity.deviceId !== identity.deviceId ||
-      stored.deviceToken.token !== deviceToken.token
-    ) {
-      throw new ConfigurationFailure("Gateway administration credential token was not persisted.");
-    }
-    return stored;
-  }
-
-  private gatewayAdministrationCredentialSecretName(ownership: Ownership): string {
-    return gatewayAdministrationSecretName({
-      namespaceId: ownership.namespaceId,
-      agentId: required(ownership.agentId, "Gateway administration Agent ID"),
-    });
-  }
-
-  private async gatewayTransportToken(revision: AgentRevision, namespace: string): Promise<string> {
-    const runtime = this.options.runtime;
-    if (runtime === undefined) {
-      throw new ConfigurationFailure("Gateway runtime credentials are unavailable.");
-    }
-    const name = `${runtime.transportSecretPrefix}-${sha256Hex(revision.agentId, 12)}`;
-    // This is the existing operator-provisioned Secret projected into this exact
-    // Agent's gateway. It is addressed by verified tenant namespace and the
-    // server-derived Agent name, and is not an OCC-managed credential resource.
-    const secret = await this.get("Secret", name, namespace);
-    if (
-      secret === undefined ||
-      secret.metadata.name !== name ||
-      secret.metadata.namespace !== namespace
-    ) {
-      throw new ConfigurationFailure("Agent gateway transport Secret is unavailable.");
-    }
-    return decodeSecretValue(secret, GATEWAY_TOKEN_KEY, "Agent gateway transport token");
-  }
-
-  private async verifyGatewayAdministrationCredential(
-    target: KubernetesGatewayTarget,
-    credential: Extract<GatewayAdministrationCredential, { readonly state: "established" }>,
-    signal: AbortSignal,
-  ): Promise<boolean> {
-    try {
-      const result = await this.withGatewayPodProxy(target, signal, (url) =>
-        requestOpenClawGatewayNative({
-          url,
-          identity: credential.identity,
-          deviceToken: credential.deviceToken.token,
-          scopes: credential.deviceToken.scopes,
-          request: { method: "status" } as unknown as Parameters<
-            typeof requestOpenClawGatewayNative
-          >[0]["request"],
-          signal,
-        }),
-      );
-      return result.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  private async withGatewayPodProxy<T>(
-    target: KubernetesGatewayTarget,
-    signal: AbortSignal,
-    operation: (url: string) => Promise<T>,
-  ): Promise<T> {
-    const forward = await openKubernetesGatewayPodProxy(
-      this.options.authentication,
-      (message) => new ConfigurationFailure(message),
-      {
-        namespace: target.namespace,
-        podName: target.podName,
-        targetPort: target.gatewayPort,
-        signal,
-      },
-    );
-    try {
-      return await operation(forward.url);
-    } finally {
-      await forward.close();
-    }
-  }
-
-  private gatewayLocalPodUrl(target: KubernetesGatewayTarget): string {
-    return `ws://127.0.0.1:${target.gatewayPort}`;
-  }
-
-  private async resolveGatewayBootstrapTarget(
-    revision: AgentRevision,
-    namespace: string,
-    gatewayName: string,
-    ownership: Ownership,
-    expected?: Pick<GatewayConfigurationSnapshot, "revision" | "revisionId">,
-  ): Promise<KubernetesGatewayTarget | undefined> {
-    const deployment = await this.getOwned("Deployment", gatewayName, namespace, ownership);
-    if (deployment === undefined || deployment.spec?.replicas !== 1) return undefined;
-    if (!this.deploymentReady(deployment)) return undefined;
-    const current = this.gatewayDeploymentRevision(deployment, gatewayName);
-    if (
-      current.revision > revision.revision ||
-      (current.revision === revision.revision && current.revisionId !== revision.id)
-    ) {
-      throw new ConfigurationFailure("Refusing stale AgentRevision gateway preparation.");
-    }
-    if (
-      expected !== undefined &&
-      (current.revision !== expected.revision || current.revisionId !== expected.revisionId)
-    ) {
-      throw new ConfigurationFailure("Refusing stale AgentRevision gateway verification.");
-    }
-    const pod = await this.selectOwnedGatewayPod(
-      revision,
-      namespace,
-      gatewayName,
-      expected ?? current,
-    );
-    if (pod === undefined) return undefined;
-    return this.gatewayTargetForPod(namespace, pod);
   }
 
   private async resolveCurrentGatewayTarget(
@@ -2615,7 +2034,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       (message) => new ConfigurationFailure(message),
     );
     this.patchOptions = sdk.setHeaderOptions("Content-Type", APPLY_CONTENT_TYPE);
-    this.jsonPatchOptions = sdk.setHeaderOptions("Content-Type", JSON_PATCH_CONTENT_TYPE);
     return {
       core: new sdk.CoreV1Api(clientConfiguration),
       apps: new sdk.AppsV1Api(clientConfiguration),

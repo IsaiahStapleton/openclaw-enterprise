@@ -1,37 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import {
-  gatewayAdministrationSecretStringData,
-  parseGatewayAdministrationCredential,
-} from "../../apps/controller/src/drivers/compute/kubernetes/gateway-administration.ts";
 import { KubernetesClientNodePodExecutor } from "../../apps/controller/src/drivers/compute/kubernetes/pod-exec.ts";
-import { createOpenClawGatewayNativeDeviceIdentity } from "../../apps/controller/src/gateway/native-client.ts";
-
-test("gateway administration credential parser rejects non-exact operator token scopes", () => {
-  const credential = {
-    state: "established",
-    identity: createOpenClawGatewayNativeDeviceIdentity(),
-    deviceToken: {
-      token: "durable-device-token",
-      scopes: ["operator.admin", "operator.read"],
-    },
-  };
-  const stringData = gatewayAdministrationSecretStringData(credential);
-  const secret = {
-    data: Object.fromEntries(
-      Object.entries(stringData).map(([key, value]) => [
-        key,
-        Buffer.from(value, "utf8").toString("base64"),
-      ]),
-    ),
-  };
-
-  assert.throws(
-    () => parseGatewayAdministrationCredential(secret),
-    /Gateway administration device token scopes must be exactly operator\.admin/,
-  );
-});
 
 test("Kubernetes pod exec rejects a pre-aborted signal before creating a client", async () => {
   let createdClient = false;
@@ -68,6 +38,52 @@ test("Kubernetes pod exec bounds output and terminates the websocket", async () 
     executor.exec(baseExecInput()),
     /Kubernetes Pod exec output exceeded limit\./,
   );
+  assert.equal(socket.terminations, 1);
+});
+
+test("Kubernetes pod exec streams fixed stdin into an exact argv command", async () => {
+  const socket = new FakeSocket();
+  let observed;
+  const executor = createPodExecutor({
+    exec(namespace, podName, containerName, command, stdout, stderr, stdin, tty, status) {
+      const chunks = [];
+      stdin.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      stdin.on("end", () => {
+        observed = {
+          namespace,
+          podName,
+          containerName,
+          command,
+          stdin: Buffer.concat(chunks).toString("utf8"),
+          tty,
+        };
+        stdout.write(JSON.stringify({ ok: true }));
+        status({ status: "Success" });
+      });
+      return Promise.resolve(socket);
+    },
+  });
+
+  const result = await executor.exec(
+    baseExecInput({
+      command: ["node", "/opt/openclaw/gateway-admin-helper.mjs"],
+      stdin: JSON.stringify({ method: "status", params: {} }),
+    }),
+  );
+
+  assert.deepEqual(result, {
+    stdout: JSON.stringify({ ok: true }),
+    stderr: "",
+    status: { status: "Success" },
+  });
+  assert.deepEqual(observed, {
+    namespace: "tenant",
+    podName: "gateway-0",
+    containerName: "gateway",
+    command: ["node", "/opt/openclaw/gateway-admin-helper.mjs"],
+    stdin: JSON.stringify({ method: "status", params: {} }),
+    tty: false,
+  });
   assert.equal(socket.terminations, 1);
 });
 
@@ -121,7 +137,7 @@ test("Kubernetes pod exec terminates the websocket exactly once across late life
 
         const result = await executor.exec(baseExecInput({ signal: abort.signal }));
         await new Promise((resolve) => setImmediate(resolve));
-        assert.deepEqual(result, { stdout: "ok", stderr: "warn" });
+        assert.deepEqual(result, { stdout: "ok", stderr: "warn", status: { status: "Success" } });
         assert.equal(socket.terminations, 1, "successful completion should terminate exactly once");
 
         abort.abort(new Error("late abort"));

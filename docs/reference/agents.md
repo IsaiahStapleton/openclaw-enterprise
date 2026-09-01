@@ -70,9 +70,10 @@ controller CSRF boundary or with a scoped service API key, and must have exact
 Agent `administer` permission. Agent ServicePrincipal credentials are rejected
 at authentication admission, even if the principal has an explicit IAM grant.
 
-The request body contains a native method and optional JSON parameters. OCC
-rejects extra top-level fields, caller-selected URLs, and methods outside this
-code-owned allowlist before contacting the gateway:
+The request body contains a native method and optional JSON parameters. OpenClaw
+Controller (OCC) rejects extra top-level fields, caller-selected URLs, arbitrary
+shell input, and methods outside this code-owned allowlist before contacting the
+gateway:
 
 | Methods                                                                                    | Purpose                                                       |
 | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
@@ -80,13 +81,15 @@ code-owned allowlist before contacting the gateway:
 | `agents.files.list`, `agents.files.get`, `agents.files.set`                                | Use native workspace file semantics for the selected Agent.   |
 | `chat.send`, `chat.history`, `chat.abort`                                                  | Submit, inspect, or abort native chat work.                   |
 
-Native configuration mutation, update/device administration, arbitrary RPC, and
-browser-to-gateway credentials are not exposed through this route. OCC rejects
+Native configuration mutation, update/device administration, arbitrary RPC,
+offline native initialization, and browser-to-gateway credentials are not exposed
+through this route. OCC rejects
 malformed request bodies and unsupported methods with `400`, unauthenticated or
 expired caller credentials with `401`, and authenticated callers that fail IAM
-or browser CSRF checks with `403`. If gateway administration is disabled,
-unavailable, or missing its enrolled controller-owned native device token, the
-route returns `503` before dispatch and has no gateway side effects.
+or browser CSRF checks with `403`. If gateway administration is unavailable,
+missing a current owned running Kubernetes gateway Pod, or selected for an
+unsupported Compute implementation, the route returns `503` before dispatch and
+has no gateway side effects.
 
 The `config.get` payload omits OpenClaw 2026.8.1's internal
 `sourceConfigBeforeMigrations` snapshot because it contains unredacted secrets.
@@ -96,15 +99,27 @@ OCC records an audit dispatch before forwarding and records success, native
 rejection, or an unknown transport outcome after the attempt. If the command
 was sent and the transport times out, disconnects, or is cancelled, OCC reports
 `UNKNOWN_OUTCOME` instead of replaying the command; the native gateway may have
-already applied the operation.
+already applied the operation. `chat.send` returns the native started
+acknowledgment; it does not wait for model-turn completion. Use `chat.history`
+to inspect the resulting messages.
 
 Gateway administration is currently implemented by the bundled Kubernetes
-Compute Driver when its runtime opt-in is configured. The driver stores one
-stable OCC native operator identity per Agent in a controller-namespace
-Kubernetes Secret, verifies token persistence before readiness, and reaches the
-selected gateway through Kubernetes API `pods/proxy` with HTTP WebSocket
-Upgrade to the verified owned Pod. Docker and external Compute Drivers return
-unsupported until they implement the same ownership and credential contract. See the
+Compute Driver. The private adapter resolves the Agent's current active
+revision, verifies the selected Service, EndpointSlice, Deployment, and one
+ready owned gateway Pod, then executes a fixed helper in that gateway container
+through Kubernetes `pods/exec`. The helper receives bounded JSON on stdin, calls
+the ordinary OpenClaw CLI/API against the Pod-local gateway port using the
+gateway's existing local configuration and authentication, and returns captured
+JSON. It is not a caller-controlled shell, WebSocket proxy, native SDK client,
+or device-enrollment path.
+
+OCC does not create an independent native device, store a gateway
+administration token Secret, pin identity on the gateway PVC, or project OCC
+private keys or controller Kubernetes credentials into Agent workloads. Runtime
+authority comes from the OCC caller's IAM authorization plus the controller API's
+Kubernetes permission to execute the fixed helper in the exact owned Pod. Docker
+and external Compute Drivers return unsupported until they implement the same
+owned-Pod command contract. See the
 [gateway administration flow](../flows/gateway-administration.md) and
 [production deployment guide](../guides/deploy.md#enable-gateway-administration)
 for runtime details and operator setup.

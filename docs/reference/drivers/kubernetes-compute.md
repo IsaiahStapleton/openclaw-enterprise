@@ -29,8 +29,11 @@ controller.
 The worker needs permission to manage PersistentVolumeClaims in its tenant
 namespaces. Only the controller API receives narrowly scoped Secret permissions
 for provider-issued credentials; workers and workloads do not receive direct
-Secret API access. Do not grant wildcard permissions, cluster-wide access to
-tenant resources, `pods/exec`, or permission to create or escalate RoleBindings.
+Secret API access. Gateway administration additionally requires controller API
+permission to execute the fixed helper in the exact owned gateway Pod through
+`pods/exec`. Do not grant wildcard permissions, cluster-wide access to tenant
+resources, workload access to controller credentials, or permission to create or
+escalate RoleBindings.
 
 If OpenShell sandboxing is enabled, the Compute Driver's Kubernetes access is
 also used directly by the optional `SandboxDriver.ensureNamespace` hook to
@@ -91,8 +94,6 @@ drivers:
         gatewayStorageClassName: sqlite-block
         transportSecretPrefix: openclaw-agent-transport
         modelSecretPrefix: openclaw-agent-model
-        gatewayAdministration:
-          controllerNamespace: openclaw-system
 ```
 
 This example shows only the Compute Driver portion of the Installation
@@ -126,17 +127,17 @@ DNS, approved gateway clients, and required communication between an Agent's
 gateway and dedicated Harness. Cross-tenant traffic, traffic between different
 Agents, Kubernetes API access, and cloud metadata access remain denied.
 
-Gateway administration does not add a gateway Service network exception. When
-enabled, the API and worker use the Kubernetes API to read the selected Service,
-EndpointSlice, Deployment, and ready owned Pod, then open a short-lived
-`pods/proxy` request with HTTP WebSocket Upgrade to that exact Pod. The worker
-additionally uses `pods/exec` only for the fixed one-shot native device
-enrollment helper. The Agent's native Configuration must pin the exact
-API-server-to-Pod source addresses in `gateway.trustedProxies`; broad Pod CIDRs,
-fixture-only addresses, and dynamically injected trust are unsupported.
-Readiness for native gateway Pods uses a Pod-local Node.js HTTP request to
-`127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz` so kubelet probe source addresses do
-not have to become trusted gateway administration proxies.
+Gateway administration does not add a gateway Service network exception. When an
+authorized caller uses the Agent gateway route, the API uses the Kubernetes API
+to read the selected Service, EndpointSlice, Deployment, and ready owned Pod for
+the Agent's active revision, then runs a fixed helper in that gateway container
+through `pods/exec`. The helper receives JSON stdin, calls the ordinary
+OpenClaw CLI/API against the Pod-local gateway port using the gateway's existing
+local configuration and authentication, and returns JSON. The path does not use
+`pods/proxy`, native trusted-proxy configuration, an OCC native device, or a
+controller-owned gateway credential Secret. Readiness for native gateway Pods
+uses a Pod-local Node.js HTTP request to
+`127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz`.
 
 Production currently permits public TCP/443 egress for model access; a
 restricted model proxy is not yet available. Channels require an approved

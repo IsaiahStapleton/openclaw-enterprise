@@ -318,16 +318,13 @@ OCC_TEST_KUBERNETES_CONTEXT=k3d-oce
 OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_k8s_local
 OCC_TEST_KUBERNETES_GATEWAY_IMAGE=<gateway-image>@sha256:<digest>
 OCC_TEST_KUBERNETES_AGENT_IMAGE=<codex-image>@sha256:<digest>
-OCC_TEST_KUBERNETES_GATEWAY_PROXY_IP=<verified-apiserver-to-pod-source-ip>
 OCC_TEST_OPENAI_MODEL=gpt-5.1
 ```
 
-The gateway administration cases also require `helm` on `PATH`, or an existing
-Helm executable selected with `OCC_HELM_BIN`. The proxy IP is the exact observed
-API-server-to-Pod source address for your disposable cluster path; do not copy a
-fixture-only address into operator instructions. See
-[Kubernetes Compute Driver networking](reference/drivers/kubernetes-compute.md#networking)
-for the trusted-proxy deployment boundary.
+The gateway administration case also requires `helm` on `PATH`, or an existing
+Helm executable selected with `OCC_HELM_BIN`. It renders the checked-in chart's
+RBAC rules and applies them to the disposable controller identity before proving
+the fixed `pods/exec` helper path.
 
 Run the ordinary runtime cases independently of Slack:
 
@@ -344,14 +341,14 @@ OCC_TEST_HARNESS_K3D_REAL=1 OCC_TEST_SLACK_LIVE=0 \
   node --env-file="$TEST_ENV_FILE" --test --test-name-pattern="OCC gateway administration" tests/integration/harness-topology-k3d-real.test.mjs
 ```
 
-Five non-Slack cases must pass: two OCC gateway administration cases, dedicated
-Codex, embedded OpenClaw with a persisted service-account credential, and
-embedded OpenClaw using the Secret API. The gateway administration cases verify
-key-only enrollment recovery after token-persistence RBAC failure and real
-Kubernetes gateway command dispatch through the active Agent HTTP route. The
-Secret API case verifies native SecretRefs, exact grants and denial, shared
-Secrets, rotation, and redeployment. It prepares those Secrets and grants
-itself. The independent Slack case is expected to skip in this run.
+Four non-Slack cases must pass: OCC gateway administration, dedicated Codex,
+embedded OpenClaw with a persisted service-account credential, and embedded
+OpenClaw using the Secret API. The gateway administration case verifies real
+Kubernetes command dispatch through the active Agent HTTP route and the fixed
+Pod-local CLI helper. The Secret API case verifies native SecretRefs, exact
+grants and denial, shared Secrets, rotation, and redeployment. It prepares those
+Secrets and grants itself. The independent Slack case is expected to skip in
+this run.
 
 This suite uses the real production API and worker in the Node test process.
 It does not install the controller with Helm. Missing selected-suite
@@ -376,7 +373,7 @@ OCC_TEST_SLACK_LIVE=1 \
 This posts real Slack messages and leaves them in the channel. It verifies the
 reply and exact runtime/session evidence. The sender bot must differ from the
 Agent bot; its credential remains with the test runner. This selection skips
-the five ordinary runtime cases, so run both selections for complete Harness
+the four ordinary runtime cases, so run both selections for complete Harness
 coverage. See [Slack test settings](reference/settings.md#slack-test-environment).
 
 ## ChatGPT service accounts

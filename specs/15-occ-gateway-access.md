@@ -2,7 +2,13 @@
 
 **Date:** 2026-08-31
 
-**Status:** Completed — implementation and required local/native verification complete
+**Status:** Completed — historical transport design superseded by the CLI execution simplification
+
+**Historical note:** This record preserves the original approved remote
+native-device enrollment design. Current gateway administration behavior is the
+CLI execution path documented in
+[Agents](../docs/reference/agents.md#gateway-administration) and
+[Gateway Administration Flow](../docs/flows/gateway-administration.md).
 
 **Owner:** OCC admission and API; bundled Kubernetes Compute implementation
 
@@ -127,3 +133,4 @@ Current behavior is documented in the [Agent reference](../docs/reference/agents
 - 2026-08-31 12:02: Applied approved review direction: defined durable enrollment ordering and terminal recovery, removed duplicate completion state and Agent-deletion scope, retained the diagnostics/files/chat allowlist, and corrected source links. (01a04ae1-7ba7-7372-88a4-488e01f690ae — 4bf6985ebd3e746999bf270aead8921b4be7d812)
 
 - 2026-08-31 15:46: Completed native gateway administration, exact rollout verification, and real Kubernetes/PostgreSQL/native failure proof; current behavior lives in the linked reference and flow documentation. (01a04ae1-7ba7-7372-88a4-488e01f690ae — 27fa96cf22522dfc382ddd9c4f152692783c76f2)
+- 2026-09-01 08:38: Marked the completed remote native-device enrollment design as historical after the approved CLI execution simplification moved the current contract to the living reference and flow docs. (cody/01a05d9c-4cb5-7602-8df5-56d7f8309f44 — 7b4a819f02d6950e8cc2a2e08eb29c2f668493ad) (NOT_IN_SPEC)

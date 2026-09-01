@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { isIP } from "node:net";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,10 +17,6 @@ import {
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { runGatewayAdministrationFailureProofs } from "../helpers/gateway-administration-proof.mjs";
-import {
-  gatewayAdministrationSecretName,
-  parseGatewayAdministrationCredential,
-} from "../../apps/controller/src/drivers/compute/kubernetes/gateway-administration.ts";
 import {
   assertGatewayModelTurn,
   configureExistingK3dLocalPathSharedFileSystem,
@@ -271,11 +266,6 @@ function installationConfiguration(authentication, platformNamespace, slack, opt
       proxyUrl: slack.proxyUrl,
     };
   }
-  if (options.gatewayAdministration === true) {
-    configuration.drivers.compute.configuration.runtime.gatewayAdministration = {
-      controllerNamespace: platformNamespace,
-    };
-  }
   return configuration;
 }
 
@@ -283,15 +273,6 @@ function nativeConfiguration(harnessId, slack, options = {}) {
   const configuration = createHarnessConfiguration(harnessId, providerModel);
   const provider = harnessId === "codex" ? "codex" : "openai";
   configuration.models.providers[provider].models[0].input = ["text", "image"];
-  if (options.gatewayAdministration) {
-    const proxyAddress = process.env.OCC_TEST_KUBERNETES_GATEWAY_PROXY_IP;
-    assert.ok(
-      proxyAddress && isIP(proxyAddress),
-      "Gateway administration proof requires the exact verified apiserver-to-Pod source IP in OCC_TEST_KUBERNETES_GATEWAY_PROXY_IP",
-    );
-    assert.ok(!["127.0.0.1", "::1", "0.0.0.0", "::"].includes(proxyAddress));
-    configuration.gateway.trustedProxies = [proxyAddress];
-  }
   if (options.autoApproveLocal !== undefined) {
     const nodes = configuration.gateway.nodes ?? {};
     configuration.gateway.nodes = {
@@ -710,13 +691,6 @@ async function createAuthenticatedControllerRequestWithHeaders(app, credentials)
   };
 }
 
-function gatewayAdministrationResourceNames({ namespaceId, agentId }) {
-  return {
-    credential: gatewayAdministrationSecretName({ namespaceId, agentId }),
-    transport: `openclaw-agent-transport-${hash(agentId)}`,
-  };
-}
-
 const gatewayAdministrationChartRuleCache = new Map();
 
 async function gatewayAdministrationChartRules(platformNamespace) {
@@ -758,8 +732,6 @@ async function renderGatewayAdministrationChartRules(platformNamespace) {
       "database.cidr=10.45.0.12/32",
       "--set",
       "cluster.cidr=10.43.0.1/32",
-      "--set",
-      `gatewayAdministration.controllerNamespace=${platformNamespace}`,
     ],
     { cwd: repository, maxBuffer: 2_000_000 },
   );
@@ -776,27 +748,9 @@ async function renderGatewayAdministrationChartRules(platformNamespace) {
     return structuredClone(object.rules);
   };
   return {
-    workerCredential: rulesFor("Role", `${release}-gateway-credentials-worker`),
-    apiCredential: rulesFor("Role", `${release}-gateway-credentials-api`),
     workerTenant: rulesFor("ClusterRole", `${release}-openclaw-tenant-worker`),
     apiTenant: rulesFor("ClusterRole", `${release}-openclaw-tenant-api`),
   };
-}
-
-function gatewayCredentialRules(rules, { credentialCreate, credentialUpdate }) {
-  return structuredClone(rules)
-    .map((rule) =>
-      rule.resources?.includes("secrets")
-        ? {
-            ...rule,
-            verbs: rule.verbs.filter(
-              (verb) =>
-                (credentialCreate || verb !== "create") && (credentialUpdate || verb !== "update"),
-            ),
-          }
-        : rule,
-    )
-    .filter((rule) => rule.verbs.length > 0);
 }
 
 async function createRole(namespace, name, rules) {
@@ -840,102 +794,19 @@ async function provisionGatewayAdministrationRbac({
   controller,
   namespaceId,
   agentId,
-  credentialCreate = true,
-  credentialUpdate = true,
 }) {
   const suffix = hash(`${namespaceId}\0${agentId}`);
-  const names = gatewayAdministrationResourceNames({ namespaceId, agentId });
-  const workerPlatformRole = `gateway-admin-worker-platform-${suffix}`;
-  const apiPlatformRole = `gateway-admin-api-platform-${suffix}`;
-  const workerTenantRole = `gateway-admin-worker-tenant-${suffix}`;
   const apiTenantRole = `gateway-admin-api-tenant-${suffix}`;
   const chartRules = await gatewayAdministrationChartRules(platformNamespace);
-  await Promise.all([
-    createRole(
-      platformNamespace,
-      workerPlatformRole,
-      gatewayCredentialRules(chartRules.workerCredential, { credentialCreate, credentialUpdate }),
-    ),
-    createRole(platformNamespace, apiPlatformRole, chartRules.apiCredential),
-    createRole(placement, workerTenantRole, [
-      ...structuredClone(chartRules.workerTenant),
-      {
-        apiGroups: [""],
-        resources: ["secrets"],
-        resourceNames: [names.transport],
-        verbs: ["get"],
-      },
-    ]),
-    createRole(placement, apiTenantRole, chartRules.apiTenant),
-  ]);
-  await Promise.all([
-    createRoleBinding(
-      platformNamespace,
-      `${workerPlatformRole}-binding`,
-      workerPlatformRole,
-      platformNamespace,
-      controller.account,
-    ),
-    createRoleBinding(
-      platformNamespace,
-      `${apiPlatformRole}-binding`,
-      apiPlatformRole,
-      platformNamespace,
-      controller.apiAccount,
-    ),
-    createRoleBinding(
-      placement,
-      `${workerTenantRole}-binding`,
-      workerTenantRole,
-      platformNamespace,
-      controller.account,
-    ),
-    createRoleBinding(
-      placement,
-      `${apiTenantRole}-binding`,
-      apiTenantRole,
-      platformNamespace,
-      controller.apiAccount,
-    ),
-  ]);
-  return names;
-}
-
-async function grantGatewayAdministrationCredentialCreate(topology) {
-  const roleName = `gateway-admin-worker-platform-create-${hash(
-    `${topology.agent.namespaceId}\0${topology.agent.id}`,
-  )}`;
-  await createRole(topology.platformNamespace, roleName, [
-    { apiGroups: [""], resources: ["secrets"], verbs: ["create"] },
-  ]);
+  await createRole(placement, apiTenantRole, chartRules.apiTenant);
   await createRoleBinding(
-    topology.platformNamespace,
-    `${roleName}-binding`,
-    roleName,
-    topology.platformNamespace,
-    topology.controllerAccount,
+    placement,
+    `${apiTenantRole}-binding`,
+    apiTenantRole,
+    platformNamespace,
+    controller.apiAccount,
   );
-}
-
-async function grantGatewayAdministrationCredentialUpdate(topology) {
-  const roleName = `gateway-admin-worker-platform-update-${hash(
-    `${topology.agent.namespaceId}\0${topology.agent.id}`,
-  )}`;
-  await createRole(topology.platformNamespace, roleName, [
-    {
-      apiGroups: [""],
-      resources: ["secrets"],
-      resourceNames: [topology.gatewayAdministrationRbac.credential],
-      verbs: ["update"],
-    },
-  ]);
-  await createRoleBinding(
-    topology.platformNamespace,
-    `${roleName}-binding`,
-    roleName,
-    topology.platformNamespace,
-    topology.controllerAccount,
-  );
+  return { apiTenantRole };
 }
 
 async function ensureHarnessAdminPrincipal(
@@ -1627,8 +1498,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
           controller,
           namespaceId,
           agentId: agent.data.id,
-          credentialCreate: options.gatewayAdministrationCredentialCreate !== false,
-          credentialUpdate: options.gatewayAdministrationCredentialUpdate !== false,
         })
       : undefined;
   if (slack !== undefined) {
@@ -1767,50 +1636,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       false,
       `the production ${description} response must never contain provider credential bytes`,
     );
-  }
-
-  if (options.expectGatewayAdministrationEnrollmentFailure === true) {
-    assert.ok(
-      gatewayAdministrationRbac,
-      "gateway administration enrollment-failure topology requires gateway administration RBAC",
-    );
-    const gatewayServiceName = `gateway-${hash(agent.data.id)}`;
-    const agentServiceName = `agent-${hash(agent.data.id)}`;
-    const partialTopology = {
-      mode,
-      placement,
-      platformNamespace,
-      productionApp,
-      restartProductionApp,
-      restartProductionWorker,
-      credentials,
-      installation: activeInstallation,
-      approvedClient,
-      controllerAccount: controller.account,
-      controllerTenantRole: controller.tenantRole,
-      apiSecretRole: controller.apiSecretRole,
-      apiAccount: controller.apiAccount,
-      kubernetesNamespaceName,
-      adminRequest,
-      request,
-      events,
-      agent: agent.data,
-      ...(persistedAccount === undefined ? {} : { account: persistedAccount.data }),
-      persistedAgent,
-      revision: deployed.data,
-      gatewayServiceName,
-      agentServiceName,
-      gatewayToken,
-      directory,
-      observerPool,
-      secretApi,
-      gatewayAdministrationRbac,
-    };
-    partialTopology.gatewayPod = await waitForReadyGatewayPod(partialTopology, deployed.data.id);
-    if (options.gatewayAdministrationCredentialCreate === false) return partialTopology;
-    await waitForGatewayAdministrationKeyOnlyCredential(partialTopology, deployed.data.id);
-    await waitForGatewayAdministrationIncompleteEnrollment(partialTopology, deployed.data.id);
-    return partialTopology;
   }
 
   if (mode === "embedded" && modelCredential === "service-account") {
@@ -2180,26 +2005,10 @@ async function assertScopedTenantPvcAccess(topology) {
 }
 
 async function assertGatewayAdministrationRbacDenials(topology) {
-  const { credential } = topology.gatewayAdministrationRbac;
   const rows = [
-    [topology.controllerAccount, "list", "secrets", topology.platformNamespace],
-    [topology.controllerAccount, "delete", "secrets", topology.platformNamespace, credential],
-    ...["create", "list"].map((verb) => [
-      topology.apiAccount,
-      verb,
-      "secrets",
-      topology.platformNamespace,
-    ]),
-    ...["update", "patch", "delete"].map((verb) => [
-      topology.apiAccount,
-      verb,
-      "secrets",
-      topology.platformNamespace,
-      credential,
-    ]),
     [topology.controllerAccount, "create", "pods", topology.placement, undefined, "proxy"],
+    [topology.controllerAccount, "create", "pods", topology.placement, undefined, "exec"],
     [topology.apiAccount, "create", "pods", topology.placement, undefined, "proxy"],
-    [topology.apiAccount, "create", "pods", topology.placement, undefined, "exec"],
   ];
   await Promise.all(
     rows.map(async ([accountName, verb, resource, namespace, resourceName, subresource]) => {
@@ -2397,237 +2206,6 @@ async function assertOccConversation(topology, sessionKey, nonce) {
     );
     return user && assistant ? history : undefined;
   });
-}
-
-async function waitForGatewayAdministrationKeyOnlyCredential(
-  topology,
-  revisionId = topology.revision.id,
-) {
-  return waitFor(`gateway-admin key-only credential for ${revisionId}`, async () => {
-    let credential;
-    try {
-      credential = await readGatewayAdministrationCredentialSecret(topology);
-    } catch (error) {
-      if (/NotFound|not found/i.test(error.stderr ?? error.message)) return undefined;
-      throw error;
-    }
-    const parsed = gatewayAdministrationCredentialFromDecodedSecret(credential);
-    return parsed.state === "keyOnly" ? parsed : undefined;
-  });
-}
-
-async function waitForGatewayAdministrationIncompleteEnrollment(
-  topology,
-  revisionId = topology.revision.id,
-) {
-  return waitFor(`gateway-admin incomplete enrollment ${revisionId}`, () =>
-    topology.events.find(
-      (event) =>
-        event.event === "worker.completed" &&
-        event.revisionId === revisionId &&
-        event.outcome === "pending" &&
-        event.code === "REVISION_INCOMPLETE",
-    ),
-  );
-}
-
-async function createUnrelatedPendingGatewayPairing(topology) {
-  const requireFromController = createRequire(
-    new URL("../../apps/controller/package.json", import.meta.url),
-  );
-  const [{ GatewayClient }, { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES }, nativeClient] =
-    await Promise.all([
-      import(requireFromController.resolve("@openclaw/gateway-client")),
-      import(requireFromController.resolve("@openclaw/gateway-protocol/client-info")),
-      import("../../apps/controller/src/gateway/native-client.ts"),
-    ]);
-  const identity = nativeClient.createOpenClawGatewayNativeDeviceIdentity();
-  const { openKubernetesGatewayPodProxy } =
-    await import("../../apps/controller/src/drivers/compute/kubernetes/pod-proxy.ts");
-  const forwarding = await openKubernetesGatewayPodProxy(
-    { mode: "kubeconfig", kubeconfigPath, context: kubernetesContext },
-    (message) => new Error(message),
-    {
-      namespace: topology.placement,
-      podName: topology.gatewayPod.metadata.name,
-      targetPort: topology.gatewayPod.spec.containers
-        .find((container) => container.name === "gateway")
-        .ports.find((port) => port.name === "http").containerPort,
-      signal: AbortSignal.timeout(90_000),
-    },
-  );
-  const client = new GatewayClient({
-    url: forwarding.url,
-    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-    clientDisplayName: "OpenClaw Enterprise unrelated pending test client",
-    clientVersion: "0.1.0",
-    platform: process.platform,
-    mode: GATEWAY_CLIENT_MODES.BACKEND,
-    role: "operator",
-    scopes: ["operator.admin"],
-    deviceIdentity: identity,
-    token: topology.gatewayToken,
-    requestTimeoutMs: 30_000,
-    connectChallengeTimeoutMs: 30_000,
-    hostDeps: {
-      loadOrCreateDeviceIdentity: () => identity,
-      signDevicePayload: nativeClient.signOpenClawGatewayNativePayload,
-      publicKeyRawBase64UrlFromPem: nativeClient.publicKeyRawBase64UrlFromPem,
-      loadDeviceAuthToken: () => null,
-      storeDeviceAuthToken: () => {},
-      clearDeviceAuthToken: () => {},
-    },
-    onConnectError: () => {},
-    onClose: () => {},
-  });
-  try {
-    client.start();
-    const pending = await assertUnrelatedPendingGatewayPairing(topology, identity);
-    return { identity, pending };
-  } finally {
-    try {
-      await client.stopAndWait({ timeoutMs: 1_000 });
-    } catch {
-      client.stop();
-    }
-    await forwarding.close();
-  }
-}
-
-async function assertUnrelatedPendingGatewayPairing(topology, identity) {
-  return waitFor(`unrelated pending native pairing ${identity.deviceId}`, async () => {
-    const pairing = await gatewayCall(topology, "device.pair.list", {});
-    const pending = pairing.pending?.find((device) => device.deviceId === identity.deviceId);
-    assert.equal(
-      pairing.paired?.some((device) => device.deviceId === identity.deviceId),
-      false,
-      "unrelated native pairing must not be approved by gateway-admin enrollment",
-    );
-    return pending;
-  });
-}
-
-async function readGatewayAdministrationCredentialSecret(topology) {
-  const secret = await resource(
-    "secret",
-    topology.gatewayAdministrationRbac.credential,
-    topology.platformNamespace,
-  );
-  return Object.fromEntries(
-    Object.entries(secret.data ?? {}).map(([key, value]) => [
-      key,
-      Buffer.from(value, "base64").toString("utf8"),
-    ]),
-  );
-}
-
-function gatewayAdministrationCredentialFromDecodedSecret(decoded) {
-  return parseGatewayAdministrationCredential({
-    data: Object.fromEntries(
-      Object.entries(decoded).map(([key, value]) => [key, Buffer.from(value).toString("base64")]),
-    ),
-  });
-}
-
-function gatewayAdministrationSecretMaterial(credential) {
-  return [
-    credential.identity.privateKeyPem,
-    ...(credential.state === "established"
-      ? [credential.deviceToken.token, JSON.stringify(credential.deviceToken.scopes)]
-      : []),
-  ];
-}
-
-async function readGatewayAdministrationCredential(topology) {
-  const decoded = await readGatewayAdministrationCredentialSecret(topology);
-  const credential = gatewayAdministrationCredentialFromDecodedSecret(decoded);
-  assert.equal(credential.state, "established");
-  assert.ok(credential.identity.deviceId, "gateway administration Secret must derive device id");
-  assert.deepEqual(credential.deviceToken.scopes, ["operator.admin"]);
-  assertNoSecretMaterial(
-    [topology.gatewayPod.spec, topology.harnessPod?.spec],
-    gatewayAdministrationSecretMaterial(credential),
-    "gateway administration credentials must not be projected into Agent workloads",
-  );
-  return credential;
-}
-
-async function revokeGatewayAdministrationCredential(topology, credential) {
-  const requireController = createRequire(
-    new URL("../../apps/controller/package.json", import.meta.url),
-  );
-  const [{ GatewayClient }, { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES }, native] =
-    await Promise.all([
-      import(requireController.resolve("@openclaw/gateway-client")),
-      import(requireController.resolve("@openclaw/gateway-protocol/client-info")),
-      import("../../apps/controller/src/gateway/native-client.ts"),
-    ]);
-  const driver = topology.apiComputeDriver;
-  const target = await driver.resolveCurrentGatewayTarget(topology.revision);
-  const signal = AbortSignal.timeout(30_000);
-  assert.equal(credential.state, "established");
-  const identity = credential.identity;
-  // Native revocation requires the caller to cover the target token's scopes.
-  // Use the official SDK as the established admin, outside the deliberately
-  // narrower OCC proxy, without projecting its credential into the Pod.
-  const result = await driver.withGatewayPodProxy(target, signal, async (url) => {
-    const ready = Promise.withResolvers();
-    const abort = () => ready.reject(signal.reason);
-    const client = new GatewayClient({
-      url,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientDisplayName: "OpenClaw Enterprise",
-      clientVersion: "0.1.0",
-      platform: process.platform,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      role: "operator",
-      scopes: credential.deviceToken.scopes,
-      deviceIdentity: identity,
-      deviceToken: credential.deviceToken.token,
-      requestTimeoutMs: 30_000,
-      connectChallengeTimeoutMs: 30_000,
-      hostDeps: {
-        loadOrCreateDeviceIdentity: () => identity,
-        signDevicePayload: native.signOpenClawGatewayNativePayload,
-        publicKeyRawBase64UrlFromPem: native.publicKeyRawBase64UrlFromPem,
-        loadDeviceAuthToken: () => null,
-        storeDeviceAuthToken: () => {},
-        clearDeviceAuthToken: () => {},
-      },
-      onHelloOk: ready.resolve,
-      onConnectError: ready.reject,
-      onClose: () => ready.reject(new Error("Native revocation connection closed.")),
-    });
-    signal.addEventListener("abort", abort, { once: true });
-    try {
-      signal.throwIfAborted();
-      client.start();
-      const hello = await ready.promise;
-      assert.equal(hello.auth.role, "operator");
-      assert.ok(hello.auth.scopes.includes("operator.admin"));
-      return await client.request(
-        "device.token.revoke",
-        { deviceId: identity.deviceId, role: "operator" },
-        { expectFinal: false, timeoutMs: 30_000, signal },
-      );
-    } finally {
-      signal.removeEventListener("abort", abort);
-      try {
-        await client.stopAndWait({ timeoutMs: 1_000 });
-      } catch {
-        client.stop();
-      }
-    }
-  });
-  assertNoSecretMaterial(
-    result,
-    gatewayAdministrationSecretMaterial(credential),
-    "native device revocation output must not expose the OCC credential",
-  );
-  assert.equal(result.deviceId, identity.deviceId);
-  assert.equal(result.role, "operator");
-  assert.equal(typeof result.revokedAtMs, "number");
-  return result;
 }
 
 async function gatewayAuditRows(topology) {
@@ -4234,150 +3812,11 @@ async function assertDedicatedSharedWorkspaceRuntime(context, topology, claim, p
 }
 
 test(
-  "OCC gateway administration preserves key-only enrollment after token persistence RBAC failure",
-  { ...requiresProductionCluster, timeout: 720_000 },
-  async (context) => {
-    const topology = await arrangeProductionTopology(context, "dedicated", undefined, {
-      gatewayAdministration: true,
-      gatewayAdministrationCredentialCreate: false,
-      gatewayAdministrationCredentialUpdate: false,
-      expectGatewayAdministrationEnrollmentFailure: true,
-      nativeConfiguration: { autoApproveLocal: false, gatewayAdministration: true },
-    });
-    topology.browserRequest = await createAuthenticatedControllerRequestWithHeaders(
-      topology.productionApp,
-      topology.credentials,
-    );
-
-    const unrelated = await createUnrelatedPendingGatewayPairing(topology);
-    await grantGatewayAdministrationCredentialCreate(topology);
-    const keyOnly = await waitForGatewayAdministrationKeyOnlyCredential(topology);
-    // Earlier readiness deferrals may race the RBAC grant. Observe a worker
-    // completion after the key exists, so native approval has actually finished.
-    const pendingEventsAtKeyOnly = topology.events.filter(
-      (event) =>
-        event.event === "worker.completed" &&
-        event.revisionId === topology.revision.id &&
-        event.outcome === "pending" &&
-        event.code === "REVISION_INCOMPLETE",
-    ).length;
-    await waitFor(`gateway-admin key-only incomplete enrollment ${topology.revision.id}`, () => {
-      const pendingEvents = topology.events.filter(
-        (event) =>
-          event.event === "worker.completed" &&
-          event.revisionId === topology.revision.id &&
-          event.outcome === "pending" &&
-          event.code === "REVISION_INCOMPLETE",
-      ).length;
-      return pendingEvents > pendingEventsAtKeyOnly ? pendingEvents : undefined;
-    });
-    await assertUnrelatedPendingGatewayPairing(topology, unrelated.identity);
-    assert.ok(
-      keyOnly.identity.deviceId,
-      "partial enrollment must derive the exact native device id",
-    );
-    assert.ok(
-      keyOnly.identity.privateKeyPem,
-      "partial enrollment must persist the exact native device private key",
-    );
-    assert.equal(
-      keyOnly.state,
-      "keyOnly",
-      "token persistence RBAC denial must leave only the pre-approved native device identity",
-    );
-    // A key-only record alone could mean enrollment failed before approval. Prove
-    // the native grant exists so this actually exercises the persistence gap.
-    const pairing = await gatewayCall(topology, "device.pair.list", {});
-    const approvedDevice = pairing.paired.find(
-      (device) => device.deviceId === keyOnly.identity.deviceId,
-    );
-    assert.ok(approvedDevice, "native approval must complete before the token write fails");
-    assert.ok(
-      approvedDevice.tokens.some(
-        (token) =>
-          token.role === "operator" &&
-          token.scopes.includes("operator.admin") &&
-          token.revokedAtMs === undefined,
-      ),
-      "the native gateway must retain the issued admin grant despite failed OCC persistence",
-    );
-    context.diagnostic(
-      `gateway-admin partial enrollment target namespace=${topology.placement} namespaceId=${topology.agent.namespaceId} agentId=${topology.agent.id} revisionId=${topology.revision.id} credentialSecret=${topology.gatewayAdministrationRbac.credential} gatewayPod=${topology.gatewayPod.metadata.name} deviceId=${keyOnly.identity.deviceId}`,
-    );
-
-    const unavailable = await dispatchOccGatewayCommand(topology, "status", undefined, {
-      secrets: [
-        process.env.OPENAI_API_KEY,
-        topology.gatewayToken,
-        ...gatewayAdministrationSecretMaterial(keyOnly),
-      ],
-    });
-    assert.equal(unavailable.status, 503);
-
-    await grantGatewayAdministrationCredentialUpdate(topology);
-    // A fresh worker and Driver instance has no captured token or enrollment
-    // memory. Durable key-only state must still prohibit another approval.
-    await topology.restartProductionWorker();
-    const pendingEventsBeforeRetry = topology.events.filter(
-      (event) =>
-        event.event === "worker.completed" &&
-        event.revisionId === topology.revision.id &&
-        event.outcome === "pending" &&
-        event.code === "REVISION_INCOMPLETE",
-    ).length;
-    await waitFor(`gateway-admin key-only retry remains incomplete ${topology.revision.id}`, () => {
-      const pendingEvents = topology.events.filter(
-        (event) =>
-          event.event === "worker.completed" &&
-          event.revisionId === topology.revision.id &&
-          event.outcome === "pending" &&
-          event.code === "REVISION_INCOMPLETE",
-      ).length;
-      return pendingEvents > pendingEventsBeforeRetry ? pendingEvents : undefined;
-    });
-    await assertUnrelatedPendingGatewayPairing(topology, unrelated.identity);
-
-    const afterRetry = gatewayAdministrationCredentialFromDecodedSecret(
-      await readGatewayAdministrationCredentialSecret(topology),
-    );
-    assert.equal(
-      afterRetry.identity.deviceId,
-      keyOnly.identity.deviceId,
-      "retry after restoring update RBAC must keep the original native device identity",
-    );
-    assert.equal(
-      afterRetry.state,
-      "keyOnly",
-      "retry after restoring update RBAC must not re-run helper enrollment for key-only state",
-    );
-    const agentAfterRetry = await topology.request(
-      "GET",
-      `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}`,
-    );
-    assert.equal(agentAfterRetry.status, 200);
-    assert.notEqual(
-      agentAfterRetry.data.activeRevisionId,
-      topology.revision.id,
-      "partial enrollment must not activate the revision after retry",
-    );
-    const stillUnavailable = await dispatchOccGatewayCommand(topology, "status", undefined, {
-      secrets: [
-        process.env.OPENAI_API_KEY,
-        topology.gatewayToken,
-        ...gatewayAdministrationSecretMaterial(afterRetry),
-      ],
-    });
-    assert.equal(stillUnavailable.status, 503);
-  },
-);
-
-test(
   "OCC gateway administration dispatches real Kubernetes gateway commands through the active Agent HTTP route",
   { ...requiresProductionCluster, timeout: 1_200_000 },
   async (context) => {
     const topology = await arrangeProductionTopology(context, "dedicated", undefined, {
       gatewayAdministration: true,
-      nativeConfiguration: { autoApproveLocal: false, gatewayAdministration: true },
     });
     assert.ok(topology.harnessPod, "gateway administration coverage uses dedicated Codex topology");
     topology.browserRequest = await createAuthenticatedControllerRequestWithHeaders(
@@ -4385,7 +3824,6 @@ test(
       topology.credentials,
     );
     await assertGatewayAdministrationRbacDenials(topology);
-    const credential = await readGatewayAdministrationCredential(topology);
 
     const status = assertOccGatewaySuccess(
       await dispatchOccGatewayCommand(topology, "status"),
@@ -4412,8 +3850,6 @@ test(
     await runGatewayAdministrationFailureProofs(topology, {
       dispatchOccGatewayCommand,
       assertOccGatewaySuccess,
-      readGatewayAdministrationCredentialSecret,
-      gatewayCall,
       diagnostic: (message) => context.diagnostic(message),
     });
 
@@ -4423,10 +3859,6 @@ test(
     topology.browserRequest = await createAuthenticatedControllerRequestWithHeaders(
       topology.productionApp,
       topology.credentials,
-    );
-    assert.equal(
-      (await readGatewayAdministrationCredential(topology)).identity.deviceId,
-      credential.identity.deviceId,
     );
     assertOccGatewaySuccess(await dispatchOccGatewayCommand(topology, "status"), "status");
 
@@ -4701,11 +4133,6 @@ test(
       topology.revision.id,
       beforeGatewayUid,
     );
-    assert.equal(
-      (await readGatewayAdministrationCredential(topology)).identity.deviceId,
-      credential.identity.deviceId,
-      "gateway Pod replacement must preserve the OCC native device identity",
-    );
     assertOccGatewaySuccess(await dispatchOccGatewayCommand(topology, "status"), "status");
 
     const secondRevision = await topology.request(
@@ -4738,169 +4165,17 @@ test(
       topology.gatewayPod.metadata.uid,
     );
     topology.revision = secondRevision.data;
-    assert.equal(
-      (await readGatewayAdministrationCredential(topology)).identity.deviceId,
-      credential.identity.deviceId,
-      "revision replacement must preserve the OCC native device identity",
-    );
     assertOccGatewaySuccess(await dispatchOccGatewayCommand(topology, "status"), "status");
 
     const auditRows = await assertGatewayAuditSanitized(topology, [
       process.env.OPENAI_API_KEY,
       topology.gatewayToken,
       fileContent,
-      ...gatewayAdministrationSecretMaterial(credential),
     ]);
     assert.ok(
       auditRows.some((row) => JSON.parse(row.details).nativeMethod === "chat.send"),
       "audit evidence must identify the admitted native method without native arguments",
     );
-
-    await revokeGatewayAdministrationCredential(topology, credential);
-    const revokedCredential = await dispatchOccGatewayCommand(topology, "status", undefined, {
-      secrets: [
-        process.env.OPENAI_API_KEY,
-        topology.gatewayToken,
-        ...gatewayAdministrationSecretMaterial(credential),
-      ],
-    });
-    assert.equal(revokedCredential.status, 503);
-
-    const revokedGatewayUid = topology.gatewayPod.metadata.uid;
-    await kubectl(
-      "delete",
-      "pod",
-      topology.gatewayPod.metadata.name,
-      "--namespace",
-      topology.placement,
-      "--wait=true",
-      "--timeout=120s",
-    );
-    topology.gatewayPod = await waitForReadyGatewayPod(
-      topology,
-      topology.revision.id,
-      revokedGatewayUid,
-    );
-    const stillRevokedAfterRestart = await dispatchOccGatewayCommand(
-      topology,
-      "status",
-      undefined,
-      {
-        secrets: [
-          process.env.OPENAI_API_KEY,
-          topology.gatewayToken,
-          ...gatewayAdministrationSecretMaterial(credential),
-        ],
-      },
-    );
-    assert.equal(stillRevokedAfterRestart.status, 503);
-
-    const afterRevokeRevision = await topology.request(
-      "POST",
-      `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/deploy`,
-    );
-    assert.equal(afterRevokeRevision.status, 202, JSON.stringify(afterRevokeRevision.error));
-    // Preparation preserves the current ready gateway until activation. A
-    // revoked device must block that preparation without replacing the Pod.
-    const gatewayBeforeRevokedDeploy = topology.gatewayPod.metadata.uid;
-    topology.gatewayPod = await waitForReadyGatewayPod(topology, topology.revision.id);
-    assert.equal(topology.gatewayPod.metadata.uid, gatewayBeforeRevokedDeploy);
-    const revokedAttemptsBeforeReady = topology.events.filter(
-      (event) =>
-        event.event === "worker.completed" &&
-        event.revisionId === afterRevokeRevision.data.id &&
-        event.outcome === "pending" &&
-        event.code === "REVISION_INCOMPLETE",
-    ).length;
-    await waitFor(
-      `gateway-admin revoked token blocks ${afterRevokeRevision.data.id}`,
-      () =>
-        topology.events.filter(
-          (event) =>
-            event.event === "worker.completed" &&
-            event.revisionId === afterRevokeRevision.data.id &&
-            event.outcome === "pending" &&
-            event.code === "REVISION_INCOMPLETE",
-        ).length > revokedAttemptsBeforeReady,
-    );
-    const blockedAfterRevoke = await topology.request(
-      "GET",
-      `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}`,
-    );
-    assert.equal(blockedAfterRevoke.status, 200);
-    assert.notEqual(
-      blockedAfterRevoke.data.activeRevisionId,
-      afterRevokeRevision.data.id,
-      "revoked OCC native access must not trigger automatic helper re-enrollment on reconcile",
-    );
-    assert.equal(
-      (await readGatewayAdministrationCredential(topology)).identity.deviceId,
-      credential.identity.deviceId,
-      "revoked OCC native access must preserve the original device identity for deliberate recovery",
-    );
-
-    // Losing the credential Secret must not look like first enrollment. The
-    // public identity pin survives on the existing Agent-owned gateway PVC.
-    const privateClaim = topology.gatewayPod.spec.volumes.find(
-      (volume) => volume.name === "openclaw-gateway-state",
-    ).persistentVolumeClaim.claimName;
-    const identityPin = "openclaw.dev/occ-gateway-device-id";
-    assert.equal(
-      (await resource("pvc", privateClaim, topology.placement)).metadata.annotations[identityPin],
-      credential.identity.deviceId,
-    );
-    await kubectl(
-      "delete",
-      "secret",
-      topology.gatewayAdministrationRbac.credential,
-      "--namespace",
-      topology.platformNamespace,
-      "--wait=true",
-    );
-    await topology.restartProductionWorker();
-    const pendingBeforeLoss = topology.events.filter(
-      (event) =>
-        event.event === "worker.completed" &&
-        event.revisionId === afterRevokeRevision.data.id &&
-        event.outcome === "retry" &&
-        event.code === "DEPENDENCY_UNAVAILABLE",
-    ).length;
-    await waitFor(
-      "lost gateway credential stays unavailable after worker restart",
-      () =>
-        topology.events.filter(
-          (event) =>
-            event.event === "worker.completed" &&
-            event.revisionId === afterRevokeRevision.data.id &&
-            event.outcome === "retry" &&
-            event.code === "DEPENDENCY_UNAVAILABLE",
-        ).length > pendingBeforeLoss,
-    );
-    let credentialStillMissing = false;
-    try {
-      await kubectl(
-        "get",
-        "secret",
-        topology.gatewayAdministrationRbac.credential,
-        "--namespace",
-        topology.platformNamespace,
-        "-o",
-        "name",
-      );
-    } catch (error) {
-      assert.match(error.stderr ?? error.message, /NotFound|not found/i);
-      credentialStillMissing = true;
-    }
-    assert.equal(
-      credentialStillMissing,
-      true,
-      "credential loss must never regenerate the OCC identity",
-    );
-    assert.equal(
-      (await resource("pvc", privateClaim, topology.placement)).metadata.annotations[identityPin],
-      credential.identity.deviceId,
-    );
-    assert.equal((await dispatchOccGatewayCommand(topology, "status")).status, 503);
   },
 );
 

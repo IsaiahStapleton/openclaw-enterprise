@@ -42,12 +42,19 @@ interface KubernetesPodExecInput {
   readonly command: readonly string[];
   readonly stdin: string;
   readonly timeoutMs: number;
+  readonly outputLimitBytes?: number;
   readonly signal?: AbortSignal;
 }
 
 class CollectingWritable extends Writable {
   private readonly chunks: Buffer[] = [];
+  private readonly limitBytes: number;
   private bytes = 0;
+
+  constructor(limitBytes = DEFAULT_OUTPUT_LIMIT_BYTES) {
+    super();
+    this.limitBytes = limitBytes;
+  }
 
   override _write(
     chunk: Buffer | string,
@@ -55,7 +62,7 @@ class CollectingWritable extends Writable {
     callback: (error?: Error | null) => void,
   ): void {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    if (this.bytes + buffer.byteLength > DEFAULT_OUTPUT_LIMIT_BYTES) {
+    if (this.bytes + buffer.byteLength > this.limitBytes) {
       callback(new Error("Kubernetes Pod exec output exceeded limit."));
       return;
     }
@@ -91,6 +98,7 @@ export class KubernetesClientNodePodExecutor {
   async exec(input: KubernetesPodExecInput): Promise<{
     readonly stdout: string;
     readonly stderr: string;
+    readonly status: import("@kubernetes/client-node").V1Status;
   }> {
     if (input.signal?.aborted === true) {
       throw new Error("Kubernetes Pod exec aborted.");
@@ -101,8 +109,8 @@ export class KubernetesClientNodePodExecutor {
       this.validationFailure,
     );
     const executor = this.dependencies.createExec(sdk, kubeConfig);
-    const stdout = new CollectingWritable();
-    const stderr = new CollectingWritable();
+    const stdout = new CollectingWritable(input.outputLimitBytes);
+    const stderr = new CollectingWritable(input.outputLimitBytes);
     const stdin = new PassThrough();
     const timeout = AbortSignal.timeout(input.timeoutMs);
     const signal = input.signal === undefined ? timeout : AbortSignal.any([input.signal, timeout]);
@@ -210,7 +218,7 @@ export class KubernetesClientNodePodExecutor {
       if (result.status !== "Success") {
         throw new Error("Kubernetes Pod exec failed.");
       }
-      return { stdout: stdout.readText(), stderr: stderr.readText() };
+      return { stdout: stdout.readText(), stderr: stderr.readText(), status: result };
     } catch (error) {
       if (isSanitizedPodExecError(error)) throw error;
       throw new Error("Kubernetes Pod exec failed.");

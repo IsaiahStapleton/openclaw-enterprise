@@ -1,264 +1,285 @@
-import { asRecord, isNonEmptyString, sha256Hex } from "@openclaw-enterprise/utils";
+import type {
+  GatewayCommandMethod,
+  OpenClawConfigurationValue,
+} from "@openclaw-enterprise/contracts";
 import {
-  NATIVE_GATEWAY_ENROLLMENT_TIMEOUT_MS,
-  NATIVE_GATEWAY_OPERATOR_ROLE,
-  NATIVE_GATEWAY_OPERATOR_SCOPES,
-  normalizeOpenClawGatewayNativeOperatorScopes,
-  openClawGatewayNativeDeviceIdentityFromPrivateKey,
-  type OpenClawGatewayNativeDeviceIdentity,
-  type OpenClawGatewayNativeTokenRecord,
-} from "../../../gateway/native-client.ts";
+  ControllerGatewayUnknownOutcomeError,
+  type ControllerGatewayDispatchResult,
+  type ControllerGatewayRpcError,
+} from "../../../gateway/contracts.ts";
 
-const PRIVATE_KEY_KEY = "private-key-pem";
-const DEVICE_TOKEN_KEY = "device-token";
-const DEVICE_TOKEN_SCOPES_KEY = "device-token-scopes";
-const DEFAULT_SECRET_PREFIX = "occ-gateway-admin";
+export const GATEWAY_ADMINISTRATION_REQUEST_TIMEOUT_MS = 30_000;
+export const GATEWAY_ADMINISTRATION_RESPONSE_MAX_BYTES = 1024 * 1024;
+export const GATEWAY_ADMINISTRATION_STDERR_MAX_BYTES = 64 * 1024;
 
-export interface KubernetesGatewayAdministrationOptions {
-  readonly controllerNamespace: string;
+const HELPER_RESULT_KIND = "openclaw-gateway-cli-result";
+
+export interface GatewayAdministrationCliRequest {
+  readonly method: GatewayCommandMethod;
+  readonly params?: unknown;
+  readonly port: number;
+  readonly timeoutMs: number;
 }
 
-export type GatewayAdministrationCredential =
-  | {
-      readonly state: "established";
-      readonly identity: OpenClawGatewayNativeDeviceIdentity;
-      readonly deviceToken: OpenClawGatewayNativeTokenRecord;
-    }
-  | {
-      readonly state: "keyOnly";
-      readonly identity: OpenClawGatewayNativeDeviceIdentity;
-    };
+interface GatewayAdministrationCliEnvelope {
+  readonly kind: typeof HELPER_RESULT_KIND;
+  readonly exitCode: number | null;
+  readonly signal: string | null;
+  readonly timedOut: boolean;
+  readonly outputExceeded: boolean;
+  readonly stdoutBytes: number;
+  readonly stderrBytes: number;
+  readonly response?: unknown;
+}
 
-export function validateGatewayAdministrationOptions(
-  value: unknown,
-): KubernetesGatewayAdministrationOptions {
-  const options = asRecord(value);
-  if (options === undefined) {
-    throw new Error("Gateway administration requires explicit configuration.");
+export function gatewayAdministrationCliInput(input: GatewayAdministrationCliRequest): string {
+  return JSON.stringify({
+    method: input.method,
+    ...(input.params === undefined ? {} : { params: input.params }),
+    port: input.port,
+    timeoutMs: input.timeoutMs,
+    responseMaxBytes: GATEWAY_ADMINISTRATION_RESPONSE_MAX_BYTES,
+    stderrMaxBytes: GATEWAY_ADMINISTRATION_STDERR_MAX_BYTES,
+  });
+}
+
+export function parseGatewayAdministrationCliOutput(
+  stdout: string,
+): ControllerGatewayDispatchResult {
+  const envelope = parseHelperEnvelope(stdout);
+  if (envelope.timedOut || envelope.outputExceeded || envelope.signal !== null) {
+    throw new ControllerGatewayUnknownOutcomeError(
+      "The native gateway command may have started, but the controller could not observe its final outcome.",
+    );
   }
-  for (const key of Object.keys(options)) {
-    if (key !== "controllerNamespace") {
-      throw new Error(`Gateway administration contains unsupported option ${key}.`);
+  if (envelope.exitCode === 0) {
+    const payload = asConfigurationValue(envelope.response);
+    return { ok: true, ...(payload === undefined ? {} : { payload }) };
+  }
+  if (envelope.exitCode === 1) {
+    const requestError = readGatewayRequestError(envelope.response);
+    if (requestError !== undefined) {
+      return { ok: false, error: requestError };
     }
   }
-  const controllerNamespace = requiredString(
-    options.controllerNamespace,
-    "Gateway administration controller namespace",
+  throw new ControllerGatewayUnknownOutcomeError(
+    "The native gateway command exited without a supported controller response.",
   );
-  return { controllerNamespace };
 }
 
-export function gatewayAdministrationSecretName(input: {
-  readonly namespaceId: string;
-  readonly agentId: string;
-}): string {
-  return `${DEFAULT_SECRET_PREFIX}-${sha256Hex(`${input.namespaceId}\0${input.agentId}`, 32)}`;
-}
+export function buildGatewayAdministrationCliScript(): string {
+  return String.raw`
+const { spawn } = require("node:child_process");
+const { readFileSync } = require("node:fs");
 
-export function gatewayAdministrationSecretStringData(
-  credential: GatewayAdministrationCredential,
-): Record<string, string> {
+const HELPER_RESULT_KIND = "openclaw-gateway-cli-result";
+const input = JSON.parse(readFileSync(0, "utf8"));
+const method = requiredString(input.method, "method");
+const port = requiredPort(input.port);
+const timeoutMs = requiredTimeout(input.timeoutMs);
+const responseMaxBytes = requiredLimit(input.responseMaxBytes);
+const stderrMaxBytes = requiredLimit(input.stderrMaxBytes);
+const paramsJson = JSON.stringify(input.params === undefined ? {} : input.params);
+
+let timedOut = false;
+let outputExceeded = false;
+const child = spawn("openclaw", [
+  "gateway",
+  "call",
+  method,
+  "--params",
+  paramsJson,
+  "--json",
+  "--timeout",
+  String(timeoutMs),
+  "--port",
+  String(port),
+], {
+  env: process.env,
+  stdio: ["ignore", "pipe", "pipe"],
+});
+
+const stdout = collect(child.stdout, responseMaxBytes);
+const stderr = collect(child.stderr, stderrMaxBytes);
+const killTimer = setTimeout(() => {
+  timedOut = true;
+  child.kill("SIGTERM");
+  setTimeout(() => child.kill("SIGKILL"), 1000).unref();
+}, timeoutMs);
+killTimer.unref();
+
+child.on("error", () => {
+  outputExceeded = true;
+});
+
+child.on("close", (exitCode, signal) => {
+  clearTimeout(killTimer);
+  const parsed = exitCode === 0 || exitCode === 1 ? parseJson(stdout.text()) : undefined;
+  writeResult({
+    kind: HELPER_RESULT_KIND,
+    exitCode,
+    signal,
+    timedOut,
+    outputExceeded: outputExceeded || stdout.exceeded() || stderr.exceeded() || parsed === undefined,
+    stdoutBytes: stdout.bytes(),
+    stderrBytes: stderr.bytes(),
+    ...(parsed === undefined ? {} : { response: stripSensitiveConfig(method, parsed) }),
+  });
+});
+
+function collect(stream, maxBytes) {
+  let size = 0;
+  let exceeded = false;
+  const chunks = [];
+  stream.on("data", (chunk) => {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.byteLength;
+    if (size > maxBytes) {
+      exceeded = true;
+      outputExceeded = true;
+      child.kill("SIGTERM");
+      return;
+    }
+    chunks.push(buffer);
+  });
   return {
-    [PRIVATE_KEY_KEY]: credential.identity.privateKeyPem,
-    ...(credential.state === "established"
-      ? {
-          [DEVICE_TOKEN_KEY]: credential.deviceToken.token,
-          [DEVICE_TOKEN_SCOPES_KEY]: JSON.stringify([...credential.deviceToken.scopes]),
-        }
+    bytes: () => size,
+    exceeded: () => exceeded,
+    text: () => Buffer.concat(chunks).toString("utf8"),
+  };
+}
+
+function parseJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function stripSensitiveConfig(methodName, value) {
+  if (methodName !== "config.get" || value === null || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const { sourceConfigBeforeMigrations, ...safe } = value;
+  return safe;
+}
+
+function requiredString(value, name) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(name + " must be a nonempty string.");
+  }
+  return value;
+}
+
+function requiredPort(value) {
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error("port must be a valid TCP port.");
+  }
+  return value;
+}
+
+function requiredTimeout(value) {
+  if (!Number.isInteger(value) || value < 1 || value > 30000) {
+    throw new Error("timeoutMs must be between 1 and 30000.");
+  }
+  return value;
+}
+
+function requiredLimit(value) {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error("output limit must be a positive integer.");
+  }
+  return value;
+}
+
+function writeResult(value) {
+  process.stdout.write(JSON.stringify(value));
+}
+`;
+}
+
+function parseHelperEnvelope(stdout: string): GatewayAdministrationCliEnvelope {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new ControllerGatewayUnknownOutcomeError(
+      "The native gateway command produced an invalid controller response.",
+    );
+  }
+  const envelope = asRecord(parsed);
+  if (
+    envelope?.kind !== HELPER_RESULT_KIND ||
+    !isExitCode(envelope.exitCode) ||
+    !isSignal(envelope.signal) ||
+    typeof envelope.timedOut !== "boolean" ||
+    typeof envelope.outputExceeded !== "boolean" ||
+    !isSafeByteCount(envelope.stdoutBytes) ||
+    !isSafeByteCount(envelope.stderrBytes)
+  ) {
+    throw new ControllerGatewayUnknownOutcomeError(
+      "The native gateway command produced an invalid controller response.",
+    );
+  }
+  return envelope as unknown as GatewayAdministrationCliEnvelope;
+}
+
+function readGatewayRequestError(value: unknown): ControllerGatewayRpcError | undefined {
+  const response = asRecord(value);
+  const error = asRecord(response?.error);
+  if (response?.ok !== false || error?.type !== "gateway_request_error") return undefined;
+  if (typeof error.code !== "string" || typeof error.message !== "string") return undefined;
+  return {
+    code: error.code,
+    message: error.message,
+    ...(isConfigurationValue(error.details) ? { details: error.details } : {}),
+    ...(typeof error.retryable === "boolean" ? { retryable: error.retryable } : {}),
+    ...(typeof error.retryAfterMs === "number" && Number.isSafeInteger(error.retryAfterMs)
+      ? { retryAfterMs: error.retryAfterMs }
       : {}),
   };
 }
 
-export function parseGatewayAdministrationCredential(secret: {
-  readonly data?: Record<string, string>;
-}): GatewayAdministrationCredential {
-  const identity = openClawGatewayNativeDeviceIdentityFromPrivateKey(
-    requiredSecretString(secret, PRIVATE_KEY_KEY),
-  );
-  const token = optionalSecretString(secret, DEVICE_TOKEN_KEY);
-  const scopesJson = optionalSecretString(secret, DEVICE_TOKEN_SCOPES_KEY);
-  if (token === undefined && scopesJson === undefined) return { state: "keyOnly", identity };
-  if (token === undefined || scopesJson === undefined) {
-    throw new Error("Gateway administration credential Secret is incomplete.");
-  }
-  const scopes = normalizeOpenClawGatewayNativeOperatorScopes(
-    parseScopes(scopesJson),
-    "Gateway administration device token scopes",
-  );
-  return { state: "established", identity, deviceToken: { token, scopes: [...scopes] } };
-}
-
-export function buildGatewayAdministrationHelperScript(): string {
-  return String.raw`
-const { execFileSync } = require("node:child_process");
-
-const input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-const deadline = Date.now() + Number(input.timeoutMs);
-const pollIntervalMs = Math.max(1, Number(input.pollIntervalMs || 100));
-function remainingTimeout() {
-  return Math.max(1, deadline - Date.now());
-}
-function sleep(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, ms));
-}
-function callOpenClaw(args) {
-  return execFileSync("openclaw", args, {
-    encoding: "utf8",
-    timeout: remainingTimeout(),
-    env: {
-      ...process.env,
-      OPENCLAW_GATEWAY_TOKEN: input.gatewayToken,
-      OPENCLAW_GATEWAY_URL: input.url,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-}
-function array(value) {
-  return Array.isArray(value) ? value : [];
-}
-function sameSet(left, right) {
-  const l = array(left).map(String).sort();
-  const r = array(right).map(String).sort();
-  return l.length === r.length && l.every((value, index) => value === r[index]);
-}
-function matchesPinnedDevice(device) {
-  return (
-    String(device.deviceId || "").trim() === input.deviceId &&
-    String(device.publicKey || "").trim() === input.publicKey
-  );
-}
-function hasRequestedGrant(device) {
-  if (
-    String(device.role || "").trim() === input.role &&
-    sameSet(device.scopes, input.scopes)
-  ) {
-    return true;
-  }
-  if (
-    array(device.roles).map(String).includes(input.role) &&
-    sameSet(device.scopes, input.scopes)
-  ) {
-    return true;
-  }
-  return array(device.tokens).some(
-    (token) =>
-      String(token.role || "").trim() === input.role &&
-      sameSet(token.scopes, input.scopes)
-  );
-}
-function findPinnedPending(list) {
-  return array(list.pending).filter((request) =>
-    String(request.requestId || "").trim() &&
-    matchesPinnedDevice(request) &&
-    String(request.role || "").trim() === input.role &&
-    sameSet(request.scopes, input.scopes)
-  );
-}
-function findGrantedPaired(list) {
-  return array(list.paired).filter((device) => matchesPinnedDevice(device) && hasRequestedGrant(device));
-}
-let requestId;
-while (Date.now() < deadline) {
-  const list = JSON.parse(callOpenClaw([
-    "devices",
-    "list",
-    "--json",
-    "--timeout",
-    String(remainingTimeout()),
-  ]));
-  const pairedMatches = findGrantedPaired(list);
-  if (pairedMatches.length > 1) {
-    throw new Error("Expected at most one pinned OCC gateway paired device.");
-  }
-  if (pairedMatches.length === 1) {
-    process.exit(0);
-  }
-  const pendingMatches = findPinnedPending(list);
-  if (pendingMatches.length > 1) {
-    throw new Error("Expected exactly one pinned OCC gateway device approval request.");
-  }
-  if (pendingMatches.length === 1) {
-    requestId = String(pendingMatches[0].requestId).trim();
-    break;
-  }
-  sleep(Math.min(pollIntervalMs, remainingTimeout()));
-}
-if (!requestId) {
-  throw new Error("Timed out waiting for pinned OCC gateway device approval request.");
-}
-const approval = JSON.parse(callOpenClaw([
-  "devices",
-  "approve",
-  requestId,
-  "--json",
-  "--timeout",
-  String(remainingTimeout()),
-]));
-if (String(approval.requestId || "").trim() !== requestId) {
-  throw new Error("Gateway device approval returned an unexpected request.");
-}
-const device = approval.device || {};
-if (!matchesPinnedDevice(device)) {
-  throw new Error("Gateway device approval returned an unexpected device.");
-}
-`;
-}
-export function gatewayAdministrationHelperInput(input: {
-  readonly url: string;
-  readonly gatewayToken: string;
-  readonly identity: OpenClawGatewayNativeDeviceIdentity;
-  readonly publicKey: string;
-  readonly timeoutMs?: number;
-}): string {
-  return JSON.stringify({
-    url: input.url,
-    gatewayToken: input.gatewayToken,
-    deviceId: input.identity.deviceId,
-    publicKey: input.publicKey,
-    role: NATIVE_GATEWAY_OPERATOR_ROLE,
-    scopes: [...NATIVE_GATEWAY_OPERATOR_SCOPES],
-    timeoutMs: input.timeoutMs ?? NATIVE_GATEWAY_ENROLLMENT_TIMEOUT_MS,
-  });
-}
-
-function parseScopes(value: string): readonly string[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("Gateway administration token scopes are invalid.");
-  }
-  if (!Array.isArray(parsed) || parsed.some((scope) => !isNonEmptyString(scope))) {
-    throw new Error("Gateway administration token scopes are invalid.");
-  }
-  return parsed;
-}
-
-function requiredString(value: unknown, description: string): string {
-  if (!isNonEmptyString(value)) throw new Error(`${description} must be explicitly configured.`);
-  return value;
-}
-
-function requiredSecretString(
-  secret: { readonly data?: Record<string, string> },
-  key: string,
-): string {
-  const value = optionalSecretString(secret, key);
-  if (value === undefined) {
-    throw new Error("Gateway administration credential Secret is incomplete.");
+function asConfigurationValue(value: unknown): OpenClawConfigurationValue | undefined {
+  if (value === undefined) return undefined;
+  if (!isConfigurationValue(value)) {
+    throw new ControllerGatewayUnknownOutcomeError(
+      "The native gateway command returned a non-JSON response.",
+    );
   }
   return value;
 }
 
-function optionalSecretString(
-  secret: { readonly data?: Record<string, string> },
-  key: string,
-): string | undefined {
-  const encoded = secret.data?.[key];
-  if (encoded === undefined) return undefined;
-  const decoded = Buffer.from(encoded, "base64").toString("utf8");
-  if (!isNonEmptyString(decoded)) {
-    throw new Error("Gateway administration credential Secret is incomplete.");
+function isConfigurationValue(value: unknown): value is OpenClawConfigurationValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return true;
   }
-  return decoded;
+  if (Array.isArray(value)) return value.every(isConfigurationValue);
+  const record = asRecord(value);
+  if (record === undefined) return false;
+  return Object.values(record).every(isConfigurationValue);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function isExitCode(value: unknown): value is number | null {
+  return value === null || (Number.isSafeInteger(value) && (value as number) >= 0);
+}
+
+function isSignal(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isSafeByteCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }

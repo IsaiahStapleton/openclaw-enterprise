@@ -10,16 +10,9 @@ import {
   kubernetesNamespaceName,
   resolveKubernetesNamespace,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
-import {
-  gatewayAdministrationSecretName,
-  gatewayAdministrationSecretStringData,
-  parseGatewayAdministrationCredential,
-} from "../../apps/controller/src/drivers/compute/kubernetes/gateway-administration.ts";
-import { createOpenClawGatewayNativeDeviceIdentity } from "../../apps/controller/src/gateway/native-client.ts";
 
 const kubeconfigPath = "/tmp/openclaw-enterprise-conformance/kubeconfig";
 const contextName = "openclaw-enterprise-local";
-const occGatewayDeviceIdAnnotation = "openclaw.dev/occ-gateway-device-id";
 const tenant = {
   id: "ns_00000000-0000-4000-8000-000000000001",
   name: "Conformance tenant",
@@ -58,19 +51,6 @@ function options(overrides = {}) {
     servicePrincipalCredentials: { mode: "disabled" },
     ...overrides,
   };
-}
-
-function base64StringData(data) {
-  return Object.fromEntries(
-    Object.entries(data).map(([key, value]) => [
-      key,
-      Buffer.from(value, "utf8").toString("base64"),
-    ]),
-  );
-}
-
-function parsedGatewayAdministrationCredential(secret) {
-  return parseGatewayAdministrationCredential(secret);
 }
 
 function labelsToSelectorForTest(labels) {
@@ -412,14 +392,8 @@ test("the canonical Kubernetes runtime isolates transport and model Agent Secret
     undefined,
   );
   assert.equal(
-    typeof createKubernetesComputeDriver(
-      options({
-        runtime: {
-          ...runtime,
-          gatewayAdministration: { controllerNamespace: "openclaw-controller" },
-        },
-      }),
-    ).createGatewayAdministrationAdapter()?.dispatch,
+    typeof createKubernetesComputeDriver(options({ runtime })).createGatewayAdministrationAdapter()
+      ?.dispatch,
     "function",
   );
   for (const shared of [
@@ -430,17 +404,10 @@ test("the canonical Kubernetes runtime isolates transport and model Agent Secret
     },
     { ...runtime, channels: { secretPrefix: "transport", proxyUrl: "http://10.42.0.15:3128" } },
     { ...runtime, channels: { secretPrefix: "model", proxyUrl: "http://10.42.0.15:3128" } },
-    {
-      ...runtime,
-      gatewayAdministration: {
-        controllerNamespace: "openclaw-controller",
-        credentialSecretPrefix: "custom-admin",
-      },
-    },
   ]) {
     assert.throws(
       () => createKubernetesComputeDriver(options({ runtime: shared })),
-      /credentials must remain separate|unsupported option credentialSecretPrefix/i,
+      /credentials must remain separate/i,
     );
   }
 
@@ -513,14 +480,13 @@ test("account-owned Kubernetes Secrets reject invalid or foreign credentials bef
   }
 });
 
-test("gateway administration rejects unsupported native profiles before production adapter work", async () => {
+test("gateway administration rejects unsupported native profiles before CLI exec work", async () => {
   const driver = createKubernetesComputeDriver(
     options({
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
         modelSecretPrefix: "model",
-        gatewayAdministration: { controllerNamespace: "openclaw-controller" },
       },
     }),
   );
@@ -576,9 +542,7 @@ test("gateway administration rejects unsupported native profiles before producti
     ],
   ]) {
     const invalid = { ...revision, configuration };
-    // Unsupported native profiles must be rejected before Kubernetes credential reads,
-    // kubeconfig loading, pod exec enrollment, pod proxy setup, or native dispatch.
-    await assert.rejects(driver.prepareRevision(invalid), expected, `prepareRevision ${name}`);
+    // Unsupported native profiles must be rejected before Pod exec setup or CLI execution.
     await assert.rejects(
       adapter.dispatch({
         revision: invalid,
@@ -1147,118 +1111,6 @@ test("embedded replacement preparation recovers past an unready active gateway w
   assert.deepEqual(
     patches.filter(({ kind }) => kind === "Deployment"),
     [{ kind: "Deployment", name: gatewayName }],
-  );
-});
-
-test("gateway administration preparation targets the current gateway while a replacement is queued", async () => {
-  const driver = createKubernetesComputeDriver(
-    options({
-      runtime: {
-        transportSecretPrefix: "transport",
-        modelSecretPrefix: "model",
-        gatewayStorageClassName: "local-path",
-        gatewayAdministration: { controllerNamespace: "openclaw-controller" },
-      },
-    }),
-  );
-  const namespace = kubernetesNamespaceName(tenant.id);
-  const agentId = "agent-gateway-admin-current";
-  const ownership = { namespaceId: tenant.id, agentId };
-  const gatewayName = `gateway-${createHash("sha256").update(agentId).digest("hex").slice(0, 12)}`;
-  const current = {
-    namespaceId: tenant.id,
-    agentId,
-    id: "revision-gateway-admin-current-1",
-    revision: 1,
-  };
-  const replacement = { ...current, id: "revision-gateway-admin-current-2", revision: 2 };
-  const currentConfiguration = {
-    name: "gateway-admin-current-configuration",
-    revision: current.revision,
-    revisionId: current.id,
-    annotations: {
-      "openclaw.dev/configuration-id": "cfg_00000000-0000-4000-8000-000000000111",
-      "openclaw.dev/configuration-kind": "agent",
-      "openclaw.dev/configuration-generation": "1",
-    },
-  };
-  const deployment = driver.deployment(
-    gatewayName,
-    ownership,
-    namespace,
-    "gateway:local",
-    gatewayName,
-    "gateway",
-    {},
-    currentConfiguration,
-  );
-  deployment.metadata.generation = 7;
-  deployment.status = { observedGeneration: 7, readyReplicas: 1 };
-  const podFor = (revision, name) => ({
-    apiVersion: "v1",
-    kind: "Pod",
-    metadata: {
-      name,
-      namespace,
-      labels: structuredClone(deployment.spec.template.metadata.labels),
-      annotations: {
-        ...structuredClone(deployment.spec.template.metadata.annotations),
-        "openclaw.dev/agent-revision": String(revision.revision),
-        "openclaw.dev/agent-revision-id": revision.id,
-      },
-    },
-    status: {
-      phase: "Running",
-      podIP: name === "current-gateway-pod" ? "10.0.0.10" : "10.0.0.11",
-      conditions: [{ type: "Ready", status: "True" }],
-    },
-  });
-  let selector;
-  driver.apiClients = Promise.resolve({
-    apps: {
-      async readNamespacedDeployment({ name }) {
-        assert.equal(name, gatewayName);
-        return structuredClone(deployment);
-      },
-    },
-    core: {
-      async listNamespacedPod(request) {
-        selector = request.labelSelector;
-        return {
-          items: [
-            podFor(replacement, "replacement-gateway-pod"),
-            podFor(current, "current-gateway-pod"),
-          ],
-        };
-      },
-    },
-  });
-
-  const target = await driver.resolveGatewayBootstrapTarget(
-    replacement,
-    namespace,
-    gatewayName,
-    ownership,
-  );
-  assert.deepEqual(target, {
-    namespace,
-    podName: "current-gateway-pod",
-    gatewayPort: 8080,
-  });
-  await assert.rejects(
-    driver.resolveGatewayBootstrapTarget(replacement, namespace, gatewayName, ownership, {
-      revision: replacement.revision,
-      revisionId: replacement.id,
-    }),
-    /stale AgentRevision gateway verification/i,
-  );
-  assert.equal(
-    selector,
-    labelsToSelectorForTest({
-      "app.kubernetes.io/name": gatewayName,
-      "openclaw.dev/agent": agentId,
-      "openclaw.dev/workload-role": "gateway",
-    }),
   );
 });
 
@@ -2066,229 +1918,6 @@ test("private gateway claim reuse and deletion verify exact ownership and storag
   observed = undefined;
   await driver.deleteGatewayPrivateStateClaim(ownership, namespace);
   assert.equal(mutations.length, 1);
-});
-
-test("gateway administration device pins prevent native identity regeneration", async () => {
-  const controllerNamespace = "openclaw-controller";
-  const driver = createKubernetesComputeDriver(
-    options({
-      runtime: {
-        transportSecretPrefix: "transport",
-        modelSecretPrefix: "model",
-        gatewayStorageClassName: "local-path",
-        gatewayAdministration: { controllerNamespace },
-      },
-    }),
-  );
-  const agentId = "agent-gateway-device-pin";
-  const ownership = { namespaceId: tenant.id, agentId };
-  const namespace = kubernetesNamespaceName(tenant.id);
-  const revision = {
-    id: "revision-gateway-device-pin-1",
-    namespaceId: tenant.id,
-    agentId,
-    revision: 1,
-    configurationId: "cfg_00000000-0000-4000-8000-000000000099",
-    configurationKind: "agent",
-    configurationGeneration: 1,
-    configuration: {
-      gateway: { auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" } },
-    },
-    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
-    compute: { id: driver.id, implementation: driver.implementation },
-    servicePrincipalId: "service-principal-gateway-device-pin",
-    createdAt: tenant.createdAt,
-  };
-  const administration = { controllerNamespace };
-  const createFixture = ({
-    pinnedDeviceId,
-    credential,
-    failPinPatch = false,
-    replacementReadbackAfterFailedPinPatch = false,
-  } = {}) => {
-    let claim = {
-      ...driver.gatewayPrivateStateClaim(agentId, ownership, namespace),
-      metadata: {
-        ...driver.gatewayPrivateStateClaim(agentId, ownership, namespace).metadata,
-        uid: "gateway-state-uid",
-        resourceVersion: "17",
-        annotations: {
-          ...driver.gatewayPrivateStateClaim(agentId, ownership, namespace).metadata.annotations,
-          ...(pinnedDeviceId === undefined
-            ? {}
-            : { [occGatewayDeviceIdAnnotation]: pinnedDeviceId }),
-        },
-      },
-    };
-    let secret =
-      credential === undefined
-        ? undefined
-        : {
-            ...driver.manifest(
-              "v1",
-              "Secret",
-              gatewayAdministrationSecretName({ namespaceId: tenant.id, agentId }),
-              ownership,
-              controllerNamespace,
-            ),
-            metadata: {
-              ...driver.manifest(
-                "v1",
-                "Secret",
-                gatewayAdministrationSecretName({ namespaceId: tenant.id, agentId }),
-                ownership,
-                controllerNamespace,
-              ).metadata,
-              uid: "gateway-admin-secret-uid",
-              resourceVersion: "31",
-            },
-            type: "Opaque",
-            data: base64StringData(gatewayAdministrationSecretStringData(credential)),
-          };
-    const operations = [];
-    driver.apiClients = Promise.resolve({
-      core: {
-        async readNamespacedPersistentVolumeClaim({ name }) {
-          operations.push(["read-pvc", name]);
-          return structuredClone(claim);
-        },
-        async patchNamespacedPersistentVolumeClaim({ name, namespace: requestNamespace, body }) {
-          operations.push(["patch-pvc", name, requestNamespace, structuredClone(body)]);
-          assert.deepEqual(body.slice(0, 2), [
-            { op: "test", path: "/metadata/uid", value: "gateway-state-uid" },
-            { op: "test", path: "/metadata/resourceVersion", value: "17" },
-          ]);
-          assert.deepEqual(body[2], {
-            op: "add",
-            path: "/metadata/annotations/openclaw.dev~1occ-gateway-device-id",
-            value: parsedGatewayAdministrationCredential(secret).identity.deviceId,
-          });
-          if (failPinPatch) {
-            if (replacementReadbackAfterFailedPinPatch) {
-              claim = {
-                ...claim,
-                metadata: {
-                  ...claim.metadata,
-                  uid: "replacement-gateway-state-uid",
-                  resourceVersion: "18",
-                  annotations: {
-                    ...claim.metadata.annotations,
-                    [occGatewayDeviceIdAnnotation]: body[2].value,
-                  },
-                },
-              };
-            }
-            throw Object.assign(new Error("conflict"), { statusCode: 409 });
-          }
-          claim = {
-            ...claim,
-            metadata: {
-              ...claim.metadata,
-              resourceVersion: "18",
-              annotations: {
-                ...claim.metadata.annotations,
-                [occGatewayDeviceIdAnnotation]: body[2].value,
-              },
-            },
-          };
-        },
-        async readNamespacedSecret() {
-          operations.push(["read-secret"]);
-          if (secret === undefined)
-            throw Object.assign(new Error("not found"), { statusCode: 404 });
-          return structuredClone(secret);
-        },
-        async createNamespacedSecret({ body }) {
-          operations.push(["create-secret"]);
-          if (secret !== undefined) throw Object.assign(new Error("conflict"), { statusCode: 409 });
-          secret = {
-            ...structuredClone(body),
-            metadata: { ...body.metadata, uid: "gateway-admin-secret-uid", resourceVersion: "31" },
-            data: base64StringData(body.stringData),
-          };
-          delete secret.stringData;
-          return structuredClone(secret);
-        },
-      },
-    });
-    return { operations };
-  };
-
-  const missingSecretWithPin = createFixture({ pinnedDeviceId: "pinned-without-secret" });
-  await assert.rejects(
-    driver.readOrCreateGatewayAdministrationCredential(
-      administration,
-      ownership,
-      await driver.readGatewayAdministrationDevicePin(revision, namespace, ownership),
-    ),
-    /missing for the pinned native device/i,
-  );
-  assert.deepEqual(
-    missingSecretWithPin.operations.map(([operation]) => operation),
-    ["read-pvc", "read-secret"],
-  );
-
-  const identity = createOpenClawGatewayNativeDeviceIdentity();
-  const mismatched = createFixture({
-    pinnedDeviceId: "another-device",
-    credential: { state: "keyOnly", identity },
-  });
-  await assert.rejects(
-    driver.readOrCreateGatewayAdministrationCredential(
-      administration,
-      ownership,
-      await driver.readGatewayAdministrationDevicePin(revision, namespace, ownership),
-    ),
-    /does not match the pinned native device/i,
-  );
-  assert.deepEqual(
-    mismatched.operations.map(([operation]) => operation),
-    ["read-pvc", "read-secret"],
-  );
-
-  const created = createFixture();
-  const record = await driver.readOrCreateGatewayAdministrationCredential(
-    administration,
-    ownership,
-    await driver.readGatewayAdministrationDevicePin(revision, namespace, ownership),
-  );
-  assert.equal(record.created, true);
-  assert.equal(record.credential.state, "keyOnly");
-  assert.deepEqual(
-    created.operations.map(([operation]) => operation),
-    ["read-pvc", "read-secret", "create-secret", "read-secret", "patch-pvc", "read-pvc"],
-  );
-
-  const uncertainPatch = createFixture({ failPinPatch: true });
-  await assert.rejects(
-    driver.readOrCreateGatewayAdministrationCredential(
-      administration,
-      ownership,
-      await driver.readGatewayAdministrationDevicePin(revision, namespace, ownership),
-    ),
-    /conflict/i,
-  );
-  assert.deepEqual(
-    uncertainPatch.operations.map(([operation]) => operation),
-    ["read-pvc", "read-secret", "create-secret", "read-secret", "patch-pvc", "read-pvc"],
-  );
-
-  const replacementReadback = createFixture({
-    failPinPatch: true,
-    replacementReadbackAfterFailedPinPatch: true,
-  });
-  await assert.rejects(
-    driver.readOrCreateGatewayAdministrationCredential(
-      administration,
-      ownership,
-      await driver.readGatewayAdministrationDevicePin(revision, namespace, ownership),
-    ),
-    /conflict/i,
-  );
-  assert.deepEqual(
-    replacementReadback.operations.map(([operation]) => operation),
-    ["read-pvc", "read-secret", "create-secret", "read-secret", "patch-pvc", "read-pvc"],
-  );
 });
 
 test("retiring a predecessor preserves both claims and final retirement deletes exact claim UIDs", async () => {
