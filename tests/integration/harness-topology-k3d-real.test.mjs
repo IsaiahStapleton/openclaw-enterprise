@@ -870,7 +870,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   );
   const [
     { default: pg },
-    { PostgresPlatformState },
+    { BOOTSTRAP_DEFAULT_NAMESPACE_NAME, PostgresPlatformState },
     { createPostgresControllerAuth },
     { loadInstallationConfiguration },
     { composeProduction },
@@ -878,7 +878,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     { kubernetesNamespaceName },
   ] = await Promise.all([
     import("pg"),
-    import("../../packages/occ/src/state/postgres-state.ts"),
+    import("../../packages/occ/src/index.ts"),
     import("../../apps/controller/src/auth/index.ts"),
     import("../../apps/controller/src/composition/installation-config.ts"),
     import("../../apps/controller/src/composition/production.ts"),
@@ -934,6 +934,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   });
 
   const existing = await new PostgresPlatformState(observerPool).loadInstallation();
+  let createdFreshInstallation = false;
   if (existing !== undefined) {
     activeInstallation = existing;
     await ensureHarnessAdminPrincipal(
@@ -944,7 +945,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     );
     context.diagnostic(`reusing pre-initialized Installation ${activeInstallation.id}`);
   } else {
-    // Bootstrap only establishes persistent IAM; every actual deployment uses production API/worker.
+    // Bootstrap establishes IAM and the initial default Namespace; production API/worker owns deployment.
     await ensureDevelopmentBootstrap(context, {
       databaseUrl,
       email: credentials.email,
@@ -953,6 +954,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       authBaseURL,
       installationName,
     });
+    createdFreshInstallation = true;
   }
 
   const productionConfig = {
@@ -973,6 +975,23 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   let request = adminRequest;
   let secretAssignmentPrincipalId;
   const events = [];
+  let namespaceId;
+  if (createdFreshInstallation) {
+    const namespaces = await adminRequest("GET", "/namespaces");
+    assert.equal(namespaces.status, 200, JSON.stringify(namespaces.error));
+    const defaultNamespace = namespaces.data.find(
+      ({ name }) => name === BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+    );
+    assert.ok(defaultNamespace, "fresh bootstrap must expose the default Namespace");
+    namespaceId = defaultNamespace.id;
+  } else {
+    const createdNamespace = await adminRequest("POST", "/namespaces", {
+      name: `production-${mode}-${randomUUID()}`,
+    });
+    assert.equal(createdNamespace.status, 201);
+    namespaceId = createdNamespace.data.id;
+  }
+  placement = kubernetesNamespaceName(namespaceId);
   workerPool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
   worker = createControllerWorker({
     mode: "production",
@@ -984,13 +1003,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     emit: (event) => events.push(event),
   });
   await worker.start();
-
-  const createdNamespace = await adminRequest("POST", "/namespaces", {
-    name: `production-${mode}-${randomUUID()}`,
-  });
-  assert.equal(createdNamespace.status, 201);
-  const namespaceId = createdNamespace.data.id;
-  placement = kubernetesNamespaceName(namespaceId);
 
   // The real production worker must remain pending until an operator grants this exact tenant.
   await waitFor(`the production worker to create tenant namespace ${placement}`, async () => {

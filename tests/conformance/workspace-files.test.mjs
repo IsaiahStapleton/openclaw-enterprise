@@ -15,7 +15,8 @@ import {
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 
 const installationId = "ins_4033697e-6397-4cc6-9b04-8ec17af78cf1";
-const tenantANamespaceId = "ns_00000000-0000-4000-8000-000000000001";
+// Bootstrap allocates the first Namespace ID for the initial default Namespace.
+const tenantANamespaceId = "ns_00000000-0000-4000-8000-000000000002";
 const publicOrigin = "http://127.0.0.1";
 
 const administratorPermissions = [

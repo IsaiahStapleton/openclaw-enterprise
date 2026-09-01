@@ -16,7 +16,10 @@ import {
 } from "../../apps/controller/src/composition/development-postgres.ts";
 import { createFilesystemDevelopmentConfigurationDriverFromEnv } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
-import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
+import {
+  BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  PostgresPlatformState,
+} from "../../packages/occ/src/index.ts";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
@@ -286,7 +289,7 @@ async function ensureBootstrapped(context, config, outputDirectory) {
   context.after(async () => pool.end());
   const state = new PostgresPlatformState(pool);
   const installation = await state.loadInstallation();
-  if (installation !== undefined) return;
+  if (installation !== undefined) return { createdFreshInstallation: false };
   await ensureDevelopmentBootstrap(context, {
     databaseUrl: config.databaseUrl,
     directory: outputDirectory,
@@ -296,6 +299,7 @@ async function ensureBootstrapped(context, config, outputDirectory) {
     authBaseURL: config.authBaseURL,
     installationName: "OpenClaw Docker workspace files integration",
   });
+  return { createdFreshInstallation: true };
 }
 
 async function startApi({ config, configurationRoot, workspaceFilesAccess }) {
@@ -355,7 +359,7 @@ test(
       await cleanupDockerNamespaces(namespaceIds);
     });
 
-    await ensureBootstrapped(context, config, workingDirectory);
+    const bootstrap = await ensureBootstrapped(context, config, workingDirectory);
 
     api = await startApi({ config, configurationRoot });
     const session = await signInWithEmailPassword({
@@ -373,14 +377,24 @@ test(
       maxAttempts: 20,
       emit: () => {},
     });
-    await worker.start();
     let request = apiClient(api.baseUrl, session);
 
-    const namespace = await request("POST", "/namespaces", {
-      name: `workspace-files-docker-${randomUUID()}`,
-    });
-    assert.equal(namespace.status, 201, JSON.stringify(namespace.error));
+    const namespace = bootstrap.createdFreshInstallation
+      ? await request("GET", "/namespaces").then((response) => {
+          assert.equal(response.status, 200, JSON.stringify(response.error));
+          const defaultNamespace = response.data.find(
+            ({ name }) => name === BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+          );
+          assert.ok(defaultNamespace, "fresh bootstrap must expose the default Namespace");
+          return { data: defaultNamespace };
+        })
+      : await request("POST", "/namespaces", {
+          name: `workspace-files-docker-${randomUUID()}`,
+        });
+    if (!bootstrap.createdFreshInstallation)
+      assert.equal(namespace.status, 201, JSON.stringify(namespace.error));
     namespaceIds.push(namespace.data.id);
+    await worker.start();
     await waitFor(`Namespace ${namespace.data.id} readiness`, async () => {
       const current = await request("GET", `/namespaces/${namespace.data.id}`);
       assert.equal(current.status, 200, JSON.stringify(current.error));
