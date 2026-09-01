@@ -28,6 +28,11 @@ the same [administrator Role](authorization.md#supported-policy-surface).
 The service identity has no email, password, session, Namespace, or Agent owner;
 its authority does not depend on the human account remaining present.
 
+Fresh bootstrap also creates the initial [`default` Namespace](namespaces.md#initial-namespace)
+under the bootstrap Principal's ordinary Namespace creation permission.
+Installation/IAM state, the Namespace, its queued reconciliation, and bootstrap
+audit commit together. Worker provisioning remains asynchronous.
+
 Bootstrap issues a 30-day service API key named `bootstrap-admin` and writes its
 one-time response to `OCC_BOOTSTRAP_SERVICE_KEY_FILE`. The JSON contains
 `data.id`, `data.servicePrincipalId`, `data.name`, `data.expiresAt`, `data.key`,
@@ -61,7 +66,7 @@ and worker do not mount it. Direct development runs the same initializer with
 an explicit private key-file path before starting the API or worker.
 The [quickstart](../guides/quickstart.md) uses the service key for its API check.
 
-An already-bootstrapped Installation receives no new identity, grants, key, or
+An already-bootstrapped Installation receives no new Namespace, identity, grants, key, or
 output, including installations created before initial-key delivery existed.
 Restarting does not replace missing files, expired/revoked keys, removed service
 identities, or removed grants. Use normal issuance/revocation for credential

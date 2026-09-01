@@ -19,7 +19,8 @@ On the default path, the helper creates a local quickstart runtime image only
 when it is needed, validates Docker Compose configuration without logging
 expanded credentials, starts PostgreSQL, migration, bootstrap, API, and worker
 services, then copies the bootstrap service-key response into a private local
-file.
+file. Fresh bootstrap also creates the initial platform Namespace named
+`default`; the worker provisions its backing infrastructure.
 
 Expected output includes:
 
@@ -49,6 +50,18 @@ Export `OCC_URL` and `OCC_SERVICE_KEY_FILE` if you are continuing to
 [Development end-to-end TUI](deploy.md#development-end-to-end-tui). The OCC key
 stays with the operator; it is separate from the Agent gateway token and model
 credential and must never enter a workload or TUI.
+
+## Find the initial Namespace
+
+```bash
+scripts/occ-api GET /namespaces
+```
+
+On a fresh Installation, expect one Namespace named `default` with a
+server-assigned `id`. Use that ID for Namespace-scoped API paths and wait for
+`status: "ready"` before deploying an Agent. Bootstrap success does not imply
+that worker provisioning has finished. Additional Namespaces can still be
+created with `POST /namespaces`; see [Namespaces](../reference/namespaces.md).
 
 ## Clean up and stop
 

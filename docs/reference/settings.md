@@ -161,8 +161,10 @@ Development consumes the `OPENCLAW_DEV_*` defaults above and only the private
 service-key output path; it never writes a password file. API/worker startup
 requires the resulting Installation and does not create credentials.
 
-The packaged Helm initialization Job creates the singleton Installation and
-human and service administrators before starting the API or worker. Its separate migration
+The packaged Helm initialization Job creates the singleton Installation,
+human and service administrators, and initial [`default` Namespace](namespaces.md#initial-namespace)
+before starting the API or worker. Namespace provisioning completes asynchronously
+through the worker. Its separate migration
 init container receives only `OCC_MIGRATION_DATABASE_URL`; the bootstrap
 container receives the application-role `OCC_DATABASE_URL`, Better Auth
 settings, and the following bootstrap settings. The Job sets `backoffLimit: 0`;
@@ -180,6 +182,8 @@ before another attempt.
 
 Repeated bootstrap preserves the existing Installation only when the exact
 administrator account and IAM identity still match; a mismatch fails closed.
+Existing Namespaces and their configuration remain unchanged; no initial
+Namespace is backfilled or recreated.
 On fresh bootstrap, both files are created exclusively with mode `0600`; their
 parent directory must be private and neither destination may already exist.
 Helm sets the key path from `bootstrap.password.mountPath` and

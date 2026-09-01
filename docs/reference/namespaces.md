@@ -20,6 +20,25 @@ Installation
 The Installation is selected by the server. You never provide an Installation
 ID when creating a Namespace or accessing its Agents.
 
+## Initial Namespace
+
+Fresh Installation bootstrap creates one platform Namespace named `default`
+with a server-assigned ID. It uses the ordinary Namespace creation path,
+authorizes `create` for the bootstrap Principal through the selected IAM
+Driver, and queues reconciliation in the same transaction as Installation
+state and bootstrap audit. The worker provisions it through the selected
+Compute Driver and transitions it from `provisioning` to `ready`. Bootstrap
+success does not imply infrastructure readiness.
+
+Use `GET /namespaces` to discover the ID. The name does not select Kubernetes'
+built-in `default` namespace or an `existingNamespace`; normal Driver placement
+and tenant permissions still apply. No Agent is created.
+
+Repeated initializer runs preserve existing Namespaces and their resources.
+They do not backfill an existing Installation, recreate a deleted Namespace,
+or overwrite configuration. Additional named Namespaces remain available
+through `POST /namespaces`.
+
 ## Ownership and supported operations
 
 The server assigns the Namespace's identifier and Installation ownership.
@@ -150,5 +169,7 @@ workload is ready.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 14:51: Document initial default Namespace creation and unchanged repeat-bootstrap behavior. (codex/01a05ef1-ee29-7941-80f2-448bb0789969 - 872fa544c98bb7ad11b2d92d777e49229ececbf5)
 
 - [2026-08-28 17:55]: Recast Namespace ownership, operations, lifecycle, and deletion as current feature reference. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)

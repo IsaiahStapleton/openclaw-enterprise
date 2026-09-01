@@ -163,7 +163,9 @@ async function rowCounts() {
         (SELECT count(*)::integer FROM occ.iam_identities WHERE kind = 'service_principal') AS service_principals,
         (SELECT count(*)::integer FROM occ.iam_access_bindings) AS bindings,
         (SELECT count(*)::integer FROM occ.apikey) AS service_keys,
-        (SELECT count(*)::integer FROM occ."user") AS users
+        (SELECT count(*)::integer FROM occ."user") AS users,
+        (SELECT count(*)::integer FROM occ.namespaces) AS namespaces,
+        (SELECT count(*)::integer FROM occ.controller_work) AS namespace_work
     `);
     return result.rows[0];
   });
@@ -297,6 +299,8 @@ for (const sharedOutput of [false, true]) {
         bindings: 2,
         service_keys: loserCreatedServiceKey ? 2 : 1,
         users: loserCreatedServiceKey ? 2 : 1,
+        namespaces: 1,
+        namespace_work: 1,
       });
 
       const winnerIndex = environments.findIndex(
@@ -388,6 +392,8 @@ test(
       bindings: 2,
       service_keys: loserCreatedServiceKey ? 2 : 1,
       users: loserCreatedServiceKey ? 2 : 1,
+      namespaces: 1,
+      namespace_work: 1,
     });
 
     const reloaded = await composePostgresDevelopment(
@@ -483,6 +489,8 @@ test(
       bindings: 2,
       service_keys: 1,
       users: 1,
+      namespaces: 1,
+      namespace_work: 1,
     });
   },
 );
@@ -531,6 +539,8 @@ test(
       bindings: 0,
       service_keys: 1,
       users: 1,
+      namespaces: 0,
+      namespace_work: 0,
     });
   },
 );
@@ -580,6 +590,8 @@ test(
       bindings: 2,
       service_keys: 1,
       users: 1,
+      namespaces: 1,
+      namespace_work: 1,
     });
     assert.match(serviceKeyOutput.data.key, /^occ_/);
     assert.equal(serviceKeyOutput.data.name, "bootstrap-admin");

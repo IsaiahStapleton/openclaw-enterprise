@@ -10,7 +10,11 @@ import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../
 import { createControllerApp, createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
-import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
+import {
+  BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  InMemoryPlatformState,
+  OpenClawController,
+} from "../../packages/occ/src/index.ts";
 import {
   authenticatedHeaders,
   createTestAuthPrincipal,
@@ -190,6 +194,17 @@ async function bootstrap(controller, name = "Enterprise development") {
   assert.match(result.data.id, identifier("ins"));
   assert.equal(Number.isNaN(Date.parse(result.data.createdAt)), false);
   return result.data;
+}
+
+async function defaultNamespace(controller) {
+  const result = await controller.request("GET", "/namespaces");
+  assert.equal(result.status, 200);
+  const found = result.data.find(
+    (namespace) => namespace.name === BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  );
+  assert.ok(found, "fresh bootstrap must create the default Namespace");
+  assert.equal(found.status, "provisioning");
+  return found;
 }
 
 async function createNamespace(controller, name) {
@@ -469,13 +484,14 @@ test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource
   const singleton = await controller.request("GET", "/installation");
   assert.equal(singleton.status, 200);
   assert.deepEqual(singleton.data, installation);
+  const bootstrappedDefault = await defaultNamespace(controller);
 
   const namespace = await createNamespace(controller, "research");
   assert.equal(Object.hasOwn(namespace, "installationId"), false);
 
   const namespaces = await controller.request("GET", "/namespaces");
   assert.equal(namespaces.status, 200);
-  assert.deepEqual(namespaces.data, [namespace]);
+  assert.deepEqual(namespaces.data, [bootstrappedDefault, namespace]);
 
   const namespaceDetail = await controller.request("GET", `/namespaces/${namespace.id}`);
   assert.equal(namespaceDetail.status, 200);
@@ -1300,7 +1316,10 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   }
 
   const untouched = await injectedRequest(fixture.app, "GET", "/namespaces");
-  assert.deepEqual(untouched.data, []);
+  assert.deepEqual(
+    untouched.data.map((namespace) => namespace.name),
+    [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
+  );
 });
 
 test("bootstrap fails closed when IAM omits structured authorization evidence", async () => {
@@ -1726,8 +1745,8 @@ test("two Namespaces become independently ready and deletion tombstones only its
   assert.equal(absent.status, 404);
   const listed = await injectedRequest(fixture.app, "GET", "/namespaces");
   assert.deepEqual(
-    listed.data.map(({ id }) => id),
-    [namespaceA.data.id],
+    listed.data.map(({ name }) => name),
+    [BOOTSTRAP_DEFAULT_NAMESPACE_NAME, "lifecycle-a"],
   );
   const stillReady = await injectedRequest(fixture.app, "GET", `/namespaces/${namespaceA.data.id}`);
   assert.equal(stillReady.data.status, "ready");
@@ -1908,7 +1927,10 @@ test("IAM and audit dependency failures fail closed without orphaned state", asy
 
   const unchanged = await injectedRequest(fixture.app, "GET", "/namespaces");
   assert.equal(unchanged.status, 200);
-  assert.deepEqual(unchanged.data, []);
+  assert.deepEqual(
+    unchanged.data.map((namespace) => namespace.name),
+    [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
+  );
   assert.equal(fixture.auditSink.events.length, 1);
 
   const originalAuthorize = fixture.iamDriver.authorize;
@@ -1928,5 +1950,8 @@ test("IAM and audit dependency failures fail closed without orphaned state", asy
   assert.equal(JSON.stringify(unavailable.body).includes("sk-iam-provider"), false);
 
   const stillUnchanged = await injectedRequest(fixture.app, "GET", "/namespaces");
-  assert.deepEqual(stillUnchanged.data, []);
+  assert.deepEqual(
+    stillUnchanged.data.map((namespace) => namespace.name),
+    [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
+  );
 });

@@ -127,6 +127,8 @@ export {
   type WorkResult,
 } from "./state/postgres-work-queue.ts";
 
+export const BOOTSTRAP_DEFAULT_NAMESPACE_NAME = "default";
+
 export interface ControllerOptions {
   readonly authorize?: (
     request: AuthorizationRequest,

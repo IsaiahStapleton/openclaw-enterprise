@@ -7,8 +7,12 @@ import {
   writeProtectedBootstrapFile,
   writeProtectedBootstrapJson,
 } from "../apps/controller/src/composition/bootstrap-output.ts";
-import { createBootstrapAdministratorSeed } from "../packages/iam/src/index.ts";
-import { OpenClawController, PostgresPlatformState } from "../packages/occ/src/index.ts";
+import { createBootstrapAdministratorSeed, NativeIAMDriver } from "../packages/iam/src/index.ts";
+import {
+  BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  OpenClawController,
+  PostgresPlatformState,
+} from "../packages/occ/src/index.ts";
 
 const requireControllerDependency = createRequire(
   new URL("../apps/controller/package.json", import.meta.url),
@@ -304,7 +308,13 @@ try {
     });
     state.setBootstrapNativeIAM(authorization.state);
     const controller = new OpenClawController(installation, { state, recordOperations: true });
+    const iam = new NativeIAMDriver(state, { id: "native-iam", implementation: "native" });
+    controller.registerDriver(iam);
+    controller.selectDriver("iam", iam.id);
     await controller.transact(async (unit) => {
+      const defaultNamespace = await controller.createNamespace(authorization.principal.id, {
+        name: BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+      });
       await unit.audit.append({
         id: `aud_${randomUUID()}`,
         installationId: installation.id,
@@ -323,6 +333,7 @@ try {
               : "development-installation-job",
           servicePrincipalId: authorization.servicePrincipal.id,
           serviceKeyId: serviceKey.id,
+          defaultNamespaceId: defaultNamespace.id,
         },
       });
     });

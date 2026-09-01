@@ -318,15 +318,16 @@ docker compose exec -T worker \
   node -e 'process.exit((process.env.OPENAI_API_KEY || "").trim() ? 0 : 1)'
 ```
 
-Create a development Namespace and save its server-generated ID:
+Select the initial `default` Namespace and save its server-generated ID:
 
 ```bash
-OCC_E2E_DIRECTORY="$(mktemp -d)"
-printf '{"name":"tui-development"}\n' > "$OCC_E2E_DIRECTORY/namespace.json"
-NAMESPACE_RESPONSE="$(scripts/occ-api POST /namespaces "$OCC_E2E_DIRECTORY/namespace.json")"
-NAMESPACE_ID="$(printf '%s' "$NAMESPACE_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+NAMESPACE_ID="$(scripts/occ-api GET /namespaces | python3 -c 'import json,sys; matches=[n for n in json.load(sys.stdin)["data"] if n["name"] == "default"]; assert len(matches) == 1, "Select an existing Namespace ID or create a new Namespace"; print(matches[0]["id"])')"
 export NAMESPACE_ID
 ```
+
+For a separate environment, create a Namespace with your chosen name using
+`POST /namespaces` and use its returned ID instead. Existing Installations are
+not backfilled by bootstrap.
 
 Poll `scripts/occ-api GET "/namespaces/$NAMESPACE_ID"` until `data.status` is
 `ready`. Create `configuration.json` from the embedded OpenClaw example in
@@ -379,9 +380,23 @@ line.
 
 #### Use a driver-managed Kubernetes namespace
 
-Create a platform Namespace with `scripts/occ-api POST /namespaces
-namespace-request.json`. The worker creates the backing Kubernetes namespace and
-marks it with `openclaw.dev/namespace-id=$NAMESPACE_ID`. Wait until
+Fresh bootstrap creates a platform Namespace named `default`. Read
+`scripts/occ-api GET /namespaces` and select its server-assigned ID as
+`NAMESPACE_ID`. To create another environment, submit a chosen name with
+`scripts/occ-api POST /namespaces namespace-request.json`. The worker creates
+the backing Kubernetes namespace and labels it with
+`openclaw.dev/namespace=$NAMESPACE_ID`. This is separate from Kubernetes'
+built-in `default` namespace. Once the worker has created it, discover and
+export its name for the tenant RoleBindings:
+
+```bash
+TENANT_NAMESPACE="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
+  get namespaces -l "openclaw.dev/namespace=$NAMESPACE_ID" -o json | \
+  python3 -c 'import json,sys; items=json.load(sys.stdin)["items"]; assert len(items) == 1, "Expected one backing Namespace; check worker provisioning"; print(items[0]["metadata"]["name"])')" && export TENANT_NAMESPACE
+```
+
+If no backing namespace is found, check the worker logs and repeat discovery
+after creation. Complete the tenant RoleBindings below, then wait until
 `GET /namespaces/$NAMESPACE_ID` reports `ready` before creating Configurations.
 
 #### Use an existing Kubernetes namespace
