@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
+import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
 const executeFile = promisify(execFile);
@@ -29,7 +31,10 @@ const requiresDockerCompute = {
 const DEFAULT_RUNTIME_IMAGE = "oce-harness-real:pr26-compatible-runtime";
 const COMPOSE_FILE = "compose.yaml";
 const INTERNAL_API_PORT = "3000";
+const BOOTSTRAP_SERVICE_KEY_PATH = "/var/lib/openclaw/bootstrap/initial-admin-service-key.json";
+const OCC_API_SCRIPT = "scripts/occ-api";
 const LABEL_COMPOSE_PROJECT = "com.docker.compose.project";
+const LABEL_COMPOSE_SERVICE = "com.docker.compose.service";
 const LABEL_MANAGED = "org.openclaw.enterprise.managed";
 const LABEL_DRIVER = "org.openclaw.enterprise.compute-driver";
 const LABEL_NAMESPACE = "org.openclaw.enterprise.namespace-id";
@@ -230,12 +235,38 @@ async function idsByNamespace(namespaceIds, baseArgs) {
   ).flat();
 }
 
-function apiClient(baseUrl, session) {
+async function composeServiceContainer(project, service) {
+  const ids = await dockerLines([
+    "ps",
+    "-aq",
+    ...labelFilters([
+      [LABEL_COMPOSE_PROJECT, project],
+      [LABEL_COMPOSE_SERVICE, service],
+    ]),
+  ]);
+  assert.equal(ids.length, 1, `Compose service ${service} must have exactly one container`);
+  const [container] = await dockerJson(["inspect", ids[0]]);
+  return container;
+}
+
+function hasMountDestination(container, destination) {
+  return (container.Mounts ?? []).some((mount) => mount.Destination === destination);
+}
+
+function serviceKeyHeaders(serviceKey) {
+  assert.equal(typeof serviceKey, "string", "an OCC service key is required");
+  assert.ok(serviceKey.length > 0, "an OCC service key is required");
+  return { "x-api-key": serviceKey };
+}
+
+function apiClient(baseUrl, serviceKey) {
   return async function request(method, path, body, options = {}) {
     const response = await fetch(new URL(path, baseUrl), {
       method,
       headers: {
-        ...(options.session === false ? {} : authenticatedHeaders(options.session ?? session)),
+        ...(options.serviceKey === false
+          ? {}
+          : serviceKeyHeaders(options.serviceKey ?? serviceKey)),
         ...(body === undefined ? {} : { "content-type": "application/json" }),
         ...options.headers,
       },
@@ -250,6 +281,173 @@ function apiClient(baseUrl, session) {
       ...(parsed === undefined ? {} : parsed),
     };
   };
+}
+
+async function copyBootstrapServiceKey({ project, env, outputDirectory, secrets }) {
+  const localFile = join(outputDirectory, "initial-admin-service-key.json");
+  const bootstrap = await composeServiceContainer(project, "bootstrap");
+  assert.equal(
+    hasMountDestination(bootstrap, "/var/lib/openclaw/bootstrap"),
+    true,
+    "bootstrap service must mount the private bootstrap output volume",
+  );
+  assert.equal(
+    hasMountDestination(
+      await composeServiceContainer(project, "controller"),
+      "/var/lib/openclaw/bootstrap",
+    ),
+    false,
+    "controller service must not mount the private bootstrap output volume",
+  );
+  await docker(["cp", `${bootstrap.Id}:${BOOTSTRAP_SERVICE_KEY_PATH}`, localFile], {
+    env,
+    timeoutMs: 60_000,
+    secrets,
+  });
+  await chmod(localFile, 0o600);
+  const outputStatus = await stat(localFile);
+  assert.equal(outputStatus.mode & 0o777, 0o600);
+  const output = JSON.parse(await readFile(localFile, "utf8"));
+  assert.equal(typeof output, "object", "bootstrap service-key output must be JSON");
+  assert.equal(typeof output?.meta?.installationId, "string");
+  assert.match(output.data?.key ?? "", /^occ_/);
+  assert.equal(typeof output.data?.id, "string");
+  assert.equal(typeof output.data?.servicePrincipalId, "string");
+  assert.equal(output.data?.name, "bootstrap-admin");
+  return { localFile, output };
+}
+
+async function occApi({ baseUrl, serviceKeyFile, method, path, body, outputDirectory, secrets }) {
+  let bodyFile;
+  if (body !== undefined) {
+    bodyFile = join(outputDirectory, `${method.toLowerCase()}-${randomUUID()}.json`);
+    await writeFile(bodyFile, `${JSON.stringify(body)}\n`, { mode: 0o600 });
+  }
+  const { stdout } = await command(
+    OCC_API_SCRIPT,
+    [method, path, ...(bodyFile === undefined ? [] : [bodyFile])],
+    {
+      env: {
+        ...process.env,
+        OCC_URL: baseUrl,
+        OCC_SERVICE_KEY_FILE: serviceKeyFile,
+      },
+      timeoutMs: 60_000,
+      secrets,
+    },
+  );
+  return JSON.parse(stdout.trim());
+}
+
+function sqlLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+async function postgresJson(project, env, sql, { secrets = [] } = {}) {
+  const { stdout } = await docker(
+    composeArguments(project, "exec", [
+      "-T",
+      "postgres",
+      "psql",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-U",
+      "postgres",
+      "-d",
+      "openclaw_enterprise",
+      "-A",
+      "-t",
+      "-q",
+      "-c",
+      sql,
+    ]),
+    { env, timeoutMs: 60_000, secrets },
+  );
+  return JSON.parse(stdout.trim());
+}
+
+async function assertRuntimeDatabaseEvidence({
+  project,
+  env,
+  serviceKeyOutput,
+  serviceKey,
+  namespaceIds,
+  revisionIds,
+}) {
+  const namespaceArray = namespaceIds.map(sqlLiteral).join(", ");
+  const revisionArray = revisionIds.map(sqlLiteral).join(", ");
+  const servicePrincipalId = sqlLiteral(serviceKeyOutput.data.servicePrincipalId);
+  const expectedOperatorMutationAudits = namespaceIds.length + revisionIds.length * 3;
+  const evidence = await postgresJson(
+    project,
+    env,
+    `SELECT json_build_object(
+      'operatorMutationAudits', (
+        SELECT count(*)::integer
+        FROM occ.audit_events
+        WHERE actor_id = ${servicePrincipalId}
+          AND action IN (
+            'openclaw.namespaces.create',
+            'openclaw.configurations.create',
+            'openclaw.agents.create',
+            'openclaw.agents.deploy'
+          )
+          AND outcome = 'success'
+      ),
+      'namespaceLifecycleSucceeded', (
+        SELECT count(*)::integer
+        FROM occ.controller_work
+        WHERE namespace_id IN (${namespaceArray})
+          AND agent_id IS NULL
+          AND revision_id IS NULL
+          AND state = 'succeeded'
+      ),
+      'revisionLifecycleSucceeded', (
+        SELECT count(*)::integer
+        FROM occ.controller_work
+        WHERE revision_id IN (${revisionArray})
+          AND state = 'succeeded'
+          AND claim_token IS NULL
+          AND lease_expires_at IS NULL
+          AND completed_at IS NOT NULL
+      ),
+      'unfinishedLifecycleWork', (
+        SELECT count(*)::integer
+        FROM occ.controller_work
+        WHERE namespace_id IN (${namespaceArray})
+          AND state <> 'succeeded'
+      )
+    )::text`,
+    { secrets: [serviceKey] },
+  );
+  assert.equal(
+    evidence.operatorMutationAudits,
+    expectedOperatorMutationAudits,
+    "service-key operator must be the actor for Namespace, Configuration, Agent, and deploy mutations",
+  );
+  assert.equal(
+    evidence.namespaceLifecycleSucceeded,
+    namespaceIds.length,
+    "each Namespace must complete its controller lifecycle work",
+  );
+  assert.equal(
+    evidence.revisionLifecycleSucceeded,
+    revisionIds.length,
+    "each AgentRevision must complete claimed lifecycle work",
+  );
+  assert.equal(evidence.unfinishedLifecycleWork, 0, "test-owned lifecycle work must be complete");
+}
+
+async function assertComposeLogsDoNotLeakBootstrapServiceKey({ project, env, serviceKey }) {
+  const { stdout, stderr } = await docker(
+    composeArguments(project, "logs", ["--no-color", "bootstrap", "controller", "worker"]),
+    { env, timeoutMs: 60_000, secrets: [serviceKey] },
+  );
+  assertNoSecretMaterial(
+    `${stdout}${stderr}`,
+    [serviceKey],
+    "bootstrap, controller, and worker logs must not leak the bootstrap service key",
+  );
 }
 
 async function inspectContainers(filters = []) {
@@ -626,6 +824,10 @@ test(
     context.after(async () => {
       await cleanupProject(project, env, namespaceIds);
     });
+    const bootstrapDirectory = await mkdtemp(join(tmpdir(), "openclaw-docker-bootstrap-key-"));
+    context.after(async () => {
+      await rm(bootstrapDirectory, { recursive: true, force: true });
+    });
     await cleanupProject(project, env);
     const composeSecrets = [providerKey, adminPassword];
     try {
@@ -647,31 +849,66 @@ test(
       }).catch(() => undefined);
       return response?.status === 200 ? true : undefined;
     });
-    const session = await waitFor("development administrator sign-in", () =>
-      signInWithEmailPassword({
-        origin: baseUrl,
-        email: adminEmail,
-        password: adminPassword,
-      }).catch(() => undefined),
+
+    const { localFile: serviceKeyFile, output: serviceKeyOutput } = await copyBootstrapServiceKey({
+      project,
+      env,
+      outputDirectory: bootstrapDirectory,
+      secrets: composeSecrets,
+    });
+    const serviceKey = serviceKeyOutput.data.key;
+    assert.equal(serviceKeyOutput.meta.installationId.startsWith("ins_"), true);
+    const helperInstallation = await occApi({
+      baseUrl,
+      serviceKeyFile,
+      method: "GET",
+      path: "/installation",
+      outputDirectory: bootstrapDirectory,
+      secrets: [...composeSecrets, serviceKey],
+    });
+    assert.equal(helperInstallation.data.id, serviceKeyOutput.meta.installationId);
+    const helperNamespace = await occApi({
+      baseUrl,
+      serviceKeyFile,
+      method: "POST",
+      path: "/namespaces",
+      body: { name: `cleanup-${project}` },
+      outputDirectory: bootstrapDirectory,
+      secrets: [...composeSecrets, serviceKey],
+    });
+    assert.equal(helperNamespace.data.status, "provisioning");
+    namespaceIds.push(helperNamespace.data.id);
+    await rm(serviceKeyFile);
+    await assert.rejects(
+      stat(serviceKeyFile),
+      (error) => error instanceof Error && error.code === "ENOENT",
+      "temporary local service-key copy must be removed before TUI attachment",
     );
-    const request = apiClient(baseUrl, session);
+
+    const request = apiClient(baseUrl, serviceKey);
 
     const installation = await request("GET", "/installation");
     assert.equal(installation.status, 200, JSON.stringify(installation.error));
     assert.equal(installation.data.name, env.OPENCLAW_DEV_INSTALLATION_NAME);
-    const bootstrap = await request("POST", "/installation/bootstrap", {
-      name: `OpenClaw Docker Compute ${project}`,
-    });
-    assert.equal(bootstrap.status, 409, JSON.stringify(bootstrap.error));
+    assert.equal(installation.data.id, serviceKeyOutput.meta.installationId);
 
     // Preserve development admission boundaries against the real Compose API listener.
     const unauthenticated = await request(
       "POST",
       "/namespaces",
       { name: `denied-unauthenticated-${project}` },
-      { session: false },
+      { serviceKey: false },
     );
     assert.equal(unauthenticated.status, 401, JSON.stringify(unauthenticated));
+    const invalidKey = `occ_invalid_${randomUUID()}`;
+    const invalid = await request(
+      "POST",
+      "/namespaces",
+      { name: `denied-invalid-key-${project}` },
+      { serviceKey: invalidKey },
+    );
+    assert.equal(invalid.status, 401, JSON.stringify(invalid));
+    assertNoSecretMaterial(invalid, [serviceKey], "invalid-key denial must not leak the valid key");
     const forwarded = await request(
       "POST",
       "/namespaces",
@@ -681,18 +918,19 @@ test(
     assert.equal(forwarded.status, 403, JSON.stringify(forwarded));
 
     const namespaces = [];
-    for (const label of ["embedded", "dedicated", "cleanup"]) {
+    for (const label of ["embedded", "dedicated"]) {
       const created = await request("POST", "/namespaces", {
         name: `${label}-${project}`,
       });
       assert.equal(
         created.status,
         201,
-        `direct Better Auth session namespace mutation must succeed: ${JSON.stringify(created.error)}`,
+        `bootstrap service-key namespace mutation must succeed: ${JSON.stringify(created.error)}`,
       );
       namespaceIds.push(created.data.id);
       namespaces.push(created.data);
     }
+    namespaces.push(helperNamespace.data);
     await Promise.all(
       namespaces.map((namespace) =>
         waitFor(`Namespace ${namespace.id} to become ready`, async () => {
@@ -730,6 +968,15 @@ test(
       namespaceId: dedicatedNamespace.id,
       mode: "dedicated",
       label: "dedicated",
+    });
+
+    await assertRuntimeDatabaseEvidence({
+      project,
+      env,
+      serviceKeyOutput,
+      serviceKey,
+      namespaceIds,
+      revisionIds: [embedded.revision.id, dedicated.revision.id],
     });
 
     const [embeddedGateway] = await waitForContainers(
@@ -865,5 +1112,6 @@ test(
       ]),
       1,
     );
+    await assertComposeLogsDoNotLeakBootstrapServiceKey({ project, env, serviceKey });
   },
 );

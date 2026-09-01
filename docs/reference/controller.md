@@ -27,9 +27,9 @@ process startup procedures.
 - For default PostgreSQL-backed development, the API must also use the
   filesystem Configuration Driver root. Compose mounts `occ_configuration_data`
   only into the controller at `/app/.development/configurations`.
-- A bootstrapped Installation. Development Compose self-bootstraps a fresh
-  database through the controller. In production, run the Helm initialization Job or
-  `scripts/bootstrap-production.mjs` before starting the API or worker.
+- A bootstrapped Installation. Compose's `bootstrap` service and the Helm
+  initialization Job run `scripts/bootstrap-installation.mjs` after migration
+  and before the API or worker. Direct-process setups run that initializer first.
 - `NODE_ENV=development` or `NODE_ENV=production` and the application-role
   `OCC_DATABASE_URL`.
 - In production, the shared absolute `OCC_CONFIG_PATH` to trusted Installation
@@ -305,10 +305,12 @@ without processing work. The worker does not expose an HTTP health endpoint.
   dedicated context uses a loopback-only API and the fixture image was imported;
   see the
   [Kubernetes Compute Driver guide](drivers/kubernetes-compute.md).
-- **Installation is not bootstrapped:** In development, restart the controller
-  against a fresh migrated database or sign in and bootstrap through the API,
-  then restart the worker. In production, run the protected bootstrap Job or
-  script against the migrated empty database before starting the API and worker.
+- **Installation is not bootstrapped:** Confirm the Compose `bootstrap` service
+  or Helm initialization Job succeeded against the API/worker database. For
+  direct-process setup, run `scripts/bootstrap-installation.mjs` with the selected
+  environment's protected output settings before starting either process.
+  Resolve [failed initialization](../guides/deploy.md#recover-an-incomplete-bootstrap)
+  manually before another attempt; bootstrap does not clean up or retry.
 - **Startup YAML is missing or rejected:** Set production `OCC_CONFIG_PATH` to
   the same absolute, readable file for API and worker. Remove unknown Driver
   fields and plaintext credentials; verify all selected Driver

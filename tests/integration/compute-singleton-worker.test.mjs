@@ -22,7 +22,6 @@ async function setup(context) {
   const [
     { Pool },
     { createControllerWorker },
-    { createDevelopmentIAMState },
     { createDevelopmentComputeDriver },
     { createAuthPrincipalSeed, NativeIAMDriver },
     { PRODUCTION_HARNESS_DESCRIPTOR },
@@ -30,10 +29,10 @@ async function setup(context) {
     { createTestConfigurationDriver },
     { createInstallationDriverConfiguration },
     { createTestSecretDriver },
+    { createDevelopmentIAMState },
   ] = await Promise.all([
     import("pg"),
     import("../../apps/controller/src/worker.ts"),
-    import("../../apps/controller/src/composition/development-postgres.ts"),
     import("../helpers/development.mjs"),
     import("../../packages/iam/src/index.ts"),
     import("../../apps/controller/src/composition/production-harness.ts"),
@@ -41,6 +40,7 @@ async function setup(context) {
     import("../helpers/configuration-driver.mjs"),
     import("../helpers/installation-driver-configuration.mjs"),
     import("../helpers/secret-driver.mjs"),
+    import("../helpers/development-iam-state.mjs"),
   ]);
 
   const observerPool = new Pool({ connectionString: databaseUrl, max: 8 });

@@ -9,7 +9,7 @@ metadata:
     helm.sh/hook-weight: "-10"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
-  backoffLimit: 1
+  backoffLimit: 0
   template:
     metadata:
       labels:
@@ -20,6 +20,7 @@ spec:
       restartPolicy: Never
       securityContext:
         {{- include "openclaw.podSecurity" . | nindent 8 }}
+        fsGroupChangePolicy: OnRootMismatch
       volumes:
         - name: bootstrap-password-output
           persistentVolumeClaim:
@@ -39,7 +40,7 @@ spec:
       containers:
         - name: bootstrap
           image: {{ .Values.images.controller | quote }}
-          args: [scripts/bootstrap-production.mjs]
+          args: ["scripts/bootstrap-installation.mjs"]
           securityContext:
             {{- include "openclaw.containerSecurity" . | nindent 12 }}
           resources:
@@ -55,6 +56,8 @@ spec:
               value: {{ .Values.bootstrap.adminEmail | quote }}
             - name: OCC_BOOTSTRAP_PASSWORD_FILE
               value: {{ printf "%s/%s" .Values.bootstrap.password.mountPath .Values.bootstrap.password.fileName | quote }}
+            - name: OCC_BOOTSTRAP_SERVICE_KEY_FILE
+              value: {{ printf "%s/%s" .Values.bootstrap.password.mountPath .Values.bootstrap.serviceKey.fileName | quote }}
             - name: OCC_BOOTSTRAP_INSTALLATION_NAME
               value: {{ .Values.installation.name | quote }}
           volumeMounts:

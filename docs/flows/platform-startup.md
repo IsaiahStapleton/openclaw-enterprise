@@ -1,7 +1,7 @@
 ---
 created: 2026-08-20
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-08-31
+last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
 ---
 
 # Platform Startup Flow
@@ -26,8 +26,8 @@ requests and the worker begins polling durable work.
   `apps/controller/src/worker.mjs:configuration`, and
   `apps/controller/src/composition/installation-config.ts:loadInstallationConfiguration`.
 - Assumptions: PostgreSQL-backed startup requires the same migrated application
-  database. Production additionally requires one bootstrapped Installation,
-  persisted IAM policy, the same absolute `OCC_CONFIG_PATH`, exact selected
+  database, one bootstrapped Installation, and persisted IAM policy. Production
+  additionally requires the same absolute `OCC_CONFIG_PATH`, exact selected
   bundled or installed IAM, Compute, and Configuration Drivers, and the API's
   mounted Better Auth signing Secret. A selected ServiceAccount Driver additionally
   requires the provider admin Secret mounted only into the API. Compose
@@ -135,8 +135,13 @@ exact-resource-authorized API routes.
 
 Development with `OCC_DATABASE_URL` instead calls
 [`composePostgresDevelopment`](../../apps/controller/src/composition/development-postgres.ts)
-and can bootstrap a missing Installation through the API. When `OCC_CONFIG_PATH`
-is absent, it registers the bundled Docker Compute Driver and filesystem
+and loads the initialized Installation and current IAM state. In both modes,
+[`scripts/bootstrap-installation.mjs`](../../scripts/bootstrap-installation.mjs)
+runs before composition; the API and worker fail if that state is absent.
+Credential creation, private delivery, and failure handling belong to
+the [bootstrap flow](local-password-authentication.md).
+
+When `OCC_CONFIG_PATH` is absent, it registers the bundled Docker Compute Driver and filesystem
 Configuration Driver, which writes native documents under
 `OCC_DEVELOPMENT_CONFIGURATION_ROOT`. Compose always supplies PostgreSQL for
 the supported development path.
@@ -223,6 +228,12 @@ execution begins in the adjacent
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
+
+- 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
+
+- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 
 - 2026-08-28 21:20: Removed local-test Compute Driver startup references; retain Docker and Kubernetes runtime ownership. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 3ec166eb5fae39ed0f51ffb5ebd93338c4a2db94)
 - 2026-08-28 17:58: Updated moved feature-reference links for the documentation organization. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)

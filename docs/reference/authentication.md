@@ -23,27 +23,61 @@ specified in [settings](settings.md). An account's immutable Better Auth user ID
 and Installation-specific trusted issuer identify its IAM Principal. Email
 addresses and display names do not grant access.
 
-Production bootstrap creates the first administrator account, its
-Installation-scoped IAM Principal, and its administrator binding. The operator
-supplies `OCC_BOOTSTRAP_ADMIN_EMAIL`; bootstrap generates a random initial
-password and writes it exactly once to `OCC_BOOTSTRAP_PASSWORD_FILE`.
+Fresh native-IAM bootstrap creates the first human administrator and one
+Installation-scoped, non-Agent ServicePrincipal. Both have separate bindings to
+the same [administrator Role](authorization.md#supported-policy-surface).
+The service identity has no email, password, session, Namespace, or Agent owner;
+its authority does not depend on the human account remaining present.
 
-The password output path must be an operator-controlled file on existing
-protected storage. The process creates the file with owner-only permissions and
-fails if the file already exists or cannot be protected. Bootstrap must not log
-the password, store it in audit records, return it from the API, or create a
-Kubernetes Secret or PersistentVolumeClaim for it.
+Bootstrap issues a 30-day service API key named `bootstrap-admin` and writes its
+one-time response to `OCC_BOOTSTRAP_SERVICE_KEY_FILE`. The JSON contains
+`data.id`, `data.servicePrincipalId`, `data.name`, `data.expiresAt`, `data.key`,
+and `meta.installationId`; it is usable with the existing service-key examples.
+Better Auth retains the hash, not plaintext. The file remains readable until the
+operator removes it; there is no server-side plaintext retrieval endpoint.
 
-In the Helm chart, operators provide `bootstrap.password.claimName`; the
-initialization Job mounts that existing PersistentVolumeClaim and writes
-`bootstrap.password.fileName` under `bootstrap.password.mountPath`.
+Production also creates the configured `OCC_BOOTSTRAP_ADMIN_EMAIL` account with
+a random password written to `OCC_BOOTSTRAP_PASSWORD_FILE`. Both paths must be
+absolute, distinct siblings on protected operator-owned storage. Output is
+exclusive, owner-only (`0600`), and synced before committing Installation/IAM
+state; existing files, symlinks, or unsafe parent directories fail closed.
+Credentials never appear in bootstrap logs, audit, or the HTTP bootstrap
+response. OCC creates no Kubernetes Secret or PVC for delivery.
 
-Development Compose instead provisions the configured `OPENCLAW_DEV_EMAIL` and
+In Helm, `bootstrap.password.claimName` selects the existing protected PVC.
+Only the initialization Job mounts it; `bootstrap.password.fileName` and
+`bootstrap.serviceKey.fileName` are written under `bootstrap.password.mountPath`.
+See [initial-key retrieval](../guides/deploy.md#retrieve-the-bootstrap-service-key)
+and [bootstrap recovery](../guides/deploy.md#recover-an-incomplete-bootstrap).
+
+The shared `scripts/bootstrap-installation.mjs` initializer runs after migration
+and before either API or worker startup in Compose and Helm. Development
+provisions the configured `OPENCLAW_DEV_EMAIL` and
 `OPENCLAW_DEV_PASSWORD` on a fresh database, using the defaults in
 [settings](settings.md#required-development-controller-environment), and
 bootstraps the Installation before serving requests. It does not generate a
-password output file or rotate an existing account's password. The
-[quickstart](../guides/quickstart.md) uses that development account.
+password output file or rotate an existing account's password. Compose stores
+the service-key JSON on the bootstrap-only `occ_bootstrap_data` volume. The API
+and worker do not mount it. Direct development runs the same initializer with
+an explicit private key-file path before starting the API or worker.
+The [quickstart](../guides/quickstart.md) uses the service key for its API check.
+
+An already-bootstrapped Installation receives no new identity, grants, key, or
+output, including installations created before initial-key delivery existed.
+Restarting does not replace missing files, expired/revoked keys, removed service
+identities, or removed grants. Use normal issuance/revocation for credential
+recovery and rotation.
+
+Bootstrap makes one attempt. Any error emits `installation.bootstrap-failed`
+with available non-secret IDs and paths, then exits unsuccessfully. Created
+accounts, keys, and files remain, including partial output from a failed write.
+Bootstrap does not automatically revoke, delete, retry, repair, or reset them.
+The Helm initialization Job uses `backoffLimit: 0` and does not retry a failed
+attempt. Better Auth persistence and the Installation/IAM commit are separate;
+an error does not establish whether the transaction committed. Operators must
+resolve that outcome before manual repair, or explicitly reset an identified
+disposable Installation. See [incomplete bootstrap recovery](../guides/deploy.md#recover-an-incomplete-bootstrap).
+File existence alone is not proof of successful initialization.
 
 ## Session lifecycle
 
@@ -127,10 +161,10 @@ Driver must support lookup by `servicePrincipalId` and load current policy for
 each identity lookup and authorization decision. Unknown identities are denied.
 
 The current API does not provision service principals or their grants. An
-operator must first provision the identity and its explicit bindings through
-the selected IAM authority. Native IAM supports these records internally;
-there is no public IAM-management API. Agent-owned principals cannot use
-service keys: Agent authentication requires the separate workload-bound
+operator uses the service administrator created by fresh bootstrap or provisions
+another identity and explicit bindings through the selected IAM authority.
+Native IAM supports these records internally; there is no public IAM-management
+API. Agent-owned principals cannot use service keys: Agent authentication requires the separate workload-bound
 credential flow. These controller keys are also distinct from upstream
 provider credentials managed by [Service accounts](service-accounts.md).
 
@@ -141,7 +175,8 @@ sessions from keys, use plugin permissions as IAM grants, or add another
 credential store. Database-backed verification does not cache keys; the
 plugin's per-key rate limit is disabled. The same service-key contract applies
 to development and production; their existing listener and storage boundaries
-remain in force. No additional environment variables are required.
+remain in force. Normal issuance and verification require no additional settings;
+initial bootstrap delivery uses the [bootstrap settings](settings.md#production-installation-bootstrap-environment).
 
 ### Issuance
 
@@ -195,7 +230,7 @@ Subsequent requests fail authentication across controller instances; a request
 already authorized may finish. An unknown or already removed key returns
 `404 NOT_FOUND`. Revocation does not delete the principal or its IAM bindings.
 
-Issuance and revocation emit audit events containing the administrator and
+HTTP issuance and revocation emit audit events containing the administrator and
 non-secret key/principal IDs, never plaintext credentials. If issuance audit
 persistence fails, the controller returns `503` without disclosing the key and
 attempts to remove it. This cleanup is best effort, not an atomic transaction
@@ -246,6 +281,10 @@ do not prove a production installation; their commands and required
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 22:29: Define single-attempt bootstrap failure handling with retained artifacts, no automatic recovery, and manual operator repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
+
+- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 
 - [2026-08-28 20:17]: Allow IAM-authorized service administrators to issue and revoke keys; retain human-session account creation and bootstrap. (codex/01a04927-11d8-7083-a4b7-9f3124559d82 - d4b5b01d02cf68a89965f7c00a0fc7d0dcec18d8)
 

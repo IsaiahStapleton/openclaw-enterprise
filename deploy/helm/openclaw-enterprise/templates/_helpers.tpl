@@ -10,6 +10,17 @@
 {{- if or (not .Values.bootstrap.password.claimName) (not .Values.bootstrap.password.mountPath) (not .Values.bootstrap.password.fileName) -}}
 {{- fail "bootstrap.password must reference an existing protected PVC output path" -}}
 {{- end -}}
+{{- if or (not .Values.bootstrap.serviceKey) (not .Values.bootstrap.serviceKey.fileName) -}}
+{{- fail "bootstrap.serviceKey.fileName must identify the service key output file name" -}}
+{{- end -}}
+{{- range $label, $fileName := dict "bootstrap.password.fileName" .Values.bootstrap.password.fileName "bootstrap.serviceKey.fileName" .Values.bootstrap.serviceKey.fileName -}}
+{{- if or (eq $fileName ".") (eq $fileName "..") (not (regexMatch "^[A-Za-z0-9._-]+$" $fileName)) -}}
+{{- fail (printf "%s must be a simple basename" $label) -}}
+{{- end -}}
+{{- end -}}
+{{- if eq .Values.bootstrap.password.fileName .Values.bootstrap.serviceKey.fileName -}}
+{{- fail "bootstrap service key and password output file names must be distinct" -}}
+{{- end -}}
 {{- if not .Values.api.clients -}}{{- fail "api.clients must contain exact approved client selectors" -}}{{- end -}}
 {{- range $index, $client := .Values.api.clients -}}
 {{- if or (not $client.namespace) (not $client.podLabels) -}}

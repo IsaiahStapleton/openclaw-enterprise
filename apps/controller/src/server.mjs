@@ -3,12 +3,9 @@ import { isIP } from "node:net";
 import { loadInstallationConfiguration } from "./composition/installation-config.ts";
 import { composeProduction } from "./composition/production.ts";
 
-const loopbackHosts = new Set(["127.0.0.1", "::1"]);
+const loopbackHosts = new Set(["127.0.0.1", "::1", "[::1]"]);
 const developmentBindHosts = new Set(["127.0.0.1", "::1", "0.0.0.0"]);
 const DEFAULT_BETTER_AUTH_BASE_URL = "http://127.0.0.1:3000";
-const DEFAULT_DEV_ADMIN_EMAIL = "admin@openclaw.local";
-const DEFAULT_DEV_ADMIN_PASSWORD = "openclaw-development-password";
-const DEFAULT_DEV_INSTALLATION_NAME = "OpenClaw Local Development";
 
 function startupFailure(message) {
   process.stderr.write(`${JSON.stringify({ event: "startup-error", error: message })}\n`);
@@ -134,12 +131,6 @@ function configuration() {
     ...settings,
     authSecret,
     authBaseURL,
-    adminEmail: optionalEnvironment("OPENCLAW_DEV_EMAIL", DEFAULT_DEV_ADMIN_EMAIL),
-    adminPassword: optionalEnvironment("OPENCLAW_DEV_PASSWORD", DEFAULT_DEV_ADMIN_PASSWORD),
-    bootstrapInstallationName: optionalEnvironment(
-      "OPENCLAW_DEV_INSTALLATION_NAME",
-      DEFAULT_DEV_INSTALLATION_NAME,
-    ),
     ...(trustedDevelopmentBridgeCidr === undefined ? {} : { trustedDevelopmentBridgeCidr }),
   });
 }

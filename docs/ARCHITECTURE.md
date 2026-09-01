@@ -71,6 +71,16 @@ The API authenticates requests, resolves caller identity, authorizes access to
 exact resources, and records resource changes. PostgreSQL stores platform
 state, IAM policy, controller work, and attributable audit evidence.
 
+Compose and Helm run one shared initializer after database migration and before
+API/worker startup. Both processes load initialized state; only the initializer
+mounts credential output. Fresh native-IAM bootstrap creates human and non-Agent service administrators
+with separate bindings to the same Role. Better Auth owns their credentials;
+bootstrap delivers the initial service key through protected storage. Auth
+persistence and the Installation/IAM commit are separate. Any bootstrap failure
+preserves created artifacts and requires operator verification and manual repair. Existing Installations receive no backfill. See
+[authentication](reference/authentication.md#installation-and-account-ownership)
+and the [bootstrap flow](flows/local-password-authentication.md).
+
 The controller worker claims pending Namespace and AgentRevision work,
 reauthorizes the original operation, and invokes the selected Compute Driver.
 Resource changes, queued work, and audit evidence are committed together.

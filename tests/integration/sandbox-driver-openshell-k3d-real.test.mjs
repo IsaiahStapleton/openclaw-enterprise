@@ -6,10 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  bootstrapControllerInstallation,
-  createAuthenticatedControllerRequest,
-} from "../helpers/auth-session.mjs";
+import { createAuthenticatedControllerRequest } from "../helpers/auth-session.mjs";
+import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import {
   createOpenShellInstallationConfiguration,
@@ -748,7 +746,6 @@ async function prepareProductionInstallation(context) {
     { default: pg },
     { PostgresPlatformState },
     { loadInstallationConfiguration },
-    { composePostgresDevelopment },
     { composeProduction },
     { createControllerWorker },
     { kubernetesNamespaceName },
@@ -759,7 +756,6 @@ async function prepareProductionInstallation(context) {
     import("pg"),
     import("../../packages/occ/src/state/postgres-state.ts"),
     import("../../apps/controller/src/composition/installation-config.ts"),
-    import("../../apps/controller/src/composition/development-postgres.ts"),
     import("../../apps/controller/src/composition/production.ts"),
     import("../../apps/controller/src/worker.ts"),
     import("../../apps/controller/src/drivers/compute/kubernetes/index.ts"),
@@ -802,7 +798,6 @@ async function prepareProductionInstallation(context) {
   const observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
   let workerPool;
   let worker;
-  let developmentApp;
   let productionApp;
   let placement;
   let gatewayForward;
@@ -811,7 +806,6 @@ async function prepareProductionInstallation(context) {
     if (worker !== undefined) await worker.stop();
     else if (workerPool !== undefined) await workerPool.end();
     if (productionApp !== undefined) await productionApp.close();
-    if (developmentApp !== undefined) await developmentApp.close();
     await observerPool.end();
     if (placement !== undefined) {
       await kubectl(
@@ -830,21 +824,14 @@ async function prepareProductionInstallation(context) {
   if (existing !== undefined) {
     assert.equal(existing.name, installationName);
   } else {
-    developmentApp = await composePostgresDevelopment(
-      {
-        mode: "development",
-        host: "127.0.0.1",
-        databaseUrl,
-        adminEmail: adminCredentials.email,
-        adminPassword: adminCredentials.password,
-        authSecret,
-        authBaseURL,
-      },
-      drivers,
-    );
-    await bootstrapControllerInstallation(developmentApp, adminCredentials, installationName);
-    await developmentApp.close();
-    developmentApp = undefined;
+    await ensureDevelopmentBootstrap(context, {
+      databaseUrl,
+      email: adminCredentials.email,
+      password: adminCredentials.password,
+      authSecret,
+      authBaseURL,
+      installationName,
+    });
   }
 
   productionApp = await composeProduction({

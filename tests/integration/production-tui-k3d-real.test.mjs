@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import https from "node:https";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -67,8 +67,8 @@ test(
         String(value),
       );
     const names = [system, foreign];
+    let localServiceKeyFile;
     let forwarding;
-    let cookie;
     const evidence = {
       source: "production Helm",
       cluster: selection.kubernetesContext,
@@ -85,9 +85,13 @@ test(
       });
       context.diagnostic(`PASS ${row}`);
     };
-    const run = (command, args, { input, timeout = 120_000, allowFailure = false } = {}) =>
+    const run = (command, args, { input, timeout = 120_000, allowFailure = false, env } = {}) =>
       new Promise((resolve, reject) => {
-        const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+        const childEnv = env ? { ...process.env, ...env } : undefined;
+        if (childEnv)
+          for (const [name, value] of Object.entries(childEnv))
+            if (value === undefined) delete childEnv[name];
+        const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: childEnv });
         let stdout = "",
           stderr = "";
         const timer = setTimeout(() => child.kill("SIGTERM"), timeout);
@@ -142,6 +146,8 @@ test(
           resources: { requests: { storage: "1Gi" } },
         },
       });
+    const protectedBootstrapFiles = ["initial-admin-password", "initial-admin-service-key.json"];
+    const shellQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
     const podSecurity = {
       runAsNonRoot: true,
       runAsUser: 1000,
@@ -156,6 +162,11 @@ test(
     };
     const waitPod = (name, namespace = system) =>
       kubectl("-n", namespace, "wait", "--for=condition=Ready", `pod/${name}`, "--timeout=180s");
+    const assertProtectedBootstrapFileModes = (stats, label) => {
+      for (const file of protectedBootstrapFiles) {
+        assert.equal(stats[file]?.mode, 0o600, `${label}: ${file} must stay owner-readable only`);
+      }
+    };
 
     context.after(async () => {
       forwarding?.kill("SIGTERM");
@@ -202,6 +213,53 @@ test(
       });
       await createClaim("postgres-data");
       await createClaim("bootstrap-password");
+      await apply({
+        apiVersion: "v1",
+        kind: "Pod",
+        metadata: metadata("bootstrap-password-prepare"),
+        spec: {
+          restartPolicy: "Never",
+          automountServiceAccountToken: false,
+          securityContext: {
+            runAsUser: 0,
+            runAsGroup: 0,
+            seccompProfile: { type: "RuntimeDefault" },
+          },
+          containers: [
+            {
+              name: "prepare",
+              image: images.controller,
+              imagePullPolicy: "IfNotPresent",
+              command: [
+                "node",
+                "-e",
+                "const fs=require('node:fs');const root='/var/lib/openclaw/bootstrap';for(const name of ['initial-admin-password','initial-admin-service-key.json']){if(fs.existsSync(`${root}/${name}`))throw new Error(`${name} already exists on fresh bootstrap PVC`)}fs.chownSync(root,1000,1000);fs.chmodSync(root,0o700);const s=fs.statSync(root);console.log(JSON.stringify({uid:s.uid,gid:s.gid,mode:s.mode&0o777}));",
+              ],
+              securityContext: {
+                allowPrivilegeEscalation: false,
+                capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER"] },
+              },
+              resources,
+              volumeMounts: [{ name: "bootstrap", mountPath: "/var/lib/openclaw/bootstrap" }],
+            },
+          ],
+          volumes: [
+            { name: "bootstrap", persistentVolumeClaim: { claimName: "bootstrap-password" } },
+          ],
+        },
+      });
+      await waitFor("fresh bootstrap PVC preparation", async () => {
+        const pod = await get("pod", "bootstrap-password-prepare");
+        assert.notEqual(pod.status.phase, "Failed", "bootstrap PVC preparation Pod failed");
+        return pod.status.phase === "Succeeded";
+      });
+      assert.deepEqual(
+        JSON.parse((await kubectl("-n", system, "logs", "bootstrap-password-prepare")).trim()),
+        { uid: 1000, gid: 1000, mode: 0o700 },
+      );
+      await record("Fresh bootstrap PVC root prepared for UID 1000 output", {
+        claimName: "bootstrap-password",
+      });
       await apply({
         apiVersion: "v1",
         kind: "Pod",
@@ -352,7 +410,7 @@ test(
           "app.kubernetes.io/name": "approved-gateway-client",
         }),
         spec: {
-          securityContext: podSecurity,
+          securityContext: { ...podSecurity, fsGroupChangePolicy: "OnRootMismatch" },
           containers: [
             {
               name: "operator",
@@ -373,6 +431,7 @@ test(
                 { name: "code", mountPath: "/code", readOnly: true },
                 { name: "tls", mountPath: "/tls", readOnly: true },
                 { name: "bootstrap", mountPath: "/bootstrap", readOnly: true },
+                { name: "operator-private", mountPath: "/operator" },
               ],
               readinessProbe: { tcpSocket: { port: 8443 }, periodSeconds: 2 },
             },
@@ -381,10 +440,26 @@ test(
             { name: "code", configMap: { name: "proxy-code" } },
             { name: "tls", secret: { secretName: "proxy-tls" } },
             { name: "bootstrap", persistentVolumeClaim: { claimName: "bootstrap-password" } },
+            { name: "operator-private", emptyDir: {} },
           ],
         },
       });
       await waitPod("operator");
+      const bootstrapFileStats = async () =>
+        JSON.parse(
+          await kubectl(
+            "-n",
+            system,
+            "exec",
+            "operator",
+            "--",
+            "node",
+            "-e",
+            "const fs=require('node:fs');const root='/bootstrap';const result={};for(const name of ['initial-admin-password','initial-admin-service-key.json']){const s=fs.statSync(`${root}/${name}`);result[name]={uid:s.uid,gid:s.gid,mode:s.mode&0o777}}console.log(JSON.stringify(result));",
+          ),
+        );
+      const beforeRetrievalStats = await bootstrapFileStats();
+      assertProtectedBootstrapFileModes(beforeRetrievalStats, "before retrieval");
       forwarding = spawn(
         "kubectl",
         [
@@ -408,7 +483,9 @@ test(
       });
       await waitFor("TLS proxy forwarding", () => forwardOutput.includes("Forwarding from"));
       const ca = await readFile(join(directory, "tls.crt"));
-      const request = (method, path, body, authenticated = true) =>
+      localServiceKeyFile = join(directory, "occ-service-key.json");
+      let serviceKey;
+      const externalRequest = (method, path, body, { authenticated = true } = {}) =>
         new Promise((resolve, reject) => {
           const data = body === undefined ? undefined : JSON.stringify(body);
           const req = https.request(
@@ -418,7 +495,7 @@ test(
               ca,
               family: 4,
               headers: {
-                ...(authenticated && cookie ? { cookie } : {}),
+                ...(authenticated ? { "x-api-key": serviceKey } : {}),
                 ...(data
                   ? {
                       "content-type": "application/json",
@@ -447,50 +524,108 @@ test(
           req.setTimeout(30_000, () => req.destroy(new Error("API request timeout")));
           req.end(data);
         });
-      const password = (
+      const stagedServiceKey = JSON.parse(
         await kubectl(
           "-n",
           system,
           "exec",
           "operator",
           "--",
-          "cat",
-          "/bootstrap/initial-admin-password",
-        )
-      ).trim();
-      secrets.push(password);
-      const login = await request(
-        "POST",
-        "/api/auth/sign-in/email",
-        { email: adminEmail, password },
-        false,
+          "node",
+          "-e",
+          "const fs=require('node:fs');const source='/bootstrap/initial-admin-service-key.json';const target='/operator/occ-service-key.json';const input=JSON.parse(fs.readFileSync(source,'utf8'));if(typeof input.data?.key!=='string'||input.data.key.length===0)throw new Error('missing service key');fs.writeFileSync(target,JSON.stringify(input),{mode:0o600});fs.chmodSync(target,0o600);const sourceStat=fs.statSync(source);const targetStat=fs.statSync(target);console.log(JSON.stringify({id:input.data.id,installationId:input.meta?.installationId,expiresAt:input.data.expiresAt,sourceMode:sourceStat.mode&0o777,targetMode:targetStat.mode&0o777,targetUid:targetStat.uid,targetGid:targetStat.gid}));",
+        ),
       );
-      assert.equal(login.status, 200, "production sign-in failed");
-      assert.ok(
-        login.headers["set-cookie"].some((header) => /;\s*Secure/i.test(header)),
-        "production cookie must be Secure",
+      assert.equal(stagedServiceKey.sourceMode, 0o600);
+      assert.equal(stagedServiceKey.targetMode, 0o600);
+      await kubectl(
+        "-n",
+        system,
+        "cp",
+        "operator:/operator/occ-service-key.json",
+        localServiceKeyFile,
       );
-      cookie = login.headers["set-cookie"].map((header) => header.split(";")[0]).join("; ");
-      const installation = await request("GET", "/installation");
-      assert.equal(installation.status, 200);
-      await record("Authenticated production HTTPS Installation read", {
-        installationId: installation.body.data.id,
-      });
-      const api = async (method, path, body, expected = 200) => {
-        const result = await request(method, path, body);
+      await chmod(localServiceKeyFile, 0o600);
+      const localServiceKey = JSON.parse(await readFile(localServiceKeyFile, "utf8"));
+      assert.equal(typeof localServiceKey.data?.key, "string");
+      assert.ok(localServiceKey.data.key.length > 0);
+      assert.equal(localServiceKey.data.id, stagedServiceKey.id);
+      assert.equal(localServiceKey.meta?.installationId, stagedServiceKey.installationId);
+      serviceKey = localServiceKey.data.key;
+      secrets.push(serviceKey);
+      const afterRetrievalStats = await bootstrapFileStats();
+      assert.deepEqual(afterRetrievalStats, beforeRetrievalStats);
+      assertProtectedBootstrapFileModes(afterRetrievalStats, "after retrieval");
+
+      const runGuideOccApi = async (method, path, body) => {
+        const bodyFile =
+          body === undefined ? undefined : join(directory, `guide-body-${method}.json`);
+        if (bodyFile) await writeFile(bodyFile, JSON.stringify(body), { mode: 0o600 });
+        const output = await run(
+          "scripts/occ-api",
+          [method, path, ...(bodyFile ? [bodyFile] : [])],
+          {
+            env: {
+              OCC_URL: baseURL,
+              OCC_SERVICE_KEY_FILE: localServiceKeyFile,
+              CURL_CA_BUNDLE: join(directory, "tls.crt"),
+              OPENAI_API_KEY: undefined,
+            },
+          },
+        );
+        for (const value of secrets)
+          assert.ok(!output.includes(value), "Guide output leaked a credential");
+        return JSON.parse(output);
+      };
+      const request = async (method, path, body, expected = 200) => {
+        const result = await externalRequest(method, path, body);
         assert.equal(
           result.status,
           expected,
           redact(`${method} ${path}: ${JSON.stringify(result.body)}`),
         );
-        return result.body.data;
+        assert.ok(result.body && typeof result.body === "object");
+        assert.ok(Object.hasOwn(result.body, "data"));
+        assert.ok(Object.hasOwn(result.body, "meta"));
+        return result.body;
       };
-      return { api, request };
+      const installation = await request("GET", "/installation");
+      assert.equal(stagedServiceKey.installationId, installation.data.id);
+      const guideInstallation = await runGuideOccApi("GET", "/installation");
+      assert.equal(guideInstallation.data.id, installation.data.id);
+      const externalUnauthenticatedInstallation = await externalRequest(
+        "GET",
+        "/installation",
+        undefined,
+        {
+          authenticated: false,
+        },
+      );
+      assert.equal(externalUnauthenticatedInstallation.status, 401);
+      await record("Protected bootstrap output files remain 0600 through retrieval");
+      await record("Service-key authenticated production HTTPS Installation read", {
+        installationId: installation.data.id,
+        serviceKeyId: stagedServiceKey.id,
+      });
+      const api = async (method, path, body, expected = 200) => {
+        const result = await request(method, path, body, expected);
+        return result.data;
+      };
+      return { api, externalRequest, runGuideOccApi };
     }
 
-    async function provisionNamespaceAndAgent({ api, request }) {
-      assert.equal((await request("GET", "/installation", undefined, false)).status, 401);
-      const namespace = await api("POST", "/namespaces", { name: `production-tui-${suffix}` }, 201);
+    async function provisionNamespaceAndAgent({ api, externalRequest, runGuideOccApi }) {
+      assert.equal(
+        (await externalRequest("GET", "/installation", undefined, { authenticated: false })).status,
+        401,
+      );
+      const namespaceResult = await runGuideOccApi("POST", "/namespaces", {
+        name: `production-tui-${suffix}`,
+      });
+      const namespace = namespaceResult.data;
+      await record("Guide occ_api created OCC Namespace through production HTTPS", {
+        namespaceId: namespace.id,
+      });
       const tenant = await waitFor("backing tenant namespace", async () => {
         const list = JSON.parse(
           await kubectl(
@@ -876,11 +1011,32 @@ test(
       for (const value of secrets)
         assert.ok(!gatewayLogs.includes(value), "Gateway log leaked a credential");
       await record("Worker least privilege and credential output boundaries");
-      await request("POST", "/api/auth/sign-out");
-      assert.equal((await request("GET", "/installation")).status, 401);
-      cookie = undefined;
-      await record("Operator session revoked before interactive handoff");
-      const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+      await kubectl(
+        "-n",
+        system,
+        "exec",
+        "operator",
+        "--",
+        "rm",
+        "-f",
+        "/operator/occ-service-key.json",
+      );
+      if (localServiceKeyFile) await rm(localServiceKeyFile, { force: true });
+      const bootstrapServiceKeyMode = JSON.parse(
+        await kubectl(
+          "-n",
+          system,
+          "exec",
+          "operator",
+          "--",
+          "node",
+          "-e",
+          "const fs=require('node:fs');const s=fs.statSync('/bootstrap/initial-admin-service-key.json');console.log(JSON.stringify({mode:s.mode&0o777}))",
+        ),
+      );
+      assert.equal(bootstrapServiceKeyMode.mode, 0o600);
+      await record("Private service-key working copies removed before handoff");
+      await record("No controller session required before interactive handoff");
       const attach = [
         "kubectl",
         ...nativeTuiArgv({
@@ -891,7 +1047,7 @@ test(
       ];
       await writeFile(
         join(directory, "attach.sh"),
-        "#!/bin/sh\nexec " + attach.map(quote).join(" ") + "\n",
+        "#!/bin/sh\nexec " + attach.map(shellQuote).join(" ") + "\n",
         { mode: 0o700 },
       );
       evidence.attachScript = join(directory, "attach.sh");
@@ -904,10 +1060,11 @@ test(
       context.diagnostic(`Evidence directory: ${directory}`);
     }
 
-    const { api, request } = await installProductionControlPlane();
+    const { api, externalRequest, runGuideOccApi } = await installProductionControlPlane();
     const { agent, agentHash, namespace, tenant } = await provisionNamespaceAndAgent({
       api,
-      request,
+      externalRequest,
+      runGuideOccApi,
     });
     const { foreignIP, probe } = await proveProductionApiNetworkPolicy();
     const finalGateway = await exerciseRevisionCutover();

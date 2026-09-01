@@ -394,8 +394,6 @@ test("only the actual API process reads ChatGPT admin credentials and provider a
       OCC_CONFIG_PATH: path,
       OCC_HOST: "127.0.0.1",
       OCC_PORT: "8080",
-      OPENCLAW_DEV_EMAIL: "admin@example.test",
-      OPENCLAW_DEV_PASSWORD: "development-password-with-at-least-32-characters",
     },
     encoding: "utf8",
     timeout: 10_000,

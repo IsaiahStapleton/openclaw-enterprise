@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-08-31
+last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
 ---
 
 # Development Startup Flow
@@ -9,22 +9,21 @@ last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
 ## Overview
 
 Start the supported OpenClaw Control Center (OCC) development environment with
-Docker Compose. Compose starts PostgreSQL, initializes the database, launches
-the API, bootstraps a fresh singleton Installation, and starts the independent
+Docker Compose. Compose starts PostgreSQL, migrates the database, initializes
+the singleton Installation, launches the API, and starts the independent
 controller worker. PostgreSQL is required; there is no in-memory development
 mode. This flow ends when the loopback-published API accepts authenticated
 requests and the Docker-backed worker begins polling durable work.
 
 For prerequisites, startup commands, and production differences, use the
 [deployment guide](../guides/deploy.md). The [quickstart](../guides/quickstart.md)
-owns the first authenticated session and resource walkthrough.
+owns the first authenticated API request.
 
 ## Entry Points
 
 - Trigger: Run `docker compose up --build` from the repository root.
-- Source: `apps/controller/src/server.mjs:start`,
-  `apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`,
-  and `apps/controller/src/worker.mjs:configuration`.
+- Source: `compose.yaml`, `scripts/bootstrap-installation.mjs`, and
+  `apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`.
 - Assumptions: Docker Engine, existing approved gateway/Codex runtime images,
   a provider credential for real model turns, persistent PostgreSQL and
   configuration volumes, and an API published only on host loopback.
@@ -34,22 +33,20 @@ owns the first authenticated session and resource walkthrough.
 ```mermaid
 graph TD
     subgraph Compose["Docker Compose development stack"]
-        A["Start Docker Compose"] --> B["Start persistent PostgreSQL"]
-        B --> C["Initialize the database with its isolated role"]
+        A["Start persistent PostgreSQL"] --> B["Migrate with isolated database role"]
+        B --> C["Run shared initializer"]
+        C --> D{"Installation exists?"}
+        D -->|no| E["Create administrators, sync key file, commit Installation"]
+        D -->|yes| F["Verify persisted administrator; retain output"]
+        E --> G["Initializer exits successfully"]
+        F --> G
     end
-
     subgraph API["PostgreSQL-backed OCC API"]
-        C --> D["Compose Better Auth and filesystem Configuration"]
-        D --> E{"Installation already exists?"}
-        E -->|no| F["Provision the administrator and bootstrap once"]
-        E -->|yes| G["Reload persisted Installation and IAM state"]
-        F --> H["Publish the API only on host loopback"]
-        G --> H
+        G --> H["Load Installation, IAM, and filesystem Configuration"]
+        H --> I["Publish API on host loopback"]
     end
-
     subgraph Worker["Independent Docker-backed worker"]
-        H --> I["Start the worker with the same PostgreSQL database"]
-        I --> J["Select the Docker Compute Driver"]
+        I --> J["Load the same Installation and select Docker Compute"]
         J --> K["Poll durable Namespace and AgentRevision work"]
     end
 ```
@@ -73,41 +70,47 @@ The worker receives the configured gateway/Codex image references and the
 existing provider credential. These are inputs to later authorized runtime
 creation; starting the control plane alone does not launch an Agent workload.
 
-### 2. Start persistent PostgreSQL and initialize the development database
+### 2. Migrate, then initialize the Installation
 
-`apps/controller/src/server.mjs:start`
+`compose.yaml:services.migrate`, `compose.yaml:services.bootstrap`,
+`scripts/bootstrap-installation.mjs`
 
-Compose starts PostgreSQL first and retains controller metadata in its
-`occ_postgres_data` named volume. Its isolated initialization service prepares
-the database before the controller starts; the API and worker receive only the
+PostgreSQL retains controller metadata in `occ_postgres_data`. The one-shot
+`migrate` service uses the isolated migrator role; only after it exits `0` does
+`bootstrap` run the shared initializer with `NODE_ENV=development` and the
 lower-privilege application-role connection.
 
-The [controller entrypoint](../../apps/controller/src/server.mjs) rejects a
-missing `OCC_DATABASE_URL` in development and production. It always enters
-[`composePostgresDevelopment`](../../apps/controller/src/composition/development-postgres.ts)
-for development; no in-memory API composition or fallback exists.
+Fresh initialization provisions `OPENCLAW_DEV_EMAIL`/`OPENCLAW_DEV_PASSWORD`,
+adds a non-Agent service administrator to the native IAM seed, issues its
+initial key, syncs private output, and commits Installation/IAM/audit directly.
+The [bootstrap flow](local-password-authentication.md) owns commit, concurrency,
+and manual repair after a failed attempt. Existing Installations retain accounts, credentials,
+output, IAM policy, and revision history; missing or expired keys never trigger
+regeneration.
 
-### 3. Compose authentication, configuration, and one Installation
+Only `bootstrap` mounts `occ_bootstrap_data` at `/var/lib/openclaw/bootstrap`.
+The development image prepares this directory for UID/GID 1000 with mode
+`0700`; the key file uses `0600`. After confirmed initializer exit `0`, operators
+copy from the stopped bootstrap container using `docker compose cp`.
+Direct development runs the same initializer with an explicit private absolute
+key-file path before the API or worker.
 
+### 3. Load initialized state and compose authentication and configuration
+
+`apps/controller/src/server.mjs:start`,
 `apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`
 
-The development composition opens PostgreSQL, loads the singleton Installation
-when present, and creates Better Auth with the configured authentication
-secret and loopback origin. Without `OCC_CONFIG_PATH`, it selects the native
-IAM Driver, the Docker Compute Driver, and a filesystem Configuration Driver
-rooted at `/app/.development/configurations`.
+Compose starts the API only after the initializer exits successfully. The
+development composition opens PostgreSQL and requires the singleton
+Installation and its current IAM identity. It creates Better Auth using the
+configured secret and loopback origin; it does not create credentials or call
+its own HTTP routes.
 
-Only the controller mounts the persistent `occ_configuration_data` volume.
-PostgreSQL owns platform metadata, audit, IAM, sessions, and durable work; the
-filesystem Driver owns native Configuration documents. The worker and Agent
-workloads never receive that configuration volume.
-
-On a fresh database, the controller provisions `OPENCLAW_DEV_EMAIL` and
-`OPENCLAW_DEV_PASSWORD`, signs in internally, and calls the existing
-authenticated bootstrap route with `OPENCLAW_DEV_INSTALLATION_NAME`. This
-happens once before normal serving. Reusing existing Compose volumes reloads
-the Installation without replacing its account, password, IAM policy, or
-existing revision history.
+Without `OCC_CONFIG_PATH`, it selects native IAM, Docker Compute, and filesystem
+Configuration rooted at `/app/.development/configurations`. Only the API mounts
+`occ_configuration_data`; PostgreSQL owns platform metadata, audit, IAM,
+sessions, and durable work. The worker and workloads receive neither this
+configuration volume nor the bootstrap-output volume.
 
 ### 4. Become ready and start the independent worker
 
@@ -133,11 +136,12 @@ API or Agent-owned workload containers.
 
 `apps/controller/src/index.ts:createFastifyApp`
 
-After bootstrap and listening complete, Better Auth verifies sign-in requests
-and issues the controller session cookie. The Installation already exists;
-normal clients do not bootstrap it again. Protected OCC requests resolve that
-session and separately authorize the requested operation through IAM. Follow
-the [quickstart](../guides/quickstart.md) for the sign-in procedure.
+After initialization and listening complete, clients can use the initial service
+key or sign in through Better Auth to receive the controller session cookie.
+The Installation already exists;
+normal clients do not bootstrap it again. Protected OCC requests resolve the
+credential and separately authorize the requested operation through IAM. Follow
+the [quickstart](../guides/quickstart.md) for both procedures.
 
 The worker does not receive the administrator password or Better Auth secret
 and does not open an HTTP listener. Accepted lifecycle operations continue
@@ -147,8 +151,8 @@ infrastructure effects are traced in the
 
 ## Debugging and Verification
 
-- Run `docker compose ps` and confirm PostgreSQL, the controller, and the
-  worker are available after initialization completes.
+- Run `docker compose ps -a` and confirm PostgreSQL, the controller, and the
+  worker are available after both `migrate` and `bootstrap` exit `0`.
 - Expect the API to emit `listening` and the worker to emit
   `{"event":"worker.started","computeDriverId":"compute-docker-development"}`,
   followed by `worker.health`.
@@ -187,6 +191,12 @@ development.` means the application-role PostgreSQL connection is missing.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
+
+- 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
+
+- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 
 - 2026-08-28 17:54: Separated startup execution from operator setup and sign-in instructions, linking the deployment guide and quickstart. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-26 23:13: Replaced the removed in-memory path with PostgreSQL-only Docker Compose startup, automatic Installation bootstrap, filesystem configuration, and Docker-backed worker ownership. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 02638f10ed52b413d41378ae0f6b45ca19b8b149)
