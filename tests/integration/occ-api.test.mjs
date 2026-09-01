@@ -207,6 +207,14 @@ async function defaultNamespace(controller) {
   return found;
 }
 
+function assertOnlyDefaultNamespace(response) {
+  assert.equal(response.status, 200);
+  assert.deepEqual(
+    response.data.map((namespace) => namespace.name),
+    [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
+  );
+}
+
 async function createNamespace(controller, name) {
   const result = await controller.request("POST", "/namespaces", {
     body: { name },
@@ -1316,10 +1324,7 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   }
 
   const untouched = await injectedRequest(fixture.app, "GET", "/namespaces");
-  assert.deepEqual(
-    untouched.data.map((namespace) => namespace.name),
-    [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
-  );
+  assertOnlyDefaultNamespace(untouched);
 });
 
 test("bootstrap fails closed when IAM omits structured authorization evidence", async () => {
@@ -1926,11 +1931,7 @@ test("IAM and audit dependency failures fail closed without orphaned state", asy
   assert.equal(JSON.stringify(failedMutation.body).includes("sk-audit-provider"), false);
 
   const unchanged = await injectedRequest(fixture.app, "GET", "/namespaces");
-  assert.equal(unchanged.status, 200);
-  assert.deepEqual(
-    unchanged.data.map((namespace) => namespace.name),
-    [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
-  );
+  assertOnlyDefaultNamespace(unchanged);
   assert.equal(fixture.auditSink.events.length, 1);
 
   const originalAuthorize = fixture.iamDriver.authorize;
@@ -1950,8 +1951,5 @@ test("IAM and audit dependency failures fail closed without orphaned state", asy
   assert.equal(JSON.stringify(unavailable.body).includes("sk-iam-provider"), false);
 
   const stillUnchanged = await injectedRequest(fixture.app, "GET", "/namespaces");
-  assert.deepEqual(
-    stillUnchanged.data.map((namespace) => namespace.name),
-    [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
-  );
+  assertOnlyDefaultNamespace(stillUnchanged);
 });
