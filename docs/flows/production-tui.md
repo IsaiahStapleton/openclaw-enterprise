@@ -1,7 +1,7 @@
 ---
 created: 2026-08-31
 updated: 2026-08-31
-last_updated_session: codex/01a059fc-1a4d-7fa2-8375-3999ef6aeff8
+last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
 ---
 
 # Production TUI Flow
@@ -24,7 +24,7 @@ operations, dedicated Codex Agents, Slack channels, or a host-installed TUI.
   `packages/occ/src/index.ts:OpenClawController.deployAgent`,
   and `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.prepareRevision`.
 - Assumptions: the production API and worker are ready, the caller has an OCC
-  session or service key with exact Namespace/Agent authority, the selected
+  bootstrap service administrator key with current Namespace/Agent authority, the selected
   Kubernetes context points to the intended cluster, tenant RoleBindings and
   Agent-owned Secrets exist, gateway memory is sized for the gateway plus an
   interactive client, and the runtime image contains `/app/openclaw.mjs`.
@@ -33,7 +33,8 @@ operations, dedicated Codex Agents, Slack channels, or a host-installed TUI.
 
 ```mermaid
 graph TD
-  A["Authenticated operator creates Namespace"] --> B["Worker prepares tenant namespace and policies"]
+  Z["Operator reads Installation with protected bootstrap service key"] --> A["Service administrator creates Namespace"]
+  A --> B["Worker prepares tenant namespace and policies"]
   B --> C["Operator creates native Configuration and embedded Agent"]
   C --> D["Operator creates Agent transport and model Secrets"]
   D --> E["Operator deploys Agent"]
@@ -51,7 +52,17 @@ graph TD
 
 ### 1. The API creates the production Namespace and records exact ownership
 
+`apps/controller/src/auth/index.ts:ControllerAdmissionVerifier.verify`,
 `apps/controller/src/index.ts:createFastifyApp`
+
+After the initialization Job completes successfully, the operator retrieves
+`initial-admin-service-key.json` from its protected output PVC. Neither the API
+nor worker mounts that PVC. The deployment guide
+[`occ_api` helper](../guides/deploy.md#retrieve-the-bootstrap-service-key) reads
+`data.key` into a private temporary header file, sends `x-api-key`, and first
+verifies `GET /installation`. The API validates the key, resolves the
+Installation-scoped service principal, and applies its current IAM grants; an
+invalid, expired, or revoked key returns `401` without cookie fallback.
 
 The production API receives `POST /namespaces` from an authenticated internal
 client. Its request handler admits the request, resolves the caller identity,
@@ -154,9 +165,9 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
     --message "Reply exactly: $NONCE"
 ```
 
-The command intentionally does not pass `--url` or a token. Before starting it,
-the operator revokes any no-longer-needed OCC session because gateway
-authentication is independent of the controller cookie. The TUI inherits the
+The command intentionally does not pass `--url` or a token. The OCC service key
+stays in the operator environment and never enters the Pod or TUI. Gateway
+authentication uses the separate Agent gateway token. The TUI inherits the
 Pod-local gateway connection details from the running container environment and
 configuration, authenticates with the injected gateway token, and opens the
 normal interactive UI. `--message` submits the first prompt to the TUI-native
@@ -172,8 +183,12 @@ operator can type a second prompt into the same session.
 Ctrl+D exits the TUI process launched by `kubectl exec`; the production TUI test
 drives that exit through `tests/helpers/tui-pty.py`, then checks the gateway
 `/readyz` endpoint from inside the same Pod. After a new
-immutable AgentRevision becomes active, the operator repeats discovery because
-the matching ConfigMap and possibly the gateway Pod UID have changed.
+immutable AgentRevision becomes active, the operator uses the service key to
+read the Agent again and repeats discovery because
+the matching ConfigMap and possibly the gateway Pod UID have changed. Removing
+a temporary local service-key copy does not revoke the credential, and exiting
+the TUI does not rotate or revoke it. Deliberate rotation and revocation follow
+the [service-key procedure](../guides/deploy.md#revoke-or-rotate-a-service-key).
 
 Automated coverage for this exact lifecycle is
 `tests/integration/production-tui-k3d-real.test.mjs`. It uses
@@ -184,7 +199,7 @@ Ctrl+D exits only the client. Its native Configuration sets
 `agents.defaults.skipBootstrap` to `true` for the disposable demo Agent so
 first-run bootstrap guidance does not consume the nonce prompt.
 
-The test separates production installation, authenticated provisioning, and
+The test separates production installation, service-key-authenticated provisioning, and
 revision conversations into named stages. Shared scoped Kubernetes commands,
 resource lookups, and polling come from
 `tests/helpers/kubernetes-real.mjs:createKubernetesClient`; the production test
@@ -197,12 +212,11 @@ script, keeping client authentication and environment handling consistent.
 - Confirm OCC activation before selecting a Pod:
 
   ```bash
-  curl --fail-with-body --silent --show-error \
-    --cookie "$OCC_SESSION_COOKIE_JAR" \
-    "$OCC_URL/namespaces/$NAMESPACE_ID/agents/$AGENT_ID"
+  occ_api GET "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID"
   ```
 
-  Expect `data.activeRevisionId` to equal the intended revision ID.
+  Use the operator shell with the guide's `occ_api` helper and protected key
+  file. Expect `data.activeRevisionId` to equal the intended revision ID.
 
 - Confirm the selected gateway mounts the active immutable ConfigMap:
 
@@ -251,6 +265,8 @@ script, keeping client authentication and environment handling consistent.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 19:14: Document bootstrap service-key API access and operator credential cleanup for the TUI path. (codex/01a05a3d-526f-7553-8cd8-070bd1847acb - 06c4bccb95543d3d545d011e72074f805f339aa8)
 
 - 2026-08-31 17:12: Recorded shared Kubernetes helpers and the common TUI command used by the refactored production proof. (01a059fc-1a4d-7fa2-8375-3999ef6aeff8 - 86441b7)
 

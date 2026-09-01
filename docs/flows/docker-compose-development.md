@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-08-31
-last_updated_session: codex/01a05a69-3fbe-7441-9e6d-20394758cf94
+last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
 ---
 
 # Docker Compose Development Flow
@@ -48,7 +48,8 @@ graph TD
   D --> E["Controller signs in and bootstraps a fresh Installation through the existing route"]
   E --> F["OCC API listens and becomes healthy"]
   F --> G["Worker starts with compute-docker-development"]
-  F --> H["Authenticated API mutations enqueue Namespace and AgentRevision work"]
+  F --> H["Operator reads Installation and provisions with bootstrap service key"]
+  H --> I
   G --> I["Worker claims durable work"]
   I --> J["Docker driver ensures one network per Namespace"]
   I --> K{"Harness topology"}
@@ -122,6 +123,14 @@ caller-supplied identity headers, bearer credentials, and trusted-proxy claims
 remain rejected. The API uses the application-role PostgreSQL URL and never
 receives the Docker socket.
 
+After successful bootstrap, the operator retrieves the private service-key JSON
+from the controller-only volume and reads `/installation` with `x-api-key` before
+provisioning. `apps/controller/src/auth/index.ts:ControllerAdmissionVerifier.verify`
+validates that key and maps it to the Installation-scoped service administrator;
+current IAM policy still authorizes each resource operation. An invalid, expired,
+or revoked key fails with `401` without cookie fallback. The
+[service-key flow](service-api-keys.md) owns admission details.
+
 When `OCC_CONFIG_PATH` is absent, PostgreSQL-backed development selects the
 filesystem Configuration Driver from `OCC_DEVELOPMENT_CONFIGURATION_ROOT`.
 Compose sets that root to `/app/.development/configurations` and backs it with
@@ -185,14 +194,16 @@ network.
 `tests/integration/docker-compute-real.test.mjs:tuiDockerCommand`
 
 The [deployment guide](../guides/deploy.md#development-end-to-end-tui) owns the
-authenticated provisioning commands, Docker label selection, and OCC cookie
-cleanup. After that guide has selected the active embedded gateway container,
+service-key-authenticated provisioning commands, Docker label selection, and
+cleanup of the temporary local key copy. Cleanup does not revoke the key or
+remove its controller-owned bootstrap output. After that guide has selected the active embedded gateway container,
 `docker exec -it` starts `node /app/openclaw.mjs tui` in that same container.
 
 The Docker driver has already written the gateway configuration to
 `OPENCLAW_CONFIG_PATH`, started `/app/openclaw.mjs gateway` on
 `OPENCLAW_GATEWAY_PORT`, and injected `OPENCLAW_GATEWAY_TOKEN` into the gateway
-container. The TUI process inherits those values. The guide overrides only
+container. The TUI process inherits those values. The OCC service key stays
+with the operator and never enters the workload or TUI. The guide overrides only
 `OPENCLAW_STATE_DIR` so the client uses temporary container-local state instead
 of the gateway's persisted `/home/node/.openclaw` state.
 
@@ -238,14 +249,14 @@ PostgreSQL and can be retried by the worker.
 - `docker ps --filter label=org.openclaw.enterprise.compute-driver=docker`
   should show one embedded gateway container or a dedicated gateway plus Codex
   container for deployed revisions.
-- The deployment guide owns gateway discovery and OCC cookie cleanup before TUI
-  attach; this flow records the selected container's runtime path after that
+- The deployment guide owns gateway discovery and local service-key copy cleanup
+  before TUI attach; this flow records the selected container's runtime path after that
   operator procedure completes.
 - `tests/integration/docker-compute-real.test.mjs:assertInteractiveTuiConversation`
   should reject an invalid gateway token, produce two model-backed replies in
   one TUI session, exit the client with Ctrl+D, and leave the gateway ready.
-- The Docker Compose integration test must perform an authenticated API
-  deployment through the worker and receive a real provider response containing
+- The Docker Compose integration test must read the singleton Installation and
+  perform API deployment with the bootstrap service administrator key through the worker and receive a real provider response containing
   a fresh nonce for both embedded and dedicated topologies. It may invoke the
   gateway through the Namespace network or through the Docker-published
   `127.0.0.1` gateway port.
@@ -271,6 +282,8 @@ PostgreSQL and can be retried by the worker.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 19:14: Document bootstrap service-key API access and operator credential cleanup for the TUI path. (codex/01a05a3d-526f-7553-8cd8-070bd1847acb - 06c4bccb95543d3d545d011e72074f805f339aa8)
 
 - 2026-08-31 17:45: Align bootstrap identity and protected service-key storage with the current startup path. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 - 2026-08-31 15:40: Added the compact development TUI runtime trace and two-turn verification boundary. (01a059f9-e5cc-7b01-9479-0c5087f5e58f - 3a04cee)

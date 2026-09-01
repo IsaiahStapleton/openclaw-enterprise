@@ -139,13 +139,17 @@ Use focused real integration tests, `pnpm test:postgres`, `pnpm typecheck`, and 
 
 Local validation passed for the implemented bootstrap contract: 31 PostgreSQL tests (five documented skips), eight standalone worker tests, 140 conformance tests, and TypeScript, formatting, workspace, OpenAPI, and flow-document checks. Actual Compose and initialization Job/PVC proofs cover private delivery, human/service access, rotation and revocation, retry preservation, and file permissions. Three review rounds resolved the PVC procedure and shared PostgreSQL fixture issues.
 
-The broader non-live integration run had 92 passes, 57 infrastructure skips, and one unchanged Driver-package fixture failure: pnpm's release-age policy queries unpublished local fixture packages on npm and receives 404. Package policy was retained. Full production TUI/model execution and a production rollout are outside this verification.
+The development and production deployment paths now use the bootstrap service key instead of operator cookies. Both selected real E2E suites passed without skips: Compose covered embedded and dedicated gateway model replies and a two-turn TUI session; production Helm on disposable k3d covered trusted HTTPS provisioning, two-turn TUI sessions before and after revision cutover, network denial, least privilege, and credential-output boundaries. The literal documented `occ_api` helper completed Installation reads and Namespace creation against both live APIs. Guide links, shell syntax, and the two affected flow-document validators passed.
+
+The broader non-live integration run had 92 passes, 57 infrastructure skips, and one unchanged Driver-package fixture failure: pnpm's release-age policy queries unpublished local fixture packages on npm and receives 404. Package policy was retained. Production rollout remains outside this verification.
 
 ## Manual Notes
 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- [2026-08-31 19:44]: Rebase against `main` at `76bf269` without conflicts; switch development and production operator guides to bootstrap service-key authentication and verify both complete live model/TUI flows, including literal guide-helper requests. (01a05a3d-526f-7553-8cd8-070bd1847acb - 06c4bcc)
 
 - [2026-08-31 19:04]: Complete implementation and local verification in `9da1e4c`; resolve PVC and PostgreSQL fixture review findings; retain the documented unrelated package-policy test failure and await PR review. (01a05a3d-526f-7553-8cd8-070bd1847acb - 9da1e4c)
 
