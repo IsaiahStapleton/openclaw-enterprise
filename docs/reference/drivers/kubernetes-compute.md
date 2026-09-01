@@ -177,11 +177,14 @@ Kubernetes namespace when creating the OpenClaw Namespace:
 }
 ```
 
-Prepare the namespace with `openclaw.dev/namespace-lifecycle=external`, all
-three restricted Pod Security labels, and tenant-local worker and API
-RoleBindings. The running worker rechecks Installation administrator
-authorization, rejects foreign NetworkPolicies and competing tenant claims,
-and binds the generated tenant identity through one resource-version-guarded,
+Prepare the namespace by annotating
+`openclaw.dev/namespace-lifecycle=external`, applying
+`pod-security.kubernetes.io/enforce=restricted`,
+`pod-security.kubernetes.io/audit=restricted`, and
+`pod-security.kubernetes.io/warn=restricted`, and granting tenant-local worker
+and API RoleBindings. The running worker rechecks Installation administrator
+authorization, rejects foreign NetworkPolicies and competing tenant claims, and
+binds the generated tenant identity through one resource-version-guarded,
 non-forced Kubernetes patch. No worker pause or restart is required. Missing
 worker permissions keep provisioning pending; missing API permissions prevent
 Configuration access. Docker and external Compute Drivers reject
