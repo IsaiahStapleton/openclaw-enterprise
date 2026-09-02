@@ -38,7 +38,9 @@ package-local runtime dependencies from its installed package root.
 Production Kubernetes installations can use this recipe as a starting point,
 but must push the resulting image to an operator-controlled registry and
 configure the Kubernetes Compute Driver with immutable `@sha256:` image
-references.
+references. Follow [Build and publish production images](../../docs/guides/deploy.md#build-and-publish-production-images)
+for the controller and runtime build commands, registry publishing, and digest
+configuration.
 
 ## Verify the local image
 

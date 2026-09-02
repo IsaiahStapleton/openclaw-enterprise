@@ -1,8 +1,9 @@
 # Quickstart
 
-Start OpenClaw Control Center (OCC) locally and read its Installation through
-an authenticated API request. This proves the controller is usable; it does not
-deploy an Agent or make a model call.
+Start [OpenClaw Control Center (OCC)](concepts.md#control-plane-and-tenancy)
+locally and read its Installation through an authenticated API request. This
+proves the controller is usable; it does not deploy an
+[Agent](concepts.md#agents-and-revisions) or make a model call.
 
 You need Docker Engine with Docker Compose, Bash, `curl`, and Python 3. Run
 commands from the repository root.
@@ -19,8 +20,9 @@ On the default path, the helper creates a local quickstart runtime image only
 when it is needed, validates Docker Compose configuration without logging
 expanded credentials, starts PostgreSQL, migration, bootstrap, API, and worker
 services, then copies the bootstrap service-key response into a private local
-file. Fresh bootstrap also creates the initial platform Namespace named
-`default`; the worker provisions its backing infrastructure.
+file. Fresh bootstrap also creates the initial platform
+[Namespace](concepts.md#control-plane-and-tenancy) named `default`; the worker
+provisions its backing infrastructure.
 
 Expected output includes:
 
@@ -46,7 +48,8 @@ or log out. The API check below remains useful for programmatic access.
 
 `dev-up` runs this check before it reports success. To run it again, copy the
 command under `Check API access again` in the output. It already includes your
-API URL and service-key file path. You can also set them yourself:
+API URL and [service-key](concepts.md#identity-and-access) file path. You can also
+set them yourself:
 
 ```bash
 export OCC_URL='http://127.0.0.1:3000'
@@ -61,8 +64,9 @@ arguments or terminal output.
 
 Export `OCC_URL` and `OCC_SERVICE_KEY_FILE` if you are continuing to
 [Development end-to-end TUI](deploy.md#development-end-to-end-tui). The OCC key
-stays with the operator; it is separate from the Agent gateway token and model
-credential and must never enter a workload or TUI.
+stays with the operator; it is separate from the Agent
+[gateway](concepts.md#gateways-and-harnesses) token and model credential and must
+never enter a workload or TUI.
 
 ## Find the initial Namespace
 
@@ -88,7 +92,8 @@ docker compose down
 ```
 
 Local cleanup does not revoke the service key. `docker compose down` preserves
-the database, Configuration, and bootstrap-key volumes. Use
+the database, [Configuration](concepts.md#configuration-and-secrets), and
+bootstrap-key volumes. Use
 `docker compose down --volumes` only when intentionally deleting the local
 Installation.
 

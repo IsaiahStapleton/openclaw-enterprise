@@ -34,8 +34,9 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
   do not promote a proposed capability into current reference before implementation.
 - `docs/flows/` explains runtime execution through the current source. Link to
   reference for normative behavior and to guides for operator procedures.
-- Keep `docs/guides/` limited to `quickstart.md` and `deploy.md` for now. The
-  deployment guide covers both development and production; do not add detailed
+- Keep `docs/guides/` limited to `concepts.md`, `quickstart.md`, and `deploy.md`
+  for now. Concepts provides a short introduction to platform terms; the
+  deployment guide covers both development and production. Do not add detailed
   per-feature or per-Driver user guides.
 - Top-level `specs/` records implementation proposals, milestones, and delivery
   history. Completed specifications do not override current feature reference.

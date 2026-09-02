@@ -56,11 +56,55 @@ resource operations remain API procedures.
 - Explicit Kubernetes context, enforcing NetworkPolicies, Helm, `kubectl`, and
   Python 3.
 - `yq` v4 for validating and reading the protected YAML copies.
-- Approved immutable controller, gateway, and Agent image digests.
+- Controller and runtime image digests (build them below).
 - External PostgreSQL with separate migrator and application roles.
 - Operator-managed HTTPS access for approved clients; the chart does not create TLS or Ingress.
 - Operator-created startup, database, authentication, optional Provider Secrets,
   fresh protected bootstrap PVC, gateway storage, and exact egress destinations.
+
+### Build and publish production images
+
+Build and push two images to a registry your cluster can access:
+
+| Image      | Source                                                                                                 | Used by                                          |
+| ---------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| Controller | Root [`Dockerfile`](../../Dockerfile), target `runtime`                                                | API, worker, migration, and bootstrap            |
+| Runtime    | [`deploy/runtime/Dockerfile`](../../deploy/runtime/Dockerfile), installing OpenClaw and Codex from npm | Gateways and Agents (the same image serves both) |
+
+You need Docker with Buildx and registry push access. Replace the example
+registry and repository, and select the platform matching your Kubernetes
+nodes. The base image below matches the [runtime recipe](../../deploy/runtime/README.md),
+which also documents package-version overrides.
+
+```bash
+export OCC_IMAGE_REPOSITORY='registry.example.com/your-team/openclaw-enterprise'
+export OCC_IMAGE_TAG="$(git rev-parse HEAD)"
+export OCC_IMAGE_PLATFORM='linux/amd64'
+export NODE_BASE_IMAGE='node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584'
+docker login registry.example.com
+
+docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" --target runtime \
+  --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
+  -t "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" .
+docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" \
+  --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
+  -f deploy/runtime/Dockerfile \
+  -t "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" deploy/runtime
+
+CONTROLLER_DIGEST="$(docker buildx imagetools inspect \
+  "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" \
+  --format '{{json .Manifest}}' | yq -p=json -r '.digest')"
+RUNTIME_DIGEST="$(docker buildx imagetools inspect \
+  "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" \
+  --format '{{json .Manifest}}' | yq -p=json -r '.digest')"
+export CONTROLLER_IMAGE="$OCC_IMAGE_REPOSITORY/controller@$CONTROLLER_DIGEST"
+export RUNTIME_IMAGE="$OCC_IMAGE_REPOSITORY/runtime@$RUNTIME_DIGEST"
+```
+
+Continue only after both builds and digest lookups succeed. Keep these exports
+for the YAML configuration below; Kubernetes requires digest references, not
+tags. For private registries, configure cluster/node pull credentials for both
+control-plane and tenant Pods; `docker login` only authenticates your builder.
 
 ### Configure the Installation
 
@@ -68,8 +112,7 @@ Set the production shell inputs before the first Kubernetes command. For a local
 Kubernetes trial, [build and import the test images](#build-images-for-local-kubernetes)
 to produce YAML copies with real image digests, then set
 `OCC_INPUT_DIRECTORY` to that generated directory and keep those files.
-Production clusters need the same images published to a registry they can pull
-from.
+For production, use the registry digests from the build-and-publish step above.
 
 ```bash
 umask 077
@@ -93,9 +136,21 @@ controller image, API endpoint, Secret names, bootstrap claim, and network
 selectors. Installation YAML owns gateway/Agent images, Driver selection,
 projected identity, and runtime networking/storage.
 
+If you built the production images above, write their digest references into
+the protected copies (skip this block for the local Kubernetes import path):
+
+```bash
+: "${CONTROLLER_IMAGE:?Set the controller digest reference}"
+: "${RUNTIME_IMAGE:?Set the runtime digest reference}"
+yq -i '.images.controller = strenv(CONTROLLER_IMAGE)' "$OCC_INPUT_DIRECTORY/values.yaml"
+yq -i '.drivers.compute.configuration.images.gateway = strenv(RUNTIME_IMAGE) |
+  .drivers.compute.configuration.images.agent = strenv(RUNTIME_IMAGE)' \
+  "$OCC_INPUT_DIRECTORY/installation.yaml"
+```
+
 Edit the protected YAML copies before provisioning anything:
 
-- `$OCC_INPUT_DIRECTORY/values.yaml`: set `images.controller` to the approved
+- `$OCC_INPUT_DIRECTORY/values.yaml`: set `images.controller` to the
   controller digest, `auth.baseUrl` to the production OCC URL,
   `bootstrap.adminEmail` to the first administrator, `database.cidr` to the
   exact PostgreSQL endpoint CIDR, `cluster.cidr` to the Kubernetes API endpoint
@@ -755,8 +810,8 @@ Use native surfaces for customization:
 - Production: extra Helm values files, ordinary Helm overrides, Kubernetes
   manifests, and Installation startup YAML.
 - Runtime images: [`deploy/runtime`](../../deploy/runtime/README.md) for the
-  public recipe; production operators rebuild, scan, publish, and use immutable
-  digests.
+  recipe and package-version overrides.
+  [Build and publish](#build-and-publish-production-images) before configuring the digests.
 - Settings: [environment and tooling reference](../reference/settings.md).
 - Driver contracts: [Kubernetes Compute](../reference/drivers/kubernetes-compute.md),
   [Kubernetes Secret](../reference/drivers/kubernetes-secret.md), and
