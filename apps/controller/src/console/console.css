@@ -189,6 +189,15 @@ p {
   justify-content: space-between;
   gap: 8px;
 }
+.account-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-chevron {
+  flex-shrink: 0;
+}
 .menu {
   padding: 6px;
   background: #fff;

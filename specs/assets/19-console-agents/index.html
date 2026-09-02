@@ -59,7 +59,7 @@
     }
     .shell {
       display: grid;
-      grid-template-columns: 210px 1fr;
+      grid-template-columns: 246px 1fr;
       min-height: 760px;
     }
     aside {
@@ -78,6 +78,23 @@
     aside p:first-of-type {
       background: #dfeae2;
       color: #195e4c;
+    }
+    .account-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 550;
+    }
+    .account-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .account-chevron {
+      flex-shrink: 0;
     }
     main {
       padding: 28px 40px;
@@ -312,7 +329,7 @@
     const field = (label, value, hint = "") =>
       `<label>${label}<input value="${value}"></label><small>${hint}</small>`;
     function shell(body, title = "Agents") {
-      return `<div class="shell"><aside><strong>CONTROL CENTER</strong><p>◇　Agents</p><p>◈　Providers</p><p>▤　Namespaces</p><div style="margin-top:390px"><small>Namespace · Support</small><p>OpenClaw Enterprise ▾</p></div></aside><main>${body}</main></div>`;
+      return `<div class="shell"><aside><strong>CONTROL CENTER</strong><p>◇　Agents</p><p>◈　Providers</p><p>▤　Namespaces</p><div style="margin-top:390px"><small>Namespace · Support</small><p class="account-toggle"><span class="account-label">OpenClaw Enterprise</span><span class="account-chevron" aria-hidden="true">▾</span></p></div></aside><main>${body}</main></div>`;
     }
     function heading(title, actions = "") {
       return `<div class="top"><div><h1>${title}</h1><p class="muted">Namespace · Support</p></div><div>${actions}</div></div>`;

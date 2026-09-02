@@ -304,7 +304,10 @@ function accountMenu() {
       "aria-controls": "account-menu",
     },
   );
-  toggle.append(element("span", { "aria-hidden": "true" }, "⌃"));
+  toggle.replaceChildren(
+    element("span", { className: "account-label" }, "OpenClaw Enterprise"),
+    element("span", { className: "account-chevron", "aria-hidden": "true" }, "⌃"),
+  );
   function closeNamespace(focus = true) {
     submenu.hidden = true;
     namespaceButton.setAttribute("aria-expanded", "false");
