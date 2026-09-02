@@ -329,23 +329,28 @@ function configuredRuntime(value: unknown): string | undefined {
   return runtime.id;
 }
 
-function configuredModel(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
+function configuredModels(value: unknown): readonly string[] {
+  if (value === undefined) return [];
   const configured = asRecord(value);
   const fallbacks = configured?.fallbacks;
-  if (fallbacks !== undefined && (!Array.isArray(fallbacks) || fallbacks.length > 0))
-    throw new ScopeViolationError("Configured Agent model fallbacks are unsupported.");
+  if (fallbacks !== undefined && !Array.isArray(fallbacks))
+    throw new ScopeViolationError("Configured Agent model fallbacks must be an array.");
   const model = typeof value === "string" ? value : configured?.primary;
-  if (
-    !isNonEmptyString(model) ||
-    !model.includes("/") ||
-    model.startsWith("/") ||
-    model.endsWith("/")
-  )
-    throw new ScopeViolationError(
-      "The configured Agent model must identify its provider and model.",
-    );
-  return model;
+  const models = [model, ...(fallbacks ?? [])].map((selected) => {
+    if (
+      !isNonEmptyString(selected) ||
+      !selected.includes("/") ||
+      selected.startsWith("/") ||
+      selected.endsWith("/")
+    )
+      throw new ScopeViolationError(
+        "The configured Agent model must identify its provider and model.",
+      );
+    return selected;
+  });
+  if (models.some((selected) => selected.split("/", 2)[0] !== models[0]!.split("/", 2)[0]))
+    throw new ScopeViolationError("Configured model fallbacks must retain the primary provider.");
+  return models;
 }
 
 function matchingSelectableModels(
@@ -390,16 +395,17 @@ export function resolveConfiguredHarnessId(
   if (agents?.list !== undefined && (!Array.isArray(agents.list) || agents.list.length > 0))
     throw new ScopeViolationError("Configured Agent lists are unsupported.");
   const providerConfigurations = asRecord(asRecord(values.models)?.providers);
-  const defaultModel = configuredModel(defaults?.model);
+  const defaultSelection = configuredModels(defaults?.model);
   const defaultModels = asRecord(defaults?.models);
-  const candidates: Array<{ model: string; entry?: Readonly<Record<string, unknown>> }> = [];
-  if (defaultModel !== undefined) candidates.push({ model: defaultModel });
+  const candidates: Array<{ model: string; entry?: Readonly<Record<string, unknown>> }> =
+    defaultSelection.map((model) => ({ model }));
 
   for (const value of Object.values(entries ?? {})) {
     const entry = asRecord(value);
     if (entry === undefined)
       throw new ScopeViolationError("The configured Agent runtime entry is invalid.");
-    const model = configuredModel(entry.model) ?? defaultModel;
+    const selection = entry.model === undefined ? defaultSelection : configuredModels(entry.model);
+    const model = selection[0];
     if (model === undefined)
       throw new ScopeViolationError("The configured Agent runtime model cannot be resolved.");
     if (candidates[0] !== undefined && model !== candidates[0].model)
@@ -408,7 +414,7 @@ export function resolveConfiguredHarnessId(
     if (entry.models !== undefined && !matchingSelectableModels(models, model)) {
       throw new ScopeViolationError("Configured selectable models must match the primary model.");
     }
-    candidates.push({ model, entry });
+    candidates.push(...selection.map((model) => ({ model, entry })));
   }
 
   if (
