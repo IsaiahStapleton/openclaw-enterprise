@@ -118,18 +118,19 @@ and namespace-level resource quotas and container defaults. Production requires
 
 ### Networking
 
-Configure the cluster DNS namespace and Pod labels, the gateway port, and the
-namespace and Pod selectors allowed to access Agent gateways.
+Configure the cluster DNS namespace and Pod labels and the gateway port.
+Without private routing, also configure the namespace and Pod selectors in
+`network.gatewayClients` allowed to access Agent gateways.
 
 Each tenant starts with default-deny ingress and egress. Explicit policies allow
 DNS, approved gateway clients, and required communication between an Agent's
 gateway and dedicated Harness. Cross-tenant traffic, traffic between different
 Agents, Kubernetes API access, and cloud metadata access remain denied.
 
-When private Agent routing is enabled, `network.gatewayClients` must contain
-exactly one Envoy data-plane peer with the configured Gateway's exact owning
-name and namespace labels. Startup rejects legacy direct API peers or additional
-clients. The native gateway trusts
+When private Agent routing is enabled, Compute derives the only allowed peer
+from `gatewayRouting`: the Envoy namespace and the Gateway's exact owning name
+and namespace labels. Omit `network.gatewayClients`; startup rejects explicit
+clients in routed mode. The native gateway trusts
 the proxy's source range; NetworkPolicy distinguishes the authenticated proxy
 from other Pods in that range. Do not retain direct API or tenant-workload
 access to the native gateway port for this mode.
@@ -154,9 +155,12 @@ gatewayRouting:
   hostname: agent-gateways.example.internal
   gatewayName: oce-agent-gateways
   gatewayNamespace: openclaw-system
+  envoyNamespace: envoy-gateway-system
 ```
 
-The Gateway name, namespace, and hostname must match the Helm-managed Gateway.
+The Gateway name, namespace, and hostname must match the Helm-managed Gateway;
+`envoyNamespace` identifies its Envoy data-plane Pods. The chart always creates
+the Gateway in its release namespace.
 The operator installs Envoy Gateway and cert-manager and configures the
 [private gateway infrastructure](../../guides/deploy.md#agent-workspace-files).
 Do not put an Agent endpoint, service key, certificate, or file contents into

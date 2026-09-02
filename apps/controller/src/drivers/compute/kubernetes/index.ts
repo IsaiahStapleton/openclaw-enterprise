@@ -87,6 +87,7 @@ export interface KubernetesGatewayRoutingOptions {
   readonly hostname: string;
   readonly gatewayName: string;
   readonly gatewayNamespace: string;
+  readonly envoyNamespace: string;
 }
 
 interface KubernetesApiClients {
@@ -117,7 +118,7 @@ export interface KubernetesComputeDriverOptions {
   readonly network: {
     readonly dns: KubernetesWorkloadPeer;
     readonly gatewayPort: number;
-    readonly gatewayClients: readonly KubernetesWorkloadPeer[];
+    readonly gatewayClients?: readonly KubernetesWorkloadPeer[];
   };
   readonly servicePrincipalCredentials:
     | { readonly mode: "disabled" }
@@ -490,7 +491,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       },
       network: {
         type: "object",
-        required: ["dns", "gatewayPort", "gatewayClients"],
+        required: ["dns", "gatewayPort"],
         additionalProperties: false,
         properties: {
           dns: WORKLOAD_PEER_SCHEMA,
@@ -529,12 +530,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
       },
       gatewayRouting: {
         type: "object",
-        required: ["hostname", "gatewayName", "gatewayNamespace"],
+        required: ["hostname", "gatewayName", "gatewayNamespace", "envoyNamespace"],
         additionalProperties: false,
         properties: {
           hostname: { type: "string" },
           gatewayName: { type: "string" },
           gatewayNamespace: { type: "string" },
+          envoyNamespace: { type: "string" },
         },
       },
     },
@@ -627,15 +629,22 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("Network policy is required.");
     validatePeer(options.network.dns, "DNS peer");
     validatePort(options.network.gatewayPort, "Gateway port");
-    if (
-      !Array.isArray(options.network.gatewayClients) ||
-      options.network.gatewayClients.length === 0
-    ) {
-      throw new ConfigurationFailure("At least one exact gateway client peer is required.");
+    const hasDirectGatewayClients = Object.hasOwn(options.network, "gatewayClients");
+    if (options.gatewayRouting === undefined) {
+      if (
+        !Array.isArray(options.network.gatewayClients) ||
+        options.network.gatewayClients.length === 0
+      ) {
+        throw new ConfigurationFailure("At least one exact gateway client peer is required.");
+      }
+      options.network.gatewayClients.forEach((peer, index) =>
+        validatePeer(peer, `Gateway client ${index}`),
+      );
+    } else if (hasDirectGatewayClients) {
+      throw new ConfigurationFailure(
+        "Gateway routing derives the Envoy gateway client peer; do not configure network.gatewayClients.",
+      );
     }
-    options.network.gatewayClients.forEach((peer, index) =>
-      validatePeer(peer, `Gateway client ${index}`),
-    );
     const credentials = options.servicePrincipalCredentials;
     if (asRecord(credentials) === undefined) {
       throw new ConfigurationFailure(
@@ -695,20 +704,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
         required(routing.gatewayNamespace, "Gateway routing Gateway namespace"),
         "Gateway routing Gateway namespace",
       );
-      if (options.network.gatewayClients.length !== 1) {
-        throw new ConfigurationFailure(
-          "Gateway routing requires exactly one Envoy gateway client peer.",
-        );
-      }
-      const labels = options.network.gatewayClients[0]?.podLabels ?? {};
-      if (
-        labels["gateway.envoyproxy.io/owning-gateway-name"] !== routing.gatewayName ||
-        labels["gateway.envoyproxy.io/owning-gateway-namespace"] !== routing.gatewayNamespace
-      ) {
-        throw new ConfigurationFailure(
-          "Gateway routing gatewayClients must select the exact Envoy data-plane Pods.",
-        );
-      }
+      validateKubernetesResourceName(
+        required(routing.envoyNamespace, "Gateway routing Envoy namespace"),
+        "Gateway routing Envoy namespace",
+      );
     }
   }
 
@@ -2404,6 +2403,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private networkPolicies(ownership: Ownership, namespace: string): ManagedKubernetesObject[] {
     const network = this.options.network;
+    const routing = this.options.gatewayRouting;
+    const gatewayIngressPeers =
+      routing === undefined
+        ? (network.gatewayClients ?? [])
+        : [
+            {
+              namespace: routing.envoyNamespace,
+              podLabels: {
+                "gateway.envoyproxy.io/owning-gateway-namespace": routing.gatewayNamespace,
+                "gateway.envoyproxy.io/owning-gateway-name": routing.gatewayName,
+              },
+            },
+          ];
     const policy = (name: string, spec: KubernetesRecord): ManagedKubernetesObject => ({
       ...this.manifest("networking.k8s.io/v1", "NetworkPolicy", name, ownership, namespace),
       spec,
@@ -2428,7 +2440,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         policyTypes: ["Ingress"],
         ingress: [
           {
-            from: network.gatewayClients.map((peer) => this.peer(peer)),
+            from: gatewayIngressPeers.map((peer) => this.peer(peer)),
             ports: [{ protocol: "TCP", port: network.gatewayPort }],
           },
         ],

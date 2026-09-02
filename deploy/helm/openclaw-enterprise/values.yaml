@@ -32,7 +32,6 @@ gatewayRouting:
   hostname: ""
   gatewayClassName: ""
   gatewayName: ""
-  gatewayNamespace: ""
   envoyNamespace: envoy-gateway-system
   apiKeySecretName: ""
   caSecretName: ""

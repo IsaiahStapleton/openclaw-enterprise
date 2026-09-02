@@ -662,28 +662,24 @@ gatewayRouting:
     group: cert-manager.io
 ```
 
-The default Gateway name is `<release>-agent-gateways`. Add matching routing
-settings to `drivers.compute.configuration` in the Installation startup YAML,
-and select only the corresponding Envoy data-plane Pods as gateway clients:
+The default Gateway name is `<release>-agent-gateways`, in the Helm release
+namespace. Add matching routing settings to `drivers.compute.configuration`
+in the Installation startup YAML:
 
 ```yaml
 gatewayRouting:
   hostname: agent-gateways.example.internal
   gatewayName: oce-agent-gateways
   gatewayNamespace: openclaw-system
+  envoyNamespace: envoy-gateway-system
 network:
   gatewayPort: 8080
-  gatewayClients:
-    - namespace: envoy-gateway-system
-      podLabels:
-        gateway.envoyproxy.io/owning-gateway-name: oce-agent-gateways
-        gateway.envoyproxy.io/owning-gateway-namespace: openclaw-system
   # Preserve the existing DNS namespace and Pod labels here.
 ```
 
 The chart's `tenantGatewayPort` must match Compute's `network.gatewayPort`.
-Routed Compute requires exactly one gateway-client peer with the exact Envoy
-owning-Gateway labels; it rejects old direct API peers or additional clients.
+Remove `network.gatewayClients` when enabling routing. Compute derives the
+Envoy peer from `gatewayRouting` and rejects explicit gateway clients in this mode.
 Retain the Installation's other Compute settings. Restart the API and worker
 when changing their Installation startup configuration. New Agent creation
 thereafter needs no configuration update. The worker requires tenant-local

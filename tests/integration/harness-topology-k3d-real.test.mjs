@@ -280,11 +280,7 @@ function installationConfiguration(authentication, platformNamespace, slack, opt
   configuration.drivers.compute.configuration.servicePrincipalCredentials.expirationSeconds = 3_600;
   if (options.gatewayRouting !== undefined) {
     configuration.drivers.compute.configuration.gatewayRouting = options.gatewayRouting;
-  }
-  if (options.gatewayClientPeer !== undefined) {
-    configuration.drivers.compute.configuration.network.gatewayClients = [
-      options.gatewayClientPeer,
-    ];
+    delete configuration.drivers.compute.configuration.network.gatewayClients;
   }
   if (slack !== undefined) {
     configuration.drivers.compute.configuration.runtime.channels = {
@@ -908,7 +904,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       ? {}
       : {
           gatewayRouting: workspaceGateway.routing,
-          gatewayClientPeer: workspaceGateway.gatewayClientPeer,
         },
   );
   const apiConfiguration = structuredClone(workerConfiguration);

@@ -145,9 +145,12 @@ requests or claiming work. Installed Drivers validate their own reviewed
 configuration and implementation-specific prerequisites.
 
 Agent workspace-file requests use the selected Compute Driver's private gateway
-endpoint. Kubernetes derives it from `gatewayRouting.hostname`, `gatewayName`,
-and `gatewayNamespace` in the Installation's Compute configuration. It does not
-read a per-Agent endpoint file or persist a URL in Agent Configuration.
+endpoint. Kubernetes derives the URL from `gatewayRouting.hostname` and the
+admitted Namespace and Agent IDs. `gatewayName` and `gatewayNamespace` identify
+the route's parent Gateway; `envoyNamespace` selects its data-plane namespace.
+Compute derives the allowed Envoy peer from those routing settings and rejects
+explicit `network.gatewayClients` in routed mode. It does not read a per-Agent
+endpoint file or persist a URL in Agent Configuration.
 
 `OCC_GATEWAY_API_KEY_PATH` mounts a dedicated, high-entropy Envoy service key into
 the API only. Missing or invalid configured key files fail startup; a file that
@@ -744,7 +747,8 @@ clock and audit-ID generator; their defaults are the current time and a new
 accept an explicit `authentication` mode
 (`"inCluster"` or `"kubeconfig"`); approved `images` and immutable-image
 policy; explicit gateway, Agent, and namespace `resources`; exact DNS and
-gateway-client `network` peers; `servicePrincipalCredentials` policy; and an
+either private `gatewayRouting` or direct gateway-client `network` peers;
+`servicePrincipalCredentials` policy; and an
 explicit production `runtime` containing per-Agent operator-provisioned
 transport and model Secret-name prefixes and required
 `gatewayStorageClassName` selecting the StorageClass for each gateway's private

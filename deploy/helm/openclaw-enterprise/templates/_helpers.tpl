@@ -48,10 +48,8 @@
 {{- end -}}
 {{- if .Values.gatewayRouting.enabled -}}
 {{- $routing := .Values.gatewayRouting -}}
-{{- $gatewayNamespace := include "openclaw.gatewayRouting.gatewayNamespace" . -}}
 {{- if not $routing.hostname -}}{{- fail "gatewayRouting.hostname must identify the private Envoy Gateway hostname" -}}{{- end -}}
 {{- if not $routing.gatewayClassName -}}{{- fail "gatewayRouting.gatewayClassName must reference an operator-created GatewayClass" -}}{{- end -}}
-{{- if ne $gatewayNamespace .Release.Namespace -}}{{- fail "gatewayRouting.gatewayNamespace must match the Helm release namespace because the API and Envoy SecurityPolicy share the operator-created API-key Secret" -}}{{- end -}}
 {{- if not $routing.envoyNamespace -}}{{- fail "gatewayRouting.envoyNamespace must identify the existing Envoy Gateway controller namespace" -}}{{- end -}}
 {{- if or (not $routing.issuerRef) (not $routing.issuerRef.name) (not $routing.issuerRef.kind) (not $routing.issuerRef.group) -}}
 {{- fail "gatewayRouting.issuerRef must reference an existing cert-manager issuer" -}}
@@ -106,10 +104,6 @@ capabilities:
 
 {{- define "openclaw.gatewayRouting.gatewayName" -}}
 {{- default (printf "%s-agent-gateways" .Release.Name | trunc 63 | trimSuffix "-") .Values.gatewayRouting.gatewayName -}}
-{{- end -}}
-
-{{- define "openclaw.gatewayRouting.gatewayNamespace" -}}
-{{- default .Release.Namespace .Values.gatewayRouting.gatewayNamespace -}}
 {{- end -}}
 
 {{- define "openclaw.gatewayRouting.tlsSecretName" -}}

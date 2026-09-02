@@ -68,24 +68,17 @@ const gatewayRouting = {
   hostname: "agents.example.internal",
   gatewayName: "oce-agent-gateways",
   gatewayNamespace: "openclaw-system",
-};
-
-const envoyGatewayPeer = {
-  namespace: "envoy-gateway-system",
-  podLabels: {
-    "gateway.envoyproxy.io/owning-gateway-name": gatewayRouting.gatewayName,
-    "gateway.envoyproxy.io/owning-gateway-namespace": gatewayRouting.gatewayNamespace,
-  },
+  envoyNamespace: "envoy-gateway-system",
 };
 
 function routedOptions(overrides = {}) {
   const configured = options();
+  const { gatewayClients, ...network } = configured.network;
   return options({
     ...overrides,
     gatewayRouting: overrides.gatewayRouting ?? gatewayRouting,
     network: {
-      ...configured.network,
-      gatewayClients: [envoyGatewayPeer],
+      ...network,
       ...(overrides.network ?? {}),
     },
   });
@@ -483,6 +476,28 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
     },
   ]);
 
+  const ingress = driver
+    .networkPolicies(ownership, namespace)
+    .find(({ metadata }) => metadata.name === "allow-gateway-ingress");
+  assert.deepEqual(ingress.spec.ingress, [
+    {
+      from: [
+        {
+          namespaceSelector: {
+            matchLabels: { "kubernetes.io/metadata.name": gatewayRouting.envoyNamespace },
+          },
+          podSelector: {
+            matchLabels: {
+              "gateway.envoyproxy.io/owning-gateway-namespace": gatewayRouting.gatewayNamespace,
+              "gateway.envoyproxy.io/owning-gateway-name": gatewayRouting.gatewayName,
+            },
+          },
+        },
+      ],
+      ports: [{ protocol: "TCP", port: 8080 }],
+    },
+  ]);
+
   for (const [configuration, expected] of [
     [
       { gateway: { allowRealIpFallback: true, trustedProxies: ["10.42.0.0/16"] } },
@@ -602,21 +617,31 @@ test("gateway routing startup validation and namespace membership fail closed", 
       hostname: "agents.example.internal:443",
       gatewayName: "oce-agent-gateways",
       gatewayNamespace: "openclaw-system",
+      envoyNamespace: "envoy-gateway-system",
     },
     {
       hostname: "https://agents.example.internal",
       gatewayName: "oce-agent-gateways",
       gatewayNamespace: "openclaw-system",
+      envoyNamespace: "envoy-gateway-system",
     },
     {
       hostname: "agents.example.internal",
       gatewayName: "OCE",
       gatewayNamespace: "openclaw-system",
+      envoyNamespace: "envoy-gateway-system",
     },
     {
       hostname: "agents.example.internal",
       gatewayName: "oce-agent-gateways",
       gatewayNamespace: "openclaw/system",
+      envoyNamespace: "envoy-gateway-system",
+    },
+    {
+      hostname: "agents.example.internal",
+      gatewayName: "oce-agent-gateways",
+      gatewayNamespace: "openclaw-system",
+      envoyNamespace: "envoy/system",
     },
   ]) {
     assert.throws(
@@ -627,39 +652,7 @@ test("gateway routing startup validation and namespace membership fail closed", 
 
   assert.throws(
     () => createKubernetesComputeDriver(options({ gatewayRouting })),
-    /exact Envoy data-plane Pods/i,
-  );
-  assert.throws(
-    () =>
-      createKubernetesComputeDriver(
-        routedOptions({
-          network: {
-            ...options().network,
-            gatewayClients: [envoyGatewayPeer, envoyGatewayPeer],
-          },
-        }),
-      ),
-    /exactly one Envoy gateway client/i,
-  );
-  assert.throws(
-    () =>
-      createKubernetesComputeDriver(
-        routedOptions({
-          network: {
-            ...options().network,
-            gatewayClients: [
-              {
-                namespace: envoyGatewayPeer.namespace,
-                podLabels: {
-                  ...envoyGatewayPeer.podLabels,
-                  "gateway.envoyproxy.io/owning-gateway-name": "another-gateway",
-                },
-              },
-            ],
-          },
-        }),
-      ),
-    /exact Envoy data-plane Pods/i,
+    /do not configure network\.gatewayClients/i,
   );
 
   const driver = createKubernetesComputeDriver(routedOptions());

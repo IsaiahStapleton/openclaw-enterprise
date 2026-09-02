@@ -476,11 +476,8 @@ test(
         },
       ],
       [
-        "private Envoy Gateway in a separate namespace",
-        {
-          ...gatewayRoutingValues,
-          "gatewayRouting.gatewayNamespace": "shared-gateway-system",
-        },
+        "private Envoy Gateway without an Envoy namespace",
+        { ...gatewayRoutingValues, "gatewayRouting.envoyNamespace": "" },
       ],
       [
         "private Envoy Gateway without an existing cert-manager issuer",

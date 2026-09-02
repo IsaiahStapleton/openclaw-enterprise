@@ -1,7 +1,6 @@
 {{- if .Values.gatewayRouting.enabled }}
 {{- $routing := .Values.gatewayRouting }}
 {{- $gatewayName := include "openclaw.gatewayRouting.gatewayName" . }}
-{{- $gatewayNamespace := include "openclaw.gatewayRouting.gatewayNamespace" . }}
 {{- $tlsSecretName := include "openclaw.gatewayRouting.tlsSecretName" . }}
 {{- $routeNamespaceLabel := include "openclaw.gatewayRouting.routeNamespaceLabel" . }}
 ---
@@ -9,7 +8,7 @@ apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: EnvoyProxy
 metadata:
   name: {{ $gatewayName }}
-  namespace: {{ $gatewayNamespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "openclaw.labels" (dict "root" . "component" "gateway-routing") | nindent 4 }}
 spec:
@@ -23,7 +22,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: {{ $gatewayName }}
-  namespace: {{ $gatewayNamespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "openclaw.labels" (dict "root" . "component" "gateway-routing") | nindent 4 }}
 spec:
@@ -58,7 +57,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: {{ $tlsSecretName }}
-  namespace: {{ $gatewayNamespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "openclaw.labels" (dict "root" . "component" "gateway-routing") | nindent 4 }}
 spec:
@@ -74,7 +73,7 @@ apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy
 metadata:
   name: {{ $gatewayName }}-api-key
-  namespace: {{ $gatewayNamespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "openclaw.labels" (dict "root" . "component" "gateway-routing") | nindent 4 }}
 spec:
@@ -114,7 +113,7 @@ spec:
               app.kubernetes.io/component: proxy
               app.kubernetes.io/managed-by: envoy-gateway
               app.kubernetes.io/name: envoy
-              gateway.envoyproxy.io/owning-gateway-namespace: {{ $gatewayNamespace }}
+              gateway.envoyproxy.io/owning-gateway-namespace: {{ .Release.Namespace }}
               gateway.envoyproxy.io/owning-gateway-name: {{ $gatewayName }}
       ports:
         - protocol: TCP
@@ -131,7 +130,7 @@ spec:
       app.kubernetes.io/component: proxy
       app.kubernetes.io/managed-by: envoy-gateway
       app.kubernetes.io/name: envoy
-      gateway.envoyproxy.io/owning-gateway-namespace: {{ $gatewayNamespace }}
+      gateway.envoyproxy.io/owning-gateway-namespace: {{ .Release.Namespace }}
       gateway.envoyproxy.io/owning-gateway-name: {{ $gatewayName }}
   policyTypes: [Ingress, Egress]
   ingress:

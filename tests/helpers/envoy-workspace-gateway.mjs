@@ -192,13 +192,7 @@ export async function createEnvoyWorkspaceGatewayPlan(context, { platformNamespa
       hostname: gatewayHostname,
       gatewayName,
       gatewayNamespace: platformNamespace,
-    },
-    gatewayClientPeer: {
-      namespace: envoyNamespace,
-      podLabels: {
-        "gateway.envoyproxy.io/owning-gateway-namespace": platformNamespace,
-        "gateway.envoyproxy.io/owning-gateway-name": gatewayName,
-      },
+      envoyNamespace,
     },
     nativeOptions: {
       gatewayAuth: {
