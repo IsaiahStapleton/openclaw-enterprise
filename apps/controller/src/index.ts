@@ -1716,8 +1716,6 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             : controller.getOperableActiveAgentRevision(context.actorId, namespaceId, agentId),
         );
         const target = { kind: "agent" as const, id: agent.id, namespaceId: agent.namespaceId };
-        const clientAddress = request.raw.socket.remoteAddress;
-        if (!isNonEmptyString(clientAddress)) throw dependencyUnavailable();
         if (signal.aborted) throw dependencyUnavailable();
 
         if (operation.operationId === "getAgentWorkspaceFile") {
@@ -1729,7 +1727,6 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               options.workspaceFilesAccess.read({
                 revision,
                 filename,
-                clientAddress,
                 signal,
                 deadline,
               }),
@@ -1770,7 +1767,6 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               revision,
               filename,
               content: writeBody.content,
-              clientAddress,
               signal,
               deadline,
             }),

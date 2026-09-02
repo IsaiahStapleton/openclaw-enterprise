@@ -62,7 +62,7 @@ see [Testing](docs/testing.md) for suite coverage, credentials, setup, and comma
 - [Platform design](docs/design.md) and [current architecture](docs/ARCHITECTURE.md): target design and implemented components.
 - [Feature reference](docs/reference/README.md): supported behavior and Driver contracts.
 - [Providers](docs/reference/providers.md): authenticated clients, related Drivers, and optional Agent association.
-- [Agent workspace files](docs/reference/agents.md#workspace-files): opt in to reading and replacing the four supported native Agent workspace files through an operator-owned WSS endpoint map.
+- [Agent workspace files](docs/reference/agents.md#workspace-files): read and replace four native Agent workspace files through private Kubernetes routes managed by Compute, Envoy Gateway, and cert-manager.
 - [HTTP API](docs/reference/api.md): routes, request and response schemas, authentication, and permissions.
 - [Spec archive](specs/README.md): proposals and implementation history, with recorded statuses.
 

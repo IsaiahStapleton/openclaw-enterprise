@@ -26,16 +26,13 @@ controller.
 - For dedicated Agents, a default StorageClass that supports `40Gi`
   `ReadWriteMany` PersistentVolumeClaims.
 
-The worker needs permission to manage PersistentVolumeClaims in its tenant
-namespaces. Only the controller API receives narrowly scoped Secret permissions
-for provider-issued credentials; workers and workloads do not receive direct
-Secret API access. The removed gateway administration helper no longer defines
-tenant API read or `pods/exec` permissions. Future workspace-file target
-resolution is operator-configured through an API-only WSS endpoint map and does
-not require new Kubernetes API RBAC by default. Add only the permissions and
-network policy needed by the selected private proxy. Do not grant wildcard
-permissions, cluster-wide access to tenant resources, workload access to
-controller credentials, or permission to create or escalate RoleBindings.
+The worker manages PersistentVolumeClaims and, when private gateway routing is
+enabled, HTTPRoutes through tenant-local RoleBindings. Only the controller API
+receives narrowly scoped Secret permissions for provider-issued credentials.
+The API does not need gateway Pod reads, exec, route writes, or certificate
+management for workspace-file access. Do not grant wildcard permissions,
+cluster-wide access to tenant resources, workload access to controller
+credentials, or permission to create or escalate RoleBindings.
 
 If OpenShell sandboxing is enabled, the Compute Driver's Kubernetes access is
 also used directly by the optional `SandboxDriver.ensureNamespace` hook to
@@ -129,27 +126,62 @@ DNS, approved gateway clients, and required communication between an Agent's
 gateway and dedicated Harness. Cross-tenant traffic, traffic between different
 Agents, Kubernetes API access, and cloud metadata access remain denied.
 
-The Kubernetes Compute Driver does not derive workspace-file targets from
-Services, EndpointSlices, Pods, or revisions. Agent workspace-file HTTP routes
-use the API process's optional operator endpoint map. The Helm chart can mount
-an existing ConfigMap as
-`/etc/openclaw/workspace-files/workspace-files.yaml` and set
-`OCC_WORKSPACE_FILES_CONFIG_PATH` only on the API Deployment; it does not mount
-the file into the worker and does not widen NetworkPolicies. The configured
-private proxy must authenticate OCC, expose native trusted-proxy WSS, grant the
-service identity `operator.admin`, derive forwarded client attribution from the
-actual OCC peer, and reject direct user or workload callers. When an Agent's
-native Configuration explicitly selects `gateway.auth.mode: "trusted-proxy"`,
-the Driver omits automatic `OPENCLAW_GATEWAY_TOKEN` projection because native
-OpenClaw rejects trusted-proxy auth with a simultaneous gateway token. Token
-mode remains the default behavior. Readiness for native gateway Pods still uses
-a Pod-local Node.js HTTP request to
-`127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz`.
+When private Agent routing is enabled, `network.gatewayClients` must contain
+exactly one Envoy data-plane peer with the configured Gateway's exact owning
+name and namespace labels. Startup rejects legacy direct API peers or additional
+clients. The native gateway trusts
+the proxy's source range; NetworkPolicy distinguishes the authenticated proxy
+from other Pods in that range. Do not retain direct API or tenant-workload
+access to the native gateway port for this mode.
+
+When native Configuration selects `gateway.auth.mode: "trusted-proxy"`, Compute
+omits automatic `OPENCLAW_GATEWAY_TOKEN` projection: native OpenClaw rejects a
+simultaneous gateway token. Token mode remains the default. Readiness uses a
+Pod-local HTTP request to `127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz`; TLS terminates
+at Envoy, so native readiness probes remain unchanged.
 
 Production currently permits public TCP/443 egress for model access; a
 restricted model proxy is not yet available. Channels require an approved
 literal-IP HTTP(S) proxy configured through `runtime.channels`; direct public
 channel-provider access is denied.
+
+## Private Agent gateway routes
+
+Optional Installation Compute settings enable one stable route per Agent:
+
+```yaml
+gatewayRouting:
+  hostname: agent-gateways.example.internal
+  gatewayName: oce-agent-gateways
+  gatewayNamespace: openclaw-system
+```
+
+The Gateway name, namespace, and hostname must match the Helm-managed Gateway.
+The operator installs Envoy Gateway and cert-manager and configures the
+[private gateway infrastructure](../../guides/deploy.md#agent-workspace-files).
+Do not put an Agent endpoint, service key, certificate, or file contents into
+native Configuration or an AgentRevision.
+
+`getGatewayEndpoint` derives
+`wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>` without Kubernetes
+API access. During preparation and activation, Compute reconciles an owned
+`HTTPRoute` in the tenant namespace, attached to the configured Gateway's
+`https` listener. It matches the exact Agent path and hostname, rewrites the
+path to `/`, and targets the existing same-namespace gateway Service.
+Namespaces receive the Gateway membership label used by `allowedRoutes`.
+
+The Service and route remain stable across revision cutover. Retiring an old
+revision preserves a newer gateway's route; final gateway cleanup removes the
+owned route. Reconciliation runs through the existing revision lifecycle; this
+Driver does not add periodic route drift repair. Missing CRDs or denied worker
+permissions fail reconciliation rather than disabling routing silently.
+
+Envoy's Gateway-level SecurityPolicy authenticates the OCC service key before
+forwarding. The route overwrites the native identity and real-IP headers and
+removes caller forwarding and scope headers. Native `allowRealIpFallback`
+accepts Envoy's direct downstream connection address when OCC and Envoy share a
+Pod CIDR. That source address must be nonloopback; a loopback port-forward alone
+is not a working native attribution path.
 
 ## Execution modes
 

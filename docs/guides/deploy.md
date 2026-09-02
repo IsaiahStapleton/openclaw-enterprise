@@ -536,52 +536,105 @@ Secrets.
 
 ### Agent workspace files
 
-OCC Agent workspace file access is opt-in. `GET` and
-`PUT /namespaces/:namespaceId/agents/:agentId/workspace/files/:name` read and
-replace the four supported native files for one Enterprise Agent when the API
-process has an operator-owned endpoint map. Without a configured map, unmapped
-Agent, offline proxy, or unavailable native gateway, the routes fail closed with
-`503 DEPENDENCY_UNAVAILABLE`.
+Enable private Agent routing to read and replace `AGENTS.md`, `SOUL.md`,
+`IDENTITY.md`, and `USER.md` through OCC. Compute creates each Agent's HTTPRoute
+when it provisions the gateway. One shared private hostname serves URLs of the
+form `wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>`; there is no
+per-Agent endpoint map or API restart after provisioning.
 
-The route contract is intentionally narrow: only `AGENTS.md`, `SOUL.md`,
-`IDENTITY.md`, and `USER.md` can be read or replaced. It is not a generic native
-RPC surface, CLI exec bridge, chat path, configuration editor, or full native
-administration UI. OCC stores no file bytes in PostgreSQL, provides no
-compare-and-swap update field, and does not replay writes after an unknown
-provider outcome.
+This integration requires Kubernetes with enforced NetworkPolicies,
+[Envoy Gateway v1.9](https://gateway.envoyproxy.io/docs/tasks/quickstart/),
+Gateway API CRDs, and [cert-manager](https://cert-manager.io/docs/installation/).
+Install and operate those controllers separately from this chart. Provide an
+existing Envoy GatewayClass and a cert-manager Issuer or ClusterIssuer capable
+of issuing the listener certificate. Configure private DNS for the hostname to
+resolve to the Gateway's ClusterIP address. The hostname and certificate must
+match; do not disable TLS verification.
 
-Create the endpoint file outside the repository with owner-only permissions:
+The chart creates the Installation's Gateway, ClusterIP EnvoyProxy,
+Certificate, and API-key SecurityPolicy. It does not install those controllers,
+create a CA, or publish a public listener. The operator installing the chart
+needs permission for its infrastructure resources; the OCC API does not.
 
-```yaml
-endpoints:
-  - namespaceId: ns_123e4567-e89b-42d3-a456-426614174000
-    agentId: agt_123e4567-e89b-42d3-a456-426614174000
-    url: wss://agent-files.example.internal/openclaw
-    nativeAgentId: main
-    identity: occ-workspace-files
-    userHeader: x-openclaw-operator
-    tlsFingerprint: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+Create a dedicated high-entropy service key with no trailing newline, then
+create its Secret in the controller namespace. Keep key files outside Git:
+
+```sh
+umask 077
+python3 -c 'import secrets; print(secrets.token_hex(32), end="")' > /secure/operator/gateway-api-key
+kubectl -n openclaw-system create secret generic occ-private-gateway-key \
+  --from-file=occ=/secure/operator/gateway-api-key
 ```
 
-The file must contain only the top-level `endpoints` array. Each `url` must be
-`wss://` and must not contain embedded credentials, a query, or a fragment.
-`tlsFingerprint` is optional; when present, use the exact 64-character
-hexadecimal certificate fingerprint. OCC reads the file once during API startup,
-fails startup on invalid YAML or invalid endpoint shape, and does not reload the
-file. Restart the API after changing mappings.
+For a private CA, also create a Secret containing only its public CA certificate
+bundle, never its private signing key:
 
-Configure the native gateway for trusted-proxy authentication with matching
-identity values. This native Configuration fragment shows only the relevant
-fields:
+```sh
+kubectl -n openclaw-system create secret generic occ-private-gateway-ca \
+  --from-file=ca.crt=/secure/operator/gateway-ca.pem
+```
+
+Add the following to the existing Helm values. This example uses release
+`oce` in `openclaw-system`; leave the CA fields empty for a certificate issued
+under a CA already trusted by Node.js:
+
+```yaml
+gatewayRouting:
+  enabled: true
+  hostname: agent-gateways.example.internal
+  gatewayClassName: eg
+  apiKeySecretName: occ-private-gateway-key
+  caSecretName: occ-private-gateway-ca
+  caSecretKey: ca.crt
+  envoyNamespace: envoy-gateway-system
+  tenantGatewayPort: 8080
+  issuerRef:
+    name: internal-gateway-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+```
+
+The default Gateway name is `<release>-agent-gateways`. Add matching routing
+settings to `drivers.compute.configuration` in the Installation startup YAML,
+and select only the corresponding Envoy data-plane Pods as gateway clients:
+
+```yaml
+gatewayRouting:
+  hostname: agent-gateways.example.internal
+  gatewayName: oce-agent-gateways
+  gatewayNamespace: openclaw-system
+network:
+  gatewayPort: 8080
+  gatewayClients:
+    - namespace: envoy-gateway-system
+      podLabels:
+        gateway.envoyproxy.io/owning-gateway-name: oce-agent-gateways
+        gateway.envoyproxy.io/owning-gateway-namespace: openclaw-system
+  # Preserve the existing DNS namespace and Pod labels here.
+```
+
+The chart's `tenantGatewayPort` must match Compute's `network.gatewayPort`.
+Routed Compute requires exactly one gateway-client peer with the exact Envoy
+owning-Gateway labels; it rejects old direct API peers or additional clients.
+Retain the Installation's other Compute settings. Restart the API and worker
+when changing their Installation startup configuration. New Agent creation
+thereafter needs no configuration update. The worker requires tenant-local
+HTTPRoute permissions from the chart's worker role; the API needs no route
+writes or gateway Pod/exec access.
+
+Each Agent's native Configuration must explicitly select trusted-proxy auth.
+This fragment shows only the relevant native fields; preserve the model,
+Harness, and other existing configuration:
 
 ```yaml
 gateway:
   trustedProxies:
-    - <private-proxy-source-ip>
+    - <actual-proxy-source-cidr>
+  allowRealIpFallback: true
   auth:
     mode: trusted-proxy
     trustedProxy:
-      userHeader: x-openclaw-operator
+      userHeader: x-occ-identity
       allowUsers:
         - occ-workspace-files
     identityScopes:
@@ -589,64 +642,65 @@ gateway:
         - operator.admin
 ```
 
-The operator owns the assertion that each URL and `nativeAgentId` belong to the
-exact Enterprise Agent named by `namespaceId` and `agentId`. OCC does not add a
-Driver API, database schema, worker setting, per-revision native attestation, or
-automatic egress broadening for this route.
+Compute validates the fixed identity header, allowed identity, administrative
+grant, real-IP fallback, and configured proxy sources before preparing a routed
+revision. Omit `gateway.auth.token`; native OpenClaw rejects a simultaneous token
+in this mode, and Compute omits automatic gateway-token projection. Do not require an
+`x-forwarded-for` header in native `requiredHeaders`: the route removes it.
+Envoy authenticates the service key, strips it, overwrites the fixed native
+identity, and supplies `X-Real-IP` from its direct OCC connection. This supported
+fallback works when OCC and Envoy share a Pod CIDR. Never fabricate an address
+or admit direct workload access to compensate for native attribution failures.
 
-The private TLS proxy must accept OCC only. It must authenticate the OCC source,
-forward the configured trusted identity header only after that authentication,
-derive `x-forwarded-for` from the actual OCC peer connection, and reject direct
-browser or workload callers. Do not forward caller-supplied `x-forwarded-for`
-blindly. Native trusted-proxy configuration must grant the service identity
-`operator.admin`; OCC still enforces user-facing Agent `read` and `operate`
-before contacting the proxy. The native Configuration for this path must set
-`gateway.auth.mode: "trusted-proxy"` and omit `gateway.auth.token`; native
-OpenClaw 2026.8.1-b9d rejects trusted-proxy auth when a token is configured at
-the same time. Docker and Kubernetes Compute omit automatic
-`OPENCLAW_GATEWAY_TOKEN` projection for that explicit mode, while default token
-mode continues to receive the automatic gateway token. Native rejects
-all-loopback forwarded addresses, so loopback development needs a genuine
-non-loopback OCC-to-proxy connection such as a separate proxy container. Do not
-use a fake IP, bypass TLS, or expose a global ingress to make local testing
-pass. Use a normal CA trusted by Node.js, `NODE_EXTRA_CA_CERTS`, or
-`tlsFingerprint`; certificate issuance, renewal, and network trust remain
-operator responsibilities.
+NetworkPolicy must restrict native gateway ingress to those Envoy Pods. The
+chart restricts proxy ingress to the OCC API and permits its required routing
+and control-plane traffic. A trusted source CIDR by itself is not sufficient
+isolation. Restrict Kubernetes writes to the Gateway, attached HTTPRoutes,
+SecurityPolicy, native configuration, and namespace attachment labels to trusted
+operators and the scoped worker. Untrusted tenants must not be able to replace
+route authentication or attach their own routes.
 
-For production, create an existing ConfigMap in the controller namespace and ask
-Helm to mount only that key into the API Deployment:
+The chart mounts the service key only into the API and sets
+`OCC_GATEWAY_API_KEY_PATH`. It optionally mounts the CA bundle and sets
+`NODE_EXTRA_CA_CERTS`. No credential or endpoint map is mounted into the worker,
+Agent, or gateway. The key is an Installation-wide native administrative
+credential; do not reuse a Better Auth signing key or model-provider token.
+OCC still checks the human caller's exact Agent `read` or `operate` permission.
 
-```bash
-kubectl -n openclaw-system create configmap occ-workspace-files \
-  --from-file=workspace-files.yaml=/secure/operator/workspace-files.yaml
+After applying the Helm and Installation changes, verify the actual resources:
 
-helm upgrade --install oce deploy/helm/openclaw-enterprise \
-  --namespace openclaw-system \
-  --set workspaceFiles.configMapName=occ-workspace-files \
-  --set workspaceFiles.key=workspace-files.yaml
+```sh
+kubectl -n openclaw-system get gateway oce-agent-gateways -o yaml
+kubectl -n openclaw-system get certificate,securitypolicy
+kubectl -n "$TENANT_NAMESPACE" get httproute
 ```
 
-The chart mounts the file read-only at
-`/etc/openclaw/workspace-files/workspace-files.yaml` and sets
-`OCC_WORKSPACE_FILES_CONFIG_PATH` only on the API Deployment. It does not mount
-the file into the worker, create the ConfigMap, add Kubernetes RBAC, or widen
-NetworkPolicies. Add exact network policy only when your private proxy needs it.
+Require accepted/programmed routing, a ready certificate, and accepted security
+policy before testing native access. Verify missing/invalid service keys and
+spoofed identity headers cannot reach native administration. Then use OCC's
+four-file GET/PUT routes and a fresh native session to prove consumption; a
+ready proxy alone is insufficient.
 
-For Docker Compose development, keep the checked-in `compose.yaml` unchanged and
-use an operator-owned override file:
+For service-key rotation, first add the new key under another client ID in the
+Envoy Secret while keeping `occ` unchanged. After Envoy accepts it, move the new
+key to `occ` while retaining the previous value under a different client ID.
+Wait for the API's mounted Secret to update and verify a new request, then
+remove the previous key and verify rejection. OCC reads the file for each
+operation; it does not require a restart for key rotation.
 
-```yaml
-services:
-  controller:
-    environment:
-      OCC_WORKSPACE_FILES_CONFIG_PATH: /etc/openclaw/workspace-files/workspace-files.yaml
-    volumes:
-      - /secure/operator/workspace-files.yaml:/etc/openclaw/workspace-files/workspace-files.yaml:ro
-```
+cert-manager renews the server leaf certificate automatically. New WSS
+connections continue using normal CA and hostname verification without an OCC
+restart while the issuing CA remains trusted. Replacing a private root bundle
+requires restarting the API because Node reads `NODE_EXTRA_CA_CERTS` at process
+startup. This integration uses API-key authentication over WSS; the pinned
+native client does not expose mTLS client-certificate options.
 
-This still requires a real private TLS proxy with non-loopback OCC attribution.
-A ready container or successful model-turn check is not workspace-file proof
-until the four-file route reads and writes through that configured WSS path.
+Without routing/key configuration, with an unsupported Driver, or when the
+proxy/native gateway is unavailable, file requests return
+`503 DEPENDENCY_UNAVAILABLE`. Docker does not implement this automatic routing
+path. The [Agents reference](../reference/agents.md#workspace-files) owns file
+limits and authorization behavior; [testing](../testing.md) distinguishes live
+integration evidence from rendering and conformance checks.
 
 ### Verify production workloads
 
@@ -688,6 +742,11 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$TENANT_NAMESPA
 The TUI uses the Pod-local WebSocket listener and injected gateway token. The
 extra client process unsets `OPENAI_API_KEY`; model access stays in the serving
 gateway path. Ctrl+D exits only the client.
+
+This Pod-local TUI procedure requires token authentication. It does not apply
+to gateways configured with the trusted-proxy authentication used by private
+workspace-file routing; that mode intentionally has no gateway token. Use the
+OCC file API for the supported administration path in that configuration.
 
 ### End the operator session
 

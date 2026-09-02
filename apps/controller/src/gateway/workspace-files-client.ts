@@ -22,9 +22,7 @@ export const NATIVE_WORKSPACE_FILE_CONTENT_MAX_BYTES = 16 * 1024;
 export interface NativeWorkspaceFilesTarget {
   readonly url: string;
   readonly nativeAgentId: string;
-  readonly identity: string;
-  readonly userHeader: string;
-  readonly tlsFingerprint?: string;
+  readonly apiKey: string;
 }
 
 export type NativeWorkspaceFilesTargetResolver = (
@@ -73,8 +71,6 @@ async function requestNativeWorkspaceFile(
   resolveTarget: NativeWorkspaceFilesTargetResolver,
   operation: WorkspaceFileOperation,
 ): Promise<NativeRequestResult> {
-  const target = normalizeTarget(await resolveTarget(request));
-  if (target === undefined) return { status: "unavailable" };
   const timeoutMs = remainingDeadlineMs(request.deadline);
   if (timeoutMs === undefined || request.signal.aborted) return { status: "unavailable" };
 
@@ -85,23 +81,22 @@ async function requestNativeWorkspaceFile(
     resolveHello = resolve;
     rejectHello = reject;
   });
-  const client = new GatewayClient({
-    url: target.url,
-    clientName: "gateway-client",
-    mode: "backend",
-    role: "operator",
-    deviceIdentity: null,
-    scopes: [],
-    edgeAuthHeaders: {
-      [target.userHeader]: target.identity,
-      "x-forwarded-for": request.clientAddress,
-    },
-    ...(target.tlsFingerprint === undefined ? {} : { tlsFingerprint: target.tlsFingerprint }),
-    onHelloOk: resolveHello,
-    onConnectError: rejectHello,
-  });
+  let client: GatewayClient | undefined;
 
   try {
+    const target = normalizeTarget(await resolveTarget(request));
+    if (target === undefined) return { status: "unavailable" };
+    client = new GatewayClient({
+      url: target.url,
+      clientName: "gateway-client",
+      mode: "backend",
+      role: "operator",
+      deviceIdentity: null,
+      scopes: [],
+      edgeAuthHeaders: { "x-api-key": target.apiKey },
+      onHelloOk: resolveHello,
+      onConnectError: rejectHello,
+    });
     client.start();
     const hello = await waitForHello(connected, request, timeoutMs);
     if (!hasGrant(hello, operation)) return { status: "unavailable" };
@@ -134,8 +129,8 @@ async function requestNativeWorkspaceFile(
     if (operation === "read" && isMissingFileError(error)) return { status: "missing" };
     return { status: "unavailable" };
   } finally {
-    client.stop();
-    await client.stopAndWait({ timeoutMs: 1_000 }).catch(() => undefined);
+    client?.stop();
+    await client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => undefined);
   }
 }
 
@@ -183,14 +178,7 @@ function normalizeTarget(
     return undefined;
   }
   if (parsed.protocol !== "wss:") return undefined;
-  if (
-    !isNonEmptyString(target.nativeAgentId) ||
-    !isNonEmptyString(target.identity) ||
-    !isNonEmptyString(target.userHeader) ||
-    target.userHeader.includes("\r") ||
-    target.userHeader.includes("\n") ||
-    (target.tlsFingerprint !== undefined && !isNonEmptyString(target.tlsFingerprint))
-  ) {
+  if (!isNonEmptyString(target.nativeAgentId) || !isNonEmptyString(target.apiKey)) {
     return undefined;
   }
   return target;

@@ -2,13 +2,13 @@
 
 **Date:** 2026-08-31
 
-**Status:** Completed — historical transport design superseded by the CLI execution simplification
+**Status:** Completed — historical transport design superseded by the workspace-file API
 
 **Historical note:** This record preserves the original approved remote
-native-device enrollment design. Current gateway administration behavior is the
-CLI execution path documented in
-[Agents](../docs/reference/agents.md#gateway-administration) and
-[Gateway Administration Flow](../docs/flows/gateway-administration.md).
+native-device enrollment design. It does not describe current gateway access.
+Use [Agents](../docs/reference/agents.md#workspace-files), the
+[workspace-file flow](../docs/flows/workspace-files.md), and the later
+[private routing specification](.archive/20-private-agent-gateway-routing.md).
 
 **Owner:** OCC admission and API; bundled Kubernetes Compute implementation
 
@@ -123,7 +123,7 @@ Implementation commit: `27fa96cf22522dfc382ddd9c4f152692783c76f2`. Verification 
 
 Both required native scenarios passed against the production application/worker composed in-process, limited-role PostgreSQL, and real digest-pinned OpenClaw `2026.8.1` / Codex `0.150.1` Pods: partial-enrollment recovery after token-persistence RBAC failure (135.6 seconds), and the complete command, model-turn, restart, revision-replacement, revocation, credential-loss, and supplemental failure proof (307.2 seconds). The partial scenario's passing result was retained while the positive scenario was rerun after audit/revocation test-helper corrections; production code and the partial scenario were unchanged. The proof does not claim a Helm-installed controller deployment or CI success.
 
-Current behavior is documented in the [Agent reference](../docs/reference/agents.md), [Kubernetes reference](../docs/reference/drivers/kubernetes-compute.md), [execution flow](../docs/flows/gateway-administration.md), and [deployment guide](../docs/guides/deploy.md).
+Current behavior is documented in the [Agent reference](../docs/reference/agents.md), [Kubernetes reference](../docs/reference/drivers/kubernetes-compute.md), [current workspace-file flow](../docs/flows/workspace-files.md), and [deployment guide](../docs/guides/deploy.md).
 
 ## Manual Notes
 

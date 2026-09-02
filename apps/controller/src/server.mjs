@@ -3,7 +3,7 @@ import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
 import { loadInstallationConfiguration } from "./composition/installation-config.ts";
 import { composeProduction } from "./composition/production.ts";
-import { loadWorkspaceFilesAccess } from "./composition/workspace-files.ts";
+import { validateWorkspaceFilesApiKeyPath } from "./composition/workspace-files.ts";
 
 const loopbackHosts = new Set(["127.0.0.1", "::1", "[::1]"]);
 const developmentBindHosts = new Set(["127.0.0.1", "::1", "0.0.0.0"]);
@@ -100,12 +100,14 @@ function configuration() {
     ...(poolMax === undefined ? {} : { poolMax }),
   };
 
-  const workspaceFilesConfigPath = process.env.OCC_WORKSPACE_FILES_CONFIG_PATH;
-  if (workspaceFilesConfigPath !== undefined) {
-    if (workspaceFilesConfigPath.trim().length === 0 || !isAbsolute(workspaceFilesConfigPath)) {
-      throw new Error(
-        "OCC_WORKSPACE_FILES_CONFIG_PATH must identify an absolute workspace-files YAML path.",
-      );
+  if (process.env.OCC_WORKSPACE_FILES_CONFIG_PATH !== undefined) {
+    throw new Error("OCC_WORKSPACE_FILES_CONFIG_PATH has been removed.");
+  }
+
+  const gatewayApiKeyPath = process.env.OCC_GATEWAY_API_KEY_PATH;
+  if (gatewayApiKeyPath !== undefined) {
+    if (gatewayApiKeyPath.trim().length === 0 || !isAbsolute(gatewayApiKeyPath)) {
+      throw new Error("OCC_GATEWAY_API_KEY_PATH must identify an absolute mounted-file path.");
     }
   }
 
@@ -128,7 +130,7 @@ function configuration() {
       ...settings,
       authSecret: requiredEnvironment("OCC_AUTH_SECRET"),
       authBaseURL,
-      ...(workspaceFilesConfigPath === undefined ? {} : { workspaceFilesConfigPath }),
+      ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
     });
   }
 
@@ -143,21 +145,17 @@ function configuration() {
     ...settings,
     authSecret,
     authBaseURL,
-    ...(workspaceFilesConfigPath === undefined ? {} : { workspaceFilesConfigPath }),
+    ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
     ...(trustedDevelopmentBridgeCidr === undefined ? {} : { trustedDevelopmentBridgeCidr }),
   });
 }
 
 async function start() {
   const settings = configuration();
-  const workspaceFilesAccess =
-    settings.workspaceFilesConfigPath === undefined
-      ? undefined
-      : await loadWorkspaceFilesAccess(settings.workspaceFilesConfigPath);
-  const compositionSettings = {
-    ...settings,
-    ...(workspaceFilesAccess === undefined ? {} : { workspaceFilesAccess }),
-  };
+  if (settings.gatewayApiKeyPath !== undefined) {
+    await validateWorkspaceFilesApiKeyPath(settings.gatewayApiKeyPath);
+  }
+  const compositionSettings = settings;
   const drivers = await loadInstallationConfiguration({ mode: settings.mode });
   let serviceAccountDriverFactory;
   const selectedServiceAccountDriver = drivers?.installation.drivers.service_account;

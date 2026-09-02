@@ -1,42 +1,71 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadWorkspaceFilesAccess } from "../../apps/controller/src/composition/workspace-files.ts";
+import {
+  createWorkspaceFilesAccess,
+  readWorkspaceFilesApiKey,
+  validateGatewayApiKeyPath,
+  validateWorkspaceFilesApiKeyPath,
+} from "../../apps/controller/src/composition/workspace-files.ts";
 import { createInstallationDriverConfiguration as installation } from "../helpers/installation-driver-configuration.mjs";
 
 const namespaceId = "ns_00000000-0000-4000-8000-000000000001";
 const agentId = "agt_00000000-0000-4000-8000-000000000001";
-const otherNamespaceId = "ns_00000000-0000-4000-8000-000000000002";
-const otherAgentId = "agt_00000000-0000-4000-8000-000000000002";
 
-async function yamlPath(t, basename, value) {
-  const directory = await mkdtemp(join(tmpdir(), "occ-workspace-files-config-"));
-  t.after(async () => rm(directory, { recursive: true, force: true }));
-  const path = join(directory, basename);
-  // JSON is valid YAML and exercises the same Kubernetes SDK parser as server startup.
-  await writeFile(path, JSON.stringify(value), "utf8");
-  return path;
-}
-
-async function rawYamlPath(t, basename, contents) {
-  const directory = await mkdtemp(join(tmpdir(), "occ-workspace-files-config-"));
+async function tempPath(t, basename, contents) {
+  const directory = await mkdtemp(join(tmpdir(), "occ-gateway-api-key-"));
   t.after(async () => rm(directory, { recursive: true, force: true }));
   const path = join(directory, basename);
   await writeFile(path, contents, "utf8");
   return path;
 }
 
-function endpoint(overrides = {}) {
+async function projectedSecretKeyPath(t, contents) {
+  const directory = await mkdtemp(join(tmpdir(), "occ-projected-gateway-api-key-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const revisionDirectory = "..2026_09_01_00_00_00.000000001";
+  await mkdir(join(directory, revisionDirectory));
+  await writeFile(join(directory, revisionDirectory, "gateway-api-key"), contents, "utf8");
+  await symlink(revisionDirectory, join(directory, "..data"));
+  await symlink("..data/gateway-api-key", join(directory, "gateway-api-key"));
+  return { directory, path: join(directory, "gateway-api-key") };
+}
+
+async function rotateProjectedSecretKey(projected, contents) {
+  const revisionDirectory = `..2026_09_01_00_00_00.${Math.random().toString(16).slice(2)}`;
+  await mkdir(join(projected.directory, revisionDirectory));
+  await writeFile(
+    join(projected.directory, revisionDirectory, "gateway-api-key"),
+    contents,
+    "utf8",
+  );
+  await symlink(revisionDirectory, join(projected.directory, "..data_tmp"));
+  await rename(join(projected.directory, "..data_tmp"), join(projected.directory, "..data"));
+}
+
+function computeDriver(overrides = {}) {
   return {
-    namespaceId,
-    agentId,
-    url: "wss://gateway.example/openclaw",
-    nativeAgentId: "native-agent-1",
-    identity: "occ-workspace-files",
-    userHeader: "x-openclaw-operator",
+    id: "compute-workspace-files",
+    capability: "compute",
+    implementation: "deterministic-test",
+    async ensureNamespace(namespace) {
+      return { namespaceId: namespace.id, namespaceReady: true };
+    },
+    async deleteNamespace(namespace) {
+      return { namespaceId: namespace.id, namespaceDeleted: true };
+    },
+    async prepareRevision(revision) {
+      return {
+        namespaceId: revision.namespaceId,
+        agentId: revision.agentId,
+        revisionId: revision.id,
+        ready: true,
+      };
+    },
+    async retireRevision() {},
     ...overrides,
   };
 }
@@ -47,6 +76,7 @@ function revision(overrides = {}) {
     namespaceId,
     agentId,
     revision: 1,
+    providerId: "provider-test",
     configurationId: "cfg_00000000-0000-4000-8000-000000000001",
     configurationKind: "agent",
     configurationGeneration: 1,
@@ -63,94 +93,107 @@ function readRequest(overrides = {}) {
   return {
     revision: revision(overrides.revision),
     filename: "AGENTS.md",
-    clientAddress: "127.0.0.1",
     signal: new AbortController().signal,
-    deadline: new Date(Date.now() + 1_000),
+    deadline: new Date(Date.now() + 100),
   };
 }
 
-async function load(t, configuration) {
-  return loadWorkspaceFilesAccess(await yamlPath(t, "workspace-files.yaml", configuration));
-}
+test("workspace-files API key parser accepts one mounted key and re-reads rotations", async (t) => {
+  const path = await tempPath(t, "gateway-api-key", "key-without-newline");
 
-test("workspace-files endpoint configuration requires an absolute YAML path", async () => {
-  await assert.rejects(
-    loadWorkspaceFilesAccess("workspace-files.yaml"),
-    /OCC_WORKSPACE_FILES_CONFIG_PATH|absolute/i,
-  );
+  await validateWorkspaceFilesApiKeyPath(path);
+  assert.equal(await readWorkspaceFilesApiKey(path), "key-without-newline");
+
+  await writeFile(path, "rotated-key", "utf8");
+  assert.equal(await readWorkspaceFilesApiKey(path), "rotated-key");
 });
 
-test("workspace-files endpoint configuration rejects unavailable and malformed YAML", async (t) => {
-  await assert.rejects(
-    loadWorkspaceFilesAccess(join(tmpdir(), "missing-workspace-files.yaml")),
-    /unavailable/i,
-  );
-  await assert.rejects(
-    loadWorkspaceFilesAccess(await rawYamlPath(t, "workspace-files.yaml", "endpoints: [")),
-    /valid YAML/i,
-  );
+test("workspace-files API key parser follows projected Secret symlink rotations", async (t) => {
+  const projected = await projectedSecretKeyPath(t, "projected-key");
+
+  await validateWorkspaceFilesApiKeyPath(projected.path);
+  assert.equal(await readWorkspaceFilesApiKey(projected.path), "projected-key");
+
+  await rotateProjectedSecretKey(projected, "projected-rotated-key");
+  assert.equal(await readWorkspaceFilesApiKey(projected.path), "projected-rotated-key");
 });
 
-test("workspace-files endpoint configuration loads one exact Agent access map", async (t) => {
-  const access = await load(t, { endpoints: [endpoint()] });
+test("workspace-files API key parser rejects missing, relative, empty, whitespace, and oversized files", async (t) => {
+  const missing = join(tmpdir(), "missing-gateway-api-key");
+  assert.throws(() => validateGatewayApiKeyPath("gateway-api-key"), /absolute/i);
+  await assert.rejects(validateWorkspaceFilesApiKeyPath("gateway-api-key"), /unavailable|invalid/i);
+  await assert.rejects(validateWorkspaceFilesApiKeyPath(missing), /unavailable|invalid/i);
 
-  assert.equal(typeof access.read, "function");
-  assert.equal(typeof access.write, "function");
-
-  // The configured tuple is exact; sibling and cross-Namespace Agents fail closed
-  // before the native gateway client can select a fallback target.
-  assert.deepEqual(
-    await access.read(readRequest({ revision: revision({ namespaceId: otherNamespaceId }) })),
-    { status: "unavailable" },
-  );
-  assert.deepEqual(
-    await access.read(readRequest({ revision: revision({ agentId: otherAgentId }) })),
-    { status: "unavailable" },
-  );
-});
-
-test("workspace-files endpoint configuration rejects malformed endpoint files", async (t) => {
-  for (const [configuration, expected] of [
-    [{}, /endpoints|schema/i],
-    [{ endpoints: [], extra: true }, /endpoints|schema/i],
-    [{ endpoints: {} }, /endpoints|schema/i],
-    [{ endpoints: [endpoint({ unexpected: true })] }, /unsupported|unknown|schema/i],
-    [{ endpoints: [endpoint({ namespaceId: "" })] }, /namespaceId|schema/i],
-    [{ endpoints: [endpoint({ agentId: "" })] }, /agentId|schema/i],
-    [{ endpoints: [endpoint({ url: "" })] }, /url|schema/i],
-    [{ endpoints: [endpoint({ nativeAgentId: "" })] }, /nativeAgentId|schema/i],
-    [{ endpoints: [endpoint({ identity: "" })] }, /identity|schema/i],
-    [{ endpoints: [endpoint({ userHeader: "" })] }, /userHeader|schema/i],
-    [{ endpoints: [endpoint({ url: "relative" })] }, /url|absolute/i],
-    [{ endpoints: [endpoint({ url: "https://gateway.example/openclaw" })] }, /url|wss/i],
-    [{ endpoints: [endpoint({ url: "wss://user:pass@gateway.example/openclaw" })] }, /url/i],
-    [{ endpoints: [endpoint({ url: "wss://gateway.example/openclaw?token=secret" })] }, /url/i],
-    [{ endpoints: [endpoint({ url: "wss://gateway.example/openclaw#secret" })] }, /url/i],
-    [{ endpoints: [endpoint({ userHeader: "authorization" })] }, /header|reserved/i],
-    [{ endpoints: [endpoint({ userHeader: "cookie" })] }, /header|reserved/i],
-    [{ endpoints: [endpoint({ userHeader: "host" })] }, /header|reserved/i],
-    [{ endpoints: [endpoint({ userHeader: "connection" })] }, /header|reserved/i],
-    [{ endpoints: [endpoint({ userHeader: "content-length" })] }, /header|reserved/i],
-    [{ endpoints: [endpoint({ userHeader: "transfer-encoding" })] }, /header|reserved/i],
-    [{ endpoints: [endpoint({ userHeader: "x-forwarded-for" })] }, /header|reserved/i],
-    [{ endpoints: [endpoint({ userHeader: "x-real-ip" })] }, /header|reserved/i],
-    [{ endpoints: [endpoint({ userHeader: "x-user\r\nx-secret" })] }, /header/i],
-    [{ endpoints: [endpoint({ identity: "occ\r\nx-secret: leaked" })] }, /identity|header/i],
-    [{ endpoints: [endpoint({ tlsFingerprint: "sha256:not-hex" })] }, /fingerprint/i],
-    [
-      { endpoints: [endpoint(), endpoint({ nativeAgentId: "native-agent-duplicate" })] },
-      /duplicate|namespaceId|agentId/i,
-    ],
+  for (const [basename, contents] of [
+    ["empty", ""],
+    ["spaces", "   "],
+    ["leading-space", " key"],
+    ["trailing-space", "key "],
+    ["embedded-space", "ke y"],
+    ["nul", "key\u0000"],
+    ["tab", "key\tvalue"],
+    ["non-ascii", "keyé"],
+    ["one-newline", "key\n"],
+    ["two-newlines", "key\n\n"],
+    ["carriage-return", "key\r\n"],
+    ["oversized", "k".repeat(4 * 1024 + 1)],
   ]) {
-    await assert.rejects(load(t, configuration), expected);
+    await assert.rejects(
+      readWorkspaceFilesApiKey(await tempPath(t, basename, contents)),
+      /invalid/i,
+      basename,
+    );
   }
 });
 
-test("workspace-files server startup validates API-only endpoint configuration before database access", async (t) => {
-  const workspacePath = await yamlPath(t, "workspace-files.yaml", {
-    endpoints: [endpoint({ url: "wss://gateway.example/openclaw?token=secret" })],
-  });
-  const installationPath = await yamlPath(t, "installation.yaml", installation());
+test("workspace-files access resolves native gateway endpoints through the selected Compute Driver", async (t) => {
+  const path = await tempPath(t, "gateway-api-key", "native-key");
+  const endpoints = [];
+  const access = createWorkspaceFilesAccess(
+    computeDriver({
+      getGatewayEndpoint(candidate) {
+        endpoints.push(candidate);
+        if (candidate.namespaceId !== namespaceId || candidate.agentId !== agentId)
+          return undefined;
+        return "https://gateway.example/openclaw";
+      },
+    }),
+    path,
+  );
+
+  assert.deepEqual(await access.read(readRequest()), { status: "unavailable" });
+  assert.equal(endpoints.length, 1);
+  assert.equal(endpoints[0].namespaceId, namespaceId);
+  assert.equal(endpoints[0].agentId, agentId);
+});
+
+test("workspace-files access reports unavailable when the Compute Driver has no native endpoint", async (t) => {
+  const access = createWorkspaceFilesAccess(
+    computeDriver(),
+    await tempPath(t, "key", "native-key"),
+  );
+
+  assert.deepEqual(await access.read(readRequest()), { status: "unavailable" });
+});
+
+test("workspace-files access maps rotated missing API-key files to unavailable after startup", async (t) => {
+  const path = await tempPath(t, "gateway-api-key", "native-key");
+  const access = createWorkspaceFilesAccess(
+    computeDriver({
+      getGatewayEndpoint() {
+        return "wss://gateway.example/openclaw";
+      },
+    }),
+    path,
+  );
+  await rm(path);
+
+  assert.deepEqual(await access.read(readRequest()), { status: "unavailable" });
+});
+
+test("workspace-files server startup validates API-only key configuration before database access", async (t) => {
+  const gatewayApiKeyPath = await tempPath(t, "gateway-api-key", " ");
+  const installationPath = await tempPath(t, "installation.yaml", JSON.stringify(installation()));
 
   const server = spawnSync(process.execPath, ["apps/controller/src/server.mjs"], {
     cwd: process.cwd(),
@@ -163,13 +206,38 @@ test("workspace-files server startup validates API-only endpoint configuration b
       OCC_AUTH_SECRET: "production-auth-secret-with-at-least-32-characters",
       OCC_AUTH_BASE_URL: "http://192.0.2.10:8080",
       OCC_DATABASE_URL: "postgresql://127.0.0.1:1/occ",
-      OCC_WORKSPACE_FILES_CONFIG_PATH: workspacePath,
+      OCC_GATEWAY_API_KEY_PATH: gatewayApiKeyPath,
     },
     encoding: "utf8",
     timeout: 10_000,
   });
 
   assert.equal(server.status, 1);
-  assert.match(server.stderr, /workspace file|OCC_WORKSPACE_FILES_CONFIG_PATH|url/i);
+  assert.match(server.stderr, /gateway API key/i);
+  assert.doesNotMatch(server.stderr, /ECONNREFUSED|PostgreSQL|database/i);
+});
+
+test("workspace-files server startup rejects the removed endpoint-map environment", async (t) => {
+  const installationPath = await tempPath(t, "installation.yaml", JSON.stringify(installation()));
+
+  const server = spawnSync(process.execPath, ["apps/controller/src/server.mjs"], {
+    cwd: process.cwd(),
+    env: {
+      PATH: process.env.PATH,
+      NODE_ENV: "production",
+      OCC_CONFIG_PATH: installationPath,
+      OCC_HOST: "192.0.2.10",
+      OCC_PORT: "8080",
+      OCC_AUTH_SECRET: "production-auth-secret-with-at-least-32-characters",
+      OCC_AUTH_BASE_URL: "http://192.0.2.10:8080",
+      OCC_DATABASE_URL: "postgresql://127.0.0.1:1/occ",
+      OCC_WORKSPACE_FILES_CONFIG_PATH: "/etc/openclaw/workspace-files/workspace-files.yaml",
+    },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+
+  assert.equal(server.status, 1);
+  assert.match(server.stderr, /OCC_WORKSPACE_FILES_CONFIG_PATH|removed/i);
   assert.doesNotMatch(server.stderr, /ECONNREFUSED|PostgreSQL|database/i);
 });

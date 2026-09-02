@@ -30,13 +30,21 @@ spec:
               - key: {{ $.Values.installation.key }}
                 path: installation.yaml
         {{- if eq $component "api" }}
-        {{- if $.Values.workspaceFiles.configMapName }}
-        - name: workspace-file-endpoints
-          configMap:
-            name: {{ $.Values.workspaceFiles.configMapName | quote }}
+        {{- if $.Values.gatewayRouting.enabled }}
+        - name: gateway-api-key
+          secret:
+            secretName: {{ $.Values.gatewayRouting.apiKeySecretName | quote }}
             items:
-              - key: {{ required "workspaceFiles.key is required" $.Values.workspaceFiles.key | quote }}
-                path: workspace-files.yaml
+              - key: occ
+                path: key
+        {{- if $.Values.gatewayRouting.caSecretName }}
+        - name: gateway-ca
+          secret:
+            secretName: {{ $.Values.gatewayRouting.caSecretName | quote }}
+            items:
+              - key: {{ $.Values.gatewayRouting.caSecretKey | quote }}
+                path: ca.crt
+        {{- end }}
         {{- end }}
         {{- if $.Values.provider.chatgpt.enabled }}
         {{- $chatgpt := $.Values.provider.chatgpt }}
@@ -74,9 +82,13 @@ spec:
               value: /etc/openclaw/installation/installation.yaml
             {{- include "openclaw.secretEnv" (dict "name" "OCC_DATABASE_URL" "secretName" $.Values.database.secretName "key" $.Values.database.appUrlKey) | nindent 12 }}
             {{- if eq $component "api" }}
-            {{- if $.Values.workspaceFiles.configMapName }}
-            - name: OCC_WORKSPACE_FILES_CONFIG_PATH
-              value: /etc/openclaw/workspace-files/workspace-files.yaml
+            {{- if $.Values.gatewayRouting.enabled }}
+            - name: OCC_GATEWAY_API_KEY_PATH
+              value: /etc/openclaw/gateway-api-key/key
+            {{- if $.Values.gatewayRouting.caSecretName }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /etc/openclaw/gateway-ca/ca.crt
+            {{- end }}
             {{- end }}
             - name: OCC_HOST
               valueFrom:
@@ -104,10 +116,15 @@ spec:
               mountPath: /etc/openclaw/installation
               readOnly: true
             {{- if eq $component "api" }}
-            {{- if $.Values.workspaceFiles.configMapName }}
-            - name: workspace-file-endpoints
-              mountPath: /etc/openclaw/workspace-files
+            {{- if $.Values.gatewayRouting.enabled }}
+            - name: gateway-api-key
+              mountPath: /etc/openclaw/gateway-api-key
               readOnly: true
+            {{- if $.Values.gatewayRouting.caSecretName }}
+            - name: gateway-ca
+              mountPath: /etc/openclaw/gateway-ca
+              readOnly: true
+            {{- end }}
             {{- end }}
             {{- if $.Values.provider.chatgpt.enabled }}
             - name: chatgpt-admin

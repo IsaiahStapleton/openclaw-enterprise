@@ -1,5 +1,6 @@
 {{- define "openclaw.validate" -}}
 {{- if hasKey .Values "integrations" -}}{{- fail "integrations is retired; configure ChatGPT packaging under provider.chatgpt" -}}{{- end -}}
+{{- if hasKey .Values "workspaceFiles" -}}{{- fail "workspaceFiles is retired; configure private Envoy Gateway routing under gatewayRouting" -}}{{- end -}}
 {{- range $name, $image := .Values.images -}}
 {{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-fA-F0-9]{64}$" $image) -}}
 {{- fail (printf "images.%s must be an approved immutable SHA-256 image reference" $name) -}}
@@ -45,6 +46,31 @@
 {{- if eq .Values.database.secretName .Values.auth.secretName -}}
 {{- fail "Better Auth signing material must use a dedicated Secret" -}}
 {{- end -}}
+{{- if .Values.gatewayRouting.enabled -}}
+{{- $routing := .Values.gatewayRouting -}}
+{{- $gatewayNamespace := include "openclaw.gatewayRouting.gatewayNamespace" . -}}
+{{- if not $routing.hostname -}}{{- fail "gatewayRouting.hostname must identify the private Envoy Gateway hostname" -}}{{- end -}}
+{{- if not $routing.gatewayClassName -}}{{- fail "gatewayRouting.gatewayClassName must reference an operator-created GatewayClass" -}}{{- end -}}
+{{- if ne $gatewayNamespace .Release.Namespace -}}{{- fail "gatewayRouting.gatewayNamespace must match the Helm release namespace because the API and Envoy SecurityPolicy share the operator-created API-key Secret" -}}{{- end -}}
+{{- if not $routing.envoyNamespace -}}{{- fail "gatewayRouting.envoyNamespace must identify the existing Envoy Gateway controller namespace" -}}{{- end -}}
+{{- if or (not $routing.issuerRef) (not $routing.issuerRef.name) (not $routing.issuerRef.kind) (not $routing.issuerRef.group) -}}
+{{- fail "gatewayRouting.issuerRef must reference an existing cert-manager issuer" -}}
+{{- end -}}
+{{- if not $routing.apiKeySecretName -}}{{- fail "gatewayRouting.apiKeySecretName must reference an operator-created Opaque Secret with key 'occ'" -}}{{- end -}}
+{{- if or (eq $routing.apiKeySecretName .Values.installation.secretName) (eq $routing.apiKeySecretName .Values.database.secretName) (eq $routing.apiKeySecretName .Values.auth.secretName) -}}
+{{- fail "gatewayRouting.apiKeySecretName must use a dedicated Secret" -}}
+{{- end -}}
+{{- if or $routing.caSecretName $routing.caSecretKey -}}
+{{- if or (not $routing.caSecretName) (not $routing.caSecretKey) -}}{{- fail "gatewayRouting.caSecretName and gatewayRouting.caSecretKey must be set together" -}}{{- end -}}
+{{- end -}}
+{{- if or (lt (int $routing.tenantGatewayPort) 1) (gt (int $routing.tenantGatewayPort) 65535) -}}
+{{- fail "gatewayRouting.tenantGatewayPort must be a valid TCP port" -}}
+{{- end -}}
+{{- if or (lt (int $routing.envoyHttpsTargetPort) 1) (gt (int $routing.envoyHttpsTargetPort) 65535) -}}
+{{- fail "gatewayRouting.envoyHttpsTargetPort must be a valid TCP port" -}}
+{{- end -}}
+{{- if not $routing.envoyGatewayPodLabels -}}{{- fail "gatewayRouting.envoyGatewayPodLabels must select the Envoy Gateway control-plane Pods for xDS egress" -}}{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "openclaw.labels" -}}
@@ -76,4 +102,24 @@ capabilities:
     secretKeyRef:
       name: {{ .secretName }}
       key: {{ .key }}
+{{- end -}}
+
+{{- define "openclaw.gatewayRouting.gatewayName" -}}
+{{- default (printf "%s-agent-gateways" .Release.Name | trunc 63 | trimSuffix "-") .Values.gatewayRouting.gatewayName -}}
+{{- end -}}
+
+{{- define "openclaw.gatewayRouting.gatewayNamespace" -}}
+{{- default .Release.Namespace .Values.gatewayRouting.gatewayNamespace -}}
+{{- end -}}
+
+{{- define "openclaw.gatewayRouting.tlsSecretName" -}}
+{{- default (printf "%s-tls" (include "openclaw.gatewayRouting.gatewayName" .) | trunc 63 | trimSuffix "-") .Values.gatewayRouting.tlsSecretName -}}
+{{- end -}}
+
+{{- define "openclaw.gatewayRouting.routeNamespaceLabel" -}}
+{{- printf "%s/%s" .Release.Namespace (include "openclaw.gatewayRouting.gatewayName" .) | sha256sum | trunc 12 -}}
+{{- end -}}
+
+{{- define "openclaw.gatewayRouting.envoyNetworkPolicyName" -}}
+{{- printf "%s-%s-envoy-dataplane" (.Release.Name | trunc 34 | trimSuffix "-") (include "openclaw.gatewayRouting.routeNamespaceLabel" .) -}}
 {{- end -}}

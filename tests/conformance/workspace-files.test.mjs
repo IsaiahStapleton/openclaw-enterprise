@@ -286,6 +286,7 @@ test("Agent workspace file routes read and replace fixed files through the selec
       assert.equal(read.signal.aborted, false);
       assert.ok(read.deadline instanceof Date);
       assert.ok(read.deadline.getTime() > Date.now());
+      assert.equal(Object.hasOwn(read, "clientAddress"), false);
       return {
         status: "ok",
         file: { name: read.filename, content: `content from ${read.revision.agentId}\n` },
@@ -296,6 +297,7 @@ test("Agent workspace file routes read and replace fixed files through the selec
       assert.equal(write.signal.aborted, false);
       assert.ok(write.deadline instanceof Date);
       assert.ok(write.deadline.getTime() > Date.now());
+      assert.equal(Object.hasOwn(write, "clientAddress"), false);
       return { status: "ok", file: { name: write.filename, size: 100_000 } };
     },
   };

@@ -17,7 +17,6 @@ export interface ControllerWorkspaceFileMetadata {
 export interface ControllerWorkspaceFileReadRequest {
   readonly revision: Readonly<AgentRevision>;
   readonly filename: WorkspaceFileName;
-  readonly clientAddress: string;
   readonly signal: AbortSignal;
   readonly deadline: Date;
 }

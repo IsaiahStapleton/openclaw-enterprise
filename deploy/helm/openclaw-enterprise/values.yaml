@@ -27,9 +27,26 @@ provider:
     key: admin-key
     providerCidr: ""
 
-workspaceFiles:
-  configMapName: ""
-  key: workspace-files.yaml
+gatewayRouting:
+  enabled: false
+  hostname: ""
+  gatewayClassName: ""
+  gatewayName: ""
+  gatewayNamespace: ""
+  envoyNamespace: envoy-gateway-system
+  apiKeySecretName: ""
+  caSecretName: ""
+  caSecretKey: ""
+  tlsSecretName: ""
+  tenantGatewayPort: 8080
+  envoyHttpsTargetPort: 10443
+  issuerRef:
+    name: ""
+    kind: ClusterIssuer
+    group: cert-manager.io
+  envoyGatewayPodLabels:
+    control-plane: envoy-gateway
+    app.kubernetes.io/name: gateway-helm
 
 database:
   secretName: occ-database

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import test from "node:test";
@@ -31,14 +32,21 @@ const chatgptValues = {
   "provider.chatgpt.enabled": "true",
   "provider.chatgpt.providerCidr": "198.51.100.25/32",
 };
+const gatewayRoutingValues = {
+  "gatewayRouting.enabled": "true",
+  "gatewayRouting.hostname": "agents.example.internal",
+  "gatewayRouting.gatewayClassName": "private-envoy-gateway",
+  "gatewayRouting.issuerRef.name": "occ-private-issuer",
+  "gatewayRouting.apiKeySecretName": "occ-gateway-api-key",
+};
 
-async function render(overrides = {}) {
+async function render(overrides = {}, options = {}) {
   const args = [
     "template",
     "oce",
     "deploy/helm/openclaw-enterprise",
     "--namespace",
-    "openclaw-system",
+    options.namespace ?? "openclaw-system",
   ];
   for (const [key, value] of Object.entries({ ...values, ...overrides })) {
     args.push("--set", `${key}=${value}`);
@@ -83,6 +91,17 @@ async function composeConfiguration() {
     },
   );
   return JSON.parse(stdout);
+}
+
+function routeNamespaceLabel(namespace, gatewayName) {
+  return createHash("sha256").update(`${namespace}/${gatewayName}`).digest("hex").slice(0, 12);
+}
+
+function envoyNetworkPolicyName(releaseName, namespace, gatewayName) {
+  return `${releaseName.slice(0, 34).replace(/-$/, "")}-${routeNamespaceLabel(
+    namespace,
+    gatewayName,
+  )}-envoy-dataplane`;
 }
 
 test("production native examples satisfy the current Helm, Installation, and PVC schemas", async () => {
@@ -444,6 +463,49 @@ test(
         "ChatGPT Provider without an admin Secret key",
         { ...chatgptValues, "provider.chatgpt.key": "" },
       ],
+      [
+        "retired workspace-files endpoint ConfigMap",
+        { "workspaceFiles.configMapName": "operator-agent-endpoints" },
+      ],
+      ["private Envoy Gateway without a hostname", { "gatewayRouting.enabled": "true" }],
+      [
+        "private Envoy Gateway without an existing GatewayClass",
+        {
+          "gatewayRouting.enabled": "true",
+          "gatewayRouting.hostname": "agents.example.internal",
+        },
+      ],
+      [
+        "private Envoy Gateway in a separate namespace",
+        {
+          ...gatewayRoutingValues,
+          "gatewayRouting.gatewayNamespace": "shared-gateway-system",
+        },
+      ],
+      [
+        "private Envoy Gateway without an existing cert-manager issuer",
+        { ...gatewayRoutingValues, "gatewayRouting.issuerRef.name": "" },
+      ],
+      [
+        "private Envoy Gateway without an operator-created API-key Secret",
+        { ...gatewayRoutingValues, "gatewayRouting.apiKeySecretName": "" },
+      ],
+      [
+        "private Envoy Gateway sharing the Better Auth Secret",
+        { ...gatewayRoutingValues, "gatewayRouting.apiKeySecretName": "occ-auth" },
+      ],
+      [
+        "private Envoy Gateway with an incomplete private CA Secret",
+        { ...gatewayRoutingValues, "gatewayRouting.caSecretName": "occ-private-ca" },
+      ],
+      [
+        "private Envoy Gateway with an invalid tenant gateway port",
+        { ...gatewayRoutingValues, "gatewayRouting.tenantGatewayPort": "0" },
+      ],
+      [
+        "private Envoy Gateway with an invalid Envoy HTTPS target port",
+        { ...gatewayRoutingValues, "gatewayRouting.envoyHttpsTargetPort": "0" },
+      ],
     ]) {
       // Rejection comes from the actual Helm templates, not a reimplemented test validator.
       await assert.rejects(
@@ -522,53 +584,266 @@ test("development packaging isolates bootstrap service key output to the bootstr
 });
 
 test(
-  "operator workspace endpoints mount only into the API without widening egress",
+  "private Envoy Gateway routing renders explicit operator-owned transport and tenant route boundaries",
   tooling,
   async () => {
-    const baseline = await resources((await render()).stdout);
     const configured = await resources(
       (
         await render({
-          "workspaceFiles.configMapName": "operator-agent-endpoints",
-          "workspaceFiles.key": "endpoints.yaml",
+          ...gatewayRoutingValues,
+          "gatewayRouting.caSecretName": "occ-private-ca",
+          "gatewayRouting.caSecretKey": "ca.crt",
         })
       ).stdout,
     );
+    const gatewayName = "oce-agent-gateways";
+    const gatewayNamespace = "openclaw-system";
+    const label = routeNamespaceLabel(gatewayNamespace, gatewayName);
+    const alternateNamespace = "openclaw-alt";
+    const alternateObjects = await resources(
+      (
+        await render(
+          {
+            ...gatewayRoutingValues,
+          },
+          { namespace: alternateNamespace },
+        )
+      ).stdout,
+    );
+    const envoyPolicyName = envoyNetworkPolicyName("oce", gatewayNamespace, gatewayName);
+    const alternateEnvoyPolicyName = envoyNetworkPolicyName("oce", alternateNamespace, gatewayName);
+    assert.notEqual(envoyPolicyName, alternateEnvoyPolicyName);
+    assert.match(envoyPolicyName, /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/);
+    assert.ok(envoyPolicyName.length <= 63);
+    assert.ok(
+      alternateObjects.some(
+        ({ kind, metadata }) =>
+          kind === "NetworkPolicy" &&
+          metadata.namespace === "envoy-gateway-system" &&
+          metadata.name === alternateEnvoyPolicyName,
+      ),
+    );
+    const deployment = (component) =>
+      configured.find(
+        ({ kind, metadata }) =>
+          kind === "Deployment" && metadata.labels["app.kubernetes.io/component"] === component,
+      );
+
     for (const component of ["api", "worker"]) {
-      const deployment = configured.find(
-        (object) =>
-          object.kind === "Deployment" &&
-          object.metadata.labels["app.kubernetes.io/component"] === component,
+      const pod = deployment(component).spec.template.spec;
+      const apiKeyVolume = pod.volumes.find(({ name }) => name === "gateway-api-key");
+      const caVolume = pod.volumes.find(({ name }) => name === "gateway-ca");
+      const apiKeyMount = pod.containers[0].volumeMounts.find(
+        ({ name }) => name === "gateway-api-key",
       );
-      const pod = deployment.spec.template.spec;
-      const volume = pod.volumes.find(({ name }) => name === "workspace-file-endpoints");
-      const mount = pod.containers[0].volumeMounts.find(
-        ({ name }) => name === "workspace-file-endpoints",
+      const caMount = pod.containers[0].volumeMounts.find(({ name }) => name === "gateway-ca");
+      const apiKeyPath = pod.containers[0].env.find(
+        ({ name }) => name === "OCC_GATEWAY_API_KEY_PATH",
       );
-      const setting = pod.containers[0].env.find(
-        ({ name }) => name === "OCC_WORKSPACE_FILES_CONFIG_PATH",
-      );
+      const caPath = pod.containers[0].env.find(({ name }) => name === "NODE_EXTRA_CA_CERTS");
       if (component === "worker") {
-        assert.equal(volume, undefined);
-        assert.equal(mount, undefined);
-        assert.equal(setting, undefined);
+        assert.equal(apiKeyVolume, undefined);
+        assert.equal(caVolume, undefined);
+        assert.equal(apiKeyMount, undefined);
+        assert.equal(caMount, undefined);
+        assert.equal(apiKeyPath, undefined);
+        assert.equal(caPath, undefined);
         continue;
       }
-      assert.deepEqual(volume.configMap, {
-        name: "operator-agent-endpoints",
-        items: [{ key: "endpoints.yaml", path: "workspace-files.yaml" }],
+      assert.deepEqual(apiKeyVolume.secret, {
+        secretName: "occ-gateway-api-key",
+        items: [{ key: "occ", path: "key" }],
       });
-      assert.equal(mount.readOnly, true);
-      assert.equal(setting.value, mount.mountPath + "/workspace-files.yaml");
+      assert.deepEqual(caVolume.secret, {
+        secretName: "occ-private-ca",
+        items: [{ key: "ca.crt", path: "ca.crt" }],
+      });
+      assert.deepEqual(apiKeyMount, {
+        name: "gateway-api-key",
+        mountPath: "/etc/openclaw/gateway-api-key",
+        readOnly: true,
+      });
+      assert.deepEqual(caMount, {
+        name: "gateway-ca",
+        mountPath: "/etc/openclaw/gateway-ca",
+        readOnly: true,
+      });
+      assert.equal(apiKeyPath.value, "/etc/openclaw/gateway-api-key/key");
+      assert.equal(caPath.value, "/etc/openclaw/gateway-ca/ca.crt");
     }
-    // The operator supplies the endpoint and its narrow network policy; enabling
-    // the mount must not introduce cluster-wide access or silently open egress.
-    assert.deepEqual(
-      configured.filter(({ kind }) => kind === "NetworkPolicy"),
-      baseline.filter(({ kind }) => kind === "NetworkPolicy"),
+
+    const envoyProxy = configured.find(({ kind }) => kind === "EnvoyProxy");
+    assert.equal(envoyProxy.metadata.name, gatewayName);
+    assert.equal(envoyProxy.metadata.namespace, gatewayNamespace);
+    assert.deepEqual(envoyProxy.spec.provider.kubernetes.envoyService, { type: "ClusterIP" });
+
+    const gateway = configured.find(({ kind }) => kind === "Gateway");
+    assert.equal(gateway.metadata.name, gatewayName);
+    assert.equal(gateway.metadata.namespace, gatewayNamespace);
+    assert.equal(gateway.spec.gatewayClassName, "private-envoy-gateway");
+    assert.deepEqual(gateway.spec.infrastructure.parametersRef, {
+      group: "gateway.envoyproxy.io",
+      kind: "EnvoyProxy",
+      name: gatewayName,
+    });
+    assert.deepEqual(gateway.spec.listeners, [
+      {
+        name: "https",
+        hostname: "agents.example.internal",
+        port: 443,
+        protocol: "HTTPS",
+        tls: {
+          mode: "Terminate",
+          certificateRefs: [{ group: "", kind: "Secret", name: `${gatewayName}-tls` }],
+        },
+        allowedRoutes: {
+          namespaces: {
+            from: "Selector",
+            selector: { matchLabels: { "openclaw-enterprise.io/gateway": label } },
+          },
+          kinds: [{ group: "gateway.networking.k8s.io", kind: "HTTPRoute" }],
+        },
+      },
+    ]);
+
+    const certificate = configured.find(({ kind }) => kind === "Certificate");
+    assert.equal(certificate.metadata.name, `${gatewayName}-tls`);
+    assert.equal(certificate.metadata.namespace, gatewayNamespace);
+    assert.deepEqual(certificate.spec, {
+      secretName: `${gatewayName}-tls`,
+      dnsNames: ["agents.example.internal"],
+      issuerRef: {
+        name: "occ-private-issuer",
+        kind: "ClusterIssuer",
+        group: "cert-manager.io",
+      },
+    });
+
+    const securityPolicy = configured.find(({ kind }) => kind === "SecurityPolicy");
+    assert.equal(securityPolicy.metadata.name, `${gatewayName}-api-key`);
+    assert.equal(securityPolicy.metadata.namespace, gatewayNamespace);
+    assert.deepEqual(securityPolicy.spec, {
+      targetRefs: [{ group: "gateway.networking.k8s.io", kind: "Gateway", name: gatewayName }],
+      apiKeyAuth: {
+        credentialRefs: [{ group: "", kind: "Secret", name: "occ-gateway-api-key" }],
+        extractFrom: [{ headers: ["x-api-key"] }],
+        sanitize: true,
+      },
+    });
+
+    const dataplaneLabels = {
+      "app.kubernetes.io/component": "proxy",
+      "app.kubernetes.io/managed-by": "envoy-gateway",
+      "app.kubernetes.io/name": "envoy",
+      "gateway.envoyproxy.io/owning-gateway-namespace": gatewayNamespace,
+      "gateway.envoyproxy.io/owning-gateway-name": gatewayName,
+    };
+    const apiEnvoyEgress = configured.find(
+      ({ kind, metadata }) =>
+        kind === "NetworkPolicy" && metadata.name === "openclaw-enterprise-api-envoy-egress",
     );
+    assert.equal(apiEnvoyEgress.metadata.namespace, gatewayNamespace);
+    assert.deepEqual(apiEnvoyEgress.spec.podSelector.matchLabels, {
+      "app.kubernetes.io/name": "openclaw-enterprise",
+      "app.kubernetes.io/instance": "oce",
+      "app.kubernetes.io/component": "api",
+    });
+    assert.deepEqual(apiEnvoyEgress.spec.egress, [
+      {
+        to: [
+          {
+            namespaceSelector: {
+              matchLabels: { "kubernetes.io/metadata.name": "envoy-gateway-system" },
+            },
+            podSelector: { matchLabels: dataplaneLabels },
+          },
+        ],
+        ports: [{ protocol: "TCP", port: 10443 }],
+      },
+    ]);
+
+    const envoyPolicy = configured.find(
+      ({ kind, metadata }) => kind === "NetworkPolicy" && metadata.name === envoyPolicyName,
+    );
+    assert.equal(envoyPolicy.metadata.namespace, "envoy-gateway-system");
+    assert.deepEqual(envoyPolicy.spec.podSelector.matchLabels, dataplaneLabels);
+    assert.deepEqual(envoyPolicy.spec.ingress, [
+      {
+        from: [
+          {
+            namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": gatewayNamespace } },
+            podSelector: {
+              matchLabels: {
+                "app.kubernetes.io/name": "openclaw-enterprise",
+                "app.kubernetes.io/instance": "oce",
+                "app.kubernetes.io/component": "api",
+              },
+            },
+          },
+        ],
+        ports: [{ protocol: "TCP", port: 10443 }],
+      },
+    ]);
+    assert.deepEqual(envoyPolicy.spec.egress, [
+      {
+        to: [
+          {
+            namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "kube-system" } },
+            podSelector: { matchLabels: { "k8s-app": "kube-dns" } },
+          },
+        ],
+        ports: [
+          { protocol: "UDP", port: 53 },
+          { protocol: "TCP", port: 53 },
+        ],
+      },
+      {
+        to: [
+          {
+            namespaceSelector: { matchLabels: { "openclaw-enterprise.io/gateway": label } },
+            podSelector: { matchLabels: { "openclaw.dev/workload-role": "gateway" } },
+          },
+        ],
+        ports: [{ protocol: "TCP", port: 8080 }],
+      },
+      {
+        to: [
+          {
+            namespaceSelector: {
+              matchLabels: { "kubernetes.io/metadata.name": "envoy-gateway-system" },
+            },
+            podSelector: {
+              matchLabels: {
+                "control-plane": "envoy-gateway",
+                "app.kubernetes.io/name": "gateway-helm",
+              },
+            },
+          },
+        ],
+        ports: [{ protocol: "TCP", port: 18000 }],
+      },
+    ]);
+
+    const roles = configured.filter(({ kind }) => kind === "ClusterRole");
+    const tenantWorker = roles.find(({ metadata }) =>
+      metadata.name.endsWith("-openclaw-tenant-worker"),
+    );
+    const tenantApi = roles.find(({ metadata }) => metadata.name.endsWith("-openclaw-tenant-api"));
+    assert.deepEqual(
+      tenantWorker.rules.find(({ resources }) => resources.includes("httproutes")),
+      {
+        apiGroups: ["gateway.networking.k8s.io"],
+        resources: ["httproutes"],
+        verbs: ["get", "create", "patch", "delete"],
+      },
+    );
+    assert.ok(!tenantApi.rules.some(({ resources }) => resources.includes("httproutes")));
     assert.equal(
       configured.some(({ kind }) => kind === "ConfigMap"),
+      false,
+    );
+    assert.equal(
+      configured.some(({ kind }) => kind === "Secret"),
       false,
     );
   },

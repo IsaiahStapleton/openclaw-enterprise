@@ -532,6 +532,7 @@ export interface ComputeDriver extends Driver {
   readonly maintenanceIntervalMs?: number;
   setLifecycleDrivers?(drivers: readonly Driver[]): void;
   bindAgent?(binding: ComputeAgentBinding): void | Promise<void>;
+  getGatewayEndpoint?(revision: AgentRevision): string | undefined;
   ensureNamespace(namespace: Namespace): Promise<NamespaceEnsureResult>;
   deleteNamespace(namespace: Namespace): Promise<NamespaceDeleteResult>;
   prepareRevision(

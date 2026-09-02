@@ -60,6 +60,68 @@ function labelsToSelectorForTest(labels) {
     .join(",");
 }
 
+function digest(value, length = 12) {
+  return createHash("sha256").update(value).digest("hex").slice(0, length);
+}
+
+const gatewayRouting = {
+  hostname: "agents.example.internal",
+  gatewayName: "oce-agent-gateways",
+  gatewayNamespace: "openclaw-system",
+};
+
+const envoyGatewayPeer = {
+  namespace: "envoy-gateway-system",
+  podLabels: {
+    "gateway.envoyproxy.io/owning-gateway-name": gatewayRouting.gatewayName,
+    "gateway.envoyproxy.io/owning-gateway-namespace": gatewayRouting.gatewayNamespace,
+  },
+};
+
+function routedOptions(overrides = {}) {
+  const configured = options();
+  return options({
+    ...overrides,
+    gatewayRouting: overrides.gatewayRouting ?? gatewayRouting,
+    network: {
+      ...configured.network,
+      gatewayClients: [envoyGatewayPeer],
+      ...(overrides.network ?? {}),
+    },
+  });
+}
+
+function routedRevision(driver, overrides = {}) {
+  return {
+    id: "revision-routed-1",
+    namespaceId: tenant.id,
+    agentId: "agent-routed",
+    revision: 1,
+    configurationId: "cfg_00000000-0000-4000-8000-000000000009",
+    configurationKind: "agent",
+    configurationGeneration: 1,
+    configuration: {
+      gateway: {
+        trustedProxies: ["10.42.0.0/16"],
+        allowRealIpFallback: true,
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-occ-identity",
+            allowUsers: ["occ-workspace-files"],
+          },
+          identityScopes: { "occ-workspace-files": ["operator.admin"] },
+        },
+      },
+    },
+    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    compute: { id: driver.id, implementation: driver.implementation },
+    servicePrincipalId: "service-principal-routed",
+    createdAt: tenant.createdAt,
+    ...overrides,
+  };
+}
+
 test("Kubernetes namespace names are deterministic, DNS-safe, distinct, and bounded", () => {
   for (const id of ["Namespace_With.UPPERCASE!punctuation", "x".repeat(250), "---"]) {
     const name = kubernetesNamespaceName(id);
@@ -349,6 +411,308 @@ test("dedicated Agent shared claims retain ownership inside an existing tenant n
   assert.equal(claim.metadata.annotations["openclaw.dev/agent-id"], agentId);
   assert.deepEqual(claim.spec.accessModes, ["ReadWriteMany"]);
   assert.equal(claim.spec.resources.requests.storage, "40Gi");
+});
+
+test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", async () => {
+  const driver = createKubernetesComputeDriver(routedOptions());
+  const revision = routedRevision(driver);
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const name = `gateway-${digest(revision.agentId)}`;
+  const ownership = { namespaceId: tenant.id, agentId: revision.agentId };
+  const service = driver.service(name, ownership, namespace, {
+    "app.kubernetes.io/name": name,
+  });
+  service.metadata.uid = "gateway-service-uid";
+
+  assert.equal(
+    driver.getGatewayEndpoint(revision),
+    `wss://${gatewayRouting.hostname}/namespaces/${tenant.id}/agents/${revision.agentId}`,
+  );
+
+  const route = driver.gatewayRoute(revision, ownership, namespace, service);
+  assert.equal(route.apiVersion, "gateway.networking.k8s.io/v1");
+  assert.equal(route.kind, "HTTPRoute");
+  assert.equal(route.metadata.name, name);
+  assert.equal(route.metadata.namespace, namespace);
+  assert.equal(route.metadata.labels["openclaw.dev/agent"], revision.agentId);
+  assert.equal(
+    route.metadata.annotations["openclaw.dev/agent-revision"],
+    String(revision.revision),
+  );
+  assert.equal(route.metadata.annotations["openclaw.dev/agent-revision-id"], revision.id);
+  assert.deepEqual(route.metadata.ownerReferences, [
+    {
+      apiVersion: "v1",
+      kind: "Service",
+      name,
+      uid: "gateway-service-uid",
+      controller: false,
+      blockOwnerDeletion: false,
+    },
+  ]);
+  assert.deepEqual(route.spec.hostnames, [gatewayRouting.hostname]);
+  assert.deepEqual(route.spec.parentRefs, [
+    {
+      group: "gateway.networking.k8s.io",
+      kind: "Gateway",
+      namespace: gatewayRouting.gatewayNamespace,
+      name: gatewayRouting.gatewayName,
+      sectionName: "https",
+    },
+  ]);
+  assert.deepEqual(route.spec.rules[0].matches, [
+    { path: { type: "Exact", value: `/namespaces/${tenant.id}/agents/${revision.agentId}` } },
+  ]);
+  assert.deepEqual(route.spec.rules[0].backendRefs, [
+    { group: "", kind: "Service", name, port: 8080 },
+  ]);
+  assert.deepEqual(route.spec.rules[0].filters, [
+    {
+      type: "URLRewrite",
+      urlRewrite: { path: { type: "ReplaceFullPath", replaceFullPath: "/" } },
+    },
+    {
+      type: "RequestHeaderModifier",
+      requestHeaderModifier: {
+        set: [
+          { name: "x-occ-identity", value: "occ-workspace-files" },
+          { name: "x-real-ip", value: "%DOWNSTREAM_DIRECT_REMOTE_ADDRESS_WITHOUT_PORT%" },
+        ],
+        remove: ["x-forwarded-for", "forwarded", "x-openclaw-scopes"],
+      },
+    },
+  ]);
+
+  for (const [configuration, expected] of [
+    [
+      { gateway: { allowRealIpFallback: true, trustedProxies: ["10.42.0.0/16"] } },
+      /trusted-proxy/i,
+    ],
+    [
+      {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            token: "legacy-token",
+            trustedProxy: {
+              userHeader: "x-occ-identity",
+              allowUsers: ["occ-workspace-files"],
+            },
+            identityScopes: { "occ-workspace-files": ["operator.admin"] },
+          },
+          allowRealIpFallback: true,
+          trustedProxies: ["10.42.0.0/16"],
+        },
+      },
+      /auth\.token/i,
+    ],
+    [
+      {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-openclaw-operator",
+              allowUsers: ["occ-workspace-files"],
+            },
+            identityScopes: { "occ-workspace-files": ["operator.admin"] },
+          },
+          allowRealIpFallback: true,
+          trustedProxies: ["10.42.0.0/16"],
+        },
+      },
+      /userHeader/i,
+    ],
+    [
+      {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-occ-identity",
+              allowUsers: ["another-user"],
+            },
+            identityScopes: { "occ-workspace-files": ["operator.admin"] },
+          },
+          allowRealIpFallback: true,
+          trustedProxies: ["10.42.0.0/16"],
+        },
+      },
+      /allowUsers/i,
+    ],
+    [
+      {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-occ-identity",
+              allowUsers: ["occ-workspace-files"],
+            },
+            identityScopes: { "occ-workspace-files": ["operator.read"] },
+          },
+          allowRealIpFallback: true,
+          trustedProxies: ["10.42.0.0/16"],
+        },
+      },
+      /identityScopes/i,
+    ],
+    [
+      {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-occ-identity",
+              allowUsers: ["occ-workspace-files"],
+            },
+            identityScopes: { "occ-workspace-files": ["operator.admin"] },
+          },
+          trustedProxies: ["10.42.0.0/16"],
+        },
+      },
+      /allowRealIpFallback/i,
+    ],
+    [
+      {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-occ-identity",
+              allowUsers: ["occ-workspace-files"],
+            },
+            identityScopes: { "occ-workspace-files": ["operator.admin"] },
+          },
+          allowRealIpFallback: true,
+          trustedProxies: [],
+        },
+      },
+      /trustedProxies/i,
+    ],
+  ]) {
+    // Routed native access must be admitted by immutable native configuration, not patched in.
+    await assert.rejects(driver.prepareRevision({ ...revision, configuration }), expected);
+  }
+});
+
+test("gateway routing startup validation and namespace membership fail closed", async () => {
+  for (const gatewayRouting of [
+    {
+      hostname: "agents.example.internal:443",
+      gatewayName: "oce-agent-gateways",
+      gatewayNamespace: "openclaw-system",
+    },
+    {
+      hostname: "https://agents.example.internal",
+      gatewayName: "oce-agent-gateways",
+      gatewayNamespace: "openclaw-system",
+    },
+    {
+      hostname: "agents.example.internal",
+      gatewayName: "OCE",
+      gatewayNamespace: "openclaw-system",
+    },
+    {
+      hostname: "agents.example.internal",
+      gatewayName: "oce-agent-gateways",
+      gatewayNamespace: "openclaw/system",
+    },
+  ]) {
+    assert.throws(
+      () => createKubernetesComputeDriver(routedOptions({ gatewayRouting })),
+      /Gateway routing/i,
+    );
+  }
+
+  assert.throws(
+    () => createKubernetesComputeDriver(options({ gatewayRouting })),
+    /exact Envoy data-plane Pods/i,
+  );
+  assert.throws(
+    () =>
+      createKubernetesComputeDriver(
+        routedOptions({
+          network: {
+            ...options().network,
+            gatewayClients: [envoyGatewayPeer, envoyGatewayPeer],
+          },
+        }),
+      ),
+    /exactly one Envoy gateway client/i,
+  );
+  assert.throws(
+    () =>
+      createKubernetesComputeDriver(
+        routedOptions({
+          network: {
+            ...options().network,
+            gatewayClients: [
+              {
+                namespace: envoyGatewayPeer.namespace,
+                podLabels: {
+                  ...envoyGatewayPeer.podLabels,
+                  "gateway.envoyproxy.io/owning-gateway-name": "another-gateway",
+                },
+              },
+            ],
+          },
+        }),
+      ),
+    /exact Envoy data-plane Pods/i,
+  );
+
+  const driver = createKubernetesComputeDriver(routedOptions());
+  const namespace = {
+    apiVersion: "v1",
+    kind: "Namespace",
+    metadata: {
+      name: "customer-support",
+      resourceVersion: "7",
+      labels: {
+        "pod-security.kubernetes.io/enforce": "restricted",
+        "pod-security.kubernetes.io/audit": "restricted",
+        "pod-security.kubernetes.io/warn": "restricted",
+      },
+      annotations: { "openclaw.dev/namespace-lifecycle": "external" },
+    },
+    status: { phase: "Active" },
+  };
+  const patches = [];
+  driver.apiClients = Promise.resolve({
+    core: {
+      async patchNamespace(request) {
+        patches.push(structuredClone(request));
+        namespace.metadata.labels = {
+          ...namespace.metadata.labels,
+          ...request.body.metadata.labels,
+        };
+        namespace.metadata.annotations = {
+          ...namespace.metadata.annotations,
+          ...request.body.metadata.annotations,
+        };
+      },
+      async readNamespace() {
+        return structuredClone(namespace);
+      },
+    },
+  });
+
+  await driver.claimExistingNamespace(namespace, { namespaceId: tenant.id });
+  assert.equal(patches.length, 1);
+  assert.equal(patches[0].fieldManager, "openclaw-enterprise-compute");
+  assert.deepEqual(patches[0].body.metadata.labels, {
+    "openclaw.dev/namespace": tenant.id,
+    "openclaw-enterprise.io/gateway": digest(
+      `${gatewayRouting.gatewayNamespace}/${gatewayRouting.gatewayName}`,
+    ),
+  });
+  assert.deepEqual(patches[0].body.metadata.annotations, {
+    "openclaw.dev/namespace-id": tenant.id,
+  });
+
+  await driver.claimExistingNamespace(namespace, { namespaceId: tenant.id });
+  assert.equal(patches.length, 1);
 });
 
 test("Kubernetes drivers require explicit authentication, images, and production policy", () => {
@@ -803,7 +1167,7 @@ test("native channel providers supply only owning gateway secrets and reviewed p
 
 test("embedded replacement preparation recovers past an unready active gateway without replacing it before activation", async () => {
   const driver = createKubernetesComputeDriver(
-    options({
+    routedOptions({
       runtime: {
         transportSecretPrefix: "transport",
         modelSecretPrefix: "model",
@@ -834,13 +1198,41 @@ test("embedded replacement preparation recovers past an unready active gateway w
     ...base,
     id: "revision-embedded-recovery-bad",
     revision: 7,
-    configuration: { models: { providers: { openai: { apiKey: { source: "env" } } } } },
+    configuration: {
+      gateway: {
+        trustedProxies: ["10.42.0.0/16"],
+        allowRealIpFallback: true,
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-occ-identity",
+            allowUsers: ["occ-workspace-files"],
+          },
+          identityScopes: { "occ-workspace-files": ["operator.admin"] },
+        },
+      },
+      models: { providers: { openai: { apiKey: { source: "env" } } } },
+    },
   };
   const replacement = {
     ...base,
     id: "revision-embedded-recovery-restored",
     revision: 8,
-    configuration: { models: { providers: { openai: { apiKey: { source: "env" } } } } },
+    configuration: {
+      gateway: {
+        trustedProxies: ["10.42.0.0/16"],
+        allowRealIpFallback: true,
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-occ-identity",
+            allowUsers: ["occ-workspace-files"],
+          },
+          identityScopes: { "occ-workspace-files": ["operator.admin"] },
+        },
+      },
+      models: { providers: { openai: { apiKey: { source: "env" } } } },
+    },
   };
   const tenantOwnership = { namespaceId: tenant.id };
   const gatewayOwnership = { namespaceId: tenant.id, agentId };
@@ -896,11 +1288,11 @@ test("embedded replacement preparation recovers past an unready active gateway w
     },
     status: { observedGeneration: 2, readyReplicas: 0 },
   });
-  save(
-    driver.service(gatewayName, gatewayOwnership, namespace, {
-      "app.kubernetes.io/name": gatewayName,
-    }),
-  );
+  const gatewayService = driver.service(gatewayName, gatewayOwnership, namespace, {
+    "app.kubernetes.io/name": gatewayName,
+  });
+  gatewayService.metadata.uid = "gateway-service-uid";
+  save(gatewayService);
 
   const patches = [];
   let replacementDeploymentPatched = false;
@@ -994,6 +1386,17 @@ test("embedded replacement preparation recovers past an unready active gateway w
         save(body);
       },
     },
+    objects: {
+      async read({ metadata }) {
+        const current = objects.get(key("HTTPRoute", metadata.name));
+        if (current === undefined) throw missing(metadata.name);
+        return structuredClone(current);
+      },
+      async patch(body) {
+        patches.push({ kind: body.kind, name: body.metadata.name });
+        save({ ...body, metadata: { ...body.metadata, uid: "route-uid" } });
+      },
+    },
   });
 
   // The candidate revision is activation-ready after its immutable snapshot is staged;
@@ -1019,6 +1422,13 @@ test("embedded replacement preparation recovers past an unready active gateway w
     ],
     oldRevision.id,
   );
+  assert.equal(patches.filter(({ kind }) => kind === "HTTPRoute").length, 1);
+  assert.equal(
+    objects.get(key("HTTPRoute", gatewayName)).metadata.annotations[
+      "openclaw.dev/agent-revision-id"
+    ],
+    replacement.id,
+  );
 
   await driver.activateRevision(replacement);
   const replaced = objects.get(key("Deployment", gatewayName));
@@ -1027,6 +1437,7 @@ test("embedded replacement preparation recovers past an unready active gateway w
     patches.filter(({ kind }) => kind === "Deployment"),
     [{ kind: "Deployment", name: gatewayName }],
   );
+  assert.equal(patches.filter(({ kind }) => kind === "HTTPRoute").length, 2);
 });
 
 test("SDK resource requirements still require explicit CPU and memory requests and limits", () => {
@@ -1865,7 +2276,7 @@ test("private gateway claim reuse and deletion verify exact ownership and storag
 
 test("retiring a predecessor preserves both claims and final retirement deletes exact claim UIDs", async () => {
   const driver = createKubernetesComputeDriver(
-    options({
+    routedOptions({
       runtime: {
         transportSecretPrefix: "transport",
         modelSecretPrefix: "model",
@@ -1880,19 +2291,38 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
   const gateway = driver.manifest("apps/v1", "Deployment", gatewayName, ownership, namespace);
   gateway.metadata.uid = "gateway-uid";
   gateway.metadata.annotations["openclaw.dev/agent-revision-id"] = "revision-2";
+  let observedGateway = gateway;
+  const gatewayService = driver.service(gatewayName, ownership, namespace, {
+    "app.kubernetes.io/name": gatewayName,
+  });
+  gatewayService.metadata.uid = "gateway-service-uid";
+  let observedService = gatewayService;
+  const gatewayAccount = driver.manifest("v1", "ServiceAccount", gatewayName, ownership, namespace);
+  gatewayAccount.metadata.uid = "gateway-account-uid";
+  let observedServiceAccount = gatewayAccount;
+  const route = driver.gatewayRoute(
+    { id: "revision-2", revision: 2, namespaceId: tenant.id, agentId },
+    ownership,
+    namespace,
+    gatewayService,
+  );
+  route.metadata.uid = "route-uid";
+  let observedRoute = route;
   const claims = [
     driver.gatewayPrivateStateClaim(agentId, ownership, namespace),
     driver.sharedWorkspaceClaim(agentId, ownership, namespace),
   ];
   for (const claim of claims) claim.metadata.uid = claim.metadata.name + "-uid";
   const deletions = [];
+  let failServiceDelete = false;
   const missing = async () => {
     throw Object.assign(new Error("Not found"), { code: 404 });
   };
   driver.apiClients = Promise.resolve({
     apps: {
       async readNamespacedDeployment() {
-        return structuredClone(gateway);
+        if (observedGateway === undefined) return missing();
+        return structuredClone(observedGateway);
       },
       async deleteNamespacedDeployment(request) {
         deletions.push(["Deployment", request]);
@@ -1907,8 +2337,38 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
       async deleteNamespacedPersistentVolumeClaim(request) {
         deletions.push(["PersistentVolumeClaim", request]);
       },
-      readNamespacedService: missing,
-      readNamespacedServiceAccount: missing,
+      async readNamespacedService() {
+        if (observedService === undefined) return missing();
+        return structuredClone(observedService);
+      },
+      async deleteNamespacedService(request) {
+        deletions.push(["Service", request]);
+        if (failServiceDelete) throw new Error("service delete failed");
+      },
+      async readNamespacedServiceAccount() {
+        if (observedServiceAccount === undefined) return missing();
+        return structuredClone(observedServiceAccount);
+      },
+      async deleteNamespacedServiceAccount(request) {
+        deletions.push(["ServiceAccount", request]);
+      },
+    },
+    objects: {
+      async read() {
+        if (observedRoute === undefined) return missing();
+        return structuredClone(observedRoute);
+      },
+      async delete(
+        spec,
+        pretty,
+        dryRun,
+        gracePeriodSeconds,
+        orphanDependents,
+        propagationPolicy,
+        body,
+      ) {
+        deletions.push(["HTTPRoute", { spec, body }]);
+      },
     },
   });
   await driver.removeRetiredGateway(
@@ -1916,6 +2376,26 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
     namespace,
   );
   assert.deepEqual(deletions, []);
+  failServiceDelete = true;
+  await assert.rejects(
+    driver.removeRetiredGateway(
+      { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+      namespace,
+    ),
+    /service delete failed/,
+  );
+  assert.deepEqual(
+    deletions.map(([kind]) => kind),
+    ["PersistentVolumeClaim", "PersistentVolumeClaim", "HTTPRoute", "Service"],
+  );
+  assert.equal(
+    deletions.some(([kind]) => kind === "Deployment"),
+    false,
+    "Deployment must remain as the retry witness until Service deletion succeeds",
+  );
+
+  deletions.length = 0;
+  failServiceDelete = false;
   await driver.removeRetiredGateway(
     { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
     namespace,
@@ -1926,8 +2406,79 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
       { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
     ]),
     [
+      "HTTPRoute",
+      {
+        spec: {
+          apiVersion: "gateway.networking.k8s.io/v1",
+          kind: "HTTPRoute",
+          metadata: { name: gatewayName, namespace },
+        },
+        body: { preconditions: { uid: "route-uid" } },
+      },
+    ],
+    [
+      "Service",
+      { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-service-uid" } } },
+    ],
+    [
+      "ServiceAccount",
+      { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-account-uid" } } },
+    ],
+    [
       "Deployment",
       { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-uid" } } },
     ],
   ]);
+
+  deletions.length = 0;
+  observedGateway = undefined;
+  observedService = gatewayService;
+  observedServiceAccount = gatewayAccount;
+  observedRoute = route;
+  await driver.removeRetiredGateway(
+    { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+    namespace,
+  );
+  assert.deepEqual(deletions, [
+    ...claims.map(({ metadata }) => [
+      "PersistentVolumeClaim",
+      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
+    ]),
+    [
+      "HTTPRoute",
+      {
+        spec: {
+          apiVersion: "gateway.networking.k8s.io/v1",
+          kind: "HTTPRoute",
+          metadata: { name: gatewayName, namespace },
+        },
+        body: { preconditions: { uid: "route-uid" } },
+      },
+    ],
+    [
+      "Service",
+      { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-service-uid" } } },
+    ],
+    [
+      "ServiceAccount",
+      { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-account-uid" } } },
+    ],
+  ]);
+
+  deletions.length = 0;
+  observedRoute = {
+    ...route,
+    metadata: {
+      ...route.metadata,
+      annotations: {
+        ...route.metadata.annotations,
+        "openclaw.dev/agent-revision-id": "revision-3",
+      },
+    },
+  };
+  await driver.removeRetiredGateway(
+    { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+    namespace,
+  );
+  assert.deepEqual(deletions, []);
 });

@@ -92,52 +92,31 @@ Write audit events contain the Agent resource, authorization action, outcome,
 reason code when present, and file name metadata. Audit details do not contain
 file contents. Reads do not create mutation audit events.
 
-The server-side access path is opt-in. Set `OCC_WORKSPACE_FILES_CONFIG_PATH` on
-the API process to an absolute YAML file with a single top-level `endpoints`
-array. OCC reads that file once at startup, rejects invalid files before
-serving, and does not reload it. Each endpoint maps one Enterprise
-`namespaceId` and `agentId` to an operator-owned native WSS target:
+The server-side access path is opt-in through the Installation's Kubernetes
+Compute routing configuration and the API's `OCC_GATEWAY_API_KEY_PATH`.
+Compute creates a private route automatically for each Agent; no per-Agent
+endpoint map or API restart is needed after provisioning. The native URL is
+`wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>`, derived from the
+admitted IDs and trusted Installation settings, never from a request body.
 
-```yaml
-endpoints:
-  - namespaceId: ns_123e4567-e89b-42d3-a456-426614174000
-    agentId: agt_123e4567-e89b-42d3-a456-426614174000
-    url: wss://agent-files.example.internal/openclaw
-    nativeAgentId: main
-    identity: occ-workspace-files
-    userHeader: x-openclaw-operator
-    tlsFingerprint: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-```
+Envoy Gateway authenticates OCC's dedicated service key, strips it before
+forwarding, and supplies the native trusted identity and actual OCC connection
+address. cert-manager manages the server certificate. OCC uses normal hostname
+and CA verification. The native gateway must explicitly enable trusted-proxy
+authentication and the identity's administrative scope; tenant networking must
+admit only the Envoy data plane. See the
+[deployment procedure](../guides/deploy.md#agent-workspace-files) for the complete
+trust configuration and rotation steps. Human callers still require the exact
+Agent permission regardless of the service identity's native scope.
 
-The `url` must be `wss://` and must not contain embedded credentials, a query,
-or a fragment. `tlsFingerprint` is optional; when present, it must be one
-64-character hexadecimal certificate fingerprint. The operator owns the
-assertion that each URL and `nativeAgentId` belong to the exact Enterprise
-Agent named by the mapping. OCC does not derive the mapping from a revision,
-does not store a per-revision native attestation, and returns `503
-DEPENDENCY_UNAVAILABLE` for unmapped, offline, unavailable, or rejected targets.
+Missing routing configuration, an unsupported Compute Driver, a missing service
+key, or a failed WSS/native connection returns `503 DEPENDENCY_UNAVAILABLE`.
+The bundled Docker Driver does not implement automatic private routes. The
+Kubernetes gateway PVC retains files across gateway Pod replacement; a
+successful URL lookup alone is not runtime or persistence proof.
 
-The private TLS proxy must accept OCC, not browsers or other workloads. It must
-authenticate the source before forwarding the trusted identity header, derive
-`x-forwarded-for` from the actual OCC peer connection, and avoid blindly
-trusting caller-supplied forwarded headers. Native trusted-proxy configuration
-must grant that service identity `operator.admin`; OCC still enforces the
-caller-facing Agent `read` and `operate` permissions before reaching the proxy.
-Native OpenClaw 2026.8.1-b9d rejects `gateway.auth.mode: "trusted-proxy"` when
-`gateway.auth.token` is also present, so the native Configuration used for this
-endpoint must omit `gateway.auth.token`. Native rejects all-loopback forwarded
-addresses, so loopback development needs a real non-loopback OCC-to-proxy
-connection such as a separate proxy container, not a fake IP or TLS bypass. The
-operator supplies the trust chain through the Node.js trust store,
-`NODE_EXTRA_CA_CERTS`, or the pinned fingerprint. OCC does not manage
-certificate issuance, renewal, proxy deployment, or network trust.
-
-See the [workspace files flow](../flows/workspace-files.md) for the endpoint
-map, proxy boundary, request flow, and runtime storage limits. Docker
-development runtimes keep the native workspace under `/home/node` tmpfs, so
-files last only for the container runtime; the current persisted-file proof is
-Kubernetes gateway PVC storage across gateway Pod replacement. The generated
-[HTTP API](api.md) owns the wire schema.
+See the [workspace files flow](../flows/workspace-files.md) for execution and
+failure handling. The generated [HTTP API](api.md) owns the wire schema.
 
 ## Namespace ownership
 

@@ -32,6 +32,7 @@ export function createKubernetesClient({
   waitTimeoutMs = 240_000,
   waitIntervalMs = 750,
 }) {
+  const kubectlArgumentsForSelection = (args) => kubectlArguments(selection, args);
   const resource = async (kind, name, namespace) => {
     const args = ["get", kind, name, "-o", "json"];
     if (namespace !== undefined) args.push("--namespace", namespace);
@@ -50,12 +51,39 @@ export function createKubernetesClient({
   };
 
   return {
-    kubectlArguments: (args) => kubectlArguments(selection, args),
+    kubectlArguments: kubectlArgumentsForSelection,
     kubectl,
+    applyManifest: (manifest, options) =>
+      applyManifest(kubectlArgumentsForSelection, manifest, options),
     resource,
     resources,
     waitFor,
   };
+}
+
+async function applyManifest(kubectlArgumentsForSelection, manifest, { redactions = [] } = {}) {
+  await new Promise((resolve, reject) => {
+    const child = spawn("kubectl", kubectlArgumentsForSelection(["apply", "-f", "-"]), {
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-4096);
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`kubectl apply failed (${code}): ${redact(stderr, redactions)}`));
+    });
+    child.stdin.once("error", reject);
+    child.stdin.end(manifest);
+  });
+}
+
+function redact(value, redactions) {
+  return redactions
+    .filter((secret) => typeof secret === "string" && secret.length > 0)
+    .reduce((current, secret) => current.split(secret).join("<redacted>"), value);
 }
 
 export async function validateExplicitK3dLoopbackContext(selection) {
@@ -330,6 +358,10 @@ export function createRealKubernetesFixture({
   }
 
   async function startPortForward(namespace, serviceName) {
+    return startPortForwardTarget(namespace, `service/${serviceName}`, "0:8080");
+  }
+
+  async function startPortForwardTarget(namespace, target, port) {
     const child = spawn(
       "kubectl",
       kubernetes.kubectlArguments([
@@ -338,8 +370,8 @@ export function createRealKubernetesFixture({
         namespace,
         "--address",
         "127.0.0.1",
-        `service/${serviceName}`,
-        "0:8080",
+        target,
+        port,
       ]),
       { stdio: ["ignore", "pipe", "pipe"] },
     );
@@ -374,6 +406,7 @@ export function createRealKubernetesFixture({
   return {
     kubectlArguments: kubernetes.kubectlArguments,
     kubectl,
+    applyManifest: kubernetes.applyManifest,
     resource: kubernetes.resource,
     resources: kubernetes.resources,
     createControllerIdentity,
@@ -381,5 +414,6 @@ export function createRealKubernetesFixture({
     validatePrerequisites,
     provisionAgentTransportSecret,
     startPortForward,
+    startPortForwardTarget,
   };
 }

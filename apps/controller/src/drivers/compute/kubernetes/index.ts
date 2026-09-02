@@ -17,6 +17,7 @@ import type {
   V1EnvVar,
   V1NetworkPolicyPeer,
   V1ObjectMeta,
+  V1DeleteOptions,
   V1ResourceRequirements,
   V1ServiceAccount,
   V1Volume,
@@ -60,7 +61,8 @@ type ManagedResourceKind =
   | "LimitRange"
   | "PersistentVolumeClaim"
   | "Deployment"
-  | "NetworkPolicy";
+  | "NetworkPolicy"
+  | "HTTPRoute";
 type ReadableResourceKind = ManagedResourceKind | "Pod" | "Secret";
 
 const CHANNEL_REQUIREMENTS = {
@@ -79,6 +81,12 @@ type ChannelRequirements = (typeof CHANNEL_REQUIREMENTS)[keyof typeof CHANNEL_RE
 export interface KubernetesWorkloadPeer {
   readonly namespace: string;
   readonly podLabels: Readonly<Record<string, string>>;
+}
+
+export interface KubernetesGatewayRoutingOptions {
+  readonly hostname: string;
+  readonly gatewayName: string;
+  readonly gatewayNamespace: string;
 }
 
 interface KubernetesApiClients {
@@ -127,6 +135,7 @@ export interface KubernetesComputeDriverOptions {
       readonly proxyUrl: string;
     };
   };
+  readonly gatewayRouting?: KubernetesGatewayRoutingOptions;
 }
 
 interface ManagedKubernetesObject<Kind extends ReadableResourceKind = ManagedResourceKind>
@@ -173,6 +182,9 @@ const CONFIGURATION_VOLUME = "openclaw-configuration";
 const AGENT_REVISION_ANNOTATION = "openclaw.dev/agent-revision";
 const AGENT_REVISION_ID_ANNOTATION = "openclaw.dev/agent-revision-id";
 const APPLY_CONTENT_TYPE = "application/apply-patch+yaml";
+const GATEWAY_API_VERSION = "gateway.networking.k8s.io/v1";
+const GATEWAY_LISTENER_SECTION = "https";
+const GATEWAY_MEMBERSHIP_LABEL = "openclaw-enterprise.io/gateway";
 const REQUEST_TIMEOUT_MS = 10_000;
 const AGENT_TRANSPORT_PORT = 18_790;
 const AGENT_TRANSPORT_TOKEN_KEY = "app-server-token";
@@ -298,6 +310,24 @@ function validatePeer(value: KubernetesWorkloadPeer, description: string): void 
     required(key, `${description} label key`);
     if (typeof label !== "string")
       throw new ConfigurationFailure(`${description} labels must be strings.`);
+  }
+}
+
+function validateDnsHostname(value: string, description: string): void {
+  if (
+    value.length > 253 ||
+    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/.test(value)
+  ) {
+    throw new ConfigurationFailure(`${description} must be a DNS hostname without a port or path.`);
+  }
+}
+
+function validateKubernetesResourceName(value: string, description: string): void {
+  if (
+    value.length > 253 ||
+    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/.test(value)
+  ) {
+    throw new ConfigurationFailure(`${description} must be a DNS-safe Kubernetes resource name.`);
   }
 }
 
@@ -497,6 +527,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
           },
         },
       },
+      gatewayRouting: {
+        type: "object",
+        required: ["hostname", "gatewayName", "gatewayNamespace"],
+        additionalProperties: false,
+        properties: {
+          hostname: { type: "string" },
+          gatewayName: { type: "string" },
+          gatewayNamespace: { type: "string" },
+        },
+      },
     },
   });
 
@@ -638,6 +678,38 @@ export class KubernetesComputeDriver implements ComputeDriver {
         channelProxy(channels.proxyUrl);
       }
     }
+    if (options.gatewayRouting !== undefined) {
+      const routing = options.gatewayRouting;
+      if (asRecord(routing) === undefined) {
+        throw new ConfigurationFailure("Gateway routing must be explicitly configured.");
+      }
+      validateDnsHostname(
+        required(routing.hostname, "Gateway routing hostname"),
+        "Gateway routing hostname",
+      );
+      validateKubernetesResourceName(
+        required(routing.gatewayName, "Gateway routing Gateway name"),
+        "Gateway routing Gateway name",
+      );
+      validateKubernetesResourceName(
+        required(routing.gatewayNamespace, "Gateway routing Gateway namespace"),
+        "Gateway routing Gateway namespace",
+      );
+      if (options.network.gatewayClients.length !== 1) {
+        throw new ConfigurationFailure(
+          "Gateway routing requires exactly one Envoy gateway client peer.",
+        );
+      }
+      const labels = options.network.gatewayClients[0]?.podLabels ?? {};
+      if (
+        labels["gateway.envoyproxy.io/owning-gateway-name"] !== routing.gatewayName ||
+        labels["gateway.envoyproxy.io/owning-gateway-namespace"] !== routing.gatewayNamespace
+      ) {
+        throw new ConfigurationFailure(
+          "Gateway routing gatewayClients must select the exact Envoy data-plane Pods.",
+        );
+      }
+    }
   }
 
   constructor(
@@ -678,6 +750,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (!Array.isArray(namespaces.items)) {
       throw new Error("The authenticated Kubernetes Namespace preflight returned invalid data.");
     }
+  }
+
+  getGatewayEndpoint(revision: AgentRevision): string | undefined {
+    const routing = this.options.gatewayRouting;
+    if (routing === undefined) return undefined;
+    return `wss://${routing.hostname}${this.gatewayRoutePath(revision)}`;
   }
 
   async storeServiceAccountCredential(input: {
@@ -779,6 +857,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         const desired = this.manifest("v1", "Namespace", name, ownership);
         desired.metadata.labels = {
           ...desired.metadata.labels,
+          ...this.gatewayMembershipLabels(),
           "pod-security.kubernetes.io/enforce": "restricted",
           "pod-security.kubernetes.io/audit": "restricted",
           "pod-security.kubernetes.io/warn": "restricted",
@@ -936,6 +1015,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new ConfigurationFailure("AgentRevision Configuration ownership is invalid.");
     }
+    this.verifyGatewayRoutingConfiguration(revision);
     const embedded = revision.harness.mode === "embedded";
     if (
       (embedded && revision.harness.id !== "openclaw") ||
@@ -1137,6 +1217,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         gatewayOwnership,
         namespace,
       );
+      await this.reconcileGatewayRoute(revision, gatewayOwnership, namespace);
       if (
         embedded &&
         this.options.runtime !== undefined &&
@@ -1242,6 +1323,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   async activateRevision(revision: AgentRevision, context?: ComputeRevisionContext): Promise<void> {
     if (this.options.runtime === undefined) return;
+    this.verifyGatewayRoutingConfiguration(revision);
     const channels = this.enabledChannels(revision);
     const { name: namespace } = await this.resolveNamespace(revision.namespaceId);
     const secretEnvironment = this.secretEnvironmentForRevision(revision, context, namespace);
@@ -1319,6 +1401,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         gatewayOwnership,
         namespace,
       );
+      await this.reconcileGatewayRoute(revision, gatewayOwnership, namespace);
       if (!(await this.gatewayReady(gatewayOwnership, gatewayName, namespace))) {
         throw new Error("The exact AgentRevision gateway is not ready.");
       }
@@ -1382,6 +1465,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
       gatewayOwnership,
       namespace,
     );
+    await this.reconcile(
+      this.service(gatewayName, gatewayOwnership, namespace, {
+        "app.kubernetes.io/name": gatewayName,
+      }),
+      gatewayOwnership,
+      namespace,
+    );
+    await this.reconcileGatewayRoute(revision, gatewayOwnership, namespace);
     if (!(await this.gatewayReady(gatewayOwnership, gatewayName, namespace))) {
       throw new Error("The exact AgentRevision gateway is not ready.");
     }
@@ -1517,7 +1608,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const name = `gateway-${sha256Hex(revision.agentId, 12)}`;
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
     const gateway = await this.getOwned("Deployment", name, namespace, ownership);
-    if (gateway === undefined) return;
+    if (gateway === undefined) {
+      const route = await this.gatewayRouteForRevision(name, ownership, namespace, revision.id);
+      if (route === undefined) return;
+      if (this.options.runtime !== undefined) {
+        await this.deleteGatewayPrivateStateClaim(ownership, namespace);
+      }
+      if (revision.harness.mode === "dedicated") {
+        await this.deleteSharedWorkspaceClaim(ownership, namespace);
+      }
+      await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
+      await this.deleteGateway(name, ownership, namespace);
+      return;
+    }
     const annotations = gateway.metadata.annotations ?? {};
     if (annotations[AGENT_REVISION_ID_ANNOTATION] === revision.id) {
       if (this.options.runtime !== undefined) {
@@ -1526,8 +1629,56 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (revision.harness.mode === "dedicated") {
         await this.deleteSharedWorkspaceClaim(ownership, namespace);
       }
+      await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
       await this.deleteGateway(name, ownership, namespace);
     }
+  }
+
+  private async deleteGatewayRoute(
+    name: string,
+    ownership: Ownership,
+    namespace: string,
+    revisionId: string,
+  ): Promise<void> {
+    const existing = await this.gatewayRouteForRevision(name, ownership, namespace, revisionId);
+    if (existing === undefined) return;
+    if (existing.metadata.uid === undefined) {
+      throw new OwnershipFailure(
+        `HTTPRoute ${name} UID must be explicitly observed before delete.`,
+      );
+    }
+    const clients = await this.clients();
+    await this.request(
+      () =>
+        clients.objects.delete(
+          {
+            apiVersion: GATEWAY_API_VERSION,
+            kind: "HTTPRoute",
+            metadata: { name, namespace },
+          },
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { preconditions: { uid: existing.metadata.uid } } as V1DeleteOptions,
+        ),
+      { mutating: true },
+    );
+  }
+
+  private async gatewayRouteForRevision(
+    name: string,
+    ownership: Ownership,
+    namespace: string,
+    revisionId: string,
+  ): Promise<ManagedKubernetesObject<"HTTPRoute"> | undefined> {
+    if (this.options.gatewayRouting === undefined) return undefined;
+    const existing = await this.getOwned("HTTPRoute", name, namespace, ownership);
+    if (existing === undefined) return undefined;
+    return existing.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revisionId
+      ? existing
+      : undefined;
   }
 
   private async deleteGateway(
@@ -1536,7 +1687,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     namespace: string,
   ): Promise<void> {
     const clients = await this.clients();
-    for (const kind of ["Deployment", "Service", "ServiceAccount"] as const) {
+    for (const kind of ["Service", "ServiceAccount", "Deployment"] as const) {
       const existing = await this.getOwned(kind, name, namespace, ownership);
       if (existing === undefined) continue;
       const request = {
@@ -1596,7 +1747,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
         `Existing Kubernetes namespace ${namespace.metadata.name} belongs to another tenant.`,
       );
     }
-    return existingLabel === ownership.namespaceId && existingId === ownership.namespaceId;
+    const requiredLabels = this.gatewayMembershipLabels();
+    const hasGatewayMembership = Object.entries(requiredLabels).every(
+      ([key, value]) => labels[key] === value,
+    );
+    return (
+      existingLabel === ownership.namespaceId &&
+      existingId === ownership.namespaceId &&
+      hasGatewayMembership
+    );
   }
 
   private async verifyUniqueExistingNamespace(name: string, ownership: Ownership): Promise<void> {
@@ -1642,7 +1801,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
                 metadata: {
                   name: namespace.metadata.name,
                   resourceVersion,
-                  labels: { "openclaw.dev/namespace": ownership.namespaceId },
+                  labels: {
+                    "openclaw.dev/namespace": ownership.namespaceId,
+                    ...this.gatewayMembershipLabels(),
+                  },
                   annotations: { "openclaw.dev/namespace-id": ownership.namespaceId },
                 },
               },
@@ -2287,6 +2449,171 @@ export class KubernetesComputeDriver implements ComputeDriver {
         "openclaw.dev/configuration-generation": String(revision.configurationGeneration),
       },
     };
+  }
+
+  private gatewayMembershipLabels(): Record<string, string> {
+    const routing = this.options.gatewayRouting;
+    if (routing === undefined) return {};
+    return {
+      [GATEWAY_MEMBERSHIP_LABEL]: sha256Hex(
+        `${routing.gatewayNamespace}/${routing.gatewayName}`,
+        12,
+      ),
+    };
+  }
+
+  private gatewayRouteName(agentId: string): string {
+    return `gateway-${sha256Hex(agentId, 12)}`;
+  }
+
+  private gatewayRoutePath(revision: AgentRevision): string {
+    return `/namespaces/${required(revision.namespaceId, "AgentRevision Namespace ID")}/agents/${required(
+      revision.agentId,
+      "Agent ID",
+    )}`;
+  }
+
+  private verifyGatewayRoutingConfiguration(revision: AgentRevision): void {
+    if (this.options.gatewayRouting === undefined) return;
+    const gateway = asRecord(revision.configuration.gateway);
+    const auth = asRecord(gateway?.auth);
+    const trustedProxy = asRecord(auth?.trustedProxy);
+    const trustedProxies = gateway?.trustedProxies;
+    if (auth?.mode !== "trusted-proxy") {
+      throw new ConfigurationFailure(
+        "Gateway routing requires native trusted-proxy authentication.",
+      );
+    }
+    if ("token" in (auth ?? {})) {
+      throw new ConfigurationFailure("Gateway routing native configuration must omit auth.token.");
+    }
+    if (trustedProxy?.userHeader !== "x-occ-identity") {
+      throw new ConfigurationFailure(
+        "Gateway routing requires native trustedProxy.userHeader x-occ-identity.",
+      );
+    }
+    if (
+      !Array.isArray(trustedProxy.allowUsers) ||
+      !trustedProxy.allowUsers.includes("occ-workspace-files")
+    ) {
+      throw new ConfigurationFailure(
+        "Gateway routing requires native trustedProxy.allowUsers to include occ-workspace-files.",
+      );
+    }
+    const identityScopes = asRecord(auth?.identityScopes);
+    const workspaceFileScopes = identityScopes?.["occ-workspace-files"];
+    if (!Array.isArray(workspaceFileScopes) || !workspaceFileScopes.includes("operator.admin")) {
+      throw new ConfigurationFailure(
+        "Gateway routing requires native identityScopes to grant operator.admin.",
+      );
+    }
+    if (gateway?.allowRealIpFallback !== true) {
+      throw new ConfigurationFailure(
+        "Gateway routing requires native allowRealIpFallback to be enabled.",
+      );
+    }
+    if (
+      !Array.isArray(trustedProxies) ||
+      !trustedProxies.some((proxy) => typeof proxy === "string" && proxy.trim().length > 0)
+    ) {
+      throw new ConfigurationFailure(
+        "Gateway routing requires explicitly configured native trustedProxies.",
+      );
+    }
+  }
+
+  private gatewayRoute(
+    revision: AgentRevision,
+    ownership: Ownership,
+    namespace: string,
+    service: ManagedKubernetesObject<"Service">,
+  ): ManagedKubernetesObject<"HTTPRoute"> | undefined {
+    const routing = this.options.gatewayRouting;
+    if (routing === undefined) return undefined;
+    const name = this.gatewayRouteName(revision.agentId);
+    const route = this.manifest(GATEWAY_API_VERSION, "HTTPRoute", name, ownership, namespace);
+    return {
+      ...route,
+      metadata: {
+        ...route.metadata,
+        annotations: {
+          ...route.metadata.annotations,
+          [AGENT_REVISION_ANNOTATION]: String(revision.revision),
+          [AGENT_REVISION_ID_ANNOTATION]: revision.id,
+        },
+        ...(service.metadata.uid === undefined
+          ? {}
+          : {
+              ownerReferences: [
+                {
+                  apiVersion: "v1",
+                  kind: "Service",
+                  name: service.metadata.name,
+                  uid: service.metadata.uid,
+                  controller: false,
+                  blockOwnerDeletion: false,
+                },
+              ],
+            }),
+      },
+      spec: {
+        hostnames: [routing.hostname],
+        parentRefs: [
+          {
+            group: "gateway.networking.k8s.io",
+            kind: "Gateway",
+            namespace: routing.gatewayNamespace,
+            name: routing.gatewayName,
+            sectionName: GATEWAY_LISTENER_SECTION,
+          },
+        ],
+        rules: [
+          {
+            matches: [{ path: { type: "Exact", value: this.gatewayRoutePath(revision) } }],
+            filters: [
+              {
+                type: "URLRewrite",
+                urlRewrite: { path: { type: "ReplaceFullPath", replaceFullPath: "/" } },
+              },
+              {
+                type: "RequestHeaderModifier",
+                requestHeaderModifier: {
+                  set: [
+                    { name: "x-occ-identity", value: "occ-workspace-files" },
+                    {
+                      name: "x-real-ip",
+                      value: "%DOWNSTREAM_DIRECT_REMOTE_ADDRESS_WITHOUT_PORT%",
+                    },
+                  ],
+                  remove: ["x-forwarded-for", "forwarded", "x-openclaw-scopes"],
+                },
+              },
+            ],
+            backendRefs: [
+              {
+                group: "",
+                kind: "Service",
+                name: service.metadata.name,
+                port: this.options.network.gatewayPort,
+              },
+            ],
+          },
+        ],
+      },
+    };
+  }
+
+  private async reconcileGatewayRoute(
+    revision: AgentRevision,
+    ownership: Ownership,
+    namespace: string,
+  ): Promise<void> {
+    if (this.options.gatewayRouting === undefined) return;
+    const name = this.gatewayRouteName(revision.agentId);
+    const service = await this.getOwned("Service", name, namespace, ownership);
+    if (service === undefined) return;
+    const route = this.gatewayRoute(revision, ownership, namespace, service);
+    if (route !== undefined) await this.reconcile(route, ownership, namespace);
   }
 
   private sharedWorkspaceClaimName(agentId: string): string {
@@ -3192,6 +3519,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
               this.patchOptions,
             );
             return;
+          case "HTTPRoute":
+            await clients.objects.patch(
+              desired,
+              undefined,
+              undefined,
+              FIELD_MANAGER,
+              false,
+              APPLY_CONTENT_TYPE,
+            );
+            return;
           default: {
             const unsupported: never = desired.kind;
             throw new ConfigurationFailure(
@@ -3276,6 +3613,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
               return clients.networking.readNamespacedNetworkPolicy({
                 name,
                 namespace: required(namespace, "NetworkPolicy namespace"),
+              });
+            case "HTTPRoute":
+              return clients.objects.read({
+                apiVersion: GATEWAY_API_VERSION,
+                kind,
+                metadata: { name, namespace: required(namespace, "HTTPRoute namespace") },
               });
             default: {
               const unsupported: never = kind;
