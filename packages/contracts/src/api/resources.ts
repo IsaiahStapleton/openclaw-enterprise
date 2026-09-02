@@ -92,6 +92,11 @@ export const ServiceAccountSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ProviderSummarySchema = Type.Object(
+  { id: ProviderId, type: Type.Literal("chatgpt") },
+  { additionalProperties: false },
+);
+
 export const InstallationResponse = Type.Object(
   { data: InstallationSchema, meta: Meta },
   { additionalProperties: false },
@@ -132,6 +137,11 @@ export const AgentResponse = Type.Object(
 
 export const AgentListResponse = Type.Object(
   { data: Type.Array(AgentSchema), meta: Meta },
+  { additionalProperties: false },
+);
+
+export const ProviderListResponse = Type.Object(
+  { data: Type.Array(ProviderSummarySchema), meta: Meta },
   { additionalProperties: false },
 );
 
@@ -223,6 +233,7 @@ export type NamespaceWire = Type.Static<typeof NamespaceSchema>;
 export type ConfigurationWire = Type.Static<typeof ConfigurationSchema>;
 export type SecretWire = Type.Static<typeof SecretSchema>;
 export type ServiceAccountWire = Type.Static<typeof ServiceAccountSchema>;
+export type ProviderSummaryWire = Type.Static<typeof ProviderSummarySchema>;
 export type AgentWire = Type.Static<typeof AgentSchema>;
 export type AgentRevisionWire = Type.Static<typeof AgentRevisionSchema>;
 export type InstallationResponse = Type.Static<typeof InstallationResponse>;
@@ -233,6 +244,7 @@ export type SecretResponse = Type.Static<typeof SecretResponse>;
 export type ServiceAccountResponse = Type.Static<typeof ServiceAccountResponse>;
 export type AgentResponse = Type.Static<typeof AgentResponse>;
 export type AgentListResponse = Type.Static<typeof AgentListResponse>;
+export type ProviderListResponse = Type.Static<typeof ProviderListResponse>;
 export type AgentRevisionResponse = Type.Static<typeof AgentRevisionResponse>;
 export type AgentRevisionListResponse = Type.Static<typeof AgentRevisionListResponse>;
 export type WorkspaceFileResponse = Type.Static<typeof WorkspaceFileResponse>;

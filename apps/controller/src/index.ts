@@ -31,6 +31,7 @@ import {
   type OccApiRoute,
   type OpenClawConfigurationDocument,
   type PermissionAction,
+  type ProviderSummary,
   type ResourceKind,
   type ResourceRef,
   type SandboxDriver,
@@ -59,6 +60,7 @@ import {
   OCC_SERVICE_KEY_HEADER,
   type ControllerAuth,
 } from "./auth/index.ts";
+import { CONSOLE_CONTENT_SECURITY_POLICY, readConsoleAsset } from "./console-assets.ts";
 import {
   ConfigurationOwnershipError,
   ConfigurationValidationError,
@@ -87,6 +89,7 @@ export interface ControllerAppOptions {
   readonly sandboxDriver?: SandboxDriver;
   readonly resolveHarness: HarnessResolver;
   readonly auditSink: AuditSink;
+  readonly providerSummaries?: readonly ProviderSummary[];
   readonly development: DevelopmentAdmission;
   readonly maxBodyBytes?: number;
   readonly auth: ControllerAuth;
@@ -1273,6 +1276,17 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (operation.operationId === "listProviders") {
+      await requireInstallationAdmin(request, operation, context);
+      const providers = options.providerSummaries;
+      if (providers === undefined) throw dependencyUnavailable();
+      reply.send({
+        data: providers.map((provider) => ({ id: provider.id, type: provider.type })),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
     if (operation.operationId === "createNamespace") {
       const namespace = await controller.transact(async (unit) => {
         const created = await controller!.createNamespace(context.actorId, {
@@ -2349,6 +2363,25 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       });
     }
   });
+
+  app.route({
+    method: ["GET", "HEAD"],
+    url: "/console",
+    handler: async (request, reply) => serveConsole(request, reply),
+  });
+  app.route({
+    method: ["GET", "HEAD"],
+    url: "/console/*",
+    handler: async (request, reply) => serveConsole(request, reply),
+  });
+
+  async function serveConsole(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const pathname = request.url.split("?", 1)[0] ?? "";
+    const asset = await readConsoleAsset(pathname);
+    reply.header("content-security-policy", CONSOLE_CONTENT_SECURITY_POLICY);
+    reply.header("content-type", asset.contentType);
+    reply.status(asset.statusCode).send(request.method === "HEAD" ? undefined : asset.body);
+  }
 
   app.setNotFoundHandler(async (request, reply) => {
     const pathname = request.url.split("?", 1)[0] ?? "";

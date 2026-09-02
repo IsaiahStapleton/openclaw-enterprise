@@ -4,6 +4,7 @@ OpenClaw Enterprise is the open platform for managing agents.
 
 ## Start and deploy
 
+- [Concepts](guides/concepts.md): understand tenancy, Agents, execution, configuration, and access.
 - [Quickstart](guides/quickstart.md): start locally, sign in, and make an authenticated request.
 - [Deploy](guides/deploy.md): configure Docker Compose or Kubernetes, verify your deployment, run the development end-to-end TUI proof, and troubleshoot startup.
 - [Testing](testing.md): choose test suites, prepare credentials and infrastructure, and interpret results.
@@ -14,6 +15,9 @@ OpenClaw Enterprise is the open platform for managing agents.
 - [Current architecture](ARCHITECTURE.md): API, worker, storage, and Agent execution.
 
 ## Reference
+
+- [Platform console](reference/console.md): sign in and browse accessible Agents,
+  Providers, and Namespaces at `/console/`.
 
 - [Reference index](reference/README.md): browse all features and Drivers.
 - [Namespaces](reference/namespaces.md), [Agents](reference/agents.md), and
@@ -41,7 +45,8 @@ OpenClaw Enterprise is the open platform for managing agents.
   [production startup](flows/production-startup.md),
   [production TUI attachment](flows/production-tui.md), and
   [shared platform startup](flows/platform-startup.md).
-- [Provider and Driver lifecycle](flows/provider-driver-lifecycle.md).
+- [Platform console requests](flows/platform-console.md) and
+  [Provider and Driver lifecycle](flows/provider-driver-lifecycle.md).
 - [Controller worker](flows/controller-worker.md),
   [Harness execution topology](flows/harness-execution-topology.md), and
   [dedicated Harness shared workspace](flows/dedicated-harness-shared-workspace-drive.md).

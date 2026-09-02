@@ -290,3 +290,43 @@ test("production image includes the OpenShell gRPC proto asset", imageTestOption
   assert.match(stdout, /"event":"openshell-proto-loaded"/);
   assertNoPackagingFailure(`${stdout}\n${stderr}`);
 });
+
+test("production image includes console shell and public assets", imageTestOptions, async () => {
+  const probe = String.raw`
+    import assert from "node:assert/strict";
+    import { readConsoleAsset } from "./apps/controller/src/console-assets.ts";
+
+    const shell = await readConsoleAsset("/console/");
+    assert.equal(shell.statusCode, 200);
+    assert.match(shell.contentType, /text\/html/);
+    assert.match(shell.body.toString("utf8"), /\/console\/console\.mjs/);
+
+    const css = await readConsoleAsset("/console/console.css");
+    assert.equal(css.statusCode, 200);
+    assert.match(css.contentType, /text\/css/);
+    assert.ok(css.body.length > 0);
+
+    const script = await readConsoleAsset("/console/console.mjs");
+    assert.equal(script.statusCode, 200);
+    assert.match(script.contentType, /javascript/);
+    assert.match(script.body.toString("utf8"), /api\/auth\/session/);
+
+    const unknown = await readConsoleAsset("/console/index.ts");
+    assert.equal(unknown.statusCode, 404);
+    assert.match(unknown.contentType, /text\/html/);
+    assert.doesNotMatch(unknown.body.toString("utf8"), /createFastifyApp|OCC_AUTH_SECRET|apiKeyPath/);
+    console.log(JSON.stringify({ event: "console-assets-loaded" }));
+  `;
+  const { stdout, stderr } = await runDocker([
+    "run",
+    "--rm",
+    "--network",
+    "none",
+    image,
+    "--input-type=module",
+    "--eval",
+    probe,
+  ]);
+  assert.match(stdout, /"event":"console-assets-loaded"/);
+  assertNoPackagingFailure(`${stdout}\n${stderr}`);
+});
