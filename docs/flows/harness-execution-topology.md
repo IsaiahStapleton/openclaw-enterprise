@@ -48,7 +48,10 @@ graph TD
 OCC authorizes and locks the exact Agent and Configuration. Selected-model/provider
 `agentRuntime.id` explicitly selects `codex` or `openclaw`; only an unambiguous built-in
 configuration defaults to embedded OpenClaw. Missing ambiguous/plugin runtime policy, conflicting
-routes, unsupported IDs, and harness/mode mismatches fail closed. The admitted revision immutably
+routes, unsupported IDs, and harness/mode mismatches fail closed. OCC validates each primary
+and fallback model through the same resolver; fallbacks must keep the
+primary provider and Harness. It preserves their order in the native configuration.
+The admitted revision immutably
 captures its native configuration, approved harness identity/version, explicit mode, Compute
 selection, and Agent ServicePrincipal. Production admits both approved
 `openclaw`/`embedded` and `codex`/`dedicated` combinations. An associated

@@ -536,6 +536,11 @@ cat > configuration.json <<'JSON'
 JSON
 ```
 
+When using native model fallbacks, keep them on the primary model provider and
+give each model a compatible Harness policy. OCC validates the full selection
+and preserves its fallback order; mixed Harnesses are rejected. See
+[native runtime selection](../reference/harness-execution.md#native-runtime-selection).
+
 Post the Configuration and capture the server-generated ID:
 
 ```bash
