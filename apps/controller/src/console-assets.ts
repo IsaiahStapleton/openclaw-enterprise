@@ -14,6 +14,22 @@ const CONSOLE_ASSETS = new Map(
       path: new URL("console.css", CONSOLE_ROOT),
       contentType: "text/css; charset=utf-8",
     },
+    "/console/channels.css": {
+      path: new URL("channels.css", CONSOLE_ROOT),
+      contentType: "text/css; charset=utf-8",
+    },
+    "/console/channels.mjs": {
+      path: new URL("channels.mjs", CONSOLE_ROOT),
+      contentType: "text/javascript; charset=utf-8",
+    },
+    "/console/agents.mjs": {
+      path: new URL("agents.mjs", CONSOLE_ROOT),
+      contentType: "text/javascript; charset=utf-8",
+    },
+    "/console/dom.mjs": {
+      path: new URL("dom.mjs", CONSOLE_ROOT),
+      contentType: "text/javascript; charset=utf-8",
+    },
     "/console/console.mjs": {
       path: new URL("console.mjs", CONSOLE_ROOT),
       contentType: "text/javascript; charset=utf-8",
@@ -54,6 +70,10 @@ export async function readConsoleAsset(pathname: string): Promise<ConsoleAsset> 
   return {
     body: await readFile(CONSOLE_SHELL),
     contentType: "text/html; charset=utf-8",
-    statusCode: CONSOLE_SHELL_ROUTES.has(pathname) ? 200 : 404,
+    statusCode:
+      CONSOLE_SHELL_ROUTES.has(pathname) ||
+      /^\/console\/agents\/(new|agt_[a-f0-9-]+)$/.test(pathname)
+        ? 200
+        : 404,
   };
 }

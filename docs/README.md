@@ -16,8 +16,9 @@ OpenClaw Enterprise is the open platform for managing agents.
 
 ## Reference
 
-- [Platform console](reference/console.md): sign in and browse accessible Agents,
-  Providers, and Namespaces at `/console/`.
+- [Platform console](reference/console.md): sign in, select Namespaces, browse
+  accessible resources, create Agents from existing Configurations, and edit
+  supported channel draft settings at `/console/`.
 
 - [Reference index](reference/README.md): browse all features and Drivers.
 - [Namespaces](reference/namespaces.md), [Agents](reference/agents.md), and

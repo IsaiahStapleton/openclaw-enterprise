@@ -45,11 +45,14 @@ Each linked section contains the setup requirements and commands for that suite.
 ## Console browser checks
 
 The [console](reference/console.md) uses real controller routes in
-`tests/integration/console-api.test.mjs` and `tests/browser/console.test.mjs`.
-The shared fixture runs Fastify, Better Auth memory storage, Native IAM, and
-in-memory platform storage on an ephemeral loopback port. Configuration and
-Compute helpers are test-only; these tests do not establish PostgreSQL
-persistence, live Provider health, or deployed Agent runtime behavior.
+`tests/integration/console-api.test.mjs`, `tests/browser/console.test.mjs`, and
+`tests/browser/console-agents.test.mjs`. The shared browser fixture runs
+Fastify, Better Auth memory storage, Native IAM, and in-memory platform storage
+on an ephemeral loopback port. Configuration and Compute helpers are test-only.
+The Agent browser suite seeds active revision pointers only to render admitted
+history; that fixture does not prove runtime dispatch, worker leases, Compute
+Driver effects, PostgreSQL persistence, live Provider health, or deployed Agent
+runtime behavior.
 
 Run the API/static boundary checks without a browser:
 
@@ -68,9 +71,11 @@ pnpm test:console-browser
 `OCC_TEST_BROWSER_EXECUTABLE` optionally selects an approved existing browser
 executable. The suite always uses a fresh context. Browser setup is explicit;
 the test command does not install software or silently skip a missing browser.
-Do not change managed browser policies to make the suite run. Set
-`OCC_TEST_CONSOLE_ARTIFACT_DIR` to retain screenshots at a chosen path; otherwise
-the suite uses a temporary directory. The existing
+Do not change managed browser policies to make the suite run. A managed Chrome
+debugging policy can currently block the browser suite on locked-down hosts; use
+an approved browser environment instead. Set `OCC_TEST_CONSOLE_ARTIFACT_DIR` to
+retain screenshots at a chosen path; otherwise the suite uses a temporary
+directory. The existing
 [image smoke test](#images-and-helm) also loads console assets from the built
 controller image; it does not claim a live production deployment.
 

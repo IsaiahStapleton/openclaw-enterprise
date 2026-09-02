@@ -1,0 +1,140 @@
+.channels-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.channel-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+}
+
+.channel-card {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.channel-card-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+}
+
+.channel-card h2,
+.channel-dialog h2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.channel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.channel-native pre {
+  max-height: 18rem;
+  overflow: auto;
+}
+
+.channel-dialog {
+  width: min(42rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  margin: auto 0 auto auto;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: -18px 0 60px rgba(13, 20, 33, 0.24);
+}
+
+.channel-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.32);
+}
+
+.channel-drawer-form {
+  display: grid;
+  gap: 1rem;
+  padding: 1.5rem;
+}
+
+.channel-drawer-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+}
+
+.channel-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.channel-field input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+}
+
+.channel-field input[readonly] {
+  background: #f8fafc;
+  color: #475569;
+  cursor: default;
+}
+
+.channel-label {
+  font-weight: 600;
+}
+
+.channel-field code {
+  display: block;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8fafc;
+  color: #475569;
+  overflow-wrap: anywhere;
+}
+
+.channel-check {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-weight: 600;
+}
+
+.channel-check input {
+  width: auto;
+}
+
+@media (max-width: 760px) {
+  .channel-heading,
+  .channel-card-row,
+  .channel-drawer-head {
+    grid-template-columns: 1fr;
+  }
+
+  .channel-card-row,
+  .channel-drawer-head {
+    display: grid;
+  }
+
+  .channel-actions {
+    justify-content: flex-start;
+  }
+
+  .channel-dialog {
+    width: 100vw;
+    max-height: 92vh;
+    margin: auto 0 0;
+  }
+}

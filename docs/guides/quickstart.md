@@ -39,10 +39,14 @@ Open `/console/` on the API URL printed by `dev-up`, normally
 No service key is needed for browser login.
 
 The [console](../reference/console.md) lists accessible Agents, Providers, and
-Namespaces. A fresh Installation has a `default` Namespace and no Agents;
-provision resources and access through the API procedures in the deployment guide. Use
-the bottom **OpenClaw Enterprise** menu to select a Namespace, open Settings,
-or log out. The API check below remains useful for programmatic access.
+Namespaces. It can create an Agent from an existing Configuration ID and edit
+supported Slack or Microsoft Teams channel settings on the saved Configuration
+draft. It does not list Configurations, deploy Agents, delete Agents, or report
+live gateway health. A fresh Installation has a `default` Namespace and no
+Agents; provision resources and access through the API procedures in the
+deployment guide. Use the bottom **OpenClaw Enterprise** menu to select a
+Namespace, open Settings, or log out. The API check below remains useful for
+programmatic access.
 
 ## Read the Installation with the bootstrap service key
 

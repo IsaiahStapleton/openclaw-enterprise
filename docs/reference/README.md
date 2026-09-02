@@ -18,7 +18,7 @@ procedure needs a public Docker-only OpenClaw/Codex runtime image.
 
 | Reference                                  | Owns                                                                                 |
 | ------------------------------------------ | ------------------------------------------------------------------------------------ |
-| [Platform console](console.md)             | Login, read-only collections, Namespace selection, and session isolation.            |
+| [Platform console](console.md)             | Login, Agent creation, draft channels, revision inspection, and Namespace selection. |
 | [Namespaces](namespaces.md)                | Tenant identity, placement, readiness, and deletion.                                 |
 | [Agents](agents.md)                        | Agent identity, mutable selection, and immutable revisions.                          |
 | [Configuration](configuration.md)          | Native documents, generations, references, and snapshots.                            |

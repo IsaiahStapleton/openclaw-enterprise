@@ -1,3 +1,6 @@
+import { element, button } from "./dom.mjs";
+import { renderAgentList, renderCreateAgent, renderAgentDetail } from "./agents.mjs";
+
 const app = document.querySelector("#app");
 const pages = {
   agents: "Agents",
@@ -15,29 +18,20 @@ let loggingOut = false;
 let menuControls = null;
 let drawerControls = null;
 
-// Every value received from the API is inserted as text, never as HTML.
-function element(tag, attributes = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attributes)) {
-    if (key === "className") node.className = value;
-    else node.setAttribute(key, String(value));
-  }
-  node.append(...children.filter((child) => child !== null && child !== undefined));
-  return node;
-}
-
-function button(label, action, attributes = {}) {
-  const node = element("button", { type: "button", ...attributes }, label);
-  node.addEventListener("click", action);
-  return node;
-}
-
 function route() {
   const url = new URL(location.href);
   const path = url.pathname;
   const feature =
     path === "/console" || path === "/console/" ? "agents" : path.slice("/console/".length);
-  return { feature, namespace: url.searchParams.get("namespace"), url };
+  const agentPath = /^agents\/(new|agt_[a-f0-9-]+)$/.exec(feature);
+  return {
+    feature: agentPath ? "agents" : feature,
+    agentId: agentPath?.[1] === "new" ? null : agentPath?.[1],
+    creating: agentPath?.[1] === "new",
+    target: feature + url.search,
+    namespace: url.searchParams.get("namespace"),
+    url,
+  };
 }
 
 function pageUrl(feature, selection = namespaceId) {
@@ -50,8 +44,13 @@ function safeReturn(value) {
   if (!value || !value.startsWith("/console/")) return null;
   try {
     const url = new URL(value, location.origin);
-    if (url.origin !== location.origin || !Object.hasOwn(pages, url.pathname.slice(9))) return null;
-    return pageUrl(url.pathname.slice(9), url.searchParams.get("namespace"));
+    const path = url.pathname.slice(9);
+    if (
+      url.origin !== location.origin ||
+      (!Object.hasOwn(pages, path) && !/^agents\/(new|agt_[a-f0-9-]+)$/.test(path))
+    )
+      return null;
+    return pageUrl(path + url.search, url.searchParams.get("namespace"));
   } catch {
     return null;
   }
@@ -75,6 +74,7 @@ function navigate(feature, selection = namespaceId, replace = false) {
 }
 
 function resetReads() {
+  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
   reads.abort();
   reads = new AbortController();
   generation += 1;
@@ -103,6 +103,7 @@ async function request(path, { method = "GET", body, signal = reads.signal } = {
     const error = new Error("The request could not be completed.");
     error.status = response.status;
     error.requestId = payload?.meta?.requestId;
+    error.code = payload?.error?.code;
     throw error;
   }
   return payload.data;
@@ -526,7 +527,7 @@ async function loadPage() {
       const destination =
         current.feature === "login"
           ? current.url.searchParams.get("return")
-          : pageUrl(current.feature, current.namespace);
+          : pageUrl(current.target, current.namespace);
       showLogin(
         current.feature !== "login" &&
           current.url.pathname !== "/console/" &&
@@ -556,7 +557,7 @@ async function loadPage() {
       null;
     if (["agents", "providers", "namespaces"].includes(history.state?.previousCollection))
       previousCollection = history.state.previousCollection;
-    history.replaceState({ previousCollection }, "", pageUrl(current.feature));
+    history.replaceState({ previousCollection }, "", pageUrl(current.target));
     shell = renderShell(current.feature);
     if (current.feature === "settings") {
       shell.view.append(
@@ -590,6 +591,28 @@ async function loadPage() {
       );
       return;
     }
+    const agentContext = {
+      view: shell.view,
+      namespaceId,
+      request,
+      navigate,
+      pageUrl,
+      isCurrent: () => active === generation,
+      onExpired: () =>
+        showLogin("Your session has expired.", pageUrl(current.target, current.namespace)),
+      setTitle: (title) => {
+        app.querySelector("h1").textContent = title;
+      },
+      url: current.url,
+    };
+    if (current.creating) {
+      renderCreateAgent(agentContext);
+      return;
+    }
+    if (current.agentId) {
+      await renderAgentDetail({ ...agentContext, agentId: current.agentId });
+      return;
+    }
     panel(shell.view, "Loading…", `Reading ${pages[current.feature].toLowerCase()}.`);
     const items =
       current.feature === "namespaces"
@@ -601,11 +624,12 @@ async function loadPage() {
           );
     if (active !== generation) return;
     if (!Array.isArray(items)) throw new Error("Invalid collection response");
-    renderRows(shell.view, current.feature, items);
+    if (current.feature === "agents") renderAgentList({ ...agentContext, items });
+    else renderRows(shell.view, current.feature, items);
   } catch (error) {
     if (active !== generation || error.name === "AbortError") return;
     if (error.status === 401) {
-      showLogin("Your session has expired.", pageUrl(current.feature, current.namespace));
+      showLogin("Your session has expired.", pageUrl(current.target, current.namespace));
       return;
     }
     if (!session) {
@@ -704,10 +728,11 @@ window.addEventListener("popstate", () => {
   if (!loggingOut) void loadPage();
 });
 window.addEventListener("focus", () => {
-  if (session && !loggingOut) void loadPage();
+  if (session && !loggingOut && !app.querySelector("form, dialog[open]")) void loadPage();
 });
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && session && !loggingOut) void loadPage();
+  if (!document.hidden && session && !loggingOut && !app.querySelector("form, dialog[open]"))
+    void loadPage();
 });
 window.addEventListener("pagehide", () => {
   resetReads();
