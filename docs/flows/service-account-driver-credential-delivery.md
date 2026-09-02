@@ -1,55 +1,74 @@
 ---
 created: 2026-08-24
 updated: 2026-09-01
-last_updated_session: codex/01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Service Account Driver Credential Delivery Flow
 
 ## Overview
 
-OCC creates a Namespace-owned account, separately issues its provider-backed
-credential, and deploys an associated dedicated Codex Agent. The Driver owns
-provider identities; Kubernetes Compute delivers the account Secret to Codex.
+OCC starts with Installation Provider composition, then creates a
+Namespace-owned account, separately issues its provider-backed credential, and
+deploys an associated dedicated Codex Agent. The API owns the provider client
+and upstream account calls; worker reconciliation repeats metadata checks before
+Compute projects the account Secret to Codex. This flow stops after Codex starts
+with the projected access token and workspace.
 
 ## Entry Points
 
 - Trigger: `POST /namespaces/:namespaceId/service-accounts`, then
   `POST /namespaces/:namespaceId/service-accounts/:serviceAccountId/credentials`,
   Agent association, and deployment.
-- Sources: `apps/controller/src/index.ts:perform` and
+- Sources: `apps/controller/src/server.mjs:start`,
+  `apps/controller/src/drivers/service-account/chatgpt.ts:ChatGPTServiceAccountDriver`,
   `packages/occ/src/index.ts:OpenClawController`.
 - Requires PostgreSQL, a ready Namespace, exact OCC permissions, the selected
-  Drivers, and an API-only credential for an authorized ChatGPT workspace.
+  ChatGPT Provider and member ServiceAccount Driver, an API-only credential for
+  the configured ChatGPT workspace, and a dedicated Codex runtime for managed
+  access-token deployment.
 
 ## Flow
 
 ```mermaid
 graph TD
-  A["API injects ChatGPT Provider into selected Driver"] --> B["Authorize and create OCC and provider accounts"]
-  B --> C["Save private provider binding in OCC transaction"]
-  C --> D["Authorize separate credential issuance"]
-  D --> E["Create account-owned token and workspace Secret"]
-  E --> F["Persist private credential ID and public Secret reference"]
-  F --> G["Validate exact Provider binding and snapshot Agent revision"]
-  G --> H{"Dedicated Codex"}
-  H -->|no| I["Reject deployment"]
-  H -->|yes| J["Project account Secret directly into Codex"]
-  J --> K["Pin workspace, authenticate, and start app server"]
+  subgraph Composition["Installation composition"]
+    A["Validate Provider and selected Driver"] --> B["API builds ChatGPT client"]
+    B --> C["Inject Provider into ServiceAccount Driver"]
+    A --> D["Worker keeps nonsecret Provider metadata"]
+  end
+  subgraph API["OCC API"]
+    C --> E["Authorize and create OCC account"]
+    E --> F["Create upstream account and private binding"]
+    F --> G["Authorize separate credential issuance"]
+    G --> H["Issue token and store account Secret"]
+    H --> I["Persist credential ID and Secret reference"]
+    I --> J["Save nullable Agent providerId"]
+    J --> K["Validate binding and freeze revision"]
+  end
+  subgraph Worker["Worker and Compute"]
+    D --> L["Reauthorize deployment actor"]
+    K --> L
+    L --> M["Recheck Provider and binding metadata"]
+    M -->|valid dedicated Codex| N["Project account Secret into Codex"]
+    M -->|mismatch| O["Fail candidate"]
+    N --> P["Codex pins workspace and starts app server"]
+  end
 ```
 
 ## Execution Trace
 
-### 1. Initialize the provider only in the API
+### 1. Compose the Provider and its ServiceAccount Driver
 
 `apps/controller/src/server.mjs:start`
 
-`apps/controller/src/server.mjs` reads the mounted admin credential, creates
-`Provider<ChatGPTClient>`, and passes it to the concrete Driver factory before
-registering that Driver after controller composition. The worker receives only
-nonsecret Provider metadata, never the admin credential or client. The
-[Provider lifecycle flow](provider-driver-lifecycle.md) covers membership and
-startup ownership checks.
+`loadInstallationConfiguration` validates the singular `provider` array and
+requires each ChatGPT Provider to declare the selected `service_account` member
+Driver. `server.mjs:start` then reads the mounted `apiKeyPath`, constructs
+`Provider<ChatGPTClient>`, and injects it into the bundled
+`ChatGPTServiceAccountDriver` factory. That client and admin key stay on the API
+side. The worker receives only nonsecret Provider definitions so it can reject
+stale or mismatched deployment snapshots before Compute effects.
 
 ### 2. Create the account and private provider binding
 
@@ -59,8 +78,11 @@ startup ownership checks.
 allocates its `sa_*` identity. `ChatGPTServiceAccountDriver.create` creates the
 upstream account, registers rollback, and persists its private provider binding
 in the same PostgreSQL transaction, including Provider, Driver, Namespace,
-account, and workspace identity. Later issuance and deletion require that exact
-binding to match the current configured Provider.
+account, and workspace identity.
+
+Account creation and credential issuance are separate operations. Creating the
+account does not issue a token, and later issuance or deletion requires that
+exact binding to match the current configured Provider and member Driver.
 
 ### 3. Issue the credential and create one account Secret
 
@@ -73,19 +95,41 @@ the workspace ID in one account-owned Secret. The private credential ID, public
 `{ kind: "access_token", secretRef }`, and audit changes commit together;
 confirmed failures compensate created provider and Kubernetes resources.
 
-### 4. Associate the account and project its Secret
+### 4. Save Agent provider intent and admit the revision
+
+`packages/occ/src/index.ts:OpenClawController.createAgent`, `updateAgent`, `deployAgent`
+
+Agent `providerId` is nullable. Create omission saves `null`; PATCH omission
+preserves the current value; explicit `null` clears it; and a nonnull ID must
+name a configured Provider. Saving or changing the draft Agent reference makes
+no upstream call.
+
+`deployAgent` authorizes the Agent, Configuration, and associated account, then
+validates `access_token` ownership with
+`validateServiceAccountProviderBinding`. Managed access-token deployment requires
+the exact nonnull Provider, selected member Driver, workspace, account, recorded
+credential issuance, and dedicated Codex execution. Native API-key accounts can
+remain providerless, and an account with no credential cannot deploy. Admission
+freezes the account identity, credential kind, Secret reference, and Agent
+`providerId` in the immutable revision.
+
+### 5. Recheck metadata and project the account Secret
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.prepareRevision`
 
-`OpenClawController.deployAgent` authorizes account `read`, validates the exact
-managed binding and matching nonnull Provider, and snapshots the account's OCC
-identity, credential kind, Secret reference, and Agent `providerId`. The worker
-repeats the metadata binding check after IAM reauthorization and before effects.
-`KubernetesComputeDriver.prepareRevision` projects the account Secret directly
-into dedicated Codex; embedded execution is rejected. The gateway receives no
-model credential, and the worker receives no direct Secret API permission.
+`ControllerWorker.resolveRevisionProvider` runs after IAM reauthorization and
+before Compute reconciliation. It rejects a missing configured Provider as
+`PROVIDER_UNAVAILABLE` and a metadata mismatch as
+`SERVICE_ACCOUNT_PROVIDER_MISMATCH`. Only Provider, Driver, workspace, account,
+and issuance metadata leave the repository; upstream account IDs, admin keys,
+and credential values stay private.
 
-### 5. Authenticate Codex under the exact workspace
+`KubernetesComputeDriver.prepareRevision` projects the account Secret directly
+into dedicated Codex. Embedded execution is rejected for managed access tokens.
+The gateway receives no model credential, and the worker receives no direct
+Secret API permission.
+
+### 6. Authenticate Codex under the exact workspace
 
 `apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:AGENT_RUNTIME_ENTRYPOINT`
 
@@ -112,8 +156,7 @@ Refresh, rotation, and automated reconciliation remain deferred.
 
 ## Related docs
 
-- [Provider and Driver lifecycle](provider-driver-lifecycle.md)
-
+- [Providers](../reference/providers.md)
 - [Service accounts](../reference/service-accounts.md)
 - [Service Account Driver specification](../../specs/.archive/11-service-account-driver.md)
 - [Platform design](../design.md)
@@ -127,6 +170,7 @@ Refresh, rotation, and automated reconciliation remain deferred.
 
 ## Changelog
 
+- 2026-09-01 19:09: Merged Provider and Driver lifecycle details into the managed credential delivery flow, including nullable Agent Provider references and worker metadata checks. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 
 - 2026-08-28 17:58: Updated moved feature-reference links for the documentation organization. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)

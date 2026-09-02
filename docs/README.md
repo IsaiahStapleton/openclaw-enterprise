@@ -39,16 +39,13 @@ OpenClaw Enterprise is the open platform for managing agents.
 
 ## Understand the code
 
-- [Development startup](flows/development-startup.md),
-  [Docker Compose development](flows/docker-compose-development.md),
+- [Docker Compose development](flows/docker-compose-development.md),
   [production startup](flows/production-startup.md),
   [production TUI attachment](flows/production-tui.md), and
   [shared platform startup](flows/platform-startup.md).
-- [Platform console requests](flows/platform-console.md) and
-  [Provider and Driver lifecycle](flows/provider-driver-lifecycle.md).
-- [Controller worker](flows/controller-worker.md),
-  [Harness execution topology](flows/harness-execution-topology.md), and
-  [dedicated Harness shared workspace](flows/dedicated-harness-shared-workspace-drive.md).
+- [Platform console requests](flows/platform-console.md).
+- [Controller worker](flows/controller-worker.md) and
+  [Harness execution and shared storage](flows/harness-execution-topology.md).
 - [Configuration and Agent revision](flows/configuration-driver.md),
   [Secret storage and gateway delivery](flows/secret-storage-and-delivery.md),
   [Driver loading](flows/driver-plugin-loading.md), and

@@ -1,7 +1,7 @@
 ---
 created: 2026-08-20
 updated: 2026-09-01
-last_updated_session: codex/01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Platform Startup Flow
@@ -215,7 +215,7 @@ execution begins in the adjacent
 
 ## Related docs
 
-- [Provider and Driver lifecycle](provider-driver-lifecycle.md)
+- [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
 
 - [Platform architecture](../ARCHITECTURE.md)
 - [Controller worker operation](../reference/controller.md)
@@ -234,8 +234,7 @@ execution begins in the adjacent
 
 ## Changelog
 
-- 2026-09-01 10:19: Validate Provider configuration at startup and exact saved ownership at use, preserving API repair access. (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158)
-
+- 2026-09-01 19:09: Validate Provider configuration at startup and exact saved ownership at use, preserving API repair access. (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 
 - 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)

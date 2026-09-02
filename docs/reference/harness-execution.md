@@ -102,5 +102,5 @@ for the complete capability and upstream compatibility boundaries.
 - [Deployment](../guides/deploy.md)
 - [ComputeDriver contract](drivers/compute.md)
 - [ServiceAccount credentials](service-accounts.md)
-- [Dedicated shared workspace flow](../flows/dedicated-harness-shared-workspace-drive.md)
+- [Harness execution and shared storage flow](../flows/harness-execution-topology.md)
 - [Implementation history](../../specs/README.md)

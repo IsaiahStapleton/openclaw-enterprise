@@ -1,39 +1,49 @@
 ---
 created: 2026-08-24
-updated: 2026-08-31
-last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
+updated: 2026-09-01
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Docker Compose Development Flow
 
 ## Overview
 
-`docker compose up --build` starts the supported local OpenClaw Enterprise
-development environment. Compose owns PostgreSQL, migrations, idempotent
-shared initialization for fresh databases, the OCC API with a
-filesystem-backed Configuration Driver, and the worker. The worker selects the
-Docker Compute Driver and starts real OpenClaw/Codex runtime containers for
-authorized Namespace and AgentRevision work. The development TUI path attaches
-inside the Agent-owned gateway container and uses that container's inherited
-gateway configuration to reach the live Agent runtime. This flow stops after the
-worker has reconciled Docker-backed runtimes, the TUI client has exited, and
-cleanup for development resources is understood.
+`scripts/dev-up` is the supported local OpenClaw Enterprise development entry
+point. The helper performs host preflight, selects or verifies runtime images,
+wraps Docker Compose, waits for PostgreSQL migration, Installation bootstrap,
+API health, and worker readiness, then proves authenticated `/installation`
+access with a protected local copy of the bootstrap service key. That startup
+proof does not create an Agent, deploy an AgentRevision, or start a TUI.
 
-Use the [deployment guide](../guides/deploy.md) for setup and shutdown and the
-[quickstart](../guides/quickstart.md) for authenticated API commands. The
-[development startup flow](development-startup.md) ends at control-plane
-readiness; this trace continues through Docker workload creation and cleanup.
+After startup, the operator uses authenticated API calls to select a Namespace,
+create a Configuration and Agent, then deploy it. The worker then claims durable
+work, invokes the Docker Compute Driver, and starts real OpenClaw/Codex runtime
+containers with the independently supplied provider key. The development TUI
+path attaches with `docker exec` inside the Agent-owned embedded gateway
+container and uses that container's inherited gateway configuration to reach the
+live Agent runtime. This flow stops after the worker has reconciled
+Docker-backed runtimes, the TUI client has exited, and cleanup for development
+resources is understood.
+
+Use the [deployment guide](../guides/deploy.md) for setup, API provisioning,
+TUI attachment, and shutdown, and the [quickstart](../guides/quickstart.md) for
+the first authenticated development API checks.
 
 ## Entry Points
 
-- Trigger: `docker compose up --build`
-- Source: `compose.yaml`, `apps/controller/src/server.mjs:start`,
-  `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`
-- Assumptions: Docker Engine is available; PostgreSQL can write
-  `occ_postgres_data`; the controller can write `occ_configuration_data` at
-  `/app/.development/configurations`; runtime images are supplied through
-  `OCC_DOCKER_GATEWAY_IMAGE` and `OCC_DOCKER_AGENT_IMAGE` or shared
-  `OCC_DOCKER_RUNTIME_IMAGE`; `OPENAI_API_KEY` is present in the
+- Trigger: `./scripts/dev-up [--key-output PATH] [-- COMPOSE_GLOBAL_OPTIONS...]`
+  from the repository root, followed by authenticated API calls and optional
+  `docker exec -it` TUI attachment.
+- Source: `scripts/dev-up`, `compose.yaml`,
+  `apps/controller/src/server.mjs:start`,
+  `apps/controller/src/worker.ts:ControllerWorker`, and
+  `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`.
+- Assumptions: Docker Engine, Docker Compose, Bash, `curl`, and Python 3 are
+  available; PostgreSQL can write `occ_postgres_data`; the controller can write
+  `occ_configuration_data` at `/app/.development/configurations`; runtime
+  images are supplied through `OCC_DOCKER_GATEWAY_IMAGE` and
+  `OCC_DOCKER_AGENT_IMAGE`, shared `OCC_DOCKER_RUNTIME_IMAGE`, or the helper's
+  default quickstart runtime image; `OPENAI_API_KEY` is present in the
   Compose-starting environment or protected `.env` before the worker starts;
   the API is published only on host loopback; the TUI runs from an interactive
   terminal attached with `docker exec -it`.
@@ -42,32 +52,47 @@ readiness; this trace continues through Docker workload creation and cleanup.
 
 ```mermaid
 graph TD
-  A["docker compose up --build"] --> B["PostgreSQL starts on a persistent local volume"]
-  B --> C["Migration job applies occ schema with migrator role"]
-  C --> D["Shared initializer creates or verifies the Installation"]
-  D --> E["API loads persisted Installation, IAM, and Configuration"]
-  E --> F["OCC API listens and becomes healthy"]
-  F --> G["Worker starts with compute-docker-development"]
-  F --> H["Operator reads Installation and provisions with bootstrap service key"]
-  H --> I
-  G --> I["Worker claims durable work"]
-  I --> J["Docker driver ensures one network per Namespace"]
-  I --> K{"Harness topology"}
-  K -->|embedded OpenClaw| L["Start one gateway plus embedded Harness container"]
-  K -->|dedicated Codex| M["Start gateway plus authenticated Codex container"]
-  L --> N["Real provider response proves execution"]
-  M --> N
-  L --> O["docker exec starts openclaw.mjs tui in the gateway container"]
-  O --> P["TUI reads inherited gateway config and isolated client state"]
-  P --> Q["TUI sends chat.send over localhost gateway WebSocket"]
-  Q --> R["Gateway streams native session events and renders the model reply"]
-  R --> S["Ctrl+D exits the TUI client; gateway remains ready"]
-  I --> T["Retire revisions and delete owned Namespace resources"]
+  A["scripts/dev-up"] --> B["Preflight host tools and resolved Compose config"]
+  B --> C["Select quickstart runtime image or validate custom images"]
+  C --> D["Docker Compose starts PostgreSQL, migrate, bootstrap, API, and worker"]
+  D --> E["Copy bootstrap service-key response to private local file"]
+  E --> F["scripts/occ-api GET /installation proves authenticated access"]
+  F --> G["Operator sends authenticated API provisioning and deploy calls"]
+  G --> H["Worker claims durable Namespace and AgentRevision work"]
+  H --> I["Docker driver ensures one network per Namespace"]
+  H --> J{"Harness topology"}
+  J -->|embedded OpenClaw| K["Start one gateway plus embedded Harness container"]
+  J -->|dedicated Codex| L["Start gateway plus authenticated Codex container"]
+  K --> M["Real provider response proves execution"]
+  L --> M
+  K --> N["docker exec starts openclaw.mjs tui in the gateway container"]
+  N --> O["TUI reads inherited gateway config and isolated client state"]
+  O --> P["TUI sends chat.send over localhost gateway WebSocket"]
+  P --> Q["Gateway streams native session events and renders the model reply"]
+  Q --> R["Ctrl+D exits the TUI client; gateway remains ready"]
+  H --> S["Retire revisions and delete owned Namespace resources"]
 ```
 
 ## Execution Trace
 
-### 1. compose.yaml:services.postgres and services.migrate
+### 1. scripts/dev-up: host preflight and runtime image selection
+
+`scripts/dev-up:50`, `deploy/runtime`
+
+The helper runs from the checkout root. It accepts an optional `--key-output`
+destination and forwards arguments after `--` to Docker Compose, so native
+Compose project names, profiles, and override files keep their normal
+precedence. It requires Docker Engine, Docker Compose, `curl`, and Python 3,
+then validates the effective Compose configuration without printing expanded
+credentials.
+
+If neither a shared runtime image nor separate gateway/Agent images are set,
+the helper selects `openclaw-enterprise-runtime:quickstart` for this invocation.
+It builds that default image from `deploy/runtime` only when the image is
+missing. Custom image references must already exist; an incomplete custom
+selection fails before startup is reported successful.
+
+### 2. compose.yaml:services.postgres and services.migrate
 
 `compose.yaml:services.postgres`, `compose.yaml:services.migrate`
 
@@ -80,22 +105,29 @@ database and the checked-in local SQL to create the less-privileged
 
 The migration service waits for PostgreSQL, connects with
 `OCC_MIGRATION_DATABASE_URL`, and applies Drizzle migrations. The API and
-worker never use the migrator or PostgreSQL administrator URL.
+worker never use the migrator or PostgreSQL administrator URL. `dev-up` invokes
+this through Compose; it does not run migration directly.
 
-### 2. Initialize before starting the API or worker
+### 3. Initialize before starting the API or worker
 
 `compose.yaml:services.bootstrap`, `scripts/bootstrap-installation.mjs`
 
 After migration exits `0`, Compose runs the shared initializer with development
-inputs. It creates fresh human/service administrators, writes the initial key
-to its private volume, and commits the singleton Installation, IAM, and audit.
-Existing Installations retain their credentials and output. Only the initializer
-mounts `occ_bootstrap_data`; the API and worker load committed state after
-initializer success. The [development startup flow](development-startup.md)
-owns startup ordering and the [bootstrap flow](local-password-authentication.md)
-owns credentials, concurrent attempts, and failure recovery.
+inputs. Fresh bootstrap creates the development human administrator, the
+non-Agent service administrator, the singleton Installation, native IAM seed,
+audit evidence, and the initial service-key response. It also creates the
+initial `default` Namespace in `provisioning` state and queues worker
+reconciliation; the worker later provisions its backing Docker boundary.
+Existing Installations retain their Namespaces, accounts, keys, IAM policy,
+configuration, and revision history. Missing, expired, or revoked keys do not
+trigger another bootstrap issue.
 
-### 3. The API admits only local development traffic
+Only the initializer mounts `occ_bootstrap_data`; the API and worker load
+committed state after initializer success. The
+[bootstrap flow](local-password-authentication.md) owns credentials, concurrent
+attempts, and failure recovery.
+
+### 4. The API admits only local development traffic
 
 `apps/controller/src/server.mjs:start`,
 `apps/controller/src/composition/development-postgres.ts:createDevelopmentConfigurationDriver`,
@@ -111,11 +143,19 @@ caller-supplied identity headers, bearer credentials, and trusted-proxy claims
 remain rejected. The API uses the application-role PostgreSQL URL and never
 receives the Docker socket.
 
-After successful bootstrap, the operator retrieves the private service-key JSON
-from the bootstrap-only volume and reads `/installation` with `x-api-key` before
-provisioning. `apps/controller/src/auth/index.ts:ControllerAdmissionVerifier.verify`
-validates that key and maps it to the Installation-scoped service administrator;
-current IAM policy still authorizes each resource operation. An invalid, expired,
+After the controller health check passes, `dev-up` waits for the worker
+readiness probe before copying the initializer-owned service-key JSON from the
+stopped bootstrap container. `--key-output` must name an absent destination in a
+private operator-owned directory; otherwise the helper creates a private
+temporary directory. The helper never overwrites an existing local file, never
+prints `data.key`, and never reruns bootstrap to replace a missing key.
+
+`dev-up` then reads `/installation` with `scripts/occ-api` and the copied
+service-key response. `apps/controller/src/auth/index.ts:ControllerAdmissionVerifier.verify`
+validates the `x-api-key` and maps it to the Installation-scoped service
+administrator; current IAM policy still authorizes each resource operation. The
+startup proof succeeds only when the response returns HTTP `200` and `data.id`
+matches the copied key response's `meta.installationId`. An invalid, expired,
 or revoked key fails with `401` without cookie fallback. The
 [service-key flow](service-api-keys.md) owns admission details.
 
@@ -126,7 +166,7 @@ the `occ_configuration_data` named volume. PostgreSQL remains the OCC metadata
 system of record; native Configuration documents live in that driver-owned
 volume.
 
-### 4. The worker selects Docker compute and claims durable work
+### 5. The worker selects Docker compute and claims durable work
 
 `apps/controller/src/worker.mjs:configuration`
 
@@ -137,11 +177,27 @@ development, it selects `compute-docker-development` with implementation
 set described by that file instead.
 
 The worker loads the singleton Installation, validates persisted IAM policy,
-and polls the PostgreSQL work queue. Every claimed operation reauthorizes the
-original actor before calling Compute. The worker is the only Compose service
-with Docker Engine access. It does not mount the configuration volume.
+and polls the PostgreSQL work queue. Startup readiness means the worker can
+claim durable work; it does not mean an Agent, AgentRevision, or TUI exists.
+Every claimed operation reauthorizes the original actor before calling Compute.
+The worker is the only Compose service with Docker Engine access. It does not
+mount the configuration volume.
 
-### 5. Docker creates Namespace networks and Agent runtimes
+### 6. Authenticated API calls enqueue deployment work
+
+`scripts/occ-api`, `packages/occ/src/index.ts:OpenClawController`
+
+After `dev-up` prints the loopback API URL, Installation ID, copied key path,
+and example `scripts/occ-api` command, the operator performs later development
+work with `OCC_URL` and `OCC_SERVICE_KEY_FILE` set in the shell. Selecting the
+bootstrapped Namespace, creating a Configuration and Agent, and deploying the
+Agent are ordinary authenticated OCC API calls that commit state, audit
+evidence, and durable work before the worker creates runtime infrastructure.
+
+The deployment guide owns the end-to-end command sequence. This trace follows
+the runtime path after those API calls have committed.
+
+### 7. Docker creates Namespace networks and Agent runtimes
 
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`
 
@@ -160,7 +216,7 @@ Runtime images come from `OCC_DOCKER_GATEWAY_IMAGE` and
 image contains both entrypoints. The driver does not build or pull a hidden
 runtime image.
 
-### 6. Credential placement follows the Harness topology
+### 8. Credential placement follows the Harness topology
 
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`
 
@@ -175,7 +231,7 @@ Agent containers. Workload containers do not receive the Docker socket,
 controller credentials, host homes, SSH-agent sockets, or another Namespace's
 network.
 
-### 7. The TUI client starts inside the embedded gateway container
+### 9. The TUI client starts inside the embedded gateway container
 
 `apps/controller/src/drivers/compute/docker/index.ts:GATEWAY_RUNTIME_ENTRYPOINT`,
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`,
@@ -184,8 +240,9 @@ network.
 The [deployment guide](../guides/deploy.md#development-end-to-end-tui) owns the
 service-key-authenticated provisioning commands, Docker label selection, and
 cleanup of the temporary local key copy. Cleanup does not revoke the key or
-remove its shared initialization output. After that guide has selected the active embedded gateway container,
-`docker exec -it` starts `node /app/openclaw.mjs tui` in that same container.
+remove its shared initialization output. After that guide has selected the
+active embedded gateway container, `docker exec -it` starts
+`node /app/openclaw.mjs tui` in that same container.
 
 The Docker driver has already written the gateway configuration to
 `OPENCLAW_CONFIG_PATH`, started `/app/openclaw.mjs gateway` on
@@ -195,7 +252,7 @@ with the operator and never enters the workload or TUI. The guide overrides only
 `OPENCLAW_STATE_DIR` so the client uses temporary container-local state instead
 of the gateway's persisted `/home/node/.openclaw` state.
 
-### 8. The TUI turn travels through the local gateway session
+### 10. The TUI turn travels through the local gateway session
 
 `tests/integration/docker-compute-real.test.mjs:assertInteractiveTuiConversation`,
 `tests/integration/harness-topology-k3d-real.test.mjs:gatewayCall`,
@@ -212,7 +269,7 @@ closes the client process after the second rendered reply. It does not stop the
 gateway process, delete the Agent runtime, or retire the AgentRevision; the
 Docker integration asserts the gateway remains ready after client exit.
 
-### 9. Cleanup removes only owned development resources
+### 11. Cleanup removes only owned development resources
 
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`
 
@@ -228,18 +285,19 @@ PostgreSQL and can be retried by the worker.
 
 ## Debugging and Verification
 
-- `docker compose up --build` should show PostgreSQL readiness, migration
-  completion, API listening on `127.0.0.1:${OPENCLAW_DEV_PORT:-3000}`,
-  fresh-database initialization, and `worker.started` with
-  `computeDriverId` set to `compute-docker-development`.
+- `./scripts/dev-up` should show PostgreSQL readiness, migration completion,
+  API listening on `127.0.0.1:${OPENCLAW_DEV_PORT:-3000}`,
+  fresh-database initialization, `worker.started` with `computeDriverId` set to
+  `compute-docker-development`, a private copied service-key path, and a
+  successful authenticated `/installation` proof.
 - `docker network ls --filter label=org.openclaw.enterprise.compute-driver=docker`
   should show one owned network for each ready development Namespace.
 - `docker ps --filter label=org.openclaw.enterprise.compute-driver=docker`
   should show one embedded gateway container or a dedicated gateway plus Codex
   container for deployed revisions.
-- The deployment guide owns gateway discovery and local service-key copy cleanup
-  before TUI attach; this flow records the selected container's runtime path after that
-  operator procedure completes.
+- The deployment guide owns authenticated API provisioning, gateway discovery,
+  and local service-key copy cleanup before TUI attach; this flow records the
+  selected container's runtime path after that operator procedure completes.
 - `tests/integration/docker-compute-real.test.mjs:assertInteractiveTuiConversation`
   should reject an invalid gateway token, produce two model-backed replies in
   one TUI session, exit the client with Ctrl+D, and leave the gateway ready.
@@ -256,7 +314,6 @@ PostgreSQL and can be retried by the worker.
 - [Deployment guide: development and production](../guides/deploy.md)
 - [Deployment guide: development end-to-end TUI](../guides/deploy.md#development-end-to-end-tui)
 - [Quickstart](../guides/quickstart.md)
-- [Development startup flow](development-startup.md)
 - [Controller worker execution flow](controller-worker.md)
 - [Docker Compute Driver](../reference/drivers/docker-compute.md)
 - [Controller worker](../reference/controller.md)
@@ -271,6 +328,7 @@ PostgreSQL and can be retried by the worker.
 
 ## Changelog
 
+- 2026-09-01 19:09: Merge the development startup trace into the canonical Docker Compose flow and clarify the `dev-up` readiness proof versus later API deployment and TUI attachment. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
 
 - 2026-08-31 19:14: Document bootstrap service-key API access and operator credential cleanup for the TUI path. (codex/01a05a3d-526f-7553-8cd8-070bd1847acb - 06c4bccb95543d3d545d011e72074f805f339aa8)

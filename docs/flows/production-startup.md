@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
 updated: 2026-09-01
-last_updated_session: codex/01a05ef1-ee29-7941-80f2-448bb0789969
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Production Startup Flow
@@ -174,7 +174,7 @@ tenant deployment and TUI procedures run.
 - [Deployment guide: production](../guides/deploy.md#production)
 - [Settings reference](../reference/settings.md)
 - [Kubernetes Compute Driver](../reference/drivers/kubernetes-compute.md)
-- [Provider and Driver lifecycle](provider-driver-lifecycle.md)
+- [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
 - [Controller worker execution flow](controller-worker.md)
 - [Production TUI flow](production-tui.md)
 - [Local password authentication flow](local-password-authentication.md)
@@ -186,8 +186,7 @@ tenant deployment and TUI procedures run.
 
 ## Changelog
 
-- 2026-09-01 14:51: Document initial default Namespace creation and unchanged repeat-bootstrap behavior. (codex/01a05ef1-ee29-7941-80f2-448bb0789969 - 872fa544c98bb7ad11b2d92d777e49229ececbf5)
-
+- 2026-09-01 19:09: Document initial default Namespace creation and unchanged repeat-bootstrap behavior. (codex/01a05ef1-ee29-7941-80f2-448bb0789969 - 872fa544c98bb7ad11b2d92d777e49229ececbf5) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-09-01 12:58: Trace production bootstrap-volume preparation, Helm startup, and authenticated Installation proof. (codex/01a05e87-6c64-7960-b9c2-f444d4a3d737 - bdb846c38d5dae6085a8841f720c93068ba8ad15)
 - 2026-09-01 10:19: Validate Provider configuration at startup and exact saved ownership at use, preserving API repair access. (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158)
 - 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)

@@ -1,17 +1,19 @@
 ---
 created: 2026-08-21
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-09-01
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Installation Driver Package Loading Flow
 
 ## Overview
 
-The API and worker independently resolve the operator-selected IAM, Compute,
-and Configuration Drivers, then hand them to OCC. Each selection may use its
-bundled implementation or an installed package in development or production.
-This trace stops when OCC owns Driver selection and Namespace reconciliation.
+The API and worker independently load trusted Installation YAML and construct
+their selected IAM, Compute, Configuration, Secret, and optional Sandbox
+capabilities. Only the API constructs the optional Provider client and
+ServiceAccount Driver. This trace follows package resolution through process
+composition and stops at request serving or worker reconciliation. Development
+without startup YAML uses the defaults traced in [platform startup](platform-startup.md).
 
 ## Entry Points
 
@@ -35,11 +37,14 @@ graph TD
     B -->|packaged| D["Resolve package identity and import code"]
     C --> E["Validate Driver configuration and capability"]
     D --> E
-    E --> F["Construct Configuration, Compute, and IAM factory"]
+    E --> F["Construct Configuration, optional Sandbox, Compute, Secret, and IAM factory"]
   end
 
   subgraph OCC["Control-plane ownership"]
-    F --> G["Construct IAM with platform state"]
+    F --> P{"API with ServiceAccount selection?"}
+    P -->|yes| Q["Build Provider client and ServiceAccount Driver factory"]
+    P -->|no| G["Construct IAM with platform state"]
+    Q --> G
     G --> H["Select exact Drivers and attach lifecycle owners"]
     H --> I["Authorize requests and reconcile Namespace lifecycle"]
   end
@@ -51,9 +56,12 @@ graph TD
 
 `apps/controller/src/composition/installation-config.ts:loadInstallationConfiguration`
 
-Each process reads the same trusted startup YAML, selects bundled Drivers or
-explicit operator-installed packages, and derives packaged implementation
-identity from installed metadata. The
+Each process reads the same trusted startup YAML. Configuration, IAM, Compute,
+and optional Sandbox selections may name an operator-installed package;
+implementation identity comes from its installed metadata. Secret selection is
+required in this YAML path and accepts only bundled Kubernetes Secrets.
+Optional `service_account` selection identifies the bundled Provider member;
+it has no package-loading path. The
 [operator installation guide](../reference/drivers/selection.md) defines the package,
 pinning, registry, and configuration contract. TypeBox checks each selected
 Driver's closed schema before implementation-owned semantic validation;
@@ -69,13 +77,14 @@ validation and lockfile integrity do not establish publisher trust.
 
 `apps/controller/src/composition/installation-config.ts:loadInstallationConfiguration`
 
-One asynchronous call returns the validated Installation, Configuration Driver,
-Compute Driver, and required `createIAMDriver(state)` function. Bundled and
+The loader constructs Configuration, optional Sandbox, Compute, and Secret
+Drivers and returns them with the validated Installation and required
+`createIAMDriver(state)` function. A selected Sandbox Driver is passed to bundled
+Kubernetes Compute; selecting it with packaged Compute rejects startup. Bundled and
 packaged IAM receive the same controller-owned platform state. The bundled IAM
 Driver loads current policy for each identity lookup and authorization decision;
 packaged Drivers must do the same, which operator review verifies because the
-runtime cannot enforce package internals. Configuration is constructed before
-Compute; packaged factories must return their exact server-owned capability
+runtime cannot enforce package internals. Packaged factories must return their exact server-owned capability
 and identity.
 
 Kubernetes-specific image, projected-credential, and preflight requirements
@@ -84,14 +93,27 @@ apply only to bundled Kubernetes Compute. Startup enforces the
 before returning any production runtime; development can use a four-operation
 Driver, and the worker still fails closed if a required stage becomes unavailable.
 
-### 3. Load current policy and hand off lifecycle ownership
+### 3. Construct the API-only Provider branch
+
+[`server.mjs:start`](../../apps/controller/src/server.mjs) handles a selected
+ServiceAccount Driver after loading the common bundle. It requires PostgreSQL,
+Compute credential-storage methods, and an owning Provider definition. It reads
+that Provider's `apiKeyPath`, constructs `ChatGPTClient`, and supplies the
+ServiceAccount Driver factory to controller composition. The worker keeps only
+nonsecret Provider metadata; it constructs neither the client nor this Driver.
+The [managed credential flow](service-account-driver-credential-delivery.md)
+continues through account creation, issuance, and deployment checks.
+
+### 4. Load current policy and hand off lifecycle ownership
 
 `apps/controller/src/worker.ts:ControllerWorker.start`
 
 API and worker construct separate process-local Driver instances. Production
 composition validates persisted policy, creates the selected IAM Driver with
-platform state, and registers exact IAM, Compute, and Configuration
-identities with OCC. Worker startup attaches selected lifecycle owners once.
+platform state, and selects the exact common Driver identities with OCC. The API
+also registers its selected ServiceAccount Driver after composition. Worker
+startup checks persisted identities, including Secret and optional Sandbox,
+and attaches selected lifecycle owners once.
 The bundled IAM Driver loads current policy for identity lookup and
 authorization; installed IAM Drivers must honor the same contract. Neither is
 rebuilt or replaced after account or policy changes.
@@ -125,6 +147,7 @@ their existing Harness-owned runtime topology.
 
 ## Changelog
 
+- 2026-09-01 19:09: Include Secret and Sandbox construction and the API-only Provider/ServiceAccount branch in the current loading trace. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-28 17:58: Updated moved feature-reference links for the documentation organization. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-24 19:46: Pass controller-owned platform state directly to bundled and installed IAM Drivers. (01a036c0-9a0e-7ee0-8428-17824f5172a0 - 786b7ce)
 - 2026-08-24 17:12: Documented the controller-owned current-policy loader supplied to bundled and installed IAM Drivers. (01a0352c-debe-73b1-baa6-379855af874f - 4502d7e)
