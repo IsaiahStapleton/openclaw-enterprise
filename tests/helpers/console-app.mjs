@@ -5,12 +5,14 @@ import { once } from "node:events";
 
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
 import { providerSummariesFromDefinitions } from "../../apps/controller/src/composition/installation-config.ts";
+import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
 import { authenticatedHeaders, signInWithEmailPassword } from "./auth-session.mjs";
 import { createTestConfigurationDriver } from "./configuration-driver.mjs";
+import { createTestSecretDriver } from "./secret-driver.mjs";
 
 export const providerFixtures = Object.freeze([
   Object.freeze({
@@ -103,6 +105,10 @@ export async function createConsoleAppFixture(t, options = {}) {
   const providerSummaries = Object.hasOwn(options, "providerSummaries")
     ? options.providerSummaries
     : providerSummariesFromDefinitions(providers);
+  const platformState = options.state ?? new InMemoryPlatformState({ auditSink });
+  const secretDriver = Object.hasOwn(options, "secretDriver")
+    ? options.secretDriver
+    : createTestSecretDriver({ id: "console-secret" });
   let controller;
   const appOptions = {
     auth,
@@ -111,10 +117,11 @@ export async function createConsoleAppFixture(t, options = {}) {
     development: options.development ?? { enabled: true, installationId },
     computeDriver: computeDriver(),
     configurationDriver: createTestConfigurationDriver({ id: "console-configuration" }),
-    resolveHarness: () => ({ id: "console-harness", version: "test" }),
+    ...(secretDriver === undefined || secretDriver === null ? {} : { secretDriver }),
+    resolveHarness: resolveApprovedHarness,
     createController(installation) {
       controller = new OpenClawController(installation, {
-        state: new InMemoryPlatformState({ auditSink }),
+        state: platformState,
         recordOperations: false,
         providers,
       });
@@ -210,16 +217,91 @@ export async function createConsoleAppFixture(t, options = {}) {
     return updated;
   }
 
-  async function createAgent(namespaceId, name, values = {}) {
+  async function createConfiguration(namespaceId, values = {}, options = {}) {
     const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
-      body: { kind: "agent", values },
+      body: {
+        kind: "agent",
+        values,
+        ...(options.secretBindings === undefined ? {} : { secretBindings: options.secretBindings }),
+      },
     });
     assert.equal(configuration.status, 201);
+    return configuration.data;
+  }
+
+  async function updateConfiguration(namespaceId, configurationId, values = {}, options = {}) {
+    const configuration = await request(
+      "PATCH",
+      `/namespaces/${namespaceId}/configurations/${configurationId}`,
+      {
+        body: {
+          values,
+          ...(options.secretBindings === undefined
+            ? {}
+            : { secretBindings: options.secretBindings }),
+        },
+      },
+    );
+    assert.equal(configuration.status, 200);
+    return configuration.data;
+  }
+
+  async function createAgent(namespaceId, name, values = {}, options = {}) {
+    const configuration = await createConfiguration(namespaceId, values, {
+      secretBindings: options.secretBindings,
+    });
     const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {
-      body: { name, configurationId: configuration.data.id },
+      body: {
+        name,
+        configurationId: configuration.id,
+        ...(options.providerId === undefined ? {} : { providerId: options.providerId }),
+        ...(options.serviceAccountId === undefined
+          ? {}
+          : { serviceAccountId: options.serviceAccountId }),
+        ...(options.executionMode === undefined ? {} : { executionMode: options.executionMode }),
+      },
     });
     assert.equal(agent.status, 201);
     return agent.data;
+  }
+
+  async function updateAgent(namespaceId, agentId, body) {
+    const agent = await request("PATCH", `/namespaces/${namespaceId}/agents/${agentId}`, {
+      body,
+    });
+    assert.equal(agent.status, 200);
+    return agent.data;
+  }
+
+  async function deployAgent(namespaceId, agentId) {
+    const revision = await request("POST", `/namespaces/${namespaceId}/agents/${agentId}/deploy`);
+    assert.equal(revision.status, 202);
+    return revision.data;
+  }
+
+  async function activateRevision(namespaceId, agentId, revisionId, expectedRevisionId) {
+    assert.ok(controller, "bootstrap must create the controller before revision activation");
+    // This renders a valid admitted active revision for console tests; runtime dispatch,
+    // worker lease handling, and Compute Driver effects are proved by worker tests.
+    const active = await platformState.transact((unit) =>
+      unit.agents.compareAndSetActiveRevision(namespaceId, agentId, expectedRevisionId, revisionId),
+    );
+    assert.ok(active, "the admitted Agent revision must activate from the expected state");
+    return active;
+  }
+
+  async function seedActiveAgentRevision(namespaceId, agentId, expectedRevisionId) {
+    const revision = await deployAgent(namespaceId, agentId);
+    const agent = await activateRevision(namespaceId, agentId, revision.id, expectedRevisionId);
+    return { agent, revision };
+  }
+
+  async function createSecret(namespaceId, name, value) {
+    const secret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
+      body: { name, value },
+    });
+    assert.equal(secret.status, 201);
+    return secret.data;
   }
 
   async function createAccountWithPolicy(label, configurePolicy) {
@@ -245,7 +327,14 @@ export async function createConsoleAppFixture(t, options = {}) {
     signIn,
     bootstrap,
     createNamespace,
+    createConfiguration,
+    updateConfiguration,
     createAgent,
+    updateAgent,
+    deployAgent,
+    activateRevision,
+    seedActiveAgentRevision,
+    createSecret,
     createAccountWithPolicy,
   };
 }

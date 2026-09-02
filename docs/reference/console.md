@@ -1,9 +1,10 @@
 # Platform console
 
-The controller serves a read-only browser console at `/console/` on its existing
-origin. Sign in, select a Namespace, and inspect accessible Agents, Providers,
-and Namespaces. The console has no resource creation, editing, deployment, or
-detail screens. Use the API for those supported operations.
+The controller serves a browser console at `/console/` on its existing origin.
+Sign in, select a Namespace, inspect accessible Agents, Providers, and
+Namespaces, create Agents with editable Configuration JSON, and edit selected channel
+settings on an Agent's saved Configuration draft. Agent deployment, rollback,
+live runtime health, and Agent deletion are unavailable in the console.
 
 ## Start and sign in
 
@@ -22,8 +23,9 @@ showing private content. Expiry clears the view and asks you to sign in again.
 
 The sidebar opens **Agents**, **Providers**, or **Namespaces**. Lists show names
 and selectable IDs. Namespace rows include their server lifecycle status;
-Provider rows show their configured type. Rows do not open detail pages.
-**Refresh** repeats the current read.
+Provider rows show their configured type. Agent rows open detail pages. Provider
+and Namespace rows remain read-only collection entries. **Refresh** repeats the
+current read.
 
 | Page       | Scope and permission                                                     |
 | ---------- | ------------------------------------------------------------------------ |
@@ -44,10 +46,83 @@ An explicit ID that is no longer readable shows **Namespace unavailable** and
 requires another selection. With no readable Namespaces, Agents explains that
 administrator provisioning or access is needed; global pages remain available.
 
-Switching Namespace preserves the page. Agents reloads within the new scope;
-Providers and Namespaces remain Installation-wide. Old rows clear immediately,
+Switching Namespace from Agent detail or creation returns to the Agents list in
+the new scope. Global pages stay open; Providers and Namespaces remain
+Installation-wide. Old rows clear immediately,
 and late responses from prior navigation cannot restore them. The API makes all
 authorization decisions; the selector does not broaden access.
+
+## Create an Agent
+
+Select **Create Agent** from the Agents page to create one Namespace-owned Agent.
+Enter an Agent name and review the prefilled native Configuration JSON. The
+editable starter matches the selected execution mode: dedicated uses
+`codex/gpt-5.1`; embedded uses `openai/gpt-5.1`. These are examples, not discovered
+Installation defaults or a guarantee of model access. Review the model and
+provision the required credentials before deployment. Changing execution mode
+updates untouched JSON; use **Reset template** to replace your edits. The form
+requires valid JSON with an object at its root.
+
+Choose an optional Provider and service account from the select lists. Provider
+discovery requires Installation `administer`; service accounts are readable
+accounts in the selected Namespace. Select the two associations independently.
+Unavailable or loading lists show their status. You can leave either association
+unset; the form does not accept freeform association IDs.
+
+Submitting creates a same-Namespace `kind: "agent"` Configuration from the JSON,
+then submits `POST /namespaces/:namespaceId/agents` with its returned ID and the
+selected execution mode and associations. If the Configuration saves but Agent
+creation fails, its ID remains visible and the saved JSON and execution mode are fixed.
+Correct the name or associations and retry to reuse that Configuration. These are separate
+API writes; failure does not remove the saved Configuration or retry automatically.
+Successful creation opens the Agent detail page at
+`/console/agents/:agentId?...&revision=draft`. It does not
+admit an AgentRevision, deploy a workload, or prove runtime health.
+
+## Inspect detail, revisions, and channel drafts
+
+An Agent detail page has two views: the saved draft and immutable
+AgentRevisions. The saved draft reads the Agent's current Configuration and is
+editable only through the supported channel editor. Historical and active
+AgentRevisions are read-only admitted snapshots. The active revision badge points
+to the Agent's current activeRevisionId, but the newest revision in history is
+not necessarily active. The URL `revision=<id>` selects a specific revision; use
+**Return to active revision** to inspect the active snapshot when one is present.
+
+Read-only AgentRevision snapshots cannot be edited, rolled back, redeployed, or
+used as a live-health check. Activation means the revision was admitted and
+selected by OCC; the console has no live gateway health API.
+
+The Channels tab edits Slack and Microsoft Teams settings on the saved
+Configuration draft. Saving a channel change patches only `values` on the
+Configuration, so existing `secretBindings` are omitted from the PATCH and
+retained by the backend. The editor preserves other loaded native keys while
+updating the provider block and enabling its plugin. An existing plugin allowlist
+is extended; an omitted allowlist stays omitted. Because a Configuration can
+be shared by multiple Agents, channel edits can affect future deployments of
+other Agents that reference the same Configuration.
+
+Before saving, the browser rereads the Agent and Configuration and checks that
+the Agent still references the same Configuration and its generation is unchanged. That detects common
+stale-editor cases, but it is not atomic lost-update protection; the API accepts
+the last valid writer. Refresh before retrying a conflict or uncertain save.
+
+Slack editing preserves existing per-channel user restrictions. **Allowed user IDs**
+controls the direct-message allowlist. Editing supports Socket Mode settings with fixed unresolved environment
+references to `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`. Microsoft Teams editing
+supports application ID, tenant ID, require-mention, and a fixed unresolved
+environment reference to `MSTEAMS_APP_PASSWORD`. Both channel integrations
+require dedicated execution and operator-provided Kubernetes runtime projection.
+Only Slack Socket Mode has live proof in the current test guide; Teams also
+requires separately configured Bot Framework ingress. The simple editor may
+reject native channel documents it cannot round-trip, including non-Socket Slack
+settings, non-standard credential references, mixed per-channel mention settings,
+or unsupported plugin shapes. The native Configuration view remains available for inspection; unsupported
+settings require the API or operator workflow.
+
+Agent deletion is unavailable in the current API, so the console cannot delete
+an Agent or its revision history. The backend deletion scope remains an open
+product question.
 
 ## Failures and logout
 
@@ -64,11 +139,12 @@ Retry. Do not treat that error as confirmation that the server session was revok
 
 ## Routes and packaging
 
-Supported pages are `/console/login`, `/console/agents`, `/console/providers`,
+Supported pages are `/console/login`, `/console/agents`,
+`/console/agents/new`, `/console/agents/:agentId`, `/console/providers`,
 `/console/namespaces`, and `/console/settings`. `/console/` resolves the session
 and opens Agents. Unknown console paths show a generic not-found page.
 
-Static HTML, CSS, and the browser module ship inside the controller image; no
+Static HTML, CSS, and browser modules ship inside the controller image; no
 separate frontend service or build is required. Console fallback does not handle
 API routes or expose controller source files. See the
 [request flow](../flows/platform-console.md) and [test guide](../testing.md) for

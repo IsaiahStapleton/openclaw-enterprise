@@ -144,6 +144,7 @@ export interface ServiceAccountReadRepository {
     namespaceId: string,
     serviceAccountId: string,
   ): Promise<Readonly<ServiceAccount> | undefined>;
+  listServiceAccounts(namespaceId: string): Promise<readonly Readonly<ServiceAccount>[]>;
   findServiceAccountProviderBinding(
     namespaceId: string,
     serviceAccountId: string,
@@ -785,6 +786,17 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       if (snapshot.namespaces.get(namespaceId)?.deletedAt !== undefined) return undefined;
       const account = snapshot.serviceAccounts.get(agentKey(namespaceId, serviceAccountId));
       return account === undefined ? undefined : immutableCopy(account);
+    },
+    listServiceAccounts: async (namespaceId) => {
+      if (snapshot.namespaces.get(namespaceId)?.deletedAt !== undefined) return Object.freeze([]);
+      return Object.freeze(
+        Array.from(snapshot.serviceAccounts.values())
+          .filter((account) => account.namespaceId === namespaceId)
+          .sort(
+            (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+          )
+          .map((account) => immutableCopy(account)),
+      );
     },
     findServiceAccountProviderBinding: async () => undefined,
     createServiceAccount: async (account) => {

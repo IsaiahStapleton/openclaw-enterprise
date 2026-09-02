@@ -21,7 +21,7 @@ const imageTestOptions =
 
 async function runDocker(args, options = {}) {
   return execute(docker, args, {
-    timeout: 20_000,
+    timeout: 60_000,
     maxBuffer: 1_000_000,
     ...options,
   });
@@ -52,8 +52,36 @@ async function temporaryGatewayConfiguration(t, harnessId) {
   t.after(() => rm(directory, { recursive: true, force: true }));
 
   const path = join(directory, "openclaw.json");
-  await writeFile(path, JSON.stringify(createHarnessConfiguration(harnessId, "gpt-4.1")));
+  await writeFile(path, JSON.stringify(createRuntimeImageConfiguration(harnessId, "gpt-4.1")));
   return path;
+}
+
+function createRuntimeImageConfiguration(harnessId, providerModel, options = {}) {
+  const configuration = createHarnessConfiguration(harnessId, providerModel);
+  if (options.enableSlack !== true) return configuration;
+
+  const plugins = configuration.plugins ?? {};
+  const entries = plugins.entries ?? {};
+  configuration.plugins = {
+    ...plugins,
+    allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), "slack"])],
+    entries: {
+      ...entries,
+      slack: {
+        ...entries.slack,
+        enabled: true,
+      },
+    },
+  };
+  configuration.channels = {
+    ...configuration.channels,
+    slack: {
+      ...configuration.channels?.slack,
+      enabled: false,
+    },
+  };
+
+  return configuration;
 }
 
 async function waitForGatewayReady(containerName) {
@@ -105,12 +133,7 @@ async function listGatewayPlugins(containerName) {
 }
 
 function assertBundledCodexPluginLoaded(pluginList) {
-  const codexPlugin = pluginList.plugins?.find((plugin) => plugin.id === "codex");
-
-  assert.ok(codexPlugin, "Codex plugin must be present in OpenClaw plugin discovery output");
-  assert.equal(codexPlugin.origin, "bundled");
-  assert.equal(codexPlugin.enabled, true);
-  assert.equal(codexPlugin.status, "loaded");
+  const codexPlugin = assertBundledPluginLoaded(pluginList, "codex");
   assert.match(
     codexPlugin.source,
     /\/app\/node_modules\/openclaw\/dist\/extensions\/codex\/dist\/index\.js$/,
@@ -120,8 +143,119 @@ function assertBundledCodexPluginLoaded(pluginList) {
   assert.deepEqual(codexPlugin.dependencyStatus?.missing, []);
 }
 
+function assertBundledSlackPluginLoaded(pluginList) {
+  const slackPlugin = assertBundledPluginLoaded(pluginList, "slack");
+  assert.match(
+    slackPlugin.source,
+    /\/app\/node_modules\/openclaw\/dist\/extensions\/slack\/dist\/index\.js$/,
+  );
+  assert.equal(slackPlugin.dependencyStatus?.requiredInstalled, true);
+  assert.deepEqual(slackPlugin.dependencyStatus?.missing, []);
+}
+
+function assertBundledPluginLoaded(pluginList, pluginId) {
+  const plugin = pluginList.plugins?.find((entry) => entry.id === pluginId);
+
+  assert.ok(plugin, `${pluginId} plugin must be present in OpenClaw plugin discovery output`);
+  assert.equal(plugin.origin, "bundled");
+  assert.equal(plugin.enabled, true);
+  assert.equal(plugin.status, "loaded");
+  return plugin;
+}
+
+async function assertCodexAppServerHandshake(containerName) {
+  const { stdout } = await runDocker(
+    [
+      "exec",
+      containerName,
+      "node",
+      "--input-type=module",
+      "-e",
+      `
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const pluginDist = "/app/node_modules/openclaw/dist/extensions/codex/dist";
+const sharedClientChunk = readdirSync(pluginDist).find((name) =>
+  /^shared-client-.*\\.js$/.test(name)
+);
+if (sharedClientChunk === undefined) {
+  throw new Error("Bundled Codex shared-client chunk was not found under " + pluginDist);
+}
+
+const sharedClientExports = await import(pathToFileURL(join(pluginDist, sharedClientChunk)));
+const { createIsolatedCodexAppServerClient } = Object.values(sharedClientExports).find(
+  (value) => typeof value?.createIsolatedCodexAppServerClient === "function"
+) ?? {};
+if (createIsolatedCodexAppServerClient === undefined) {
+  throw new Error("Bundled Codex shared-client export did not expose createIsolatedCodexAppServerClient.");
+}
+const configChunk = readdirSync(pluginDist).find((name) => /^config-.*\\.js$/.test(name));
+if (configChunk === undefined) {
+  throw new Error("Bundled Codex config chunk was not found under " + pluginDist);
+}
+const configExports = await import(pathToFileURL(join(pluginDist, configChunk)));
+const resolveCodexAppServerRuntimeOptions = Object.values(configExports).find(
+  (value) => typeof value === "function" && value.name === "resolveCodexAppServerRuntimeOptions"
+);
+if (resolveCodexAppServerRuntimeOptions === undefined) {
+  throw new Error("Bundled Codex config export did not expose resolveCodexAppServerRuntimeOptions.");
+}
+const versionOutput = execFileSync("codex", ["--version"], { encoding: "utf8" });
+const installedVersion = versionOutput.match(/\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?/)?.[0];
+if (installedVersion === undefined) {
+  throw new Error("Unable to parse installed Codex version from: " + versionOutput);
+}
+
+const agentDir = mkdtempSync(join(tmpdir(), "openclaw-codex-agent-"));
+const codexHome = join(agentDir, "codex-home");
+mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+const runtime = resolveCodexAppServerRuntimeOptions({
+  env: {
+    OPENCLAW_CODEX_APP_SERVER_BIN: "codex",
+    OPENCLAW_CODEX_APP_SERVER_ARGS: "app-server --listen stdio://",
+  },
+});
+const client = await createIsolatedCodexAppServerClient({
+  agentDir,
+  authProfileId: null,
+  timeoutMs: 10_000,
+  startOptions: {
+    ...runtime.start,
+    env: {
+      CODEX_HOME: codexHome,
+      HOME: "/home/node",
+    },
+    clearEnv: ["CODEX_ACCESS_TOKEN", "CODEX_API_KEY", "OPENAI_API_KEY"],
+  },
+});
+
+try {
+  const serverVersion = client.getServerVersion();
+  if (serverVersion !== installedVersion) {
+    throw new Error(
+      \`Codex app-server initialized as \${serverVersion}, but codex --version reported \${installedVersion}.\`
+    );
+  }
+  process.stdout.write(JSON.stringify({ installedVersion, serverVersion }));
+} finally {
+  client.close();
+}
+`,
+    ],
+    { timeout: 20_000 },
+  );
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.serverVersion, result.installedVersion);
+}
+
 async function runGatewaySmoke(t, harnessId, options = {}) {
   const {
+    collectPlugins = harnessId === "codex",
     configurationPath,
     entrypoint = await dockerGatewayEntrypoint(),
     extraEnvironment = [],
@@ -131,7 +265,9 @@ async function runGatewaySmoke(t, harnessId, options = {}) {
   const containerName = `oce-runtime-image-${harnessId}-${randomBytes(6).toString("hex")}`;
   t.after(() => runDocker(["rm", "-f", containerName]).catch(() => {}));
 
-  const configuration = createHarnessConfiguration(harnessId, "gpt-4.1");
+  const configuration = createRuntimeImageConfiguration(harnessId, "gpt-4.1", {
+    enableSlack: harnessId === "openclaw",
+  });
   const environment = [
     `OPENCLAW_CONFIG_PATH=${configurationPath ?? "/home/node/.openclaw/openclaw.json"}`,
     ...(configurationPath === undefined
@@ -175,7 +311,7 @@ async function runGatewaySmoke(t, harnessId, options = {}) {
 
   try {
     await waitForGatewayReady(containerName);
-    const pluginList = harnessId === "codex" ? await listGatewayPlugins(containerName) : undefined;
+    const pluginList = collectPlugins ? await listGatewayPlugins(containerName) : undefined;
     const logs = await runDocker(["logs", containerName]);
     return {
       containerName,
@@ -205,11 +341,15 @@ if (bundled.length === 0) {
   throw new Error("Kubernetes gateway entrypoint did not publish bundled skills.");
 }
 const plugin = lstatSync("/home/node/openclaw-runtime-assets/plugin-skills");
-if (!plugin.isDirectory()) {
-  throw new Error("Kubernetes gateway entrypoint did not publish plugin skills directory.");
-}
-process.stdout.write(JSON.stringify({ bundledCount: bundled.length }));
-`,
+	if (!plugin.isDirectory()) {
+	  throw new Error("Kubernetes gateway entrypoint did not publish plugin skills directory.");
+	}
+	const slack = lstatSync("/home/node/openclaw-runtime-assets/plugin-skills/slack/SKILL.md");
+	if (!slack.isFile()) {
+	  throw new Error("Kubernetes gateway entrypoint did not publish Slack plugin skills.");
+	}
+	process.stdout.write(JSON.stringify({ bundledCount: bundled.length, slackSkill: true }));
+	`,
   ]);
 
   assert.ok(JSON.parse(stdout).bundledCount > 0);
@@ -219,10 +359,13 @@ test(
   "runtime image starts an embedded OpenClaw gateway with the Docker driver entrypoint",
   imageTestOptions,
   async (t) => {
-    const { logs } = await runGatewaySmoke(t, "openclaw");
+    const { logs, pluginList } = await runGatewaySmoke(t, "openclaw", {
+      collectPlugins: true,
+    });
 
     assert.match(logs, /\[gateway\] ready/);
     assert.match(logs, /agent model: openai\/gpt-4\.1/);
+    assertBundledSlackPluginLoaded(pluginList);
     assertNoPackagingFailure(logs);
   },
 );
@@ -231,11 +374,12 @@ test(
   "runtime image discovers the bundled Codex plugin from a fresh gateway home",
   imageTestOptions,
   async (t) => {
-    const { logs, pluginList } = await runGatewaySmoke(t, "codex");
+    const { logs, containerName, pluginList } = await runGatewaySmoke(t, "codex");
 
     assert.match(logs, /\[gateway\] ready/);
     assert.match(logs, /agent model: codex\/gpt-4\.1/);
     assertBundledCodexPluginLoaded(pluginList);
+    await assertCodexAppServerHandshake(containerName);
     assertNoPackagingFailure(logs);
   },
 );

@@ -508,6 +508,14 @@ test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource
   const agent = await createAgent(controller, namespace.id, "research-agent");
   assert.equal(Object.hasOwn(agent, "installationId"), false);
 
+  const account = await createServiceAccount(controller, namespace.id, "research-account");
+  const serviceAccounts = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/service-accounts`,
+  );
+  assert.equal(serviceAccounts.status, 200);
+  assert.deepEqual(serviceAccounts.data, [account]);
+
   const agents = await controller.request("GET", `/namespaces/${namespace.id}/agents`);
   assert.equal(agents.status, 200);
   assert.deepEqual(agents.data, [agent]);
@@ -901,6 +909,16 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
 
   const authorizedAccount = await injectedRequest(readerApp, "GET", exactAccountPath);
   assert.equal(authorizedAccount.status, 200);
+
+  const accountList = await injectedRequest(
+    readerApp,
+    "GET",
+    `/namespaces/${namespaceA.id}/service-accounts`,
+  );
+  assert.equal(accountList.status, 200);
+  assert.deepEqual(accountList.data, [assigned.data]);
+  assert.equal(JSON.stringify(accountList.data).includes(accountB.id), false);
+  assert.equal(Object.hasOwn(accountList.data[0], "providerId"), false);
 
   const denied = await injectedRequest(
     readerApp,
@@ -1389,6 +1407,7 @@ test("bodyless OCC routes reject request payloads before IAM or domain side effe
       ["GET", "/installation"],
       ["GET", "/namespaces"],
       ["GET", `/namespaces/${namespace.data.id}`],
+      ["GET", `/namespaces/${namespace.data.id}/service-accounts`],
       ["GET", `/namespaces/${namespace.data.id}/agents`],
       ["GET", `/namespaces/${namespace.data.id}/agents/${agent.data.id}`],
       ["GET", `/namespaces/${namespace.data.id}/agents/${agent.data.id}/revisions`],

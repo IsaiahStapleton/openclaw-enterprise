@@ -1350,6 +1350,53 @@ Replace exact Namespace-owned Secret material and return stable metadata
 
 ## Service accounts
 
+### `GET /namespaces/{namespaceId}/service-accounts`
+
+List authorized Namespace-owned ServiceAccounts in one exact Namespace
+
+**Operation ID:** `listServiceAccounts`
+
+**Permissions:** Requires read permission on the requested Namespace. Only ServiceAccount resources with individual read permission are returned.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `read` | `namespace` | `requested` |
+| `read` | `service_account` | `each_returned` |
+
+#### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `array<object>` | Yes | — |
+| `data[].credential` | `object` | No | — |
+| `data[].credential.kind` | `"api_key" or "access_token" or "oauth_access_token"` | Yes | — |
+| `data[].credential.secretRef` | `object` | Yes | — |
+| `data[].credential.secretRef.key` | `string` | Yes | max length: 253; pattern: `^(?![.]{1,2}$)[-._a-zA-Z0-9]+$` |
+| `data[].credential.secretRef.name` | `string` | Yes | max length: 253; pattern: `^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$` |
+| `data[].id` | `string` | Yes | pattern: `^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data[].name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
+| `data[].namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
 ### `POST /namespaces/{namespaceId}/service-accounts`
 
 Create a native Namespace-owned ServiceAccount

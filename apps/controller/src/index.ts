@@ -356,6 +356,11 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
         { action: "read", resourceKind: "namespace", scope: "requested" },
         { ...permission, scope: "each_returned" },
       ];
+    case "namespace_and_service_account_candidates":
+      return [
+        { action: "read", resourceKind: "namespace", scope: "requested" },
+        { ...permission, scope: "each_returned" },
+      ];
     case "agent_collection":
       return [
         { ...permission, scope: "requested" },
@@ -1377,6 +1382,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         return clientServiceAccount(created);
       });
       reply.status(201).send({ data: account, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "listServiceAccounts") {
+      const accounts = await controller.listServiceAccounts(context.actorId, namespaceId);
+      reply.send({ data: accounts.map(clientServiceAccount), meta: { requestId: request.id } });
       return;
     }
 

@@ -14,7 +14,9 @@ body {
   margin: 0;
 }
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 button,
@@ -43,7 +45,9 @@ button:disabled {
 }
 button:focus-visible,
 a:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
   outline: 3px solid #6b9f89;
   outline-offset: 3px;
 }
@@ -188,6 +192,15 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+.account-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-chevron {
+  flex-shrink: 0;
 }
 .menu {
   padding: 6px;
@@ -370,4 +383,196 @@ p {
   h1 {
     font-size: 25px;
   }
+}
+
+/* Agent management retains the console's native controls and Namespace shell. */
+select {
+  font: inherit;
+  color: inherit;
+  background: #fff;
+}
+.agent-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin: 20px 0;
+  flex-wrap: wrap;
+}
+.agent-toolbar input {
+  width: min(360px, 100%);
+  padding: 11px 12px;
+  border: 1px solid #bbc7c0;
+  border-radius: 8px;
+}
+.agent-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 24px;
+  margin: 20px 0;
+}
+.agent-form {
+  max-width: 760px;
+}
+.form-field {
+  margin: 20px 0;
+}
+.form-field label,
+.revision-selector label {
+  display: block;
+  font-weight: 550;
+  margin-bottom: 8px;
+}
+.form-field input,
+.form-field select,
+.form-field textarea,
+.revision-selector select {
+  width: 100%;
+  border: 1px solid #bbc7c0;
+  border-radius: 7px;
+  padding: 11px 12px;
+}
+.form-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+.table-scroll {
+  overflow-x: auto;
+}
+.agent-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.agent-table th,
+.agent-table td {
+  padding: 20px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.agent-table th {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.agent-table td {
+  vertical-align: top;
+}
+.agent-table .resource-id {
+  display: block;
+  margin-top: 7px;
+  max-width: 310px;
+  overflow-wrap: anywhere;
+}
+.agent-table a {
+  font-weight: 550;
+  text-decoration: none;
+}
+.agent-tabs {
+  display: flex;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 20px;
+}
+.agent-tabs button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.agent-tabs [aria-current] {
+  border-bottom: 2px solid var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.notice {
+  padding: 16px;
+  background: #f3f6eb;
+  border: 1px solid #dce3ce;
+  border-radius: 8px;
+}
+.configuration-summary {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 14px 20px;
+}
+.configuration-summary dt {
+  color: var(--muted);
+}
+.configuration-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.native-document {
+  margin-top: 24px;
+}
+.native-document summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.native-document pre {
+  max-height: 480px;
+  overflow: auto;
+  background: #f4f6f3;
+  padding: 18px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.revision-selector .resource-id {
+  overflow-wrap: anywhere;
+}
+.deletion-note {
+  border-color: #ead6d0;
+}
+select:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #6b9f89;
+  outline-offset: 3px;
+}
+@media (max-width: 760px) {
+  .agent-card {
+    padding: 18px;
+  }
+  .configuration-summary {
+    grid-template-columns: 1fr;
+    gap: 7px;
+  }
+  .configuration-summary dd {
+    margin-bottom: 12px;
+  }
+  .agent-table th,
+  .agent-table td {
+    padding: 14px 8px;
+  }
+}
+
+.revision-selector {
+  padding: 18px 22px;
+}
+.revision-selector > p {
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.revision-selector h2 {
+  margin-bottom: 12px;
+}
+.revision-selector .form-actions {
+  margin: 12px 0;
+}
+.revision-selector label {
+  font-size: 13px;
+}
+
+.configuration-editor {
+  min-height: 340px;
+  resize: vertical;
+  font:
+    13px/1.6 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  tab-size: 2;
 }

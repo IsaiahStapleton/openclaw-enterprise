@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-01
-last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
+last_updated_session: codex/01a05f89-ff1c-7643-a77f-7e1e3aed9e5f
 ---
 
 # Platform console request flow
@@ -9,20 +9,25 @@ last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ## Overview
 
 Opening `/console/` loads the controller's static browser client, resolves a
-cookie session, and reads an authorized collection. This trace follows an Agents
-page through Namespace selection, then the Provider branch and logout. It stops
-at rendered rows or a cleared error/login view. The [console reference](../reference/console.md)
-owns user-visible behavior; the API and IAM retain resource authority.
+cookie session, and reads authorized resources. This trace follows the Agents
+page through Namespace selection, Agent creation, detail revision selection, and
+saved channel draft edits, then covers the Provider branch and logout. It stops
+at rendered state or a submitted API mutation; deployment, rollback, deletion,
+and live gateway health remain outside the console flow. The
+[console reference](../reference/console.md) owns user-visible behavior; the API
+and IAM retain resource authority.
 
 ## Entry Points
 
-- Browser: `apps/controller/src/console/console.mjs`.
+- Browser: `apps/controller/src/console/console.mjs`,
+  `apps/controller/src/console/agents.mjs`, and
+  `apps/controller/src/console/channels.mjs`.
 - HTTP: `apps/controller/src/index.ts:createFastifyApp`.
 - Startup: `apps/controller/src/composition/production.ts:composeProduction`
   and `development-postgres.ts:composePostgresDevelopment`.
 - Assumptions: a bootstrapped Installation, provisioned account, selected IAM
-  Driver, and the configured same-origin controller URL. Collection access
-  requires the exact permissions in the [API reference](../reference/api.md).
+  Driver, and the configured same-origin controller URL. Reads and mutations
+  require the exact permissions in the [API reference](../reference/api.md).
 
 ## Flow
 
@@ -32,17 +37,27 @@ graph TD
     A["Open console or change page"] --> B["Clear old rows and check session"]
     B -->|no session| C["Login"]
     B -->|authenticated| D["Read readable Namespaces and validate selection"]
-    D --> E["Request current collection"]
+    D --> E["Request current page resource"]
+    E --> E1["Edit starter JSON and select associations"]
+    E --> E2["Select saved draft or AgentRevision by URL"]
+    E2 --> E3["Save supported channel draft edit"]
   end
   subgraph Controller["Controller API"]
     E --> F["Authenticate and authorize exact scope"]
     F -->|Agents or Namespaces| G["OCC reads and filters by IAM"]
     F -->|Providers and Installation admin| H["Project loaded Provider IDs and types"]
+    E1 --> M1["POST creates Configuration"]
+    M1 -->|returned Configuration ID| M["POST creates Agent draft only"]
+    E2 --> N["GET draft Configuration or immutable revision"]
+    E3 --> O["PATCH Configuration values"]
   end
   subgraph Result["Browser result"]
     G --> I["Accept only current navigation response"]
     H --> I
-    I --> J["Render rows or explicit empty state"]
+    M --> I
+    N --> I
+    O --> I
+    I --> J["Render list, draft, revision, or channel state"]
     F -->|denied or unavailable| K["Clear rows and show recovery"]
     J -->|Logout| L["Hide private state and confirm sign-out"]
   end
@@ -62,12 +77,12 @@ configuration scan. The request path never reads credentials or contacts a
 Provider. The existing [Provider-managed credential delivery](service-account-driver-credential-delivery.md) owns
 client construction and Driver activation.
 
-`apps/controller/src/console-assets.ts:readConsoleAsset` maps the two public
-asset URLs to fixed files and recognized page URLs to the HTML shell. Unknown
-console paths receive the same shell with HTTP `404`. The controller sets the
-HTML, CSS, or JavaScript MIME type and a same-origin content security policy.
-Other routes retain canonical API JSON errors. The Dockerfile copies these
-files into the existing controller image.
+`apps/controller/src/console-assets.ts:readConsoleAsset` maps public console
+assets to fixed files and recognized page URLs to the HTML shell. Agent create
+and detail paths share the shell. Unknown console paths receive the same shell
+with HTTP `404`. The controller sets the HTML, CSS, or JavaScript MIME type and
+a same-origin content security policy. Other routes retain canonical API JSON
+errors. The Dockerfile copies these files into the existing controller image.
 
 ### 2. Resolve the session before private reads
 
@@ -90,7 +105,7 @@ Namespace followed by the first readable one. An unavailable explicit ID stays
 unavailable until the user selects another. The selection is carried in the URL
 through global pages and history, without becoming an API query selector.
 
-### 3. Authorize the selected collection
+### 3. Authorize the selected page resource
 
 `apps/controller/src/index.ts:perform`, `requireInstallationAdmin`
 
@@ -104,7 +119,49 @@ Installation `administer` precedes the safe startup-summary response. Explicit
 empty configuration is a successful empty list; absent wiring and dependency
 failure return errors.
 
-### 4. Commit only the current response, or clear the view
+`apps/controller/src/console/agents.mjs:renderCreateAgent` loads Provider discovery
+and `GET /namespaces/:namespaceId/service-accounts` into optional select lists.
+The latter requires Namespace read and filters each account by exact read access.
+Provider selection does not filter service accounts. A failed list read
+shows a field-level error and retains the unset association option.
+
+The form starts with editable native JSON for the selected execution mode.
+Submission parses an object and posts `{kind: "agent", values}` to
+`POST /namespaces/:namespaceId/configurations`. After that returns its ID,
+`POST /namespaces/:namespaceId/agents` creates the Agent draft and returns to the
+detail URL with `revision=draft`. If that second write fails, the browser retains
+the Configuration ID and locks its JSON and execution mode; an explicit Agent retry reuses the saved
+Configuration. No write retries automatically, and creation alone does not admit
+a revision or start runtime work.
+
+### 4. Render draft, revision, or channels
+
+`apps/controller/src/console/agents.mjs:renderAgentDetail`
+
+The detail page reads the Agent, revision list, and either the saved draft
+Configuration or the selected AgentRevision. `revision=draft` reads the current
+Configuration referenced by the Agent. `revision=<id>` reads that immutable
+snapshot. The active revision badge is derived from `activeRevisionId`; the
+newest revision in the list can differ from the active one. Revision snapshots
+are read-only and do not expose rollback, edit, deploy, or live-health controls.
+Agent deletion is unavailable because the API has no Agent delete operation.
+
+`apps/controller/src/console/channels.mjs:renderChannels` renders supported
+Slack and Microsoft Teams channel settings for the saved draft only. Slack uses
+fixed unresolved `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` environment references;
+Teams uses fixed unresolved `MSTEAMS_APP_PASSWORD`. The editor requires
+dedicated execution for enabled channels and may refuse native documents that it
+cannot round-trip, including non-Socket Slack settings, non-standard credential
+references, mixed Slack mention settings, and unsupported plugin shapes.
+
+Saving channels first rereads the Agent and Configuration, then checks that the
+Agent still references the same Configuration generation. The subsequent PATCH
+sends `{ values: updatedValues }` and omits `secretBindings`, so the backend
+retains existing bindings. This client-side generation check detects common
+stale-editor cases but is not atomic lost-update protection; the API accepts the
+last valid writer.
+
+### 5. Commit only the current response, or clear the view
 
 `apps/controller/src/console/console.mjs:loadPage`, `logout`
 
@@ -126,9 +183,11 @@ this client never infers it from a network error.
 - Use the displayed request ID to associate API failures with controller logs.
   A Namespace-only user cannot discover Providers; check Installation authority
   before treating that denial as a configuration problem.
-- The browser suite exercises real Fastify, Better Auth, and Native IAM with
-  in-memory storage. It verifies user-visible navigation, list isolation, and
-  auth behavior; it does not establish PostgreSQL persistence or runtime health.
+- The browser suites exercise real Fastify routes, Better Auth, and Native IAM
+  with in-memory storage. They verify user-visible navigation, list isolation,
+  Agent creation, draft/history rendering, channel draft editing, and auth
+  behavior; they do not establish PostgreSQL persistence, live Provider health,
+  runtime dispatch, worker lease handling, or Compute Driver effects.
 - API tests cover safe discovery, permission boundaries, empty versus missing
   wiring, static MIME/allowlisting, and unchanged API JSON errors. See
   [Testing](../testing.md) for commands and the image smoke boundary.
@@ -138,6 +197,7 @@ this client never infers it from a network error.
 - [Console reference](../reference/console.md)
 - [Authentication](../reference/authentication.md)
 - [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
+- [Configuration and Agent revision](configuration-driver.md)
 - [Docker development](docker-compose-development.md)
 - [Production startup](production-startup.md)
 
@@ -148,3 +208,5 @@ this client never infers it from a network error.
 ## Changelog
 
 - 2026-09-01 19:09: Trace static serving, session resolution, exact collection authorization, Namespace isolation, and logout. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - 97911d361ac02ddf561e46c8af0864ad66a6df45) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
+- 2026-09-01 17:47: Add Agent creation, detail revision selection, and saved channel draft editing flow boundaries. (01a05f94-886b-7122-8784-c4b5aa5c5d1d - b02a07f2e575b13260b8792f87975d51c5ef7a61)
+- 2026-09-01 18:07: Trace association discovery and Configuration-first creation from editable starter JSON. (01a05f89-ff1c-7643-a77f-7e1e3aed9e5f - 1dd4b6b)

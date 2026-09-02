@@ -45,9 +45,11 @@ internal HTTPS origin matching `OCC_AUTH_BASE_URL`; it retains the existing
 ClusterIP/network boundary and secure cookie settings.
 
 The browser uses the human administrator session path, not service keys. The
-[console reference](../reference/console.md) describes read-only lists,
-Namespace selection, and error recovery. Creation, deployment, and other
-resource operations remain API procedures.
+[console reference](../reference/console.md) describes Namespace selection,
+Agent creation with editable starter Configuration JSON, Agent draft and revision
+inspection, supported channel draft edits, and error recovery. Deployment,
+rollback, Agent deletion, Configuration listing, and live gateway health remain
+API or operator procedures outside the console.
 
 ## Production
 
@@ -75,6 +77,15 @@ You need Docker with Buildx and registry push access. Replace the example
 registry and repository, and select the platform matching your Kubernetes
 nodes. The base image below matches the [runtime recipe](../../deploy/runtime/README.md),
 which also documents package-version overrides.
+
+The runtime must include the channel plugins its Agents enable, with their
+runtime dependencies available from a fresh home directory. The standard recipe
+packages Slack and Codex. Verify plugin loading and the gateway's supported
+Codex app-server version before publishing; use the
+[runtime image checks](../../deploy/runtime/README.md#verify-the-local-image).
+Use the same verified runtime image for both slots unless you have separately
+verified the gateway/Codex image pair. Runtime package installation at gateway
+startup is not part of this deployment procedure.
 
 ```bash
 export OCC_IMAGE_REPOSITORY='registry.example.com/your-team/openclaw-enterprise'
