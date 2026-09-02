@@ -201,7 +201,8 @@ stateDiagram-v2
   OpenClaw and dedicated Codex in both modes.
 - **`claimed`:** One worker owns a time-limited claim and increments the attempt
   count. It checks current authorization, calls the appropriate Compute Driver
-  method, and renews its lease while the effect runs. Only the current claim
+  method, renews its lease before each effect, and keeps renewing while it runs.
+  Consecutive short effects must not starve renewal. Only the current claim
   token can publish lifecycle state, audit evidence, or completion.
 - **`succeeded`:** The exact Namespace or AgentRevision operation completed
   successfully. Namespace transitions finalize with their audit; an Agent

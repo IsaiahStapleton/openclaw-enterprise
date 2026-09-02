@@ -870,6 +870,9 @@ export class ControllerWorker {
   }
 
   private async withClaimHeartbeat<T>(claim: ClaimedWork, effect: () => Promise<T>): Promise<T> {
+    // Consecutive short effects can each finish before their timer fires while
+    // the whole sequence outlives the lease. Renew before every external effect.
+    if ((await this.queue.heartbeat(claim)) === undefined) throw new WorkClaimLostError();
     let lost = false;
     let pending = Promise.resolve();
     const operation = new AbortController();

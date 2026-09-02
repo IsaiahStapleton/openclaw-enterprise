@@ -164,8 +164,11 @@ immutable snapshot. The worker validates the returned observation's owner and
 shape before treating it as ready. A pending observation defers convergence;
 an invalid observation fails permanently.
 
-`withClaimHeartbeat()` renews the claim roughly every third of its lease
-duration and propagates an abort signal into Compute. A lost lease, failed
+`withClaimHeartbeat()` renews the claim before starting each effect and then
+roughly every third of its lease duration while the effect runs. The initial
+renewal also keeps a sequence of short effects alive when no individual effect
+lasts long enough for its timer to fire. It propagates an abort signal into
+Compute. A lost lease, failed
 heartbeat, or worker shutdown aborts the operation context and raises
 `WorkClaimLostError`. The stale worker cannot publish its result under an expired
 or replaced token.
