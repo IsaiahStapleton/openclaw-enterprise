@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-01
-last_updated_session: codex/01a05f94-886b-7122-8784-c4b5aa5c5d1d
+last_updated_session: codex/01a05f89-ff1c-7643-a77f-7e1e3aed9e5f
 ---
 
 # Platform console request flow
@@ -38,7 +38,7 @@ graph TD
     B -->|no session| C["Login"]
     B -->|authenticated| D["Read readable Namespaces and validate selection"]
     D --> E["Request current page resource"]
-    E --> E1["Create Agent from existing Configuration ID"]
+    E --> E1["Edit starter JSON and select associations"]
     E --> E2["Select saved draft or AgentRevision by URL"]
     E2 --> E3["Save supported channel draft edit"]
   end
@@ -46,7 +46,8 @@ graph TD
     E --> F["Authenticate and authorize exact scope"]
     F -->|Agents or Namespaces| G["OCC reads and filters by IAM"]
     F -->|Providers and Installation admin| H["Project loaded Provider IDs and types"]
-    E1 --> M["POST creates Agent draft only"]
+    E1 --> M1["POST creates Configuration"]
+    M1 -->|returned Configuration ID| M["POST creates Agent draft only"]
     E2 --> N["GET draft Configuration or immutable revision"]
     E3 --> O["PATCH Configuration values"]
   end
@@ -118,12 +119,20 @@ Installation `administer` precedes the safe startup-summary response. Explicit
 empty configuration is a successful empty list; absent wiring and dependency
 failure return errors.
 
-`apps/controller/src/console/agents.mjs:renderCreateAgent` previews exactly the
-entered Configuration ID with `GET /namespaces/:namespaceId/configurations/:id`.
-It does not list Configurations. Submitting the form calls
-`POST /namespaces/:namespaceId/agents`, which creates the Agent draft and returns
-to the detail URL with `revision=draft`. Creation alone does not admit a
-revision or start runtime work.
+`apps/controller/src/console/agents.mjs:renderCreateAgent` loads Provider discovery
+and `GET /namespaces/:namespaceId/service-accounts` into optional select lists.
+The latter requires Namespace read and filters each account by exact read access.
+Provider selection does not filter service accounts. A failed list read
+shows a field-level error and retains the unset association option.
+
+The form starts with editable native JSON for the selected execution mode.
+Submission parses an object and posts `{kind: "agent", values}` to
+`POST /namespaces/:namespaceId/configurations`. After that returns its ID,
+`POST /namespaces/:namespaceId/agents` creates the Agent draft and returns to the
+detail URL with `revision=draft`. If that second write fails, the browser retains
+the Configuration ID and locks its JSON and execution mode; an explicit Agent retry reuses the saved
+Configuration. No write retries automatically, and creation alone does not admit
+a revision or start runtime work.
 
 ### 4. Render draft, revision, or channels
 
@@ -200,3 +209,4 @@ this client never infers it from a network error.
 
 - 2026-09-01 19:09: Trace static serving, session resolution, exact collection authorization, Namespace isolation, and logout. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - 97911d361ac02ddf561e46c8af0864ad66a6df45) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-09-01 17:47: Add Agent creation, detail revision selection, and saved channel draft editing flow boundaries. (01a05f94-886b-7122-8784-c4b5aa5c5d1d - b02a07f2e575b13260b8792f87975d51c5ef7a61)
+- 2026-09-01 18:07: Trace association discovery and Configuration-first creation from editable starter JSON. (01a05f89-ff1c-7643-a77f-7e1e3aed9e5f - 1dd4b6b)

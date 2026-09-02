@@ -46,7 +46,7 @@ ClusterIP/network boundary and secure cookie settings.
 
 The browser uses the human administrator session path, not service keys. The
 [console reference](../reference/console.md) describes Namespace selection,
-Agent creation from an existing Configuration ID, Agent draft and revision
+Agent creation with editable starter Configuration JSON, Agent draft and revision
 inspection, supported channel draft edits, and error recovery. Deployment,
 rollback, Agent deletion, Configuration listing, and live gateway health remain
 API or operator procedures outside the console.

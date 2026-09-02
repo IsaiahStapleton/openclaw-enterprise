@@ -30,6 +30,7 @@ import {
   NamespaceListResponse,
   NamespaceResponse,
   ProviderListResponse,
+  ServiceAccountListResponse,
   ServiceAccountResponse,
 } from "./resources.ts";
 
@@ -324,6 +325,22 @@ export const occApiRoutes = [
       params: NamespaceParams,
       body: CreateServiceAccountBody,
       response: { 201: ServiceAccountResponse, ...createErrors },
+    },
+  },
+  {
+    operationId: "listServiceAccounts",
+    method: "GET",
+    path: "/namespaces/:namespaceId/service-accounts",
+    action: "openclaw.service_accounts.list",
+    iamAction: "read",
+    resourceKind: "service_account",
+    authorizationTarget: "namespace_and_service_account_candidates",
+    summary: "List authorized Namespace-owned ServiceAccounts in one exact Namespace",
+    tags: ["Service accounts"],
+    schema: {
+      querystring: EmptyQuery,
+      params: NamespaceParams,
+      response: { 200: ServiceAccountListResponse, ...readErrors },
     },
   },
   {

@@ -14,7 +14,9 @@ body {
   margin: 0;
 }
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 button,
@@ -43,7 +45,9 @@ button:disabled {
 }
 button:focus-visible,
 a:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
   outline: 3px solid #6b9f89;
   outline-offset: 3px;
 }
@@ -422,6 +426,7 @@ select {
 }
 .form-field input,
 .form-field select,
+.form-field textarea,
 .revision-selector select {
   width: 100%;
   border: 1px solid #bbc7c0;
@@ -559,4 +564,15 @@ summary:focus-visible {
 }
 .revision-selector label {
   font-size: 13px;
+}
+
+.configuration-editor {
+  min-height: 340px;
+  resize: vertical;
+  font:
+    13px/1.6 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  tab-size: 2;
 }

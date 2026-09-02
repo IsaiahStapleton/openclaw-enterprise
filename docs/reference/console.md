@@ -2,7 +2,7 @@
 
 The controller serves a browser console at `/console/` on its existing origin.
 Sign in, select a Namespace, inspect accessible Agents, Providers, and
-Namespaces, create Agents from existing Configurations, and edit selected channel
+Namespaces, create Agents with editable Configuration JSON, and edit selected channel
 settings on an Agent's saved Configuration draft. Agent deployment, rollback,
 live runtime health, and Agent deletion are unavailable in the console.
 
@@ -55,15 +55,28 @@ authorization decisions; the selector does not broaden access.
 ## Create an Agent
 
 Select **Create Agent** from the Agents page to create one Namespace-owned Agent.
-The console requires an Agent name and an existing same-Namespace Configuration
-ID. It can preview that exact Configuration by ID, including its generation and
-native values summary, but it does not list or search Configurations. Use the API
-or an operator workflow to create the Configuration first.
+Enter an Agent name and review the prefilled native Configuration JSON. The
+editable starter matches the selected execution mode: dedicated uses
+`codex/gpt-5.1`; embedded uses `openai/gpt-5.1`. These are examples, not discovered
+Installation defaults or a guarantee of model access. Review the model and
+provision the required credentials before deployment. Changing execution mode
+updates untouched JSON; use **Reset template** to replace your edits. The form
+requires valid JSON with an object at its root.
 
-The form submits `POST /namespaces/:namespaceId/agents` with the selected
-execution mode, optional Provider ID, and optional service account ID. Successful
-creation saves the Agent draft and opens its detail page at
-`/console/agents/:agentId?...&revision=draft&tab=configuration`. It does not
+Choose an optional Provider and service account from the select lists. Provider
+discovery requires Installation `administer`; service accounts are readable
+accounts in the selected Namespace. Select the two associations independently.
+Unavailable or loading lists show their status. You can leave either association
+unset; the form does not accept freeform association IDs.
+
+Submitting creates a same-Namespace `kind: "agent"` Configuration from the JSON,
+then submits `POST /namespaces/:namespaceId/agents` with its returned ID and the
+selected execution mode and associations. If the Configuration saves but Agent
+creation fails, its ID remains visible and the saved JSON and execution mode are fixed.
+Correct the name or associations and retry to reuse that Configuration. These are separate
+API writes; failure does not remove the saved Configuration or retry automatically.
+Successful creation opens the Agent detail page at
+`/console/agents/:agentId?...&revision=draft`. It does not
 admit an AgentRevision, deploy a workload, or prove runtime health.
 
 ## Inspect detail, revisions, and channel drafts

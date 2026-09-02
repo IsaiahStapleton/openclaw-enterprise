@@ -16,8 +16,8 @@ current [Agent](../docs/reference/agents.md) and
 
 ## Scope
 
-- Create a Namespace-owned Agent using an existing Configuration ID, with an
-  explicit execution mode and optional Provider and service-account references.
+- Create a Namespace-owned Configuration from editable starter JSON, then create
+  an Agent with an explicit execution mode and optional listed associations.
 - Inspect the saved editable Configuration separately from AgentRevisions.
 - Browse the active and historical revisions without mutation controls.
 - Configure Slack and Microsoft Teams in the saved Configuration.
@@ -34,12 +34,23 @@ exact-resource IAM, Namespace selection, error envelopes, and no-store behavior
 remain authoritative. Navigation clears old private content; late responses
 cannot replace a newer page or revision selection.
 
-Creation reads the exact Configuration under the selected Namespace, then sends
-`POST /namespaces/:namespaceId/agents` with `name`, `configurationId`,
-`executionMode`, and any explicitly supplied association IDs. Creation does not
-deploy or create a revision. The Configuration API has no collection endpoint;
-the form requests its ID and previews the readable document. Failure retains
-form inputs and does not retry a mutation automatically.
+Creation starts with editable native Configuration JSON for the selected execution
+mode. The starter is an example, not discovered Installation or model defaults;
+credentials still require operator provisioning. A mode change updates untouched
+JSON; replacing edits requires **Reset template**. Invalid JSON or a non-object
+value blocks submission. The form first posts `{kind: "agent", values}` to
+`POST /namespaces/:namespaceId/configurations`, then uses the returned ID with
+`name`, `executionMode`, and selected association IDs in
+`POST /namespaces/:namespaceId/agents`. Creation does not deploy or create a revision.
+If Configuration creation succeeds but Agent creation fails, the form retains its
+ID, locks the saved JSON and execution mode, and offers an explicit Agent retry without another
+Configuration write. Other failures retain inputs; mutations never retry automatically.
+
+Provider and service-account associations use optional select lists. Providers
+come from Installation-admin-authorized discovery; service accounts come from the
+selected Namespace, filtered by exact read access. The two associations are independent.
+Loading and unavailable discovery have explicit field status and no freeform
+fallback. Leaving an association unset remains supported.
 
 Agent detail distinguishes the saved draft from an explicitly selected immutable
 revision. A revision selector names its number, ID, timestamp, and active marker.
@@ -85,14 +96,14 @@ editor remain inspectable; the editor must not flatten or discard them.
 
 ## Verification
 
-| Required outcome                                                             | How to verify                                                                                                      |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Wireframes precede UI implementation                                         | Open the gallery and capture its principal states before editing production UI.                                    |
-| Creation records the selected Namespace and Configuration without deployment | Browser create followed by actual API Agent/revision reads.                                                        |
-| Historical selection never mutates or substitutes configuration              | Two real admitted snapshots; edit saved Configuration, switch revisions, inspect exact values and network methods. |
-| Slack/Teams editing preserves native data and uses SecretRefs                | Browser save followed by exact Configuration read; include unrelated keys and Secret bindings.                     |
-| Errors retain context without unauthorized writes                            | Real IAM denial, missing resource, duplicate name, expired session, and stale-read browser cases.                  |
-| Clear desktop and narrow layouts                                             | Screenshots, keyboard drawer/dialog traversal, and viewport overflow checks.                                       |
+| Required outcome                                                        | How to verify                                                                                                      |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Wireframes precede UI implementation                                    | Open the gallery and capture its principal states before editing production UI.                                    |
+| Creation saves edited JSON and selected associations without deployment | Browser create followed by actual Configuration/Agent/revision reads; exercise invalid JSON and Agent-only retry.  |
+| Historical selection never mutates or substitutes configuration         | Two real admitted snapshots; edit saved Configuration, switch revisions, inspect exact values and network methods. |
+| Slack/Teams editing preserves native data and uses SecretRefs           | Browser save followed by exact Configuration read; include unrelated keys and Secret bindings.                     |
+| Errors retain context without unauthorized writes                       | Real IAM denial, missing resource, duplicate name, expired session, and stale-read browser cases.                  |
+| Clear desktop and narrow layouts                                        | Screenshots, keyboard drawer/dialog traversal, and viewport overflow checks.                                       |
 
 ## Open Decisions
 
@@ -115,3 +126,5 @@ editor remain inspectable; the editor must not flatten or discard them.
   and read-only history. Deletion scope remains pending user decision. Browser
   suite execution is blocked by managed Chrome policy; API reads verified saved
   state and unchanged revisions after in-app browser actions.
+- 2026-09-01 18:07: Specify association selectors and editable starter JSON with
+  Configuration-first creation and explicit Agent retry. (01a05f89-ff1c-7643-a77f-7e1e3aed9e5f - 1dd4b6b)

@@ -100,7 +100,7 @@ export function renderAgentList(context) {
             {},
             query
               ? "Try another name or ID."
-              : "Create an Agent in this Namespace using an existing Configuration.",
+              : "Create an Agent in this Namespace using an editable Configuration template.",
           ),
         ),
       );
@@ -154,6 +154,68 @@ export function renderAgentList(context) {
   render();
 }
 
+function configurationTemplate(mode) {
+  const harnessId = mode === "dedicated" ? "codex" : "openclaw";
+  const providerModel = "gpt-5.1";
+  const modelReference = `${harnessId === "codex" ? "codex" : "openai"}/${providerModel}`;
+  const provider =
+    harnessId === "codex"
+      ? {
+          codex: {
+            baseUrl: "http://127.0.0.1:9",
+            api: "openai-responses",
+            models: [{ id: providerModel, name: providerModel }],
+          },
+        }
+      : {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+            models: [{ id: providerModel, name: providerModel }],
+          },
+        };
+
+  return {
+    gateway: {
+      mode: "local",
+      bind: "lan",
+      controlUi: { enabled: false },
+      auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+      http: { endpoints: { chatCompletions: { enabled: true } } },
+    },
+    agents: {
+      defaults: {
+        model: modelReference,
+        models: { [modelReference]: { agentRuntime: { id: harnessId } } },
+      },
+    },
+    models: { providers: provider },
+    ...(harnessId === "codex"
+      ? {
+          // Codex model transport must use its authenticated app server, never direct HTTP.
+          plugins: {
+            allow: ["codex"],
+            entries: {
+              codex: {
+                enabled: true,
+                config: {
+                  appServer: {
+                    mode: "guardian",
+                    approvalPolicy: "on-request",
+                    sandbox: "read-only",
+                    transport: "websocket",
+                    url: "${APP_SERVER_URL}",
+                    authToken: "${APP_SERVER_TOKEN}",
+                  },
+                },
+              },
+            },
+          },
+        }
+      : {}),
+  };
+}
+
 export function renderCreateAgent(context) {
   const { view, request, namespaceId } = context;
   context.setTitle("Create Agent");
@@ -164,95 +226,78 @@ export function renderCreateAgent(context) {
     maxlength: "200",
     autocomplete: "off",
   });
-  const configuration = element("input", {
-    id: "configuration-id",
-    name: "configurationId",
-    required: "",
-    placeholder: "cfg_…",
-    autocomplete: "off",
-  });
   const mode = element(
     "select",
     { id: "execution-mode" },
     element("option", { value: "dedicated" }, "Dedicated"),
     element("option", { value: "embedded" }, "Embedded"),
   );
-  const provider = element("input", { id: "provider-id", autocomplete: "off" });
-  const account = element("input", {
-    id: "service-account-id",
-    placeholder: "sa_…",
-    autocomplete: "off",
+  const configuration = element("textarea", {
+    id: "configuration-json",
+    name: "configuration",
+    required: "",
+    rows: "18",
+    className: "configuration-editor",
+    spellcheck: "false",
+    "aria-describedby": "configuration-json-hint",
   });
+  let template = JSON.stringify(configurationTemplate(mode.value), null, 2);
+  configuration.value = template;
+  const reset = button("Reset template", () => {
+    template = JSON.stringify(configurationTemplate(mode.value), null, 2);
+    configuration.value = template;
+    configuration.setCustomValidity("");
+  });
+  mode.addEventListener("change", () => {
+    const untouched = configuration.value === template;
+    template = JSON.stringify(configurationTemplate(mode.value), null, 2);
+    if (untouched) configuration.value = template;
+  });
+  configuration.addEventListener("input", () => configuration.setCustomValidity(""));
+
+  const provider = element(
+    "select",
+    { id: "provider-id", disabled: true },
+    element("option", { value: "" }, "None"),
+  );
+  const account = element(
+    "select",
+    { id: "service-account-id", disabled: true },
+    element("option", { value: "" }, "None"),
+  );
+  const providerStatus = element("p", { className: "hint", role: "status" }, "Loading Providers…");
+  const accountStatus = element(
+    "p",
+    { className: "hint", role: "status" },
+    "Loading service accounts…",
+  );
+  let providersLoaded = false;
+  let accountsLoaded = false;
+  let pending = false;
+  let savedConfiguration;
   const feedback = element("p", { className: "error", role: "alert" });
-  const preview = element("div", { "aria-live": "polite" });
+  const savedStatus = element("p", { className: "hint", role: "status" });
   const submit = element("button", { type: "submit", className: "primary" }, "Create Agent");
-  let previewGeneration = 0;
-  const previewButton = button("Preview configuration", async () => {
-    const selected = configuration.value.trim();
-    if (!selected) {
-      configuration.reportValidity();
-      return;
-    }
-    const token = ++previewGeneration;
-    previewButton.disabled = true;
-    preview.replaceChildren(element("p", {}, "Reading Configuration…"));
-    try {
-      const result = await request(
-        `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(selected)}`,
-      );
-      if (
-        !context.isCurrent() ||
-        token !== previewGeneration ||
-        configuration.value.trim() !== selected
-      )
-        return;
-      preview.replaceChildren(
-        element(
-          "section",
-          { className: "agent-card" },
-          element("h2", {}, `Configuration · generation ${result.generation}`),
-          element("p", { className: "resource-id" }, result.id),
-          summary(result.values, [["Kind", result.kind]]),
-        ),
-      );
-    } catch (error) {
-      if (!context.isCurrent() || token !== previewGeneration) return;
-      if (error.status === 401) {
-        context.onExpired();
-        return;
-      }
-      preview.replaceChildren(element("p", { className: "error", role: "alert" }, message(error)));
-    } finally {
-      if (token === previewGeneration) previewButton.disabled = false;
-    }
-  });
-  configuration.addEventListener("input", () => {
-    previewGeneration += 1;
-    preview.replaceChildren();
-    previewButton.disabled = false;
-  });
   const form = element(
     "form",
     { className: "agent-form agent-card" },
     field("Agent name", name, "Unique within this Namespace."),
     field(
-      "Configuration ID",
-      configuration,
-      "Use an existing Agent Configuration from this Namespace.",
-    ),
-    previewButton,
-    preview,
-    field(
       "Execution mode",
       mode,
-      "Choose the mode matching your Configuration. Slack and Microsoft Teams require Dedicated execution.",
+      "Slack and Microsoft Teams require Dedicated execution. Changing the mode keeps any edited JSON; use Reset template to start again.",
     ),
-    field("Provider ID (optional)", provider, "Leave blank for no Provider association."),
+    field("Provider (optional)", provider),
+    providerStatus,
+    field("Service account (optional)", account),
+    accountStatus,
     field(
-      "Service account ID (optional)",
-      account,
-      "Use an existing service account when required.",
+      "Configuration JSON",
+      configuration,
+      "Starter template applied. Edit the sample model and settings before saving. Your operator must provision the referenced credentials.",
     ),
+    reset,
+    savedStatus,
     feedback,
     element(
       "div",
@@ -261,30 +306,87 @@ export function renderCreateAgent(context) {
       submit,
     ),
   );
-  let pending = false;
+  const updateControls = () => {
+    for (const node of form.querySelectorAll("button, input, select, textarea"))
+      node.disabled = pending;
+    provider.disabled = pending || !providersLoaded;
+    account.disabled = pending || !accountsLoaded;
+    reset.disabled = pending || Boolean(savedConfiguration);
+    mode.disabled = pending || Boolean(savedConfiguration);
+    configuration.readOnly = Boolean(savedConfiguration);
+  };
+  for (const [path, control, status, label] of [
+    ["/providers", provider, providerStatus, "Providers"],
+    [`${namespacePath(namespaceId)}/service-accounts`, account, accountStatus, "Service accounts"],
+  ]) {
+    request(path)
+      .then((items) => {
+        if (!context.isCurrent()) return;
+        if (control === provider) {
+          provider.append(
+            ...items.map((item) =>
+              element("option", { value: item.id }, `${item.id} · ${item.type}`),
+            ),
+          );
+          providersLoaded = true;
+          status.textContent = items.length
+            ? "Choose an installed Provider."
+            : "No Providers configured.";
+        } else {
+          account.append(
+            ...items.map((item) =>
+              element("option", { value: item.id }, `${item.name} · ${item.id}`),
+            ),
+          );
+          accountsLoaded = true;
+          status.textContent = items.length
+            ? "Choose an existing account in this Namespace."
+            : "No service accounts available in this Namespace.";
+        }
+        updateControls();
+      })
+      .catch((error) => {
+        if (!context.isCurrent()) return;
+        if (error.status === 401) {
+          context.onExpired();
+          return;
+        }
+        status.textContent = `${label} unavailable. ${message(error)} You can continue with None.`;
+      });
+  }
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (pending || !form.reportValidity()) return;
+    let values;
+    try {
+      values = JSON.parse(configuration.value);
+      if (values === null || Array.isArray(values) || typeof values !== "object") throw new Error();
+    } catch {
+      configuration.setCustomValidity("Enter a valid JSON object.");
+      configuration.reportValidity();
+      return;
+    }
     const body = {
       name: name.value.trim(),
-      configurationId: configuration.value.trim(),
       executionMode: mode.value,
-      ...(provider.value.trim() ? { providerId: provider.value.trim() } : {}),
-      ...(account.value.trim() ? { serviceAccountId: account.value.trim() } : {}),
+      ...(provider.value ? { providerId: provider.value } : {}),
+      ...(account.value ? { serviceAccountId: account.value } : {}),
     };
     pending = true;
-    for (const node of form.querySelectorAll("button, input, select")) node.disabled = true;
+    updateControls();
     feedback.textContent = "";
-    let sent = false;
     try {
-      await request(
-        `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(body.configurationId)}`,
-      );
-      if (!context.isCurrent()) return;
-      sent = true;
+      if (!savedConfiguration) {
+        savedConfiguration = await request(`${namespacePath(namespaceId)}/configurations`, {
+          method: "POST",
+          body: { kind: "agent", values },
+        });
+        if (!context.isCurrent()) return;
+        savedStatus.textContent = `Configuration saved: ${savedConfiguration.id}. Its JSON and execution mode are now fixed for this form; retrying Agent creation will reuse it.`;
+      }
       const created = await request(`${namespacePath(namespaceId)}/agents`, {
         method: "POST",
-        body,
+        body: { ...body, configurationId: savedConfiguration.id },
       });
       if (context.isCurrent()) context.navigate(`agents/${created.id}?revision=draft`);
     } catch (error) {
@@ -293,12 +395,15 @@ export function renderCreateAgent(context) {
         context.onExpired();
         return;
       }
-      feedback.textContent =
-        message(error, sent) + (error.requestId ? ` Request ID: ${error.requestId}` : "");
+      const detail =
+        error.status === 409 && savedConfiguration
+          ? "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again."
+          : message(error, true);
+      feedback.textContent = detail + (error.requestId ? ` Request ID: ${error.requestId}` : "");
     } finally {
       if (context.isCurrent()) {
         pending = false;
-        for (const node of form.querySelectorAll("button, input, select")) node.disabled = false;
+        updateControls();
       }
     }
   });
@@ -307,7 +412,7 @@ export function renderCreateAgent(context) {
     element(
       "p",
       { className: "muted" },
-      "Save an Agent in this Namespace. Creation does not deploy it or create an AgentRevision.",
+      "Save a Configuration and an Agent in this Namespace. Creation does not deploy it or create an AgentRevision.",
     ),
     form,
   );

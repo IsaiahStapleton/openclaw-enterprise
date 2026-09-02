@@ -39,7 +39,7 @@ Open `/console/` on the API URL printed by `dev-up`, normally
 No service key is needed for browser login.
 
 The [console](../reference/console.md) lists accessible Agents, Providers, and
-Namespaces. It can create an Agent from an existing Configuration ID and edit
+Namespaces. It can create an Agent with editable starter Configuration JSON and edit
 supported Slack or Microsoft Teams channel settings on the saved Configuration
 draft. It does not list Configurations, deploy Agents, delete Agents, or report
 live gateway health. A fresh Installation has a `default` Namespace and no

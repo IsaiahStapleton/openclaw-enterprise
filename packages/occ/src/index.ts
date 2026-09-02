@@ -691,6 +691,27 @@ export class OpenClawController {
     });
   }
 
+  async listServiceAccounts(
+    principalId: string,
+    namespaceId: string,
+  ): Promise<readonly Readonly<ServiceAccount>[]> {
+    const namespace = await this.getNamespace(principalId, namespaceId);
+    return this.read(async (state) => {
+      const readable: Readonly<ServiceAccount>[] = [];
+      for (const account of await state.serviceAccounts.listServiceAccounts(namespace.id)) {
+        if (
+          await this.canRead(principalId, {
+            kind: "service_account",
+            id: account.id,
+            namespaceId: namespace.id,
+          })
+        )
+          readable.push(account);
+      }
+      return Object.freeze(readable);
+    });
+  }
+
   async listRevisions(
     principalId: string,
     namespaceId: string,

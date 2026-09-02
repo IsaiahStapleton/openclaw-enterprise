@@ -18,7 +18,7 @@ The helper uses Docker Compose, prepares the default quickstart runtime image
 when needed, and prints the loopback OCC URL, Installation ID, and private
 [service-key](docs/guides/concepts.md#identity-and-access) file path. Open the
 printed API URL with `/console/` to sign in, browse accessible Agents, Providers,
-and Namespaces, create Agents from existing Configurations, and edit supported
+and Namespaces, create Agents with editable Configuration JSON, and edit supported
 channel draft settings. To deploy an Agent and attach the OpenClaw terminal UI
 to a real model-backed [runtime](docs/guides/concepts.md#gateways-and-harnesses),
 continue to [development docs](docs/guides/deploy.md#development-end-to-end-tui).

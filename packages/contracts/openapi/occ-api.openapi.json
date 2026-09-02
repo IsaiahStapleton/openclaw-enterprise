@@ -4575,6 +4575,145 @@
       }
     },
     "/namespaces/{namespaceId}/service-accounts": {
+      "get": {
+        "description": "Requires read permission on the requested Namespace. Only ServiceAccount resources with individual read permission are returned.",
+        "operationId": "listServiceAccounts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "credential": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "anyOf": [
+                                  { "const": "api_key", "type": "string" },
+                                  { "const": "access_token", "type": "string" },
+                                  { "const": "oauth_access_token", "type": "string" }
+                                ]
+                              },
+                              "secretRef": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "key": {
+                                    "maxLength": 253,
+                                    "pattern": "^(?![.]{1,2}$)[-._a-zA-Z0-9]+$",
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "maxLength": 253,
+                                    "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["name", "key"],
+                                "type": "object"
+                              }
+                            },
+                            "required": ["kind", "secretRef"],
+                            "type": "object"
+                          },
+                          "id": {
+                            "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          },
+                          "name": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                            "type": "string"
+                          },
+                          "namespaceId": {
+                            "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "namespaceId", "name"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-1" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "List authorized Namespace-owned ServiceAccounts in one exact Namespace",
+        "tags": ["Service accounts"],
+        "x-openclaw-permissions": [
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" },
+          { "action": "read", "resourceKind": "service_account", "scope": "each_returned" }
+        ]
+      },
       "post": {
         "description": "Requires create permission for ServiceAccount resources in the requested Namespace.",
         "operationId": "createServiceAccount",

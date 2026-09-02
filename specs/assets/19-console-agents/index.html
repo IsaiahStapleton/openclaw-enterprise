@@ -16,7 +16,8 @@
     }
     button,
     input,
-    select {
+    select,
+    textarea {
       font: inherit;
     }
     button {
@@ -171,13 +172,29 @@
       margin: 20px 0 8px;
     }
     input,
-    select {
+    select,
+    textarea {
       padding: 11px;
       border: 1px solid #bbc9be;
       border-radius: 7px;
       width: 100%;
       background: white;
       color: inherit;
+    }
+    textarea {
+      min-height: 320px;
+      resize: vertical;
+      font:
+        14px/1.5 ui-monospace,
+        monospace;
+      tab-size: 2;
+    }
+    .configuration-heading {
+      margin-top: 24px;
+      margin-bottom: 8px;
+    }
+    .configuration-heading label {
+      margin: 0;
     }
     table {
       width: 100%;
@@ -262,7 +279,8 @@
     }
     button:focus-visible,
     input:focus-visible,
-    select:focus-visible {
+    select:focus-visible,
+    textarea:focus-visible {
       outline: 3px solid #689881;
       outline-offset: 2px;
     }
@@ -328,6 +346,70 @@
       `<button class="${cls}" onclick="show('${to}')">${label}</button>`;
     const field = (label, value, hint = "") =>
       `<label>${label}<input value="${value}"></label><small>${hint}</small>`;
+    function configurationTemplate(mode) {
+      const harnessId = mode === "dedicated" ? "codex" : "openclaw";
+      const providerId = mode === "dedicated" ? "codex" : "openai";
+      const modelReference = `${providerId}/gpt-5.1`;
+      return JSON.stringify(
+        {
+          gateway: {
+            mode: "local",
+            bind: "lan",
+            controlUi: { enabled: false },
+            auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+            http: { endpoints: { chatCompletions: { enabled: true } } },
+          },
+          agents: {
+            defaults: {
+              model: modelReference,
+              models: { [modelReference]: { agentRuntime: { id: harnessId } } },
+            },
+          },
+          models: {
+            providers: {
+              [providerId]: {
+                baseUrl: mode === "dedicated" ? "http://127.0.0.1:9" : "https://api.openai.com/v1",
+                api: "openai-responses",
+                models: [{ id: "gpt-5.1", name: "gpt-5.1" }],
+              },
+            },
+          },
+          ...(mode === "dedicated"
+            ? {
+                plugins: {
+                  allow: ["codex"],
+                  entries: {
+                    codex: {
+                      enabled: true,
+                      config: {
+                        appServer: {
+                          mode: "guardian",
+                          approvalPolicy: "on-request",
+                          sandbox: "read-only",
+                          transport: "websocket",
+                          url: "${APP_SERVER_URL}",
+                          authToken: "${APP_SERVER_TOKEN}",
+                        },
+                      },
+                    },
+                  },
+                },
+              }
+            : {}),
+        },
+        null,
+        2,
+      );
+    }
+    let appliedTemplate = "";
+    function resetConfigurationTemplate() {
+      appliedTemplate = configurationTemplate(document.querySelector("#execution-mode").value);
+      document.querySelector("#configuration-json").value = appliedTemplate;
+    }
+    function changeExecutionMode() {
+      const editor = document.querySelector("#configuration-json");
+      if (editor.value === appliedTemplate) resetConfigurationTemplate();
+    }
     function shell(body, title = "Agents") {
       return `<div class="shell"><aside><strong>CONTROL CENTER</strong><p>◇　Agents</p><p>◈　Providers</p><p>▤　Namespaces</p><div style="margin-top:390px"><small>Namespace · Support</small><p class="account-toggle"><span class="account-label">OpenClaw Enterprise</span><span class="account-chevron" aria-hidden="true">▾</span></p></div></aside><main>${body}</main></div>`;
     }
@@ -347,10 +429,10 @@
           `<input aria-label="Search agents" placeholder="Search Agents" style="max-width:350px">`;
         body +=
           id === "empty"
-            ? `<section class="card empty"><h2>No Agents yet</h2><p>Create your first Agent in Support using an existing Configuration.</p>${action("Create Agent", "create", "primary")}</section>`
+            ? `<section class="card empty"><h2>No Agents yet</h2><p>Create your first Agent in Support with a starter configuration template.</p>${action("Create Agent", "create", "primary")}</section>`
             : `<table><thead><tr><th>Agent</th><th>Execution mode</th><th>Active revision</th><th>Created</th></tr></thead><tbody><tr><td><a onclick="show('detail')"><strong>Support Agent</strong></a><small>agt_…7f29</small></td><td>Dedicated</td><td><a onclick="show('detail')">rev_…9a42</a></td><td>Aug 29, 2026</td></tr><tr><td><a onclick="show('channels')"><strong>Triage Agent</strong></a><small>agt_…19b0</small></td><td>Dedicated</td><td>No active revision</td><td>Sep 1, 2026</td></tr></tbody></table>`;
       } else if (id === "create") {
-        body = `<p class="crumb"><a onclick="show('list')">Agents</a> / Create</p>${heading("Create Agent")}<p class="muted">Save a named Agent in this Namespace. Creation does not deploy it.</p><section class="card" style="max-width:750px">${field("Agent name", "Support Agent", "Unique within Support.")}${field("Configuration ID", "cfg_…support", "Use an existing Agent Configuration from this Namespace.")}${action("Preview configuration", "create")}<div class="notice">Configuration found · Generation 6 · Dedicated Codex<br>Model: codex/gpt-5.6-sol · Slack enabled</div><label>Execution mode<select><option>Dedicated</option><option>Embedded</option></select></label><small>Slack and Microsoft Teams require Dedicated execution.</small><div class="grid">${field("Provider ID (optional)", "", "Leave blank for no Provider association.")}${field("Service account ID (optional)", "", "Use an existing account when required.")}</div><div class="bottom">${action("Cancel", "list")}${action("Create Agent", "channels", "primary")}</div></section>`;
+        body = `<p class="crumb"><a onclick="show('list')">Agents</a> / Create</p>${heading("Create Agent")}<p class="muted">Save a named Agent in this Namespace. Creation does not deploy it.</p><section class="card" style="max-width:750px">${field("Agent name", "Support Agent", "Unique within Support.")}<label>Execution mode<select id="execution-mode" onchange="changeExecutionMode()"><option value="dedicated">Dedicated</option><option value="embedded">Embedded</option></select></label><small>Slack and Microsoft Teams require Dedicated execution.</small><div class="grid"><div><label>Provider (optional)<select><option value="">None</option><option value="openai-primary">OpenAI primary</option></select></label><small>Select an installed Provider.</small></div><div><label>Service account (optional)<select><option value="">None</option><option value="sa_support">Support account</option></select></label><small>Select a service account from this Namespace.</small></div></div><div class="row configuration-heading"><label for="configuration-json">Configuration JSON</label><button onclick="resetConfigurationTemplate()">Reset template</button></div><textarea id="configuration-json" rows="16" spellcheck="false" aria-describedby="configuration-hint"></textarea><small id="configuration-hint">A starter template is applied. Edit it for this Agent. Changing execution mode preserves your edits; Reset template replaces them with the selected mode's template.</small><div class="bottom">${action("Cancel", "list")}${action("Create Agent", "channels", "primary")}</div></section>`;
       } else if (id === "detail" || id === "history") {
         body =
           detailBase(id === "history") +
@@ -360,6 +442,7 @@
         body = `<p class="crumb"><a onclick="show('list')">Agents</a> / Support Agent</p>${heading("Support Agent", action("Delete Agent", "delete", "danger"))}<p><code>agt_…7f29</code>　<span class="badge">Active revision · v3</span>　<span class="badge">Dedicated</span></p><section class="card"><div class="row"><div><small>Inspect configuration</small><h2>Saved draft</h2><small>cfg_support · Generation 7</small></div>${action("View active AgentRevision v3", "detail")}</div></section><div class="notice">Changes here affect future deployments using this Configuration. Active and historical revisions stay unchanged.</div><div class="tabs">${action("Configuration", "detail")}${action("Channels", "channels", "selected")}</div><div class="row"><h2>Channels</h2><small>Live connection status unavailable</small></div><section class="card"><div class="row"><div><h2>Slack　<span class="badge">Configured · Enabled</span></h2><p>Socket mode · 2 selected channels · Mention required</p><small>C0123456789, C0987654321 · Credential references configured</small></div>${action("Edit Slack", "slack")}</div></section><section class="card"><div class="row"><div><h2>Microsoft Teams　<span class="badge">Not configured</span></h2><p>Application identity and password reference</p><small>Requires separately configured Bot Framework ingress.</small></div>${action("Configure Microsoft Teams", "teams")}</div></section>`;
       }
       screen.innerHTML = shell(body);
+      if (id === "create") resetConfigurationTemplate();
       if (id === "slack" || id === "teams") {
         const slack = id === "slack";
         overlay.innerHTML = `<div class="overlay"><section class="drawer" role="dialog" aria-modal="true" aria-label="${slack ? "Edit Slack" : "Configure Microsoft Teams"}"><div class="row"><h2>${slack ? "Edit Slack" : "Configure Microsoft Teams"}</h2>${action("Close", "channels")}</div><p class="muted">Saved draft · cfg_support · Generation 7</p><div class="notice">Dedicated execution required. Credentials must be provisioned by your operator.</div><label><input type="checkbox" checked style="width:auto"> Enable ${slack ? "Slack" : "Microsoft Teams"}</label>${slack ? `${field("Slack channel IDs", "C0123456789, C0987654321", "Comma-separated IDs; only selected channels.")}${field("Allowed user IDs", "U0123456789", "Direct messages use an explicit allowlist.")}` : `${field("Application (client) ID", "00000000-0000-0000-0000-000000000000")}${field("Directory (tenant) ID", "11111111-1111-1111-1111-111111111111")}`}<label><input type="checkbox" checked style="width:auto"> Require a mention</label><h2>Credential references</h2><small>Unresolved references only. No token or password values are entered here.</small>${slack ? `${field("App token reference", "env / default / SLACK_APP_TOKEN")}${field("Bot token reference", "env / default / SLACK_BOT_TOKEN")}` : field("App password reference", "env / default / MSTEAMS_APP_PASSWORD")}<p class="muted">This Configuration may be shared by other Agents.</p><div class="bottom">${action("Cancel", "channels")}${action("Save configuration", "channels", "primary")}</div></section></div>`;
