@@ -46,8 +46,9 @@ An explicit ID that is no longer readable shows **Namespace unavailable** and
 requires another selection. With no readable Namespaces, Agents explains that
 administrator provisioning or access is needed; global pages remain available.
 
-Switching Namespace preserves the page. Agents reloads within the new scope;
-Providers and Namespaces remain Installation-wide. Old rows clear immediately,
+Switching Namespace from Agent detail or creation returns to the Agents list in
+the new scope. Global pages stay open; Providers and Namespaces remain
+Installation-wide. Old rows clear immediately,
 and late responses from prior navigation cannot restore them. The API makes all
 authorization decisions; the selector does not broaden access.
 
@@ -83,16 +84,18 @@ The Channels tab edits Slack and Microsoft Teams settings on the saved
 Configuration draft. Saving a channel change patches only `values` on the
 Configuration, so existing `secretBindings` are omitted from the PATCH and
 retained by the backend. The editor preserves other loaded native keys while
-updating the provider block and plugin allow entry. Because a Configuration can
+updating the provider block and enabling its plugin. An existing plugin allowlist
+is extended; an omitted allowlist stays omitted. Because a Configuration can
 be shared by multiple Agents, channel edits can affect future deployments of
 other Agents that reference the same Configuration.
 
 Before saving, the browser rereads the Agent and Configuration and checks that
-the Agent still points at the same Configuration generation. That detects common
+the Agent still references the same Configuration and its generation is unchanged. That detects common
 stale-editor cases, but it is not atomic lost-update protection; the API accepts
 the last valid writer. Refresh before retrying a conflict or uncertain save.
 
-Slack editing supports Socket Mode settings with fixed unresolved environment
+Slack editing preserves existing per-channel user restrictions. **Allowed user IDs**
+controls the direct-message allowlist. Editing supports Socket Mode settings with fixed unresolved environment
 references to `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`. Microsoft Teams editing
 supports application ID, tenant ID, require-mention, and a fixed unresolved
 environment reference to `MSTEAMS_APP_PASSWORD`. Both channel integrations
@@ -101,8 +104,8 @@ Only Slack Socket Mode has live proof in the current test guide; Teams also
 requires separately configured Bot Framework ingress. The simple editor may
 reject native channel documents it cannot round-trip, including non-Socket Slack
 settings, non-standard credential references, mixed per-channel mention settings,
-or unsupported plugin shapes. In that case it shows the native JSON for
-inspection and leaves editing to the API or operator workflow.
+or unsupported plugin shapes. The native Configuration view remains available for inspection; unsupported
+settings require the API or operator workflow.
 
 Agent deletion is unavailable in the current API, so the console cannot delete
 an Agent or its revision history. The backend deletion scope remains an open
