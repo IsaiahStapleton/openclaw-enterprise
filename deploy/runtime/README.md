@@ -14,6 +14,7 @@ The Dockerfile installs only public npm packages:
 | `NODE_BASE_IMAGE`               | `node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584` |
 | `OPENCLAW_VERSION`              | `2026.7.1`                                                                                 |
 | `OPENCLAW_CODEX_PLUGIN_VERSION` | `2026.7.1-1`                                                                               |
+| `OPENCLAW_SLACK_PLUGIN_VERSION` | `2026.7.1`                                                                                 |
 | `OPENAI_CODEX_VERSION`          | `0.147.0`                                                                                  |
 
 Build it from the repository root:
@@ -35,12 +36,35 @@ Kubernetes gateway entrypoint can publish it into the shared runtime-assets
 volume for dedicated Codex Pods. Do not flatten `/app/dist`; OpenClaw resolves
 package-local runtime dependencies from its installed package root.
 
+Codex and Slack are packaged under `/app/dist/extensions/` with their runtime
+dependencies. They must load from a fresh runtime home without downloading or
+installing packages at gateway startup. Slack credentials remain operator-owned
+runtime Secrets; do not put them in the image.
+
+When overriding package versions, choose plugins compatible with the selected
+OpenClaw release and a Codex CLI accepted by the installed Codex plugin's runtime
+guard. A plugin's npm dependency version is not necessarily its exact app-server
+requirement. Run the compatibility check below against the resulting image.
+
 Production Kubernetes installations can use this recipe as a starting point,
 but must push the resulting image to an operator-controlled registry and
 configure the Kubernetes Compute Driver with immutable `@sha256:` image
 references. Follow [Build and publish production images](../../docs/guides/deploy.md#build-and-publish-production-images)
 for the controller and runtime build commands, registry publishing, and digest
 configuration.
+
+## Rebuild an existing image
+
+`scripts/dev-up` reuses the configured image tag and builds the default
+`openclaw-enterprise-runtime:quickstart` image only when that tag is absent.
+After changing this recipe or its package versions, run the build command above
+explicitly, verify the rebuilt image, then run `./scripts/dev-up` again. For a
+custom `OCC_DOCKER_RUNTIME_IMAGE`, build or pull that selected tag yourself.
+
+For Kubernetes, publish the rebuilt image and update both Installation image
+references to its verified immutable digest. Separate gateway and Codex images
+require verification of that exact pair through the
+[Kubernetes runtime tests](../../docs/testing.md#kubernetes-model-turns-and-secrets).
 
 ## Verify the local image
 
@@ -64,12 +88,14 @@ The smoke starts task-owned containers with the Docker Compute Driver gateway
 entrypoint and the Kubernetes Compute Driver gateway entrypoint, UID
 `1000:1000`, a read-only root filesystem, and tmpfs-backed runtime directories.
 Passing means an embedded OpenClaw gateway reaches `/readyz` from a fresh home,
-the bundled Codex plugin can be discovered without missing package
-dependencies, and the Kubernetes dedicated-gateway startup path publishes the
-bundled skills directory into `/home/node/openclaw-runtime-assets`. It does not
-make a model call.
+the bundled Codex and Slack plugins load without missing package dependencies,
+the installed Codex plugin successfully initializes the image's real Codex
+app-server, and the Kubernetes dedicated-gateway startup path publishes the
+bundled skills directory into `/home/node/openclaw-runtime-assets`. These checks
+run without external network access or provider credentials. They do not make a
+model call or establish a Slack connection.
 
-The Codex plugin is copied into `/app/dist/extensions/codex`, where OpenClaw
-discovers it as a bundled plugin when Enterprise starts an Agent with a fresh
-runtime state directory. The copy includes the plugin's installed package
-dependencies.
+Before enabling Slack in an Installation, run the
+[live Slack test](../../docs/testing.md#slack) with the verified image, projected
+credentials, and the required proxy configuration. It must prove a real mention,
+Codex turn, and gateway-authored reply; gateway readiness alone is insufficient.

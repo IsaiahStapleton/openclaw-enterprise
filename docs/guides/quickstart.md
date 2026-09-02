@@ -24,6 +24,10 @@ file. Fresh bootstrap also creates the initial platform
 [Namespace](concepts.md#control-plane-and-tenancy) named `default`; the worker
 provisions its backing infrastructure.
 
+The helper reuses an existing runtime image tag. After changing the runtime
+recipe or package versions, [rebuild and verify the image](../../deploy/runtime/README.md#rebuild-an-existing-image)
+before running the helper again.
+
 Expected output includes:
 
 - the API URL, normally `http://127.0.0.1:3000`

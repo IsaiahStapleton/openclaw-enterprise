@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-09-01
-last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
+last_updated_session: codex/01a05f89-ff1c-7643-a77f-7e1e3aed9e5f
 ---
 
 # Docker Compose Development Flow
@@ -91,6 +91,12 @@ the helper selects `openclaw-enterprise-runtime:quickstart` for this invocation.
 It builds that default image from `deploy/runtime` only when the image is
 missing. Custom image references must already exist; an incomplete custom
 selection fails before startup is reported successful.
+
+Existing tags are reused even after the runtime recipe changes. Operators
+[rebuild and verify the image](../../deploy/runtime/README.md#rebuild-an-existing-image)
+explicitly to pick up package changes. The runtime recipe owns packaged channel
+plugins and gateway/Codex compatibility checks; `dev-up` does not install
+missing plugins or verify a model turn.
 
 ### 2. compose.yaml:services.postgres and services.migrate
 
@@ -327,6 +333,8 @@ PostgreSQL and can be retried by the worker.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 22:09: Document explicit runtime image rebuilding and link packaged-plugin and Codex compatibility checks. (01a05f89-ff1c-7643-a77f-7e1e3aed9e5f - 5fa47a6)
 
 - 2026-09-01 19:09: Merge the development startup trace into the canonical Docker Compose flow and clarify the `dev-up` readiness proof versus later API deployment and TUI attachment. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)

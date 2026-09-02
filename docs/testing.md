@@ -243,8 +243,11 @@ OCC_TEST_RUNTIME_IMAGE=openclaw-enterprise-runtime:test \
   node --test tests/integration/runtime-image-startup.test.mjs
 ```
 
-This starts an embedded gateway with a fresh runtime home and checks readiness
-and Codex plugin discovery. It does not make a model call.
+This checks gateway readiness and bundled Codex/Slack plugin loading from a
+fresh runtime home, then initializes the image's real Codex app-server through
+the installed plugin's version guard. The smoke runs offline without provider
+credentials. It does not make a model call or establish a Slack connection;
+run the [live Slack test](#slack) for channel delivery proof.
 
 Build the controller image using the [production prerequisites](guides/deploy.md#production-prerequisites),
 then set `OCC_TEST_PRODUCTION_IMAGE` to the local tag you built:
@@ -380,7 +383,13 @@ for version assertions and alternate image variables.
 ## Slack
 
 Use the Kubernetes runtime prerequisites and model credential above, plus an
-authorized test channel. Put the three Slack tokens in the private environment
+authorized test channel. The gateway image must already contain the Slack plugin
+and its runtime dependencies. Run the [runtime image smoke](#images-and-helm)
+before provisioning the cluster, and use a Codex app-server version accepted by
+the gateway's installed Codex plugin. Successful `--version` commands alone do
+not prove that the two runtimes are compatible.
+
+Put the three Slack tokens in the private environment
 file. Set `OCC_TEST_SLACK_CHANNEL_ID` and `OCC_TEST_SLACK_PROXY_URL`; the proxy URL
 must have a literal IP and explicit port. Both bots must belong to the same
 workspace and have joined the channel. Use an existing Socket Mode app configured
