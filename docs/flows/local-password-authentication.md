@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-08-31
-last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
+updated: 2026-09-01
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Bootstrap and Local Password Authentication Flow
@@ -42,7 +42,7 @@ graph TD
   end
   F --> G["Complete startup"]
   B --> G
-  Bootstrap -->|Any error| H["Exit unsuccessfully; retain artifacts for manual repair"]
+  Bootstrap -->|Any error| H["Exit unsuccessfully; preserve tracked artifacts for manual repair"]
   subgraph Request["Human controller request"]
     G --> J["Sign in and receive session cookie"]
     J --> K["Resolve current IAM identity and exact authority"]
@@ -91,13 +91,18 @@ issuance, output, and commit. The API subsequently loads committed state without
 signing into itself or calling `POST /installation/bootstrap`; that public
 endpoint remains human-session-only and does not issue bootstrap credentials.
 Singleton database constraints select at most one committed seed. A losing
-initializer fails and retains its created artifacts for operator inspection.
+initializer fails and preserves completed tracked artifacts for operator
+inspection.
 
 Any error ends the single initialization attempt with
 `installation.bootstrap-failed`, available non-secret IDs and paths, and a
-nonzero exit. Created accounts, keys, and files remain; even a partially written
-file is preserved. The initializer neither distinguishes failure types to select
-cleanup nor automatically revokes, deletes, retries, repairs, or resets state.
+nonzero exit. Completed tracked accounts, keys, and files remain available for
+manual inspection; even a partially written output file is preserved. One
+pre-return Better Auth failure is narrower: if password `linkAccount` fails
+inside `createAccount`, the helper attempts to delete the just-created user
+before rethrowing. The initializer does not treat that cleanup attempt as a
+general artifact-recovery path, and it does not automatically revoke, retry,
+repair, or reset committed or uncertain state.
 The Helm initialization Job uses `backoffLimit: 0`.
 
 The operator confirms the original transaction has finished and compares exact
@@ -172,7 +177,7 @@ implicit permissions.
 - [Configuration reference](../reference/settings.md)
 - [IAM](../reference/authorization.md)
 - [Platform startup flow](platform-startup.md)
-- [Development startup](development-startup.md) and [production startup](production-startup.md)
+- [Docker Compose development](docker-compose-development.md) and [production startup](production-startup.md)
 - [Service API keys](service-api-keys.md)
 - [Bootstrap specification](../../specs/16-bootstrap-admin-service-account.md)
 - [Feature spec](../../specs/.archive/10-local-password-authentication.md)
@@ -183,6 +188,7 @@ implicit permissions.
 
 ## Changelog
 
+- 2026-09-01 19:09: Update links to consolidated runtime flows. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
 
 - 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)

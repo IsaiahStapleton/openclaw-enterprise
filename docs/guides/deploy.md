@@ -34,7 +34,7 @@ OCC_URL='http://127.0.0.1:3000' \
 
 Expect HTTP `200` with `data.id` matching `meta.installationId` in the key
 file. This proves controller access, not an Agent deployment or model turn. For
-startup internals, see the [development startup flow](../flows/development-startup.md).
+startup internals, see the [Docker development flow](../flows/docker-compose-development.md).
 
 ### Open the platform console
 

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-01
-last_updated_session: codex/01a05e1d-6dc8-7231-bf58-58c80ef580f3
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Platform console request flow
@@ -59,7 +59,7 @@ graph TD
 Startup projects validated Provider definitions into safe `{id,type}` summaries
 and passes them to `createFastifyApp`. This is a startup snapshot, not a live
 configuration scan. The request path never reads credentials or contacts a
-Provider. The existing [Provider lifecycle](provider-driver-lifecycle.md) owns
+Provider. The existing [Provider-managed credential delivery](service-account-driver-credential-delivery.md) owns
 client construction and Driver activation.
 
 `apps/controller/src/console-assets.ts:readConsoleAsset` maps the two public
@@ -137,8 +137,8 @@ this client never infers it from a network error.
 
 - [Console reference](../reference/console.md)
 - [Authentication](../reference/authentication.md)
-- [Provider and Driver lifecycle](provider-driver-lifecycle.md)
-- [Development startup](development-startup.md)
+- [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
+- [Docker development](docker-compose-development.md)
 - [Production startup](production-startup.md)
 
 ## Manual Notes
@@ -147,4 +147,4 @@ this client never infers it from a network error.
 
 ## Changelog
 
-- 2026-09-01 13:32: Trace static serving, session resolution, exact collection authorization, Namespace isolation, and logout. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - 97911d361ac02ddf561e46c8af0864ad66a6df45)
+- 2026-09-01 19:09: Trace static serving, session resolution, exact collection authorization, Namespace isolation, and logout. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - 97911d361ac02ddf561e46c8af0864ad66a6df45) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)

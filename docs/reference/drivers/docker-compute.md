@@ -43,7 +43,7 @@ administrator, and singleton Installation; existing state is retained. Only
 the initializer mounts the protected initial-key output volume. The
 [authentication reference](../authentication.md#installation-and-account-ownership)
 owns credential creation and recovery; the
-[development startup flow](../../flows/development-startup.md) traces ordering.
+[Docker development flow](../../flows/docker-compose-development.md) traces ordering.
 
 `docker compose down` keeps `occ_postgres_data`, `occ_configuration_data`, and
 the bootstrap-only `occ_bootstrap_data` volume. `docker compose down --volumes`

@@ -142,7 +142,7 @@ the API receives provider TCP/443 egress to the approved `/32`. Disabled default
 keep `occ-chatgpt-admin`, `admin-key`, and an empty CIDR. See the
 [deployment guide](../guides/deploy.md) and [security boundary](security.md).
 
-The [lifecycle flow](../flows/provider-driver-lifecycle.md) names code and proof
+The [lifecycle flow](../flows/service-account-driver-credential-delivery.md) names code and proof
 boundaries. Local API, PostgreSQL, Driver, and packaging tests do not prove live
 provider calls or model execution. The
 [real provider suite](../../tests/integration/service-account-driver-real.test.mjs)
