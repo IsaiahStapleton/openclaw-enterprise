@@ -64,6 +64,10 @@ function digest(value, length = 12) {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
 }
 
+function defaultGatewayHostname(routing) {
+  return `occ-gateway-${digest(`${routing.gatewayNamespace}/${routing.gatewayName}`)}.${routing.envoyNamespace}.svc`;
+}
+
 const gatewayRouting = {
   hostname: "agents.example.internal",
   gatewayName: "oce-agent-gateways",
@@ -498,6 +502,34 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
     },
   ]);
 
+  const omittedHostnameRouting = {
+    gatewayName: gatewayRouting.gatewayName,
+    gatewayNamespace: gatewayRouting.gatewayNamespace,
+    envoyNamespace: gatewayRouting.envoyNamespace,
+  };
+  const emptyHostnameRouting = { ...gatewayRouting, hostname: "" };
+  const alternateNamespaceRouting = {
+    ...omittedHostnameRouting,
+    gatewayNamespace: "openclaw-alt",
+  };
+  const derivedOutputs = [];
+  for (const routing of [omittedHostnameRouting, emptyHostnameRouting, alternateNamespaceRouting]) {
+    const derivedDriver = createKubernetesComputeDriver(routedOptions({ gatewayRouting: routing }));
+    const derivedRevision = routedRevision(derivedDriver);
+    const expectedHostname = defaultGatewayHostname(routing);
+    const endpoint = derivedDriver.getGatewayEndpoint(derivedRevision);
+    const hostnames = derivedDriver.gatewayRoute(derivedRevision, ownership, namespace, service)
+      .spec.hostnames;
+    assert.equal(
+      endpoint,
+      `wss://${expectedHostname}/namespaces/${tenant.id}/agents/${derivedRevision.agentId}`,
+    );
+    assert.deepEqual(hostnames, [expectedHostname]);
+    derivedOutputs.push({ endpoint, hostnames });
+  }
+  assert.notEqual(derivedOutputs[0].endpoint, derivedOutputs[2].endpoint);
+  assert.notDeepEqual(derivedOutputs[0].hostnames, derivedOutputs[2].hostnames);
+
   for (const [configuration, expected] of [
     [
       { gateway: { allowRealIpFallback: true, trustedProxies: ["10.42.0.0/16"] } },
@@ -621,6 +653,18 @@ test("gateway routing startup validation and namespace membership fail closed", 
     },
     {
       hostname: "https://agents.example.internal",
+      gatewayName: "oce-agent-gateways",
+      gatewayNamespace: "openclaw-system",
+      envoyNamespace: "envoy-gateway-system",
+    },
+    {
+      hostname: " ",
+      gatewayName: "oce-agent-gateways",
+      gatewayNamespace: "openclaw-system",
+      envoyNamespace: "envoy-gateway-system",
+    },
+    {
+      hostname: 42,
       gatewayName: "oce-agent-gateways",
       gatewayNamespace: "openclaw-system",
       envoyNamespace: "envoy-gateway-system",

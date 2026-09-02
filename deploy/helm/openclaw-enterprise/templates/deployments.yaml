@@ -37,12 +37,12 @@ spec:
             items:
               - key: occ
                 path: key
-        {{- if $.Values.gatewayRouting.caSecretName }}
+        {{- if or (not $.Values.gatewayRouting.issuerRef.name) $.Values.gatewayRouting.caSecretName }}
         - name: gateway-ca
           secret:
-            secretName: {{ $.Values.gatewayRouting.caSecretName | quote }}
+            secretName: {{ ternary (include "openclaw.gatewayRouting.rootSecretName" $) $.Values.gatewayRouting.caSecretName (not $.Values.gatewayRouting.issuerRef.name) | quote }}
             items:
-              - key: {{ $.Values.gatewayRouting.caSecretKey | quote }}
+              - key: {{ ternary "tls.crt" $.Values.gatewayRouting.caSecretKey (not $.Values.gatewayRouting.issuerRef.name) | quote }}
                 path: ca.crt
         {{- end }}
         {{- end }}
@@ -85,7 +85,7 @@ spec:
             {{- if $.Values.gatewayRouting.enabled }}
             - name: OCC_GATEWAY_API_KEY_PATH
               value: /etc/openclaw/gateway-api-key/key
-            {{- if $.Values.gatewayRouting.caSecretName }}
+            {{- if or (not $.Values.gatewayRouting.issuerRef.name) $.Values.gatewayRouting.caSecretName }}
             - name: NODE_EXTRA_CA_CERTS
               value: /etc/openclaw/gateway-ca/ca.crt
             {{- end }}
@@ -120,7 +120,7 @@ spec:
             - name: gateway-api-key
               mountPath: /etc/openclaw/gateway-api-key
               readOnly: true
-            {{- if $.Values.gatewayRouting.caSecretName }}
+            {{- if or (not $.Values.gatewayRouting.issuerRef.name) $.Values.gatewayRouting.caSecretName }}
             - name: gateway-ca
               mountPath: /etc/openclaw/gateway-ca
               readOnly: true

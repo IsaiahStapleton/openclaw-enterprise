@@ -84,7 +84,7 @@ export interface KubernetesWorkloadPeer {
 }
 
 export interface KubernetesGatewayRoutingOptions {
-  readonly hostname: string;
+  readonly hostname?: string;
   readonly gatewayName: string;
   readonly gatewayNamespace: string;
   readonly envoyNamespace: string;
@@ -530,7 +530,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       },
       gatewayRouting: {
         type: "object",
-        required: ["hostname", "gatewayName", "gatewayNamespace", "envoyNamespace"],
+        required: ["gatewayName", "gatewayNamespace", "envoyNamespace"],
         additionalProperties: false,
         properties: {
           hostname: { type: "string" },
@@ -692,10 +692,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (asRecord(routing) === undefined) {
         throw new ConfigurationFailure("Gateway routing must be explicitly configured.");
       }
-      validateDnsHostname(
-        required(routing.hostname, "Gateway routing hostname"),
-        "Gateway routing hostname",
-      );
+      if (routing.hostname !== undefined) {
+        if (typeof routing.hostname !== "string") {
+          throw new ConfigurationFailure(
+            "Gateway routing hostname must be a DNS hostname without a port or path.",
+          );
+        }
+        if (routing.hostname.length > 0) {
+          validateDnsHostname(routing.hostname, "Gateway routing hostname");
+        }
+      }
       validateKubernetesResourceName(
         required(routing.gatewayName, "Gateway routing Gateway name"),
         "Gateway routing Gateway name",
@@ -754,7 +760,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   getGatewayEndpoint(revision: AgentRevision): string | undefined {
     const routing = this.options.gatewayRouting;
     if (routing === undefined) return undefined;
-    return `wss://${routing.hostname}${this.gatewayRoutePath(revision)}`;
+    return `wss://${this.gatewayRoutingHostname(routing)}${this.gatewayRoutePath(revision)}`;
   }
 
   async storeServiceAccountCredential(input: {
@@ -2485,6 +2491,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
     )}`;
   }
 
+  private gatewayRoutingHostname(routing: KubernetesGatewayRoutingOptions): string {
+    if (routing.hostname !== undefined && routing.hostname.length > 0) return routing.hostname;
+    return `occ-gateway-${sha256Hex(
+      `${routing.gatewayNamespace}/${routing.gatewayName}`,
+      12,
+    )}.${routing.envoyNamespace}.svc`;
+  }
+
   private verifyGatewayRoutingConfiguration(revision: AgentRevision): void {
     if (this.options.gatewayRouting === undefined) return;
     const gateway = asRecord(revision.configuration.gateway);
@@ -2569,7 +2583,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
             }),
       },
       spec: {
-        hostnames: [routing.hostname],
+        hostnames: [this.gatewayRoutingHostname(routing)],
         parentRefs: [
           {
             group: "gateway.networking.k8s.io",

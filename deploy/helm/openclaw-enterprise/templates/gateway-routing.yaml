@@ -1,8 +1,58 @@
 {{- if .Values.gatewayRouting.enabled }}
 {{- $routing := .Values.gatewayRouting }}
 {{- $gatewayName := include "openclaw.gatewayRouting.gatewayName" . }}
+{{- $serviceName := include "openclaw.gatewayRouting.serviceName" . }}
+{{- $hostname := default (printf "%s.%s.svc" $serviceName $routing.envoyNamespace) $routing.hostname }}
 {{- $tlsSecretName := include "openclaw.gatewayRouting.tlsSecretName" . }}
 {{- $routeNamespaceLabel := include "openclaw.gatewayRouting.routeNamespaceLabel" . }}
+{{- $rootSecretName := include "openclaw.gatewayRouting.rootSecretName" . }}
+{{- $bootstrapIssuerName := printf "%s-bootstrap" $serviceName }}
+{{- $caIssuerName := printf "%s-ca" $serviceName }}
+{{- if not $routing.issuerRef.name }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $bootstrapIssuerName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openclaw.labels" (dict "root" . "component" "gateway-routing") | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $rootSecretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openclaw.labels" (dict "root" . "component" "gateway-routing") | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ $rootSecretName | quote }}
+  secretName: {{ $rootSecretName }}
+  duration: 87600h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  issuerRef:
+    name: {{ $bootstrapIssuerName }}
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $caIssuerName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openclaw.labels" (dict "root" . "component" "gateway-routing") | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ $rootSecretName }}
+{{- end }}
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: EnvoyProxy
@@ -16,6 +66,7 @@ spec:
     type: Kubernetes
     kubernetes:
       envoyService:
+        name: {{ $serviceName }}
         type: ClusterIP
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -34,7 +85,7 @@ spec:
       name: {{ $gatewayName }}
   listeners:
     - name: https
-      hostname: {{ $routing.hostname | quote }}
+      hostname: {{ $hostname | quote }}
       port: 443
       protocol: HTTPS
       tls:
@@ -62,12 +113,20 @@ metadata:
     {{- include "openclaw.labels" (dict "root" . "component" "gateway-routing") | nindent 4 }}
 spec:
   secretName: {{ $tlsSecretName }}
+  duration: 2160h
+  renewBefore: 720h
   dnsNames:
-    - {{ $routing.hostname | quote }}
+    - {{ $hostname | quote }}
   issuerRef:
+    {{- if $routing.issuerRef.name }}
     name: {{ $routing.issuerRef.name | quote }}
     kind: {{ $routing.issuerRef.kind | quote }}
     group: {{ $routing.issuerRef.group | quote }}
+    {{- else }}
+    name: {{ $caIssuerName | quote }}
+    kind: Issuer
+    group: cert-manager.io
+    {{- end }}
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy

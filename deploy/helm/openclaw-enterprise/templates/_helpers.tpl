@@ -48,18 +48,37 @@
 {{- end -}}
 {{- if .Values.gatewayRouting.enabled -}}
 {{- $routing := .Values.gatewayRouting -}}
-{{- if not $routing.hostname -}}{{- fail "gatewayRouting.hostname must identify the private Envoy Gateway hostname" -}}{{- end -}}
+{{- $tlsSecretName := include "openclaw.gatewayRouting.tlsSecretName" . -}}
+{{- $rootSecretName := include "openclaw.gatewayRouting.rootSecretName" . -}}
+{{- if and (hasKey $routing "hostname") (not (kindIs "string" $routing.hostname)) -}}{{- fail "gatewayRouting.hostname must be a string when supplied" -}}{{- end -}}
 {{- if not $routing.gatewayClassName -}}{{- fail "gatewayRouting.gatewayClassName must reference an operator-created GatewayClass" -}}{{- end -}}
 {{- if not $routing.envoyNamespace -}}{{- fail "gatewayRouting.envoyNamespace must identify the existing Envoy Gateway controller namespace" -}}{{- end -}}
-{{- if or (not $routing.issuerRef) (not $routing.issuerRef.name) (not $routing.issuerRef.kind) (not $routing.issuerRef.group) -}}
-{{- fail "gatewayRouting.issuerRef must reference an existing cert-manager issuer" -}}
+{{- if not $routing.issuerRef -}}{{- fail "gatewayRouting.issuerRef must be configured" -}}{{- end -}}
+{{- if and (hasKey $routing.issuerRef "name") (not (kindIs "string" $routing.issuerRef.name)) -}}{{- fail "gatewayRouting.issuerRef.name must be a string when supplied" -}}{{- end -}}
+{{- if $routing.issuerRef.name -}}
+{{- if or (not $routing.issuerRef.kind) (not $routing.issuerRef.group) -}}{{- fail "gatewayRouting.issuerRef kind and group must be set with an external issuer" -}}{{- end -}}
+{{- else -}}
+{{- if or $routing.caSecretName $routing.caSecretKey -}}{{- fail "gatewayRouting.caSecretName and gatewayRouting.caSecretKey require an external issuerRef.name" -}}{{- end -}}
 {{- end -}}
 {{- if not $routing.apiKeySecretName -}}{{- fail "gatewayRouting.apiKeySecretName must reference an operator-created Opaque Secret with key 'occ'" -}}{{- end -}}
 {{- if or (eq $routing.apiKeySecretName .Values.installation.secretName) (eq $routing.apiKeySecretName .Values.database.secretName) (eq $routing.apiKeySecretName .Values.auth.secretName) -}}
 {{- fail "gatewayRouting.apiKeySecretName must use a dedicated Secret" -}}
 {{- end -}}
+{{- if eq $routing.apiKeySecretName $tlsSecretName -}}{{- fail "gatewayRouting.apiKeySecretName must differ from the Gateway TLS Secret" -}}{{- end -}}
+{{- if or (eq $tlsSecretName .Values.installation.secretName) (eq $tlsSecretName .Values.database.secretName) (eq $tlsSecretName .Values.auth.secretName) -}}
+{{- fail "gatewayRouting.tlsSecretName must differ from installation, database, and auth Secrets" -}}
+{{- end -}}
+{{- if and .Values.provider.chatgpt.enabled (eq $tlsSecretName .Values.provider.chatgpt.secretName) -}}{{- fail "gatewayRouting.tlsSecretName must differ from the ChatGPT provider Secret" -}}{{- end -}}
+{{- if or (eq $rootSecretName $tlsSecretName) (eq $rootSecretName $routing.apiKeySecretName) (eq $rootSecretName .Values.installation.secretName) (eq $rootSecretName .Values.database.secretName) (eq $rootSecretName .Values.auth.secretName) -}}
+{{- fail "generated gatewayRouting root CA Secret must differ from leaf TLS, API key, installation, database, and auth Secrets" -}}
+{{- end -}}
+{{- if and .Values.provider.chatgpt.enabled (eq $rootSecretName .Values.provider.chatgpt.secretName) -}}{{- fail "generated gatewayRouting root CA Secret must differ from the ChatGPT provider Secret" -}}{{- end -}}
 {{- if or $routing.caSecretName $routing.caSecretKey -}}
 {{- if or (not $routing.caSecretName) (not $routing.caSecretKey) -}}{{- fail "gatewayRouting.caSecretName and gatewayRouting.caSecretKey must be set together" -}}{{- end -}}
+{{- if or (eq $routing.caSecretName $tlsSecretName) (eq $routing.caSecretName $routing.apiKeySecretName) (eq $routing.caSecretName .Values.installation.secretName) (eq $routing.caSecretName .Values.database.secretName) (eq $routing.caSecretName .Values.auth.secretName) -}}
+{{- fail "gatewayRouting.caSecretName must differ from leaf TLS, API key, installation, database, and auth Secrets" -}}
+{{- end -}}
+{{- if and .Values.provider.chatgpt.enabled (eq $routing.caSecretName .Values.provider.chatgpt.secretName) -}}{{- fail "gatewayRouting.caSecretName must differ from the ChatGPT provider Secret" -}}{{- end -}}
 {{- end -}}
 {{- if or (lt (int $routing.tenantGatewayPort) 1) (gt (int $routing.tenantGatewayPort) 65535) -}}
 {{- fail "gatewayRouting.tenantGatewayPort must be a valid TCP port" -}}
@@ -113,6 +132,17 @@ capabilities:
 {{- define "openclaw.gatewayRouting.routeNamespaceLabel" -}}
 {{- printf "%s/%s" .Release.Namespace (include "openclaw.gatewayRouting.gatewayName" .) | sha256sum | trunc 12 -}}
 {{- end -}}
+
+{{- define "openclaw.gatewayRouting.serviceName" -}}
+{{- printf "occ-gateway-%s" (include "openclaw.gatewayRouting.routeNamespaceLabel" .) -}}
+{{- end -}}
+
+
+{{- define "openclaw.gatewayRouting.rootSecretName" -}}
+{{- printf "%s-root" (include "openclaw.gatewayRouting.serviceName" .) -}}
+{{- end -}}
+
+
 
 {{- define "openclaw.gatewayRouting.envoyNetworkPolicyName" -}}
 {{- printf "%s-%s-envoy-dataplane" (.Release.Name | trunc 34 | trimSuffix "-") (include "openclaw.gatewayRouting.routeNamespaceLabel" .) -}}

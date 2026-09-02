@@ -152,15 +152,23 @@ Optional Installation Compute settings enable one stable route per Agent:
 
 ```yaml
 gatewayRouting:
-  hostname: agent-gateways.example.internal
   gatewayName: oce-agent-gateways
   gatewayNamespace: openclaw-system
   envoyNamespace: envoy-gateway-system
 ```
 
-The Gateway name, namespace, and hostname must match the Helm-managed Gateway;
+The Gateway name and namespace must match the Helm-managed Gateway;
 `envoyNamespace` identifies its Envoy data-plane Pods. The chart always creates
-the Gateway in its release namespace.
+the Gateway in its release namespace. These three settings are required when
+routing is enabled; `hostname` is optional.
+
+When `hostname` is omitted or empty, Compute and Helm derive the same Service
+name: `occ-gateway-` followed by the first 12 hexadecimal characters of the
+SHA-256 of `<gatewayNamespace>/<gatewayName>`. The hostname is
+`<serviceName>.<envoyNamespace>.svc`. It uses standard Linux Pod DNS search and
+does not assume a `cluster.local` suffix. Set the same explicit `hostname` in
+Compute and Helm for custom DNS or clients outside that cluster DNS context.
+The default needs no existing Agent or Kubernetes lookup.
 The operator installs Envoy Gateway and cert-manager and configures the
 [private gateway infrastructure](../../guides/deploy.md#agent-workspace-files).
 Do not put an Agent endpoint, service key, certificate, or file contents into

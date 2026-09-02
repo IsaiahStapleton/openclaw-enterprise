@@ -145,9 +145,13 @@ requests or claiming work. Installed Drivers validate their own reviewed
 configuration and implementation-specific prerequisites.
 
 Agent workspace-file requests use the selected Compute Driver's private gateway
-endpoint. Kubernetes derives the URL from `gatewayRouting.hostname` and the
-admitted Namespace and Agent IDs. `gatewayName` and `gatewayNamespace` identify
-the route's parent Gateway; `envoyNamespace` selects its data-plane namespace.
+endpoint. Kubernetes derives the URL from the optional `gatewayRouting.hostname`
+and the admitted Namespace and Agent IDs. If the hostname is omitted or empty,
+Compute derives the chart's Service DNS hostname from the required `gatewayName`,
+`gatewayNamespace`, and `envoyNamespace`; see the
+[hostname contract](drivers/kubernetes-compute.md#private-agent-gateway-routes).
+`gatewayName` and `gatewayNamespace` identify the route's parent Gateway;
+`envoyNamespace` selects its data-plane namespace.
 Compute derives the allowed Envoy peer from those routing settings and rejects
 explicit `network.gatewayClients` in routed mode. It does not read a per-Agent
 endpoint file or persist a URL in Agent Configuration.
@@ -158,6 +162,13 @@ becomes unavailable during rotation makes new requests unavailable. Never reuse
 the Better Auth signing secret or a model-provider credential. The worker needs
 route configuration and namespace-bound HTTPRoute permissions, but no service
 key or CA bundle for native file access.
+
+With Helm routing enabled and no `gatewayRouting.issuerRef.name`, cert-manager
+bootstraps a private CA and issues Envoy's certificate. The chart projects only
+the generated root Secret's public `tls.crt` into the API and sets
+`NODE_EXTRA_CA_CERTS`; the CA signing key is never mounted into OCC. An explicit
+issuer selects operator-managed issuance instead. Its optional `caSecretName`
+and `caSecretKey` must be supplied together when additional CA trust is needed.
 
 See [private Agent gateway routes](drivers/kubernetes-compute.md#private-agent-gateway-routes)
 for the Compute contract, and the

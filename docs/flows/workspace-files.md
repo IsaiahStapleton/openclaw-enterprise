@@ -24,9 +24,12 @@ audit evidence. File contents remain in the native workspace.
   connects using the published native gateway client.
 
 The Kubernetes worker must have provisioned the Agent's private HTTPRoute and
-native gateway. Installation operators configure the shared Envoy Gateway,
-certificate issuer, native trust, and network restrictions described in
+native gateway. Installation operators enable the shared Envoy Gateway,
+native trust, and network restrictions described in
 [deployment](../guides/deploy.md#agent-workspace-files).
+By default, the chart requests a private CA and listener certificate from
+cert-manager and uses a derived Service DNS hostname. Operators can provide
+an existing issuer and explicit hostname instead.
 
 ## Flow
 
@@ -60,6 +63,11 @@ PostgreSQL development composition bind the selected Compute Driver to
 without reading this credential. Node loads any `NODE_EXTRA_CA_CERTS` trust
 bundle at startup.
 
+For the chart's automatic CA, the API Pod waits for cert-manager's generated
+root Secret and receives only its public certificate. It does not receive the
+CA signing key. An explicit external issuer uses the configured public CA
+bundle, or Node's existing trust store when no bundle is configured.
+
 There is no per-Agent map. Kubernetes endpoint derivation uses the admitted
 Namespace and Agent IDs plus trusted Installation routing settings. A Driver
 without the optional endpoint capability cannot serve this file feature.
@@ -82,7 +90,9 @@ admission and native access.
 `apps/controller/src/composition/workspace-files.ts:createWorkspaceFilesAccess`
 uses `ComputeDriver.getGatewayEndpoint(revision)`. Kubernetes returns
 `wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>` without reading
-Kubernetes resources. Preparation and activation create or repair the route;
+Kubernetes resources. The optional hostname defaults to the same Service DNS
+name used by Helm, derived from the shared Gateway's name and namespaces.
+Preparation and activation create or repair the route;
 resolution itself does not prove that the gateway is serving.
 
 The API reads the mounted key for each operation, so new connections pick up
