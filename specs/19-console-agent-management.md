@@ -1,8 +1,10 @@
 # Feature Spec: Agent creation, channels, and revision inspection
 
 **Date:** 2026-09-01
-**Status:** In Progress
+**Status:** Completed scoped UI; Agent deletion remains deferred
 **Owner:** Platform console
+
+Current behavior is maintained in the [console reference](../docs/reference/console.md).
 
 ## Problem and Decision
 
@@ -128,3 +130,11 @@ editor remain inspectable; the editor must not flatten or discard them.
   state and unchanged revisions after in-app browser actions.
 - 2026-09-01 18:07: Specify association selectors and editable starter JSON with
   Configuration-first creation and explicit Agent retry. (01a05f89-ff1c-7643-a77f-7e1e3aed9e5f - 1dd4b6b)
+
+- 2026-09-02 07:42: Completed the scoped creation, channel editing, and revision UI.
+  Verified 18 API tests, all three startup tests against the rebuilt runtime image,
+  and a console-saved Slack draft through real PostgreSQL, Kubernetes deployment,
+  a dedicated Codex turn, a gateway-authored reply, and persisted user/assistant
+  transcript messages. Agent deletion remains the open decision above. Retained
+  this numbered path under the repository specification policy.
+  (01a05f89-ff1c-7643-a77f-7e1e3aed9e5f - 9e3932e)
