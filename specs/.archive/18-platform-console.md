@@ -1,19 +1,19 @@
 # Feature Spec: Platform console bootstrap
 
 **Date:** 2026-09-01
-**Status:** Implemented — read-only resource UI
+**Status:** Completed — read-only resource UI; [PR #12](https://github.com/openclaw/openclaw-enterprise/pull/12)
 **Owner:** OCC console / controller
-**Current reference:** [Platform console](../docs/reference/console.md)
+**Current reference:** [Platform console](../../docs/reference/console.md)
 
 ## Problem and Decision
 
-Add a small controller-hosted browser console for login, Namespace selection, and existing-resource lists, following the [platform design](../docs/design.md). Use static HTML/CSS and a small browser module; independent frontend tooling is unnecessary for this phase.
+Add a small controller-hosted browser console for login, Namespace selection, and existing-resource lists, following the [platform design](../../docs/design.md). Use static HTML/CSS and a small browser module; independent frontend tooling is unnecessary for this phase.
 
-Source baseline: fetched `origin/main` **`b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d`**. The [workspace](../pnpm-workspace.yaml) and [authentication reference](../docs/reference/authentication.md#session-lifecycle) contain an existing backend but no active console. Provider discovery is proposed below, not baseline behavior. Implementation base: `origin/main` `a222ae3182a3dfd7dd8cd56c34f20b0e9b5ed09e`, integrated in `97911d3`; the Provider abstraction is present there. Provider discovery and the console remain the work defined here.
+Source baseline: fetched `origin/main` **`b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d`**. The [workspace](../../pnpm-workspace.yaml) and [authentication reference](../../docs/reference/authentication.md#session-lifecycle) contain an existing backend but no active console. Provider discovery is proposed below, not baseline behavior. Implementation base: `origin/main` `a222ae3182a3dfd7dd8cd56c34f20b0e9b5ed09e`, integrated in `97911d3`; the Provider abstraction is present there. Provider discovery and the console remain the work defined here.
 
-![UI wireframe reference](assets/18-platform-console-wireframe-reference.png)
+![UI wireframe reference](../assets/18-platform-console-wireframe-reference.png)
 
-[Earlier wireframe](assets/18-platform-console-wireframe.png). These images guide the layout; their create/detail annotations remain deferred under this spec's scope.
+[Earlier wireframe](../assets/18-platform-console-wireframe.png). These images guide the layout; their create/detail annotations remain deferred under this spec's scope.
 
 ## Scope
 
@@ -23,7 +23,7 @@ Include login, the wireframe shell, accessible menus, Agents/Providers/Namespace
 
 ### Authentication
 
-Follow the existing [authentication contract](../docs/reference/authentication.md) and [implementation](../apps/controller/src/auth/index.ts). The form has **Username** (email input; “Use your account email”), masked **Password**, and **Login**. Use username/current-password autocomplete, current input validation, unchanged passwords, Enter submission, and duplicate-submit protection.
+Follow the existing [authentication contract](../../docs/reference/authentication.md) and [implementation](../../apps/controller/src/auth/index.ts). The form has **Username** (email input; “Use your account email”), masked **Password**, and **Login**. Use username/current-password autocomplete, current input validation, unchanged passwords, Enter submission, and duplicate-submit protection.
 
 Send exactly `{email,password}` to `POST /api/auth/sign-in/email`; use same-origin session cookies. Credentials/tokens never enter storage, URLs, or Authorization headers. Keep email after failure; clear passwords after success or departure. Invalid credentials get generic feedback; `429` asks users to try later; dependency/network failures offer Retry.
 
@@ -51,22 +51,22 @@ Switching preserves the feature: Agents refetch; Providers/Namespaces remain vis
 | Agents | `GET /namespaces/:namespaceId/agents`; Namespace `read`, then exact Agent `read` filtering | ID, name |
 | Providers | Proposed `GET /providers`; singleton Installation `administer` through existing IAM | ID, type |
 
-Existing [routes/schemas](../packages/contracts/src/api/routes.ts) and [list implementation](../packages/occ/src/index.ts) own Agent/Namespace behavior. Collections return `{data:[...],meta:{requestId}}`; no query parameters or pagination. Sort returned rows by name/ID. URL Namespace selection is UI state, never a global API selector. Server IAM remains authoritative; do not fetch broader data for client filtering.
+Existing [routes/schemas](../../packages/contracts/src/api/routes.ts) and [list implementation](../../packages/occ/src/index.ts) own Agent/Namespace behavior. Collections return `{data:[...],meta:{requestId}}`; no query parameters or pagination. Sort returned rows by name/ID. URL Namespace selection is UI state, never a global API selector. Server IAM remains authoritative; do not fetch broader data for client filtering.
 
 Use one shared state model: loading retains heading/scope without old rows; authorized empty results explain no accessible/configured resources and offer Refresh; read failures show Retry and request ID when available. Network/`500`/`503` failures are unavailable, never empty. `403` clears affected data and shows access denied within the shell; `404` clears it and offers return/refresh. Malformed context/`400` offers valid selection. Protected `401` clears private state and opens login with “Your session has expired.”
 
 ### Provider dependency
 
-Provider configuration and creation will be API-managed in the subsequent creation spec. This phase reads validated, loaded operator configuration after verifying the accepted, landed [Provider abstraction at `a635483`](https://github.com/openclaw/openclaw-enterprise/blob/a635483aa62d41df7b45040b89d9edf4a3cee725/specs/17-provider-driver-abstraction.md). The abstraction is present at the implementation base above; its source and [current reference](../docs/reference/providers.md) govern integration. Dirty checkout proposals are not shipped evidence. Do not synthesize Providers from legacy `integrations.chatgpt` or Agents.
+Provider configuration and creation will be API-managed in the subsequent creation spec. This phase reads validated, loaded operator configuration after verifying the accepted, landed [Provider abstraction at `a635483`](https://github.com/openclaw/openclaw-enterprise/blob/a635483aa62d41df7b45040b89d9edf4a3cee725/specs/17-provider-driver-abstraction.md). The abstraction is present at the implementation base above; its source and [current reference](../../docs/reference/providers.md) govern integration. Dirty checkout proposals are not shipped evidence. Do not synthesize Providers from legacy `integrations.chatgpt` or Agents.
 
 Proposed `GET /providers` returns `{data:[{id,type}],meta:{requestId}}` using ordinary API success/error envelopes and Installation authorization before disclosure. Controller composition explicitly passes safe summaries of loaded Provider definitions. No secrets, credentials, paths, clients, full configuration, upstream calls, reloads, or new storage. “Configured” makes no health/activation claim. Authorized `[]` is valid; absent wiring or unavailable configuration/IAM is an error. Real Provider discovery is required for completion, though other views can proceed independently.
 
 ## Implementation
 
 1. Add static HTML/CSS and a browser `.mjs` under `apps/controller/src/console`; keep the existing workspace/TypeScript projects. Connect authentication, menus, routes, and collection reads.
-2. After verifying the Provider dependency, add discovery to [controller routing](../apps/controller/src/index.ts) and shared contracts. Reuse IAM, errors, and request metadata.
-3. Serve only public console assets under `/console/` on the controller origin; never expose arbitrary controller sources. Package assets in the existing [Dockerfile](../Dockerfile). Preserve API JSON/404/405 behavior, MIME correctness, trusted-origin/cookie admission, and loopback/ClusterIP boundaries; refresh fallback applies only to console routes.
-4. At implementation, add one console reference and link it from the [docs index](../docs/README.md), [quickstart](../docs/guides/quickstart.md), and [deployment guide](../docs/guides/deploy.md). Update authentication's “no login UI” claim and [architecture's](../docs/ARCHITECTURE.md) deferred-console claim; regenerate API documentation for Provider GET.
+2. After verifying the Provider dependency, add discovery to [controller routing](../../apps/controller/src/index.ts) and shared contracts. Reuse IAM, errors, and request metadata.
+3. Serve only public console assets under `/console/` on the controller origin; never expose arbitrary controller sources. Package assets in the existing [Dockerfile](../../Dockerfile). Preserve API JSON/404/405 behavior, MIME correctness, trusted-origin/cookie admission, and loopback/ClusterIP boundaries; refresh fallback applies only to console routes.
+4. At implementation, add one console reference and link it from the [docs index](../../docs/README.md), [quickstart](../../docs/guides/quickstart.md), and [deployment guide](../../docs/guides/deploy.md). Update authentication's “no login UI” claim and [architecture's](../../docs/ARCHITECTURE.md) deferred-console claim; regenerate API documentation for Provider GET.
 
 ## Verification
 
@@ -76,7 +76,7 @@ Acceptance outcomes:
 - **API/IAM:** real supported resource setup proves list filtering and Namespace read requirements. Test Provider Installation-admin versus Namespace-only access, exact safe projection, authorized empty versus unavailable, canonical envelopes, and no writes/upstream calls. Verify trusted-origin rejection, secure production cookies, and no credentials in browser storage/URLs.
 - **Static/build:** build/typecheck/workspace checks, packaged browser refresh, correct HTML/asset MIME, asset-only exposure, API JSON 404/405, and existing API/security suites.
 
-Implementation verification (2026-09-01): 42 API/security tests, build/typecheck, workspace, formatting, generated API checks, and packaged-image checks passed. Computer use in Chrome exercised the browser acceptance outcomes against real controller/auth/IAM routes with in-memory persistence and transport-only fault injection. The automated Playwright suite remains available but was not run; browser verification followed the requested computer-use method. No production deployment or live Provider/runtime verification is claimed.
+Implementation verification (2026-09-01): 43 API/security tests and four packaged-image checks passed after integrating the latest main branch, including default-Namespace coverage. Build/typecheck, workspace, formatting, and generated API checks also passed. GitHub reported no active CI test jobs; its only reported check was skipped. Computer use in Chrome exercised the browser acceptance outcomes against real controller/auth/IAM routes with in-memory persistence and transport-only fault injection. The automated Playwright suite remains available but was not run; browser verification followed the requested computer-use method. No production deployment or live Provider/runtime verification is claimed.
 
 ## Manual Notes
 
@@ -91,3 +91,4 @@ Implementation verification (2026-09-01): 42 API/security tests, build/typecheck
 - 2026-09-01 13:13: Added the supplied UI wireframe as an embedded reference, retained the earlier image, and kept creation/detail annotations outside the bootstrap scope. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
 - 2026-09-01 13:18: Started implementation on dev/kevinlin/platform-console after integrating the landed Provider abstraction at a222ae3; retained the approved read-only console scope. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - 97911d361ac02ddf561e46c8af0864ad66a6df45)
 - 2026-09-01 15:04: Completed the read-only console, safe Provider discovery, source/docs review fixes, and local API/image/computer-use verification. Corrected the browser fixture to expire Date-valued auth sessions; creation and detail screens remain deferred. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - 97911d361ac02ddf561e46c8af0864ad66a6df45)
+- 2026-09-01 17:15: Marked the read-only console complete for PR #12 and archived this implementation record; preserved Manual Notes and wireframe assets, and recorded the final local verification and CI limits. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - f7136f901f32a7080b8213164b3d32037b3f0148)
