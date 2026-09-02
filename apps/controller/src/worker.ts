@@ -86,6 +86,25 @@ function positiveInteger(value: number, name: string): number {
   return value;
 }
 
+function workOperation(claim: ClaimedWork): string {
+  if (claim.revisionId !== undefined) return "agent_revision.reconcile";
+  if (claim.namespaceTarget === "deleted") return "namespace.delete";
+  if (claim.namespaceTarget === "ready") return "namespace.ensure";
+  return "work.reconcile";
+}
+
+function workLogFields(claim: ClaimedWork): {
+  readonly workId: string;
+  readonly attempt: number;
+  readonly operation: string;
+} {
+  return {
+    workId: claim.idempotencyKey,
+    attempt: claim.attemptCount,
+    operation: workOperation(claim),
+  };
+}
+
 function validDriver(driver: ComputeDriver): boolean {
   return (
     typeof driver.id === "string" &&
@@ -1000,9 +1019,11 @@ export class ControllerWorker {
     }
     this.emit({
       event: "worker.completed",
+      ...workLogFields(claim),
       namespaceId: claim.namespaceId,
       agentId: claim.agentId,
       revisionId: claim.revisionId,
+      result: resolved.outcome,
       outcome: resolved.outcome,
       code: resolved.code,
     });
@@ -1036,9 +1057,11 @@ export class ControllerWorker {
     if (!completed) return;
     this.emit({
       event: "worker.completed",
+      ...workLogFields(claim),
       namespaceId: claim.namespaceId,
       agentId: claim.agentId,
       revisionId: claim.revisionId,
+      result: result.outcome,
       outcome: result.outcome,
       code: result.code,
     });
@@ -1074,9 +1097,11 @@ export class ControllerWorker {
     }, this.queueOptions);
     this.emit({
       event: "worker.completed",
+      ...workLogFields(claim),
       namespaceId: claim.namespaceId,
       agentId: claim.agentId,
       revisionId: claim.revisionId,
+      result: "pending",
       outcome: "pending",
       code,
     });
@@ -1233,7 +1258,9 @@ export class ControllerWorker {
     }, this.queueOptions);
     this.emit({
       event: "worker.completed",
+      ...workLogFields(claim),
       namespaceId: claim.namespaceId,
+      result: resolved.outcome,
       outcome: resolved.outcome,
       code: resolved.code,
     });

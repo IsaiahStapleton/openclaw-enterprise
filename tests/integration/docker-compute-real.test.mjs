@@ -10,6 +10,11 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+import {
+  assertDockerRuntimeOtelSettings,
+  createOtelLogObservation,
+  OTEL_RESOURCE,
+} from "../helpers/logging-otel-observation.mjs";
 
 const executeFile = promisify(execFile);
 const tuiPty = fileURLToPath(new URL("../helpers/tui-pty.py", import.meta.url));
@@ -17,6 +22,7 @@ const python = process.env.PYTHON ?? "python3";
 
 const selected =
   process.env.OCC_TEST_DOCKER_COMPUTE_REAL === "1" ||
+  process.env.OCC_TEST_OTEL_LOGS === "1" ||
   [
     process.env.OCC_DOCKER_RUNTIME_IMAGE,
     process.env.OCC_DOCKER_GATEWAY_IMAGE,
@@ -30,6 +36,7 @@ const requiresDockerCompute = {
 
 const DEFAULT_RUNTIME_IMAGE = "oce-harness-real:pr26-compatible-runtime";
 const COMPOSE_FILE = "compose.yaml";
+const LOGGING_COMPOSE_FILE = "compose.logging.yaml";
 const INTERNAL_API_PORT = "3000";
 const BOOTSTRAP_SERVICE_KEY_PATH = "/var/lib/openclaw/bootstrap/initial-admin-service-key.json";
 const OCC_API_SCRIPT = "scripts/occ-api";
@@ -141,8 +148,16 @@ async function waitFor(description, operation, timeoutMs = 180_000) {
   );
 }
 
-function composeArguments(project, commandName, args = []) {
-  return ["compose", "--project-name", project, "--file", COMPOSE_FILE, commandName, ...args];
+function composeArguments(project, commandName, args = [], { withLogging = false } = {}) {
+  const files = [COMPOSE_FILE, ...(withLogging ? [LOGGING_COMPOSE_FILE] : [])];
+  return [
+    "compose",
+    "--project-name",
+    project,
+    ...files.flatMap((file) => ["--file", file]),
+    commandName,
+    ...args,
+  ];
 }
 
 function labelFilters(labels) {
@@ -176,18 +191,24 @@ async function composeProjectGatewayTokens(project) {
     .filter(Boolean);
 }
 
-async function composeFailureLogs(project, env, secrets) {
+async function composeFailureLogs(project, env, secrets, options = {}) {
   const discoveredSecrets = [...secrets, ...(await composeProjectGatewayTokens(project))];
   try {
     const { stdout, stderr } = await docker(
-      composeArguments(project, "logs", [
-        "--no-color",
-        "--tail",
-        "80",
-        "controller",
-        "worker",
-        "migrate",
-      ]),
+      composeArguments(
+        project,
+        "logs",
+        [
+          "--no-color",
+          "--tail",
+          "80",
+          ...(options.withLogging ? ["collector"] : []),
+          "controller",
+          "worker",
+          "migrate",
+        ],
+        options,
+      ),
       { env, timeoutMs: 60_000, secrets: discoveredSecrets },
     );
     return sanitize(`${stdout}${stderr}`, discoveredSecrets);
@@ -201,8 +222,8 @@ async function composeFailureLogs(project, env, secrets) {
   }
 }
 
-async function cleanupProject(project, env, namespaceIds = []) {
-  await docker(composeArguments(project, "down", ["--volumes", "--remove-orphans"]), {
+async function cleanupProject(project, env, namespaceIds = [], options = {}) {
+  await docker(composeArguments(project, "down", ["--volumes", "--remove-orphans"], options), {
     env,
     timeoutMs: 120_000,
   }).catch(() => {});
@@ -735,6 +756,48 @@ async function assertInteractiveTuiConversation({ context, gateway, gatewayToken
   await assertGatewayReady(gateway, "Ctrl+D after the TUI conversation");
 }
 
+async function assertCollectorOutageDoesNotBlockDockerOperations({
+  project,
+  env,
+  composeOptions,
+  request,
+  cleanupNamespace,
+  secrets,
+}) {
+  let restartError;
+  await docker(
+    composeArguments(project, "stop", ["--timeout", "10", "collector"], composeOptions),
+    {
+      env,
+      timeoutMs: 60_000,
+      secrets,
+    },
+  );
+  try {
+    const installation = await request("GET", "/installation", undefined, { timeoutMs: 5_000 });
+    assert.equal(installation.status, 200, JSON.stringify(installation.error));
+    const deleted = await request("DELETE", `/namespaces/${cleanupNamespace.id}`, undefined, {
+      timeoutMs: 10_000,
+    });
+    assert.equal(deleted.status, 202, JSON.stringify(deleted.error));
+    await waitFor(`cleanup Namespace ${cleanupNamespace.id} network removal`, async () => {
+      return (await inspectNetworks(cleanupNamespace.id)).length === 0 ? true : undefined;
+    });
+  } finally {
+    await docker(
+      composeArguments(project, "up", ["--detach", "--no-deps", "collector"], composeOptions),
+      {
+        env,
+        timeoutMs: 60_000,
+        secrets,
+      },
+    ).catch((error) => {
+      restartError = error;
+    });
+  }
+  if (restartError !== undefined) throw restartError;
+}
+
 async function createAgentJourney({ request, namespaceId, mode, label }) {
   const harnessId = mode === "dedicated" ? "codex" : "openclaw";
   const values = createHarnessConfiguration(harnessId, providerModel);
@@ -798,6 +861,12 @@ test(
     const adminPassword = `docker-admin-${randomUUID()}`;
     const baseUrl = `http://127.0.0.1:${apiPort}`;
     const composeSubnet = randomComposeSubnet();
+    const otelLogs = createOtelLogObservation(context, {
+      description: "Docker Compose real-runtime OTel logs",
+    });
+    const loggingPort = otelLogs.enabled ? await reserveLoopbackPort() : undefined;
+    const loggingMetricsPort = otelLogs.enabled ? await reserveLoopbackPort() : undefined;
+    const composeOptions = { withLogging: otelLogs.enabled };
     const env = {
       ...process.env,
       COMPOSE_PROJECT_NAME: project,
@@ -818,26 +887,36 @@ test(
       OCC_DOCKER_GATEWAY_IMAGE: gatewayImage,
       OCC_DOCKER_AGENT_IMAGE: agentImage,
       OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR: composeSubnet,
+      ...(loggingPort === undefined
+        ? {}
+        : {
+            OCC_DOCKER_LOGGING_ADDRESS: `127.0.0.1:${loggingPort}`,
+            OTEL_COLLECTOR_PORT: String(loggingPort),
+            OTEL_COLLECTOR_METRICS_PORT: String(loggingMetricsPort),
+          }),
       OPENAI_API_KEY: providerKey,
     };
 
     context.after(async () => {
-      await cleanupProject(project, env, namespaceIds);
+      await cleanupProject(project, env, namespaceIds, composeOptions);
     });
     const bootstrapDirectory = await mkdtemp(join(tmpdir(), "openclaw-docker-bootstrap-key-"));
     context.after(async () => {
       await rm(bootstrapDirectory, { recursive: true, force: true });
     });
-    await cleanupProject(project, env);
+    await cleanupProject(project, env, [], composeOptions);
     const composeSecrets = [providerKey, adminPassword];
     try {
-      await docker(composeArguments(project, "up", ["--build", "--detach", "--wait"]), {
-        env,
-        timeoutMs: 300_000,
-        secrets: composeSecrets,
-      });
+      await docker(
+        composeArguments(project, "up", ["--build", "--detach", "--wait"], composeOptions),
+        {
+          env,
+          timeoutMs: 300_000,
+          secrets: composeSecrets,
+        },
+      );
     } catch (error) {
-      const logs = await composeFailureLogs(project, env, composeSecrets);
+      const logs = await composeFailureLogs(project, env, composeSecrets, composeOptions);
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}\n\nDocker Compose failure logs for ${project}:\n${logs}`,
       );
@@ -849,6 +928,14 @@ test(
       }).catch(() => undefined);
       return response?.status === 200 ? true : undefined;
     });
+    assertDockerRuntimeOtelSettings(
+      otelLogs,
+      await Promise.all(
+        ["bootstrap", "controller", "worker"].map((service) =>
+          composeServiceContainer(project, service),
+        ),
+      ),
+    );
 
     const { localFile: serviceKeyFile, output: serviceKeyOutput } = await copyBootstrapServiceKey({
       project,
@@ -1045,6 +1132,7 @@ test(
       "dedicated Codex app-server must receive the matching app-server token",
     );
     assertNamespaceOnlyAttachment(dedicatedAgent, dedicatedNetwork.Name);
+    assertDockerRuntimeOtelSettings(otelLogs, [embeddedGateway, dedicatedGateway, dedicatedAgent]);
 
     const embeddedToken = nonempty(
       containerEnv(embeddedGateway, "OPENCLAW_GATEWAY_TOKEN"),
@@ -1090,12 +1178,113 @@ test(
       mode: "dedicated",
       onFailure: () => containerLogs([dedicatedGateway, dedicatedAgent], [dedicatedToken]),
     });
-
-    const deleted = await request("DELETE", `/namespaces/${cleanupNamespace.id}`);
-    assert.equal(deleted.status, 202, JSON.stringify(deleted.error));
-    await waitFor(`cleanup Namespace ${cleanupNamespace.id} network removal`, async () => {
-      return (await inspectNetworks(cleanupNamespace.id)).length === 0 ? true : undefined;
+    await otelLogs.assertRecords({
+      forbidden: [providerKey, adminPassword, serviceKey, embeddedToken, dedicatedToken],
+      expected: [
+        {
+          label: "bootstrap service-key creation",
+          serviceName: "occ-api",
+          resource: {
+            [OTEL_RESOURCE.serviceInstanceId]: project,
+          },
+          attributes: { "event.name": "installation.bootstrapped" },
+          body: "installation.bootstrapped",
+        },
+        {
+          label: "OCC API successful request completion",
+          serviceName: "occ-api",
+          resource: {
+            [OTEL_RESOURCE.serviceInstanceId]: project,
+          },
+          attributes: {
+            "event.name": "http.completed",
+            "http.request.method": "GET",
+            "http.response.status_code": 200,
+          },
+          body: "http.completed",
+        },
+        {
+          label: "worker embedded revision completion",
+          serviceName: "occ-worker",
+          resource: {
+            [OTEL_RESOURCE.serviceInstanceId]: project,
+          },
+          attributes: {
+            "event.name": "worker.completed",
+            "occ.namespace.id": embeddedNamespace.id,
+            "occ.agent.id": embedded.agent.id,
+            "occ.revision.id": embedded.revision.id,
+            "work.outcome": "success",
+          },
+          body: "worker.completed",
+        },
+        {
+          label: "worker dedicated revision completion",
+          serviceName: "occ-worker",
+          resource: {
+            [OTEL_RESOURCE.serviceInstanceId]: project,
+          },
+          attributes: {
+            "event.name": "worker.completed",
+            "occ.namespace.id": dedicatedNamespace.id,
+            "occ.agent.id": dedicated.agent.id,
+            "occ.revision.id": dedicated.revision.id,
+            "work.outcome": "success",
+          },
+          body: "worker.completed",
+        },
+        {
+          label: "embedded gateway operational record",
+          serviceName: "openclaw-gateway",
+          resource: {
+            [OTEL_RESOURCE.namespaceId]: embeddedNamespace.id,
+            [OTEL_RESOURCE.agentId]: embedded.agent.id,
+            [OTEL_RESOURCE.revisionId]: embedded.revision.id,
+          },
+          attributes: { "event.name": "gateway.operational" },
+          body: "gateway.operational",
+        },
+        {
+          label: "dedicated gateway operational record",
+          serviceName: "openclaw-gateway",
+          resource: {
+            [OTEL_RESOURCE.namespaceId]: dedicatedNamespace.id,
+            [OTEL_RESOURCE.agentId]: dedicated.agent.id,
+            [OTEL_RESOURCE.revisionId]: dedicated.revision.id,
+          },
+          attributes: { "event.name": "gateway.operational" },
+          body: "gateway.operational",
+        },
+        {
+          label: "dedicated Codex app-server operational record",
+          serviceName: "codex-app-server",
+          resource: {
+            [OTEL_RESOURCE.namespaceId]: dedicatedNamespace.id,
+            [OTEL_RESOURCE.agentId]: dedicated.agent.id,
+            [OTEL_RESOURCE.revisionId]: dedicated.revision.id,
+          },
+          attributes: { "event.name": "codex.operational" },
+          body: "codex.operational",
+        },
+      ],
     });
+
+    if (otelLogs.enabled) {
+      await assertCollectorOutageDoesNotBlockDockerOperations({
+        project,
+        env,
+        composeOptions,
+        request,
+        cleanupNamespace,
+        secrets: [providerKey, adminPassword, serviceKey],
+      });
+    } else {
+      const deleted = await request("DELETE", `/namespaces/${cleanupNamespace.id}`);
+      assert.equal(deleted.status, 202, JSON.stringify(deleted.error));
+      await waitFor(`cleanup Namespace ${cleanupNamespace.id} network removal`, async () => {
+        return (await inspectNetworks(cleanupNamespace.id)).length === 0 ? true : undefined;
+      });
+    }
     assert.equal((await inspectNetworks(embeddedNamespace.id)).length, 1);
     assert.equal((await inspectNetworks(dedicatedNamespace.id)).length, 1);
     assert.equal(

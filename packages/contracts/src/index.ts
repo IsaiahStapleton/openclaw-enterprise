@@ -1,5 +1,13 @@
 import { immutableCopy } from "@openclaw-enterprise/utils";
 
+export {
+  LOGGING_LEVELS,
+  admitLoggingConfiguration,
+  admittedLoggingLevel,
+  normalizeLoggingLevel,
+  type LoggingLevel,
+} from "./logging.ts";
+
 export const DRIVER_CAPABILITIES = Object.freeze([
   "iam",
   "compute",

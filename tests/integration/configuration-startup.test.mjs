@@ -13,7 +13,22 @@ import {
 } from "../../apps/controller/src/composition/production-harness.ts";
 import { kubernetesNamespaceName } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { createInstallationDriverConfiguration as installation } from "../helpers/installation-driver-configuration.mjs";
+
+function jsonLines(text) {
+  return text
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function startupDiagnostic(stderr, event) {
+  const diagnostic = jsonLines(stderr).find((line) => line.event === event);
+  assert.ok(diagnostic, stderr);
+  return diagnostic;
+}
 
 async function fixture(t, configuration = installation()) {
   const directory = await mkdtemp(join(tmpdir(), "occ-installation-startup-"));
@@ -220,7 +235,7 @@ test("production embedded and dedicated replacements preserve their active Servi
       configurationId: `cfg_production-${harness.mode}-cutover`,
       configurationKind: "agent",
       configurationGeneration: 1,
-      configuration: {},
+      configuration: admitLoggingConfiguration({}, "info"),
       harness,
       compute: { id: computeDriver.id, implementation: computeDriver.implementation },
       servicePrincipalId,
@@ -337,6 +352,7 @@ test("production embedded and dedicated replacements preserve their active Servi
         `agent-${shortHash(agentId, 12)}`,
         "gateway",
         {},
+        "info",
         computeDriver.gatewayConfiguration(candidate),
         true,
         servicePrincipalId,
@@ -419,8 +435,8 @@ test("production server and worker resolve singleton startup without an Installa
     timeout: 10_000,
   });
   assert.equal(server.status, 1);
-  assert.match(server.stderr, /OCC_AUTH_BASE_URL|OCC_AUTH_SECRET/);
-  assert.doesNotMatch(server.stderr, /OCC_INSTALLATION_ID/);
+  assert.equal(startupDiagnostic(server.stderr, "startup-error").code, "AUTH_BASE_URL_INVALID");
+  assert.doesNotMatch(server.stderr, /OCC_AUTH_BASE_URL|OCC_AUTH_SECRET|OCC_INSTALLATION_ID/);
 
   // The real worker likewise reaches PostgreSQL; no test-owned database or driver is substituted.
   const worker = spawnSync(process.execPath, ["apps/controller/src/worker.mjs"], {
@@ -430,7 +446,10 @@ test("production server and worker resolve singleton startup without an Installa
     timeout: 10_000,
   });
   assert.equal(worker.status, 1);
-  assert.match(worker.stderr, /worker\.startup-error/);
+  assert.equal(
+    startupDiagnostic(worker.stderr, "worker.startup-error").code,
+    "PERSISTENCE_UNAVAILABLE",
+  );
   assert.doesNotMatch(worker.stderr, /OCC_INSTALLATION_ID|explicit Installation/);
 });
 
@@ -457,7 +476,11 @@ test("only the actual API process reads ChatGPT admin credentials and provider a
     timeout: 10_000,
   });
   assert.equal(server.status, 1);
-  assert.match(server.stderr, /ChatGPT admin-key Secret is unavailable/);
+  assert.equal(
+    startupDiagnostic(server.stderr, "startup-error").code,
+    "CHATGPT_ADMIN_KEY_UNAVAILABLE",
+  );
+  assert.doesNotMatch(server.stderr, /ChatGPT admin-key Secret is unavailable/);
 
   // The same configured worker cannot read that mount and fails only when PostgreSQL is unavailable.
   const worker = spawnSync(process.execPath, ["apps/controller/src/worker.mjs"], {
@@ -467,7 +490,10 @@ test("only the actual API process reads ChatGPT admin credentials and provider a
     timeout: 10_000,
   });
   assert.equal(worker.status, 1);
-  assert.match(worker.stderr, /worker\.startup-error/);
+  assert.equal(
+    startupDiagnostic(worker.stderr, "worker.startup-error").code,
+    "PERSISTENCE_UNAVAILABLE",
+  );
   assert.doesNotMatch(worker.stderr, /ChatGPT|admin-key|ServiceAccount Driver/);
 
   // Driver-private provider bindings cannot silently fall back to ephemeral in-memory persistence.
@@ -484,8 +510,14 @@ test("only the actual API process reads ChatGPT admin credentials and provider a
     timeout: 10_000,
   });
   assert.equal(inMemory.status, 1);
-  assert.match(inMemory.stderr, /ServiceAccounts require PostgreSQL persistence/);
-  assert.doesNotMatch(inMemory.stderr, /ChatGPT admin-key Secret/);
+  assert.equal(
+    startupDiagnostic(inMemory.stderr, "startup-error").code,
+    "SERVICE_ACCOUNT_REQUIRES_POSTGRES",
+  );
+  assert.doesNotMatch(
+    inMemory.stderr,
+    /ServiceAccounts require PostgreSQL persistence|ChatGPT admin-key Secret/,
+  );
 });
 
 test("startup rejects caller-selected Installation IDs and obsolete Driver selectors", async (t) => {

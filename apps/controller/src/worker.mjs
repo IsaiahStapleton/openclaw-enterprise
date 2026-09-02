@@ -1,6 +1,10 @@
 import { unlink, writeFile } from "node:fs/promises";
 import pg from "pg";
-import { loadInstallationConfiguration } from "./composition/installation-config.ts";
+import {
+  loadInstallationConfiguration,
+  loadOperationalLoggingConfiguration,
+} from "./composition/installation-config.ts";
+import { createOccLogger, createWorkerLogEmitter, emitOccLogEvent } from "./logging.ts";
 import { createControllerWorker } from "./worker.ts";
 
 function positiveEnvironment(name, fallback) {
@@ -37,11 +41,23 @@ function configuration() {
   };
 }
 
+function workerStartupFailureCode(error) {
+  const message = error instanceof Error ? error.message : "";
+  if (/PostgreSQL connection URL/.test(message)) return "DATABASE_CONFIGURATION_INVALID";
+  if (/platform persistence repository|ECONNREFUSED|ECONNRESET|connect /i.test(message)) {
+    return "PERSISTENCE_UNAVAILABLE";
+  }
+  return "WORKER_STARTUP_FAILED";
+}
+
 let worker;
 let pool;
 let readinessPath;
+let logger;
 try {
   const { databaseUrl, mode, ...options } = configuration();
+  const logging = await loadOperationalLoggingConfiguration({ mode });
+  logger = createOccLogger({ component: "occ-worker", level: logging.level });
   readinessPath = process.env.OCC_WORKER_READINESS_PATH;
   if (readinessPath !== undefined) {
     if (!readinessPath.startsWith("/"))
@@ -65,6 +81,7 @@ try {
     pool,
     mode,
     ...options,
+    emit: createWorkerLogEmitter(logger),
     ...(drivers === undefined ? { computeDriver } : { drivers }),
     ...(readinessPath === undefined
       ? {}
@@ -81,9 +98,7 @@ try {
       await worker.stop();
       process.exitCode = 0;
     } catch {
-      process.stderr.write(
-        `${JSON.stringify({ event: "worker.error", code: "SHUTDOWN_FAILED" })}\n`,
-      );
+      emitOccLogEvent(logger, { event: "worker.error", code: "SHUTDOWN_FAILED" });
       process.exitCode = 1;
     }
   }
@@ -93,11 +108,20 @@ try {
   if (readinessPath !== undefined) await unlink(readinessPath).catch(() => {});
   if (worker !== undefined) await worker.stop().catch(() => {});
   else if (pool !== undefined) await pool.end();
-  process.stderr.write(
-    `${JSON.stringify({
-      event: "worker.startup-error",
-      error: error instanceof Error ? error.message : "The controller worker could not start.",
-    })}\n`,
-  );
+  try {
+    const mode = process.env.NODE_ENV === "production" ? "production" : "development";
+    const logging = await loadOperationalLoggingConfiguration({ mode });
+    logger = createOccLogger({
+      component: "occ-worker",
+      level: logging.level,
+      destination: "stderr",
+    });
+  } catch {
+    logger = createOccLogger({ component: "occ-worker", level: "info", destination: "stderr" });
+  }
+  emitOccLogEvent(logger, {
+    event: "worker.startup-error",
+    code: workerStartupFailureCode(error),
+  });
   process.exitCode = 1;
 }

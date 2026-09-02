@@ -151,12 +151,21 @@ function assertNoPackagingFailure(output) {
 }
 
 function assertPersistenceBoundary(output, event) {
-  assert.match(
-    output,
-    new RegExp(
-      `"event":"${event}","error":"The platform persistence repository is unavailable\\."`,
-    ),
-  );
+  const diagnostic = output
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return undefined;
+      }
+    })
+    .find((line) => line?.event === event);
+  assert.ok(diagnostic, output);
+  assert.equal(diagnostic.code, "PERSISTENCE_UNAVAILABLE");
+  assert.doesNotMatch(output, /The platform persistence repository is unavailable/);
 }
 
 async function productionFixture(t) {
@@ -251,7 +260,7 @@ test(
     assert.ok(failure, "the worker smoke intentionally stops at the database boundary");
     assert.equal(failure.code, 1);
     const output = imageFailureOutput(failure);
-    assertPersistenceBoundary(output, "worker\\.startup-error");
+    assertPersistenceBoundary(output, "worker.startup-error");
     assertNoPackagingFailure(output);
   },
 );

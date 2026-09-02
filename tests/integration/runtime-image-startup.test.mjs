@@ -132,6 +132,20 @@ async function listGatewayPlugins(containerName) {
   }
 }
 
+function jsonLogEntries(output) {
+  return output
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((entry) => entry !== undefined);
+}
+
 function assertBundledCodexPluginLoaded(pluginList) {
   const codexPlugin = assertBundledPluginLoaded(pluginList, "codex");
   assert.match(
@@ -256,6 +270,9 @@ try {
 async function runGatewaySmoke(t, harnessId, options = {}) {
   const {
     collectPlugins = harnessId === "codex",
+    configuration = createRuntimeImageConfiguration(harnessId, "gpt-4.1", {
+      enableSlack: harnessId === "openclaw",
+    }),
     configurationPath,
     entrypoint = await dockerGatewayEntrypoint(),
     extraEnvironment = [],
@@ -265,9 +282,6 @@ async function runGatewaySmoke(t, harnessId, options = {}) {
   const containerName = `oce-runtime-image-${harnessId}-${randomBytes(6).toString("hex")}`;
   t.after(() => runDocker(["rm", "-f", containerName]).catch(() => {}));
 
-  const configuration = createRuntimeImageConfiguration(harnessId, "gpt-4.1", {
-    enableSlack: harnessId === "openclaw",
-  });
   const environment = [
     `OPENCLAW_CONFIG_PATH=${configurationPath ?? "/home/node/.openclaw/openclaw.json"}`,
     ...(configurationPath === undefined
@@ -356,6 +370,48 @@ const plugin = lstatSync("/home/node/openclaw-runtime-assets/plugin-skills");
 }
 
 test(
+  "runtime image gateway ignores inherited OPENCLAW_LOG_LEVEL in favor of native configuration",
+  imageTestOptions,
+  async (t) => {
+    const configuration = createRuntimeImageConfiguration("openclaw", "gpt-4.1", {
+      enableSlack: true,
+    });
+    configuration.logging = {
+      level: "info",
+      consoleLevel: "info",
+      consoleStyle: "json",
+      redactSensitive: "tools",
+    };
+    configuration.diagnostics = { otel: { logs: false } };
+
+    const { logs } = await runGatewaySmoke(t, "openclaw", {
+      collectPlugins: false,
+      configuration,
+      extraEnvironment: ["OPENCLAW_LOG_LEVEL=error"],
+    });
+
+    const entries = jsonLogEntries(logs);
+    assert.ok(
+      entries.some(
+        (entry) =>
+          entry.subsystem === "gateway" &&
+          entry.level === "info" &&
+          entry.message === "gateway ready",
+      ),
+    );
+    assert.ok(
+      entries.some(
+        (entry) =>
+          entry.subsystem === "gateway" &&
+          entry.level === "info" &&
+          /agent model: openai\/gpt-4\.1/.test(entry.message),
+      ),
+    );
+    assertNoPackagingFailure(logs);
+  },
+);
+
+test(
   "runtime image starts an embedded OpenClaw gateway with the Docker driver entrypoint",
   imageTestOptions,
   async (t) => {
@@ -392,7 +448,7 @@ test(
     const { logs, containerName } = await runGatewaySmoke(t, "codex", {
       configurationPath: "/etc/openclaw/openclaw.json",
       entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
-      extraEnvironment: ["OPENCLAW_WORKSPACE_DIR=/home/node/workspace"],
+      extraEnvironment: ["OPENCLAW_WORKSPACE_DIR=/home/node/workspace", "OPENCLAW_LOG_LEVEL=error"],
       tmpfs: [
         "/home/node:size=1024m,uid=1000,gid=1000,mode=700",
         "/home/node/workspace:size=1024m,uid=1000,gid=1000,mode=700",

@@ -1,0 +1,164 @@
+{{- $collector := .Values.logging.collector -}}
+{{- if $collector.enabled -}}
+{{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-fA-F0-9]{64}$" $collector.image) -}}
+{{- fail "logging.collector.image must be an approved immutable SHA-256 image reference" -}}
+{{- end -}}
+{{- if or (not $collector.configSecretName) (not $collector.envSecretName) -}}
+{{- fail "logging.collector requires dedicated operator-created config and environment Secrets" -}}
+{{- end -}}
+{{- range $name, $secret := dict "installation" .Values.installation.secretName "database" .Values.database.secretName "auth" .Values.auth.secretName "chatgpt" .Values.provider.chatgpt.secretName -}}
+{{- if and $secret (or (eq $collector.configSecretName $secret) (and $collector.envSecretName (eq $collector.envSecretName $secret))) -}}
+{{- fail (printf "logging.collector Secrets must be dedicated and cannot reuse the %s Secret" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/32$" $collector.exporter.cidr) -}}
+{{- fail "logging.collector.exporter.cidr must identify exactly one approved IPv4 exporter or proxy host with /32" -}}
+{{- end -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openclaw-enterprise-collector
+  labels:
+    {{- include "openclaw.labels" (dict "root" . "component" "collector") | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-openclaw-log-metadata
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, nodes, pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-openclaw-log-metadata
+subjects:
+  - kind: ServiceAccount
+    name: openclaw-enterprise-collector
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-openclaw-log-metadata
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: openclaw-enterprise-collector
+  labels:
+    {{- include "openclaw.labels" (dict "root" . "component" "collector") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: collector
+  template:
+    metadata:
+      labels:
+        {{- include "openclaw.labels" (dict "root" . "component" "collector") | nindent 8 }}
+    spec:
+      serviceAccountName: openclaw-enterprise-collector
+      automountServiceAccountToken: true
+      securityContext:
+        {{- include "openclaw.podSecurity" . | nindent 8 }}
+        fsGroupChangePolicy: OnRootMismatch
+        # CRI log directories commonly use root:root 0750 and files 0640.
+        # Supplementary read access keeps the Collector UID non-root.
+        supplementalGroups: [0]
+      volumes:
+        - name: collector-config
+          secret:
+            secretName: {{ $collector.configSecretName }}
+            items:
+              - key: collector.yaml
+                path: collector.yaml
+              - key: kubernetes.yaml
+                path: receiver.yaml
+              - key: exporter.yaml
+                path: exporter.yaml
+        - name: pod-logs
+          hostPath:
+            path: {{ $collector.hostLogsPath }}
+            type: Directory
+        - name: collector-state
+          emptyDir:
+            sizeLimit: {{ $collector.state.sizeLimit | quote }}
+        - name: collector-tmp
+          emptyDir:
+            sizeLimit: {{ $collector.tmp.sizeLimit | quote }}
+      containers:
+        - name: collector
+          image: {{ $collector.image | quote }}
+          args:
+            - --config=/etc/otel/collector.yaml
+            - --config=/etc/otel/receiver.yaml
+            - --config=/etc/otel/exporter.yaml
+          securityContext:
+            {{- include "openclaw.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml $collector.resources | nindent 12 }}
+          env:
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          {{- if $collector.envSecretName }}
+          envFrom:
+            - secretRef:
+                name: {{ $collector.envSecretName }}
+          {{- end }}
+          ports:
+            - name: metrics
+              containerPort: {{ $collector.metrics.port }}
+          volumeMounts:
+            - name: collector-config
+              mountPath: /etc/otel
+              readOnly: true
+            - name: pod-logs
+              mountPath: {{ $collector.hostLogsPath }}
+              readOnly: true
+            - name: collector-state
+              mountPath: {{ $collector.statePath }}
+            - name: collector-tmp
+              mountPath: /tmp
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openclaw-enterprise-collector-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: collector
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.dns.podLabels | nindent 14 }}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.cluster.cidr }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.cluster.port }}
+    - to:
+        - ipBlock:
+            cidr: {{ $collector.exporter.cidr }}
+      ports:
+        - protocol: TCP
+          port: {{ $collector.exporter.port }}
+{{- end }}

@@ -1,10 +1,19 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { createOccLogger, emitOccLogEvent } from "../apps/controller/src/logging.ts";
+import { loadOperationalLoggingConfiguration } from "../apps/controller/src/composition/installation-config.ts";
 
 const databaseUrl = process.env.OCC_MIGRATION_DATABASE_URL;
 let pool;
+let logger = createOccLogger({ component: "occ-migration", level: "info", destination: "stderr" });
 
 try {
+  const logging = await loadOperationalLoggingConfiguration({ mode: "production" });
+  logger = createOccLogger({
+    component: "occ-migration",
+    level: logging.level,
+    destination: "stderr",
+  });
   if (typeof databaseUrl !== "string" || databaseUrl.trim().length === 0) {
     throw new Error("OCC_MIGRATION_DATABASE_URL must contain the dedicated migrator credential.");
   }
@@ -22,13 +31,12 @@ try {
     migrationsFolder: fileURLToPath(new URL("../migrations", import.meta.url)),
   });
   process.stdout.write(`${JSON.stringify({ event: "migration.completed" })}\n`);
+  emitOccLogEvent(logger, { event: "migration.completed" });
 } catch (error) {
-  process.stderr.write(
-    `${JSON.stringify({
-      event: "migration.failed",
-      error: error instanceof Error ? error.message : "The reviewed migrations failed.",
-    })}\n`,
-  );
+  emitOccLogEvent(logger, {
+    event: "migration.failed",
+    code: "MIGRATION_FAILED",
+  });
   process.exitCode = 1;
 } finally {
   if (pool !== undefined) await pool.end();

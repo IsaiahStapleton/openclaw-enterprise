@@ -36,7 +36,7 @@ OpenClaw Enterprise is the open platform for managing agents.
   [Controller reconciliation](reference/controller.md): runtime topology, deployment,
   and revision activation.
 - [Security controls](reference/security.md), [settings](reference/settings.md),
-  and [HTTP API](reference/api.md): access controls, deployment configuration, and request schemas.
+  and [HTTP API](reference/api.md): access controls, deployment configuration, operational logging, and request schemas.
 - [Drivers](reference/README.md#drivers): select and configure compute, configuration,
   identity, and Secret implementations.
 
@@ -47,8 +47,9 @@ OpenClaw Enterprise is the open platform for managing agents.
   [production TUI attachment](flows/production-tui.md), and
   [shared platform startup](flows/platform-startup.md).
 - [Platform console requests](flows/platform-console.md).
-- [Controller worker](flows/controller-worker.md) and
-  [Harness execution and shared storage](flows/harness-execution-topology.md).
+- [Controller worker](flows/controller-worker.md),
+  [Harness execution and shared storage](flows/harness-execution-topology.md), and
+  [common operational logging](flows/common-logging.md).
 - [Configuration and Agent revision](flows/configuration-driver.md),
   [Secret storage and gateway delivery](flows/secret-storage-and-delivery.md),
   [Driver loading](flows/driver-plugin-loading.md), and

@@ -34,6 +34,7 @@ import {
   KubernetesSecretDriver,
   type KubernetesSecretDriverOptions,
 } from "../drivers/secret/kubernetes/index.ts";
+import { type LoggingConfiguration, operationalLoggingConfiguration } from "../logging.ts";
 
 type ConfigurationRecord = Readonly<Record<string, unknown>>;
 
@@ -46,6 +47,7 @@ export interface SelectedDriverConfiguration<T = ConfigurationRecord> {
 
 export interface InstallationStartupConfiguration {
   readonly occ: { readonly cluster: string };
+  readonly logging: LoggingConfiguration;
   readonly provider: readonly ProviderDefinition[];
   readonly drivers: {
     readonly configuration: SelectedDriverConfiguration;
@@ -69,6 +71,54 @@ export interface InstallationRuntimeDrivers {
   readonly secretDriver: SecretDriver;
   readonly sandboxDriver?: SandboxDriver;
   readonly createIAMDriver: (state: NativeIAMStateStore) => IAMDriver;
+}
+
+async function startupConfiguration(
+  options: {
+    readonly mode: "development" | "production";
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+  },
+  required: boolean,
+): Promise<ConfigurationRecord | undefined> {
+  const environment = options.environment ?? process.env;
+  const path = environment.OCC_CONFIG_PATH;
+  if (path === undefined) {
+    if (!required) return undefined;
+    throw new Error("OCC_CONFIG_PATH must identify the Installation startup YAML.");
+  }
+  if (typeof path !== "string" || path.trim().length === 0) {
+    throw new Error("OCC_CONFIG_PATH must identify the Installation startup YAML.");
+  }
+  if (!isAbsolute(path)) {
+    throw new Error("OCC_CONFIG_PATH must identify an absolute Installation startup YAML path.");
+  }
+
+  let contents: string;
+  try {
+    contents = await readFile(path, "utf8");
+  } catch {
+    throw new Error("The configured Installation startup YAML is unavailable.");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = loadYaml(contents);
+  } catch {
+    throw new Error("The configured Installation startup file must contain valid YAML.");
+  }
+  const configuration = object(parsed, "Installation startup configuration");
+  safe(configuration, "Installation startup configuration");
+  if (Object.hasOwn(configuration, "integrations")) {
+    throw new Error(
+      "integrations is retired; configure ChatGPT with provider[].configuration.apiKeyPath.",
+    );
+  }
+  closed(
+    configuration,
+    ["occ", "drivers", "provider", "logging"],
+    "Installation startup configuration",
+  );
+  return configuration;
 }
 
 interface ExternalDriverModule extends DriverImplementation {
@@ -360,36 +410,17 @@ export async function loadInstallationConfiguration(options: {
       throw new Error(`${name} is unsupported; select Drivers in the Installation startup YAML.`);
     }
   }
-  const path = environment.OCC_CONFIG_PATH;
-  if (path === undefined && options.mode === "development") return undefined;
-  if (typeof path !== "string" || path.trim().length === 0) {
-    throw new Error("OCC_CONFIG_PATH must identify the Installation startup YAML.");
+  const configuration = await startupConfiguration(options, options.mode === "production");
+  if (configuration === undefined) return undefined;
+  const logging = operationalLoggingConfiguration(configuration.logging);
+  if (
+    options.mode === "development" &&
+    configuration.occ === undefined &&
+    configuration.drivers === undefined &&
+    configuration.provider === undefined
+  ) {
+    return undefined;
   }
-  if (!isAbsolute(path)) {
-    throw new Error("OCC_CONFIG_PATH must identify an absolute Installation startup YAML path.");
-  }
-
-  let contents: string;
-  try {
-    contents = await readFile(path, "utf8");
-  } catch {
-    throw new Error("The configured Installation startup YAML is unavailable.");
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = loadYaml(contents);
-  } catch {
-    throw new Error("The configured Installation startup file must contain valid YAML.");
-  }
-  const configuration = object(parsed, "Installation startup configuration");
-  safe(configuration, "Installation startup configuration");
-  if (Object.hasOwn(configuration, "integrations")) {
-    throw new Error(
-      "integrations is retired; configure ChatGPT with provider[].configuration.apiKeyPath.",
-    );
-  }
-  closed(configuration, ["occ", "drivers", "provider"], "Installation startup configuration");
   const occ = object(configuration.occ, "occ");
   closed(occ, ["cluster"], "occ");
   const cluster = nonempty(occ.cluster, "occ.cluster");
@@ -520,6 +551,7 @@ export async function loadInstallationConfiguration(options: {
   }
   const installation = Object.freeze({
     occ: Object.freeze({ cluster }),
+    logging,
     provider: providers,
     drivers: Object.freeze({
       configuration: configured,
@@ -590,6 +622,14 @@ export async function loadInstallationConfiguration(options: {
     ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
     createIAMDriver,
   });
+}
+
+export async function loadOperationalLoggingConfiguration(options: {
+  readonly mode: "development" | "production";
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+}): Promise<LoggingConfiguration> {
+  const configuration = await startupConfiguration(options, false);
+  return operationalLoggingConfiguration(configuration?.logging);
 }
 
 async function loadBundledOpenShellSandboxDriver(): Promise<BundledOpenShellSandboxDriverModule> {

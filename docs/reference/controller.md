@@ -267,19 +267,32 @@ exhausted.
 
 ## Observability
 
-The worker emits newline-delimited JSON to standard output:
+The API and worker use the shared OCC Pino logger. `logging.level` in the
+trusted startup YAML selects `debug`, `info`, `warn`, or `error`; omitted
+configuration uses `info`. The API disables Fastify's default request logging
+and emits one sanitized `http.completed` record per response with the generated
+request ID, method, route template, status, and duration. Unexpected internal
+failures add `http.unexpected_error` with a bounded error code.
 
-- `worker.started`: confirms the selected Compute Driver.
-- `worker.health`: reports readiness and the number of pending Namespace and
-  AgentRevision items.
-- `worker.completed`: includes `namespaceId`, the outcome, and a stable result
-  code; AgentRevision operations also include `agentId` and `revisionId`.
+The worker emits fixed operational event classes through the same logger:
+
+- `worker.started`: confirms the selected Compute Driver and optional
+  SandboxDriver.
+- `worker.health`: reports readiness and pending work count at debug level.
+- `worker.completed`: includes `namespaceId`, work identity, attempt, outcome,
+  and a stable result code; AgentRevision operations also include `agentId` and
+  `revisionId`.
 - `worker.error`: reports `CLAIM_LOST` or `WORKER_UNAVAILABLE` without exposing
   credentials.
 - `worker.stopped`: confirms graceful shutdown.
 
-Startup failures write `worker.startup-error` to standard error and exit
-without processing work. The worker does not expose an HTTP health endpoint.
+Bootstrap and migration scripts use the same level and write machine-protocol
+success records to stdout. Their structured failure diagnostics go to stderr.
+Startup failures write `startup-error`, `worker.startup-error`,
+`installation.bootstrap-failed`, or `migration.failed` and exit before serving
+or processing work. Log sanitization keeps only reviewed scalar fields and drops
+credentials, provider payloads, request objects, and unbounded error values. The
+worker does not expose an HTTP health endpoint.
 
 ## Failures and diagnostics
 

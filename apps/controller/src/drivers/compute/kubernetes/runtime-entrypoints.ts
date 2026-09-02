@@ -36,18 +36,32 @@ function publishDedicatedGatewayRuntimeAssets() {
   publishImageTree("/app/plugin-skills", runtimeAssetsDirectory + "/plugin-skills", false);
 }
 
+function forwardTermination(child) {
+  let terminating = false;
+  const forward = (signal) => {
+    if (terminating) return;
+    terminating = true;
+    child.kill(signal);
+    setTimeout(() => child.kill("SIGKILL"), 8_000).unref();
+  };
+  process.on("SIGTERM", () => forward("SIGTERM"));
+  process.on("SIGINT", () => forward("SIGINT"));
+}
+
 mkdirSync("/home/node/.openclaw", { recursive: true });
 mkdirSync("/home/node/workspace", { recursive: true });
 if (process.env.OPENCLAW_WORKSPACE_DIR !== undefined) {
   mkdirSync(process.env.OPENCLAW_WORKSPACE_DIR, { recursive: true });
   publishDedicatedGatewayRuntimeAssets();
 }
+delete process.env.OPENCLAW_LOG_LEVEL;
 const child = spawn(
   "node",
   ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
   { stdio: "inherit" },
 );
-child.on("exit", (code) => process.exit(code ?? 1));
+forwardTermination(child);
+child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
 `;
 
 export const AGENT_RUNTIME_ENTRYPOINT = String.raw`
@@ -83,10 +97,26 @@ const login = spawnSync("codex", loginArguments, {
 if (login.status !== 0) throw new Error("Codex model authentication initialization failed.");
 delete process.env.CODEX_ACCESS_TOKEN;
 
+function forwardTermination(child) {
+  let terminating = false;
+  const forward = (signal) => {
+    if (terminating) return;
+    terminating = true;
+    child.kill(signal);
+    setTimeout(() => child.kill("SIGKILL"), 8_000).unref();
+  };
+  process.on("SIGTERM", () => forward("SIGTERM"));
+  process.on("SIGINT", () => forward("SIGINT"));
+}
+
 const digest = createHash("sha256").update(process.env.APP_SERVER_TOKEN).digest("hex");
 const child = spawn(
   "codex",
   [
+    "-c",
+    "otel.exporter=\"none\"",
+    "-c",
+    "otel.log_user_prompt=false",
     "app-server",
     "--listen",
     "ws://0.0.0.0:" + process.env.APP_SERVER_PORT,
@@ -97,7 +127,8 @@ const child = spawn(
   ],
   { stdio: "inherit", cwd: "/home/node/workspace" },
 );
-child.on("exit", (code) => process.exit(code ?? 1));
+forwardTermination(child);
+child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
 `;
 
 // Check native readiness over Pod loopback: kubelet's node source can also be

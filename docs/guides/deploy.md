@@ -36,6 +36,27 @@ Expect HTTP `200` with `data.id` matching `meta.installationId` in the key
 file. This proves controller access, not an Agent deployment or model turn. For
 startup internals, see the [Docker development flow](../flows/docker-compose-development.md).
 
+To opt into local OTLP Logs collection, start or configure an OTLP Logs receiver
+first. For a receiver on the host machine, use Docker's host alias from inside
+the Collector container. Then edit
+[`deploy/logging/occ.yaml`](../../deploy/logging/occ.yaml) if you want a level
+other than `info`, set the Collector exporter endpoint, and add the logging
+Compose override:
+
+```bash
+OTEL_EXPORTER_OTLP_LOGS_ENDPOINT='http://host.docker.internal:4318/v1/logs' \
+  ./scripts/dev-up -- -f compose.yaml -f compose.logging.yaml
+```
+
+The override mounts `deploy/logging/occ.yaml` into the OCC migrate, bootstrap,
+controller, and worker services as `/etc/openclaw/occ.yaml`, starts the pinned
+Collector, publishes Fluent Forward on `127.0.0.1:${OTEL_COLLECTOR_PORT:-24224}`,
+and passes the same address to Docker Compute as `OCC_DOCKER_LOGGING_ADDRESS`
+for managed gateway and Codex containers. If your receiver is another container,
+use a same-network DNS name that the Collector can resolve. Collector routing
+alone is not a backend. If Docker runs in a VM, verify the Engine can reach the
+Fluent Forward host and port; container DNS reachability is not enough.
+
 ### Open the platform console
 
 Open `/console/` on the API URL printed by `dev-up`, normally
@@ -143,9 +164,22 @@ chmod 600 "$KUBECONFIG_FILE" "$OCC_INPUT_DIRECTORY/values.yaml" \
 ```
 
 The default examples use native API-key operation. Helm values own the
-controller image, API endpoint, Secret names, bootstrap claim, and network
-selectors. Installation YAML owns gateway/Agent images, Driver selection,
-projected identity, and runtime networking/storage.
+controller image, API endpoint, Secret names, bootstrap claim, optional
+Collector, and network selectors. Installation YAML owns gateway/Agent images,
+Driver selection, projected identity, runtime networking/storage, and the shared
+startup logging level.
+
+Add or edit the startup logging block in the protected Installation YAML copy:
+
+```yaml
+logging:
+  level: info
+```
+
+Use `debug`, `info`, `warn`, or `error`. Restarting API, worker, migration, or
+bootstrap processes applies a changed OCC level. Existing AgentRevisions keep
+the level frozen at admission; deploy the Agent again to change gateway or Codex
+runtime logging.
 
 If you built the production images above, write their digest references into
 the protected copies (skip this block for the local Kubernetes import path):
@@ -167,8 +201,8 @@ Edit the protected YAML copies before provisioning anything:
   exact PostgreSQL endpoint CIDR, `cluster.cidr` to the Kubernetes API endpoint
   CIDR, `api.clients` to approved client selectors, and
   `bootstrap.password.claimName` to the bootstrap PVC name.
-- `$OCC_INPUT_DIRECTORY/installation.yaml`: set `occ.cluster`, both
-  `drivers.compute.configuration.images` digests, the DNS and gateway-client
+- `$OCC_INPUT_DIRECTORY/installation.yaml`: set `occ.cluster`, `logging.level`,
+  both `drivers.compute.configuration.images` digests, the DNS and gateway-client
   selectors, the service-principal token settings, the runtime Secret prefixes,
   and `runtime.gatewayStorageClassName`. Keep
   `drivers.compute.configuration.images.requireImmutableDigest: true`.
@@ -251,6 +285,47 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
 
 These commands provision operator-owned inputs; they are not a recurring Secret
 synchronizer.
+
+#### Optional operational log export
+
+Skip this section only when an existing cluster Collector already reads the OCC
+and tenant CRI log files and applies the same reviewed receiver, trusted
+metadata, transform/filter, privacy, native-export exclusion, stdout exclusion,
+one-route, dedicated-exporter-credential, exporter-egress, and bounded-queue
+contract as [`deploy/logging/kubernetes.yaml`](../../deploy/logging/kubernetes.yaml)
+and [`deploy/logging/collector.yaml`](../../deploy/logging/collector.yaml). The
+[common logging flow](../flows/common-logging.md) names the compatible path.
+Otherwise, use the bundled Collector or install the same native Collector policy
+in the existing Collector. To use the bundled Collector, create dedicated logging
+Secrets before the Helm install:
+
+```bash
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  create secret generic occ-otel-collector-config \
+  --from-file=collector.yaml=deploy/logging/collector.yaml \
+  --from-file=kubernetes.yaml=deploy/logging/kubernetes.yaml \
+  --from-file=exporter.yaml=deploy/logging/exporter.yaml
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  create secret generic occ-otel-collector-exporter \
+  --from-literal=OTEL_EXPORTER_OTLP_LOGS_ENDPOINT='https://otel.example.internal/v1/logs'
+```
+
+Then enable the Collector in the protected values copy and set the exact exporter
+or proxy address allowed by NetworkPolicy:
+
+```bash
+yq -i '.logging.collector.enabled = true |
+  .logging.collector.exporter.cidr = "203.0.113.10/32" |
+  .logging.collector.exporter.port = 443' \
+  "$OCC_INPUT_DIRECTORY/values.yaml"
+```
+
+Use Collector-native configuration for exporter headers, TLS, queues, and retry.
+Do not put exporter credentials or endpoints in Installation YAML, Agent
+Configurations, SecretBindings, lifecycle hooks, or runtime images. The bundled
+Collector mounts `/var/log/pods` read-only and stores offsets and exporter queue
+state in a bounded `emptyDir`, so delivery is best-effort across Pod or node
+replacement.
 
 #### Prepare the fresh bootstrap output PVC
 
@@ -1016,7 +1091,7 @@ Use native surfaces for customization:
 - Development: `.env`, Compose environment precedence, and optional Compose
   files passed after `--`.
 - Production: extra Helm values files, ordinary Helm overrides, Kubernetes
-  manifests, and Installation startup YAML.
+  manifests, Installation startup YAML, and optional Collector Secrets.
 - Runtime images: [`deploy/runtime`](../../deploy/runtime/README.md) for the
   recipe and package-version overrides.
   [Build and publish](#build-and-publish-production-images) before configuring the digests.

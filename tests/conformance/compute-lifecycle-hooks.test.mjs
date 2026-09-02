@@ -18,7 +18,11 @@ const revision = Object.freeze({
   configurationId: "configuration-support",
   configurationKind: "agent",
   configurationGeneration: 3,
-  configuration: Object.freeze({ model: "test-model" }),
+  configuration: Object.freeze({
+    model: "test-model",
+    logging: { level: "info", consoleLevel: "info", consoleStyle: "json" },
+    diagnostics: { otel: { logs: false } },
+  }),
   harness: Object.freeze({ id: "openclaw", version: "1.0.0" }),
   compute: Object.freeze({ id: "compute-docker-development", implementation: "docker-local" }),
   servicePrincipalId: "service-principal-support",
@@ -94,7 +98,7 @@ test("workload hooks receive immutable Agent Configuration provenance and native
         assert.equal(actualRevision.configurationId, "configuration-support");
         assert.equal(actualRevision.configurationKind, "agent");
         assert.equal(actualRevision.configurationGeneration, 3);
-        assert.deepEqual(actualRevision.configuration, { model: "test-model" });
+        assert.deepEqual(actualRevision.configuration, revision.configuration);
         assert.equal(Object.isFrozen(actualRevision), true);
         assert.equal(Object.isFrozen(actualRevision.configuration), true);
         assert.throws(() => {

@@ -1,8 +1,10 @@
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
 import { randomUUID } from "node:crypto";
 import Fastify, {
+  LogController,
   type FastifyError,
   type FastifyInstance,
+  type FastifyBaseLogger,
   type FastifyReply,
   type FastifyRequest,
   type FastifySchema,
@@ -101,6 +103,7 @@ export interface ControllerAppOptions {
     auditEvent: AuditEvent,
   ) => Promise<void>;
   readonly auditEventFactory?: AuditEventFactory;
+  readonly logger?: FastifyBaseLogger;
 }
 
 export interface ControllerApp {
@@ -654,6 +657,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
   const app = Fastify({
     bodyLimit,
+    ...(options.logger === undefined
+      ? {}
+      : {
+          loggerInstance: options.logger,
+          logController: new LogController({ disableRequestLogging: true }),
+        }),
     trustProxy: false,
     requestIdHeader: false,
     genReqId: () => `req_${randomUUID()}`,
@@ -693,6 +702,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     development.installationId ?? controller?.installation.id ?? `ins_${randomUUID()}`;
   const admissions = new WeakMap<FastifyRequest, AdmittedCaller>();
   const contexts = new WeakMap<FastifyRequest, RequestContext>();
+  const requestStartedAt = new WeakMap<FastifyRequest, bigint>();
   const factory = options.auditEventFactory ?? new AuditEventFactory();
   const createAuthAccountOperation = {
     operationId: "createAuthAccount",
@@ -1022,10 +1032,25 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
   }
 
   app.addHook("onRequest", async (request, reply) => {
+    requestStartedAt.set(request, process.hrtime.bigint());
     responseHeaders(reply, request.id);
     const contentLength = request.headers["content-length"];
     if (typeof contentLength === "string" && Number(contentLength) > bodyLimit)
       throw failure(413, "PAYLOAD_TOO_LARGE", "The request body exceeds the permitted size.");
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    const startedAt = requestStartedAt.get(request);
+    const durationMs =
+      startedAt === undefined ? undefined : Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    app.log.info({
+      event: "http.completed",
+      requestId: request.id,
+      method: request.method,
+      route: request.routeOptions.url ?? "unmatched",
+      status: reply.statusCode,
+      ...(durationMs === undefined ? {} : { durationMs: Math.round(durationMs * 1000) / 1000 }),
+    });
   });
 
   async function admit(request: FastifyRequest, operation: OccApiRoute): Promise<void> {
@@ -2437,6 +2462,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           mapped = requestFailure(auditError);
         }
       }
+    }
+    if (mapped.code === "INTERNAL_ERROR") {
+      app.log.error({
+        event: "http.unexpected_error",
+        requestId: request.id,
+        method: request.method,
+        route: request.routeOptions.url ?? "unmatched",
+        status: mapped.status,
+        code: mapped.code,
+      });
     }
     canonicalFailure(reply, mapped);
   });

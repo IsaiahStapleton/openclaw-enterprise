@@ -1,6 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DockerComputeDriver } from "../../apps/controller/src/drivers/compute/docker/index.ts";
+import {
+  createDockerDevelopmentComputeDriverFromEnv,
+  DockerComputeDriver,
+} from "../../apps/controller/src/drivers/compute/docker/index.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
+
+test("Docker Compute logging forwarding configuration accepts only loopback addresses", () => {
+  const base = { OCC_DOCKER_RUNTIME_IMAGE: "openclaw-runtime:local" };
+  for (const OCC_DOCKER_LOGGING_ADDRESS of [
+    "0.0.0.0:24224",
+    "host.docker.internal:24224",
+    "127.0.0.1",
+    "127.0.0.1:70000",
+    "http://127.0.0.1:24224",
+  ]) {
+    assert.throws(
+      () => createDockerDevelopmentComputeDriverFromEnv({ ...base, OCC_DOCKER_LOGGING_ADDRESS }),
+      /loopback host:port/,
+    );
+  }
+
+  assert.doesNotThrow(() => createDockerDevelopmentComputeDriverFromEnv(base));
+  for (const OCC_DOCKER_LOGGING_ADDRESS of ["127.0.0.1:24224", "localhost:24224", "[::1]:24224"]) {
+    assert.doesNotThrow(() =>
+      createDockerDevelopmentComputeDriverFromEnv({ ...base, OCC_DOCKER_LOGGING_ADDRESS }),
+    );
+  }
+});
 
 const tenant = {
   id: "ns_00000000-0000-4000-8000-000000000001",
@@ -33,7 +60,7 @@ async function gatewayContainerEnvironment(configuration = {}) {
     configurationId: "cfg_00000000-0000-4000-8000-000000000001",
     configurationKind: "agent",
     configurationGeneration: 1,
-    configuration,
+    configuration: admitLoggingConfiguration(configuration, "info"),
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: "service-principal-docker-token",

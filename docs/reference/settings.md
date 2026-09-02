@@ -47,6 +47,20 @@ only the API reads its admin Secret. See
 [Installation startup configuration](configuration.md#installation-startup-configuration)
 for the complete document shape. OCC resolves its singleton Installation internally.
 
+The optional `logging` block in the same startup YAML controls OCC operational
+logging for the API, worker, migration, bootstrap, and future Agent deployments:
+
+```yaml
+logging:
+  level: info
+```
+
+`level` accepts `debug`, `info`, `warn`, or `error` and defaults to `info` when
+omitted. The block is closed: unknown logging keys or invalid levels fail
+startup. This setting is not persisted as an Installation resource and does not
+configure OTLP export. Remote export is configured only in the operator-owned
+OpenTelemetry Collector files mounted by Compose or Helm.
+
 When a production or explicit Kubernetes startup YAML is used, the required
 `drivers.secret` selection currently supports the bundled
 [Kubernetes Secret Driver](drivers/kubernetes-secret.md). It is loaded from the
@@ -130,6 +144,12 @@ endpoint.
 | `OCC_AUTH_BASE_URL`        | Absolute controller base URL.                                   | Defines the production Better Auth base URL and cookie origin.                                                          |
 | `OCC_GATEWAY_API_KEY_PATH` | Optional absolute path to the private gateway service-key file. | API only; validates at startup and reads each operation for rotation. Requires Compute endpoint resolution.             |
 | `NODE_EXTRA_CA_CERTS`      | Optional PEM bundle for a private gateway CA.                   | Node reads it at process startup. Normal leaf renewal under that CA does not require a restart; root-bundle changes do. |
+
+The API and worker also load the same `logging.level` from that YAML. The
+setting controls their Pino JSON diagnostics and the migration/bootstrap scripts;
+restarting those processes applies a changed level to OCC logs. It does not
+rewrite existing AgentRevisions. A later authorized Agent deployment is required
+before gateway or Codex workloads use a changed level.
 
 The API and worker load the same trusted startup YAML; only the API initializes
 the optional [Provider client](providers.md). Both validate Provider membership
@@ -293,9 +313,36 @@ full stack because it validates Compose configuration, waits for startup, copies
 the bootstrap service-key response to a private file, and proves authenticated
 access. Direct `docker compose` commands remain supported.
 [`compose.postgres.yaml`](../../compose.postgres.yaml) remains the focused
-database-only helper for tests and manual PostgreSQL debugging. Both bind the
-PostgreSQL host port to loopback only. The following value controls Docker
-Compose port substitution:
+database-only helper for tests and manual PostgreSQL debugging.
+
+[`compose.logging.yaml`](../../compose.logging.yaml) is an optional development
+override that adds a pinned OpenTelemetry Collector, mounts
+[`deploy/logging/occ.yaml`](../../deploy/logging/occ.yaml) as
+`/etc/openclaw/occ.yaml` for the OCC services, and routes only OCC-owned
+migrate, bootstrap, controller, worker, gateway, and Codex Agent containers
+through Docker's `fluentd` logging driver. The override mounts
+[`deploy/logging/collector.yaml`](../../deploy/logging/collector.yaml),
+[`deploy/logging/docker.yaml`](../../deploy/logging/docker.yaml), and
+[`deploy/logging/exporter.yaml`](../../deploy/logging/exporter.yaml) into the
+Collector. `occ.yaml` owns the shared development `logging.level`,
+`collector.yaml` owns shared filtering and queues, `docker.yaml` owns Docker
+Fluent Forward input and metadata mapping, and `exporter.yaml` owns the backend
+exporter. The Collector stores exporter queue state in the `occ_otelcol_data`
+volume; Docker Fluent Forward is push-based and has no file offsets. Docker
+runtime containers additionally keep a bounded local logging cache. The default
+Fluent Forward and metrics ports are bound only on `127.0.0.1`.
+
+Development logging override variables:
+
+| Variable                           | Default or requirement                         | Behavior                                                                                                         |
+| ---------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Required when `compose.logging.yaml` is used.  | Passed only to the Collector exporter; use HTTPS for real backends and HTTP only for local test receivers.       |
+| `OTEL_COLLECTOR_PORT`              | `24224`.                                       | Publishes the Collector Fluent Forward receiver on `127.0.0.1:<port>`.                                           |
+| `OTEL_COLLECTOR_METRICS_PORT`      | `8888`.                                        | Publishes Collector self-metrics on `127.0.0.1:<port>`.                                                          |
+| `OCC_DOCKER_LOGGING_ADDRESS`       | `127.0.0.1:24224` when the override is active. | Tells Docker Compute where the Engine should forward managed gateway and Codex container logs; keep it loopback. |
+
+Both Compose files bind the PostgreSQL host port to loopback only. The following
+value controls Docker Compose port substitution:
 
 | Variable            | Default | Behavior                                                                                              |
 | ------------------- | ------- | ----------------------------------------------------------------------------------------------------- |
@@ -672,6 +719,57 @@ When using the file path, unset `OCC_TEST_CHATGPT_ADMIN_KEY` first so the test
 actually reads the protected file. See the
 [ChatGPT service-account testing guide](../testing.md#chatgpt-service-accounts)
 for the complete setup.
+
+### Production operational logging collection
+
+Production log export is opt-in. Leave `logging.collector.enabled: false` only
+when an existing cluster Collector already reads the OCC and tenant CRI log
+files and applies an equivalent reviewed policy: the Kubernetes receiver and
+trusted metadata mapping from
+[`deploy/logging/kubernetes.yaml`](../../deploy/logging/kubernetes.yaml), the
+transform/filter/privacy policy from
+[`deploy/logging/collector.yaml`](../../deploy/logging/collector.yaml), native
+runtime-export and stdout exclusions, one route per stream, dedicated exporter
+credentials, exporter-only egress, and finite queues/state. Otherwise enable the
+bundled Collector or install the same native Collector configuration in the
+existing Collector. The [common logging flow](../flows/common-logging.md)
+describes the compatible path. When enabling the bundled Collector, first create
+two dedicated Secrets in the control-plane namespace:
+
+- `logging.collector.configSecretName` supplies `collector.yaml`,
+  `kubernetes.yaml`, and `exporter.yaml` keys. Use the files under
+  [`deploy/logging/`](../../deploy/logging/) as the starting point.
+- `logging.collector.envSecretName` supplies exporter environment such as
+  `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`. Do not reuse the Installation, database,
+  auth, or Provider Secret.
+
+Helm requires the Collector image to be pinned by `@sha256:`, the exporter CIDR
+to identify exactly one approved IPv4 `/32` host or proxy, and the two Secrets
+to be dedicated to logging. The Collector DaemonSet mounts `/var/log/pods`
+read-only, runs as a non-root user with supplementary group `0` to read the
+node's root-group CRI files, drops all capabilities, and uses an
+`emptyDir` at `logging.collector.statePath` with
+`logging.collector.state.sizeLimit` for file offsets and exporter queues. The
+state survives process and container restart in the same Pod, but not Pod or
+node replacement.
+
+Relevant Helm values:
+
+```yaml
+logging:
+  collector:
+    enabled: true
+    image: docker.io/otel/opentelemetry-collector-contrib:0.159.0@sha256:1f2c54a30e713fac6b3ae77a1ec84010c2007e29ced8ec666214fc2f6739c1cc
+    configSecretName: occ-otel-collector-config
+    envSecretName: occ-otel-collector-exporter
+    exporter:
+      cidr: 203.0.113.10/32
+      port: 443
+```
+
+The Collector is the only component that receives exporter credentials or
+exporter egress. Gateway and Codex native OTLP exporters remain disabled by the
+admitted runtime configuration.
 
 ### Helm packaging test environment
 
