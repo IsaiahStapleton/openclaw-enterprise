@@ -4,7 +4,22 @@ A Provider is Installation-owned configuration that gives related Drivers an
 authenticated client. Agents may reference it through nullable `providerId`;
 this neither grants permissions nor changes model or Harness selection.
 The bundled ChatGPT client manages upstream service accounts, not inference.
-Providers have no OCC resource, CRUD, discovery, or authorization API.
+Providers have no OCC resource or write API. Installation administrators can
+discover nonsecret configured IDs and types through `GET /providers`.
+
+## Read configured Providers
+
+`GET /providers` returns `{data:[{id,type}],meta:{requestId}}` after the selected
+IAM Driver authorizes `administer` on the singleton Installation. Namespace
+access alone does not grant discovery. The [console](console.md) uses this
+Installation-wide inventory regardless of the selected Namespace.
+
+The API projects the validated definitions loaded at startup. It returns no
+credentials, paths, workspace identifiers, Driver settings, or full configuration,
+and makes no upstream request. A configured Provider is not a health or activation
+claim. Authorized empty configuration returns `200` with `data:[]`; unavailable
+discovery wiring or IAM is an error, never an empty inventory. Changes take effect
+through the existing startup configuration lifecycle below.
 
 ## Installation configuration
 
@@ -136,8 +151,9 @@ requires authorized credentials and selected disposable Kubernetes runtimes.
 ## Deferred behavior
 
 Optional member Drivers, per-Agent Driver selection, automatic account creation,
-clientless Providers, installed Provider loading/injection, UI discovery,
-OAuth/refresh, renewal, and a common inference API remain out of scope.
+clientless Providers, installed Provider loading/injection, Provider detail,
+creation, and management UI, OAuth/refresh, renewal, and a common inference API
+remain out of scope.
 
 ## Related
 

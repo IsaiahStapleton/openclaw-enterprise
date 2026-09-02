@@ -20,6 +20,7 @@ import type {
   InstallationRuntimeDrivers,
   ServiceAccountDriverFactory,
 } from "./installation-config.ts";
+import { providerSummariesFromDefinitions } from "./installation-config.ts";
 import { resolveApprovedHarness } from "./production-harness.ts";
 
 export interface PostgresDevelopmentConfig {
@@ -158,6 +159,9 @@ export async function composePostgresDevelopment(
       ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
       resolveHarness: resolveApprovedHarness,
       auditSink: state.auditSink,
+      ...(drivers === undefined
+        ? {}
+        : { providerSummaries: providerSummariesFromDefinitions(drivers.installation.provider) }),
       auth,
       provisionAuthAccount,
       ...(auditEventFactory === undefined ? {} : { auditEventFactory }),

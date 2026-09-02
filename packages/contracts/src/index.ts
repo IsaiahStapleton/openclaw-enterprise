@@ -28,6 +28,11 @@ export interface ProviderDefinition {
   readonly drivers: Readonly<Record<"service_account", string>>;
 }
 
+export interface ProviderSummary {
+  readonly id: string;
+  readonly type: ProviderType;
+}
+
 export interface Provider<Client = unknown> {
   readonly id: string;
   readonly client: Client;

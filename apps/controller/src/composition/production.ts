@@ -12,6 +12,7 @@ import type {
   InstallationRuntimeDrivers,
   ServiceAccountDriverFactory,
 } from "./installation-config.ts";
+import { providerSummariesFromDefinitions } from "./installation-config.ts";
 import { resolveApprovedProductionHarness } from "./production-harness.ts";
 
 export interface ProductionConfig {
@@ -144,6 +145,7 @@ export async function composeProduction(config: ProductionConfig) {
       ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
       resolveHarness: resolveApprovedProductionHarness,
       auditSink: state.auditSink,
+      providerSummaries: providerSummariesFromDefinitions(installation.provider),
       auth,
       provisionAuthAccount,
       development: {

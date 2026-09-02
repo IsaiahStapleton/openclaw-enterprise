@@ -29,6 +29,19 @@ Expected output includes:
 - the service-key file path, pointing at an owner-readable JSON file
 - a command you can copy to check that the API accepts your service key
 
+## Open the platform console
+
+Open `/console/` on the API URL printed by `dev-up`, normally
+`http://127.0.0.1:3000/console/`. Enter the provisioned human account email in
+**Username** and its password. An existing database keeps its original password.
+No service key is needed for browser login.
+
+The [console](../reference/console.md) lists accessible Agents, Providers, and
+Namespaces. A fresh Installation has a `default` Namespace and no Agents;
+provision resources and access through the API procedures in the deployment guide. Use
+the bottom **OpenClaw Enterprise** menu to select a Namespace, open Settings,
+or log out. The API check below remains useful for programmatic access.
+
 ## Read the Installation with the bootstrap service key
 
 `dev-up` runs this check before it reports success. To run it again, copy the

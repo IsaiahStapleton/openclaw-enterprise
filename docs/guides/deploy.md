@@ -36,6 +36,19 @@ Expect HTTP `200` with `data.id` matching `meta.installationId` in the key
 file. This proves controller access, not an Agent deployment or model turn. For
 startup internals, see the [development startup flow](../flows/development-startup.md).
 
+### Open the platform console
+
+Open `/console/` on the API URL printed by `dev-up`, normally
+`http://127.0.0.1:3000/console/`. Sign in with the provisioned human account
+email and password. Production uses the same `/console/` path on the approved
+internal HTTPS origin matching `OCC_AUTH_BASE_URL`; it retains the existing
+ClusterIP/network boundary and secure cookie settings.
+
+The browser uses the human administrator session path, not service keys. The
+[console reference](../reference/console.md) describes read-only lists,
+Namespace selection, and error recovery. Creation, deployment, and other
+resource operations remain API procedures.
+
 ## Production
 
 ### Production prerequisites

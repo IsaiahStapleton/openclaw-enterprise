@@ -13,7 +13,10 @@ the [two guides](README.md#start-and-deploy), and source execution by
 ## System overview
 
 The control plane consists of an API, an independent controller worker,
-PostgreSQL-backed state, and Installation-selected Drivers.
+PostgreSQL-backed state, and Installation-selected Drivers. The API also serves
+the [read-only platform console](reference/console.md) at `/console/`. Its static
+browser module uses same-origin sessions and the existing authorized APIs; it
+adds no frontend service or resource persistence.
 
 ```mermaid
 flowchart LR
@@ -233,7 +236,9 @@ See [Docker development](reference/drivers/docker-compute.md),
 
 The current implementation does not provide:
 
-- Public ingress, external identity federation, or a management console.
+- Public ingress, external identity federation, or console resource management.
+  The console currently lists Agents, Providers, and Namespaces; creation,
+  editing, deployment, and resource details remain outside its scope.
 - A general, verified pre-execution sandbox policy barrier for every runtime.
   Optional SandboxDriver facets and delegated OpenShell Harness provisioning
   exist, but upstream compatibility and enforcement limitations remain; see

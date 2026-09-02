@@ -15,8 +15,9 @@ the local stack and run the first authenticated Installation read with:
 
 The helper uses Docker Compose, prepares the default quickstart runtime image
 when needed, and prints the loopback OCC URL, Installation ID, and private
-service-key file path. To deploy an Agent and attach the OpenClaw terminal UI
-to a real model-backed runtime, continue to
+service-key file path. Open the printed API URL with `/console/` to sign in and
+browse accessible Agents, Providers, and Namespaces. To deploy an Agent and
+attach the OpenClaw terminal UI to a real model-backed runtime, continue to
 [Development end-to-end TUI](docs/guides/deploy.md#development-end-to-end-tui).
 A model credential is required to run Agent model turns, but not to start the
 stack.
@@ -48,7 +49,7 @@ see [Testing](docs/testing.md) for suite coverage, credentials, setup, and comma
 
 | Path                                          | Responsibility                                       |
 | --------------------------------------------- | ---------------------------------------------------- |
-| `apps/controller/`                            | HTTP API, worker, and Driver implementations.        |
+| `apps/controller/`                            | HTTP API, read-only console, worker, and Drivers.    |
 | `packages/contracts/`                         | Resource models, Driver interfaces, and API schemas. |
 | `packages/occ/`                               | Resource lifecycle, persistence, and work queue.     |
 | `packages/iam/`                               | Identities, roles, and resource authorization.       |
@@ -61,6 +62,7 @@ see [Testing](docs/testing.md) for suite coverage, credentials, setup, and comma
 - [Documentation map](docs/README.md): guides, references, and runtime flows.
 - [Platform design](docs/design.md) and [current architecture](docs/ARCHITECTURE.md): target design and implemented components.
 - [Feature reference](docs/reference/README.md): supported behavior and Driver contracts.
+- [Platform console](docs/reference/console.md): login, read-only collections, and Namespace selection.
 - [Providers](docs/reference/providers.md): authenticated clients, related Drivers, and optional Agent association.
 - [HTTP API](docs/reference/api.md): routes, request and response schemas, authentication, and permissions.
 - [Spec archive](specs/README.md): proposals and implementation history, with recorded statuses.
