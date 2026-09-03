@@ -531,6 +531,8 @@ test("Agent workspace file routes map provider file states without leaking conte
   );
 });
 
+// Exercise an uncertain write together with a stalled audit sink. The provider is
+// simulated here; this test does not perform or verify a real gateway file write.
 test("Agent workspace file unknown outcomes stay bounded when audit persistence stalls", async () => {
   const writes = [];
   const fixture = await createFixture({
@@ -540,6 +542,7 @@ test("Agent workspace file unknown outcomes stay bounded when audit persistence 
       },
       async write(write) {
         writes.push(write);
+        // Model a dispatched write whose acknowledgement was lost: it may have succeeded.
         throw new ControllerWorkspaceFileUnknownOutcomeError("workspace write sent before timeout");
       },
     },
@@ -550,6 +553,7 @@ test("Agent workspace file unknown outcomes stay bounded when audit persistence 
   const { agent } = await createAgent(fixture, namespace, "Unknown write Agent");
   const append = fixture.auditSink.append.bind(fixture.auditSink);
   fixture.auditSink.append = async (event) => {
+    // Stall before storing the event, so the API must bound its audit attempt too.
     if (event.action === "openclaw.agents.workspace.files.write") await new Promise(() => {});
     await append(event);
   };
@@ -566,14 +570,18 @@ test("Agent workspace file unknown outcomes stay bounded when audit persistence 
   );
   const elapsedMs = Date.now() - startedAt;
 
+  // Report uncertainty rather than claiming success or a definite write failure.
   assert.equal(result.response.status, 503);
   assert.equal(result.payload.error.code, "UNKNOWN_OUTCOME");
+  // The 20 ms deadline must release the request; 2 seconds allows scheduling slack.
   assert.ok(
     elapsedMs < 2_000,
     `expected stalled audit to be deadline-bounded, took ${elapsedMs}ms`,
   );
+  // OCC must not replay a mutation that may already have succeeded.
   assert.equal(writes.length, 1);
   assert.equal(writes[0].content, "sent once\n");
+  // Error responses must not echo operator-supplied file contents.
   assert.equal(JSON.stringify(result.payload).includes("sent once"), false);
 });
 

@@ -53,13 +53,6 @@ function options(overrides = {}) {
   };
 }
 
-function labelsToSelectorForTest(labels) {
-  return Object.entries(labels)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}=${value}`)
-    .join(",");
-}
-
 function digest(value, length = 12) {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
 }
