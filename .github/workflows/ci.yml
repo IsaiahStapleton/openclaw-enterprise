@@ -149,6 +149,15 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJson(needs) }}
         run: |
-          node -e 'const fs = require("fs"); const needs = JSON.parse(process.env.NEEDS_JSON); const lanes = ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector"]; const expanded = { audit: needs.audit }; for (const lane of lanes) expanded[lane] = { result: needs["pr-safe"]?.result ?? "missing" }; fs.writeFileSync(`${process.env.RUNNER_TEMP}/needs.json`, JSON.stringify(expanded));'
+          node <<'NODE'
+          const fs = require("fs");
+          const needs = JSON.parse(process.env.NEEDS_JSON);
+          const lanes = ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector"];
+          const expanded = { audit: needs.audit };
+          for (const lane of lanes) {
+            expanded[lane] = { result: needs["pr-safe"]?.result ?? "missing" };
+          }
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/needs.json`, JSON.stringify(expanded));
+          NODE
       - name: Aggregate CI results
         run: node scripts/ci/run-tests.mjs aggregate ci --results-dir "$RUNNER_TEMP/results" --needs "$RUNNER_TEMP/needs.json"

@@ -51,18 +51,23 @@ jobs:
         id: select
         env:
           LANE: ${{ inputs.lane }}
-        run: >-
-          node -e 'const lane = process.env.LANE;
+        run: |
+          node <<'NODE'
+          const lane = process.env.LANE;
           const lanes = new Set(["docker-model", "k3d-model", "gateway-routing", "production-tui", "slack", "provider-account", "openshell", "helper-timeout", "logging-collector", "k3d-otel", "all"]);
-          if (!lanes.has(lane)) throw new Error(`Unknown lane: ${lane}`);
-          require("fs").appendFileSync(process.env.GITHUB_OUTPUT, `run_all=${lane === "all"}\n`);'
+          if (!lanes.has(lane)) {
+            throw new Error(`Unknown lane: ${lane}`);
+          }
+          require("fs").appendFileSync(process.env.GITHUB_OUTPUT, `run_all=${lane === "all"}\n`);
+          NODE
       - name: Verify protected environments exist
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           LANE: ${{ inputs.lane }}
-        run: >-
-          node --input-type=module -e 'const repository = process.env.REPOSITORY;
+        run: |
+          node --input-type=module <<'NODE'
+          const repository = process.env.REPOSITORY;
           const selected = process.env.LANE;
           const laneEnvironments = {
             "docker-model": "integration-model",
@@ -86,20 +91,33 @@ jobs:
                 "User-Agent": "openclaw-enterprise-full-integration",
               },
             });
-            if (!response.ok) throw new Error(`GitHub API ${path} returned ${response.status}.`);
+            if (!response.ok) {
+              throw new Error(`GitHub API ${path} returned ${response.status}.`);
+            }
             return response.json();
           }
           for (const environment of required) {
             const body = await github(`/environments/${environment}`);
             const requiredReviewers = body.protection_rules?.find((rule) => rule.type === "required_reviewers");
-            if (!requiredReviewers) throw new Error(`Protected environment ${environment} has no required reviewers.`);
-            if (requiredReviewers.prevent_self_review !== true) throw new Error(`Protected environment ${environment} does not prevent self-review.`);
+            if (!requiredReviewers) {
+              throw new Error(`Protected environment ${environment} has no required reviewers.`);
+            }
+            if (requiredReviewers.prevent_self_review !== true) {
+              throw new Error(`Protected environment ${environment} does not prevent self-review.`);
+            }
             const policy = body.deployment_branch_policy;
-            if (policy?.protected_branches === true) continue;
-            if (policy?.custom_branch_policies !== true) throw new Error(`Protected environment ${environment} is not restricted to protected branches or main.`);
+            if (policy?.protected_branches === true) {
+              continue;
+            }
+            if (policy?.custom_branch_policies !== true) {
+              throw new Error(`Protected environment ${environment} is not restricted to protected branches or main.`);
+            }
             const policies = await github(`/environments/${environment}/deployment-branch-policies`);
-            if (!policies.branch_policies?.some((branch) => branch.name === "main")) throw new Error(`Protected environment ${environment} has no main deployment branch policy.`);
-          }'
+            if (!policies.branch_policies?.some((branch) => branch.name === "main")) {
+              throw new Error(`Protected environment ${environment} has no main deployment branch policy.`);
+            }
+          }
+          NODE
 
   pr-safe-same-sha:
     name: Same-SHA ${{ matrix.title }}
@@ -691,7 +709,25 @@ jobs:
           NEEDS_JSON: ${{ toJson(needs) }}
           LANE: ${{ inputs.lane }}
         run: |
-          node -e 'const fs = require("fs"); const needs = JSON.parse(process.env.NEEDS_JSON); const lane = process.env.LANE; const out = { preflight: needs.preflight }; if (lane === "all") { for (const name of ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector"]) out[name] = { result: needs["pr-safe-same-sha"]?.result ?? "missing" }; } else if (lane === "logging-collector") { out["logging-collector"] = needs["logging-collector"] ?? { result: "missing" }; } for (const name of ["docker-model", "k3d-model", "gateway-routing", "production-tui", "slack", "provider-account", "openshell", "helper-timeout", "k3d-otel"]) { if (lane === "all" || lane === name) out[name] = needs[name] ?? { result: "missing" }; } fs.writeFileSync(`${process.env.RUNNER_TEMP}/needs.json`, JSON.stringify(out));'
+          node <<'NODE'
+          const fs = require("fs");
+          const needs = JSON.parse(process.env.NEEDS_JSON);
+          const lane = process.env.LANE;
+          const out = { preflight: needs.preflight };
+          if (lane === "all") {
+            for (const name of ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector"]) {
+              out[name] = { result: needs["pr-safe-same-sha"]?.result ?? "missing" };
+            }
+          } else if (lane === "logging-collector") {
+            out["logging-collector"] = needs["logging-collector"] ?? { result: "missing" };
+          }
+          for (const name of ["docker-model", "k3d-model", "gateway-routing", "production-tui", "slack", "provider-account", "openshell", "helper-timeout", "k3d-otel"]) {
+            if (lane === "all" || lane === name) {
+              out[name] = needs[name] ?? { result: "missing" };
+            }
+          }
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/needs.json`, JSON.stringify(out));
+          NODE
       - name: Aggregate targeted runtime results
         if: needs.preflight.outputs.run_all != 'true'
         run: node scripts/ci/run-tests.mjs aggregate "${{ inputs.lane }}" --results-dir "$RUNNER_TEMP/results" --needs "$RUNNER_TEMP/needs.json"
