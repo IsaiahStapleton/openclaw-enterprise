@@ -6,3 +6,7 @@ packages:
   - packages/iam
   - packages/audit
   - "!legacy/**"
+
+allowBuilds:
+  esbuild: true
+  protobufjs: true
