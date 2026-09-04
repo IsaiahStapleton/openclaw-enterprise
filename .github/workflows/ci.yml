@@ -79,6 +79,8 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache-mode: read-write
+      - uses: ./.github/actions/setup-test-docker
+        if: matrix.lane == 'logging-collector'
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         if: matrix.profile == 'images' || matrix.profile == 'k3d'
       - name: Set up CI tools
@@ -115,12 +117,6 @@ jobs:
         run: node scripts/ci/prepare.mjs --lane "${{ matrix.lane }}" --state "$RUNNER_TEMP/state/${{ matrix.lane }}.json" --github-env "$GITHUB_ENV"
       - name: Run lane
         run: node scripts/ci/run-tests.mjs run "${{ matrix.lane }}" --state "$RUNNER_TEMP/state/${{ matrix.lane }}.json" --results "$RUNNER_TEMP/results/${{ matrix.lane }}.json"
-      - name: Diagnose hosted Collector transport failure
-        if: failure() && matrix.lane == 'logging-collector'
-        env:
-          OCC_TEST_LOGGING_COLLECTOR: "1"
-        run: |
-          node --test --test-name-pattern '^native Collector filters actual Docker forwarding, binds transport identity, and survives exporter outage$' tests/integration/logging-collector.test.mjs
       - name: Cleanup lane
         if: always()
         run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/${{ matrix.lane }}.json"
