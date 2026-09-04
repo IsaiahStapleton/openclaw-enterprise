@@ -19,6 +19,12 @@ function startupFailureCode(error) {
   if (/OCC_AUTH_BASE_URL|loopback host|loopback HTTP\(S\) URL/.test(message)) {
     return "AUTH_BASE_URL_INVALID";
   }
+  if (/OCC_WORKSPACE_FILES_CONFIG_PATH.*removed/.test(message)) {
+    return "WORKSPACE_FILES_CONFIG_REMOVED";
+  }
+  if (/OCC_GATEWAY_API_KEY_PATH|gateway API key file/i.test(message)) {
+    return "GATEWAY_API_KEY_UNAVAILABLE";
+  }
   if (/ChatGPT admin-key Secret/.test(message)) return "CHATGPT_ADMIN_KEY_UNAVAILABLE";
   if (/ServiceAccounts require PostgreSQL persistence/.test(message)) {
     return "SERVICE_ACCOUNT_REQUIRES_POSTGRES";

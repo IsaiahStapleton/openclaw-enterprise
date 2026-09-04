@@ -56,17 +56,17 @@ const requiresProductionCluster = {
     ? false
     : "Set an explicit k3d kubeconfig/context, immutable real OpenClaw/Codex runtime image references, a dedicated openclaw_k8s_* PostgreSQL database, and OPENAI_API_KEY for production model-turn proof.",
 };
-const requiresGatewayRouting = {
-  skip:
-    process.env.OCC_TEST_GATEWAY_ROUTING_REAL === "1"
-      ? requiresProductionCluster.skip
-      : "Set OCC_TEST_GATEWAY_ROUTING_REAL=1 with Envoy Gateway and cert-manager for private routing proof.",
-};
 const requiresProductionClusterOtelLogs = {
   skip:
     selected && process.env.OCC_TEST_OTEL_LOGS === "1"
       ? false
       : "Set OCC_TEST_OTEL_LOGS=1 plus the explicit k3d kubeconfig/context, immutable real OpenClaw/Codex runtime image references, dedicated openclaw_k8s_* PostgreSQL database, OPENAI_API_KEY, and an OTLP observation source for production runtime log proof.",
+};
+const requiresGatewayRouting = {
+  skip:
+    process.env.OCC_TEST_GATEWAY_ROUTING_REAL === "1"
+      ? requiresProductionCluster.skip
+      : "Set OCC_TEST_GATEWAY_ROUTING_REAL=1 with Envoy Gateway and cert-manager for private routing proof.",
 };
 const requiresLiveSlack = {
   skip: slackSelected
