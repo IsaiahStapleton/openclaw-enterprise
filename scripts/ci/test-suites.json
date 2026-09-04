@@ -163,7 +163,8 @@
         },
         {
           "path": "tests/integration/ci-logging.test.mjs",
-          "namePattern": "^(?!prepareLogging backend receives real OTLP/HTTP logs and writes JSONL$)"
+          "namePattern": "^(?!prepareLogging backend receives real OTLP/HTTP logs and writes JSONL$)",
+          "allowedSkips": ["prepareLogging backend receives real OTLP/HTTP logs and writes JSONL"]
         }
       ]
     },
