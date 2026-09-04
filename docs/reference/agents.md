@@ -63,60 +63,48 @@ Creating an Agent does not create a provider account or issue credentials.
 
 ## Workspace files
 
-`GET /namespaces/:namespaceId/agents/:agentId/workspace/files/:name` reads one
-allowed native workspace file through the Agent's active gateway. `PUT` to the
-same path creates or replaces that mutable Agent workspace file. The only supported names are
-`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md`.
+Read, create, or replace `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md`
+in an Agent's live workspace:
 
-The caller must authenticate with a Better Auth session or scoped service API
-key. `GET` requires exact Agent `read`; `PUT` requires exact Agent `operate` and
-the browser CSRF boundary when the caller uses a session. Agent
-ServicePrincipal credentials are rejected at authentication admission, even if
-the principal has an explicit IAM grant.
+```text
+/namespaces/:namespaceId/agents/:agentId/workspace/files/:name
+```
 
-OCC validates the file name before provider access. `PUT` accepts a closed JSON
-body with `content`, rejects NUL bytes and unpaired UTF-16 surrogates, enforces
-a 16 KiB UTF-8 content limit, and uses a 48 KiB request-body limit. The response
-body for a read is `{ name, content }`; the write response is `{ name, size }`.
-The native provider may return a missing file as `404`.
+| Method | Operation                  | Agent permission | Response `data`     |
+| ------ | -------------------------- | ---------------- | ------------------- |
+| `GET`  | Read the file              | `read`           | `{ name, content }` |
+| `PUT`  | Create or replace the file | `operate`        | `{ name, size }`    |
 
-These routes are a narrow workspace-file shim, not a generic native RPC or CLI
-execution surface. They do not expose `agents.files.list`, chat, configuration,
-status, device enrollment, browser-to-gateway credentials, caller-selected
-URLs, arbitrary native methods, or a full native administration UI. OCC does
-not store file bytes in its database, does not implement compare-and-swap or
-revisioned file updates, and does not replay a write whose provider outcome is
-unknown.
+Authenticate with a session or scoped service API key. Session-authenticated
+writes must pass the [CSRF checks](authentication.md). The Agent must have an
+active revision and a reachable gateway.
 
-Write audit events contain the Agent resource, authorization action, outcome,
-reason code when present, and file name metadata. Audit details do not contain
-file contents. Reads do not create mutation audit events.
+`PUT` accepts one `content` field:
 
-The server-side access path is opt-in through the Installation's Kubernetes
-Compute routing configuration and the API's `OCC_GATEWAY_API_KEY_PATH`.
-Compute creates a private route automatically for each Agent; no per-Agent
-endpoint map or API restart is needed after provisioning. The native URL is
-`wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>`, derived from the
-admitted IDs and trusted Installation settings, never from a request body.
+```json
+{ "content": "You are a support assistant.\n" }
+```
 
-Envoy Gateway authenticates OCC's dedicated service key, strips it before
-forwarding, and supplies the native trusted identity and actual OCC connection
-address. cert-manager manages the server certificate. OCC uses normal hostname
-and CA verification. The native gateway must explicitly enable trusted-proxy
-authentication and the identity's administrative scope; tenant networking must
-admit only the Envoy data plane. See the
-[deployment procedure](../guides/deploy.md#agent-workspace-files) for the complete
-trust configuration and rotation steps. Human callers still require the exact
-Agent permission regardless of the service identity's native scope.
+`content` must be well-formed Unicode without NUL characters and fit within
+16 KiB when encoded as UTF-8. The complete request body is limited to 48 KiB.
+Successful requests return `200`; `size` is the written content's UTF-8 byte
+count. Successful writes record the Agent, file name, and outcome in the audit log.
 
-Missing routing configuration, an unsupported Compute Driver, a missing service
-key, or a failed WSS/native connection returns `503 DEPENDENCY_UNAVAILABLE`.
-The bundled Docker Driver does not implement automatic private routes. The
-Kubernetes gateway PVC retains files across gateway Pod replacement; a
-successful URL lookup alone is not runtime or persistence proof.
+| Error                        | Meaning                                              |
+| ---------------------------- | ---------------------------------------------------- |
+| `400 INVALID_REQUEST`        | Invalid file name or content.                        |
+| `404 NOT_FOUND`              | The requested Agent or file was not found.           |
+| `413 PAYLOAD_TOO_LARGE`      | The request body exceeds 48 KiB.                     |
+| `503 DEPENDENCY_UNAVAILABLE` | Workspace access is unavailable.                     |
+| `503 UNKNOWN_OUTCOME`        | OCC could not confirm the write or its audit record. |
 
-See the [workspace files flow](../flows/workspace-files.md) for execution and
-failure handling. The generated [HTTP API](api.md) owns the wire schema.
+After `UNKNOWN_OUTCOME`, read the current file before deciding whether to submit
+another write.
+
+See [workspace-file setup](../guides/deploy.md#agent-workspace-files) to enable
+access, the [HTTP API](api.md#get-namespacesnamespaceidagentsagentidworkspacefilesname)
+for request and response schemas, and the [execution flow](../flows/workspace-files.md)
+for implementation details.
 
 ## Namespace ownership
 
