@@ -16,22 +16,23 @@ procedure needs a public Docker-only OpenClaw/Codex runtime image.
 
 ## Features
 
-| Reference                                  | Owns                                                                                 |
-| ------------------------------------------ | ------------------------------------------------------------------------------------ |
-| [Platform console](console.md)             | Login, read-only collections, Namespace selection, and session isolation.            |
-| [Namespaces](namespaces.md)                | Tenant identity, placement, readiness, and deletion.                                 |
-| [Agents](agents.md)                        | Agent identity, mutable selection, immutable revisions, and workspace file routes.   |
-| [Configuration](configuration.md)          | Native documents, generations, references, and snapshots.                            |
-| [Secrets](drivers/kubernetes-secret.md)    | Namespace-owned Secret storage, metadata-only responses, env bindings, and redeploy. |
-| [Authentication](authentication.md)        | Supported caller credentials, sessions, bootstrap, and account provisioning.         |
-| [Authorization](authorization.md)          | Principals, Groups, Roles, Bindings, Restrictions, and exact-resource decisions.     |
-| [Providers](providers.md)                  | Provider configuration, related Drivers, client ownership, and Agent references.     |
-| [Service accounts](service-accounts.md)    | Account associations, credential references, issuance, and revocation boundaries.    |
-| [Harness execution](harness-execution.md)  | Runtime selection, topology, and admitted execution constraints.                     |
-| [Controller reconciliation](controller.md) | Durable lifecycle work, authorization refresh, claims, retries, and recovery.        |
-| [Security](security.md)                    | Kubernetes workload and credential boundaries and enforcement limitations.           |
-| [Settings](settings.md)                    | Supported environment variables and programmatic configuration.                      |
-| [HTTP API](api.md)                         | Generated routes, wire schemas, and declared permissions.                            |
+| Reference                                        | Owns                                                                                 |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| [Platform console](console.md)                   | Login, read-only collections, Namespace selection, and session isolation.            |
+| [Namespaces](namespaces.md)                      | Tenant identity, placement, readiness, and deletion.                                 |
+| [Agents](agents.md)                              | Agent identity, mutable selection, immutable revisions, and workspace file routes.   |
+| [Gateway routing with Envoy](gateway-routing.md) | Private Agent endpoints, service keys, TLS, and network enforcement.                 |
+| [Configuration](configuration.md)                | Native documents, generations, references, and snapshots.                            |
+| [Secrets](drivers/kubernetes-secret.md)          | Namespace-owned Secret storage, metadata-only responses, env bindings, and redeploy. |
+| [Authentication](authentication.md)              | Supported caller credentials, sessions, bootstrap, and account provisioning.         |
+| [Authorization](authorization.md)                | Principals, Groups, Roles, Bindings, Restrictions, and exact-resource decisions.     |
+| [Providers](providers.md)                        | Provider configuration, related Drivers, client ownership, and Agent references.     |
+| [Service accounts](service-accounts.md)          | Account associations, credential references, issuance, and revocation boundaries.    |
+| [Harness execution](harness-execution.md)        | Runtime selection, topology, and admitted execution constraints.                     |
+| [Controller reconciliation](controller.md)       | Durable lifecycle work, authorization refresh, claims, retries, and recovery.        |
+| [Security](security.md)                          | Kubernetes workload and credential boundaries and enforcement limitations.           |
+| [Settings](settings.md)                          | Supported environment variables and programmatic configuration.                      |
+| [HTTP API](api.md)                               | Generated routes, wire schemas, and declared permissions.                            |
 
 Generated schemas describe wire shape. The feature pages additionally own
 behavioral rules such as cross-resource ownership, lifecycle ordering, and failure

@@ -26,7 +26,9 @@ audit evidence. File contents remain in the native workspace.
 The Kubernetes worker must have provisioned the Agent's private HTTPRoute and
 native gateway. Installation operators enable the shared Envoy Gateway,
 native trust, and network restrictions described in
-[deployment](../guides/deploy.md#agent-workspace-files).
+[deployment](../guides/deploy.md#agent-workspace-files). The
+[routing reference](../reference/gateway-routing.md) owns the current transport
+and credential contract.
 By default, the chart requests a private CA and listener certificate from
 cert-manager and uses a derived Service DNS hostname. Operators can provide
 an existing issuer and explicit hostname instead.

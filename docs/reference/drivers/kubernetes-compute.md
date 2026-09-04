@@ -148,6 +148,9 @@ channel-provider access is denied.
 
 ## Private Agent gateway routes
 
+See [gateway routing with Envoy](../gateway-routing.md) for shared infrastructure,
+service-key bootstrap, TLS, and network enforcement.
+
 Optional Installation Compute settings enable one stable route per Agent:
 
 ```yaml

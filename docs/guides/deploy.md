@@ -604,6 +604,9 @@ Secrets.
 
 ### Agent workspace files
 
+The [Envoy routing reference](../reference/gateway-routing.md) describes endpoints,
+resource ownership, service keys, TLS, and failure behavior.
+
 Enable private Agent routing to read and replace `AGENTS.md`, `SOUL.md`,
 `IDENTITY.md`, and `USER.md` through OCC. Compute creates each Agent's HTTPRoute
 when it provisions the gateway. One shared private hostname serves URLs of the

@@ -101,7 +101,8 @@ count. Successful writes record the Agent, file name, and outcome in the audit l
 After `UNKNOWN_OUTCOME`, read the current file before deciding whether to submit
 another write.
 
-See [workspace-file setup](../guides/deploy.md#agent-workspace-files) to enable
+See [gateway routing](gateway-routing.md) for transport configuration and
+[workspace-file setup](../guides/deploy.md#agent-workspace-files) to enable
 access, the [HTTP API](api.md#get-namespacesnamespaceidagentsagentidworkspacefilesname)
 for request and response schemas, and the [execution flow](../flows/workspace-files.md)
 for implementation details.
