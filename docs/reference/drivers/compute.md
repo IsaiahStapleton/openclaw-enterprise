@@ -75,6 +75,20 @@ retain their default post-commit activation behavior. A Driver's activation
 must remain idempotent and must not report success before its effective
 configuration and authenticated runtime are actually ready.
 
+## Optional gateway endpoint resolution
+
+`getGatewayEndpoint(revision)` returns the private WSS endpoint for an admitted
+AgentRevision, or `undefined` when the Driver does not support gateway access.
+OCC invokes it after exact-Agent authorization and active-revision selection.
+The resolver derives an address from trusted Driver settings and resource IDs;
+it does not establish readiness, perform user authorization, or persist a URL in
+Agent Configuration. Native connection failures remain dependency failures.
+
+Bundled Kubernetes Compute uses this capability for
+[private Agent routes](kubernetes-compute.md#private-agent-gateway-routes).
+Docker does not implement it. Optional resolution does not change the required
+revision lifecycle operations or grant the API Kubernetes route permissions.
+
 ## Optional active-runtime maintenance
 
 A provider that must continuously observe and repair an already-active Agent

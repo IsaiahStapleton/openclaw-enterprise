@@ -22,6 +22,8 @@ import type {
 } from "./installation-config.ts";
 import { providerSummariesFromDefinitions } from "./installation-config.ts";
 import { resolveApprovedHarness } from "./production-harness.ts";
+import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
+import { createWorkspaceFilesAccess, validateWorkspaceFilesApiKeyPath } from "./workspace-files.ts";
 
 export interface PostgresDevelopmentConfig {
   readonly mode: "development";
@@ -31,6 +33,8 @@ export interface PostgresDevelopmentConfig {
   readonly authBaseURL: string;
   readonly poolMax?: number;
   readonly trustedDevelopmentBridgeCidr?: string;
+  readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
+  readonly gatewayApiKeyPath?: string;
 }
 
 export type PostgresDevelopmentRuntimeOptions =
@@ -151,10 +155,18 @@ export async function composePostgresDevelopment(
     serviceAccountDriverFactory?.(controller, state);
     await controller.validateProviderConfiguration();
 
+    let workspaceFilesAccess = config.workspaceFilesAccess;
+    if (workspaceFilesAccess === undefined && config.gatewayApiKeyPath !== undefined) {
+      const gatewayApiKeyPath = config.gatewayApiKeyPath;
+      await validateWorkspaceFilesApiKeyPath(gatewayApiKeyPath);
+      workspaceFilesAccess = createWorkspaceFilesAccess(computeDriver, gatewayApiKeyPath);
+    }
+
     const app = createFastifyApp({
       controller,
       iamDriver,
       computeDriver,
+      publicOrigin: config.authBaseURL,
       ...(configurationDriver === undefined ? {} : { configurationDriver }),
       ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
       resolveHarness: resolveApprovedHarness,
@@ -173,6 +185,7 @@ export async function composePostgresDevelopment(
           : { trustedCidrs: [config.trustedDevelopmentBridgeCidr] }),
       },
       maxBodyBytes: 64 * 1024,
+      ...(workspaceFilesAccess === undefined ? {} : { workspaceFilesAccess }),
     });
     app.get("/healthz", async () => ({ status: "ok" }));
     app.get("/readyz", async () => {

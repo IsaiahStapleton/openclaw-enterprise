@@ -14,6 +14,8 @@ import type {
 } from "./installation-config.ts";
 import { providerSummariesFromDefinitions } from "./installation-config.ts";
 import { resolveApprovedProductionHarness } from "./production-harness.ts";
+import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
+import { createWorkspaceFilesAccess, validateWorkspaceFilesApiKeyPath } from "./workspace-files.ts";
 
 export interface ProductionConfig {
   readonly mode: "production";
@@ -24,6 +26,8 @@ export interface ProductionConfig {
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
   readonly serviceAccountDriverFactory?: ServiceAccountDriverFactory;
+  readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
+  readonly gatewayApiKeyPath?: string;
 }
 
 export async function composeProduction(config: ProductionConfig) {
@@ -136,12 +140,20 @@ export async function composeProduction(config: ProductionConfig) {
     config.serviceAccountDriverFactory?.(controller, state);
     await controller.validateProviderConfiguration();
 
+    let workspaceFilesAccess = config.workspaceFilesAccess;
+    if (workspaceFilesAccess === undefined && config.gatewayApiKeyPath !== undefined) {
+      const gatewayApiKeyPath = config.gatewayApiKeyPath;
+      await validateWorkspaceFilesApiKeyPath(gatewayApiKeyPath);
+      workspaceFilesAccess = createWorkspaceFilesAccess(computeDriver, gatewayApiKeyPath);
+    }
+
     const app = createFastifyApp({
       controller,
       iamDriver,
       computeDriver,
       configurationDriver,
       secretDriver,
+      publicOrigin: config.authBaseURL,
       ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
       resolveHarness: resolveApprovedProductionHarness,
       auditSink: state.auditSink,
@@ -153,6 +165,7 @@ export async function composeProduction(config: ProductionConfig) {
         installationId: persistedInstallation.id,
       },
       maxBodyBytes: 64 * 1024,
+      ...(workspaceFilesAccess === undefined ? {} : { workspaceFilesAccess }),
     });
     app.get("/healthz", async () => ({ status: "ok" }));
     app.get("/readyz", async () => {

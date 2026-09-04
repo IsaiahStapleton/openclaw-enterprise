@@ -100,6 +100,21 @@ const child = spawn(
 child.on("exit", (code) => process.exit(code ?? 1));
 `;
 
+// Check native readiness over Pod loopback: kubelet's node source can also be
+// the trusted apiserver proxy source, but its probes have no forwarded headers.
+export const GATEWAY_READINESS_ENTRYPOINT = String.raw`
+const timeout = setTimeout(() => process.exit(1), 2_000);
+const request = require("node:http").get(
+  "http://127.0.0.1:" + process.env.OPENCLAW_GATEWAY_PORT + "/readyz",
+  (response) => {
+    response.resume();
+    clearTimeout(timeout);
+    process.exit(response.statusCode === 200 ? 0 : 1);
+  },
+);
+request.on("error", () => process.exit(1));
+`;
+
 export const AGENT_READINESS_ENTRYPOINT = String.raw`
 const timeout = setTimeout(() => process.exit(1), 2_000);
 const socket = new WebSocket("ws://127.0.0.1:" + process.env.APP_SERVER_PORT, {

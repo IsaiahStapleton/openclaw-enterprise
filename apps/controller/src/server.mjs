@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
+import { isAbsolute } from "node:path";
 import { loadInstallationConfiguration } from "./composition/installation-config.ts";
 import { composeProduction } from "./composition/production.ts";
+import { validateWorkspaceFilesApiKeyPath } from "./composition/workspace-files.ts";
 
 const loopbackHosts = new Set(["127.0.0.1", "::1", "[::1]"]);
 const developmentBindHosts = new Set(["127.0.0.1", "::1", "0.0.0.0"]);
@@ -98,6 +100,17 @@ function configuration() {
     ...(poolMax === undefined ? {} : { poolMax }),
   };
 
+  if (process.env.OCC_WORKSPACE_FILES_CONFIG_PATH !== undefined) {
+    throw new Error("OCC_WORKSPACE_FILES_CONFIG_PATH has been removed.");
+  }
+
+  const gatewayApiKeyPath = process.env.OCC_GATEWAY_API_KEY_PATH;
+  if (gatewayApiKeyPath !== undefined) {
+    if (gatewayApiKeyPath.trim().length === 0 || !isAbsolute(gatewayApiKeyPath)) {
+      throw new Error("OCC_GATEWAY_API_KEY_PATH must identify an absolute mounted-file path.");
+    }
+  }
+
   const configuredAuthBaseURL =
     mode === "production"
       ? requiredEnvironment("OCC_AUTH_BASE_URL")
@@ -117,6 +130,7 @@ function configuration() {
       ...settings,
       authSecret: requiredEnvironment("OCC_AUTH_SECRET"),
       authBaseURL,
+      ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
     });
   }
 
@@ -131,12 +145,17 @@ function configuration() {
     ...settings,
     authSecret,
     authBaseURL,
+    ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
     ...(trustedDevelopmentBridgeCidr === undefined ? {} : { trustedDevelopmentBridgeCidr }),
   });
 }
 
 async function start() {
   const settings = configuration();
+  if (settings.gatewayApiKeyPath !== undefined) {
+    await validateWorkspaceFilesApiKeyPath(settings.gatewayApiKeyPath);
+  }
+  const compositionSettings = settings;
   const drivers = await loadInstallationConfiguration({ mode: settings.mode });
   let serviceAccountDriverFactory;
   const selectedServiceAccountDriver = drivers?.installation.drivers.service_account;
@@ -192,13 +211,17 @@ async function start() {
   if (settings.mode === "production") {
     if (drivers === undefined) throw new Error("Production Driver configuration is unavailable.");
     app = await composeProduction({
-      ...settings,
+      ...compositionSettings,
       drivers,
       ...(serviceAccountDriverFactory === undefined ? {} : { serviceAccountDriverFactory }),
     });
   } else {
     const { composePostgresDevelopment } = await import("./composition/development-postgres.ts");
-    app = await composePostgresDevelopment(settings, drivers, serviceAccountDriverFactory);
+    app = await composePostgresDevelopment(
+      compositionSettings,
+      drivers,
+      serviceAccountDriverFactory,
+    );
   }
 
   let closing = false;

@@ -26,11 +26,13 @@ controller.
 - For dedicated Agents, a default StorageClass that supports `40Gi`
   `ReadWriteMany` PersistentVolumeClaims.
 
-The worker needs permission to manage PersistentVolumeClaims in its tenant
-namespaces. Only the controller API receives narrowly scoped Secret permissions
-for provider-issued credentials; workers and workloads do not receive direct
-Secret API access. Do not grant wildcard permissions, cluster-wide access to
-tenant resources, `pods/exec`, or permission to create or escalate RoleBindings.
+The worker manages PersistentVolumeClaims and, when private gateway routing is
+enabled, HTTPRoutes through tenant-local RoleBindings. Only the controller API
+receives narrowly scoped Secret permissions for provider-issued credentials.
+The API does not need gateway Pod reads, exec, route writes, or certificate
+management for workspace-file access. Do not grant wildcard permissions,
+cluster-wide access to tenant resources, workload access to controller
+credentials, or permission to create or escalate RoleBindings.
 
 If OpenShell sandboxing is enabled, the Compute Driver's Kubernetes access is
 also used directly by the optional `SandboxDriver.ensureNamespace` hook to
@@ -116,18 +118,85 @@ and namespace-level resource quotas and container defaults. Production requires
 
 ### Networking
 
-Configure the cluster DNS namespace and Pod labels, the gateway port, and the
-namespace and Pod selectors allowed to access Agent gateways.
+Configure the cluster DNS namespace and Pod labels and the gateway port.
+Without private routing, also configure the namespace and Pod selectors in
+`network.gatewayClients` allowed to access Agent gateways.
 
 Each tenant starts with default-deny ingress and egress. Explicit policies allow
 DNS, approved gateway clients, and required communication between an Agent's
 gateway and dedicated Harness. Cross-tenant traffic, traffic between different
 Agents, Kubernetes API access, and cloud metadata access remain denied.
 
+When private Agent routing is enabled, Compute derives the only allowed peer
+from `gatewayRouting`: the Envoy namespace and the Gateway's exact owning name
+and namespace labels. Omit `network.gatewayClients`; startup rejects explicit
+clients in routed mode. The native gateway trusts
+the proxy's source range; NetworkPolicy distinguishes the authenticated proxy
+from other Pods in that range. Do not retain direct API or tenant-workload
+access to the native gateway port for this mode.
+
+When native Configuration selects `gateway.auth.mode: "trusted-proxy"`, Compute
+omits automatic `OPENCLAW_GATEWAY_TOKEN` projection: native OpenClaw rejects a
+simultaneous gateway token. Token mode remains the default. Readiness uses a
+Pod-local HTTP request to `127.0.0.1:$OPENCLAW_GATEWAY_PORT/readyz`; TLS terminates
+at Envoy, so native readiness probes remain unchanged.
+
 Production currently permits public TCP/443 egress for model access; a
 restricted model proxy is not yet available. Channels require an approved
 literal-IP HTTP(S) proxy configured through `runtime.channels`; direct public
 channel-provider access is denied.
+
+## Private Agent gateway routes
+
+See [gateway routing with Envoy](../gateway-routing.md) for shared infrastructure,
+service-key bootstrap, TLS, and network enforcement.
+
+Optional Installation Compute settings enable one stable route per Agent:
+
+```yaml
+gatewayRouting:
+  gatewayName: oce-agent-gateways
+  gatewayNamespace: openclaw-system
+  envoyNamespace: envoy-gateway-system
+```
+
+The Gateway name and namespace must match the Helm-managed Gateway;
+`envoyNamespace` identifies its Envoy data-plane Pods. The chart always creates
+the Gateway in its release namespace. These three settings are required when
+routing is enabled; `hostname` is optional.
+
+When `hostname` is omitted or empty, Compute and Helm derive the same Service
+name: `occ-gateway-` followed by the first 12 hexadecimal characters of the
+SHA-256 of `<gatewayNamespace>/<gatewayName>`. The hostname is
+`<serviceName>.<envoyNamespace>.svc`. It uses standard Linux Pod DNS search and
+does not assume a `cluster.local` suffix. Set the same explicit `hostname` in
+Compute and Helm for custom DNS or clients outside that cluster DNS context.
+The default needs no existing Agent or Kubernetes lookup.
+The operator installs Envoy Gateway and cert-manager and configures the
+[private gateway infrastructure](../../guides/deploy.md#agent-workspace-files).
+Do not put an Agent endpoint, service key, certificate, or file contents into
+native Configuration or an AgentRevision.
+
+`getGatewayEndpoint` derives
+`wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>` without Kubernetes
+API access. During preparation and activation, Compute reconciles an owned
+`HTTPRoute` in the tenant namespace, attached to the configured Gateway's
+`https` listener. It matches the exact Agent path and hostname, rewrites the
+path to `/`, and targets the existing same-namespace gateway Service.
+Namespaces receive the Gateway membership label used by `allowedRoutes`.
+
+The Service and route remain stable across revision cutover. Retiring an old
+revision preserves a newer gateway's route; final gateway cleanup removes the
+owned route. Reconciliation runs through the existing revision lifecycle; this
+Driver does not add periodic route drift repair. Missing CRDs or denied worker
+permissions fail reconciliation rather than disabling routing silently.
+
+Envoy's Gateway-level SecurityPolicy authenticates the OCC service key before
+forwarding. The route overwrites the native identity and real-IP headers and
+removes caller forwarding and scope headers. Native `allowRealIpFallback`
+accepts Envoy's direct downstream connection address when OCC and Envoy share a
+Pod CIDR. That source address must be nonloopback; a loopback port-forward alone
+is not a working native attribution path.
 
 ## Execution modes
 
@@ -273,8 +342,11 @@ is not currently a supported API operation.
 
 Before deploying an Agent, provision its Agent-specific transport Secret using
 the configured `runtime.transportSecretPrefix`. The Secret name appends the
-first 12 hexadecimal characters of `sha256(agentId)` and contains
-`gateway-token`; dedicated Agents additionally require `app-server-token`.
+first 12 hexadecimal characters of `sha256(agentId)`. Token-mode gateways use
+`gateway-token`; dedicated Agents additionally require `app-server-token`. When
+native Configuration explicitly selects `gateway.auth.mode: "trusted-proxy"`,
+the generated Secret may still contain a `gateway-token` key, but the Driver
+does not project it into the gateway environment.
 
 The selected model credential determines how model access is configured:
 

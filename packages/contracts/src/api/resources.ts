@@ -20,6 +20,7 @@ import {
   ServiceAccountCredentialSchema,
   ServiceAccountId,
   Timestamp,
+  WorkspaceFileName,
 } from "./common.ts";
 
 export const InstallationSchema = Type.Object(
@@ -204,6 +205,34 @@ export const AgentRevisionListResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const WorkspaceFileResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        name: WorkspaceFileName,
+        content: Type.String({ maxLength: 16 * 1024, pattern: "^[^\\u0000]*$" }),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
+export const WorkspaceFileUpdateResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        name: WorkspaceFileName,
+        size: Type.Optional(Type.Integer({ minimum: 0, maximum: 16 * 1024 })),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
 export type InstallationWire = Type.Static<typeof InstallationSchema>;
 export type NamespaceWire = Type.Static<typeof NamespaceSchema>;
 export type ConfigurationWire = Type.Static<typeof ConfigurationSchema>;
@@ -224,3 +253,5 @@ export type AgentListResponse = Type.Static<typeof AgentListResponse>;
 export type ProviderListResponse = Type.Static<typeof ProviderListResponse>;
 export type AgentRevisionResponse = Type.Static<typeof AgentRevisionResponse>;
 export type AgentRevisionListResponse = Type.Static<typeof AgentRevisionListResponse>;
+export type WorkspaceFileResponse = Type.Static<typeof WorkspaceFileResponse>;
+export type WorkspaceFileUpdateResponse = Type.Static<typeof WorkspaceFileUpdateResponse>;

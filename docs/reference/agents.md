@@ -61,6 +61,52 @@ matching Provider and private account binding at admission and reconciliation;
 see [Provider deployment checks](providers.md#agent-association-and-immutable-deployment).
 Creating an Agent does not create a provider account or issue credentials.
 
+## Workspace files
+
+Read, create, or replace `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md`
+in an Agent's live workspace:
+
+```text
+/namespaces/:namespaceId/agents/:agentId/workspace/files/:name
+```
+
+| Method | Operation                  | Agent permission | Response `data`     |
+| ------ | -------------------------- | ---------------- | ------------------- |
+| `GET`  | Read the file              | `read`           | `{ name, content }` |
+| `PUT`  | Create or replace the file | `operate`        | `{ name, size }`    |
+
+Authenticate with a session or scoped service API key. Session-authenticated
+writes must pass the [CSRF checks](authentication.md). The Agent must have an
+active revision and a reachable gateway.
+
+`PUT` accepts one `content` field:
+
+```json
+{ "content": "You are a support assistant.\n" }
+```
+
+`content` must be well-formed Unicode without NUL characters and fit within
+16 KiB when encoded as UTF-8. The complete request body is limited to 48 KiB.
+Successful requests return `200`; `size` is the written content's UTF-8 byte
+count. Successful writes record the Agent, file name, and outcome in the audit log.
+
+| Error                        | Meaning                                              |
+| ---------------------------- | ---------------------------------------------------- |
+| `400 INVALID_REQUEST`        | Invalid file name or content.                        |
+| `404 NOT_FOUND`              | The requested Agent or file was not found.           |
+| `413 PAYLOAD_TOO_LARGE`      | The request body exceeds 48 KiB.                     |
+| `503 DEPENDENCY_UNAVAILABLE` | Workspace access is unavailable.                     |
+| `503 UNKNOWN_OUTCOME`        | OCC could not confirm the write or its audit record. |
+
+After `UNKNOWN_OUTCOME`, read the current file before deciding whether to submit
+another write.
+
+See [gateway routing](gateway-routing.md) for transport configuration and
+[workspace-file setup](../guides/deploy.md#agent-workspace-files) to enable
+access, the [HTTP API](api.md#get-namespacesnamespaceidagentsagentidworkspacefilesname)
+for request and response schemas, and the [execution flow](../flows/workspace-files.md)
+for implementation details.
+
 ## Namespace ownership
 
 An Agent belongs to the Namespace in its creation URL. The controller assigns

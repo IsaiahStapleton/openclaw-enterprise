@@ -68,6 +68,7 @@ see [Testing](docs/testing.md) for suite coverage, credentials, setup, and comma
 - [Feature reference](docs/reference/README.md): supported behavior and Driver contracts.
 - [Platform console](docs/reference/console.md): login, Namespace selection, Agent creation, revision inspection, and supported channel draft edits.
 - [Providers](docs/reference/providers.md): authenticated clients, related Drivers, and optional Agent association.
+- [Agent workspace files](docs/reference/agents.md#workspace-files): read and replace four native Agent workspace files through private Kubernetes routes managed by Compute, Envoy Gateway, and cert-manager.
 - [HTTP API](docs/reference/api.md): routes, request and response schemas, authentication, and permissions.
 - [Spec archive](specs/README.md): proposals and implementation history, with recorded statuses.
 

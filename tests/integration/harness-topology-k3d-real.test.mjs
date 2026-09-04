@@ -7,7 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { createAuthenticatedControllerRequest } from "../helpers/auth-session.mjs";
+import {
+  authenticatedHeaders,
+  createAuthenticatedControllerRequest,
+  signInToControllerApp,
+} from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import {
@@ -17,6 +21,11 @@ import {
   createRealKubernetesFixture,
   kubernetesHash as hash,
 } from "../helpers/kubernetes-real.mjs";
+import {
+  ensureEnvoyGatewayControllers,
+  createEnvoyWorkspaceGatewayPlan,
+  requestNativeGatewayModelTurn,
+} from "../helpers/envoy-workspace-gateway.mjs";
 
 const kubeconfigPath = process.env.OCC_TEST_KUBERNETES_KUBECONFIG;
 const kubernetesContext = process.env.OCC_TEST_KUBERNETES_CONTEXT;
@@ -35,11 +44,18 @@ const slackSelected = process.env.OCC_TEST_SLACK_LIVE === "1";
 const selected =
   !slackSelected &&
   (process.env.OCC_TEST_HARNESS_K3D_REAL === "1" ||
+    process.env.OCC_TEST_GATEWAY_ROUTING_REAL === "1" ||
     [runtimeImage, gatewayImage, codexImage].some(Boolean));
 const requiresProductionCluster = {
   skip: selected
     ? false
     : "Set an explicit k3d kubeconfig/context, immutable real OpenClaw/Codex runtime image references, a dedicated openclaw_k8s_* PostgreSQL database, and OPENAI_API_KEY for production model-turn proof.",
+};
+const requiresGatewayRouting = {
+  skip:
+    process.env.OCC_TEST_GATEWAY_ROUTING_REAL === "1"
+      ? requiresProductionCluster.skip
+      : "Set OCC_TEST_GATEWAY_ROUTING_REAL=1 with Envoy Gateway and cert-manager for private routing proof.",
 };
 const requiresLiveSlack = {
   skip: slackSelected
@@ -67,6 +83,7 @@ const sharedWorkspaceSubPaths = Object.freeze([
 const {
   kubectlArguments,
   kubectl,
+  applyManifest,
   resource,
   resources,
   createControllerIdentity,
@@ -74,6 +91,7 @@ const {
   validatePrerequisites: validateKubernetesPrerequisites,
   provisionAgentTransportSecret,
   startPortForward,
+  startPortForwardTarget,
 } = createRealKubernetesFixture({
   kubeconfigPath,
   kubernetesContext,
@@ -189,6 +207,15 @@ async function createScopedController(context, identifier, platformNamespace, ku
           verbs: ["get", "create", "patch", "delete"],
         },
       },
+      {
+        op: "add",
+        path: "/rules/-",
+        value: {
+          apiGroups: ["gateway.networking.k8s.io"],
+          resources: ["httproutes"],
+          verbs: ["get", "create", "patch", "delete"],
+        },
+      },
     ]),
   );
   const identity = await createControllerIdentity({
@@ -232,7 +259,7 @@ async function createScopedController(context, identifier, platformNamespace, ku
   };
 }
 
-function installationConfiguration(authentication, platformNamespace, slack) {
+function installationConfiguration(authentication, platformNamespace, slack, options = {}) {
   const configuration = createKubernetesInstallationConfiguration({
     authentication,
     platformNamespace,
@@ -251,6 +278,10 @@ function installationConfiguration(authentication, platformNamespace, slack) {
     "limits.memory": "4Gi",
   };
   configuration.drivers.compute.configuration.servicePrincipalCredentials.expirationSeconds = 3_600;
+  if (options.gatewayRouting !== undefined) {
+    configuration.drivers.compute.configuration.gatewayRouting = options.gatewayRouting;
+    delete configuration.drivers.compute.configuration.network.gatewayClients;
+  }
   if (slack !== undefined) {
     configuration.drivers.compute.configuration.runtime.channels = {
       secretPrefix: channelPrefix,
@@ -264,6 +295,16 @@ function nativeConfiguration(harnessId, slack, options = {}) {
   const configuration = createHarnessConfiguration(harnessId, providerModel);
   const provider = harnessId === "codex" ? "codex" : "openai";
   configuration.models.providers[provider].models[0].input = ["text", "image"];
+  if (options.gatewayAuth !== undefined) {
+    configuration.gateway = {
+      ...configuration.gateway,
+      auth: options.gatewayAuth.auth,
+      ...(options.gatewayAuth.allowRealIpFallback === undefined
+        ? {}
+        : { allowRealIpFallback: options.gatewayAuth.allowRealIpFallback }),
+      trustedProxies: options.gatewayAuth.trustedProxies,
+    };
+  }
   if (harnessId === "openclaw") {
     const modelEnvName = options.modelEnvName ?? "OPENAI_API_KEY";
     configuration.secrets = {
@@ -337,6 +378,29 @@ async function createOperatorSecret(namespace, name, key, credential) {
         data: { [key]: Buffer.from(credential).toString("base64") },
       }),
     );
+  });
+}
+
+async function captureCommand(command, args, options = {}) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout = `${stdout}${chunk.toString()}`.slice(-4096);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-4096);
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolve(stdout);
+      else reject(new Error(`${command} failed (${code}): ${stderr}`));
+    });
   });
 }
 
@@ -768,6 +832,25 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     platformNamespace,
     kubeconfig,
   );
+  // Shared infrastructure and API credentials exist before any Agent is created.
+  // The production Compute Driver alone supplies each Agent's route and endpoint.
+  let workspaceGateway;
+  if (options.workspaceGateway === true) {
+    const gatewayHelpers = {
+      kubectl,
+      applyManifest,
+      resource,
+      resources,
+      waitFor,
+      startPortForwardTarget,
+    };
+    await ensureEnvoyGatewayControllers(gatewayHelpers);
+    workspaceGateway = await createEnvoyWorkspaceGatewayPlan(
+      context,
+      { platformNamespace },
+      gatewayHelpers,
+    );
+  }
   const approvedClient = "approved-gateway-client";
   await kubectl(
     "run",
@@ -794,7 +877,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   );
   const [
     { default: pg },
-    { PostgresPlatformState },
+    { BOOTSTRAP_DEFAULT_NAMESPACE_NAME, PostgresPlatformState },
     { createPostgresControllerAuth },
     { loadInstallationConfiguration },
     { composeProduction },
@@ -802,7 +885,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     { kubernetesNamespaceName },
   ] = await Promise.all([
     import("pg"),
-    import("../../packages/occ/src/state/postgres-state.ts"),
+    import("../../packages/occ/src/index.ts"),
     import("../../apps/controller/src/auth/index.ts"),
     import("../../apps/controller/src/composition/installation-config.ts"),
     import("../../apps/controller/src/composition/production.ts"),
@@ -817,9 +900,17 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     controller.authentication,
     platformNamespace,
     slack,
+    workspaceGateway === undefined
+      ? {}
+      : {
+          gatewayRouting: workspaceGateway.routing,
+        },
   );
   const apiConfiguration = structuredClone(workerConfiguration);
   apiConfiguration.drivers.secret.configuration.authentication = controller.apiAuthentication;
+  if (workspaceGateway !== undefined) {
+    apiConfiguration.drivers.compute.configuration.authentication = controller.apiAuthentication;
+  }
   await writeFile(startupPath, JSON.stringify(apiConfiguration), { mode: 0o600 });
   await writeFile(workerStartupPath, JSON.stringify(workerConfiguration), { mode: 0o600 });
   const drivers = await loadInstallationConfiguration({
@@ -858,6 +949,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   });
 
   const existing = await new PostgresPlatformState(observerPool).loadInstallation();
+  let createdFreshInstallation = false;
   if (existing !== undefined) {
     activeInstallation = existing;
     await ensureHarnessAdminPrincipal(
@@ -868,7 +960,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     );
     context.diagnostic(`reusing pre-initialized Installation ${activeInstallation.id}`);
   } else {
-    // Bootstrap only establishes persistent IAM; every actual deployment uses production API/worker.
+    // Bootstrap establishes IAM and the initial default Namespace; production API/worker owns deployment.
     await ensureDevelopmentBootstrap(context, {
       databaseUrl,
       email: credentials.email,
@@ -877,20 +969,67 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       authBaseURL,
       installationName,
     });
+    createdFreshInstallation = true;
   }
 
-  productionApp = await composeProduction({
+  const productionConfig = {
     mode: "production",
     host: "127.0.0.1",
     databaseUrl,
     authSecret,
     authBaseURL,
     drivers,
-  });
+    ...(workspaceGateway === undefined ? {} : { gatewayApiKeyPath: workspaceGateway.apiKeyPath }),
+  };
+  productionApp = await composeProduction(productionConfig);
+  let workspaceRequest;
+  if (workspaceGateway !== undefined) {
+    const session = await signInToControllerApp(productionApp, credentials);
+    await productionApp.listen({ host: "127.0.0.1", port: 0 });
+    const address = productionApp.server.address();
+    assert.ok(address && typeof address === "object");
+    const base = `http://127.0.0.1:${address.port}`;
+    workspaceRequest = async (method, pathname, payload) => {
+      const response = await fetch(`${base}${pathname}`, {
+        method,
+        headers: {
+          ...authenticatedHeaders(session),
+          origin: authBaseURL,
+          ...(payload === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      const body = await response.text();
+      assertNoSecretMaterial(
+        body,
+        [process.env.OPENAI_API_KEY, workspaceGateway.apiKey],
+        "workspace-files controller response must not expose credentials",
+      );
+      return { status: response.status, ...(body.length === 0 ? {} : JSON.parse(body)) };
+    };
+  }
   const adminRequest = await createAuthenticatedControllerRequest(productionApp, credentials);
   let request = adminRequest;
   let secretAssignmentPrincipalId;
   const events = [];
+  let namespaceId;
+  if (createdFreshInstallation) {
+    const namespaces = await adminRequest("GET", "/namespaces");
+    assert.equal(namespaces.status, 200, JSON.stringify(namespaces.error));
+    const defaultNamespace = namespaces.data.find(
+      ({ name }) => name === BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+    );
+    assert.ok(defaultNamespace, "fresh bootstrap must expose the default Namespace");
+    namespaceId = defaultNamespace.id;
+  } else {
+    const createdNamespace = await adminRequest("POST", "/namespaces", {
+      name: `production-${mode}-${randomUUID()}`,
+    });
+    assert.equal(createdNamespace.status, 201);
+    namespaceId = createdNamespace.data.id;
+  }
+  placement = kubernetesNamespaceName(namespaceId);
   workerPool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
   worker = createControllerWorker({
     mode: "production",
@@ -902,13 +1041,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     emit: (event) => events.push(event),
   });
   await worker.start();
-
-  const createdNamespace = await adminRequest("POST", "/namespaces", {
-    name: `production-${mode}-${randomUUID()}`,
-  });
-  assert.equal(createdNamespace.status, 201);
-  const namespaceId = createdNamespace.data.id;
-  placement = kubernetesNamespaceName(namespaceId);
 
   // The real production worker must remain pending until an operator grants this exact tenant.
   await waitFor(`the production worker to create tenant namespace ${placement}`, async () => {
@@ -1143,7 +1275,11 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
         };
   const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
-    values: nativeConfiguration(harnessId, slack),
+    values: nativeConfiguration(
+      harnessId,
+      slack,
+      workspaceGateway?.nativeOptions ?? options.nativeOptions,
+    ),
     ...(secretBindings === undefined ? {} : { secretBindings }),
   });
   assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
@@ -1445,6 +1581,9 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     mode,
     placement,
     platformNamespace,
+    gatewayImage,
+    workspaceGateway,
+    workspaceRequest,
     approvedClient,
     controllerAccount: controller.account,
     controllerTenantRole: controller.tenantRole,
@@ -3353,6 +3492,127 @@ async function assertDedicatedSharedWorkspaceRuntime(context, topology, claim, p
     `dedicated shared workspace PVC persisted across restart and revision: ${claim.metadata.name}`,
   );
 }
+
+async function assertRoutedWorkspaceFilesThroughOcc(topology, connection) {
+  const marker = `occ-agents-${hash(randomUUID())}`;
+  const files = new Map([
+    [
+      "AGENTS.md",
+      `When asked for the configured workspace marker, reply exactly ${marker} and no other text.\n`,
+    ],
+    ["SOUL.md", `Workspace soul proof ${randomUUID()}.\n`],
+    ["IDENTITY.md", `Workspace identity proof ${randomUUID()}.\n`],
+    ["USER.md", `Workspace user proof ${randomUUID()}.\n`],
+  ]);
+  const basePath = `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/workspace/files`;
+  for (const [name, content] of files) {
+    const written = await topology.workspaceRequest("PUT", `${basePath}/${name}`, { content });
+    assert.equal(written.status, 200, JSON.stringify(written.error));
+    assert.deepEqual(written.data, { name, size: Buffer.byteLength(content, "utf8") });
+  }
+  await assertRoutedWorkspaceFileReads(topology, files);
+  await assertRoutedWorkspaceModelTurn(topology, connection, marker);
+  return { marker, files };
+}
+
+async function assertRoutedWorkspaceFileReads(topology, files) {
+  const basePath = `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/workspace/files`;
+  for (const [name, content] of files) {
+    const observed = await topology.workspaceRequest("GET", `${basePath}/${name}`);
+    assert.equal(observed.status, 200, JSON.stringify(observed.error));
+    assert.deepEqual(observed.data, { name, content });
+  }
+}
+
+async function assertRoutedWorkspaceModelTurn(topology, connection, marker) {
+  const turn = await requestNativeGatewayModelTurn({
+    url: connection.url,
+    apiKey: topology.workspaceGateway.apiKey,
+    expectedMarker: marker,
+  });
+  assertNoSecretMaterial(
+    turn.content,
+    [topology.gatewayToken, topology.workspaceGateway.apiKey, process.env.OPENAI_API_KEY],
+    "workspace-file model proof must not expose credentials",
+  );
+}
+
+test(
+  "production dedicated Codex consumes Envoy-routed workspace files through OCC",
+  { ...requiresGatewayRouting, timeout: 900_000 },
+  async (context) => {
+    try {
+      const topology = await arrangeProductionTopology(context, "dedicated", undefined, {
+        workspaceGateway: true,
+      });
+      const connection = await topology.workspaceGateway.connect(topology);
+      const routeBefore = await resource(
+        "httproute",
+        topology.gatewayServiceName,
+        topology.placement,
+      );
+      for (const verb of ["get", "create", "patch", "delete"]) {
+        const denied = await kubectl(
+          "auth",
+          "can-i",
+          verb,
+          "httproutes.gateway.networking.k8s.io",
+          "--namespace",
+          topology.placement,
+          `--as=system:serviceaccount:${topology.platformNamespace}:${topology.apiAccount}`,
+        ).catch(({ stdout }) => stdout);
+        assert.equal(denied.trim(), "no", "the OCC API must not manage tenant HTTPRoutes");
+      }
+      const proof = await assertRoutedWorkspaceFilesThroughOcc(topology, connection);
+      context.diagnostic(
+        "Real Envoy and Compute-created HTTPRoute passed four OCC file writes/reads and fresh native model consumption without API restart.",
+      );
+      await connection.assertSecurity();
+      await connection.rotateApiKey(() => assertRoutedWorkspaceFileReads(topology, proof.files));
+      await assertRoutedWorkspaceFileReads(topology, proof.files);
+      const certificates = await connection.renewCertificate();
+      assert.notEqual(certificates.previous.serialNumber, certificates.next.serialNumber);
+      await assertRoutedWorkspaceFileReads(topology, proof.files);
+      context.diagnostic(
+        "Real Envoy rejected missing/invalid credentials and direct peers; key rotation and served certificate renewal preserved OCC access without restart.",
+      );
+
+      // Replace only the Pod: the stable route and Service must preserve the same workspace.
+      const previousUid = topology.gatewayPod.metadata.uid;
+      await kubectl(
+        "delete",
+        "pod",
+        topology.gatewayPod.metadata.name,
+        "--namespace",
+        topology.placement,
+        "--wait=true",
+        "--timeout=120s",
+      );
+      topology.gatewayPod = await waitForReadyGatewayPod(
+        topology,
+        topology.revision.id,
+        previousUid,
+      );
+      const routeAfter = await resource(
+        "httproute",
+        topology.gatewayServiceName,
+        topology.placement,
+      );
+      assert.equal(routeAfter.metadata.uid, routeBefore.metadata.uid);
+      assert.deepEqual(routeAfter.spec, routeBefore.spec);
+      await assertRoutedWorkspaceFileReads(topology, proof.files);
+      await assertRoutedWorkspaceModelTurn(topology, connection, proof.marker);
+      context.diagnostic(
+        "Gateway Pod UID changed; unchanged route served four persisted files and a second fresh model session.",
+      );
+    } catch (error) {
+      // Emit the failure before Kubernetes teardown so the live run can be diagnosed promptly.
+      process.stderr.write(`Private routing proof failed: ${error.message}\n`);
+      throw error;
+    }
+  },
+);
+
 test(
   "production dedicated Codex preserves gateway SQLite conversations and retained images across Pod replacement",
   { ...requiresProductionCluster, timeout: 1_200_000 },

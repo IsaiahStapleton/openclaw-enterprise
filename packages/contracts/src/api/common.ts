@@ -84,6 +84,20 @@ export const RevisionParams = Type.Object(
   { additionalProperties: false },
 );
 
+export const WORKSPACE_FILE_NAMES = Object.freeze([
+  "AGENTS.md",
+  "SOUL.md",
+  "IDENTITY.md",
+  "USER.md",
+] as const);
+
+export const WorkspaceFileName = Type.Enum([...WORKSPACE_FILE_NAMES]);
+
+export const WorkspaceFileParams = Type.Object(
+  { namespaceId: NamespaceId, agentId: AgentId, name: WorkspaceFileName },
+  { additionalProperties: false },
+);
+
 export const JsonValue = Type.Union(
   [
     Type.String(),
@@ -233,6 +247,18 @@ export const UpdateAgentBody = Type.Object(
   { additionalProperties: false },
 );
 
+export const UpdateWorkspaceFileBody = Type.Object(
+  {
+    content: Type.String({
+      maxLength: 16 * 1024,
+      pattern: "^[^\\u0000]*$",
+      description:
+        "Workspace file content. The controller also enforces a 16 KiB UTF-8 byte limit and rejects unpaired UTF-16 surrogates.",
+    }),
+  },
+  { additionalProperties: false },
+);
+
 export const ERROR_DETAIL_CODES = Object.freeze([
   "REQUIRED",
   "UNKNOWN_FIELD",
@@ -255,6 +281,7 @@ export const ERROR_CODES = Object.freeze([
   "NAMESPACE_NOT_EMPTY",
   "PAYLOAD_TOO_LARGE",
   "UNSUPPORTED_MEDIA_TYPE",
+  "UNKNOWN_OUTCOME",
   "INTERNAL_ERROR",
   "DEPENDENCY_UNAVAILABLE",
 ] as const);
@@ -294,6 +321,7 @@ export const ErrorResponse = Type.Object(
           Type.Literal("NAMESPACE_NOT_EMPTY"),
           Type.Literal("PAYLOAD_TOO_LARGE"),
           Type.Literal("UNSUPPORTED_MEDIA_TYPE"),
+          Type.Literal("UNKNOWN_OUTCOME"),
           Type.Literal("INTERNAL_ERROR"),
           Type.Literal("DEPENDENCY_UNAVAILABLE"),
         ]),
@@ -329,6 +357,8 @@ export type ServiceAccountParams = Type.Static<typeof ServiceAccountParams>;
 export type SecretParams = Type.Static<typeof SecretParams>;
 export type AgentParams = Type.Static<typeof AgentParams>;
 export type RevisionParams = Type.Static<typeof RevisionParams>;
+export type WorkspaceFileName = Type.Static<typeof WorkspaceFileName>;
+export type WorkspaceFileParams = Type.Static<typeof WorkspaceFileParams>;
 export type ConfigurationValues = Type.Static<typeof ConfigurationValues>;
 export type CreateSecretBody = Type.Static<typeof CreateSecretBody>;
 export type UpdateSecretBody = Type.Static<typeof UpdateSecretBody>;
@@ -343,6 +373,7 @@ export type UpdateServiceAccountCredentialBody = Type.Static<
 >;
 export type CreateAgentBody = Type.Static<typeof CreateAgentBody>;
 export type UpdateAgentBody = Type.Static<typeof UpdateAgentBody>;
+export type UpdateWorkspaceFileBody = Type.Static<typeof UpdateWorkspaceFileBody>;
 export type ErrorDetail = Type.Static<typeof ErrorDetail>;
 export type ErrorResponse = Type.Static<typeof ErrorResponse>;
 export type ErrorCode = (typeof ERROR_CODES)[number];

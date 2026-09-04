@@ -18,6 +18,7 @@ import type {
   NamespaceDeleteResult,
   NamespaceEnsureResult,
   OpenClawConfigurationDocument,
+  PermissionAction,
   ProviderDefinition,
   ProviderRef,
   ResourceKind,
@@ -202,6 +203,11 @@ export interface UpdateConfigurationInput {
 export interface DeployAgentInput {
   readonly namespaceId: string;
   readonly agentId: string;
+}
+
+export interface ActiveAgentRevisionSelection {
+  readonly agent: Readonly<Agent>;
+  readonly revision: Readonly<AgentRevision>;
 }
 
 export type ReconciliationOperation = PlatformOperation;
@@ -770,6 +776,57 @@ export class OpenClawController {
           "The AgentRevision does not belong to the exact Agent and Namespace.",
         );
       return revision;
+    });
+  }
+
+  async getReadableActiveAgentRevision(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<ActiveAgentRevisionSelection> {
+    return this.getAuthorizedActiveAgentRevision(principalId, namespaceId, agentId, "read");
+  }
+
+  async getOperableActiveAgentRevision(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<ActiveAgentRevisionSelection> {
+    return this.getAuthorizedActiveAgentRevision(principalId, namespaceId, agentId, "operate");
+  }
+
+  private async getAuthorizedActiveAgentRevision(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    action: PermissionAction,
+  ): Promise<ActiveAgentRevisionSelection> {
+    if (!isNonEmptyString(namespaceId))
+      throw new ScopeViolationError("The exact Namespace identity is missing.");
+    if (!isNonEmptyString(agentId))
+      throw new ScopeViolationError("The exact Agent identity is missing.");
+    await this.authorize(principalId, action, {
+      kind: "agent",
+      id: agentId,
+      namespaceId,
+    });
+    return this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      const agent = await state.agents.findAgent(namespace.id, agentId);
+      if (!agent)
+        throw new ScopeViolationError(
+          "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      if (!isNonEmptyString(agent.activeRevisionId))
+        throw new DependencyUnavailableError("The Agent has no active gateway revision.");
+      const revision = await state.revisions.findRevision(
+        namespace.id,
+        agent.id,
+        agent.activeRevisionId,
+      );
+      if (!revision)
+        throw new DependencyUnavailableError("The active Agent revision is unavailable.");
+      return Object.freeze({ agent, revision });
     });
   }
 

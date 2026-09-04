@@ -38,6 +38,7 @@ const permissions = [
   { action: "update", resourceKind: "agent" },
   { action: "deploy", resourceKind: "agent" },
   { action: "read", resourceKind: "agent_revision" },
+  { action: "administer", resourceKind: "agent" },
 ];
 
 async function createFixture(options = {}) {
@@ -130,8 +131,8 @@ async function createFixture(options = {}) {
   let sequence = 0;
   let configurationSequence = 0;
 
-  function createApp(principal = administrator, overrides = {}) {
-    const app = createControllerApp({
+  function createApp(principal = administrator, overrides = {}, factory = createControllerApp) {
+    const app = factory({
       ...(controller
         ? { controller }
         : {
@@ -168,6 +169,10 @@ async function createFixture(options = {}) {
       },
       auth: adminAuth.auth,
       ...(overrides.maxBodyBytes === undefined ? {} : { maxBodyBytes: overrides.maxBodyBytes }),
+      ...(overrides.gatewayRequestTimeoutMs === undefined
+        ? {}
+        : { gatewayRequestTimeoutMs: overrides.gatewayRequestTimeoutMs }),
+      ...(overrides.publicOrigin === undefined ? {} : { publicOrigin: overrides.publicOrigin }),
     });
     app.defaultSession = sessions.get(principal.id);
     return app;
@@ -187,6 +192,7 @@ async function createFixture(options = {}) {
     tenantAReader,
     auditSink,
     createApp,
+    auth: adminAuth.auth,
     iamDriver,
     state,
     get controller() {

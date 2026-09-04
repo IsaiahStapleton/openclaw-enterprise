@@ -40,6 +40,8 @@ import {
   type SecretMetadata,
   type ServiceAccount,
   type ServiceAccountCredential,
+  type UpdateWorkspaceFileBody,
+  type WorkspaceFileName,
 } from "@openclaw-enterprise/contracts";
 import {
   AuthorizationDeniedError,
@@ -63,6 +65,13 @@ import {
   ConfigurationOwnershipError,
   ConfigurationValidationError,
 } from "./drivers/configuration/kubernetes/index.ts";
+import {
+  ControllerWorkspaceFileUnknownOutcomeError,
+  isAllowedWorkspaceFileName,
+  type ControllerWorkspaceFilesAccess,
+  type ControllerWorkspaceFileReadResult,
+  type ControllerWorkspaceFileWriteResult,
+} from "./gateway/contracts.ts";
 
 export interface DevelopmentAdmission {
   readonly enabled: boolean;
@@ -84,6 +93,9 @@ export interface ControllerAppOptions {
   readonly development: DevelopmentAdmission;
   readonly maxBodyBytes?: number;
   readonly auth: ControllerAuth;
+  readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
+  readonly workspaceFileRequestTimeoutMs?: number;
+  readonly publicOrigin?: string;
   readonly provisionAuthAccount?: (
     seed: AuthPrincipalSeed,
     auditEvent: AuditEvent,
@@ -141,6 +153,8 @@ class RequestFailure extends Error {
 }
 
 const DEFAULT_BODY_LIMIT = 64 * 1024;
+const WORKSPACE_FILE_BODY_LIMIT = 48 * 1024;
+const WORKSPACE_FILE_CONTENT_LIMIT = 16 * 1024;
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const RESOURCE_ID = {
@@ -616,6 +630,26 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
   const bodyLimit = options.maxBodyBytes ?? DEFAULT_BODY_LIMIT;
   if (!Number.isSafeInteger(bodyLimit) || bodyLimit < 1)
     throw new Error("The controller request-body limit must be a positive integer.");
+  const workspaceFileRequestTimeoutMs = options.workspaceFileRequestTimeoutMs ?? 30_000;
+  if (!Number.isSafeInteger(workspaceFileRequestTimeoutMs) || workspaceFileRequestTimeoutMs < 1)
+    throw new Error("The workspace file request timeout must be a positive integer.");
+  let publicOrigin: string | undefined;
+  if (options.publicOrigin !== undefined) {
+    try {
+      const parsed = new URL(options.publicOrigin);
+      publicOrigin = parsed.origin;
+      if (
+        parsed.username ||
+        parsed.password ||
+        parsed.pathname !== "/" ||
+        parsed.search ||
+        parsed.hash
+      )
+        throw new Error("Invalid public origin.");
+    } catch {
+      throw new Error("The controller public origin must be an absolute origin URL.");
+    }
+  }
   validateTrustedDevelopmentCidrs(development);
 
   const app = Fastify({
@@ -789,6 +823,113 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
   function dependencyUnavailable(): RequestFailure {
     return failure(503, "DEPENDENCY_UNAVAILABLE", "A required platform dependency is unavailable.");
+  }
+
+  function requireWorkspaceFileCsrf(request: FastifyRequest, requireOrigin: boolean): void {
+    const admitted = admissions.get(request);
+    if (admitted?.method === "api_key") return;
+    const fetchSite = request.headers["sec-fetch-site"];
+    const fetchSites =
+      fetchSite === undefined ? [] : Array.isArray(fetchSite) ? fetchSite : [fetchSite];
+    if (fetchSites.some((site) => site.toLowerCase() === "cross-site"))
+      throw failure(403, "FORBIDDEN", "The request did not satisfy the configured CSRF boundary.");
+    if (!requireOrigin) return;
+    if (publicOrigin === undefined) throw dependencyUnavailable();
+    const origin = request.headers.origin;
+    if (typeof origin !== "string" || origin !== publicOrigin)
+      throw failure(403, "FORBIDDEN", "The request did not satisfy the configured CSRF boundary.");
+  }
+
+  function workspaceFileRequestSignal(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    timeoutMs: number,
+  ): { readonly signal: AbortSignal; readonly dispose: () => void } {
+    const controller = new AbortController();
+    const abort = (message: string) => {
+      if (!controller.signal.aborted) controller.abort(new Error(message));
+    };
+    const timeout = setTimeout(
+      () => abort(`The workspace file request exceeded its ${timeoutMs}ms deadline.`),
+      timeoutMs,
+    );
+    timeout.unref?.();
+    const onRequestAborted = () =>
+      abort("The HTTP client disconnected before the workspace file request completed.");
+    const onReplyClosed = () => {
+      if (!reply.raw.writableEnded)
+        abort("The HTTP client disconnected before the workspace file request completed.");
+    };
+    if (request.raw.aborted)
+      abort("The HTTP client disconnected before the workspace file request.");
+    request.raw.once("aborted", onRequestAborted);
+    reply.raw.once("close", onReplyClosed);
+    return {
+      signal: controller.signal,
+      dispose() {
+        clearTimeout(timeout);
+        request.raw.off("aborted", onRequestAborted);
+        reply.raw.off("close", onReplyClosed);
+      },
+    };
+  }
+
+  async function withWorkspaceFileRequestSignal<T>(
+    signal: AbortSignal,
+    operation: Promise<T>,
+    abortError: () => Error = dependencyUnavailable,
+  ): Promise<T> {
+    if (signal.aborted) {
+      // The operation has already started; observe any rejection after the HTTP deadline.
+      void operation.catch(() => {});
+      throw abortError();
+    }
+    let abort: (() => void) | undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      abort = () => reject(abortError());
+      signal.addEventListener("abort", abort, { once: true });
+    });
+    try {
+      return await Promise.race([operation, aborted]);
+    } finally {
+      if (abort !== undefined) signal.removeEventListener("abort", abort);
+    }
+  }
+
+  function workspaceFileAuditEvent(
+    operation: OccApiRoute,
+    request: FastifyRequest,
+    resource: ResourceRef,
+    context: RequestContext,
+    filename: WorkspaceFileName,
+    result?: { readonly outcome: "success" | "failure"; readonly reasonCode?: string },
+  ): AuditEvent {
+    const base = event(operation, request, resource, "mutation", context, undefined, result);
+    return {
+      ...base,
+      details: {
+        ...base.details,
+        workspaceFileName: filename,
+      },
+    };
+  }
+
+  function validateWorkspaceFileBody(body: UpdateWorkspaceFileBody): void {
+    const details: ErrorDetail[] = [];
+    if (Buffer.byteLength(body.content, "utf8") > WORKSPACE_FILE_CONTENT_LIMIT)
+      details.push({ path: "/content", code: "TOO_LONG" });
+    const isWellFormed = (
+      String.prototype as unknown as { isWellFormed: (this: string) => boolean }
+    ).isWellFormed;
+    if (body.content.includes("\u0000") || !isWellFormed.call(body.content))
+      details.push({ path: "/content", code: "INVALID_VALUE" });
+    if (details.length > 0)
+      throw failure(
+        400,
+        "INVALID_REQUEST",
+        "The request does not match the operation contract.",
+        details,
+      );
   }
 
   async function requireInstallationAdmin(
@@ -1574,6 +1715,189 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       }
     }
 
+    if (
+      operation.operationId === "getAgentWorkspaceFile" ||
+      operation.operationId === "putAgentWorkspaceFile"
+    ) {
+      const deadlineMs = workspaceFileRequestTimeoutMs;
+      const workspaceFileSignal = workspaceFileRequestSignal(request, reply, deadlineMs);
+      const signal = workspaceFileSignal.signal;
+      const deadline = new Date(Date.now() + deadlineMs);
+      try {
+        requireWorkspaceFileCsrf(request, operation.operationId === "putAgentWorkspaceFile");
+        if (options.workspaceFilesAccess === undefined) throw dependencyUnavailable();
+        const filename = params.name;
+        if (filename === undefined || !isAllowedWorkspaceFileName(filename))
+          throw failure(
+            400,
+            "INVALID_REQUEST",
+            "The request does not match the operation contract.",
+          );
+        if (signal.aborted) throw dependencyUnavailable();
+        const { agent, revision } = await withWorkspaceFileRequestSignal(
+          signal,
+          operation.operationId === "getAgentWorkspaceFile"
+            ? controller.getReadableActiveAgentRevision(context.actorId, namespaceId, agentId)
+            : controller.getOperableActiveAgentRevision(context.actorId, namespaceId, agentId),
+        );
+        const target = { kind: "agent" as const, id: agent.id, namespaceId: agent.namespaceId };
+        if (signal.aborted) throw dependencyUnavailable();
+
+        if (operation.operationId === "getAgentWorkspaceFile") {
+          let result: ControllerWorkspaceFileReadResult;
+          try {
+            if (signal.aborted) throw dependencyUnavailable();
+            result = await withWorkspaceFileRequestSignal(
+              signal,
+              options.workspaceFilesAccess.read({
+                revision,
+                filename,
+                signal,
+                deadline,
+              }),
+            );
+          } catch {
+            throw dependencyUnavailable();
+          }
+          if (result.status === "missing") {
+            throw failure(404, "NOT_FOUND", "The requested workspace file was not found.");
+          }
+          if (result.status === "unavailable") {
+            throw dependencyUnavailable();
+          }
+          const isWellFormed = (
+            String.prototype as unknown as { isWellFormed: (this: string) => boolean }
+          ).isWellFormed;
+          if (
+            Buffer.byteLength(result.file.content, "utf8") > WORKSPACE_FILE_CONTENT_LIMIT ||
+            result.file.content.includes("\u0000") ||
+            !isWellFormed.call(result.file.content)
+          )
+            throw dependencyUnavailable();
+          reply.send({
+            data: { name: filename, content: result.file.content },
+            meta: { requestId: request.id },
+          });
+          return;
+        }
+
+        const writeBody = body as unknown as UpdateWorkspaceFileBody;
+        validateWorkspaceFileBody(writeBody);
+        let result: ControllerWorkspaceFileWriteResult;
+        try {
+          if (signal.aborted) throw dependencyUnavailable();
+          result = await withWorkspaceFileRequestSignal(
+            signal,
+            options.workspaceFilesAccess.write({
+              revision,
+              filename,
+              content: writeBody.content,
+              signal,
+              deadline,
+            }),
+            () =>
+              new ControllerWorkspaceFileUnknownOutcomeError(
+                "The workspace file write reached the OCC request deadline before the controller observed its outcome.",
+              ),
+          );
+        } catch (error) {
+          if (error instanceof ControllerWorkspaceFileUnknownOutcomeError) {
+            try {
+              await withWorkspaceFileRequestSignal(
+                signal,
+                options.auditSink.append(
+                  workspaceFileAuditEvent(operation, request, target, context, filename, {
+                    outcome: "failure",
+                    reasonCode: "UNKNOWN_OUTCOME",
+                  }),
+                ),
+                () => new ControllerWorkspaceFileUnknownOutcomeError(error.message),
+              );
+            } catch {
+              throw failure(503, "UNKNOWN_OUTCOME", error.message);
+            }
+            throw failure(503, "UNKNOWN_OUTCOME", error.message);
+          }
+          try {
+            await withWorkspaceFileRequestSignal(
+              signal,
+              options.auditSink.append(
+                workspaceFileAuditEvent(operation, request, target, context, filename, {
+                  outcome: "failure",
+                  reasonCode: "DEPENDENCY_UNAVAILABLE",
+                }),
+              ),
+            );
+          } catch {
+            throw dependencyUnavailable();
+          }
+          throw dependencyUnavailable();
+        }
+        if (result.status === "missing") {
+          try {
+            await withWorkspaceFileRequestSignal(
+              signal,
+              options.auditSink.append(
+                workspaceFileAuditEvent(operation, request, target, context, filename, {
+                  outcome: "failure",
+                  reasonCode: "FILE_MISSING",
+                }),
+              ),
+            );
+          } catch {
+            throw dependencyUnavailable();
+          }
+          throw failure(404, "NOT_FOUND", "The requested workspace file was not found.");
+        }
+        if (result.status === "unavailable") {
+          try {
+            await withWorkspaceFileRequestSignal(
+              signal,
+              options.auditSink.append(
+                workspaceFileAuditEvent(operation, request, target, context, filename, {
+                  outcome: "failure",
+                  reasonCode: "DEPENDENCY_UNAVAILABLE",
+                }),
+              ),
+            );
+          } catch {
+            throw dependencyUnavailable();
+          }
+          throw dependencyUnavailable();
+        }
+        try {
+          await withWorkspaceFileRequestSignal(
+            signal,
+            options.auditSink.append(
+              workspaceFileAuditEvent(operation, request, target, context, filename, {
+                outcome: "success",
+              }),
+            ),
+            () =>
+              new ControllerWorkspaceFileUnknownOutcomeError(
+                "The workspace file was written, but its final audit outcome could not be persisted before the request ended.",
+              ),
+          );
+        } catch {
+          throw failure(
+            503,
+            "UNKNOWN_OUTCOME",
+            "The workspace file was written, but its final audit outcome could not be persisted.",
+          );
+        }
+        reply.send({
+          data: {
+            name: filename,
+            size: Buffer.byteLength(writeBody.content, "utf8"),
+          },
+          meta: { requestId: request.id },
+        });
+        return;
+      } finally {
+        workspaceFileSignal.dispose();
+      }
+    }
+
     if (operation.operationId === "listAgentRevisions") {
       const revisions = await controller.listRevisions(context.actorId, namespaceId, agentId);
       reply.send({
@@ -2028,6 +2352,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       routes.route({
         method: operation.method as HTTPMethods,
         url: operation.path,
+        ...(operation.operationId === "putAgentWorkspaceFile"
+          ? { bodyLimit: WORKSPACE_FILE_BODY_LIMIT }
+          : {}),
         schema,
         onRequest: async (request) => admit(request, operation),
         preValidation: async (request) => {

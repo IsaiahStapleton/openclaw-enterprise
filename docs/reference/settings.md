@@ -119,15 +119,17 @@ cluster must enforce NetworkPolicies. Do not expose the listener through an
 Ingress, Gateway API route, `NodePort`, `LoadBalancer`, `hostNetwork`, or public
 endpoint.
 
-| Variable            | Required value or format                            | Behavior                                                              |
-| ------------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
-| `NODE_ENV`          | Exactly `production`.                               | Enables durable production controller composition.                    |
-| `OCC_HOST`          | One explicit Pod interface IP address.              | Wildcard addresses and implicit hostnames are rejected.               |
-| `OCC_PORT`          | Decimal integer from `1` through `65535`.           | Selects the internal listener port exposed by the operator's Service. |
-| `OCC_DATABASE_URL`  | Explicit PostgreSQL application-role URL.           | Must connect to the already migrated controller database.             |
-| `OCC_CONFIG_PATH`   | Absolute path to trusted Installation startup YAML. | Selects Configuration, IAM, Compute, and optional account Drivers.    |
-| `OCC_AUTH_SECRET`   | Mounted high-entropy Better Auth secret.            | Signs and verifies session material without logging it.               |
-| `OCC_AUTH_BASE_URL` | Absolute controller base URL.                       | Defines the production Better Auth base URL and cookie origin.        |
+| Variable                   | Required value or format                                        | Behavior                                                                                                                |
+| -------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                 | Exactly `production`.                                           | Enables durable production controller composition.                                                                      |
+| `OCC_HOST`                 | One explicit Pod interface IP address.                          | Wildcard addresses and implicit hostnames are rejected.                                                                 |
+| `OCC_PORT`                 | Decimal integer from `1` through `65535`.                       | Selects the internal listener port exposed by the operator's Service.                                                   |
+| `OCC_DATABASE_URL`         | Explicit PostgreSQL application-role URL.                       | Must connect to the already migrated controller database.                                                               |
+| `OCC_CONFIG_PATH`          | Absolute path to trusted Installation startup YAML.             | Selects Configuration, IAM, Compute, and optional account Drivers.                                                      |
+| `OCC_AUTH_SECRET`          | Mounted high-entropy Better Auth secret.                        | Signs and verifies session material without logging it.                                                                 |
+| `OCC_AUTH_BASE_URL`        | Absolute controller base URL.                                   | Defines the production Better Auth base URL and cookie origin.                                                          |
+| `OCC_GATEWAY_API_KEY_PATH` | Optional absolute path to the private gateway service-key file. | API only; validates at startup and reads each operation for rotation. Requires Compute endpoint resolution.             |
+| `NODE_EXTRA_CA_CERTS`      | Optional PEM bundle for a private gateway CA.                   | Node reads it at process startup. Normal leaf renewal under that CA does not require a restart; root-bundle changes do. |
 
 The API and worker load the same trusted startup YAML; only the API initializes
 the optional [Provider client](providers.md). Both validate Provider membership
@@ -141,6 +143,40 @@ identity or explicitly named kubeconfig/context. The processes then verify
 authenticated, TLS-checked, read-only Kubernetes Namespace access before serving
 requests or claiming work. Installed Drivers validate their own reviewed
 configuration and implementation-specific prerequisites.
+
+Agent workspace-file requests use the selected Compute Driver's private gateway
+endpoint. Kubernetes derives the URL from the optional `gatewayRouting.hostname`
+and the admitted Namespace and Agent IDs. If the hostname is omitted or empty,
+Compute derives the chart's Service DNS hostname from the required `gatewayName`,
+`gatewayNamespace`, and `envoyNamespace`; see the
+[hostname contract](drivers/kubernetes-compute.md#private-agent-gateway-routes).
+`gatewayName` and `gatewayNamespace` identify the route's parent Gateway;
+`envoyNamespace` selects its data-plane namespace.
+Compute derives the allowed Envoy peer from those routing settings and rejects
+explicit `network.gatewayClients` in routed mode. It does not read a per-Agent
+endpoint file or persist a URL in Agent Configuration.
+
+`OCC_GATEWAY_API_KEY_PATH` mounts a dedicated, high-entropy Envoy service key into
+the API only. Missing or invalid configured key files fail startup; a file that
+becomes unavailable during rotation makes new requests unavailable. Never reuse
+the Better Auth signing secret or a model-provider credential. The worker needs
+route configuration and namespace-bound HTTPRoute permissions, but no service
+key or CA bundle for native file access.
+
+With Helm routing enabled and no `gatewayRouting.issuerRef.name`, cert-manager
+bootstraps a private CA and issues Envoy's certificate. The chart projects only
+the generated root Secret's public `tls.crt` into the API and sets
+`NODE_EXTRA_CA_CERTS`; the CA signing key is never mounted into OCC. An explicit
+issuer selects operator-managed issuance instead. Its optional `caSecretName`
+and `caSecretKey` must be supplied together when additional CA trust is needed.
+
+See [private Agent gateway routes](drivers/kubernetes-compute.md#private-agent-gateway-routes)
+for the Compute contract, and the
+[deployment procedure](../guides/deploy.md#agent-workspace-files) for Envoy,
+cert-manager, native trusted-proxy configuration, and key/certificate rotation.
+The default token-authenticated native gateway does not enable this path by
+itself. Unsupported Drivers and unavailable endpoints return
+`503 DEPENDENCY_UNAVAILABLE`.
 
 Missing, invalid, expired, or revoked sessions or service keys return `401`; an
 authenticated Principal or ServicePrincipal without the exact existing IAM grant
@@ -194,11 +230,12 @@ replace, or regenerate output; see [recovery](../guides/deploy.md#recover-an-inc
 
 ## Optional controller environment
 
-| Variable                | Default or behavior when omitted                                                                     | Validation and scope                                                                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `OCC_DATABASE_URL`      | Compose supplies PostgreSQL. Manual host-process debugging should also set the application-role URL. | Must use a `postgresql:` or `postgres:` URL and the application role for the supported development path.      |
-| `OCC_CONFIG_PATH`       | Optional in development; required in production.                                                     | Must be an absolute path to trusted, closed-schema Installation startup YAML whenever present.                |
-| `OCC_DATABASE_POOL_MAX` | The installed PostgreSQL client's default: `10`.                                                     | Must be a positive safe integer. Applies to the PostgreSQL connection pool; it is validated whenever present. |
+| Variable                   | Default or behavior when omitted                                                                     | Validation and scope                                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `OCC_DATABASE_URL`         | Compose supplies PostgreSQL. Manual host-process debugging should also set the application-role URL. | Must use a `postgresql:` or `postgres:` URL and the application role for the supported development path.                      |
+| `OCC_CONFIG_PATH`          | Optional in development; required in production.                                                     | Must be an absolute path to trusted, closed-schema Installation startup YAML whenever present.                                |
+| `OCC_GATEWAY_API_KEY_PATH` | Optional when development selects Kubernetes Compute with private routing.                           | Absolute mounted service-key file, read by the API only. Docker Compute does not provide private gateway endpoint resolution. |
+| `OCC_DATABASE_POOL_MAX`    | The installed PostgreSQL client's default: `10`.                                                     | Must be a positive safe integer. Applies to the PostgreSQL connection pool; it is validated whenever present.                 |
 
 OCC resolves the one persisted Installation internally; no startup environment
 variable or YAML field supplies its identifier. The stable ID remains visible
@@ -485,12 +522,14 @@ or model turn. A separate real-runtime lane below provides model-turn proof.
 
 [`harness-topology-k3d-real.test.mjs`](../../tests/integration/harness-topology-k3d-real.test.mjs)
 is independently opt-in. Set `OCC_TEST_HARNESS_K3D_REAL=1` or explicitly select
-a real runtime image to enable the ordinary three-case suite. Once selected,
+a real runtime image to enable the ordinary runtime suite. Once selected,
 missing cluster, image, database, credential, or NetworkPolicy prerequisites
 fail instead of skipping. The ordinary suite verifies dedicated Codex, embedded
 OpenClaw with a persisted provider credential, and embedded OpenClaw with the
 Secret API through real Enterprise gateways on an explicitly selected disposable
-k3d cluster. For dedicated Codex coverage, set `OCC_TEST_OPENAI_MODEL` to an
+k3d cluster. It does not prove Agent workspace-file private routing until
+Compute HTTPRoutes, real Envoy Gateway, cert-manager, OCC, and the native Agent
+runtime are tested together. For dedicated Codex coverage, set `OCC_TEST_OPENAI_MODEL` to an
 authorized model that supports Codex custom tools, such as `gpt-5.1`; the source
 default remains `gpt-4.1`.
 
@@ -509,10 +548,21 @@ default remains `gpt-4.1`.
 | `OPENAI_API_KEY`                       | Existing authorized provider credential for real embedded and dedicated model turns.                   |
 | `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-4.1`.                                                      |
 
+The separate workspace-file routing case requires
+`OCC_TEST_GATEWAY_ROUTING_REAL=1` and the same runtime prerequisites. It also
+requires ready Envoy Gateway and cert-manager controllers, free local port
+443, `OCC_TEST_GATEWAY_CA_CERT_PATH`, `OCC_TEST_GATEWAY_CA_KEY_PATH`, and
+`NODE_EXTRA_CA_CERTS` set before Node starts. Controller namespace overrides
+are `OCC_TEST_ENVOY_GATEWAY_NAMESPACE` (default `envoy-gateway-system`) and
+`OCC_TEST_CERT_MANAGER_NAMESPACE` (default `cert-manager`). See the
+[focused routing proof](../testing.md#kubernetes-model-turns-and-secrets) for
+the disposable CA and command. The CA private key is test setup only; the
+production OCC API mounts only a public trust bundle.
+
 ### Slack test environment
 
 `OCC_TEST_SLACK_LIVE=1` selects the separate live Slack case and suppresses the
-ordinary three-case suite. The Slack case uses the same production k3d,
+ordinary runtime suite. The Slack case uses the same production k3d,
 PostgreSQL, image, and model-turn prerequisites, then posts a real message and
 waits for a gateway-authored reply. It does not delete the Slack messages it
 creates.
@@ -708,7 +758,8 @@ clock and audit-ID generator; their defaults are the current time and a new
 accept an explicit `authentication` mode
 (`"inCluster"` or `"kubeconfig"`); approved `images` and immutable-image
 policy; explicit gateway, Agent, and namespace `resources`; exact DNS and
-gateway-client `network` peers; `servicePrincipalCredentials` policy; and an
+either private `gatewayRouting` or direct gateway-client `network` peers;
+`servicePrincipalCredentials` policy; and an
 explicit production `runtime` containing per-Agent operator-provisioned
 transport and model Secret-name prefixes and required
 `gatewayStorageClassName` selecting the StorageClass for each gateway's private

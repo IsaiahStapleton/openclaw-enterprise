@@ -19,6 +19,8 @@ import {
   UpdateConfigurationBody,
   UpdateSecretBody,
   UpdateServiceAccountCredentialBody,
+  UpdateWorkspaceFileBody,
+  WorkspaceFileParams,
 } from "./common.ts";
 import {
   AgentListResponse,
@@ -32,6 +34,8 @@ import {
   ProviderListResponse,
   ServiceAccountListResponse,
   ServiceAccountResponse,
+  WorkspaceFileResponse,
+  WorkspaceFileUpdateResponse,
 } from "./resources.ts";
 
 const ErrorResponseRef = Type.Ref("ErrorResponse");
@@ -489,6 +493,39 @@ export const occApiRoutes = [
       querystring: EmptyQuery,
       params: AgentParams,
       response: { 202: AgentRevisionResponse, ...mutationErrors },
+    },
+  },
+  {
+    operationId: "getAgentWorkspaceFile",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/workspace/files/:name",
+    action: "openclaw.agents.workspace.files.read",
+    iamAction: "read",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Read an allowed workspace file from one active Agent",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: WorkspaceFileParams,
+      response: { 200: WorkspaceFileResponse, ...readErrors },
+    },
+  },
+  {
+    operationId: "putAgentWorkspaceFile",
+    method: "PUT",
+    path: "/namespaces/:namespaceId/agents/:agentId/workspace/files/:name",
+    action: "openclaw.agents.workspace.files.write",
+    iamAction: "operate",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Create or replace an allowed workspace file for one active Agent",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: WorkspaceFileParams,
+      body: UpdateWorkspaceFileBody,
+      response: { 200: WorkspaceFileUpdateResponse, ...createErrors },
     },
   },
   {

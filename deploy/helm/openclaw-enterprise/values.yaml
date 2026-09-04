@@ -27,6 +27,31 @@ provider:
     key: admin-key
     providerCidr: ""
 
+gatewayRouting:
+  enabled: false
+  # Empty derives the private Envoy Service DNS name:
+  # occ-gateway-<route-hash>.<envoyNamespace>.svc.
+  hostname: ""
+  gatewayClassName: ""
+  gatewayName: ""
+  envoyNamespace: envoy-gateway-system
+  apiKeySecretName: ""
+  # Set caSecretName/caSecretKey only with an external issuerRef.name to mount
+  # public CA trust into the API. Empty issuerRef.name generates a private CA.
+  caSecretName: ""
+  caSecretKey: ""
+  tlsSecretName: ""
+  tenantGatewayPort: 8080
+  envoyHttpsTargetPort: 10443
+  issuerRef:
+    # Empty bootstraps a namespaced SelfSigned root and CA Issuer for the leaf.
+    name: ""
+    kind: ClusterIssuer
+    group: cert-manager.io
+  envoyGatewayPodLabels:
+    control-plane: envoy-gateway
+    app.kubernetes.io/name: gateway-helm
+
 database:
   secretName: occ-database
   appUrlKey: application-url
