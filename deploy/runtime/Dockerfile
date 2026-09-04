@@ -3,6 +3,7 @@ FROM ${NODE_BASE_IMAGE}
 
 ARG OPENCLAW_VERSION=2026.7.1
 ARG OPENCLAW_CODEX_PLUGIN_VERSION=2026.7.1-1
+ARG OPENCLAW_SLACK_PLUGIN_VERSION=2026.7.1
 ARG OPENAI_CODEX_VERSION=0.147.0
 
 ENV NODE_ENV=production
@@ -16,11 +17,14 @@ RUN npm init -y >/dev/null \
   && npm install --omit=dev --no-audit --no-fund \
     "openclaw@${OPENCLAW_VERSION}" \
     "@openclaw/codex@${OPENCLAW_CODEX_PLUGIN_VERSION}" \
+    "@openclaw/slack@${OPENCLAW_SLACK_PLUGIN_VERSION}" \
     "@openai/codex@${OPENAI_CODEX_VERSION}" \
   && npm cache clean --force
 
 RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw \
   && cp -R node_modules/@openclaw/codex node_modules/openclaw/dist/extensions/codex \
+  && cp -R node_modules/@openclaw/slack node_modules/openclaw/dist/extensions/slack \
+  && cp -R node_modules/@openclaw/slack/skills/slack ./plugin-skills/slack \
   && ln -s node_modules/openclaw/openclaw.mjs ./openclaw.mjs \
   && ln -s node_modules/openclaw/dist ./dist \
   && cp -R node_modules/openclaw/skills ./skills \
@@ -28,8 +32,10 @@ RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw
   && test -L /app/dist \
   && test -d /app/skills \
   && test ! -L /app/skills \
+  && test -d /app/plugin-skills/slack \
   && node /app/openclaw.mjs --version \
   && codex --version \
-  && test -f /app/dist/extensions/codex/openclaw.plugin.json
+  && test -f /app/dist/extensions/codex/openclaw.plugin.json \
+  && test -f /app/dist/extensions/slack/openclaw.plugin.json
 
 USER node

@@ -20,18 +20,21 @@ account has at most one credential reference; its provider identity and
 credential bytes remain private. Creating an account is supported while its
 Namespace is `provisioning` or `ready`.
 
-| Operation                                                                      | Required exact permission                       |
-| ------------------------------------------------------------------------------ | ----------------------------------------------- |
-| `POST /namespaces/:namespaceId/service-accounts`                               | `create` on the Namespace's account collection. |
-| `GET /namespaces/:namespaceId/service-accounts/:serviceAccountId`              | `read` on the account.                          |
-| `POST /namespaces/:namespaceId/service-accounts/:serviceAccountId/credentials` | `update` on the exact account.                  |
-| `PATCH /namespaces/:namespaceId/service-accounts/:serviceAccountId/credential` | `update` on the native account.                 |
-| `DELETE /namespaces/:namespaceId/service-accounts/:serviceAccountId`           | `delete` on the unreferenced account.           |
+| Operation                                                                      | Required exact permission                          |
+| ------------------------------------------------------------------------------ | -------------------------------------------------- |
+| `POST /namespaces/:namespaceId/service-accounts`                               | `create` on the Namespace's account collection.    |
+| `GET /namespaces/:namespaceId/service-accounts`                                | `read` on the Namespace and each returned account. |
+| `GET /namespaces/:namespaceId/service-accounts/:serviceAccountId`              | `read` on the account.                             |
+| `POST /namespaces/:namespaceId/service-accounts/:serviceAccountId/credentials` | `update` on the exact account.                     |
+| `PATCH /namespaces/:namespaceId/service-accounts/:serviceAccountId/credential` | `update` on the native account.                    |
+| `DELETE /namespaces/:namespaceId/service-accounts/:serviceAccountId`           | `delete` on the unreferenced account.              |
 
 Account creation and credential issuance are separate. OCC authorizes each
 operation before provider or Kubernetes effects; provider authorization remains
 independent. Responses expose only OCC account metadata and an optional generic
 credential/Secret reference, never provider identities or credential bytes.
+Collection reads require `read` on the Namespace and return only accounts for
+which the caller also has exact-account `read`.
 
 ## Provider selection and configuration
 

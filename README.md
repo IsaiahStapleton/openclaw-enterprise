@@ -17,9 +17,10 @@ the local stack and run with:
 The helper uses Docker Compose, prepares the default quickstart runtime image
 when needed, and prints the loopback OCC URL, Installation ID, and private
 [service-key](docs/guides/concepts.md#identity-and-access) file path. Open the
-printed API URL with `/console/` to sign in and browse accessible Agents,
-Providers, and Namespaces. To deploy an Agent and attach the OpenClaw terminal
-UI to a real model-backed [runtime](docs/guides/concepts.md#gateways-and-harnesses),
+printed API URL with `/console/` to sign in, browse accessible Agents, Providers,
+and Namespaces, create Agents with editable Configuration JSON, and edit supported
+channel draft settings. To deploy an Agent and attach the OpenClaw terminal UI
+to a real model-backed [runtime](docs/guides/concepts.md#gateways-and-harnesses),
 continue to [development docs](docs/guides/deploy.md#development-end-to-end-tui).
 A model credential is required to run Agent model turns, but not to start the
 stack.
@@ -49,15 +50,15 @@ see [Testing](docs/testing.md) for suite coverage, credentials, setup, and comma
 
 ## Code layout
 
-| Path                                          | Responsibility                                                                                     |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `apps/controller/`                            | HTTP API, read-only console, worker, and [Drivers](docs/guides/concepts.md#drivers-and-providers). |
-| `packages/contracts/`                         | Resource models, Driver interfaces, and API schemas.                                               |
-| `packages/occ/`                               | Resource lifecycle, persistence, and work queue.                                                   |
-| `packages/iam/`                               | Identities, roles, and resource authorization.                                                     |
-| `packages/audit/`                             | Audit events and sensitive-value sanitization.                                                     |
-| [`packages/utils/`](packages/utils/README.md) | Shared validation, hashing, and object helpers.                                                    |
-| `tests/`                                      | Conformance and integration tests.                                                                 |
+| Path                                          | Responsibility                                                                                   |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `apps/controller/`                            | HTTP API, browser console, worker, and [Drivers](docs/guides/concepts.md#drivers-and-providers). |
+| `packages/contracts/`                         | Resource models, Driver interfaces, and API schemas.                                             |
+| `packages/occ/`                               | Resource lifecycle, persistence, and work queue.                                                 |
+| `packages/iam/`                               | Identities, roles, and resource authorization.                                                   |
+| `packages/audit/`                             | Audit events and sensitive-value sanitization.                                                   |
+| [`packages/utils/`](packages/utils/README.md) | Shared validation, hashing, and object helpers.                                                  |
+| `tests/`                                      | Conformance and integration tests.                                                               |
 
 ## Documentation
 
@@ -65,7 +66,7 @@ see [Testing](docs/testing.md) for suite coverage, credentials, setup, and comma
 - [Documentation map](docs/README.md): guides, references, and runtime flows.
 - [Platform design](docs/design.md) and [current architecture](docs/ARCHITECTURE.md): target design and implemented components.
 - [Feature reference](docs/reference/README.md): supported behavior and Driver contracts.
-- [Platform console](docs/reference/console.md): login, read-only collections, and Namespace selection.
+- [Platform console](docs/reference/console.md): login, Namespace selection, Agent creation, revision inspection, and supported channel draft edits.
 - [Providers](docs/reference/providers.md): authenticated clients, related Drivers, and optional Agent association.
 - [Agent workspace files](docs/reference/agents.md#workspace-files): read and replace four native Agent workspace files through private Kubernetes routes managed by Compute, Envoy Gateway, and cert-manager.
 - [HTTP API](docs/reference/api.md): routes, request and response schemas, authentication, and permissions.

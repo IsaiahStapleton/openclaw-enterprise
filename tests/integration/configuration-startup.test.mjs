@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -267,14 +267,27 @@ test("production embedded and dedicated replacements preserve their active Servi
       revisionId: revision.id,
       ready: true,
     });
+    const now = new Date();
     const claim = {
+      idempotencyKey: `revision:${candidate.id}:reconcile`,
       namespaceId,
       agentId,
       revisionId: candidate.id,
       actorId: "principal-production",
+      state: "claimed",
+      claimToken: randomUUID(),
+      leaseExpiresAt: new Date(now.getTime() + 30_000),
+      availableAt: now,
       attemptCount: 1,
-      createdAt: new Date(),
+      createdAt: now,
+      updatedAt: now,
     };
+    // This selector unit assumes a live claim at the queue boundary; actual
+    // renewal/loss is exercised by the PostgreSQL worker and stale-claim suites.
+    const heartbeat = t.mock.method(worker.queue, "heartbeat", async (received) => {
+      assert.equal(received, claim);
+      return claim;
+    });
 
     // Preparation must leave each mode's currently serving selector untouched before CAS.
     const observation = await worker.observeRevision(claim, candidate, predecessor, predecessor.id);
@@ -358,6 +371,7 @@ test("production embedded and dedicated replacements preserve their active Servi
     assert.equal(Object.hasOwn(initial, "expectedActiveRevisionId"), false);
     assert.deepEqual(serviceWrites, embedded ? [] : [inactiveSelector]);
     assert.deepEqual(service.spec.selector, inactiveSelector);
+    heartbeat.mock.restore();
   }
 });
 

@@ -1268,6 +1268,21 @@ export class PostgresPlatformState implements PlatformStateStore {
 
     const serviceAccounts: ServiceAccountRepository = {
       findServiceAccount,
+      listServiceAccounts: async (namespaceId) =>
+        Object.freeze(
+          rows(
+            (
+              await client.query(
+                `SELECT s.id, s.namespace_id, s.name, s.credential
+                 FROM occ.service_accounts AS s
+                 JOIN occ.namespaces AS n ON n.id = s.namespace_id AND n.deleted_at IS NULL
+                 WHERE s.namespace_id = $1
+                 ORDER BY s.name, s.id`,
+                [namespaceId],
+              )
+            ).rows,
+          ).map(serviceAccountFromRow),
+        ),
       findServiceAccountProviderBinding: async (namespaceId, serviceAccountId) => {
         const found = rows(
           (

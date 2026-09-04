@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
 updated: 2026-09-01
-last_updated_session: codex/01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Controller Worker Flow
@@ -83,7 +83,7 @@ and starting `run()`.
 
 The worker has no HTTP listener, Better Auth session service, or provider-admin
 client. Compose and Helm keep it separate from the API process. See the
-[development](development-startup.md) and
+[development](docker-compose-development.md) and
 [production](production-startup.md) startup flows for their input boundaries.
 
 ### 2. Commit API admission and the durable work record
@@ -145,7 +145,7 @@ checks. The worker then resolves the revision's frozen Provider metadata and
 rechecks any managed credential's exact Provider, Driver, workspace, and issued
 account binding before Compute effects. It uses a read-only projection and has
 no Provider client or admin key. The
-[Provider lifecycle flow](provider-driver-lifecycle.md) owns these checks.
+[Provider-managed credential delivery flow](service-account-driver-credential-delivery.md) owns these checks.
 
 Revoked actors and denied operations become permanent results before runtime
 creation. A revision older than the current active revision completes as
@@ -164,8 +164,11 @@ immutable snapshot. The worker validates the returned observation's owner and
 shape before treating it as ready. A pending observation defers convergence;
 an invalid observation fails permanently.
 
-`withClaimHeartbeat()` renews the claim roughly every third of its lease
-duration and propagates an abort signal into Compute. A lost lease, failed
+`withClaimHeartbeat()` renews the claim before starting each effect and then
+roughly every third of its lease duration while the effect runs. The initial
+renewal also keeps a sequence of short effects alive when no individual effect
+lasts long enough for its timer to fire. It propagates an abort signal into
+Compute. A lost lease, failed
 heartbeat, or worker shutdown aborts the operation context and raises
 `WorkClaimLostError`. The stale worker cannot publish its result under an expired
 or replaced token.
@@ -253,13 +256,13 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 
 ## Related docs
 
-- [Provider and Driver lifecycle](provider-driver-lifecycle.md)
+- [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
 
 - [Controller reference](../reference/controller.md)
 - [Deployment guide: development and production](../guides/deploy.md)
 - [Controller settings](../reference/settings.md)
 - [IAM authorization](../reference/authorization.md)
-- [Development startup flow](development-startup.md)
+- [Docker development flow](docker-compose-development.md)
 - [Production startup flow](production-startup.md)
 - [Docker Compose development flow](docker-compose-development.md)
 - [Harness execution topology](harness-execution-topology.md)
@@ -272,6 +275,5 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 
 ## Changelog
 
-- 2026-09-01 08:47: Preserve providerless API-key execution and document Provider metadata checks before workload effects. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
-
+- 2026-09-01 19:09: Preserve providerless API-key execution and document Provider metadata checks before workload effects. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-28 17:56: Converted the worker overview into a source-ordered execution trace covering startup, admission, lease ownership, current authorization, Compute and Sandbox delegation, activation, and retry. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)

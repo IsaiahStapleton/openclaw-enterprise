@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   authorizedPrincipal,
   cleanupProviderFixtures,
@@ -15,7 +16,7 @@ import {
   waitFor,
 } from "../helpers/postgres-provider-state.mjs";
 
-async function setup(context) {
+async function setup(context, { leaseDurationMs = 30_000 } = {}) {
   const [
     { Pool },
     { createControllerWorker },
@@ -161,7 +162,7 @@ async function setup(context) {
     worker = createControllerWorker({
       pool,
       pollIntervalMs: 15,
-      leaseDurationMs: 30_000,
+      leaseDurationMs,
       maxAttempts: 5,
       ...(drivers === undefined ? { computeDriver } : { drivers }),
       ...(convergenceTimeoutMs === undefined ? {} : { convergenceTimeoutMs }),
@@ -191,6 +192,66 @@ async function setup(context) {
     workerPool,
   };
 }
+
+test(
+  "maintenance retains its real lease across consecutive short predecessor retirements",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context, { leaseDurationMs: 1_200 });
+    const owner = await fixture.agent("short-retirement-lease");
+    const first = await fixture.revision(owner, 1);
+    const events = [];
+    let completedRetirements = 0;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        maintenanceIntervalMs: 200,
+        async retireRevision(previous) {
+          // Exercise the real worker and PostgreSQL lease with short external
+          // effects: each finishes before the heartbeat timer, but the whole
+          // cleanup sequence exceeds the lease. No claim timestamps are edited.
+          await delay(120);
+          const result = await fixture.compute.retireRevision(previous);
+          completedRetirements += 1;
+          return result;
+        },
+      },
+      (event) => events.push(event),
+    );
+    await fixture.work(first, "succeeded");
+    // Admitted intermediate revisions can be superseded before execution. They
+    // remain valid predecessors that active-revision maintenance must retire.
+    await fixture.state.transact(async (unit) => {
+      for (let number = 2; number <= 24; number += 1) {
+        const skipped = { ...first, id: `rev_${randomUUID()}`, revision: number };
+        delete skipped.idempotencyKey;
+        await unit.revisions.createRevision(skipped);
+      }
+    });
+    const current = await fixture.revision(owner, 25);
+    await fixture.work(current, "succeeded");
+    const maintenance = await waitFor("one successful short-effect maintenance claim", async () => {
+      assert.equal(
+        events.some(({ event, code }) => event === "worker.error" && code === "CLAIM_LOST"),
+        false,
+        "consecutive short effects must not starve lease renewal",
+      );
+      const result = await fixture.observerPool.query(
+        `SELECT state, attempt_count FROM occ.controller_work
+         WHERE revision_id = $1 AND idempotency_key LIKE '%:maintenance:%'
+           AND state = 'succeeded'`,
+        [current.id],
+      );
+      return result.rows[0];
+    });
+    assert.equal(maintenance.attempt_count, 1);
+    assert.ok(completedRetirements >= 25, "activation and all predecessors were retired");
+    const active = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(active.activeRevisionId, current.id);
+  },
+);
 
 test(
   "the revision worker activates admitted candidates, retires predecessors, and rejects revoked, malformed, and wrong-owner effects",

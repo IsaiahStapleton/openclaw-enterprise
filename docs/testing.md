@@ -45,11 +45,14 @@ Each linked section contains the setup requirements and commands for that suite.
 ## Console browser checks
 
 The [console](reference/console.md) uses real controller routes in
-`tests/integration/console-api.test.mjs` and `tests/browser/console.test.mjs`.
-The shared fixture runs Fastify, Better Auth memory storage, Native IAM, and
-in-memory platform storage on an ephemeral loopback port. Configuration and
-Compute helpers are test-only; these tests do not establish PostgreSQL
-persistence, live Provider health, or deployed Agent runtime behavior.
+`tests/integration/console-api.test.mjs`, `tests/browser/console.test.mjs`, and
+`tests/browser/console-agents.test.mjs`. The shared browser fixture runs
+Fastify, Better Auth memory storage, Native IAM, and in-memory platform storage
+on an ephemeral loopback port. Configuration and Compute helpers are test-only.
+The Agent browser suite seeds active revision pointers only to render admitted
+history; that fixture does not prove runtime dispatch, worker leases, Compute
+Driver effects, PostgreSQL persistence, live Provider health, or deployed Agent
+runtime behavior.
 
 Run the API/static boundary checks without a browser:
 
@@ -68,9 +71,11 @@ pnpm test:console-browser
 `OCC_TEST_BROWSER_EXECUTABLE` optionally selects an approved existing browser
 executable. The suite always uses a fresh context. Browser setup is explicit;
 the test command does not install software or silently skip a missing browser.
-Do not change managed browser policies to make the suite run. Set
-`OCC_TEST_CONSOLE_ARTIFACT_DIR` to retain screenshots at a chosen path; otherwise
-the suite uses a temporary directory. The existing
+Do not change managed browser policies to make the suite run. A managed Chrome
+debugging policy can currently block the browser suite on locked-down hosts; use
+an approved browser environment instead. Set `OCC_TEST_CONSOLE_ARTIFACT_DIR` to
+retain screenshots at a chosen path; otherwise the suite uses a temporary
+directory. The existing
 [image smoke test](#images-and-helm) also loads console assets from the built
 controller image; it does not claim a live production deployment.
 
@@ -238,8 +243,11 @@ OCC_TEST_RUNTIME_IMAGE=openclaw-enterprise-runtime:test \
   node --test tests/integration/runtime-image-startup.test.mjs
 ```
 
-This starts an embedded gateway with a fresh runtime home and checks readiness
-and Codex plugin discovery. It does not make a model call.
+This checks gateway readiness and bundled Codex/Slack plugin loading from a
+fresh runtime home, then initializes the image's real Codex app-server through
+the installed plugin's version guard. The smoke runs offline without provider
+credentials. It does not make a model call or establish a Slack connection;
+run the [live Slack test](#slack) for channel delivery proof.
 
 Build the controller image using the [production prerequisites](guides/deploy.md#production-prerequisites),
 then set `OCC_TEST_PRODUCTION_IMAGE` to the local tag you built:
@@ -434,7 +442,13 @@ for version assertions and alternate image variables.
 ## Slack
 
 Use the Kubernetes runtime prerequisites and model credential above, plus an
-authorized test channel. Put the three Slack tokens in the private environment
+authorized test channel. The gateway image must already contain the Slack plugin
+and its runtime dependencies. Run the [runtime image smoke](#images-and-helm)
+before provisioning the cluster, and use a Codex app-server version accepted by
+the gateway's installed Codex plugin. Successful `--version` commands alone do
+not prove that the two runtimes are compatible.
+
+Put the three Slack tokens in the private environment
 file. Set `OCC_TEST_SLACK_CHANNEL_ID` and `OCC_TEST_SLACK_PROXY_URL`; the proxy URL
 must have a literal IP and explicit port. Both bots must belong to the same
 workspace and have joined the channel. Use an existing Socket Mode app configured

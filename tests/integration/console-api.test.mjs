@@ -109,7 +109,14 @@ test("console collection APIs keep exact Namespace and Agent IAM boundaries", as
 test("console static routes expose only public assets and preserve API JSON failures", async (t) => {
   const fixture = await createConsoleAppFixture(t);
 
-  for (const path of ["/console/", "/console/login", "/console/agents", "/console/settings"]) {
+  for (const path of [
+    "/console/",
+    "/console/login",
+    "/console/agents",
+    "/console/agents/new",
+    "/console/agents/agt_00000000-0000-4000-8000-000000000000",
+    "/console/settings",
+  ]) {
     const result = await fixture.rawRequest("GET", path);
     assert.equal(result.response.status, 200, path);
     assert.match(result.response.headers.get("content-type") ?? "", /text\/html/i, path);
@@ -120,6 +127,10 @@ test("console static routes expose only public assets and preserve API JSON fail
   for (const [path, mime] of [
     ["/console/console.css", /text\/css/i],
     ["/console/console.mjs", /javascript/i],
+    ["/console/agents.mjs", /javascript/i],
+    ["/console/channels.mjs", /javascript/i],
+    ["/console/dom.mjs", /javascript/i],
+    ["/console/channels.css", /text\/css/i],
   ]) {
     const result = await fixture.rawRequest("GET", path);
     assert.equal(result.response.status, 200, path);

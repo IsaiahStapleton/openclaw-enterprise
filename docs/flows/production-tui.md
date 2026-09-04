@@ -1,7 +1,7 @@
 ---
 created: 2026-08-31
-updated: 2026-08-31
-last_updated_session: codex/01a05a3d-526f-7553-8cd8-070bd1847acb
+updated: 2026-09-01
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Production TUI Flow
@@ -39,13 +39,18 @@ graph TD
   C --> D["Operator creates Agent transport and model Secrets"]
   D --> E["Operator deploys Agent"]
   E --> F["OCC freezes AgentRevision and queues work"]
-  F --> G["Worker prepares gateway ConfigMap, ServiceAccount, PVC, and Deployment"]
-  G --> H["Initial setup uses an inactive Service; replacement staging preserves the predecessor selector"]
-  H --> I["Worker activates the fenced revision and updates the gateway Service selector"]
-  I --> J["Operator discovers Ready gateway Pod by labels and mounted ConfigMap"]
-  J --> K["kubectl exec starts native OpenClaw TUI in the gateway container"]
-  K --> L["TUI exchanges prompts with the Pod-local gateway and stays open"]
-  L --> M["Ctrl+D exits the client while the gateway keeps serving"]
+  F --> G["Worker prepares ConfigMap, ServiceAccount, PVC, and gateway resources"]
+  G --> H{"Existing embedded gateway?"}
+  H -->|no| I["First prepare waits for inactive Deployment readiness"]
+  H -->|yes| J["Replacement prepare returns ready before running a new Pod"]
+  I --> K["Worker commits Agent.activeRevisionId with compare-and-set"]
+  J --> K
+  K --> L["Post-commit activateRevision replaces the Recreate Deployment and Service selector"]
+  L --> M["Worker retires predecessor and completes activation audit"]
+  M --> N["Operator discovers Ready gateway Pod by labels and mounted ConfigMap"]
+  N --> O["kubectl exec starts native OpenClaw TUI in the gateway container"]
+  O --> P["TUI exchanges prompts with the Pod-local gateway and stays open"]
+  P --> Q["Ctrl+D exits the client while the gateway keeps serving"]
 ```
 
 ## Execution Trace
@@ -106,29 +111,46 @@ does not by itself prove that Kubernetes is serving the new revision.
 
 The worker claims the durable AgentRevision work, reloads the Namespace, Agent,
 revision, and previous active revision, reauthorizes the deployment actor, and
-resolves the Secret delivery context. Kubernetes Compute verifies tenant
-ownership and NetworkPolicies, writes an immutable ConfigMap named
-`gateway-<agent-hash>-rev-<revision-hash>` containing `openclaw.json`, creates
-the Agent-owned ServiceAccount, creates or reuses the gateway private-state
-PersistentVolumeClaim, and starts one gateway Deployment with `Recreate`
-strategy.
+resolves the Secret delivery context. The broader activation contract lives in
+the [controller worker flow](controller-worker.md#6-persist-the-result-and-finish-revision-activation)
+and the
+[Harness execution topology flow](harness-execution-topology.md#3-publish-safely-and-complete-activation-once).
+This flow calls out the production embedded TUI path.
+
+Kubernetes Compute verifies tenant ownership and NetworkPolicies, writes an
+immutable ConfigMap named `gateway-<agent-hash>-rev-<revision-hash>` containing
+`openclaw.json`, creates the Agent-owned ServiceAccount, creates or reuses the
+gateway private-state PersistentVolumeClaim, and uses one gateway Deployment
+with `Recreate` strategy.
 
 For embedded OpenClaw, the gateway Deployment is also the Harness workload. Its
 container receives `OPENCLAW_CONFIG_PATH=/etc/openclaw/openclaw.json`,
 `OPENCLAW_GATEWAY_PORT`, `OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_STATE_DIR`, and
 the exact Agent model credential by Secret projection unless the revision uses
 an OCC Secret binding for `OPENAI_API_KEY`. The API and worker do not receive
-the model credential. For the first embedded revision, the Service selects the
-inactive gateway name until the Deployment is ready. When preparing a newer
-revision while a predecessor exists, the driver stages the replacement and keeps
-the predecessor selector in place until fenced activation.
+the model credential. For the first embedded revision, `prepareRevision` creates
+the Deployment and keeps the Service on the inactive selector until the gateway
+is ready. When a predecessor gateway exists, embedded replacement preparation
+returns ready after staging the immutable ConfigMap and related ownership
+resources; it does not start the replacement gateway process.
 
-`KubernetesComputeDriver.activateRevision` rechecks the exact gateway revision,
-applies the Agent runtime NetworkPolicy, and updates the gateway Service
-selector. The worker then records the active revision through a guarded
-compare-and-set, retires the predecessor, and emits completion evidence. At
-this point `GET /namespaces/:namespaceId/agents/:agentId` can return
-`data.activeRevisionId` equal to the admitted revision ID.
+For the bundled Kubernetes Compute Driver, the worker first records the active
+revision through a guarded `Agent.activeRevisionId` compare-and-set. Because the
+driver does not request `beforeCommit` activation, production then calls
+`KubernetesComputeDriver.activateRevision` after that commit. Embedded
+`activateRevision` rechecks the existing gateway Deployment, then replaces that
+same `Recreate` Deployment with the new revision configuration, applies Agent
+runtime NetworkPolicies, updates the gateway Service selector, and waits for the
+exact revision gateway to become ready. This replacement can make the gateway
+temporarily unavailable while Kubernetes recreates the Pod.
+
+After post-commit activation succeeds, the worker retires the predecessor and
+then completes the activation audit. If activation or retirement fails after the
+active pointer commit, the worker records pending
+`REVISION_FINALIZATION_INCOMPLETE` work and retries finalization; an operator
+should not attach until `GET /namespaces/:namespaceId/agents/:agentId` returns
+the intended `data.activeRevisionId` and Pod discovery verifies the matching
+ConfigMap-mounted gateway is Running and Ready.
 
 ### 4. The operator discovers the active gateway Pod
 
@@ -266,6 +288,7 @@ script, keeping client authentication and environment handling consistent.
 
 ## Changelog
 
+- 2026-09-01 19:09: Correct production embedded activation ordering and replacement behavior for the post-commit Kubernetes TUI path. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-31 20:34: Use the checked-in operator API helper for service-key requests. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
 
 - 2026-08-31 19:14: Document bootstrap service-key API access and operator credential cleanup for the TUI path. (codex/01a05a3d-526f-7553-8cd8-070bd1847acb - 06c4bccb95543d3d545d011e72074f805f339aa8)

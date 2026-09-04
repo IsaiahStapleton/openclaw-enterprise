@@ -39,10 +39,12 @@ when the Codex plugin is explicitly enabled and its app-server transport is
 
 Selectable model catalogs under Agent defaults or entries may include additional
 models only when they retain the selected provider and an explicit matching
-Harness runtime. A provider's native `models` array remains limited to the
-resolved primary model. Nonempty model fallbacks and nonempty native
-`agents.list` configurations are unsupported. This admits a bounded catalog; it
-does not admit changing topology or provider after deployment.
+Harness runtime. Model fallbacks under defaults or Agent entries must retain
+the primary provider and resolve through the same policy checks to the same
+Harness. A provider's native `models` array is limited to the resolved primary
+and fallback models. Nonempty native `agents.list` configurations remain
+unsupported. Admission preserves the fallback order in the immutable revision;
+it does not implement fallback execution or allow changing topology.
 
 ## Admission and immutable execution
 
@@ -102,5 +104,5 @@ for the complete capability and upstream compatibility boundaries.
 - [Deployment](../guides/deploy.md)
 - [ComputeDriver contract](drivers/compute.md)
 - [ServiceAccount credentials](service-accounts.md)
-- [Dedicated shared workspace flow](../flows/dedicated-harness-shared-workspace-drive.md)
+- [Harness execution and shared storage flow](../flows/harness-execution-topology.md)
 - [Implementation history](../../specs/README.md)
