@@ -56,7 +56,7 @@ Implementation status: routing, OpenShell, and logging now have concrete CI prep
 
 The runner validates actual Node case results, including expected names and explicitly owned counterpart skips. Missing results, zero cases, unexpected skips, failures and cleanup errors cannot satisfy a required lane. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use trusted main inputs.
 
-Prepare infrastructure only on a disposable host or through the reviewed CI helpers. Each run owns its Compose project, file-specific databases, cluster and temporary files. CI writes private cleanup state under `RUNNER_TEMP` and uploads only sanitized result JSON, so hosted-runner cleanup state is unavailable after the job ends. Local failures can retain cleanup state while the host and state path still exist. Model/service tests require the approved credentials and spend policy described in the [implementation specification](../specs/19-github-actions-test-coverage.md); configuring workflow files does not prove those tests have passed.
+Prepare infrastructure only on a disposable host or through the reviewed CI helpers. Each run owns its Compose project, file-specific databases, cluster and temporary files. CI writes private cleanup state under `RUNNER_TEMP` and uploads only sanitized result JSON, so hosted-runner cleanup state is unavailable after the job ends. Local failures can retain cleanup state while the host and state path still exist. On local Docker Desktop or equivalent VM-backed Docker hosts, run one Kubernetes lane at a time when disk or network pressure has caused measured instability. The GitHub matrix remains parallel; this local guidance is for reproducible operator runs. Model/service tests require the approved credentials and spend policy described in the [implementation specification](../specs/19-github-actions-test-coverage.md); configuring workflow files does not prove those tests have passed.
 
 See the [execution flow](flows/github-actions-testing.md) for entrypoints, result accounting, cleanup and failure interpretation. Existing suite-specific setup below remains the local reproduction contract.
 
@@ -568,8 +568,11 @@ Keep optional live Configuration cases and mutually exclusive Slack selection
 distinct from missing prerequisites.
 
 Tests normally clean up their own temporary processes, resources, and files.
-Kubernetes suites leave the selected cluster and database in place. After all
-needed suites finish, remove only the disposable cluster you created:
+Kubernetes suites leave the selected cluster and database in place. Logging
+cleanup removes its local Docker backend container and JSONL/config directory
+without requiring a live Kubernetes API; the disposable k3d cluster owns
+Collector Namespace and RBAC cleanup. After all needed suites finish, remove only
+the disposable cluster you created:
 
 ```sh
 k3d cluster delete oce

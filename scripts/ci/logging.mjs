@@ -507,8 +507,6 @@ async function prepareLogging({
   const containerName = ownedName("openclaw-ci-otel", laneName, { maxLength: 63 });
   assertOwnedContainerName(containerName);
   const namespace = ownedCluster ? containerName : undefined;
-  const clusterRoleName = namespace ? `${namespace}-openclaw-log-metadata` : undefined;
-  const clusterRoleBindingName = namespace ? `${namespace}-openclaw-log-metadata` : undefined;
   const baseDirectory = resolve(
     directory ?? ownedCluster?.directory ?? env.RUNNER_TEMP ?? tmpdir(),
   );
@@ -538,8 +536,6 @@ async function prepareLogging({
     namespace,
     manifestPath: namespace ? manifestPath : undefined,
     secretsManifestPath: namespace ? secretsManifestPath : undefined,
-    clusterRoleName,
-    clusterRoleBindingName,
     cluster: ownedCluster,
   });
 
@@ -618,8 +614,6 @@ async function prepareLogging({
         containerName,
         directory: backendDirectory,
         namespace,
-        clusterRoleName,
-        clusterRoleBindingName,
         cluster: ownedCluster,
       },
       { env, execFile },
@@ -636,52 +630,9 @@ async function cleanupLogging(resource, { env = process.env, execFile } = {}) {
   assertOwnedContainerName(resource.containerName);
   const directory = assertOwnedDirectory(resource.directory, resource.containerName);
   const docker = env.OCC_DOCKER_BIN ?? "docker";
-  if (resource.cluster && resource.namespace) {
-    const cluster = assertCluster(resource.cluster);
-    const kubectl = env.OCC_KUBECTL_BIN ?? "kubectl";
-    assertKubernetesName(resource.namespace, "OTel backend namespace");
-    if (resource.clusterRoleBindingName) {
-      await execFile(
-        kubectl,
-        kubectlArgs(cluster, [
-          "delete",
-          "clusterrolebinding",
-          resource.clusterRoleBindingName,
-          "--ignore-not-found=true",
-        ]),
-      ).catch((error) => {
-        if (/NotFound|not found/i.test(error.message)) return;
-        throw error;
-      });
-    }
-    if (resource.clusterRoleName) {
-      await execFile(
-        kubectl,
-        kubectlArgs(cluster, [
-          "delete",
-          "clusterrole",
-          resource.clusterRoleName,
-          "--ignore-not-found=true",
-        ]),
-      ).catch((error) => {
-        if (/NotFound|not found/i.test(error.message)) return;
-        throw error;
-      });
-    }
-    await execFile(
-      kubectl,
-      kubectlArgs(cluster, [
-        "delete",
-        "namespace",
-        resource.namespace,
-        "--ignore-not-found=true",
-        "--wait=false",
-      ]),
-    ).catch((error) => {
-      if (/NotFound|not found/i.test(error.message)) return;
-      throw error;
-    });
-  }
+  // k3d logging installs are scoped to the lane-owned cluster. The k3d-cluster
+  // cleanup owns all Kubernetes API objects, including Collector Namespace and
+  // RBAC, so a dead cluster must not block backend container and JSONL cleanup.
   await execFile(docker, ["rm", "--force", resource.containerName]).catch((error) => {
     if (/No such container/i.test(error.message)) return;
     throw error;

@@ -304,3 +304,40 @@ test("cleanupLogging removes the owned Collector backend and rejects foreign pat
     /outside ownership/,
   );
 });
+
+test("cleanupLogging does not require Kubernetes when a k3d backend is cleaned", async (t) => {
+  const root = await fixture(t);
+  const clusterName = "openclaw-k8s-deadcluster";
+  const clusterDirectory = join(root, `${clusterName}-state`);
+  const kubeconfig = join(clusterDirectory, "kubeconfig");
+  await mkdir(clusterDirectory, { mode: 0o700 });
+  await writeFile(kubeconfig, "apiVersion: v1\n", { mode: 0o600 });
+  const containerName = "openclaw-ci-otel-k3d-otel-abc123def456";
+  const directory = join(root, `${containerName}-state`);
+  await mkdir(directory, { mode: 0o700 });
+  const calls = [];
+  const execFile = async (command, args) => {
+    calls.push([command, args]);
+    if (command === "kubectl") throw new Error("dead cluster");
+    return { stdout: "", stderr: "" };
+  };
+
+  await cleanupLogging(
+    {
+      kind: ciOtelBackendResourceKind,
+      containerName,
+      directory,
+      namespace: containerName,
+      cluster: {
+        name: clusterName,
+        directory: clusterDirectory,
+        kubeconfig,
+        context: `k3d-${clusterName}`,
+      },
+    },
+    { execFile, env: { OCC_DOCKER_BIN: "docker", OCC_KUBECTL_BIN: "kubectl" } },
+  );
+
+  assert.deepEqual(calls, [["docker", ["rm", "--force", containerName]]]);
+  await assert.rejects(() => stat(directory), { code: "ENOENT" });
+});
