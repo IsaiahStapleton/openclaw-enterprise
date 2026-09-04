@@ -209,7 +209,6 @@ jobs:
       OCC_TEST_OPENAI_MODEL: ${{ vars.OCC_TEST_OPENAI_MODEL }}
       OCC_DOCKER_RUNTIME_IMAGE: ${{ vars.OCC_DOCKER_RUNTIME_IMAGE }}
       NODE_BASE_IMAGE: ${{ vars.NODE_BASE_IMAGE }}
-      OCC_TEST_OTEL_LOGS_URL: ${{ vars.OCC_TEST_OTEL_LOGS_URL }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -301,8 +300,6 @@ jobs:
       OCC_TEST_OPENAI_MODEL: ${{ vars.OCC_TEST_OPENAI_MODEL }}
       OCC_TEST_KUBERNETES_GATEWAY_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_GATEWAY_IMAGE }}
       OCC_TEST_KUBERNETES_AGENT_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_AGENT_IMAGE }}
-      OCC_TEST_GATEWAY_CA_CERT_PEM: ${{ secrets.OCC_TEST_GATEWAY_CA_CERT_PEM }}
-      OCC_TEST_GATEWAY_CA_KEY_PEM: ${{ secrets.OCC_TEST_GATEWAY_CA_KEY_PEM }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -317,16 +314,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache-mode: read-write
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - name: Materialize routing CA
-        run: |
-          install -m 0700 -d "$RUNNER_TEMP/secrets"
-          test -n "${OCC_TEST_GATEWAY_CA_CERT_PEM:-}"
-          test -n "${OCC_TEST_GATEWAY_CA_KEY_PEM:-}"
-          printf '%s' "$OCC_TEST_GATEWAY_CA_CERT_PEM" > "$RUNNER_TEMP/secrets/gateway-ca.crt"
-          printf '%s' "$OCC_TEST_GATEWAY_CA_KEY_PEM" > "$RUNNER_TEMP/secrets/gateway-ca.key"
-          chmod 0600 "$RUNNER_TEMP/secrets/gateway-ca.crt" "$RUNNER_TEMP/secrets/gateway-ca.key"
-          echo "OCC_TEST_GATEWAY_CA_CERT_PATH=$RUNNER_TEMP/secrets/gateway-ca.crt" >> "$GITHUB_ENV"
-          echo "OCC_TEST_GATEWAY_CA_KEY_PATH=$RUNNER_TEMP/secrets/gateway-ca.key" >> "$GITHUB_ENV"
       - run: bash scripts/ci/setup-tools.sh full
       - run: pnpm install --frozen-lockfile
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -360,7 +347,6 @@ jobs:
       OCC_TEST_KUBERNETES_RUNTIME_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_RUNTIME_IMAGE }}
       OCC_TEST_PRODUCTION_POSTGRES_IMAGE: ${{ vars.OCC_TEST_PRODUCTION_POSTGRES_IMAGE }}
       OCC_TEST_PRODUCTION_NODE_IMAGE: ${{ vars.OCC_TEST_PRODUCTION_NODE_IMAGE }}
-      OCC_TEST_OTEL_LOGS_URL: ${{ vars.OCC_TEST_OTEL_LOGS_URL }}
       NODE_BASE_IMAGE: ${{ vars.NODE_BASE_IMAGE }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -510,12 +496,8 @@ jobs:
       OCC_TEST_OPENAI_MODEL: ${{ vars.OCC_TEST_OPENAI_MODEL }}
       OCC_TEST_KUBERNETES_GATEWAY_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_GATEWAY_IMAGE }}
       OCC_TEST_KUBERNETES_AGENT_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_AGENT_IMAGE }}
-      OCC_TEST_OPENSHELL_CLI: ${{ vars.OCC_TEST_OPENSHELL_CLI }}
       OCC_TEST_OPENSHELL_GATEWAY_IMAGE: ${{ vars.OCC_TEST_OPENSHELL_GATEWAY_IMAGE }}
       OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE: ${{ vars.OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE }}
-      OCC_TEST_OPENSHELL_HELM: ${{ vars.OCC_TEST_OPENSHELL_HELM }}
-      OCC_TEST_OPENSHELL_HELM_CHART: ${{ vars.OCC_TEST_OPENSHELL_HELM_CHART }}
-      OCC_TEST_OPENSHELL_RUNTIME_CLASS: ${{ vars.OCC_TEST_OPENSHELL_RUNTIME_CLASS }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -561,7 +543,6 @@ jobs:
       OCC_TEST_OPENAI_MODEL: ${{ vars.OCC_TEST_OPENAI_MODEL }}
       OCC_TEST_KUBERNETES_GATEWAY_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_GATEWAY_IMAGE }}
       OCC_TEST_KUBERNETES_AGENT_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_AGENT_IMAGE }}
-      OCC_TEST_OTEL_LOGS_URL: ${{ vars.OCC_TEST_OTEL_LOGS_URL }}
       NODE_BASE_IMAGE: ${{ vars.NODE_BASE_IMAGE }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09

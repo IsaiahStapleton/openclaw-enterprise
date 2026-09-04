@@ -1,4 +1,5 @@
 function location(data = {}) {
+  const error = data.details?.error;
   return {
     file: data.file,
     line: data.line,
@@ -10,10 +11,10 @@ function location(data = {}) {
     type: data.type,
     testId: data.testId,
     parentId: data.parentId,
-    error: data.error
+    error: error
       ? {
-          code: data.error.code,
-          name: data.error.name,
+          code: error.code,
+          name: error.name,
         }
       : undefined,
     durationMs:

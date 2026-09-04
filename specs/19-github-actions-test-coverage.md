@@ -10,7 +10,7 @@ Start with PR-safe local and PostgreSQL checks, then add disposable image/Kubern
 
 The [refreshed report](reports/openclaw-testing-infrastructure.md) was completed first and owns upstream evidence, source mismatches and the full inventory. This plan targets reviewed main [`1233e13`](https://github.com/openclaw/openclaw-enterprise/commit/1233e13aa6e1a2e4f502fa5febf06f5531c19f2c): 19 conformance, 37 integration and two browser files. Canonical authoring HEAD `f0b17b7` additionally contains three logging files and new gated log assertions. Inventory the eventual implementation SHA; do not change branches or restore historical `setup-*` suites to meet an old count.
 
-The user removed the workflow prohibition from [AGENTS.md](../AGENTS.md) and authorized implementation on September 4. GitHub acceptance of the workflow push remains to be verified. This proposal follows [the platform design](../docs/design.md) and changes test orchestration, not application architecture.
+The user removed the workflow prohibition from [AGENTS.md](../AGENTS.md) and authorized implementation on September 4. GitHub accepted the workflow push in [PR #23](https://github.com/openclaw/openclaw-enterprise/pull/23). This proposal follows [the platform design](../docs/design.md) and changes test orchestration, not application architecture.
 
 ## Scope
 
@@ -101,15 +101,17 @@ Measure cold setup time, Docker disk/memory, image artifact size and provider to
 
 ## Delivery status
 
-The five PR lanes, explicit suite map, result validation, resource ownership, and current-contract Configuration repairs are implemented. Local PostgreSQL, image packaging, Kubernetes fixture/Configuration, logging collector, timeout, and image transport proofs passed. Browser, protected runtime/service acceptance, and hosted workflow verification remain outstanding. Routing and OpenShell bootstrap implementation is in progress.
+The five PR lanes, 66-file suite map, result validation, resource ownership, and current-contract Configuration repairs are implemented. Routing installs pinned controllers and generates a private CA. OpenShell builds an owned gVisor-enabled K3s image and verifies a real RuntimeClass smoke Pod before its suite. Docker and Kubernetes logging preparation create owned Collector backends and JSONL observation sources.
+
+Local baseline/browser, PostgreSQL, image packaging, Kubernetes fixture/Configuration, logging collector, timeout, image transport, and Docker model proofs passed. Hosted baseline/browser, PostgreSQL, and image packaging jobs passed at `16c227b`; hosted Kubernetes fixture/Configuration and logging collector failures are under investigation. Specialized Kubernetes runtime proofs are in progress. Dedicated Slack and ChatGPT test inputs remain missing. These results do not establish full-suite acceptance.
 
 ## Open Decisions
 
 The user approved branch/PR creation, browser provisioning, bounded live model/service testing, and selection of pinned routing/OpenShell bootstrap recipes on 2026-09-04. Use the documented `gpt-5.1` model for initial live proof and existing test timeouts to bound attempts.
 
-- Administrators: verify protected-environment controls and workflow-push acceptance for this repository.
+- Administrators: six protected environments are configured with main-only deployment policies, a required reviewer, and prevention of self-review. Protected workflow execution still requires the exact main revision and its environment review.
 - Test owners: supply the dedicated ChatGPT workspace/admin credential and Slack app/bot/sender/channel/proxy inputs; approval alone does not supply missing credentials.
-- Implementation: pin and prove Envoy/cert-manager and OpenShell on disposable runners; select larger ephemeral capacity only if measured needs require it.
+- Verification: complete Envoy/cert-manager, OpenShell, Kubernetes model/logging, and production TUI live proofs; resolve fresh-hosted-runner failures. Select larger ephemeral capacity only if measured needs require it.
 
 ## Manual Notes
 

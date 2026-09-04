@@ -7,6 +7,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { cleanupResourceIds } from "./cleanup.mjs";
+import { prepareGatewayRouting } from "./routing.mjs";
+import { prepareLogging } from "./logging.mjs";
+import { prepareOpenShell, prepareOpenShellNodeImage } from "./openshell.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const composePostgresFile = join(repositoryRoot, "compose.postgres.yaml");
@@ -386,11 +389,6 @@ async function requirePathMode0600(path, description) {
   }
 }
 
-async function requireFile(path, description) {
-  const info = await stat(path);
-  if (!info.isFile()) throw new Error(`${description} must be a file: ${path}`);
-}
-
 function assertImmutableImageReference(image, name) {
   if (!/^\S+@sha256:[a-f0-9]{64}$/i.test(image ?? "")) {
     throw new Error(`${name} must be an immutable image@sha256 reference.`);
@@ -423,12 +421,7 @@ async function validateLaneInputsBeforeSideEffects(lane) {
       assertNodeBaseImage(process.env.NODE_BASE_IMAGE);
       break;
     case "docker-model":
-      requireEnv([
-        "OPENAI_API_KEY",
-        "OCC_TEST_OPENAI_MODEL",
-        "NODE_BASE_IMAGE",
-        "OCC_TEST_OTEL_LOGS_URL",
-      ]);
+      requireEnv(["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL", "NODE_BASE_IMAGE"]);
       assertNodeBaseImage(process.env.NODE_BASE_IMAGE);
       break;
     case "k3d-model":
@@ -441,20 +434,11 @@ async function validateLaneInputsBeforeSideEffects(lane) {
       ]);
       break;
     case "gateway-routing":
-      requireEnv([
-        "OPENAI_API_KEY",
-        "OCC_TEST_OPENAI_MODEL",
-        "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-        "OCC_TEST_KUBERNETES_AGENT_IMAGE",
-        "OCC_TEST_GATEWAY_CA_CERT_PATH",
-        "OCC_TEST_GATEWAY_CA_KEY_PATH",
-      ]);
-      assertImmutableEnvImages([
+      requireEnv(["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"]);
+      assertImmutableOptionalEnvImages([
         "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
         "OCC_TEST_KUBERNETES_AGENT_IMAGE",
       ]);
-      await requireFile(process.env.OCC_TEST_GATEWAY_CA_CERT_PATH, "gateway CA certificate");
-      await requirePathMode0600(process.env.OCC_TEST_GATEWAY_CA_KEY_PATH, "gateway CA private key");
       break;
     case "production-tui":
       requireEnv([
@@ -463,7 +447,6 @@ async function validateLaneInputsBeforeSideEffects(lane) {
         "NODE_BASE_IMAGE",
         "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
         "OCC_TEST_PRODUCTION_NODE_IMAGE",
-        "OCC_TEST_OTEL_LOGS_URL",
       ]);
       assertNodeBaseImage(process.env.NODE_BASE_IMAGE);
       assertImmutableEnvImages([
@@ -503,19 +486,8 @@ async function validateLaneInputsBeforeSideEffects(lane) {
       await requirePathMode0600(process.env.OCC_TEST_CHATGPT_ADMIN_KEY_PATH, "ChatGPT admin key");
       break;
     case "openshell":
-      requireEnv([
-        "OPENAI_API_KEY",
-        "OCC_TEST_OPENAI_MODEL",
-        "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-        "OCC_TEST_KUBERNETES_AGENT_IMAGE",
-        "OCC_TEST_OPENSHELL_CLI",
-        "OCC_TEST_OPENSHELL_GATEWAY_IMAGE",
-        "OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE",
-        "OCC_TEST_OPENSHELL_HELM",
-        "OCC_TEST_OPENSHELL_HELM_CHART",
-        "OCC_TEST_OPENSHELL_RUNTIME_CLASS",
-      ]);
-      assertImmutableEnvImages([
+      requireEnv(["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"]);
+      assertImmutableOptionalEnvImages([
         "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
         "OCC_TEST_KUBERNETES_AGENT_IMAGE",
         "OCC_TEST_OPENSHELL_GATEWAY_IMAGE",
@@ -523,7 +495,7 @@ async function validateLaneInputsBeforeSideEffects(lane) {
       ]);
       break;
     case "k3d-otel":
-      requireEnv(["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL", "OCC_TEST_OTEL_LOGS_URL"]);
+      requireEnv(["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"]);
       assertImmutableOptionalEnvImages([
         "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
         "OCC_TEST_KUBERNETES_AGENT_IMAGE",
@@ -592,12 +564,20 @@ async function ensureK3dCluster(statePath, state) {
   const existing = state.resources.find((resource) => resource.kind === "k3d-cluster");
   if (existing) return existing;
   await commandAvailable(process.env.OPENCLAW_CI_K3D_BIN ?? "k3d", ["version"]);
-  await commandAvailable(process.env.OCC_KUBECTL_BIN ?? "kubectl", ["version", "--client=true"]);
+  const openShell = state.lane === "openshell";
+  if (!openShell)
+    await commandAvailable(process.env.OCC_KUBECTL_BIN ?? "kubectl", ["version", "--client=true"]);
   const cluster = ownedName("openclaw-k8s", state.prefix, { maxLength: 32 });
   const apiPort = await reserveLoopbackPort();
   const directory = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), `${cluster}-`));
   await chmod(directory, 0o700);
   const kubeconfig = join(directory, "kubeconfig");
+  // Register the node image before its cluster so reverse cleanup removes containers first.
+  const nodeImageResource = openShell
+    ? addResource(state, "image-tag", {
+        name: `localhost/${ownedName("openclaw-ci-image", state.prefix, { maxLength: 48 })}/k3s:local`,
+      })
+    : undefined;
   const resource = addResource(state, "k3d-cluster", {
     name: cluster,
     directory,
@@ -605,10 +585,24 @@ async function ensureK3dCluster(statePath, state) {
     context: `k3d-${cluster}`,
   });
   await writeState(statePath, state);
+  if (nodeImageResource) {
+    const node = await prepareOpenShellNodeImage({
+      directory,
+      imageTag: nodeImageResource.name,
+      execFile,
+    });
+    resource.nodeImage = node.image;
+    resource.nodeImageSource = node.k3sImage;
+    resource.kubectl = node.kubectl;
+    resource.runtimeClass = node.runtimeClass;
+    resource.runtimeHandler = node.runtimeHandler;
+    await markResourceReady(statePath, state, nodeImageResource);
+  }
   await execFile(process.env.OPENCLAW_CI_K3D_BIN ?? "k3d", [
     "cluster",
     "create",
     cluster,
+    ...(resource.nodeImage ? ["--image", resource.nodeImage] : []),
     "--servers",
     "1",
     "--agents",
@@ -625,8 +619,8 @@ async function ensureK3dCluster(statePath, state) {
   ]);
   await writeFile(kubeconfig, kubeconfigData.stdout, { mode: 0o600 });
   await chmod(kubeconfig, 0o600);
-  await validateLoopbackKubeconfig(kubeconfig, resource.context);
-  await execFile(process.env.OCC_KUBECTL_BIN ?? "kubectl", [
+  await validateLoopbackKubeconfig(kubeconfig, resource.context, resource.kubectl);
+  await execFile(resource.kubectl ?? process.env.OCC_KUBECTL_BIN ?? "kubectl", [
     "--kubeconfig",
     kubeconfig,
     "--context",
@@ -641,8 +635,12 @@ async function ensureK3dCluster(statePath, state) {
   return resource;
 }
 
-async function validateLoopbackKubeconfig(kubeconfig, context) {
-  const result = await execFile(process.env.OCC_KUBECTL_BIN ?? "kubectl", [
+async function validateLoopbackKubeconfig(
+  kubeconfig,
+  context,
+  kubectl = process.env.OCC_KUBECTL_BIN ?? "kubectl",
+) {
+  const result = await execFile(kubectl, [
     "--kubeconfig",
     kubeconfig,
     "--context",
@@ -931,6 +929,21 @@ async function saveLaneEnv(statePath, state, env) {
   await writeState(statePath, state);
 }
 
+async function prepareLaneLogging(statePath, state, env, cluster) {
+  const logging = await prepareLogging({
+    laneName: state.lane,
+    cluster,
+    execFile,
+    registerResource: async (kind, details) => {
+      const resource = addResource(state, kind, details);
+      await writeState(statePath, state);
+      return resource;
+    },
+  });
+  Object.assign(env, logging.env);
+  await markResourceReady(statePath, state, logging.resource);
+}
+
 async function prepareLane({ lane, statePath }) {
   const name = assertLane(lane);
   await validateLaneInputsBeforeSideEffects(name);
@@ -973,6 +986,7 @@ async function prepareLane({ lane, statePath }) {
         env,
         (await buildRuntimeImages(resolvedStatePath, state, { runtime: true })).env,
       );
+      await prepareLaneLogging(resolvedStatePath, state, env);
       env.OCC_TEST_DOCKER_COMPUTE_REAL = "1";
       env.OCC_TEST_OTEL_LOGS = "1";
       break;
@@ -983,13 +997,16 @@ async function prepareLane({ lane, statePath }) {
       env.OCC_TEST_SLACK_LIVE = "0";
       env.OCC_TEST_GATEWAY_ROUTING_REAL = "0";
       break;
-    case "gateway-routing":
+    case "gateway-routing": {
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await ensurePostgresServer(resolvedStatePath, state);
-      await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: false });
-      env.OCC_TEST_GATEWAY_ROUTING_REAL = "1";
-      env.OCC_TEST_SLACK_LIVE = "0";
+      const cluster = await prepareK3dModelLane(resolvedStatePath, state, env, {
+        buildRuntime: true,
+      });
+      const routing = await prepareGatewayRouting({ cluster, execFile });
+      Object.assign(env, routing.env);
       break;
+    }
     case "production-tui": {
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await ensurePostgresServer(resolvedStatePath, state);
@@ -997,6 +1014,7 @@ async function prepareLane({ lane, statePath }) {
       env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
       await prepareProductionImages(resolvedStatePath, state, cluster, env);
+      await prepareLaneLogging(resolvedStatePath, state, env, cluster);
       env.OCC_TEST_PRODUCTION_TUI_REAL = "1";
       env.OCC_TEST_OTEL_LOGS = "1";
       break;
@@ -1011,11 +1029,23 @@ async function prepareLane({ lane, statePath }) {
       await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: false });
       env.OCC_TEST_CHATGPT_SERVICE_ACCOUNT_REAL = "1";
       break;
-    case "openshell":
+    case "openshell": {
       await ensurePostgresServer(resolvedStatePath, state);
-      await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: false });
-      env.OCC_TEST_OPENSHELL_K3D_REAL = "1";
+      const cluster = await prepareK3dModelLane(resolvedStatePath, state, env, {
+        buildRuntime: true,
+      });
+      Object.assign(
+        env,
+        await prepareOpenShell({
+          cluster,
+          execFile,
+          env: { ...process.env, ...env },
+          registerImage: (image, name) =>
+            registerImageInK3d(resolvedStatePath, state, cluster, image, name),
+        }),
+      );
       break;
+    }
     case "helper-timeout":
       env.OCC_TEST_DEV_UP_REAL_TIMEOUT = "1";
       break;
@@ -1024,13 +1054,17 @@ async function prepareLane({ lane, statePath }) {
       env.OCC_TEST_LOGGING_NODE_IMAGE =
         process.env.OCC_TEST_LOGGING_NODE_IMAGE ?? defaultLoggingNodeImage;
       break;
-    case "k3d-otel":
+    case "k3d-otel": {
       await ensurePostgresServer(resolvedStatePath, state);
-      await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: true });
+      const cluster = await prepareK3dModelLane(resolvedStatePath, state, env, {
+        buildRuntime: true,
+      });
+      await prepareLaneLogging(resolvedStatePath, state, env, cluster);
       env.OCC_TEST_HARNESS_K3D_REAL = "1";
       env.OCC_TEST_OTEL_LOGS = "1";
       env.OCC_TEST_SLACK_LIVE = "0";
       break;
+    }
   }
 
   await saveLaneEnv(resolvedStatePath, state, env);
@@ -1041,7 +1075,11 @@ async function prepareK3dModelLane(statePath, state, env, options) {
   const cluster = await ensureK3dCluster(statePath, state);
   env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
   env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
+  if (cluster.kubectl) env.OCC_KUBECTL_BIN = cluster.kubectl;
+  if (cluster.runtimeClass) env.OCC_TEST_OPENSHELL_RUNTIME_CLASS = cluster.runtimeClass;
+  if (cluster.runtimeHandler) env.OCC_TEST_OPENSHELL_RUNTIME_HANDLER = cluster.runtimeHandler;
   await prepareK3dRuntimeImages(statePath, state, cluster, env, options);
+  return cluster;
 }
 
 async function prepareFile({ lane, file, statePath }) {

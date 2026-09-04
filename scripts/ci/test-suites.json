@@ -153,10 +153,17 @@
           "path": "tests/integration/ci-prepare.test.mjs"
         },
         {
+          "path": "tests/integration/ci-openshell.test.mjs"
+        },
+        {
           "path": "tests/browser/console-agents.test.mjs"
         },
         {
           "path": "tests/browser/console.test.mjs"
+        },
+        {
+          "path": "tests/integration/ci-logging.test.mjs",
+          "namePattern": "^(?!prepareLogging backend receives real OTLP/HTTP logs and writes JSONL$)"
         }
       ]
     },
@@ -355,7 +362,7 @@
         "OCC_TEST_OPENAI_MODEL",
         "OCC_DOCKER_RUNTIME_IMAGE",
         "NODE_BASE_IMAGE",
-        "OCC_TEST_OTEL_LOGS_URL"
+        "OCC_TEST_OTEL_LOGS_JSONL"
       ],
       "env": {
         "OCC_TEST_DOCKER_COMPUTE_REAL": "1",
@@ -445,7 +452,7 @@
         "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
         "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
         "OCC_TEST_PRODUCTION_NODE_IMAGE",
-        "OCC_TEST_OTEL_LOGS_URL"
+        "OCC_TEST_OTEL_LOGS_JSONL"
       ],
       "env": {
         "OCC_TEST_PRODUCTION_TUI_REAL": "1",
@@ -581,6 +588,11 @@
             "native Collector filters actual Docker forwarding, binds transport identity, and survives exporter outage",
             "native Collector preserves Kubernetes identity after a dropped record sharing Pod metadata"
           ]
+        },
+        {
+          "path": "tests/integration/ci-logging.test.mjs",
+          "expectedTests": ["prepareLogging backend receives real OTLP/HTTP logs and writes JSONL"],
+          "namePattern": "^prepareLogging backend receives real OTLP/HTTP logs and writes JSONL$"
         }
       ]
     },
@@ -597,7 +609,7 @@
         "OCC_TEST_KUBERNETES_AGENT_IMAGE",
         "OPENAI_API_KEY",
         "OCC_TEST_OPENAI_MODEL",
-        "OCC_TEST_OTEL_LOGS_URL"
+        "OCC_TEST_OTEL_LOGS_JSONL"
       ],
       "files": [
         {

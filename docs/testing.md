@@ -52,7 +52,7 @@ node scripts/ci/run-tests.mjs audit
 
 The PR workflow runs exactly five lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, and logging collector. The protected workflow uses an immutable main commit and separately approved environments for model, routing, Slack, ChatGPT account, OpenShell, and additional OpenTelemetry integrations. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
 
-Implementation status: routing and OpenShell lanes are mapped and workflow-wired, but they are not runnable on fresh hosted runners yet. The current tests validate their selected prerequisites, while `prepare.mjs` creates only a bare owned cluster plus common model resources; fresh-runner bootstrap still needs approved Gateway API, cert-manager, and Envoy controller setup, OpenShell CLI/chart inputs, gateway and supervisor image import, Agent Sandbox custom resources and controller setup, and runtime/admission configuration. The approved pins and recipes remain open in the [implementation specification](../specs/19-github-actions-test-coverage.md#open-decisions).
+Implementation status: routing, OpenShell, and logging now have concrete CI preparation contracts. Routing installs pinned Gateway API, cert-manager v1.18.4, and Envoy Gateway v1.6.7 controller manifests and generates a private test CA; live routing acceptance remains under verification. OpenShell prepares an owned K3s v1.36.4 node image with gVisor release-20260831.0, a matched kubectl, RuntimeClass smoke coverage, OpenShell CLI/chart assets, gateway and supervisor images, Agent Sandbox resources, and runtime setup; its helper coverage has passed, and live lane acceptance remains under verification. Logging preparation owns a real OTLP Collector backend with JSONL evidence; the Docker full-model logging proof has passed, Kubernetes Collector proof is still running against the Helm template, and `OCC_TEST_OTEL_LOGS_URL` is no longer a required external input. The protected workflow is main-dispatch only, with environment checks for required review and no self-review. Dedicated Slack and ChatGPT inputs are still missing. Do not report full-suite coverage until every selected protected lane has recorded live results.
 
 The runner validates actual Node case results, including expected names and explicitly owned counterpart skips. Missing results, zero cases, unexpected skips, failures and cleanup errors cannot satisfy a required lane. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use trusted main inputs.
 
@@ -380,7 +380,7 @@ OCC_TEST_OPENAI_MODEL=gpt-5.1
 ```
 
 Workspace-file conformance and Helm rendering are separate from the real
-private-routing proof. The focused case requires Envoy Gateway v1.9 and
+private-routing proof. The focused case requires Envoy Gateway v1.6.7 and
 cert-manager controllers/CRDs in the selected disposable cluster, in addition
 to the database, native gateway/Codex images, and authorized model credential.
 It must use the real Envoy data plane; a hand-built TLS proxy does not exercise
@@ -393,16 +393,30 @@ and asks a fresh native session for the marker supplied only through
 model consumption. Proxy authentication denials, key rotation, and cert-manager
 leaf renewal under the same CA are separate required assertions.
 
-Install the Envoy Gateway and cert-manager controllers in the disposable
-cluster first. The fixture creates its own GatewayClass, CA Issuer, Gateway,
-and service-key Secret; it does not install the controllers. The default
-controller namespaces are `envoy-gateway-system` and `cert-manager`; override
-them with `OCC_TEST_ENVOY_GATEWAY_NAMESPACE` and
-`OCC_TEST_CERT_MANAGER_NAMESPACE` when needed. Helm must be on `PATH` or selected
-by `OCC_HELM_BIN`.
+For CI-shaped setup, let `prepare.mjs` install the pinned Gateway API,
+cert-manager v1.18.4, and Envoy Gateway v1.6.7 controllers, then create the
+disposable test CA before `run-tests.mjs` invokes the case:
 
-Create a disposable test CA before starting Node so its ordinary TLS verifier
-trusts the cert-manager-issued leaf. Do not use a production CA signing key:
+```sh
+node scripts/ci/prepare.mjs \
+  --lane gateway-routing \
+  --state "$RUNNER_TEMP/state/gateway-routing.json" \
+  --github-env "$GITHUB_ENV"
+node scripts/ci/run-tests.mjs run gateway-routing \
+  --state "$RUNNER_TEMP/state/gateway-routing.json" \
+  --results "$RUNNER_TEMP/results/gateway-routing.json"
+```
+
+For local manual setup, install the same controllers into the disposable
+cluster first. The fixture creates its own GatewayClass, CA Issuer, Gateway,
+and service-key Secret. The default controller namespaces are
+`envoy-gateway-system` and `cert-manager`; override them with
+`OCC_TEST_ENVOY_GATEWAY_NAMESPACE` and `OCC_TEST_CERT_MANAGER_NAMESPACE` when
+needed. Helm must be on `PATH` or selected by `OCC_HELM_BIN`.
+
+When preparing the CA manually, create a disposable test CA before starting Node
+so its ordinary TLS verifier trusts the cert-manager-issued leaf. Do not use a
+production CA signing key:
 
 ```sh
 umask 077
@@ -507,13 +521,29 @@ scoped resource cleanup; investigate any reported cleanup failure before rerunni
 
 ## OpenShell Sandbox
 
-This suite needs a separately prepared disposable cluster with the selected
-RuntimeClass, Agent Sandbox CRD, and ready Agent Sandbox controller. It also
-needs OpenShell CLI/Helm/chart files, imported immutable OpenShell gateway and
-supervisor images, real gateway/Codex images, the Kubernetes test database,
-`openssl`, and `OPENAI_API_KEY`. The standard k3d recipe alone is insufficient.
+This suite needs the owned OpenShell CI recipe: a disposable K3s v1.36.4 k3d
+cluster using the run-owned gVisor release-20260831.0 node image, matched
+kubectl, the selected RuntimeClass, a successful RuntimeClass smoke Pod, Agent
+Sandbox CRDs/controller, OpenShell CLI/Helm/chart files, imported immutable
+OpenShell gateway and supervisor images, real gateway/Codex images, the
+Kubernetes test database, `openssl`, and `OPENAI_API_KEY`. The standard k3d
+recipe alone is insufficient.
 
-Prepare these inputs using the
+For CI-shaped setup, let `prepare.mjs` build the node image, create the cluster,
+install OpenShell prerequisites, and export the lane environment before
+`run-tests.mjs` invokes the case:
+
+```sh
+node scripts/ci/prepare.mjs \
+  --lane openshell \
+  --state "$RUNNER_TEMP/state/openshell.json" \
+  --github-env "$GITHUB_ENV"
+node scripts/ci/run-tests.mjs run openshell \
+  --state "$RUNNER_TEMP/state/openshell.json" \
+  --results "$RUNNER_TEMP/results/openshell.json"
+```
+
+For manual setup, prepare these inputs using the
 [OpenShell test settings](reference/settings.md#openshell-test-environment) and
 [OpenShell requirements](reference/drivers/openshell-sandbox.md#kubernetes-and-admission-requirements),
 then run the exact file:

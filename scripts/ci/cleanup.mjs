@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { cleanupLogging, ciOtelBackendResourceKind } from "./logging.mjs";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, chmod, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -219,6 +220,10 @@ async function cleanupK3dImage(resource, state) {
 
 async function cleanupResource(resource, state) {
   switch (resource.kind) {
+    case ciOtelBackendResourceKind:
+      assertResourceOwner(resource, state);
+      await cleanupLogging(resource, { execFile });
+      break;
     case "postgres-database":
       await cleanupDatabase(resource, state);
       break;

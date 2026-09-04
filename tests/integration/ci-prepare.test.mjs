@@ -65,13 +65,7 @@ test("prepareLane fails closed instead of overwriting an existing CI state file"
 
 test("prepareLane rejects mutable Kubernetes image inputs before creating state", async (t) => {
   const root = await fixture(t);
-  const caCertPath = join(root, "ca.crt");
-  const caKeyPath = join(root, "ca.key");
   const adminKeyPath = join(root, "admin.key");
-  await writeFile(caCertPath, "certificate\n", { mode: 0o600 });
-  await chmod(caCertPath, 0o600);
-  await writeFile(caKeyPath, "private key\n", { mode: 0o600 });
-  await chmod(caKeyPath, 0o600);
   await writeFile(adminKeyPath, "admin key\n", { mode: 0o600 });
   await chmod(adminKeyPath, 0o600);
 
@@ -105,7 +99,6 @@ test("prepareLane rejects mutable Kubernetes image inputs before creating state"
       env: {
         ...baseModelEnv,
         ...optionalKubernetesImages,
-        OCC_TEST_OTEL_LOGS_URL: "http://127.0.0.1:4318/v1/logs",
         OCC_TEST_KUBERNETES_AGENT_IMAGE: mutableImage,
       },
     },
@@ -116,8 +109,6 @@ test("prepareLane rejects mutable Kubernetes image inputs before creating state"
         ...baseModelEnv,
         ...k3dImages,
         OCC_TEST_KUBERNETES_AGENT_IMAGE: mutableImage,
-        OCC_TEST_GATEWAY_CA_CERT_PATH: caCertPath,
-        OCC_TEST_GATEWAY_CA_KEY_PATH: caKeyPath,
       },
     },
     {
