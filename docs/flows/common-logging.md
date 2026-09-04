@@ -1,28 +1,28 @@
 ---
 created: 2026-09-02
-updated: 2026-09-02
-last_updated_session: cody/01a06333-d27e-7b00-b27d-f4a17262849b
+updated: 2026-09-03
+last_updated_session: cody/01a05fa0-6720-7f42-891b-c2c0495c8d12
 ---
 
 # Common Operational Logging Flow
 
 ## Overview
 
-Trusted startup configuration selects one OCC operational logging level. The API,
-worker, migration, and bootstrap processes use that level immediately. An
-authorized Agent deployment freezes the same level into the admitted native
-runtime configuration, and Compute renders gateway and Codex logging from the
-saved AgentRevision. Optional Docker Compose or Helm Collector configuration
-then converts reviewed container records into OTLP Logs. This flow ends at the
-Collector exporter; PostgreSQL audit remains the durable evidence boundary.
+Trusted startup configuration selects one OCC operational logging level for API,
+worker, migration, and bootstrap processes. Authorized Agent deployment freezes
+that level into the immutable AgentRevision, and Compute renders gateway and
+Codex runtime logging from the saved revision. Optional Docker Compose or Helm
+Collector configuration exports only reviewed operational records. This flow
+ends at the Collector exporter; PostgreSQL audit remains separate durable
+evidence.
 
 ## Entry Points
 
 - Trigger: start the API, worker, migration, or bootstrap process; deploy an
   Agent; enable the optional Docker Compose or Helm logging Collector.
-- Source: `apps/controller/src/composition/installation-config.ts:loadOperationalLoggingConfiguration`
+- Source: `apps/controller/src/composition/installation-config.ts:loadStartupConfigurationSnapshot`
 - Source: `packages/occ/src/index.ts:OpenClawController.deployAgent`
-- Source: `deploy/logging/collector.yaml` and `deploy/helm/openclaw-enterprise/templates/collector.yaml`
+- Source: `deploy/helm/openclaw-enterprise/templates/collector.yaml:logging.collector.enabled`
 - Assumptions: trusted startup YAML, an authorized deployment request, selected
   Compute Driver support, and operator-owned Collector configuration when remote
   export is enabled.
@@ -32,9 +32,9 @@ Collector exporter; PostgreSQL audit remains the durable evidence boundary.
 ```mermaid
 graph TD
   subgraph OCC["OCC control plane"]
-    A["OCC process starts"] --> B["Read logging.level from trusted startup YAML"]
+    A["OCC process starts"] --> B["Parse startup snapshot once"]
     B --> C["Create OCC Pino logger"]
-    C --> D["API, worker, migration, and bootstrap emit fixed JSON events"]
+    C --> D["Emit fixed JSON operational events"]
     B --> E["Authorized Agent deployment starts"]
     E --> F["Sandbox may transform a Configuration copy"]
     F --> G["Admission stamps platform-owned native logging fields"]
@@ -42,7 +42,7 @@ graph TD
   end
 
   subgraph Runtime["Managed runtime"]
-    H --> I["Docker or Kubernetes Compute renders runtime settings"]
+    H --> I["Compute renders gateway and Codex settings"]
     I --> J["Gateway JSON console and Codex JSON stderr"]
     K -->|"no"| L["Local container logs only"]
   end
@@ -51,179 +51,123 @@ graph TD
     D --> K{"Collector enabled?"}
     J --> K
     K -->|"yes"| M["Collector reads container output and protected metadata"]
-    M --> N["Promote fixed safe event classes"]
+    M --> N["Promote safe event classes and drop content-bearing records"]
     N --> O["Bounded queue and OTLP HTTP exporter"]
   end
 ```
 
 ## Execution Trace
 
-### 1. OCC reads the startup logging level
+### 1. Startup parses one configuration snapshot
 
-`apps/controller/src/composition/installation-config.ts:loadOperationalLoggingConfiguration`
+`apps/controller/src/composition/installation-config.ts:loadStartupConfigurationSnapshot`
 
-The startup reader loads the trusted YAML selected by `OCC_CONFIG_PATH` when it
-is present. `logging` is an optional closed block with one supported key,
-`level`. Missing configuration returns the default `info`; invalid levels or
-unknown logging keys fail startup before the process serves requests or claims
-work. Development without `OCC_CONFIG_PATH` uses the same default path. The
-Compose logging override mounts `deploy/logging/occ.yaml` and points the OCC
-services at it.
+API and worker startup parse the trusted YAML once, derive
+`startupConfiguration.logging`, and pass the same snapshot into later driver
+composition. Invalid logging configuration fails startup before the process
+serves requests or claims work. The settings reference owns the accepted YAML
+shape and values.
 
-### 2. API, worker, and scripts create structured OCC loggers
+### 2. Processes log fixed sanitized events
 
 `apps/controller/src/server.mjs:start`
 
 Related startup paths are `apps/controller/src/worker.mjs`,
-`scripts/bootstrap-installation.mjs`, and `scripts/migrate-production.mjs`.
+`scripts/bootstrap-installation.mjs`, `scripts/migrate-production.mjs`, and
+`apps/controller/src/logging.ts:emitOccLogEvent`. Each process creates an OCC
+Pino logger with the selected level. The API disables Fastify request logging so
+OCC owns the HTTP event shape; bootstrap and migration keep success protocol
+output separate from structured failure diagnostics. The source sanitizer keeps
+reviewed scalar fields and drops unapproved fields, credentials, provider
+payloads, request/reply objects, and unsafe strings before Pino writes the
+record. This source boundary is distinct from the Collector export filter in
+step 7.
 
-Each process creates an OCC Pino logger with the selected level. The API passes
-that logger into Fastify as `loggerInstance` and disables Fastify request
-logging, so OCC owns the HTTP event shape. The worker wraps the logger with
-`createWorkerLogEmitter`. Bootstrap and migration keep machine-protocol success
-records on stdout while sending structured failure diagnostics to stderr.
-
-### 3. OCC emits fixed controller event classes
-
-`apps/controller/src/index.ts:createFastifyApp`, `apps/controller/src/worker.ts`,
-and `apps/controller/src/logging.ts`
-
-The API records `http.completed` after each response with generated request ID,
-route template, method, status, and duration. It records
-`http.unexpected_error` only for unexpected internal failures. The worker records
-`worker.started`, debug-level `worker.health`, `worker.completed`,
-`worker.error`, and `worker.stopped`. The sanitizer keeps reviewed scalar fields
-such as request, Namespace, Agent, revision, work, attempt, outcome, and code;
-it drops unapproved fields, credentials, provider payloads, request/reply
-objects, and unsafe strings before Pino writes the record.
-
-### 4. Admission freezes native runtime logging
+### 3. Admission freezes runtime logging
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
-Deployment reads the exact Namespace-owned Configuration and allows a selected
-SandboxDriver to transform a frozen copy. OCC then stamps the platform-owned
-native logging fields after sandbox configuration and before validation:
-`logging.level`, matching `logging.consoleLevel`, `logging.consoleStyle: json`,
-`logging.redactSensitive: tools`, and `diagnostics.otel.logs: false`. The stored
-source Configuration is unchanged. The admitted document is persisted inside the
-existing immutable AgentRevision, so a later OCC restart or Configuration edit
-cannot change that revision's runtime logging policy.
+Deployment reads the exact Namespace-owned Configuration and allows the selected
+SandboxDriver to transform a frozen copy. OCC then stamps platform-owned native
+logging fields after sandbox configuration and before validation. The stored
+source Configuration is unchanged, and the admitted document is persisted inside
+the immutable AgentRevision, so later startup restarts or Configuration edits do
+not change that revision's runtime logging policy.
 
-### 5. Compute renders gateway and Codex settings from the revision
+### 4. Compute renders settings from the revision
 
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver.prepareRevision`
 
-The Kubernetes counterpart is
-`apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.deployment`;
-Codex app-server launch arguments come from
-`apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts`.
+Kubernetes rendering follows
+`apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.deployment`.
+Both Drivers require the admitted native logging fields to agree before they
+render gateway and Codex settings. Gateway receives native JSON console logging.
+Dedicated Codex app-servers receive JSON stderr logging and host-owned arguments
+that disable Codex OTLP export and prompt logging. Lifecycle hooks and
+SecretBindings cannot override those reserved destinations.
 
-Docker and Kubernetes Compute call `admittedLoggingLevel` on the saved revision.
-That helper requires the native level fields to agree, JSON console style to be
-present, tool-sensitive redaction to be enabled, and native OTLP Logs to be off.
-Gateway containers receive the admitted native JSON logging configuration.
-Dedicated Codex app-servers receive `LOG_FORMAT=json`,
-`RUST_LOG=<level>,codex_otel=off`, and host-owned `codex` arguments for
-`otel.exporter="none"` and `otel.log_user_prompt=false`. Codex stdout remains
-protocol output; Collector export admits Codex stderr records only.
+### 5. Docker collection is an explicit development override
 
-Lifecycle hooks and SecretBindings cannot override these settings. The hook
-validator rejects `LOG_FORMAT`, `RUST_LOG`, `OTEL_*`, `OPENCLAW_*`, and other
-reserved environment names. Secret binding normalization rejects the same
-reserved destinations before admission and rendering.
-
-### 6. Docker development collection is explicitly enabled
-
-`compose.logging.yaml`, `deploy/logging/docker.yaml`, and
-`apps/controller/src/drivers/compute/docker/index.ts`
+`apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver.prepareRevision`
 
 The normal development stack works without a Collector. Adding
-`compose.logging.yaml` starts the pinned Collector and routes migrate,
-bootstrap, controller, worker, gateway, and Codex Agent containers through the
-Docker `fluentd` logging driver. The receiver listens on `0.0.0.0:24224` inside
-the Collector container and is published as `127.0.0.1:${OTEL_COLLECTOR_PORT:-24224}`.
-Docker Compute reads `OCC_DOCKER_LOGGING_ADDRESS` and applies a nonblocking
-`fluentd` `LogConfig` with finite buffer, cache, and write-timeout settings to
-managed runtime containers. The address must be reachable from the Docker
-Engine, not merely from other containers.
+`compose.logging.yaml` starts the pinned Collector and routes OCC, gateway, and
+Codex Agent containers through Docker's nonblocking `fluentd` logging driver.
+Docker Compute applies the managed runtime `LogConfig` from
+`OCC_DOCKER_LOGGING_ADDRESS`; the address must be reachable from the Docker
+Engine. The deployment guide owns the runnable command.
 
-### 7. Kubernetes production collection is explicitly enabled or reused
+### 6. Kubernetes collection is bundled or equivalent
 
 `deploy/helm/openclaw-enterprise/templates/collector.yaml:logging.collector.enabled`
 
-The rendered receiver configuration comes from `deploy/logging/kubernetes.yaml`.
-
 Production can reuse an existing cluster Collector only when that Collector
-already reads the OCC and tenant CRI log files and applies an equivalent native
-Collector policy: the reviewed Kubernetes receiver/metadata mapping,
-transform/filter/privacy policy, native-export and stdout exclusions, one route
-per stream, dedicated exporter credentials, exporter-only egress, and finite
-queues/state. Otherwise operators should enable the bundled Collector or install
-the same `deploy/logging/kubernetes.yaml` and `deploy/logging/collector.yaml`
-policy in their existing Collector. When `logging.collector.enabled` is true,
-Helm renders a pinned Collector DaemonSet with dedicated config and exporter
-Secrets, read-only `/var/log/pods`, k8s metadata RBAC, restricted Pod/container
-security settings, and egress only to DNS, the Kubernetes API, and one approved
-exporter or proxy `/32`. The Collector uses `filelog` with container parsing,
-`32KiB` record bounds, file offset storage, and Kubernetes labels to derive OCC,
-gateway, Codex, Namespace, Agent, and revision identity.
-The file patterns also include release-named initialization Jobs. Identity is
-mapped onto every record before a separate resource transform removes internal
-Pod labels; removing shared labels inside the record loop would discard later
-records in the same batch, including bootstrap stderr after protocol stdout.
+already reads the OCC and tenant CRI log files and applies the same native
+receiver, metadata, filtering, privacy, routing, egress, credential, and bounded
+queue/state contract. Otherwise operators enable the bundled Collector or
+install the same native Collector policy in their existing Collector.
 
-The built-in state volume is a bounded `emptyDir`. File offsets and exporter
-queue entries can survive process and container restart in the same Pod, but
-Pod or node replacement loses that state. Operators needing stronger replay must
-provide or reuse Collector infrastructure with durable state and the same filter
-contract.
+When enabled, Helm renders a pinned Collector DaemonSet with dedicated config
+and exporter Secrets, read-only `/var/log/pods`, file offset storage under
+`/var/lib/otelcol`, self-metrics on port `8888`, k8s metadata RBAC, restricted
+Pod/container security settings, and egress only to DNS, the Kubernetes API, and
+one approved exporter or proxy `/32`. The `k8sattributes` processor maps
+identity onto each record before `transform/kubernetes-resource` removes
+internal Pod labels; removing shared labels in the record loop would discard
+later records in the same batch.
 
-### 8. Collector filters and exports bounded operational records
+### 7. Collector exports only operational classes
 
 `deploy/logging/collector.yaml:transform/operational`
 
-The backend exporter configuration comes from `deploy/logging/exporter.yaml`.
-
 The shared Collector policy keeps transport-derived identity before parsing
-untrusted JSON. It promotes fixed OCC event names, gateway records whose
-subsystem begins with `gateway`, and Codex stderr records whose target begins
-with `codex_app_server`. It maps severity explicitly, derives remote resource
-identity from protected metadata, and changes the exported body to the safe
-event class. Request IDs, Namespace IDs, Agent IDs, revision IDs, and worker
-fields remain attributes.
-
-Malformed, oversized, unclassified, content-bearing, and protocol stdout records
-are dropped before remote export. Exporter credentials and TLS settings live in
-Collector-only configuration. The exporter uses finite queues and retry limits;
-outage or overflow may lose operational logs, but it cannot block API service,
-worker reconciliation, or PostgreSQL audit persistence.
+untrusted JSON. It promotes fixed OCC event names, gateway records from the
+`gateway` subsystem, and Codex stderr records from `codex_app_server`; malformed,
+oversized, unclassified, content-bearing, and protocol stdout records are
+dropped before remote export. Exporter credentials and TLS settings live in
+Collector-only configuration. Finite queues and retry limits make operational
+logs best-effort, but outage or overflow cannot block API service, worker
+reconciliation, or PostgreSQL audit persistence.
 
 ## Debugging and Verification
 
-- Check the effective startup YAML first. Invalid `logging.level` or unknown
-  logging keys fail before API serving, worker claiming, bootstrap, or migration
-  completion.
-- For runtime workloads, compare the AgentRevision's admitted logging fields
-  with Docker `LOG_FORMAT` / `RUST_LOG`, Kubernetes environment variables, and
-  the gateway configuration ConfigMap mounted into the active revision.
-- For Docker collection, verify `compose.logging.yaml` is active,
-  `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` is set for the Collector, and the Docker
-  Engine can reach `OCC_DOCKER_LOGGING_ADDRESS`.
-- For Kubernetes collection, verify `logging.collector.enabled`, the dedicated
-  Collector Secrets, the read-only `/var/log/pods` mount, the exporter `/32`
-  NetworkPolicy, and Collector drop/queue/export metrics.
+- Check the startup snapshot first when API, worker, bootstrap, or migration
+  logging does not match the expected level; compare admitted AgentRevision
+  logging fields with rendered Docker or Kubernetes container settings for
+  runtime workloads.
+- For Docker collection, verify `compose.logging.yaml`, the Collector endpoint,
+  and Docker Engine reachability for `OCC_DOCKER_LOGGING_ADDRESS`; for
+  Kubernetes collection, verify dedicated Collector Secrets, fixed
+  `/var/log/pods` and `/var/lib/otelcol` mounts, exporter `/32` egress, and
+  Collector drop/queue/export metrics.
 - Packaging and Collector configuration tests prove rendered configuration,
   filtering, bounded queues, and startup boundaries. Real runtime suites must be
   selected separately before claiming gateway, Codex, model-turn, or OpenShell
-  deployment proof; generated contract tests cover only rendered launch
-  contracts.
+  deployment proof.
 
 ## Related docs
 
 - [Settings reference](../reference/settings.md)
-- [Controller reconciliation](../reference/controller.md)
-- [Harness execution](../reference/harness-execution.md)
 - [Security controls](../reference/security.md)
 - [Deployment guide](../guides/deploy.md)
 - [Common OpenTelemetry logging spec](../../specs/20-common-otel-logging.md)
@@ -235,3 +179,4 @@ worker reconciliation, or PostgreSQL audit persistence.
 ## Changelog
 
 - 2026-09-02 10:42: Added the source-backed common logging flow for startup policy, revision admission, runtime rendering, and Collector export. (cody/01a06333-d27e-7b00-b27d-f4a17262849b - 1242406b6863c8953abe4827c601c2173129ee50)
+- 2026-09-03 17:56: Simplified repeated settings and guide detail while preserving the logging lifecycle, admission, Collector filtering, and audit boundaries. (cody/01a05fa0-6720-7f42-891b-c2c0495c8d12 - 61ef68bc61129c90130bb65b0fc48373f0c70866)

@@ -14,6 +14,7 @@ import {
 import {
   loadInstallationConfiguration,
   loadOperationalLoggingConfiguration,
+  loadStartupConfigurationSnapshot,
 } from "../../apps/controller/src/composition/installation-config.ts";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
@@ -148,6 +149,30 @@ test("startup logging configuration is closed, defaults to info, and can stand a
   });
   assert.equal(loaded.installation.logging.level, "warn");
   assert.equal(Object.hasOwn(loaded, "logging"), false);
+});
+
+test("startup snapshot feeds logging and full Driver configuration without rereading YAML", async (t) => {
+  const full = installation();
+  full.logging = { level: "warn" };
+  full.drivers.compute.configuration.network.gatewayPort = 8082;
+  const path = await fixture(t, JSON.stringify(full));
+  const startupConfiguration = await loadStartupConfigurationSnapshot({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+
+  // API and worker startup parse the trusted YAML once, then pass the same snapshot to logging
+  // and Driver construction. A later file change must not affect the running process snapshot.
+  await writeFile(path, "drivers: [\n", "utf8");
+  assert.deepEqual(startupConfiguration.logging, { level: "warn" });
+  const loaded = await loadInstallationConfiguration({
+    mode: "production",
+    environment: {},
+    startupConfiguration,
+  });
+
+  assert.equal(loaded.installation.logging.level, "warn");
+  assert.equal(loaded.installation.drivers.compute.configuration.network.gatewayPort, 8082);
 });
 
 test("OCC logger emits structured severity and filters below the configured level", () => {

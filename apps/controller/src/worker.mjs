@@ -3,6 +3,7 @@ import pg from "pg";
 import {
   loadInstallationConfiguration,
   loadOperationalLoggingConfiguration,
+  loadStartupConfigurationSnapshot,
 } from "./composition/installation-config.ts";
 import { createOccLogger, createWorkerLogEmitter, emitOccLogEvent } from "./logging.ts";
 import { createControllerWorker } from "./worker.ts";
@@ -54,9 +55,12 @@ let worker;
 let pool;
 let readinessPath;
 let logger;
+let logging;
+let startupConfiguration;
 try {
   const { databaseUrl, mode, ...options } = configuration();
-  const logging = await loadOperationalLoggingConfiguration({ mode });
+  startupConfiguration = await loadStartupConfigurationSnapshot({ mode });
+  logging = startupConfiguration.logging;
   logger = createOccLogger({ component: "occ-worker", level: logging.level });
   readinessPath = process.env.OCC_WORKER_READINESS_PATH;
   if (readinessPath !== undefined) {
@@ -68,7 +72,7 @@ try {
       if (error?.code !== "ENOENT") throw error;
     }
   }
-  const drivers = await loadInstallationConfiguration({ mode });
+  const drivers = await loadInstallationConfiguration({ mode, startupConfiguration });
   let computeDriver;
   if (drivers === undefined && mode === "development") {
     const { createDevelopmentDockerComputeDriver } =
@@ -110,7 +114,10 @@ try {
   else if (pool !== undefined) await pool.end();
   try {
     const mode = process.env.NODE_ENV === "production" ? "production" : "development";
-    const logging = await loadOperationalLoggingConfiguration({ mode });
+    logging =
+      logging ??
+      startupConfiguration?.logging ??
+      (await loadOperationalLoggingConfiguration({ mode }));
     logger = createOccLogger({
       component: "occ-worker",
       level: logging.level,

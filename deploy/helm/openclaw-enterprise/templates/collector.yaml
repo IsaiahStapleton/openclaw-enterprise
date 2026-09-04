@@ -83,7 +83,7 @@ spec:
                 path: exporter.yaml
         - name: pod-logs
           hostPath:
-            path: {{ $collector.hostLogsPath }}
+            path: /var/log/pods
             type: Directory
         - name: collector-state
           emptyDir:
@@ -114,16 +114,16 @@ spec:
           {{- end }}
           ports:
             - name: metrics
-              containerPort: {{ $collector.metrics.port }}
+              containerPort: 8888
           volumeMounts:
             - name: collector-config
               mountPath: /etc/otel
               readOnly: true
             - name: pod-logs
-              mountPath: {{ $collector.hostLogsPath }}
+              mountPath: /var/log/pods
               readOnly: true
             - name: collector-state
-              mountPath: {{ $collector.statePath }}
+              mountPath: /var/lib/otelcol
             - name: collector-tmp
               mountPath: /tmp
 ---

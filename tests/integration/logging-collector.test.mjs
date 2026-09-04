@@ -36,6 +36,101 @@ function attributes(entries = []) {
   );
 }
 
+async function collectorFixture(t, prefix) {
+  const suffix = randomUUID().slice(0, 8);
+  const network = `oce-otel-${prefix}-${suffix}`;
+  const backend = `oce-otel-${prefix}-backend-${suffix}`;
+  const collector = `oce-otel-${prefix}-collector-${suffix}`;
+  const directory = await mkdtemp(join(tmpdir(), `occ-collector-${prefix}-`));
+  const out = join(directory, "out");
+  const state = join(directory, "state");
+  await mkdir(out);
+  await mkdir(state);
+  const overlay = loadYaml(await readFile(join(root, "compose.logging.yaml"), "utf8"));
+  const image = overlay.services.collector.image;
+  assert.match(image, /@sha256:[a-f0-9]{64}$/);
+  const user = `${process.getuid()}:${process.getgid()}`;
+  await writeFile(
+    join(directory, "backend.yaml"),
+    `receivers:\n  otlp:\n    protocols:\n      http:\n        endpoint: 0.0.0.0:4318\nexporters:\n  file:\n    path: /out/logs.jsonl\nservice:\n  telemetry:\n    logs:\n      level: error\n  pipelines:\n    logs:\n      receivers: [otlp]\n      exporters: [file]\n`,
+  );
+  t.after(async () => {
+    await docker(["rm", "--force", collector, backend]).catch(() => {});
+    await docker(["network", "rm", network]).catch(() => {});
+    await rm(directory, { recursive: true, force: true });
+  });
+  await docker(["network", "create", network]);
+  await docker([
+    "run",
+    "--detach",
+    "--name",
+    backend,
+    "--network",
+    network,
+    "--user",
+    user,
+    "--volume",
+    `${join(directory, "backend.yaml")}:/etc/otel/backend.yaml:ro`,
+    "--volume",
+    `${out}:/out`,
+    image,
+    "--config=/etc/otel/backend.yaml",
+  ]);
+  return {
+    suffix,
+    directory,
+    out,
+    backend,
+    collector,
+    async startCollector({ receiverPath, publish }) {
+      const args = ["run", "--detach", "--name", collector, "--network", network, "--user", user];
+      for (const port of publish) args.push("--publish", port);
+      args.push(
+        "--env",
+        `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://${backend}:4318/v1/logs`,
+        "--volume",
+        `${join(root, "deploy/logging/collector.yaml")}:/etc/otel/collector.yaml:ro`,
+        "--volume",
+        `${join(root, "deploy/logging/exporter.yaml")}:/etc/otel/exporter.yaml:ro`,
+        "--volume",
+        `${receiverPath}:/etc/otel/receiver.yaml:ro`,
+        "--volume",
+        `${state}:/var/lib/otelcol`,
+        image,
+        "--config=/etc/otel/collector.yaml",
+        "--config=/etc/otel/receiver.yaml",
+        "--config=/etc/otel/exporter.yaml",
+      );
+      await docker(args);
+    },
+    port(containerPort) {
+      return docker(["port", collector, `${containerPort}/tcp`]);
+    },
+  };
+}
+
+async function exportedRecords(out, mapRecord) {
+  let text;
+  try {
+    text = await readFile(join(out, "logs.jsonl"), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  return text
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      const payload = JSON.parse(line);
+      return payload.resourceLogs.flatMap((resource) =>
+        resource.scopeLogs.flatMap((scope) =>
+          scope.logRecords.map((record) => mapRecord(resource, record)),
+        ),
+      );
+    });
+}
+
 test(
   "native Collector filters actual Docker forwarding, binds transport identity, and survives exporter outage",
   {
@@ -45,109 +140,29 @@ test(
     timeout: 240_000,
   },
   async (t) => {
-    const suffix = randomUUID().slice(0, 8);
-    const network = `oce-otel-${suffix}`;
-    const backend = `oce-otel-backend-${suffix}`;
-    const collector = `oce-otel-collector-${suffix}`;
-    const directory = await mkdtemp(join(tmpdir(), "occ-collector-"));
-    const out = join(directory, "out");
-    const state = join(directory, "state");
-    await mkdir(out);
-    await mkdir(state);
-    const overlay = loadYaml(await readFile(join(root, "compose.logging.yaml"), "utf8"));
-    const image = overlay.services.collector.image;
-    assert.match(image, /@sha256:[a-f0-9]{64}$/);
-    const user = `${process.getuid()}:${process.getgid()}`;
-    await writeFile(
-      join(directory, "backend.yaml"),
-      `receivers:\n  otlp:\n    protocols:\n      http:\n        endpoint: 0.0.0.0:4318\nexporters:\n  file:\n    path: /out/logs.jsonl\nservice:\n  telemetry:\n    logs:\n      level: error\n  pipelines:\n    logs:\n      receivers: [otlp]\n      exporters: [file]\n`,
-    );
-    t.after(async () => {
-      await docker(["rm", "--force", collector, backend]).catch(() => {});
-      await docker(["network", "rm", network]).catch(() => {});
-      await rm(directory, { recursive: true, force: true });
+    const fixture = await collectorFixture(t, "docker");
+    await fixture.startCollector({
+      receiverPath: join(root, "deploy/logging/docker.yaml"),
+      publish: ["127.0.0.1::24224", "127.0.0.1::8888"],
     });
-    await docker(["network", "create", network]);
-    await docker([
-      "run",
-      "--detach",
-      "--name",
-      backend,
-      "--network",
-      network,
-      "--user",
-      user,
-      "--volume",
-      `${join(directory, "backend.yaml")}:/etc/otel/backend.yaml:ro`,
-      "--volume",
-      `${out}:/out`,
-      image,
-      "--config=/etc/otel/backend.yaml",
-    ]);
-    await docker([
-      "run",
-      "--detach",
-      "--name",
-      collector,
-      "--network",
-      network,
-      "--user",
-      user,
-      "--publish",
-      "127.0.0.1::24224",
-      "--publish",
-      "127.0.0.1::8888",
-      "--env",
-      `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://${backend}:4318/v1/logs`,
-      "--volume",
-      `${join(root, "deploy/logging/collector.yaml")}:/etc/otel/collector.yaml:ro`,
-      "--volume",
-      `${join(root, "deploy/logging/docker.yaml")}:/etc/otel/receiver.yaml:ro`,
-      "--volume",
-      `${join(root, "deploy/logging/exporter.yaml")}:/etc/otel/exporter.yaml:ro`,
-      "--volume",
-      `${state}:/var/lib/otelcol`,
-      image,
-      "--config=/etc/otel/collector.yaml",
-      "--config=/etc/otel/receiver.yaml",
-      "--config=/etc/otel/exporter.yaml",
-    ]);
-    const forwardAddress = await docker(["port", collector, "24224/tcp"]);
-    let metricsAddress = await docker(["port", collector, "8888/tcp"]);
+    const forwardAddress = await fixture.port(24224);
+    let metricsAddress = await fixture.port(8888);
     await waitFor(async () =>
       fetch(`http://${metricsAddress}/metrics`)
         .then((r) => r.ok)
         .catch(() => false),
     );
     const records = async () => {
-      let text;
-      try {
-        text = await readFile(join(out, "logs.jsonl"), "utf8");
-      } catch (error) {
-        if (error.code === "ENOENT") return [];
-        throw error;
-      }
-      return text
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .flatMap((line) => {
-          const payload = JSON.parse(line);
-          return payload.resourceLogs.flatMap((resource) =>
-            resource.scopeLogs.flatMap((scope) =>
-              scope.logRecords.map((record) => ({
-                resource: attributes(resource.resource?.attributes),
-                record,
-              })),
-            ),
-          );
-        });
+      return exportedRecords(fixture.out, (resource, record) => ({
+        resource: attributes(resource.resource?.attributes),
+        record,
+      }));
     };
     const namespaceId = `ns_${randomUUID()}`;
     const agentId = `agt_${randomUUID()}`;
     const revisionId = `rev_${randomUUID()}`;
     const canaries = ["password", "token", "prompt", "tool-output", "email"].map(
-      (kind) => `CANARY_${kind}_${suffix}`,
+      (kind) => `CANARY_${kind}_${fixture.suffix}`,
     );
     const payload = Object.fromEntries(canaries.map((value) => [value, value]));
 
@@ -271,7 +286,7 @@ test(
     // A stopped destination leaves the Collector responsive and queues a bounded
     // operational record. Restart the Collector too, proving its configured
     // file-backed queue survives a process restart before the destination returns.
-    await docker(["stop", "--time", "5", backend]);
+    await docker(["stop", "--time", "5", fixture.backend]);
     await send("gateway", [JSON.stringify({ level: "warn", subsystem: "gateway" })]);
     await waitFor(async () => {
       const current = await fetch(`http://${metricsAddress}/metrics`).then((response) =>
@@ -279,9 +294,9 @@ test(
       );
       return /otelcol_exporter_queue_size[^\n]* [1-9]/.test(current);
     });
-    await docker(["stop", "--time", "10", collector]);
-    await docker(["start", collector]);
-    metricsAddress = (await docker(["port", collector, "8888/tcp"])).trim();
+    await docker(["stop", "--time", "10", fixture.collector]);
+    await docker(["start", fixture.collector]);
+    metricsAddress = (await fixture.port(8888)).trim();
     await waitFor(async () => {
       try {
         return (await fetch(`http://${metricsAddress}/metrics`)).status === 200;
@@ -289,9 +304,9 @@ test(
         return false;
       }
     });
-    await docker(["start", backend]);
+    await docker(["start", fixture.backend]);
     await waitFor(async () => (await records()).some(({ record }) => record.severityNumber === 13));
-    await docker(["stop", "--time", "10", collector]);
+    await docker(["stop", "--time", "10", fixture.collector]);
     // The file-export test destination starts a new capture segment on restart.
     assert.equal((await records()).length, 1, "the restored destination receives the queued event");
   },
@@ -306,30 +321,14 @@ test(
     timeout: 180_000,
   },
   async (t) => {
-    const suffix = randomUUID().slice(0, 8);
-    const network = `oce-otel-k8s-${suffix}`;
-    const backend = `oce-otel-k8s-backend-${suffix}`;
-    const collector = `oce-otel-k8s-collector-${suffix}`;
-    const directory = await mkdtemp(join(tmpdir(), "occ-collector-k8s-"));
-    const out = join(directory, "out");
-    const state = join(directory, "state");
-    await mkdir(out);
-    await mkdir(state);
-    const overlay = loadYaml(await readFile(join(root, "compose.logging.yaml"), "utf8"));
+    const fixture = await collectorFixture(t, "k8s");
     const kubernetes = loadYaml(
       await readFile(join(root, "deploy/logging/kubernetes.yaml"), "utf8"),
-    );
-    const image = overlay.services.collector.image;
-    assert.match(image, /@sha256:[a-f0-9]{64}$/);
-    const user = `${process.getuid()}:${process.getgid()}`;
-    await writeFile(
-      join(directory, "backend.yaml"),
-      `receivers:\n  otlp:\n    protocols:\n      http:\n        endpoint: 0.0.0.0:4318\nexporters:\n  file:\n    path: /out/logs.jsonl\nservice:\n  telemetry:\n    logs:\n      level: error\n  pipelines:\n    logs:\n      receivers: [otlp]\n      exporters: [file]\n`,
     );
     const fixtureProcessors = { ...kubernetes.processors };
     delete fixtureProcessors.k8sattributes;
     await writeFile(
-      join(directory, "receiver.yaml"),
+      join(fixture.directory, "receiver.yaml"),
       `${JSON.stringify(
         {
           receivers: { otlp: { protocols: { http: { endpoint: "0.0.0.0:4318" } } } },
@@ -350,55 +349,11 @@ test(
         2,
       )}\n`,
     );
-    t.after(async () => {
-      await docker(["rm", "--force", collector, backend]).catch(() => {});
-      await docker(["network", "rm", network]).catch(() => {});
-      await rm(directory, { recursive: true, force: true });
+    await fixture.startCollector({
+      receiverPath: join(fixture.directory, "receiver.yaml"),
+      publish: ["127.0.0.1::4318"],
     });
-    await docker(["network", "create", network]);
-    await docker([
-      "run",
-      "--detach",
-      "--name",
-      backend,
-      "--network",
-      network,
-      "--user",
-      user,
-      "--volume",
-      `${join(directory, "backend.yaml")}:/etc/otel/backend.yaml:ro`,
-      "--volume",
-      `${out}:/out`,
-      image,
-      "--config=/etc/otel/backend.yaml",
-    ]);
-    await docker([
-      "run",
-      "--detach",
-      "--name",
-      collector,
-      "--network",
-      network,
-      "--user",
-      user,
-      "--publish",
-      "127.0.0.1::4318",
-      "--env",
-      `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://${backend}:4318/v1/logs`,
-      "--volume",
-      `${join(root, "deploy/logging/collector.yaml")}:/etc/otel/collector.yaml:ro`,
-      "--volume",
-      `${join(root, "deploy/logging/exporter.yaml")}:/etc/otel/exporter.yaml:ro`,
-      "--volume",
-      `${join(directory, "receiver.yaml")}:/etc/otel/receiver.yaml:ro`,
-      "--volume",
-      `${state}:/var/lib/otelcol`,
-      image,
-      "--config=/etc/otel/collector.yaml",
-      "--config=/etc/otel/receiver.yaml",
-      "--config=/etc/otel/exporter.yaml",
-    ]);
-    const receiverAddress = await docker(["port", collector, "4318/tcp"]);
+    const receiverAddress = await fixture.port(4318);
     await waitFor(async () =>
       fetch(`http://${receiverAddress}/v1/logs`, {
         method: "POST",
@@ -429,10 +384,10 @@ test(
               { key: "occ.managed_by", value: { stringValue: "openclaw-enterprise" } },
               {
                 key: "k8s.pod.name",
-                value: { stringValue: `openclaw-enterprise-initialization-${suffix}` },
+                value: { stringValue: `openclaw-enterprise-initialization-${fixture.suffix}` },
               },
               { key: "k8s.pod.uid", value: { stringValue: podUid } },
-              { key: "k8s.namespace.name", value: { stringValue: `system-${suffix}` } },
+              { key: "k8s.namespace.name", value: { stringValue: `system-${fixture.suffix}` } },
               { key: "k8s.node.name", value: { stringValue: "fixture-node" } },
               { key: "container.id", value: { stringValue: containerId } },
               { key: "container.image.name", value: { stringValue: "openclaw-enterprise" } },
@@ -475,29 +430,11 @@ test(
     assert.equal(response.status, 200, await response.text());
 
     const records = async () => {
-      let text;
-      try {
-        text = await readFile(join(out, "logs.jsonl"), "utf8");
-      } catch (error) {
-        if (error.code === "ENOENT") return [];
-        throw error;
-      }
-      return text
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .flatMap((line) => {
-          const exported = JSON.parse(line);
-          return exported.resourceLogs.flatMap((resource) =>
-            resource.scopeLogs.flatMap((scope) =>
-              scope.logRecords.map((record) => ({
-                resource: attributes(resource.resource?.attributes),
-                attributes: attributes(record.attributes),
-                record,
-              })),
-            ),
-          );
-        });
+      return exportedRecords(fixture.out, (resource, record) => ({
+        resource: attributes(resource.resource?.attributes),
+        attributes: attributes(record.attributes),
+        record,
+      }));
     };
     await waitFor(async () => (await records()).length === 1);
     const [exported] = await records();

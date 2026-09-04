@@ -38,6 +38,11 @@ import { type LoggingConfiguration, operationalLoggingConfiguration } from "../l
 
 type ConfigurationRecord = Readonly<Record<string, unknown>>;
 
+export interface StartupConfigurationSnapshot {
+  readonly configuration?: ConfigurationRecord;
+  readonly logging: LoggingConfiguration;
+}
+
 export interface SelectedDriverConfiguration<T = ConfigurationRecord> {
   readonly id: string;
   readonly implementation: string;
@@ -119,6 +124,18 @@ async function startupConfiguration(
     "Installation startup configuration",
   );
   return configuration;
+}
+
+export async function loadStartupConfigurationSnapshot(options: {
+  readonly mode: "development" | "production";
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+}): Promise<StartupConfigurationSnapshot> {
+  const configuration = await startupConfiguration(options, options.mode === "production");
+  const logging = operationalLoggingConfiguration(configuration?.logging);
+  return Object.freeze({
+    ...(configuration === undefined ? {} : { configuration }),
+    logging,
+  });
 }
 
 interface ExternalDriverModule extends DriverImplementation {
@@ -395,6 +412,7 @@ export async function loadInstallationConfiguration(options: {
   readonly mode: "development" | "production";
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly packageRoot?: string;
+  readonly startupConfiguration?: StartupConfigurationSnapshot;
   readonly createSandboxDriver?: (selection: SelectedDriverConfiguration) => SandboxDriver;
 }): Promise<InstallationRuntimeDrivers | undefined> {
   const environment = options.environment ?? process.env;
@@ -410,9 +428,12 @@ export async function loadInstallationConfiguration(options: {
       throw new Error(`${name} is unsupported; select Drivers in the Installation startup YAML.`);
     }
   }
-  const configuration = await startupConfiguration(options, options.mode === "production");
+  const startup = options.startupConfiguration ?? (await loadStartupConfigurationSnapshot(options));
+  const { configuration, logging } = startup;
+  if (configuration === undefined && options.mode === "production") {
+    throw new Error("OCC_CONFIG_PATH must identify the Installation startup YAML.");
+  }
   if (configuration === undefined) return undefined;
-  const logging = operationalLoggingConfiguration(configuration.logging);
   if (
     options.mode === "development" &&
     configuration.occ === undefined &&

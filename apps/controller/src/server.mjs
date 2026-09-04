@@ -3,7 +3,7 @@ import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
 import {
   loadInstallationConfiguration,
-  loadOperationalLoggingConfiguration,
+  loadStartupConfigurationSnapshot,
 } from "./composition/installation-config.ts";
 import { composeProduction } from "./composition/production.ts";
 import { validateWorkspaceFilesApiKeyPath } from "./composition/workspace-files.ts";
@@ -175,13 +175,17 @@ function configuration() {
 
 async function start() {
   const settings = configuration();
-  const logging = await loadOperationalLoggingConfiguration({ mode: settings.mode });
+  const startupConfiguration = await loadStartupConfigurationSnapshot({ mode: settings.mode });
+  const logging = startupConfiguration.logging;
   const logger = createOccLogger({ component: "occ-api", level: logging.level });
   if (settings.gatewayApiKeyPath !== undefined) {
     await validateWorkspaceFilesApiKeyPath(settings.gatewayApiKeyPath);
   }
   const compositionSettings = { ...settings, logger, logging };
-  const drivers = await loadInstallationConfiguration({ mode: settings.mode });
+  const drivers = await loadInstallationConfiguration({
+    mode: settings.mode,
+    startupConfiguration,
+  });
   let serviceAccountDriverFactory;
   const selectedServiceAccountDriver = drivers?.installation.drivers.service_account;
   if (selectedServiceAccountDriver !== undefined) {

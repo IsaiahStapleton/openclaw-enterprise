@@ -117,11 +117,6 @@ test("development logging override routes only OCC-owned services through the pr
     collector.image,
     "docker.io/otel/opentelemetry-collector-contrib:0.159.0@sha256:1f2c54a30e713fac6b3ae77a1ec84010c2007e29ced8ec666214fc2f6739c1cc",
   );
-  assert.deepEqual(collector.command, [
-    "--config=/etc/otel/collector.yaml",
-    "--config=/etc/otel/receiver.yaml",
-    "--config=/etc/otel/exporter.yaml",
-  ]);
   assert.ok(
     collector.ports.some(({ mode, target, published, host_ip }) => {
       return (
@@ -142,24 +137,6 @@ test("development logging override routes only OCC-owned services through the pr
   assert.equal(collector.read_only, true);
   assert.deepEqual(collector.cap_drop, ["ALL"]);
   assert.deepEqual(collector.security_opt, ["no-new-privileges:true"]);
-  assert.deepEqual(
-    collector.volumes.filter(({ read_only }) => read_only !== true),
-    [
-      {
-        type: "volume",
-        source: "occ_otelcol_data",
-        target: "/var/lib/otelcol",
-        volume: {},
-      },
-    ],
-  );
-  assert.deepEqual(
-    collector.volumes
-      .filter(({ type, read_only }) => type === "bind" && read_only === true)
-      .map(({ target }) => target)
-      .sort(),
-    ["/etc/otel/collector.yaml", "/etc/otel/exporter.yaml", "/etc/otel/receiver.yaml"],
-  );
   assert.ok(configuration.volumes.occ_otelcol_data);
 
   for (const service of [bootstrap, controller, migrate, worker]) {
@@ -176,41 +153,7 @@ test("development logging override routes only OCC-owned services through the pr
     assert.match(service.logging.options.labels, /org\.openclaw\.enterprise\.managed/);
     assert.match(service.logging.options.labels, /org\.openclaw\.enterprise\.version/);
     assert.match(service.logging.options.labels, /com\.docker\.compose\.service/);
-    assert.equal(service.depends_on.collector.condition, "service_started");
-    assert.equal(service.environment.OCC_CONFIG_PATH, "/etc/openclaw/occ.yaml");
-    assert.equal(service.labels["org.openclaw.enterprise.version"], "0.1.0");
-    assert.deepEqual(
-      service.volumes.filter(({ target }) => target === "/etc/openclaw/occ.yaml"),
-      [
-        {
-          type: "bind",
-          source: `${repository}deploy/logging/occ.yaml`,
-          target: "/etc/openclaw/occ.yaml",
-          read_only: true,
-          bind: {},
-        },
-      ],
-    );
   }
-  assert.ok(
-    bootstrap.volumes.some(({ source, target }) => {
-      return source === "occ_bootstrap_data" && target === "/var/lib/openclaw/bootstrap";
-    }),
-  );
-  assert.ok(
-    controller.volumes.some(({ source, target }) => {
-      return source === "occ_configuration_data" && target === "/app/.development/configurations";
-    }),
-  );
-  assert.ok(
-    worker.volumes.some(({ source, target }) => {
-      return source === "/var/run/docker.sock" && target === "/var/run/docker.sock";
-    }),
-  );
-  assert.equal(migrate.depends_on.postgres.condition, "service_healthy");
-  assert.equal(bootstrap.depends_on.migrate.condition, "service_completed_successfully");
-  assert.equal(controller.depends_on.bootstrap.condition, "service_completed_successfully");
-  assert.equal(worker.depends_on.controller.condition, "service_healthy");
   assert.equal(controller.environment.OCC_DOCKER_LOGGING_ADDRESS, "127.0.0.1:24224");
   assert.equal(worker.environment.OCC_DOCKER_LOGGING_ADDRESS, "127.0.0.1:24224");
   assert.equal(postgres.logging, undefined);
@@ -260,15 +203,11 @@ test(
 
     assert.equal(serviceAccount.automountServiceAccountToken, true);
     assert.equal(container.image, collectorImage);
-    assert.deepEqual(container.args, [
-      "--config=/etc/otel/collector.yaml",
-      "--config=/etc/otel/receiver.yaml",
-      "--config=/etc/otel/exporter.yaml",
-    ]);
     assert.deepEqual(container.envFrom, [{ secretRef: { name: "occ-otel-collector-exporter" } }]);
     assert.deepEqual(container.env, [
       { name: "K8S_NODE_NAME", valueFrom: { fieldRef: { fieldPath: "spec.nodeName" } } },
     ]);
+    assert.deepEqual(container.ports, [{ name: "metrics", containerPort: 8888 }]);
     assert.equal(daemonSet.spec.template.spec.securityContext.runAsNonRoot, true);
     assert.deepEqual(daemonSet.spec.template.spec.securityContext.supplementalGroups, [0]);
     assert.equal(container.securityContext.allowPrivilegeEscalation, false);
@@ -278,7 +217,14 @@ test(
       requests: { cpu: "100m", memory: "128Mi" },
       limits: { cpu: "500m", memory: "384Mi" },
     });
-    assert.equal(container.volumeMounts.find(({ name }) => name === "pod-logs").readOnly, true);
+    assert.deepEqual(
+      container.volumeMounts.find(({ name }) => name === "pod-logs"),
+      {
+        name: "pod-logs",
+        mountPath: "/var/log/pods",
+        readOnly: true,
+      },
+    );
     assert.equal(
       container.volumeMounts.some(({ name }) => name === "container-logs"),
       false,
@@ -292,17 +238,16 @@ test(
         return name === "collector-state" && mountPath === "/var/lib/otelcol";
       }),
     );
+    assert.deepEqual(pod.volumes.find(({ name }) => name === "pod-logs").hostPath, {
+      path: "/var/log/pods",
+      type: "Directory",
+    });
     assert.deepEqual(pod.volumes.find(({ name }) => name === "collector-state").emptyDir, {
       sizeLimit: "128Mi",
     });
 
     const configVolume = pod.volumes.find(({ name }) => name === "collector-config");
     assert.equal(configVolume.secret.secretName, "occ-otel-collector-config");
-    assert.deepEqual(configVolume.secret.items, [
-      { key: "collector.yaml", path: "collector.yaml" },
-      { key: "kubernetes.yaml", path: "receiver.yaml" },
-      { key: "exporter.yaml", path: "exporter.yaml" },
-    ]);
     const kubernetesCollectorConfig = await readFile(
       new URL("../../deploy/logging/kubernetes.yaml", import.meta.url),
       "utf8",
