@@ -6,7 +6,10 @@ import { join } from "node:path";
 import test from "node:test";
 import pg from "pg";
 import { AuditEventFactory } from "../../packages/audit/src/index.ts";
-import { PostgresPlatformState } from "../../packages/occ/src/state/postgres-state.ts";
+import {
+  BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  PostgresPlatformState,
+} from "../../packages/occ/src/index.ts";
 import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
@@ -199,9 +202,20 @@ test(
     assert.equal(authorized.statusCode, 200, authorized.body);
     assert.equal(authorized.json().data.id, installation.id);
     const queuedWork = await observerPool.query(
-      "SELECT count(*)::integer AS count FROM occ.controller_work",
+      `SELECT namespace.id, namespace.name, namespace.status, work.idempotency_key
+       FROM occ.namespaces AS namespace
+       JOIN occ.controller_work AS work ON work.namespace_id = namespace.id
+       WHERE namespace.name = $1`,
+      [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
     );
-    assert.equal(queuedWork.rows[0].count, 0);
+    assert.equal(queuedWork.rowCount, 1);
+    assert.match(queuedWork.rows[0].id, /^ns_/);
+    assert.equal(queuedWork.rows[0].name, BOOTSTRAP_DEFAULT_NAMESPACE_NAME);
+    assert.equal(queuedWork.rows[0].status, "provisioning");
+    assert.equal(
+      queuedWork.rows[0].idempotency_key,
+      `namespace:${queuedWork.rows[0].id}:reconcile:ready`,
+    );
 
     const session = await signInWithEmailPassword({
       fetch: (request) => fetchFromInjectedApp(app, request),

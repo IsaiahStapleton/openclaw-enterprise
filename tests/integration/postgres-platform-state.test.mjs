@@ -1,24 +1,36 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { kubernetesNamespaceName } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { verifyPlatformStateStoreContract } from "../conformance/platform-state-store.contract.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
+import {
+  createKubernetesInstallationConfiguration,
+  kubernetesHash,
+  validateExplicitK3dLoopbackContext,
+} from "../helpers/kubernetes-real.mjs";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const entrypoint = fileURLToPath(new URL("../../apps/controller/src/server.mjs", import.meta.url));
 const workerEntrypoint = fileURLToPath(
   new URL("../../apps/controller/src/worker.mjs", import.meta.url),
 );
+const execute = promisify(execFile);
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
+const kubeconfigPath = process.env.OCC_TEST_KUBERNETES_KUBECONFIG;
+const kubernetesContext = process.env.OCC_TEST_KUBERNETES_CONTEXT;
+const fixtureImage = process.env.OCC_TEST_KUBERNETES_IMAGE;
 const adminEmail = "postgres-admin@openclaw.local";
 const adminPassword = "postgres-development-password";
 const authSecret = "openclaw-postgres-development-auth-secret-minimum-32-bytes";
@@ -30,8 +42,274 @@ const requiresPostgresAndKubernetesConfiguration = {
     ? "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests."
     : process.env.OCC_TEST_KUBERNETES_CONFIGURATION === "1"
       ? false
-      : "Requires a live Kubernetes ConfigurationDriver; development has no fallback backend.",
+      : "Set OCC_TEST_KUBERNETES_CONFIGURATION=1 to run PostgreSQL plus live Kubernetes Driver coverage.",
 };
+const useKubernetesDrivers = process.env.OCC_TEST_KUBERNETES_CONFIGURATION === "1";
+const kubernetesStartupEnvironments = new WeakMap();
+const kubernetesWorkloadResources = Object.freeze({
+  requests: Object.freeze({ cpu: "25m", memory: "48Mi" }),
+  limits: Object.freeze({ cpu: "250m", memory: "192Mi" }),
+});
+const defaultAgentConfigurationValues = Object.freeze({
+  gateway: Object.freeze({ controlUi: Object.freeze({ enabled: false }) }),
+});
+
+async function kubectl(...args) {
+  const { stdout } = await execute(
+    "kubectl",
+    ["--kubeconfig", kubeconfigPath, "--context", kubernetesContext, ...args],
+    { maxBuffer: 4 * 1024 * 1024 },
+  );
+  return stdout;
+}
+
+async function configuredDriverEnvironment(context, kubernetesDrivers) {
+  if (!kubernetesDrivers) return {};
+  assert.equal(
+    useKubernetesDrivers,
+    true,
+    "OCC_TEST_KUBERNETES_CONFIGURATION=1 is required for live Kubernetes Driver coverage.",
+  );
+  return (await createKubernetesStartupEnvironment(context)).environment;
+}
+
+async function createKubernetesStartupEnvironment(context) {
+  // The API and worker share a scoped controller identity; the base kubeconfig is used only
+  // to create that identity and grant per-tenant access after each Namespace exists.
+  const cached = kubernetesStartupEnvironments.get(context);
+  if (cached !== undefined) return cached;
+
+  assert.ok(fixtureImage, "OCC_TEST_KUBERNETES_IMAGE is required.");
+  await validateExplicitK3dLoopbackContext({ kubeconfigPath, kubernetesContext });
+  const installationId = `ins_${randomUUID()}`;
+  const identifier = kubernetesHash(installationId);
+  const account = "openclaw-controller";
+  const namespaceRole = `oce-postgres-namespaces-${identifier}`;
+  const tenantRole = `oce-postgres-tenant-${identifier}`;
+  const binding = `oce-postgres-controller-${identifier}`;
+  const platformNamespace = `oce-postgres-platform-${identifier}`;
+  const directory = await mkdtemp(join(tmpdir(), "openclaw-postgres-kubernetes-"));
+  context.after(async () => {
+    const cleanup = await Promise.allSettled([
+      kubectl("delete", "namespace", platformNamespace, "--ignore-not-found=true", "--wait=true"),
+      kubectl("delete", "clusterrolebinding", binding, "--ignore-not-found=true"),
+      kubectl("delete", "clusterrole", namespaceRole, tenantRole, "--ignore-not-found=true"),
+      rm(directory, { recursive: true, force: true }),
+    ]);
+    const failures = cleanup.filter((result) => result.status === "rejected");
+    if (failures.length > 0) throw new AggregateError(failures.map(({ reason }) => reason));
+  });
+
+  await kubectl("create", "namespace", platformNamespace);
+  await kubectl("create", "serviceaccount", account, "--namespace", platformNamespace);
+  await kubectl(
+    "create",
+    "clusterrole",
+    namespaceRole,
+    "--verb=create,get,list,patch,update,delete",
+    "--resource=namespaces",
+  );
+  await kubectl(
+    "create",
+    "clusterrole",
+    tenantRole,
+    "--verb=create,get,list,patch,update,delete",
+    "--resource=deployments.apps,services,serviceaccounts,configmaps,endpointslices.discovery.k8s.io,networkpolicies.networking.k8s.io,resourcequotas,limitranges,secrets",
+  );
+  await kubectl(
+    "patch",
+    "clusterrole",
+    tenantRole,
+    "--type=json",
+    "--patch",
+    JSON.stringify([
+      {
+        op: "add",
+        path: "/rules/-",
+        value: {
+          apiGroups: [""],
+          resources: ["persistentvolumeclaims"],
+          verbs: ["get", "create", "patch", "delete"],
+        },
+      },
+    ]),
+  );
+  await kubectl(
+    "create",
+    "clusterrolebinding",
+    binding,
+    `--clusterrole=${namespaceRole}`,
+    `--serviceaccount=${platformNamespace}:${account}`,
+  );
+
+  const token = (
+    await kubectl("create", "token", account, "--namespace", platformNamespace)
+  ).trim();
+  const current = JSON.parse(
+    await kubectl("config", "view", "--minify", "--flatten", "-o", "json"),
+  );
+  const scopedContext = `scoped-${identifier}`;
+  const scopedKubeconfig = join(directory, "kubeconfig.json");
+  await writeFile(
+    scopedKubeconfig,
+    JSON.stringify({
+      apiVersion: "v1",
+      kind: "Config",
+      clusters: [{ name: "local", cluster: current.clusters[0].cluster }],
+      users: [{ name: account, user: { token } }],
+      contexts: [{ name: scopedContext, context: { cluster: "local", user: account } }],
+      "current-context": scopedContext,
+    }),
+    { mode: 0o600 },
+  );
+
+  const authentication = {
+    mode: "kubeconfig",
+    kubeconfigPath: scopedKubeconfig,
+    context: scopedContext,
+  };
+  const installation = createKubernetesInstallationConfiguration({
+    authentication,
+    platformNamespace,
+    gatewayImage: fixtureImage,
+    codexImage: fixtureImage,
+    cluster: `postgres-platform-state-${identifier}`,
+  });
+  installation.drivers.secret.configuration.authentication = structuredClone(authentication);
+  installation.drivers.compute.configuration.images.requireImmutableDigest = false;
+  installation.drivers.compute.configuration.resources.gateway = structuredClone(
+    kubernetesWorkloadResources,
+  );
+  installation.drivers.compute.configuration.resources.agent = structuredClone(
+    kubernetesWorkloadResources,
+  );
+  installation.drivers.compute.configuration.resources.namespace = {
+    quota: {
+      pods: "20",
+      "requests.cpu": "1",
+      "requests.memory": "1Gi",
+      "limits.cpu": "4",
+      "limits.memory": "3Gi",
+    },
+    containerDefaults: structuredClone(kubernetesWorkloadResources),
+  };
+  installation.drivers.compute.configuration.network.gatewayPort = 8080;
+  delete installation.drivers.compute.configuration.runtime;
+  const configurationPath = join(directory, "installation.yaml");
+  await writeFile(configurationPath, JSON.stringify(installation), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+
+  const environment = { OCC_CONFIG_PATH: configurationPath };
+  const startup = { environment, platformNamespace, account, tenantRole };
+  kubernetesStartupEnvironments.set(context, startup);
+  return startup;
+}
+
+async function waitForKubernetesNamespace(context, namespaceId) {
+  const name = kubernetesNamespaceName(namespaceId);
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    try {
+      await kubectl("get", "namespace", name, "-o", "json");
+      return name;
+    } catch (error) {
+      if (!/NotFound|not found/i.test(error.stderr ?? error.message)) throw error;
+      await delay(100);
+    }
+  }
+  assert.fail(`Timed out waiting for Kubernetes Namespace ${name}.`);
+}
+
+async function grantTenantAccess(context, namespaceId) {
+  // Kubernetes namespace creation succeeds before tenant resources can be reconciled;
+  // this mirrors the operator-owned RoleBinding handoff required by the real driver.
+  const { platformNamespace, account, tenantRole } =
+    await createKubernetesStartupEnvironment(context);
+  const name = await waitForKubernetesNamespace(context, namespaceId);
+  try {
+    await kubectl(
+      "create",
+      "rolebinding",
+      "openclaw-controller",
+      "--namespace",
+      name,
+      `--clusterrole=${tenantRole}`,
+      `--serviceaccount=${platformNamespace}:${account}`,
+    );
+  } catch (error) {
+    if (!/AlreadyExists|already exists/i.test(error.stderr ?? error.message)) throw error;
+  }
+}
+
+function cleanupKubernetesNamespaces(context, namespaceIds) {
+  context.after(async () => {
+    const cleanup = await Promise.allSettled(
+      namespaceIds.map((namespaceId) =>
+        kubectl(
+          "delete",
+          "namespace",
+          kubernetesNamespaceName(namespaceId),
+          "--ignore-not-found=true",
+          "--wait=true",
+        ),
+      ),
+    );
+    const failures = cleanup.filter((result) => result.status === "rejected");
+    if (failures.length > 0) throw new AggregateError(failures.map(({ reason }) => reason));
+  });
+}
+
+async function waitForNamespaceReady(api, namespaceId, worker) {
+  const ready = await pollUntil(
+    `Namespace ${namespaceId} to become ready through the independent worker`,
+    async () => {
+      const current = await request(api, "GET", `/namespaces/${namespaceId}`);
+      assert.equal(current.status, 200);
+      return current.data.status === "ready" ? current.data : undefined;
+    },
+    { worker, timeoutMs: 60_000 },
+  );
+  assert.equal(ready.id, namespaceId);
+  assert.equal(ready.status, "ready");
+  return ready;
+}
+
+async function createConfiguration(api, namespaceId, values = defaultAgentConfigurationValues) {
+  const configuration = await request(api, "POST", `/namespaces/${namespaceId}/configurations`, {
+    kind: "agent",
+    values,
+  });
+  assert.equal(configuration.status, 201);
+  return configuration.data;
+}
+
+async function updateConfiguration(api, namespaceId, configurationId, values) {
+  const configuration = await request(
+    api,
+    "PATCH",
+    `/namespaces/${namespaceId}/configurations/${configurationId}`,
+    { values },
+  );
+  assert.equal(configuration.status, 200);
+  return configuration.data;
+}
+
+async function createConfiguredAgent(api, namespaceId, name, values, body = {}) {
+  const configuration = await createConfiguration(api, namespaceId, values);
+  const agent = await request(api, "POST", `/namespaces/${namespaceId}/agents`, {
+    name,
+    configurationId: configuration.id,
+    ...body,
+  });
+  assert.equal(agent.status, 201);
+  return { configuration, agent: agent.data };
+}
+
+function admitted(values) {
+  return admitLoggingConfiguration(values, "info");
+}
 
 async function availablePort() {
   const server = createServer();
@@ -57,8 +335,9 @@ async function stopController(child) {
   }
 }
 
-async function startController(context) {
+async function startController(context, { kubernetesDrivers = false } = {}) {
   const port = await availablePort();
+  const driverEnvironment = await configuredDriverEnvironment(context, kubernetesDrivers);
   const configurationRoot = await mkdtemp(join(tmpdir(), "openclaw-postgres-configurations-"));
   context.after(async () => {
     await rm(configurationRoot, { recursive: true, force: true });
@@ -83,6 +362,7 @@ async function startController(context) {
       OCC_AUTH_SECRET: authSecret,
       OCC_DEVELOPMENT_CONFIGURATION_ROOT: configurationRoot,
       OCC_DOCKER_RUNTIME_IMAGE: "openclaw-enterprise-runtime:not-used-by-postgres-platform-state",
+      ...driverEnvironment,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -113,7 +393,8 @@ async function startController(context) {
   assert.fail(`The durable OCC subprocess never became ready:\n${output}`);
 }
 
-function spawnWorker(context) {
+async function spawnWorker(context, { kubernetesDrivers = false } = {}) {
+  const driverEnvironment = await configuredDriverEnvironment(context, kubernetesDrivers);
   const child = spawn(process.execPath, [workerEntrypoint], {
     cwd: repository,
     env: {
@@ -126,6 +407,7 @@ function spawnWorker(context) {
       OCC_WORKER_LEASE_DURATION_MS: "5000",
       OCC_AUTH_BASE_URL: "http://127.0.0.1",
       OCC_AUTH_SECRET: authSecret,
+      ...driverEnvironment,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -140,8 +422,8 @@ function spawnWorker(context) {
   return { child, output: () => output };
 }
 
-async function startWorker(context) {
-  const worker = spawnWorker(context);
+async function startWorker(context, options) {
+  const worker = await spawnWorker(context, options);
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     assert.equal(
@@ -153,6 +435,14 @@ async function startWorker(context) {
     await delay(25);
   }
   assert.fail(`The separate OCC worker subprocess never became ready:\n${worker.output()}`);
+}
+
+async function startKubernetesController(context) {
+  return startController(context, { kubernetesDrivers: true });
+}
+
+async function startKubernetesWorker(context) {
+  return startWorker(context, { kubernetesDrivers: true });
 }
 
 async function pollUntil(description, operation, { worker, timeoutMs = 15_000 } = {}) {
@@ -172,6 +462,14 @@ async function pollUntil(description, operation, { worker, timeoutMs = 15_000 } 
   assert.fail(
     `Timed out waiting for ${description}.${worker === undefined ? "" : `\n${worker.output()}`}`,
   );
+}
+
+function parseJsonLines(output) {
+  return output
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
 }
 
 async function request(controller, method, path, body, options = {}) {
@@ -243,12 +541,26 @@ test(
       return;
     }
 
-    const prematureWorker = spawnWorker(context);
+    const prematureWorker = await spawnWorker(context);
     const [prematureExit] = await once(prematureWorker.child, "exit", {
       signal: AbortSignal.timeout(10_000),
     });
     assert.notEqual(prematureExit, 0);
-    assert.match(prematureWorker.output(), /installation|initializ|bootstrap/i);
+    const startupFailure = parseJsonLines(prematureWorker.output()).find(
+      (line) => line.event === "worker.startup-error",
+    );
+    assert.deepEqual(
+      {
+        service: startupFailure?.service,
+        event: startupFailure?.event,
+        code: startupFailure?.code,
+      },
+      {
+        service: "occ-worker",
+        event: "worker.startup-error",
+        code: "WORKER_STARTUP_FAILED",
+      },
+    );
 
     const namespaceId = `ns_${randomUUID()}`;
     const agentId = `agt_${randomUUID()}`;
@@ -323,7 +635,7 @@ test(
     const pool = new Pool({ connectionString: databaseUrl });
     context.after(() => pool.end());
 
-    const first = await startController(context);
+    const first = await startKubernetesController(context);
     const existing = await request(first, "GET", "/installation");
     let installation;
     if (existing.status === 200) {
@@ -342,27 +654,37 @@ test(
     });
     assert.equal(namespace.status, 201);
     assert.equal(Object.hasOwn(namespace.data, "installationId"), false);
+    cleanupKubernetesNamespaces(context, [namespace.data.id]);
 
-    const agent = await request(first, "POST", `/namespaces/${namespace.data.id}/agents`, {
-      name: `agent-${randomUUID()}`,
-    });
-    assert.equal(agent.status, 201);
-    assert.equal(Object.hasOwn(agent.data, "installationId"), false);
-    assert.equal(agent.data.namespaceId, namespace.data.id);
+    const worker = await startKubernetesWorker(context);
+    await grantTenantAccess(context, namespace.data.id);
+    const readyNamespace = await waitForNamespaceReady(first, namespace.data.id, worker);
+
+    const { agent } = await createConfiguredAgent(
+      first,
+      namespace.data.id,
+      `agent-${randomUUID()}`,
+    );
+    assert.equal(Object.hasOwn(agent, "installationId"), false);
+    assert.equal(Object.hasOwn(agent, "servicePrincipalId"), false);
+    assert.equal(agent.namespaceId, namespace.data.id);
 
     const persisted = await pool.query(
       `SELECT
        (SELECT count(*)::integer FROM occ.audit_events
-         WHERE resource_id = $1 OR resource_id = $2) AS audit_events,
+         WHERE resource_id = $1 OR resource_id = $2 OR resource_id = $3) AS audit_events,
        (SELECT count(*)::integer FROM occ.controller_work
          WHERE namespace_id = $1) AS queued_operations,
+       (SELECT count(*)::integer FROM occ.configurations
+         WHERE namespace_id = $1 AND id = $3) AS configurations,
        (SELECT count(*)::integer FROM occ.iam_identities
          WHERE namespace_id = $1 AND agent_id = $2
            AND kind = 'service_principal') AS agent_service_principals`,
-      [namespace.data.id, agent.data.id],
+      [namespace.data.id, agent.id, agent.configurationId],
     );
-    assert.ok(persisted.rows[0].audit_events >= 2);
+    assert.ok(persisted.rows[0].audit_events >= 3);
     assert.equal(persisted.rows[0].queued_operations, 1);
+    assert.equal(persisted.rows[0].configurations, 1);
     assert.equal(persisted.rows[0].agent_service_principals, 1);
 
     const auditBeforeUnauthenticatedRequest = await pool.query(
@@ -382,7 +704,7 @@ test(
     );
 
     await stopController(first.child);
-    const restarted = await startController(context);
+    const restarted = await startKubernetesController(context);
 
     const reloadedInstallation = await request(restarted, "GET", "/installation");
     assert.equal(reloadedInstallation.status, 200);
@@ -390,15 +712,15 @@ test(
 
     const reloadedNamespace = await request(restarted, "GET", `/namespaces/${namespace.data.id}`);
     assert.equal(reloadedNamespace.status, 200);
-    assert.deepEqual(reloadedNamespace.data, namespace.data);
+    assert.deepEqual(reloadedNamespace.data, readyNamespace);
 
     const reloadedAgent = await request(
       restarted,
       "GET",
-      `/namespaces/${namespace.data.id}/agents/${agent.data.id}`,
+      `/namespaces/${namespace.data.id}/agents/${agent.id}`,
     );
     assert.equal(reloadedAgent.status, 200);
-    assert.deepEqual(reloadedAgent.data, agent.data);
+    assert.deepEqual(reloadedAgent.data, agent);
 
     const duplicateBootstrap = await request(restarted, "POST", "/installation/bootstrap", {
       name: "Forbidden second Installation",
@@ -541,22 +863,36 @@ test(
     const { Pool } = await import("pg");
     const pool = new Pool({ connectionString: databaseUrl });
     context.after(() => pool.end());
-    const process = await startController(context);
+    const process = await startKubernetesController(context);
 
     const namespace = await request(process, "POST", "/namespaces", {
       name: `concurrent-agents-${randomUUID()}`,
     });
     assert.equal(namespace.status, 201);
     assert.equal(namespace.data.status, "provisioning");
+    cleanupKubernetesNamespaces(context, [namespace.data.id]);
 
-    const configuration = { model: { id: "gpt-integration" }, tools: ["lookup"] };
+    const worker = await startKubernetesWorker(context);
+    await grantTenantAccess(context, namespace.data.id);
+    await waitForNamespaceReady(process, namespace.data.id, worker);
+
+    const firstValues = { ...defaultAgentConfigurationValues, model: { id: "gpt-integration" } };
+    const secondValues = {
+      ...defaultAgentConfigurationValues,
+      model: { id: "gpt-integration-sibling" },
+    };
+    const [firstConfiguration, secondConfiguration] = await Promise.all([
+      createConfiguration(process, namespace.data.id, firstValues),
+      createConfiguration(process, namespace.data.id, secondValues),
+    ]);
     const [first, second] = await Promise.all([
       request(process, "POST", `/namespaces/${namespace.data.id}/agents`, {
         name: `first-${randomUUID()}`,
-        draft_spec: configuration,
+        configurationId: firstConfiguration.id,
       }),
       request(process, "POST", `/namespaces/${namespace.data.id}/agents`, {
         name: `second-${randomUUID()}`,
+        configurationId: secondConfiguration.id,
       }),
     ]);
     assert.equal(first.status, 201);
@@ -564,10 +900,12 @@ test(
     assert.notEqual(first.data.id, second.data.id);
     assert.equal(first.data.namespaceId, namespace.data.id);
     assert.equal(second.data.namespaceId, namespace.data.id);
+    assert.equal(Object.hasOwn(first.data, "servicePrincipalId"), false);
+    assert.equal(Object.hasOwn(second.data, "servicePrincipalId"), false);
 
-    const stillProvisioning = await request(process, "GET", `/namespaces/${namespace.data.id}`);
-    assert.equal(stillProvisioning.status, 200);
-    assert.equal(stillProvisioning.data.status, "provisioning");
+    const stillReady = await request(process, "GET", `/namespaces/${namespace.data.id}`);
+    assert.equal(stillReady.status, 200);
+    assert.equal(stillReady.data.status, "ready");
     const listed = await request(process, "GET", `/namespaces/${namespace.data.id}/agents`);
     assert.equal(listed.status, 200);
     assert.deepEqual(
@@ -598,42 +936,70 @@ test(
     assert.ok(persistedAgents.rows.every(({ execution_mode }) => execution_mode === "embedded"));
     assert.ok(persistedAgents.rows.every(({ kind }) => kind === "service_principal"));
 
-    const { controller, state, harness, resolveHarness } = await createDurableController(pool);
-    const historyBefore = await state.read((view) =>
-      view.revisions.listRevisions(namespace.data.id, first.data.id),
+    const historyBefore = await request(
+      process,
+      "GET",
+      `/namespaces/${namespace.data.id}/agents/${first.data.id}/revisions`,
     );
-    assert.deepEqual(historyBefore, []);
+    assert.equal(historyBefore.status, 200);
+    assert.deepEqual(historyBefore.data, []);
 
-    await controller.handleNamespaceLifecycle(principalId, namespace.data.id, "ready");
-    const revision = await controller.deployAgent(
-      principalId,
-      { namespaceId: namespace.data.id, agentId: first.data.id },
-      resolveHarness,
+    const deployment = await request(
+      process,
+      "POST",
+      `/namespaces/${namespace.data.id}/agents/${first.data.id}/deploy`,
     );
+    assert.equal(deployment.status, 202);
+    const revision = deployment.data;
     assert.equal(revision.namespaceId, namespace.data.id);
     assert.equal(revision.agentId, first.data.id);
     assert.equal(revision.revision, 1);
-    assert.equal(revision.configurationId, first.data.configurationId);
+    assert.equal(revision.configurationId, firstConfiguration.id);
     assert.equal(revision.configurationKind, "agent");
     assert.equal(revision.configurationGeneration, 1);
-    assert.deepEqual(revision.configuration, configuration);
-
-    const [reloadedAgent, firstHistory, secondHistory] = await state.read(async (view) => {
-      const originalAgent = await view.agents.findAgent(namespace.data.id, first.data.id);
-      const originalAgentHistory = await view.revisions.listRevisions(
-        namespace.data.id,
-        first.data.id,
-      );
-      const otherAgentHistory = await view.revisions.listRevisions(
-        namespace.data.id,
-        second.data.id,
-      );
-      return [originalAgent, originalAgentHistory, otherAgentHistory];
+    assert.deepEqual(revision.configuration, admitted(firstValues));
+    assert.deepEqual(revision.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
+    assert.deepEqual(revision.compute, {
+      id: "compute-kubernetes",
+      implementation: "occ/kubernetes",
     });
-    assert.equal(reloadedAgent.id, first.data.id);
-    assert.equal(revision.servicePrincipalId, reloadedAgent.servicePrincipalId);
-    assert.deepEqual(firstHistory, [revision]);
-    assert.deepEqual(secondHistory, []);
+
+    const activeAgent = await pollUntil(
+      `independent worker to activate admitted revision ${revision.id}`,
+      async () => {
+        const current = await request(
+          process,
+          "GET",
+          `/namespaces/${namespace.data.id}/agents/${first.data.id}`,
+        );
+        assert.equal(current.status, 200);
+        return current.data.activeRevisionId === revision.id ? current.data : undefined;
+      },
+      { worker, timeoutMs: 60_000 },
+    );
+
+    const [firstHistory, secondHistory] = await Promise.all([
+      request(process, "GET", `/namespaces/${namespace.data.id}/agents/${first.data.id}/revisions`),
+      request(
+        process,
+        "GET",
+        `/namespaces/${namespace.data.id}/agents/${second.data.id}/revisions`,
+      ),
+    ]);
+    assert.equal(firstHistory.status, 200);
+    assert.equal(secondHistory.status, 200);
+    assert.deepEqual(firstHistory.data, [revision]);
+    assert.deepEqual(secondHistory.data, []);
+
+    const actor = await pool.query(
+      `SELECT identity.id
+       FROM occ.iam_identities AS identity
+       JOIN occ."user" AS auth_user ON auth_user.id = identity.subject
+       WHERE auth_user.email = $1`,
+      [adminEmail],
+    );
+    assert.equal(actor.rowCount, 1);
+    const principalId = actor.rows[0].id;
 
     const persistedRevision = await pool.query(
       `SELECT agent.id AS agent_id, agent.namespace_id, agent.active_revision_id,
@@ -653,19 +1019,15 @@ test(
       configuration_id: revision.configurationId,
       configuration_kind: revision.configurationKind,
       configuration_generation: revision.configurationGeneration,
-      draft_spec: configuration,
-      harness: { ...harness, mode: first.data.executionMode },
-      compute: {
-        id: "compute-local-development",
-        implementation: "deterministic-local-development",
-      },
+      draft_spec: admitted(firstValues),
+      harness: revision.harness,
+      compute: revision.compute,
     });
-    // Activation is a later, deployment-gated transition; admission only updates revision history.
-    assert.equal(persistedRevision.rows[0].active_revision_id, null);
-    assert.equal(reloadedAgent.activeRevisionId, undefined);
+    assert.equal(persistedRevision.rows[0].active_revision_id, revision.id);
+    assert.equal(activeAgent.activeRevisionId, revision.id);
 
     const revisionWork = await pool.query(
-      `SELECT namespace_id, agent_id, revision_id, actor_id
+      `SELECT namespace_id, agent_id, revision_id, actor_id, state
        FROM occ.controller_work WHERE revision_id = $1`,
       [revision.id],
     );
@@ -675,6 +1037,7 @@ test(
         agent_id: first.data.id,
         revision_id: revision.id,
         actor_id: principalId,
+        state: "succeeded",
       },
     ]);
   },
@@ -1127,7 +1490,7 @@ test(
     const { Pool } = await import("pg");
     const pool = new Pool({ connectionString: databaseUrl });
     context.after(() => pool.end());
-    const api = await startController(context);
+    const api = await startKubernetesController(context);
 
     const installation = await request(api, "GET", "/installation");
     if (installation.status === 404) {
@@ -1149,44 +1512,40 @@ test(
       assert.equal(Object.hasOwn(namespace.data, "installationId"), false);
     }
     assert.notEqual(removed.data.id, retained.data.id);
+    cleanupKubernetesNamespaces(context, [removed.data.id, retained.data.id]);
 
-    const agent = await request(api, "POST", `/namespaces/${retained.data.id}/agents`, {
-      name: `worker-agent-${randomUUID()}`,
-    });
-    assert.equal(agent.status, 201);
+    const worker = await startKubernetesWorker(context);
+    await Promise.all([
+      grantTenantAccess(context, removed.data.id),
+      grantTenantAccess(context, retained.data.id),
+    ]);
+    for (const namespace of [removed, retained]) {
+      await waitForNamespaceReady(api, namespace.data.id, worker);
+    }
+
+    const { agent } = await createConfiguredAgent(
+      api,
+      retained.data.id,
+      `worker-agent-${randomUUID()}`,
+    );
     const preDeploymentWork = await pool.query(
       `SELECT idempotency_key FROM occ.controller_work
        WHERE namespace_id = $1 AND agent_id = $2`,
-      [retained.data.id, agent.data.id],
+      [retained.data.id, agent.id],
     );
     assert.equal(preDeploymentWork.rowCount, 0, "Agent creation must not enqueue deployment work");
-
-    const worker = await startWorker(context);
-    for (const namespace of [removed, retained]) {
-      const ready = await pollUntil(
-        `Namespace ${namespace.data.id} to become ready through the independent worker`,
-        async () => {
-          const current = await request(api, "GET", `/namespaces/${namespace.data.id}`);
-          assert.equal(current.status, 200);
-          return current.data.status === "ready" ? current.data : undefined;
-        },
-        { worker },
-      );
-      assert.equal(ready.id, namespace.data.id);
-      assert.equal(ready.status, "ready");
-    }
 
     const deployment = await request(
       api,
       "POST",
-      `/namespaces/${retained.data.id}/agents/${agent.data.id}/deploy`,
+      `/namespaces/${retained.data.id}/agents/${agent.id}/deploy`,
     );
     assert.equal(deployment.status, 202);
     const revision = deployment.data;
     assert.deepEqual(revision.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
     assert.deepEqual(revision.compute, {
-      id: "compute-local-development",
-      implementation: "deterministic-local-development",
+      id: "compute-kubernetes",
+      implementation: "occ/kubernetes",
     });
 
     await pollUntil(
@@ -1195,12 +1554,12 @@ test(
         const current = await request(
           api,
           "GET",
-          `/namespaces/${retained.data.id}/agents/${agent.data.id}`,
+          `/namespaces/${retained.data.id}/agents/${agent.id}`,
         );
         assert.equal(current.status, 200);
         return current.data.activeRevisionId === revision.id ? current.data : undefined;
       },
-      { worker },
+      { worker, timeoutMs: 60_000 },
     );
 
     const deletion = await request(api, "DELETE", `/namespaces/${removed.data.id}`);
@@ -1217,7 +1576,7 @@ test(
         assert.equal(rows.rowCount, 1);
         return rows.rows[0].deleted_at === null ? undefined : rows.rows[0];
       },
-      { worker },
+      { worker, timeoutMs: 60_000 },
     );
     assert.equal(tombstone.id, removed.data.id);
     assert.equal(tombstone.status, "deleting");
@@ -1265,22 +1624,6 @@ test(
     assert.equal(admittedWork.rows[0].claim_token, null);
     assert.equal(admittedWork.rows[0].lease_expires_at, null);
     assert.ok(admittedWork.rows[0].completed_at instanceof Date);
-    const retainedAgent = await pool.query(
-      "SELECT active_revision_id FROM occ.agents WHERE id = $1",
-      [agent.data.id],
-    );
-    assert.equal(retainedAgent.rows[0].active_revision_id, revision.id);
-
-    const lifecycle = await pool.query(
-      `SELECT action, outcome FROM occ.audit_events
-       WHERE resource_id = $1 AND action LIKE 'openclaw.namespaces.lifecycle.%'
-       ORDER BY action`,
-      [removed.data.id],
-    );
-    assert.deepEqual(lifecycle.rows, [
-      { action: "openclaw.namespaces.lifecycle.delete", outcome: "success" },
-      { action: "openclaw.namespaces.lifecycle.ensure", outcome: "success" },
-    ]);
   },
 );
 
@@ -1411,15 +1754,10 @@ test(
   "PostgreSQL API and worker preserve immutable deployments, stable identities, and tenant isolation",
   requiresPostgresAndKubernetesConfiguration,
   async (context) => {
-    const [{ Pool }, { createControllerWorker }, { createDevelopmentComputeDriver }] =
-      await Promise.all([
-        import("pg"),
-        import("../../apps/controller/src/worker.ts"),
-        import("../helpers/development.mjs"),
-      ]);
+    const { Pool } = await import("pg");
     const pool = new Pool({ connectionString: databaseUrl });
     context.after(() => pool.end());
-    let api = await startController(context);
+    let api = await startKubernetesController(context);
 
     const existingInstallation = await request(api, "GET", "/installation");
     if (existingInstallation.status === 404) {
@@ -1439,41 +1777,63 @@ test(
     assert.equal(secondNamespace.status, 201);
     const namespaceA = firstNamespace.data.id;
     const namespaceB = secondNamespace.data.id;
+    cleanupKubernetesNamespaces(context, [namespaceA, namespaceB]);
 
-    const originalDraft = { model: { id: "draft-original" }, tools: ["lookup"] };
-    const [primary, sibling, foreign, restricted] = await Promise.all([
-      request(api, "POST", `/namespaces/${namespaceA}/agents`, {
-        name: `revision-primary-${randomUUID()}`,
-        draft_spec: originalDraft,
+    const worker = await startKubernetesWorker(context);
+    await Promise.all([
+      grantTenantAccess(context, namespaceA),
+      grantTenantAccess(context, namespaceB),
+    ]);
+    for (const namespaceId of [namespaceA, namespaceB]) {
+      await waitForNamespaceReady(api, namespaceId, worker);
+    }
+
+    const originalConfigValues = {
+      ...defaultAgentConfigurationValues,
+      model: { id: "draft-original" },
+      tools: ["lookup"],
+    };
+    const [
+      { configuration: primaryConfiguration, agent: primary },
+      { agent: sibling },
+      { agent: foreign },
+      { agent: restricted },
+    ] = await Promise.all([
+      createConfiguredAgent(
+        api,
+        namespaceA,
+        `revision-primary-${randomUUID()}`,
+        originalConfigValues,
+      ),
+      createConfiguredAgent(api, namespaceA, `revision-sibling-${randomUUID()}`, {
+        ...defaultAgentConfigurationValues,
+        model: { id: "tenant-a-sibling" },
       }),
-      request(api, "POST", `/namespaces/${namespaceA}/agents`, {
-        name: `revision-sibling-${randomUUID()}`,
-        draft_spec: { model: "tenant-a-sibling" },
+      createConfiguredAgent(api, namespaceB, `revision-foreign-${randomUUID()}`, {
+        ...defaultAgentConfigurationValues,
+        model: { id: "tenant-b" },
       }),
-      request(api, "POST", `/namespaces/${namespaceB}/agents`, {
-        name: `revision-foreign-${randomUUID()}`,
-        draft_spec: { model: "tenant-b" },
-      }),
-      request(api, "POST", `/namespaces/${namespaceA}/agents`, {
-        name: `revision-restricted-${randomUUID()}`,
-      }),
+      createConfiguredAgent(api, namespaceA, `revision-restricted-${randomUUID()}`),
     ]);
     for (const created of [primary, sibling, foreign, restricted]) {
-      assert.equal(created.status, 201);
-      assert.equal(Object.hasOwn(created.data, "servicePrincipalId"), false);
+      assert.equal(Object.hasOwn(created, "servicePrincipalId"), false);
     }
-    assert.deepEqual(primary.data.draft_spec, originalDraft);
-    assert.deepEqual(restricted.data.draft_spec, {});
+    assert.equal(primary.configurationId, primaryConfiguration.id);
 
-    const persistedDraft = { model: { id: "draft-persisted" }, tools: ["lookup", "search"] };
-    const updated = await request(
+    const persistedConfigValues = {
+      ...defaultAgentConfigurationValues,
+      model: { id: "draft-persisted" },
+      tools: ["lookup", "search"],
+    };
+    const persistedConfiguration = await updateConfiguration(
       api,
-      "PATCH",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}`,
-      { draft_spec: persistedDraft },
+      namespaceA,
+      primaryConfiguration.id,
+      persistedConfigValues,
     );
-    assert.equal(updated.status, 200);
-    assert.deepEqual(updated.data.draft_spec, persistedDraft);
+    assert.equal(persistedConfiguration.id, primaryConfiguration.id);
+    assert.equal(persistedConfiguration.generation, 2);
+    assert.deepEqual(persistedConfiguration.values, persistedConfigValues);
 
     const noMetadataEffects = await pool.query(
       `SELECT count(*)::integer AS count FROM occ.controller_work
@@ -1482,6 +1842,10 @@ test(
     );
     assert.equal(noMetadataEffects.rows[0].count, 0);
 
+    const deniedTargetConfiguration = await createConfiguration(api, namespaceA, {
+      ...defaultAgentConfigurationValues,
+      model: { id: "unauthorized-update" },
+    });
     await pool.query(
       `INSERT INTO occ.iam_restrictions
        (id, namespace_id, action, resource_kind, resource_id, effect)
@@ -1491,152 +1855,109 @@ test(
         `restriction-update-${randomUUID()}`,
         `restriction-deploy-${randomUUID()}`,
         namespaceA,
-        restricted.data.id,
+        restricted.id,
       ],
     );
 
     await stopController(api.child);
-    api = await startController(context);
+    api = await startKubernetesController(context);
     const afterRestart = await request(
       api,
       "GET",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}`,
+      `/namespaces/${namespaceA}/configurations/${primaryConfiguration.id}`,
     );
     assert.equal(afterRestart.status, 200);
-    assert.deepEqual(afterRestart.data.draft_spec, persistedDraft);
+    assert.equal(afterRestart.data.generation, 2);
+    assert.deepEqual(afterRestart.data.values, persistedConfigValues);
 
     const deniedUpdate = await request(
       api,
       "PATCH",
-      `/namespaces/${namespaceA}/agents/${restricted.data.id}`,
-      { draft_spec: { model: "unauthorized-update" } },
+      `/namespaces/${namespaceA}/agents/${restricted.id}`,
+      { configurationId: deniedTargetConfiguration.id },
     );
     assert.equal(deniedUpdate.status, 403);
     const deniedDeployment = await request(
       api,
       "POST",
-      `/namespaces/${namespaceA}/agents/${restricted.data.id}/deploy`,
+      `/namespaces/${namespaceA}/agents/${restricted.id}/deploy`,
     );
     assert.equal(deniedDeployment.status, 403);
     const deniedMutation = await pool.query(
-      `SELECT agent.draft_spec,
+      `SELECT agent.configuration_id,
               (SELECT count(*)::integer FROM occ.agent_revisions WHERE agent_id = agent.id)
                 AS revisions,
               (SELECT count(*)::integer FROM occ.controller_work WHERE agent_id = agent.id)
                 AS work
        FROM occ.agents AS agent WHERE agent.id = $1`,
-      [restricted.data.id],
+      [restricted.id],
     );
-    assert.deepEqual(deniedMutation.rows, [{ draft_spec: {}, revisions: 0, work: 0 }]);
-
-    const premature = await request(
-      api,
-      "POST",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}/deploy`,
-    );
-    assert.equal(premature.status, 409);
-    const beforeReady = await pool.query(
-      "SELECT count(*)::integer AS count FROM occ.agent_revisions WHERE agent_id = $1",
-      [primary.data.id],
-    );
-    assert.equal(beforeReady.rows[0].count, 0);
-
-    const effects = { ensured: [], prepared: [], retired: [] };
-    const developmentCompute = createDevelopmentComputeDriver();
-    const worker = createControllerWorker({
-      pool: new Pool({ connectionString: databaseUrl }),
-      pollIntervalMs: 20,
-      computeDriver: {
-        ...developmentCompute,
-        async ensureNamespace(namespace) {
-          effects.ensured.push(namespace.id);
-          return developmentCompute.ensureNamespace(namespace);
-        },
-        async prepareRevision(revision) {
-          effects.prepared.push({
-            namespaceId: revision.namespaceId,
-            agentId: revision.agentId,
-            revisionId: revision.id,
-            servicePrincipalId: revision.servicePrincipalId,
-          });
-          return developmentCompute.prepareRevision(revision);
-        },
-        async retireRevision(revision) {
-          effects.retired.push({
-            namespaceId: revision.namespaceId,
-            agentId: revision.agentId,
-            revisionId: revision.id,
-            servicePrincipalId: revision.servicePrincipalId,
-          });
-          return developmentCompute.retireRevision(revision);
-        },
-      },
-      emit() {},
-    });
-    context.after(() => worker.stop());
-    await worker.start();
-
-    for (const namespaceId of [namespaceA, namespaceB]) {
-      await pollUntil(`Namespace ${namespaceId} to become ready`, async () => {
-        const current = await request(api, "GET", `/namespaces/${namespaceId}`);
-        assert.equal(current.status, 200);
-        return current.data.status === "ready" ? current.data : undefined;
-      });
-      assert.equal(effects.ensured.filter((id) => id === namespaceId).length, 1);
-    }
+    assert.deepEqual(deniedMutation.rows, [
+      { configuration_id: restricted.configurationId, revisions: 0, work: 0 },
+    ]);
 
     const firstDeployment = await request(
       api,
       "POST",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}/deploy`,
+      `/namespaces/${namespaceA}/agents/${primary.id}/deploy`,
     );
     assert.equal(firstDeployment.status, 202);
     const firstRevision = firstDeployment.data;
     assert.deepEqual(Object.keys(firstRevision).sort(), [
       "agentId",
       "compute",
+      "configuration",
+      "configurationGeneration",
+      "configurationId",
+      "configurationKind",
       "createdAt",
-      "draft_spec",
       "harness",
       "id",
       "namespaceId",
+      "providerId",
       "revision",
     ]);
     assert.equal(firstRevision.namespaceId, namespaceA);
-    assert.equal(firstRevision.agentId, primary.data.id);
+    assert.equal(firstRevision.agentId, primary.id);
     assert.equal(firstRevision.revision, 1);
-    assert.deepEqual(firstRevision.draft_spec, persistedDraft);
+    assert.equal(firstRevision.configurationId, primaryConfiguration.id);
+    assert.equal(firstRevision.configurationKind, "agent");
+    assert.equal(firstRevision.configurationGeneration, 2);
+    assert.deepEqual(firstRevision.configuration, admitted(persistedConfigValues));
     assert.deepEqual(firstRevision.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
     assert.deepEqual(firstRevision.compute, {
-      id: "compute-local-development",
-      implementation: "deterministic-local-development",
+      id: "compute-kubernetes",
+      implementation: "occ/kubernetes",
     });
     assert.equal(Object.hasOwn(firstRevision, "servicePrincipalId"), false);
 
-    await pollUntil(`first revision ${firstRevision.id} to become active`, async () => {
-      const current = await request(
-        api,
-        "GET",
-        `/namespaces/${namespaceA}/agents/${primary.data.id}`,
-      );
-      assert.equal(current.status, 200);
-      return current.data.activeRevisionId === firstRevision.id ? current.data : undefined;
-    });
-
-    const replacementDraft = { model: { id: "draft-replacement" }, tools: ["replace"] };
-    const replacement = await request(
-      api,
-      "PATCH",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}`,
-      { draft_spec: replacementDraft },
+    await pollUntil(
+      `first revision ${firstRevision.id} to become active`,
+      async () => {
+        const current = await request(api, "GET", `/namespaces/${namespaceA}/agents/${primary.id}`);
+        assert.equal(current.status, 200);
+        return current.data.activeRevisionId === firstRevision.id ? current.data : undefined;
+      },
+      { worker, timeoutMs: 60_000 },
     );
-    assert.equal(replacement.status, 200);
-    assert.equal(replacement.data.activeRevisionId, firstRevision.id);
+
+    const replacementConfigValues = {
+      ...defaultAgentConfigurationValues,
+      model: { id: "draft-replacement" },
+      tools: ["replace"],
+    };
+    const replacement = await updateConfiguration(
+      api,
+      namespaceA,
+      primaryConfiguration.id,
+      replacementConfigValues,
+    );
+    assert.equal(replacement.generation, 3);
 
     const [secondDeployment, siblingDeployment, foreignDeployment] = await Promise.all([
-      request(api, "POST", `/namespaces/${namespaceA}/agents/${primary.data.id}/deploy`),
-      request(api, "POST", `/namespaces/${namespaceA}/agents/${sibling.data.id}/deploy`),
-      request(api, "POST", `/namespaces/${namespaceB}/agents/${foreign.data.id}/deploy`),
+      request(api, "POST", `/namespaces/${namespaceA}/agents/${primary.id}/deploy`),
+      request(api, "POST", `/namespaces/${namespaceA}/agents/${sibling.id}/deploy`),
+      request(api, "POST", `/namespaces/${namespaceB}/agents/${foreign.id}/deploy`),
     ]);
     for (const deployment of [secondDeployment, siblingDeployment, foreignDeployment]) {
       assert.equal(deployment.status, 202);
@@ -1644,38 +1965,48 @@ test(
     const secondRevision = secondDeployment.data;
     assert.equal(secondRevision.revision, 2);
     assert.notEqual(secondRevision.id, firstRevision.id);
-    assert.deepEqual(secondRevision.draft_spec, replacementDraft);
+    assert.equal(secondRevision.configurationId, primaryConfiguration.id);
+    assert.equal(secondRevision.configurationGeneration, 3);
+    assert.deepEqual(secondRevision.configuration, admitted(replacementConfigValues));
 
     for (const [namespaceId, agent, revision] of [
-      [namespaceA, primary.data, secondRevision],
-      [namespaceA, sibling.data, siblingDeployment.data],
-      [namespaceB, foreign.data, foreignDeployment.data],
+      [namespaceA, primary, secondRevision],
+      [namespaceA, sibling, siblingDeployment.data],
+      [namespaceB, foreign, foreignDeployment.data],
     ]) {
-      await pollUntil(`Agent ${agent.id} to activate revision ${revision.id}`, async () => {
-        const current = await request(api, "GET", `/namespaces/${namespaceId}/agents/${agent.id}`);
-        assert.equal(current.status, 200);
-        return current.data.activeRevisionId === revision.id ? current.data : undefined;
-      });
+      await pollUntil(
+        `Agent ${agent.id} to activate revision ${revision.id}`,
+        async () => {
+          const current = await request(
+            api,
+            "GET",
+            `/namespaces/${namespaceId}/agents/${agent.id}`,
+          );
+          assert.equal(current.status, 200);
+          return current.data.activeRevisionId === revision.id ? current.data : undefined;
+        },
+        { worker, timeoutMs: 60_000 },
+      );
     }
 
     const history = await request(
       api,
       "GET",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}/revisions`,
+      `/namespaces/${namespaceA}/agents/${primary.id}/revisions`,
     );
     assert.equal(history.status, 200);
     assert.deepEqual(history.data, [firstRevision, secondRevision]);
     const firstRevisionRead = await request(
       api,
       "GET",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}/revisions/${firstRevision.id}`,
+      `/namespaces/${namespaceA}/agents/${primary.id}/revisions/${firstRevision.id}`,
     );
     assert.equal(firstRevisionRead.status, 200);
     assert.deepEqual(firstRevisionRead.data, firstRevision);
     const foreignRead = await request(
       api,
       "GET",
-      `/namespaces/${namespaceB}/agents/${foreign.data.id}/revisions/${firstRevision.id}`,
+      `/namespaces/${namespaceB}/agents/${foreign.id}/revisions/${firstRevision.id}`,
     );
     assert.equal(foreignRead.status, 404);
 
@@ -1687,14 +2018,14 @@ test(
        JOIN occ.agents AS agent
          ON agent.namespace_id = revision.namespace_id AND agent.id = revision.agent_id
        WHERE revision.agent_id = $1 ORDER BY revision.revision_number`,
-      [primary.data.id],
+      [primary.id],
     );
     assert.equal(persistedRevisions.rowCount, 2);
     assert.deepEqual(persistedRevisions.rows[0].admitted_spec, {
       configuration_id: firstRevision.configurationId,
       configuration_kind: firstRevision.configurationKind,
       configuration_generation: firstRevision.configurationGeneration,
-      draft_spec: persistedDraft,
+      draft_spec: admitted(persistedConfigValues),
       harness: firstRevision.harness,
       compute: firstRevision.compute,
     });
@@ -1702,7 +2033,7 @@ test(
       configuration_id: secondRevision.configurationId,
       configuration_kind: secondRevision.configurationKind,
       configuration_generation: secondRevision.configurationGeneration,
-      draft_spec: replacementDraft,
+      draft_spec: admitted(replacementConfigValues),
       harness: secondRevision.harness,
       compute: secondRevision.compute,
     });
@@ -1715,48 +2046,25 @@ test(
       `SELECT namespace_id, agent_id, id FROM occ.iam_identities
        WHERE kind = 'service_principal' AND agent_id = ANY($1::text[])
        ORDER BY agent_id`,
-      [[primary.data.id, sibling.data.id, foreign.data.id]],
+      [[primary.id, sibling.id, foreign.id]],
     );
     assert.equal(identities.rowCount, 3);
     assert.equal(new Set(identities.rows.map(({ id }) => id)).size, 3);
-    const primaryIdentity = identities.rows.find(({ agent_id }) => agent_id === primary.data.id);
+    const primaryIdentity = identities.rows.find(({ agent_id }) => agent_id === primary.id);
     assert.equal(primaryIdentity.namespace_id, namespaceA);
     assert.equal(primaryIdentity.id, persistedRevisions.rows[0].service_principal_id);
-    for (const effect of effects.prepared.filter(({ agentId }) => agentId === primary.data.id)) {
-      assert.equal(effect.namespaceId, namespaceA);
-      assert.equal(effect.servicePrincipalId, primaryIdentity.id);
-    }
-    assert.deepEqual(
-      effects.prepared
-        .filter(({ agentId }) => agentId === primary.data.id)
-        .map(({ revisionId }) => revisionId),
-      [firstRevision.id, secondRevision.id],
-    );
-    assert.deepEqual(
-      effects.retired.filter(({ agentId }) => agentId === primary.data.id),
-      [
-        {
-          namespaceId: namespaceA,
-          agentId: primary.data.id,
-          revisionId: firstRevision.id,
-          servicePrincipalId: primaryIdentity.id,
-        },
-      ],
-    );
 
     const work = await pool.query(
       `SELECT namespace_id, agent_id, revision_id, idempotency_key, state
        FROM occ.controller_work WHERE agent_id = ANY($1::text[])
        ORDER BY agent_id, idempotency_key`,
-      [[primary.data.id, sibling.data.id, foreign.data.id]],
+      [[primary.id, sibling.id, foreign.id]],
     );
     assert.equal(work.rowCount, 4);
     for (const item of work.rows) {
       assert.equal(item.state, "succeeded");
       assert.equal(item.idempotency_key, `agent_revision:${item.revision_id}:reconcile`);
     }
-    assert.equal(effects.ensured.filter((id) => id === namespaceA).length, 1);
-    assert.equal(effects.ensured.filter((id) => id === namespaceB).length, 1);
 
     const namespaceWork = await pool.query(
       `SELECT namespace_id, namespace_target, state FROM occ.controller_work

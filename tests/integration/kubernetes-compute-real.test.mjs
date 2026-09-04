@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import {
   configureExistingK3dLocalPathSharedFileSystem,
@@ -101,6 +102,7 @@ function revision(driver, owner, agentId, number) {
     configurationId = `cfg_${randomUUID()}`;
     configurationIds.set(identity, configurationId);
   }
+  const loggingLevel = number === 1 ? "info" : "debug";
   return {
     id: `rev_${randomUUID()}`,
     namespaceId: owner.id,
@@ -109,10 +111,13 @@ function revision(driver, owner, agentId, number) {
     configurationId,
     configurationKind: "agent",
     configurationGeneration: number,
-    configuration: {
-      gateway: { controlUi: { enabled: false } },
-      logging: { level: number === 1 ? "info" : "debug" },
-    },
+    configuration: admitLoggingConfiguration(
+      {
+        gateway: { controlUi: { enabled: false } },
+        logging: { level: loggingLevel },
+      },
+      loggingLevel,
+    ),
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
     compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: `service-agent-${agentId}`,

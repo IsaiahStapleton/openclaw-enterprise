@@ -7,8 +7,6 @@ controller and Driver implementations, reviewed PostgreSQL persistence, and
 production Kubernetes packaging described in the current implementation specs.
 Do not introduce platform resources or deployment behavior outside those
 approved milestones.
-Do not add GitHub Actions workflows: organization push restrictions prohibit
-workflow changes in this repository.
 
 The development API must bind only to loopback, reject nondevelopment
 configuration, admit only explicitly provisioned development identities,

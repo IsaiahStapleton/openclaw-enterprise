@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { composeProduction } from "../../apps/controller/src/composition/production.ts";
+import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { createInstallationDriverConfiguration } from "../helpers/installation-driver-configuration.mjs";
@@ -49,21 +50,45 @@ function createPassiveComputeDriver() {
     implementation: "production-wireup-memory-compute",
     async preflight() {},
     async ensureNamespace(namespace) {
-      return { namespaceId: namespace.id, status: "ready" };
+      return { namespaceId: namespace.id, namespaceReady: true };
     },
     async deleteNamespace(namespace) {
-      return { namespaceId: namespace.id, status: "deleted" };
+      return { namespaceId: namespace.id, namespaceDeleted: true };
     },
     async prepareRevision(revision) {
-      return { revisionId: revision.id, ready: true };
+      return {
+        namespaceId: revision.namespaceId,
+        agentId: revision.agentId,
+        revisionId: revision.id,
+        ready: true,
+      };
     },
     async retireRevision() {},
   };
 }
 
-function productionDrivers() {
-  const installation = createInstallationDriverConfiguration();
-  installation.drivers.iam.id = "native-iam";
+function parseLogEvents(stderr) {
+  return stderr
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+async function productionDrivers() {
+  const configuration = createInstallationDriverConfiguration();
+  configuration.drivers.compute.id = "compute-production-wireup";
+  configuration.drivers.iam.id = "native-iam";
+  const runtime = await loadInstallationConfiguration({
+    mode: "production",
+    environment: {},
+    startupConfiguration: {
+      configuration,
+      logging: { level: "info" },
+    },
+  });
+  assert.ok(runtime);
+  const { installation } = runtime;
   return {
     installation,
     computeDriver: createPassiveComputeDriver(),
@@ -74,7 +99,10 @@ function productionDrivers() {
       id: installation.drivers.secret.id,
     }),
     createIAMDriver(state) {
-      return new NativeIAMDriver(state, { id: "native-iam", implementation: "native" });
+      return new NativeIAMDriver(state, {
+        id: installation.drivers.iam.id,
+        implementation: installation.drivers.iam.implementation,
+      });
     },
   };
 }
@@ -212,12 +240,32 @@ test(
       );
 
       // A different configured administrator must not silently adopt the existing Installation.
-      await assert.rejects(
-        run(process.execPath, ["scripts/bootstrap-installation.mjs"], {
+      const administratorMismatch = await run(
+        process.execPath,
+        ["scripts/bootstrap-installation.mjs"],
+        {
           cwd: repository,
           env: { ...environment, OCC_BOOTSTRAP_ADMIN_EMAIL: "different-admin@example.test" },
-        }),
-        ({ stderr }) => /configured administrator account/.test(stderr),
+        },
+      ).then(
+        () => undefined,
+        (error) => error,
+      );
+      assert.ok(administratorMismatch);
+      const bootstrapFailure = parseLogEvents(administratorMismatch.stderr).find(
+        (line) => line.event === "installation.bootstrap-failed",
+      );
+      assert.deepEqual(
+        {
+          service: bootstrapFailure?.service,
+          event: bootstrapFailure?.event,
+          code: bootstrapFailure?.code,
+        },
+        {
+          service: "occ-bootstrap",
+          event: "installation.bootstrap-failed",
+          code: "BOOTSTRAP_FAILED",
+        },
       );
 
       // Verify persisted Better Auth ownership, the real IAM Principal, and bootstrap audit evidence.
@@ -304,7 +352,7 @@ test(
         databaseUrl,
         authSecret,
         authBaseURL,
-        drivers: productionDrivers(),
+        drivers: await productionDrivers(),
       });
       endpoint = await app.listen({ port: 0, host: "127.0.0.1" });
 

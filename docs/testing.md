@@ -42,6 +42,24 @@ Each linked section contains the setup requirements and commands for that suite.
 | ChatGPT service accounts | Actual provider account creation, credential issuance, exact Agent delivery, and a model turn.                                        | [ChatGPT service accounts](#chatgpt-service-accounts)                     |
 | OpenShell Sandbox        | Provider-owned dedicated Harness execution and filesystem/network enforcement through real tools.                                     | [OpenShell Sandbox](#openshell-sandbox)                                   |
 
+## GitHub Actions
+
+The [suite map](../scripts/ci/test-suites.json) assigns each active test file and gated scenario to a lane. Check its coverage after adding or renaming tests:
+
+```sh
+node scripts/ci/run-tests.mjs audit
+```
+
+The PR workflow runs exactly five lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, and logging collector. The protected workflow uses an immutable main commit and separately approved environments for model, routing, Slack, ChatGPT account, OpenShell, and additional OpenTelemetry integrations. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
+
+Implementation status: routing and OpenShell lanes are mapped and workflow-wired, but they are not runnable on fresh hosted runners yet. The current tests validate their selected prerequisites, while `prepare.mjs` creates only a bare owned cluster plus common model resources; fresh-runner bootstrap still needs approved Gateway API, cert-manager, and Envoy controller setup, OpenShell CLI/chart inputs, gateway and supervisor image import, Agent Sandbox custom resources and controller setup, and runtime/admission configuration. The approved pins and recipes remain open in the [implementation specification](../specs/19-github-actions-test-coverage.md#open-decisions).
+
+The runner validates actual Node case results, including expected names and explicitly owned counterpart skips. Missing results, zero cases, unexpected skips, failures and cleanup errors cannot satisfy a required lane. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use trusted main inputs.
+
+Prepare infrastructure only on a disposable host or through the reviewed CI helpers. Each run owns its Compose project, file-specific databases, cluster and temporary files. CI writes private cleanup state under `RUNNER_TEMP` and uploads only sanitized result JSON, so hosted-runner cleanup state is unavailable after the job ends. Local failures can retain cleanup state while the host and state path still exist. Model/service tests require the approved credentials and spend policy described in the [implementation specification](../specs/19-github-actions-test-coverage.md); configuring workflow files does not prove those tests have passed.
+
+See the [execution flow](flows/github-actions-testing.md) for entrypoints, result accounting, cleanup and failure interpretation. Existing suite-specific setup below remains the local reproduction contract.
+
 ## Console browser checks
 
 The [console](reference/console.md) uses real controller routes in

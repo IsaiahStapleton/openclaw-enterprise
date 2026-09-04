@@ -47,6 +47,7 @@ pnpm test
 
 PostgreSQL, Docker, and Kubernetes integration suites require additional setup;
 see [Testing](docs/testing.md) for suite coverage, credentials, setup, and commands.
+[GitHub Actions coverage](docs/testing.md#github-actions) separates five PR-safe lanes from protected model and service integrations.
 
 ## Code layout
 

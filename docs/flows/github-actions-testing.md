@@ -1,0 +1,104 @@
+---
+created: 2026-09-04
+updated: 2026-09-04
+last_updated_session: codex/01a06e43-6504-7810-9f09-4dd31b2e9681
+---
+
+# GitHub Actions testing flow
+
+## Overview
+
+GitHub Actions selects explicit test lanes, prepares disposable resources, runs the real Node test runner, and rejects missing or skipped required coverage. This flow ends at the aggregate check and resource cleanup. A PR check proves its five selected noncredentialed lanes, including the logging collector lane; it does not establish that protected model or service integrations passed.
+
+## Entry Points
+
+- `.github/workflows/ci.yml:jobs`: PR, main push, merge-group and manual checks on ephemeral runners.
+- `.github/workflows/full-integration.yml:jobs`: main-only manual protected integration, bound to the dispatched commit.
+- `scripts/ci/run-tests.mjs:main`: local or workflow `audit`, `run` and `aggregate` commands; the suite map is the coverage owner.
+
+## Flow
+
+```mermaid
+graph TD
+  subgraph Actions["GitHub Actions"]
+    A["PR or main event"] --> B["PR-safe jobs"]
+    C["Main integration dispatch"] --> D["Environment protection preflight"]
+    D -->|approved environment| E["Protected jobs"]
+    D -->|missing protection| X["Failed check"]
+  end
+  subgraph Runner["Disposable job runner"]
+    B --> F["Prepare lane resources"]
+    E --> F
+    F -->|prepared| G["Prepare file prerequisites"]
+    G --> H["Node tests and structured reporter"]
+    H --> I["Case and skip validation"]
+    F -->|preparation fails| J["Owned-resource cleanup"]
+    I --> J
+  end
+  subgraph Results["Check results"]
+    I --> K["Sanitized lane result"]
+    J --> L["Aggregate expected jobs and results"]
+    K --> L
+    L --> M["Pass or fail for named coverage"]
+  end
+```
+
+## Execution Trace
+
+### 1. Select one source revision and coverage group
+
+`.github/workflows/ci.yml:jobs` and `.github/workflows/full-integration.yml:jobs`
+
+The PR workflow uses the event checkout and supplies no external service credentials. Its aggregate requires exactly five lanes: `checks-baseline`, `postgres`, `images-packaging`, `k3d-fixture-configuration`, and `logging-collector`. The protected workflow admits only a main dispatch, checks configured environment protection, and checks out the immutable dispatched SHA. Review approval binds that SHA. A targeted integration run has a narrower claim than a full inventory run.
+
+Ordinary PR dependency caches may be restored and saved within GitHub's PR merge-ref scope. Main jobs use main-scoped caches. Test results and credential-bearing state are not dependency caches, and protected jobs do not promote PR build artifacts.
+
+### 2. Prepare resources under the job owner
+
+`scripts/ci/prepare.mjs:prepareFile`
+
+The preparation CLI records run-owned resources in a private state file before creating them. GitHub Actions passes that file under `RUNNER_TEMP`; it is available to later steps in the same job and is not uploaded as an artifact. Database tests receive a fresh migrated database per file and use the limited application role. Failure and Kubernetes database names satisfy the existing test admission guards. A cluster lane selects an explicit loopback k3d context. External images are pulled by their approved registry digest and exported for the selected platform; built and external images receive a run-owned reference at the imported platform manifest digest. Preparation records the original source image and checks Kubernetes CRI resolution before passing the immutable runtime reference to tests. Preparation failures still enter job cleanup.
+
+The suite map supplies fixed selection flags and required input names. External model, ChatGPT and Slack credentials come only from the selected protected environment. Missing selected inputs fail rather than turning the lane into a skipped success.
+
+Current gap: the routing and OpenShell lanes are mapped and workflow-wired, but the shared preparation path still creates only a bare owned k3d cluster plus common model resources. Their tests validate selected prerequisites instead of bootstrapping Gateway API, cert-manager and Envoy controllers, OpenShell CLI/chart assets, gateway and supervisor image imports, Agent Sandbox custom resources and controller, or runtime/admission setup on a fresh hosted runner. The approved pins and recipes remain in [Open Decisions](../../specs/19-github-actions-test-coverage.md#open-decisions).
+
+### 3. Execute and account for actual cases
+
+`scripts/ci/run-tests.mjs:main` and `scripts/ci/reporter.mjs:jsonLinesReporter`
+
+The runner discovers active test files and verifies that the map owns every file. It invokes exact files with invocation-scoped environment inputs. A custom Node reporter exposes case names, locations and outcomes; arbitrary test output and credential-bearing error payloads are excluded from published results.
+
+Required named cases must pass. A permitted counterpart skip belongs to a separate invocation, and a full run requires that invocation too. A synthetic file-wrapper success, missing result output or zero executed cases cannot establish coverage. The runner retains failure, timeout and cleanup outcomes in the lane result.
+
+### 4. Clean up and publish the bounded result
+
+`scripts/ci/cleanup.mjs:main` and `scripts/ci/run-tests.mjs:main`
+
+Per-file cleanup releases its disposable database. Job cleanup removes only the state-owned resources, including its cluster and private temporary files. Cleanup failure fails the check and keeps the private state file usable only while that runner host and path remain available. User databases, contexts, unrelated containers and global images remain outside that ownership.
+
+The aggregate runs after success or failure and checks expected job outcomes plus same-revision lane results. Missing, failed, cancelled or skipped selected jobs cannot pass. A full-suite result additionally accounts for every mapped lane. Abrupt hosted-runner loss can prevent teardown and also loses the private `RUNNER_TEMP` state at job end. External resource reconciliation is deferred until an approved resource ledger exists.
+
+## Debugging and Verification
+
+- `node scripts/ci/run-tests.mjs audit` checks the actual checkout inventory against the suite map.
+- `node --test tests/integration/ci-runner.test.mjs` exercises the runner with real child Node processes and controlled pass/fail/skip cases.
+- Use the failing test's file, name and location in the sanitized result to reproduce its exact invocation with approved local prerequisites. Treat the named aggregate as its coverage boundary.
+- Missing protected environments, tools, images or credentials are setup failures. Configure the approved resource; do not mark its required test skipped or replace it with a fixture.
+- Retain sanitized results for seven days. Keep private cleanup state and credential files outside uploaded artifacts. On local runs, follow the run-owned state when recovering a failed teardown while that host and state path still exist.
+
+## Related docs
+
+- [Testing guide](../testing.md)
+- [CI suite map](../../scripts/ci/test-suites.json)
+- [Integration implementation specification](../../specs/19-github-actions-test-coverage.md)
+- [Upstream infrastructure report](../../specs/reports/openclaw-testing-infrastructure.md)
+
+## Manual Notes
+
+[keep this for the user to add notes. do not change between edits]
+
+## Changelog
+
+- 2026-09-04 13:52: Documented explicit CI selection, disposable resource ownership, Node outcome accounting and aggregate boundaries. (01a06dd0-9fff-7e90-aae3-4e7099a6d154 - f0b17b79e25b020e7cf1adb5ed143ef8adc502c2)
+- 2026-09-04 14:13: Corrected hosted-runner cleanup-state limits and named the PR-safe logging collector lane. (01a06e43-6504-7810-9f09-4dd31b2e9681 - f0b17b79e25b020e7cf1adb5ed143ef8adc502c2)
