@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -457,6 +457,14 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
       `  console.error("${secret}-stderr");`,
       `  assert.equal("${secret}-actual", "expected");`,
       "});",
+      'test("redacted custom error", () => {',
+      `  console.log("${secret}-custom-stdout");`,
+      `  console.error("${secret}-custom-stderr");`,
+      `  const error = new Error("${secret}-message");`,
+      `  error.name = "${secret}-name";`,
+      `  error.code = "${secret}-code";`,
+      "  throw error;",
+      "});",
       "",
     ].join("\n"),
   );
@@ -491,10 +499,23 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
   const summary = JSON.parse(await readFile(resultsPath, "utf8"));
   assert.equal(summary.files[0].tests[0].name, "redacted failure locator");
   assert.equal(summary.files[0].tests[0].line, 3);
-  assert.deepEqual(summary.files[0].tests[0].error, {
-    code: "ERR_TEST_FAILURE",
-    name: "Error",
-  });
+  const failure = summary.files[0].tests[0].error;
+  assert.equal(failure.code, "ERR_TEST_FAILURE");
+  assert.equal(failure.name, "Error");
+  assert.equal(failure.cause.code, "ERR_ASSERTION");
+  assert.equal(failure.cause.name, "AssertionError");
+  assert.equal(
+    failure.location.file,
+    await realpath(join(root, "tests/integration/redacted.test.mjs")),
+  );
+  assert.equal(failure.location.line, 6);
+  assert.ok(failure.location.column > 0);
+  const customFailure = summary.files[0].tests.find(
+    (entry) => entry.name === "redacted custom error",
+  );
+  assert.equal(customFailure.status, "failed");
+  assert.equal(customFailure.error.cause, undefined);
+  assert.equal(customFailure.error.location.line, 11);
 });
 
 test("namePattern selects exact cases and fails when it selects zero cases", async (t) => {

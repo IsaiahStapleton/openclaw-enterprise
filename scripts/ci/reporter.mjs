@@ -1,5 +1,17 @@
 function location(data = {}) {
   const error = data.details?.error;
+  const cause = error?.cause ?? error;
+  // Only retain coordinates in the known test file, never arbitrary stack text.
+  const frame =
+    typeof cause?.stack === "string" && typeof data.file === "string"
+      ? cause.stack.split("\n").find((line) => line.includes(`${data.file}:`))
+      : undefined;
+  const coordinates = frame
+    ?.slice(frame.indexOf(`${data.file}:`) + data.file.length + 1)
+    .match(/^(\d+):(\d+)/);
+  const failureLocation = coordinates
+    ? { file: data.file, line: Number(coordinates[1]), column: Number(coordinates[2]) }
+    : undefined;
   return {
     file: data.file,
     line: data.line,
@@ -13,8 +25,13 @@ function location(data = {}) {
     parentId: data.parentId,
     error: error
       ? {
-          code: error.code,
-          name: error.name,
+          code: error.code === "ERR_TEST_FAILURE" ? "ERR_TEST_FAILURE" : undefined,
+          name: "Error",
+          cause:
+            cause?.code === "ERR_ASSERTION" && cause?.name === "AssertionError"
+              ? { code: "ERR_ASSERTION", name: "AssertionError" }
+              : undefined,
+          location: failureLocation,
         }
       : undefined,
     durationMs:

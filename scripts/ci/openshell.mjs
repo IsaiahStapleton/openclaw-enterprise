@@ -545,7 +545,6 @@ async function prepareOpenShellNodeImage({
     [
       "test -x /usr/local/bin/runsc",
       "test -x /usr/local/bin/containerd-shim-runsc-v1",
-      "test -x /usr/local/bin/gvisor-bin",
       `grep -F "[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'${runtimeHandler}']" /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl`,
       "grep -F 'runtime_type = \"io.containerd.runsc.v1\"' /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl",
     ].join(" && "),
