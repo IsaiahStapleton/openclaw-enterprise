@@ -21,6 +21,7 @@ import type {
   ServiceAccountDriverFactory,
 } from "./installation-config.ts";
 import { providerSummariesFromDefinitions } from "./installation-config.ts";
+import type { LoggingConfiguration, OccLogger } from "../logging.ts";
 import { resolveApprovedHarness } from "./production-harness.ts";
 import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import { createWorkspaceFilesAccess, validateWorkspaceFilesApiKeyPath } from "./workspace-files.ts";
@@ -32,6 +33,8 @@ export interface PostgresDevelopmentConfig {
   readonly authSecret: string;
   readonly authBaseURL: string;
   readonly poolMax?: number;
+  readonly logger?: OccLogger;
+  readonly logging?: LoggingConfiguration;
   readonly trustedDevelopmentBridgeCidr?: string;
   readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
   readonly gatewayApiKeyPath?: string;
@@ -120,9 +123,11 @@ export async function composePostgresDevelopment(
       await state.appendNativeIAMPrincipal(seed, auditEvent);
     };
 
+    const loggingLevel = config.logging?.level ?? drivers?.installation.logging.level;
     const controller = new OpenClawController(persistedInstallation, {
       state,
       recordOperations: true,
+      ...(loggingLevel === undefined ? {} : { loggingLevel }),
       ...(drivers === undefined ? {} : { providers: drivers.installation.provider }),
     });
     controller.registerDriver(iamDriver);
@@ -175,6 +180,7 @@ export async function composePostgresDevelopment(
         ? {}
         : { providerSummaries: providerSummariesFromDefinitions(drivers.installation.provider) }),
       auth,
+      ...(config.logger === undefined ? {} : { logger: config.logger }),
       provisionAuthAccount,
       ...(auditEventFactory === undefined ? {} : { auditEventFactory }),
       development: {

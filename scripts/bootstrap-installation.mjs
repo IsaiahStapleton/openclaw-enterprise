@@ -13,6 +13,8 @@ import {
   OpenClawController,
   PostgresPlatformState,
 } from "../packages/occ/src/index.ts";
+import { createOccLogger, emitOccLogEvent } from "../apps/controller/src/logging.ts";
+import { loadOperationalLoggingConfiguration } from "../apps/controller/src/composition/installation-config.ts";
 
 const requireControllerDependency = createRequire(
   new URL("../apps/controller/package.json", import.meta.url),
@@ -104,6 +106,22 @@ function serviceKeyOutputPath(raw, passwordPath) {
 
 function randomPassword() {
   return randomBytes(32).toString("base64url");
+}
+
+function bootstrapFailureCode(error) {
+  const message = error instanceof Error ? error.message : "";
+  if (/OCC_AUTH_SECRET/.test(message)) return "AUTH_SECRET_INVALID";
+  if (/OCC_AUTH_BASE_URL|loopback host|loopback HTTP\(S\) URL/.test(message)) {
+    return "AUTH_BASE_URL_INVALID";
+  }
+  if (/OCC_DATABASE_URL|PostgreSQL database|PostgreSQL connection URL/.test(message)) {
+    return "DATABASE_CONFIGURATION_INVALID";
+  }
+  if (/commit outcome is unknown/i.test(message)) return "COMMIT_OUTCOME_UNKNOWN";
+  if (/platform persistence repository|ECONNREFUSED|ECONNRESET|connect /i.test(message)) {
+    return "PERSISTENCE_UNAVAILABLE";
+  }
+  return "BOOTSTRAP_FAILED";
 }
 
 function modeConfig(mode) {
@@ -247,9 +265,18 @@ function administratorPrincipal(state, issuer, userId) {
 
 let bootstrapAttempt;
 let pool;
+let logging;
+let logger = createOccLogger({ component: "occ-bootstrap", level: "info", destination: "stderr" });
 
 try {
-  const config = modeConfig(parseMode(process.env.NODE_ENV, process.argv.slice(2)));
+  const mode = parseMode(process.env.NODE_ENV, process.argv.slice(2));
+  logging = await loadOperationalLoggingConfiguration({ mode });
+  logger = createOccLogger({
+    component: "occ-bootstrap",
+    level: logging.level,
+    destination: "stderr",
+  });
+  const config = modeConfig(mode);
   pool = new pg.Pool({ connectionString: config.databaseUrl });
   const state = new PostgresPlatformState(pool);
   const existing = await state.loadInstallation();
@@ -269,6 +296,10 @@ try {
       );
     }
     process.stdout.write(`${JSON.stringify({ event: "installation.already-bootstrapped" })}\n`);
+    emitOccLogEvent(logger, {
+      event: "installation.already-bootstrapped",
+      installationId: existing.id,
+    });
   } else {
     const freshConfig = freshBootstrapConfig(config);
     const installation = {
@@ -307,7 +338,11 @@ try {
       meta: { installationId: installation.id },
     });
     state.setBootstrapNativeIAM(authorization.state);
-    const controller = new OpenClawController(installation, { state, recordOperations: true });
+    const controller = new OpenClawController(installation, {
+      state,
+      recordOperations: true,
+      loggingLevel: logging.level,
+    });
     const iam = new NativeIAMDriver(state, { id: "native-iam", implementation: "native" });
     controller.registerDriver(iam);
     controller.selectDriver("iam", iam.id);
@@ -340,15 +375,17 @@ try {
     process.stdout.write(
       `${JSON.stringify({ event: "installation.bootstrapped", ...bootstrapAttempt })}\n`,
     );
+    emitOccLogEvent(logger, {
+      event: "installation.bootstrapped",
+      installationId: installation.id,
+    });
   }
 } catch (error) {
-  process.stderr.write(
-    `${JSON.stringify({
-      event: "installation.bootstrap-failed",
-      error: error instanceof Error ? error.message : "Installation bootstrap failed.",
-      ...(bootstrapAttempt === undefined ? {} : { attempt: bootstrapAttempt }),
-    })}\n`,
-  );
+  emitOccLogEvent(logger, {
+    event: "installation.bootstrap-failed",
+    code: bootstrapFailureCode(error),
+    attempt: bootstrapAttempt,
+  });
   process.exitCode = 1;
 } finally {
   await pool?.end();

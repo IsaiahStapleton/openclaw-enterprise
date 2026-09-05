@@ -15,6 +15,11 @@ import {
   kubernetesHash as hash,
   validateExplicitK3dLoopbackContext,
 } from "../helpers/kubernetes-real.mjs";
+import {
+  assertKubernetesRuntimeOtelSettings,
+  createOtelLogObservation,
+  OTEL_RESOURCE,
+} from "../helpers/logging-otel-observation.mjs";
 
 const selected = process.env.OCC_TEST_PRODUCTION_TUI_REAL === "1";
 const selection = {
@@ -56,6 +61,9 @@ test(
     const release = `tui-${suffix}`;
     const directory = await mkdtemp(join(tmpdir(), "oce-production-tui-"));
     const secrets = [process.env.OPENAI_API_KEY];
+    const otelLogs = createOtelLogObservation(context, {
+      description: "production Helm real-Pod OTel logs",
+    });
     const secret = () => {
       const value = randomBytes(32).toString("hex");
       secrets.push(value);
@@ -790,6 +798,7 @@ test(
 
     async function exerciseRevisionCutover() {
       let previousPod;
+      let firstRevision;
       let finalPod;
       let finalRevision;
       for (const round of [1, 2]) {
@@ -834,6 +843,7 @@ test(
             "Cutover must serve the new immutable config in a new Pod",
           );
         previousPod = gateway;
+        if (round === 1) firstRevision = revision.id;
         finalPod = gateway.metadata.name;
         finalRevision = revision.id;
         if (round === 1) {
@@ -945,7 +955,11 @@ test(
         assert.equal(await probe(system, "operator", foreignIP, 8123), "connected");
         await record(`Revision ${round}: gateway ingress and private egress isolation`);
       }
-      return { pod: finalPod, revisionId: finalRevision };
+      return {
+        pod: finalPod,
+        revisionId: finalRevision,
+        successfulWorkerRevisionId: firstRevision,
+      };
     }
 
     async function verifyCredentialBoundariesAndPrepareHandoff(finalGateway) {
@@ -1060,6 +1074,98 @@ test(
       context.diagnostic(`Evidence directory: ${directory}`);
     }
 
+    async function newestPod(component) {
+      const pods = await resourcesFor(
+        "pods",
+        system,
+        "-l",
+        `app.kubernetes.io/name=openclaw-enterprise,app.kubernetes.io/component=${component}`,
+      );
+      const candidates = pods
+        .filter((pod) => pod.metadata.deletionTimestamp === undefined)
+        .sort((left, right) =>
+          String(left.metadata.creationTimestamp).localeCompare(
+            String(right.metadata.creationTimestamp),
+          ),
+        );
+      assert.ok(candidates.length > 0, `expected a ${component} Pod`);
+      return candidates.at(-1);
+    }
+
+    async function assertProductionOtelLogs(finalGateway) {
+      const [initializationPod, apiPod, workerPod, gatewayPod] = await Promise.all([
+        newestPod("initialization"),
+        newestPod("api"),
+        newestPod("worker"),
+        get("pod", finalGateway.pod, tenant),
+      ]);
+      assertKubernetesRuntimeOtelSettings(otelLogs, [gatewayPod]);
+      await otelLogs.assertRecords({
+        forbidden: secrets,
+        expected: [
+          {
+            label: "production migration completed",
+            serviceName: "occ-api",
+            resource: {
+              [OTEL_RESOURCE.serviceInstanceId]: initializationPod.metadata.uid,
+            },
+            attributes: { "event.name": "migration.completed" },
+            body: "migration.completed",
+          },
+          {
+            label: "production bootstrap completed",
+            serviceName: "occ-api",
+            resource: {
+              [OTEL_RESOURCE.serviceInstanceId]: initializationPod.metadata.uid,
+            },
+            attributes: { "event.name": "installation.bootstrapped" },
+            body: "installation.bootstrapped",
+          },
+          {
+            label: "production API request completed",
+            serviceName: "occ-api",
+            resource: {
+              [OTEL_RESOURCE.serviceInstanceId]: apiPod.metadata.uid,
+            },
+            attributes: {
+              "event.name": "http.completed",
+              "http.request.method": "GET",
+              "http.response.status_code": 200,
+            },
+            body: "http.completed",
+          },
+          {
+            label: "production worker completed embedded revision",
+            serviceName: "occ-worker",
+            resource: {
+              [OTEL_RESOURCE.serviceInstanceId]: workerPod.metadata.uid,
+            },
+            attributes: {
+              "event.name": "worker.completed",
+              "occ.namespace.id": namespace.id,
+              "occ.agent.id": agent.id,
+              "occ.revision.id": finalGateway.successfulWorkerRevisionId,
+              "work.operation": "agent_revision.reconcile",
+              "work.outcome": "success",
+            },
+            body: "worker.completed",
+          },
+          {
+            label: "production embedded gateway operational record",
+            serviceName: "openclaw-gateway",
+            resource: {
+              [OTEL_RESOURCE.serviceInstanceId]: gatewayPod.metadata.uid,
+              [OTEL_RESOURCE.namespaceId]: namespace.id,
+              [OTEL_RESOURCE.agentId]: agent.id,
+              [OTEL_RESOURCE.revisionId]: finalGateway.revisionId,
+            },
+            attributes: { "event.name": "gateway.operational" },
+            body: "gateway.operational",
+          },
+        ],
+      });
+    }
+
     const { api, externalRequest, runGuideOccApi } = await installProductionControlPlane();
     const { agent, agentHash, namespace, tenant } = await provisionNamespaceAndAgent({
       api,
@@ -1068,6 +1174,7 @@ test(
     });
     const { foreignIP, probe } = await proveProductionApiNetworkPolicy();
     const finalGateway = await exerciseRevisionCutover();
+    await assertProductionOtelLogs(finalGateway);
     await verifyCredentialBoundariesAndPrepareHandoff(finalGateway);
   },
 );

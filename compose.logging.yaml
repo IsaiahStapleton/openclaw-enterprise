@@ -1,0 +1,115 @@
+name: openclaw-enterprise-development
+
+x-otel-fluentd-logging: &otel-fluentd-logging
+  driver: fluentd
+  options:
+    fluentd-address: ${OCC_DOCKER_LOGGING_ADDRESS:-127.0.0.1:24224}
+    fluentd-async: "true"
+    fluentd-buffer-limit: "1024"
+    fluentd-retry-wait: "1s"
+    fluentd-max-retries: "3"
+    fluentd-sub-second-precision: "true"
+    fluentd-write-timeout: "1s"
+    mode: non-blocking
+    max-buffer-size: 1m
+    cache-disabled: "false"
+    cache-max-size: 10m
+    cache-max-file: "2"
+    cache-compress: "true"
+    labels: org.openclaw.enterprise.managed,org.openclaw.enterprise.role,org.openclaw.enterprise.namespace-id,org.openclaw.enterprise.agent-id,org.openclaw.enterprise.revision-id,org.openclaw.enterprise.version,com.docker.compose.service,com.docker.compose.project
+    env: NODE_ENV
+    tag: openclaw-enterprise.{{.Name}}
+
+services:
+  collector:
+    image: docker.io/otel/opentelemetry-collector-contrib:0.159.0@sha256:1f2c54a30e713fac6b3ae77a1ec84010c2007e29ced8ec666214fc2f6739c1cc
+    user: "0:0"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    command:
+      - --config=/etc/otel/collector.yaml
+      - --config=/etc/otel/receiver.yaml
+      - --config=/etc/otel/exporter.yaml
+    environment:
+      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:?Set OTEL_EXPORTER_OTLP_LOGS_ENDPOINT for the logging Collector}
+    ports:
+      - "127.0.0.1:${OTEL_COLLECTOR_PORT:-24224}:24224"
+      - "127.0.0.1:${OTEL_COLLECTOR_METRICS_PORT:-8888}:8888"
+    volumes:
+      - ./deploy/logging/collector.yaml:/etc/otel/collector.yaml:ro
+      - ./deploy/logging/docker.yaml:/etc/otel/receiver.yaml:ro
+      - ./deploy/logging/exporter.yaml:/etc/otel/exporter.yaml:ro
+      - occ_otelcol_data:/var/lib/otelcol
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "2"
+        compress: "true"
+    networks:
+      development:
+
+  migrate:
+    environment:
+      OCC_CONFIG_PATH: /etc/openclaw/occ.yaml
+    labels:
+      org.openclaw.enterprise.managed: "true"
+      org.openclaw.enterprise.role: migrate
+      org.openclaw.enterprise.version: 0.1.0
+    logging: *otel-fluentd-logging
+    volumes:
+      - ./deploy/logging/occ.yaml:/etc/openclaw/occ.yaml:ro
+    depends_on:
+      collector:
+        condition: service_started
+
+  controller:
+    environment:
+      OCC_CONFIG_PATH: /etc/openclaw/occ.yaml
+      OCC_DOCKER_LOGGING_ADDRESS: ${OCC_DOCKER_LOGGING_ADDRESS:-127.0.0.1:24224}
+    labels:
+      org.openclaw.enterprise.managed: "true"
+      org.openclaw.enterprise.role: controller
+      org.openclaw.enterprise.version: 0.1.0
+    logging: *otel-fluentd-logging
+    volumes:
+      - ./deploy/logging/occ.yaml:/etc/openclaw/occ.yaml:ro
+    depends_on:
+      collector:
+        condition: service_started
+
+  bootstrap:
+    environment:
+      OCC_CONFIG_PATH: /etc/openclaw/occ.yaml
+    labels:
+      org.openclaw.enterprise.managed: "true"
+      org.openclaw.enterprise.role: bootstrap
+      org.openclaw.enterprise.version: 0.1.0
+    logging: *otel-fluentd-logging
+    volumes:
+      - ./deploy/logging/occ.yaml:/etc/openclaw/occ.yaml:ro
+    depends_on:
+      collector:
+        condition: service_started
+
+  worker:
+    environment:
+      OCC_CONFIG_PATH: /etc/openclaw/occ.yaml
+      OCC_DOCKER_LOGGING_ADDRESS: ${OCC_DOCKER_LOGGING_ADDRESS:-127.0.0.1:24224}
+    labels:
+      org.openclaw.enterprise.managed: "true"
+      org.openclaw.enterprise.role: worker
+      org.openclaw.enterprise.version: 0.1.0
+    logging: *otel-fluentd-logging
+    volumes:
+      - ./deploy/logging/occ.yaml:/etc/openclaw/occ.yaml:ro
+    depends_on:
+      collector:
+        condition: service_started
+
+volumes:
+  occ_otelcol_data:

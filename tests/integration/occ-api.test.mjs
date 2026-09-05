@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { AuthAccountRoleNotFoundError } from "../../apps/controller/src/auth/index.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { createControllerApp, createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
@@ -1696,7 +1697,10 @@ test("two Namespaces become independently ready and deletion tombstones only its
   assert.equal(readyDeployment.data.configurationId, firstConfiguration.id);
   assert.equal(readyDeployment.data.configurationKind, "agent");
   assert.equal(readyDeployment.data.configurationGeneration, 1);
-  assert.deepEqual(readyDeployment.data.configuration, { model: "first", temperature: "0" });
+  assert.deepEqual(
+    readyDeployment.data.configuration,
+    admitLoggingConfiguration({ model: "first", temperature: "0" }, "info"),
+  );
   assert.deepEqual(readyDeployment.data.harness, {
     id: "openclaw",
     version: "1.0.0",
@@ -1735,7 +1739,10 @@ test("two Namespaces become independently ready and deletion tombstones only its
   );
   assert.equal(nextDeployment.status, 202);
   assert.equal(nextDeployment.data.revision, 2);
-  assert.deepEqual(nextDeployment.data.configuration, { model: "second", temperature: "1" });
+  assert.deepEqual(
+    nextDeployment.data.configuration,
+    admitLoggingConfiguration({ model: "second", temperature: "1" }, "info"),
+  );
   const admittedRevisions = await injectedRequest(
     fixture.app,
     "GET",

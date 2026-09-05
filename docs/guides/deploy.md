@@ -36,6 +36,9 @@ Expect HTTP `200` with `data.id` matching `meta.installationId` in the key
 file. This proves controller access, not an Agent deployment or model turn. For
 startup internals, see the [Docker development flow](../flows/docker-compose-development.md).
 
+For optional operational log export and Collector metrics, follow
+[Configure platform observability](observability.md#docker-compose).
+
 ### Open the platform console
 
 Open `/console/` on the API URL printed by `dev-up`, normally
@@ -143,9 +146,13 @@ chmod 600 "$KUBECONFIG_FILE" "$OCC_INPUT_DIRECTORY/values.yaml" \
 ```
 
 The default examples use native API-key operation. Helm values own the
-controller image, API endpoint, Secret names, bootstrap claim, and network
-selectors. Installation YAML owns gateway/Agent images, Driver selection,
-projected identity, and runtime networking/storage.
+controller image, API endpoint, Secret names, bootstrap claim, optional
+Collector, and network selectors. Installation YAML owns gateway/Agent images,
+Driver selection, projected identity, runtime networking/storage, and the shared
+startup logging level.
+
+For `logging.level`, follow [Choose the log level](observability.md#1-choose-the-log-level),
+including when to restart OCC and deploy a new AgentRevision.
 
 If you built the production images above, write their digest references into
 the protected copies (skip this block for the local Kubernetes import path):
@@ -167,8 +174,8 @@ Edit the protected YAML copies before provisioning anything:
   exact PostgreSQL endpoint CIDR, `cluster.cidr` to the Kubernetes API endpoint
   CIDR, `api.clients` to approved client selectors, and
   `bootstrap.password.claimName` to the bootstrap PVC name.
-- `$OCC_INPUT_DIRECTORY/installation.yaml`: set `occ.cluster`, both
-  `drivers.compute.configuration.images` digests, the DNS and gateway-client
+- `$OCC_INPUT_DIRECTORY/installation.yaml`: set `occ.cluster`, `logging.level`,
+  both `drivers.compute.configuration.images` digests, the DNS and gateway-client
   selectors, the service-principal token settings, the runtime Secret prefixes,
   and `runtime.gatewayStorageClassName`. Keep
   `drivers.compute.configuration.images.requireImmutableDigest: true`.
@@ -251,6 +258,14 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
 
 These commands provision operator-owned inputs; they are not a recurring Secret
 synchronizer.
+
+#### Optional operational log export
+
+Before installing the chart, configure the Collector Secrets and Helm values
+using [Configure platform observability](observability.md#kubernetes-and-helm).
+That guide also covers reusing an existing cluster Collector, exporter
+credentials, and verification. Return here to prepare the bootstrap PVC and
+install OCC.
 
 #### Prepare the fresh bootstrap output PVC
 
@@ -1016,7 +1031,7 @@ Use native surfaces for customization:
 - Development: `.env`, Compose environment precedence, and optional Compose
   files passed after `--`.
 - Production: extra Helm values files, ordinary Helm overrides, Kubernetes
-  manifests, and Installation startup YAML.
+  manifests, Installation startup YAML, and optional Collector Secrets.
 - Runtime images: [`deploy/runtime`](../../deploy/runtime/README.md) for the
   recipe and package-version overrides.
   [Build and publish](#build-and-publish-production-images) before configuring the digests.

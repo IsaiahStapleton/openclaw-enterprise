@@ -4,6 +4,7 @@ import test from "node:test";
 import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { createControllerApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
 import {
@@ -408,7 +409,10 @@ test("Configuration deletion rejects an Agent reference and deployments retain i
   assert.equal(deployed.body.data.configurationId, configurationId);
   assert.equal(deployed.body.data.configurationKind, "agent");
   assert.equal(deployed.body.data.configurationGeneration, 1);
-  assert.deepEqual(deployed.body.data.configuration, initialValues);
+  assert.deepEqual(
+    deployed.body.data.configuration,
+    admitLoggingConfiguration(initialValues, "info"),
+  );
 
   // Admission recursively detaches the model reference and every plugin array element.
   initialValues.models.providers.openai.apiKey.id = "MUTATED_AFTER_ADMISSION";
@@ -435,7 +439,10 @@ test("Configuration deletion rejects an Agent reference and deployments retain i
   );
   assert.equal(historical.status, 200);
   assert.equal(historical.body.data.configurationGeneration, 1);
-  assert.deepEqual(historical.body.data.configuration, expectedHistorical);
+  assert.deepEqual(
+    historical.body.data.configuration,
+    admitLoggingConfiguration(expectedHistorical, "info"),
+  );
 });
 
 test("Configuration operations fail closed when no ConfigurationDriver is selected", async () => {

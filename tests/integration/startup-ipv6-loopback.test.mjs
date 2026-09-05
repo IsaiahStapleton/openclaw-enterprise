@@ -10,6 +10,18 @@ const developmentEnvironment = {
   OCC_DATABASE_URL: "postgresql://127.0.0.1:1/occ",
 };
 
+function diagnostic(result, path) {
+  const event = path.endsWith("server.mjs") ? "startup-error" : "installation.bootstrap-failed";
+  const line = result.stderr
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((entry) => JSON.parse(entry))
+    .find((entry) => entry.event === event);
+  assert.ok(line, result.stderr);
+  return line;
+}
+
 function run(path, env) {
   return spawnSync(process.execPath, [path], {
     cwd: process.cwd(),
@@ -29,8 +41,8 @@ test("development startup accepts bracketed IPv6 loopback auth base URLs", () =>
       OCC_AUTH_SECRET: "short",
     });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /OCC_AUTH_SECRET/);
-    assert.doesNotMatch(result.stderr, /loopback host|loopback HTTP\(S\) URL/);
+    assert.equal(diagnostic(result, path).code, "AUTH_SECRET_INVALID");
+    assert.doesNotMatch(result.stderr, /OCC_AUTH_SECRET|loopback host|loopback HTTP\(S\) URL/);
   }
 });
 
@@ -41,6 +53,7 @@ test("development startup still rejects nonloopback auth base URLs", () => {
       OCC_AUTH_SECRET: "development-auth-secret-with-at-least-32-characters",
     });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /loopback host|loopback HTTP\(S\) URL/);
+    assert.equal(diagnostic(result, path).code, "AUTH_BASE_URL_INVALID");
+    assert.doesNotMatch(result.stderr, /loopback host|loopback HTTP\(S\) URL/);
   }
 });

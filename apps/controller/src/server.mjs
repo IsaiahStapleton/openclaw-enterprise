@@ -1,16 +1,45 @@
 import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
-import { loadInstallationConfiguration } from "./composition/installation-config.ts";
+import {
+  loadInstallationConfiguration,
+  loadStartupConfigurationSnapshot,
+} from "./composition/installation-config.ts";
 import { composeProduction } from "./composition/production.ts";
 import { validateWorkspaceFilesApiKeyPath } from "./composition/workspace-files.ts";
+import { createOccLogger, emitOccLogEvent } from "./logging.ts";
 
 const loopbackHosts = new Set(["127.0.0.1", "::1", "[::1]"]);
 const developmentBindHosts = new Set(["127.0.0.1", "::1", "0.0.0.0"]);
 const DEFAULT_BETTER_AUTH_BASE_URL = "http://127.0.0.1:3000";
 
-function startupFailure(message) {
-  process.stderr.write(`${JSON.stringify({ event: "startup-error", error: message })}\n`);
+function startupFailureCode(error) {
+  const message = error instanceof Error ? error.message : "";
+  if (/OCC_AUTH_SECRET/.test(message)) return "AUTH_SECRET_INVALID";
+  if (/OCC_AUTH_BASE_URL|loopback host|loopback HTTP\(S\) URL/.test(message)) {
+    return "AUTH_BASE_URL_INVALID";
+  }
+  if (/OCC_WORKSPACE_FILES_CONFIG_PATH.*removed/.test(message)) {
+    return "WORKSPACE_FILES_CONFIG_REMOVED";
+  }
+  if (/OCC_GATEWAY_API_KEY_PATH|gateway API key file/i.test(message)) {
+    return "GATEWAY_API_KEY_UNAVAILABLE";
+  }
+  if (/ChatGPT admin-key Secret/.test(message)) return "CHATGPT_ADMIN_KEY_UNAVAILABLE";
+  if (/ServiceAccounts require PostgreSQL persistence/.test(message)) {
+    return "SERVICE_ACCOUNT_REQUIRES_POSTGRES";
+  }
+  if (/OCC_DATABASE_URL|PostgreSQL connection URL/.test(message)) {
+    return "DATABASE_CONFIGURATION_INVALID";
+  }
+  if (/platform persistence repository|ECONNREFUSED|ECONNRESET|connect /i.test(message)) {
+    return "PERSISTENCE_UNAVAILABLE";
+  }
+  return "STARTUP_FAILED";
+}
+
+function startupFailure(logger, error) {
+  emitOccLogEvent(logger, { event: "startup-error", code: startupFailureCode(error) });
   process.exitCode = 1;
 }
 
@@ -152,11 +181,17 @@ function configuration() {
 
 async function start() {
   const settings = configuration();
+  const startupConfiguration = await loadStartupConfigurationSnapshot({ mode: settings.mode });
+  const logging = startupConfiguration.logging;
+  const logger = createOccLogger({ component: "occ-api", level: logging.level });
   if (settings.gatewayApiKeyPath !== undefined) {
     await validateWorkspaceFilesApiKeyPath(settings.gatewayApiKeyPath);
   }
-  const compositionSettings = settings;
-  const drivers = await loadInstallationConfiguration({ mode: settings.mode });
+  const compositionSettings = { ...settings, logger, logging };
+  const drivers = await loadInstallationConfiguration({
+    mode: settings.mode,
+    startupConfiguration,
+  });
   let serviceAccountDriverFactory;
   const selectedServiceAccountDriver = drivers?.installation.drivers.service_account;
   if (selectedServiceAccountDriver !== undefined) {
@@ -213,6 +248,7 @@ async function start() {
     app = await composeProduction({
       ...compositionSettings,
       drivers,
+      logger,
       ...(serviceAccountDriverFactory === undefined ? {} : { serviceAccountDriverFactory }),
     });
   } else {
@@ -245,13 +281,14 @@ async function start() {
     await app.close();
     throw error;
   }
-  process.stdout.write(
-    `${JSON.stringify({ event: "listening", host: settings.host, port: settings.port })}\n`,
-  );
+  logger.info({ event: "listening", host: settings.host, port: settings.port });
 }
 
 try {
   await start();
 } catch (error) {
-  startupFailure(error instanceof Error ? error.message : "The OCC server could not start.");
+  startupFailure(
+    createOccLogger({ component: "occ-api", level: "info", destination: "stderr" }),
+    error,
+  );
 }

@@ -17,6 +17,7 @@ import type {
   Namespace,
   NamespaceDeleteResult,
   NamespaceEnsureResult,
+  LoggingLevel,
   OpenClawConfigurationDocument,
   PermissionAction,
   ProviderDefinition,
@@ -37,6 +38,8 @@ import type {
 import {
   DRIVER_CAPABILITIES,
   SANDBOX_FACETS,
+  admitLoggingConfiguration,
+  normalizeLoggingLevel,
   normalizeSecretBindings,
 } from "@openclaw-enterprise/contracts";
 import { asRecord, immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
@@ -139,6 +142,7 @@ export interface ControllerOptions {
   readonly state?: PlatformStateStore;
   readonly recordOperations?: boolean;
   readonly providers?: readonly ProviderDefinition[];
+  readonly loggingLevel?: LoggingLevel;
 }
 
 export interface CreateNamespaceInput {
@@ -522,6 +526,7 @@ export class OpenClawController {
   private readonly registry = new Map<string, RegisteredDriver>();
   private readonly selections = new Map<DriverCapability, RegisteredDriver>();
   private readonly providers: readonly ProviderDefinition[];
+  private readonly loggingLevel: LoggingLevel;
   private readonly providerMap: ReadonlyMap<string, ProviderDefinition>;
 
   constructor(installation: Installation, options: ControllerOptions = {}) {
@@ -543,6 +548,7 @@ export class OpenClawController {
     this.state = options.state ?? new InMemoryPlatformState();
     this.shouldRecordOperations = options.recordOperations ?? true;
     this.providers = validateProviderDefinitions(options.providers ?? []);
+    this.loggingLevel = normalizeLoggingLevel(options.loggingLevel);
     this.providerMap = providerDefinitionMap(this.providers);
   }
 
@@ -1554,10 +1560,13 @@ export class OpenClawController {
         ),
         metadata,
       );
-      const admittedConfiguration =
+      const sandboxConfiguration =
         sandbox?.configureAgent !== undefined
           ? frozenValues(sandbox.configureAgent(frozenValues(configuration.values)))
           : configuration.values;
+      const admittedConfiguration = frozenValues(
+        admitLoggingConfiguration(sandboxConfiguration, this.loggingLevel),
+      );
       await configurationDriver.validate({ ...configuration, values: admittedConfiguration });
       if (!validExecutionMode(lockedAgent.executionMode))
         throw new ScopeViolationError("The persisted Agent Harness execution mode is invalid.");

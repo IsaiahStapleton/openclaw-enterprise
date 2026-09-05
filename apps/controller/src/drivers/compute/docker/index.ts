@@ -8,7 +8,9 @@ import type {
   Namespace,
   NamespaceDeleteResult,
   NamespaceEnsureResult,
+  LoggingLevel,
 } from "@openclaw-enterprise/contracts";
+import { admittedLoggingLevel } from "@openclaw-enterprise/contracts";
 import { asRecord, immutableCopy, isNonEmptyString, sha256Hex } from "@openclaw-enterprise/utils";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
@@ -22,6 +24,7 @@ export interface DockerComputeDriverOptions {
     readonly gateway: string;
     readonly agent: string;
   };
+  readonly loggingAddress?: string;
 }
 
 interface DockerContainerInspect {
@@ -85,6 +88,8 @@ const REVISION_LABEL = "org.openclaw.enterprise.revision-id";
 const REVISION_NUMBER_LABEL = "org.openclaw.enterprise.revision-number";
 const ROLE_LABEL = "org.openclaw.enterprise.role";
 const CONFIGURATION_HASH_LABEL = "org.openclaw.enterprise.configuration-hash";
+const HARNESS_VERSION_LABEL = "org.openclaw.enterprise.harness-version";
+const VERSION_LABEL = "org.openclaw.enterprise.version";
 const SOCKET_PATH = "/var/run/docker.sock";
 const REQUEST_TIMEOUT_MS = 10_000;
 const STARTUP_TIMEOUT_MS = 120_000;
@@ -97,16 +102,30 @@ const GATEWAY_RUNTIME_ENTRYPOINT = String.raw`
 const { mkdirSync, writeFileSync } = require("node:fs");
 const { spawn } = require("node:child_process");
 
+function forwardTermination(child) {
+  let terminating = false;
+  const forward = (signal) => {
+    if (terminating) return;
+    terminating = true;
+    child.kill(signal);
+    setTimeout(() => child.kill("SIGKILL"), 8_000).unref();
+  };
+  process.on("SIGTERM", () => forward("SIGTERM"));
+  process.on("SIGINT", () => forward("SIGINT"));
+}
+
 mkdirSync("/home/node/.openclaw", { recursive: true });
 mkdirSync("/home/node/workspace", { recursive: true });
 writeFileSync(process.env.OPENCLAW_CONFIG_PATH, process.env.OPENCLAW_CONFIG_JSON, { mode: 0o600 });
 delete process.env.OPENCLAW_CONFIG_JSON;
+delete process.env.OPENCLAW_LOG_LEVEL;
 const child = spawn(
   "node",
   ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
   { stdio: "inherit" },
 );
-child.on("exit", (code) => process.exit(code ?? 1));
+forwardTermination(child);
+child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
 `;
 
 function required(value: unknown, description: string): string {
@@ -154,6 +173,37 @@ function optionalEnvironment(value: string | undefined): string | undefined {
   return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
 }
 
+function loopbackHost(host: string): boolean {
+  if (host === "localhost" || host === "::1") return true;
+  const parts = host.split(".");
+  return (
+    parts.length === 4 &&
+    parts[0] === "127" &&
+    parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255)
+  );
+}
+
+function dockerLoggingAddress(value: string | undefined): string | undefined {
+  const trimmed = optionalEnvironment(value);
+  if (trimmed === undefined) return undefined;
+  const bracketed = /^\[([^\]]+)\]:(\d+)$/.exec(trimmed);
+  const plain = bracketed === null ? /^([^:]+):(\d+)$/.exec(trimmed) : null;
+  const host = bracketed?.[1] ?? plain?.[1];
+  const portText = bracketed?.[2] ?? plain?.[2];
+  const port = Number(portText);
+  if (
+    host === undefined ||
+    portText === undefined ||
+    !loopbackHost(host) ||
+    !Number.isSafeInteger(port) ||
+    port < 1 ||
+    port > 65_535
+  ) {
+    throw new ConfigurationFailure("Docker logging address must be a loopback host:port.");
+  }
+  return host === "::1" ? `[::1]:${port}` : `${host}:${port}`;
+}
+
 export class DockerComputeDriver implements ComputeDriver {
   readonly id = DRIVER_ID;
   readonly capability = "compute" as const;
@@ -165,7 +215,11 @@ export class DockerComputeDriver implements ComputeDriver {
   constructor(options: DockerComputeDriverOptions) {
     required(options.images.gateway, "Docker gateway image");
     required(options.images.agent, "Docker Codex Agent image");
-    this.options = immutableCopy(options);
+    const loggingAddress = dockerLoggingAddress(options.loggingAddress);
+    this.options = immutableCopy({
+      ...options,
+      ...(loggingAddress === undefined ? {} : { loggingAddress }),
+    });
   }
 
   setLifecycleDrivers(drivers: readonly Driver[]): void {
@@ -273,6 +327,7 @@ export class DockerComputeDriver implements ComputeDriver {
       `network ${network}`,
     );
 
+    const loggingLevel = admittedLoggingLevel(revision.configuration);
     const prepared = immutableCopy(revision);
     let launchPrepared = false;
     let agentCreated: string | undefined;
@@ -291,7 +346,7 @@ export class DockerComputeDriver implements ComputeDriver {
       }
 
       const appServerToken = randomBytes(32).toString("hex");
-      const agent = await this.reconcileAgent(prepared, network, appServerToken, {
+      const agent = await this.reconcileAgent(prepared, network, appServerToken, loggingLevel, {
         ...provider,
         ...launch.environment,
       });
@@ -423,6 +478,7 @@ export class DockerComputeDriver implements ComputeDriver {
         [REVISION_LABEL]: revision.id,
         [REVISION_NUMBER_LABEL]: String(revision.revision),
         [CONFIGURATION_HASH_LABEL]: configurationHash,
+        [HARNESS_VERSION_LABEL]: revision.harness.version,
       },
       portBindings: {
         [`${GATEWAY_PORT}/tcp`]: [{ HostIp: "127.0.0.1", HostPort: "" }],
@@ -436,6 +492,7 @@ export class DockerComputeDriver implements ComputeDriver {
     revision: Readonly<AgentRevision>,
     network: string,
     appServerToken: string,
+    loggingLevel: LoggingLevel,
     environment: Readonly<Record<string, string>>,
   ): Promise<{
     readonly containerName: string;
@@ -465,6 +522,8 @@ export class DockerComputeDriver implements ComputeDriver {
         APP_SERVER_PORT: String(AGENT_TRANSPORT_PORT),
         APP_SERVER_TOKEN: appServerToken,
         CODEX_HOME: "/home/node/.codex",
+        LOG_FORMAT: "json",
+        RUST_LOG: `${loggingLevel},codex_otel=off`,
         HOME: "/home/node",
         PATH: "/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
       },
@@ -474,6 +533,7 @@ export class DockerComputeDriver implements ComputeDriver {
       labels: {
         [REVISION_LABEL]: revision.id,
         [REVISION_NUMBER_LABEL]: String(revision.revision),
+        [HARNESS_VERSION_LABEL]: revision.harness.version,
       },
     });
     return { containerName, created: true, ready: true };
@@ -482,6 +542,12 @@ export class DockerComputeDriver implements ComputeDriver {
   private async createRuntimeContainer(
     input: RuntimeContainerInput,
   ): Promise<DockerContainerInspect> {
+    const labels = {
+      ...this.ownershipMetadata(input.ownership),
+      [ROLE_LABEL]: input.role,
+      ...input.labels,
+      [VERSION_LABEL]: input.image,
+    };
     await this.request(
       "POST",
       `/containers/create?name=${encodeURIComponent(input.name)}`,
@@ -491,11 +557,7 @@ export class DockerComputeDriver implements ComputeDriver {
         Env: Object.entries(input.environment).map(([name, value]) => `${name}=${value}`),
         Entrypoint: ["node"],
         Cmd: ["-e", input.command],
-        Labels: {
-          ...this.ownershipMetadata(input.ownership),
-          [ROLE_LABEL]: input.role,
-          ...input.labels,
-        },
+        Labels: labels,
         ExposedPorts: { [`${input.exposedPort}/tcp`]: {} },
         Healthcheck: {
           Test: ["CMD", "node", "-e", input.healthcheckScript],
@@ -513,6 +575,9 @@ export class DockerComputeDriver implements ComputeDriver {
             "/tmp": "size=64m,uid=1000,gid=1000,mode=1777",
           },
           ...(input.portBindings === undefined ? {} : { PortBindings: input.portBindings }),
+          ...(this.options.loggingAddress === undefined
+            ? {}
+            : { LogConfig: this.logConfig(labels) }),
         },
         NetworkingConfig: {
           EndpointsConfig: {
@@ -534,6 +599,32 @@ export class DockerComputeDriver implements ComputeDriver {
       await this.removeContainer(input.name, true).catch(() => {});
       throw error;
     }
+  }
+
+  private logConfig(labels: Readonly<Record<string, string>>): {
+    readonly Type: "fluentd";
+    readonly Config: Readonly<Record<string, string>>;
+  } {
+    const exportedLabels = Object.keys(labels)
+      .filter((name) => name.startsWith("org.openclaw.enterprise."))
+      .sort()
+      .join(",");
+    return {
+      Type: "fluentd",
+      Config: {
+        "fluentd-address": required(this.options.loggingAddress, "Docker logging address"),
+        "fluentd-async": "true",
+        "fluentd-buffer-limit": "1024",
+        "fluentd-write-timeout": "1s",
+        mode: "non-blocking",
+        "max-buffer-size": "1m",
+        "cache-disabled": "false",
+        "cache-max-size": "10m",
+        "cache-max-file": "2",
+        "cache-compress": "true",
+        labels: exportedLabels,
+      },
+    };
   }
 
   private providerEnvironment(): Readonly<Record<string, string>> {
@@ -754,10 +845,12 @@ export function createDockerDevelopmentComputeDriverFromEnv(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): DockerComputeDriver {
   const shared = optionalEnvironment(environment.OCC_DOCKER_RUNTIME_IMAGE);
+  const loggingAddress = dockerLoggingAddress(environment.OCC_DOCKER_LOGGING_ADDRESS);
   return new DockerComputeDriver({
     images: {
       gateway: optionalEnvironment(environment.OCC_DOCKER_GATEWAY_IMAGE) ?? shared ?? "",
       agent: optionalEnvironment(environment.OCC_DOCKER_AGENT_IMAGE) ?? shared ?? "",
     },
+    ...(loggingAddress === undefined ? {} : { loggingAddress }),
   });
 }

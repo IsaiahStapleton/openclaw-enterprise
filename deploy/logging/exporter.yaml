@@ -1,0 +1,18 @@
+# Replace this native Collector exporter with the configuration for your backend.
+# Keep header credentials in a Collector-only Secret/environment or mounted config.
+# Use HTTPS with verified server identity; HTTP is only for a local test receiver.
+exporters:
+  otlp_http:
+    logs_endpoint: ${env:OTEL_EXPORTER_OTLP_LOGS_ENDPOINT}
+    encoding: proto
+    timeout: 10s
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 1024
+      storage: file_storage
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 60s

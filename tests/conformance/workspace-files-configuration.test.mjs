@@ -70,6 +70,17 @@ function computeDriver(overrides = {}) {
   };
 }
 
+function startupDiagnostic(stderr) {
+  const diagnostic = stderr
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .find((line) => line.event === "startup-error");
+  assert.ok(diagnostic, stderr);
+  return diagnostic;
+}
+
 function revision(overrides = {}) {
   return {
     id: "rev_00000000-0000-4000-8000-000000000001",
@@ -213,7 +224,7 @@ test("workspace-files server startup validates API-only key configuration before
   });
 
   assert.equal(server.status, 1);
-  assert.match(server.stderr, /gateway API key/i);
+  assert.equal(startupDiagnostic(server.stderr).code, "GATEWAY_API_KEY_UNAVAILABLE");
   assert.doesNotMatch(server.stderr, /ECONNREFUSED|PostgreSQL|database/i);
 });
 
@@ -238,6 +249,6 @@ test("workspace-files server startup rejects the removed endpoint-map environmen
   });
 
   assert.equal(server.status, 1);
-  assert.match(server.stderr, /OCC_WORKSPACE_FILES_CONFIG_PATH|removed/i);
+  assert.equal(startupDiagnostic(server.stderr).code, "WORKSPACE_FILES_CONFIG_REMOVED");
   assert.doesNotMatch(server.stderr, /ECONNREFUSED|PostgreSQL|database/i);
 });

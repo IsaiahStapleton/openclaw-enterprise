@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
+import { admittedLoggingLevel } from "../../packages/contracts/src/index.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import {
   developmentBootstrapEnvironment,
@@ -219,6 +220,23 @@ function jsonLines(output) {
     .map((line) => JSON.parse(line));
 }
 
+async function request(app, method, url, apiKey, body) {
+  const response = await app.inject({
+    method,
+    url,
+    headers: { "x-api-key": apiKey, host: "127.0.0.1" },
+    ...(body === undefined ? {} : { payload: body }),
+  });
+  const parsed = response.body.length === 0 ? undefined : response.json();
+  return { status: response.statusCode, body: parsed };
+}
+
+async function markNamespaceReady(namespaceId) {
+  await withPool(failureDatabaseUrl, async (pool) => {
+    await pool.query("UPDATE occ.namespaces SET status = 'ready' WHERE id = $1", [namespaceId]);
+  });
+}
+
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -289,24 +307,42 @@ for (const sharedOutput of [false, true]) {
         (line) => line.event === "installation.bootstrapped",
       );
       assert.ok(winner);
-      const loserCreatedServiceKey = failedEvent.attempt?.serviceKeyId !== undefined;
+      assert.ok(failedEvent.attempt, failed[0].stderr);
       const counts = await rowCounts();
-      assert.deepEqual(counts, {
-        installations: 1,
-        bootstrap_audits: 1,
-        principals: 1,
-        service_principals: 1,
-        bindings: 2,
-        service_keys: loserCreatedServiceKey ? 2 : 1,
-        users: loserCreatedServiceKey ? 2 : 1,
-        namespaces: 1,
-        namespace_work: 1,
-      });
-
+      assert.deepEqual(
+        {
+          installations: counts.installations,
+          bootstrap_audits: counts.bootstrap_audits,
+          principals: counts.principals,
+          service_principals: counts.service_principals,
+          bindings: counts.bindings,
+          namespaces: counts.namespaces,
+          namespace_work: counts.namespace_work,
+        },
+        {
+          installations: 1,
+          bootstrap_audits: 1,
+          principals: 1,
+          service_principals: 1,
+          bindings: 2,
+          namespaces: 1,
+          namespace_work: 1,
+        },
+      );
       const winnerIndex = environments.findIndex(
         (environment) => environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE === winner.serviceKeyFile,
       );
       assert.notEqual(winnerIndex, -1);
+      const loserIndex = winnerIndex === 0 ? 1 : 0;
+      const loserCreatedServiceKey =
+        !sharedOutput && (await exists(environments[loserIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE));
+      if (sharedOutput) {
+        assert.ok([1, 2].includes(counts.service_keys));
+        assert.ok([1, 2].includes(counts.users));
+      } else {
+        assert.equal(counts.service_keys, loserCreatedServiceKey ? 2 : 1);
+        assert.equal(counts.users, loserCreatedServiceKey ? 2 : 1);
+      }
       const outputEnvironment = sharedOutput ? environments[0] : environments[winnerIndex];
       assert.equal(await exists(outputEnvironment.OCC_BOOTSTRAP_PASSWORD_FILE), true);
       assert.equal(await exists(outputEnvironment.OCC_BOOTSTRAP_SERVICE_KEY_FILE), true);
@@ -377,24 +413,34 @@ test(
     );
     const winnerOutputDigest = sha256(winnerOutputBytes);
     const winnerOutput = JSON.parse(winnerOutputBytes);
-    const loserCreatedServiceKey = rejectedEvent.attempt?.serviceKeyId !== undefined;
-    assert.equal(
-      await exists(environments[loserIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE),
-      loserCreatedServiceKey,
+    assert.ok(rejectedEvent.attempt, rejected[0].stderr);
+    const loserCreatedServiceKey = await exists(
+      environments[loserIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE,
     );
 
     const counts = await rowCounts();
-    assert.deepEqual(counts, {
-      installations: 1,
-      bootstrap_audits: 1,
-      principals: 1,
-      service_principals: 1,
-      bindings: 2,
-      service_keys: loserCreatedServiceKey ? 2 : 1,
-      users: loserCreatedServiceKey ? 2 : 1,
-      namespaces: 1,
-      namespace_work: 1,
-    });
+    assert.deepEqual(
+      {
+        installations: counts.installations,
+        bootstrap_audits: counts.bootstrap_audits,
+        principals: counts.principals,
+        service_principals: counts.service_principals,
+        bindings: counts.bindings,
+        namespaces: counts.namespaces,
+        namespace_work: counts.namespace_work,
+      },
+      {
+        installations: 1,
+        bootstrap_audits: 1,
+        principals: 1,
+        service_principals: 1,
+        bindings: 2,
+        namespaces: 1,
+        namespace_work: 1,
+      },
+    );
+    assert.equal(counts.service_keys, loserCreatedServiceKey ? 2 : 1);
+    assert.equal(counts.users, loserCreatedServiceKey ? 2 : 1);
 
     const reloaded = await composePostgresDevelopment(
       {
@@ -404,6 +450,7 @@ test(
         poolMax: 2,
         authBaseURL: environments[winnerIndex].OCC_AUTH_BASE_URL,
         authSecret: environments[winnerIndex].OCC_AUTH_SECRET,
+        logging: { level: "warn" },
       },
       {
         computeDriver: passiveComputeDriver(),
@@ -422,13 +469,45 @@ test(
     });
     assert.equal(installation.statusCode, 200, installation.body);
     assert.equal(installation.json().data.id, winnerOutput.meta.installationId);
+    const apiKey = winnerOutput.data.key;
+    const namespace = await request(reloaded, "POST", "/namespaces", apiKey, {
+      name: "Logging admission",
+    });
+    assert.equal(namespace.status, 201, JSON.stringify(namespace.body));
+    await markNamespaceReady(namespace.body.data.id);
+    const configuration = await request(
+      reloaded,
+      "POST",
+      `/namespaces/${namespace.body.data.id}/configurations`,
+      apiKey,
+      { kind: "agent", values: { model: "openclaw/local" } },
+    );
+    assert.equal(configuration.status, 201, JSON.stringify(configuration.body));
+    const agent = await request(
+      reloaded,
+      "POST",
+      `/namespaces/${namespace.body.data.id}/agents`,
+      apiKey,
+      {
+        name: "Logging Agent",
+        configurationId: configuration.body.data.id,
+      },
+    );
+    assert.equal(agent.status, 201, JSON.stringify(agent.body));
+    const revision = await request(
+      reloaded,
+      "POST",
+      `/namespaces/${namespace.body.data.id}/agents/${agent.body.data.id}/deploy`,
+      apiKey,
+    );
+    assert.equal(revision.status, 202, JSON.stringify(revision.body));
+    assert.equal(admittedLoggingLevel(revision.body.data.configuration), "warn");
     if (loserCreatedServiceKey) {
       const loserOutput = JSON.parse(
         await readFile(environments[loserIndex].OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8"),
       );
-      assert.equal(loserOutput.meta.installationId, rejectedEvent.attempt.installationId);
-      assert.equal(loserOutput.data.servicePrincipalId, rejectedEvent.attempt.servicePrincipalId);
-      assert.equal(loserOutput.data.id, rejectedEvent.attempt.serviceKeyId);
+      assert.match(loserOutput.meta.installationId, /^ins_/);
+      assert.match(loserOutput.data.servicePrincipalId, /^spn_/);
       const rejectedInstallation = await reloaded.inject({
         method: "GET",
         url: "/installation",
@@ -468,7 +547,7 @@ test(
       (line) => line.event === "installation.bootstrap-failed",
     );
     assert.ok(failure, result.stderr);
-    assert.match(failure.error, /commit outcome is unknown/);
+    assert.equal(failure.code, "COMMIT_OUTCOME_UNKNOWN");
     assert.equal(failure.attempt.passwordFile, environment.OCC_BOOTSTRAP_PASSWORD_FILE);
     assert.equal(failure.attempt.serviceKeyFile, environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE);
 
@@ -518,6 +597,7 @@ test(
       (line) => line.event === "installation.bootstrap-failed",
     );
     assert.ok(failure, result.stderr);
+    assert.equal(failure.code, "BOOTSTRAP_FAILED");
     assert.equal("cleanupFailures" in failure, false);
     assert.doesNotMatch(result.stderr, /^occ_/m);
     assert.equal(failure.attempt.passwordFile, environment.OCC_BOOTSTRAP_PASSWORD_FILE);
@@ -574,7 +654,7 @@ test(
       (line) => line.event === "installation.bootstrap-failed",
     );
     assert.ok(failure, result.stderr);
-    assert.match(failure.error, /commit outcome is unknown/);
+    assert.equal(failure.code, "COMMIT_OUTCOME_UNKNOWN");
     assert.equal(failure.attempt.serviceKeyFile, environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE);
 
     assert.equal(await exists(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE), true);

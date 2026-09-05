@@ -55,12 +55,38 @@ is unchanged; the revision freezes the admitted document, source Configuration
 identity and generation, approved Harness identity/version, execution mode,
 Compute identity, and any selected sandbox or account binding.
 
+Admission also stamps the platform-owned native logging settings after any
+SandboxDriver transformation and before validation. The frozen AgentRevision
+contains `logging.level`, matching `logging.consoleLevel`, JSON console style,
+tool-sensitive redaction, and disabled native OTLP log export. Later edits to
+the source Configuration or to OCC startup `logging.level` cannot mutate that
+snapshot; deploy the Agent again to create a new revision with a changed runtime
+level.
+
 Later edits affect a future explicit deployment. The worker checks the admitted
 combination and exact ownership before runtime effects. Unsupported combinations,
 revoked authority, or a missing required Driver fail closed. See
 [Agents](agents.md), [Configuration](configuration.md), and
 [controller reconciliation](controller.md) for their respective ownership and
 queue guarantees.
+
+## Runtime logging
+
+For level changes, collection, and backend verification, use the
+[observability guide](../guides/observability.md).
+
+Compute renders logging from the admitted revision. Gateway containers receive
+native JSON console logging at the admitted level and keep their own OTLP log
+export disabled. Dedicated Codex app-servers receive `LOG_FORMAT=json`,
+`RUST_LOG=<level>,codex_otel=off`, and host-owned `codex` configuration that
+sets `otel.exporter="none"` and `otel.log_user_prompt=false`. Collector-based
+export reads Codex stderr only; stdout remains protocol output.
+
+Worker log attributes such as `work.id`, `work.operation`, `work.attempt`, and
+`work.outcome` describe controller reconciliation. They do not define runtime
+resource identity. The Collector derives `service.name`, version, container,
+Namespace, Agent, and revision identity from protected container labels or Pod
+metadata instead of trusting payload fields.
 
 ## Isolation and activation
 

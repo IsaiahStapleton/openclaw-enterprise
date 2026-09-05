@@ -3,6 +3,9 @@ import test from "node:test";
 import {
   CONFIGURATION_KINDS,
   DRIVER_CAPABILITIES,
+  LOGGING_LEVELS,
+  admitLoggingConfiguration,
+  admittedLoggingLevel,
   HARNESS_EXECUTION_MODES,
   RESOURCE_KINDS,
   SANDBOX_FACETS,
@@ -10,6 +13,7 @@ import {
   isDriverCapability,
   isResourceKind,
   isSandboxFacet,
+  normalizeLoggingLevel,
 } from "../../packages/contracts/src/index.ts";
 
 test("the Driver contract exposes IAM, Compute, Configuration, ServiceAccount, Secret, and Sandbox capabilities", () => {
@@ -46,6 +50,89 @@ test("Sandbox facets expose only the initial containment surfaces", () => {
   for (const facet of SANDBOX_FACETS) assert.equal(isSandboxFacet(facet), true);
   for (const unsupported of ["exec", "tool", "workspace", "network", "", undefined]) {
     assert.equal(isSandboxFacet(unsupported), false);
+  }
+});
+
+test("logging helpers admit one platform-owned native JSON policy", () => {
+  assert.deepEqual(LOGGING_LEVELS, ["debug", "info", "warn", "error"]);
+  assert.equal(normalizeLoggingLevel(undefined), "info");
+  assert.equal(normalizeLoggingLevel("debug"), "debug");
+  for (const value of ["trace", "INFO", "", null]) {
+    assert.throws(() => normalizeLoggingLevel(value), /debug, info, warn, or error/);
+  }
+
+  const draft = {
+    logging: {
+      level: "debug",
+      consoleLevel: "error",
+      consoleStyle: "pretty",
+      redactSensitive: "off",
+      keep: true,
+    },
+    diagnostics: { otel: { logs: true, traces: true }, retain: "diagnostics" },
+    feature: "preserved",
+  };
+  const admitted = admitLoggingConfiguration(draft, "warn");
+  assert.deepEqual(admitted, {
+    logging: {
+      level: "warn",
+      consoleLevel: "warn",
+      consoleStyle: "json",
+      redactSensitive: "tools",
+      keep: true,
+    },
+    diagnostics: { otel: { logs: false, traces: true }, retain: "diagnostics" },
+    feature: "preserved",
+  });
+  assert.deepEqual(draft.logging, {
+    level: "debug",
+    consoleLevel: "error",
+    consoleStyle: "pretty",
+    redactSensitive: "off",
+    keep: true,
+  });
+  assert.equal(admittedLoggingLevel(admitted), "warn");
+
+  for (const configuration of [
+    {},
+    {
+      logging: {
+        level: "info",
+        consoleLevel: "debug",
+        consoleStyle: "json",
+        redactSensitive: "tools",
+      },
+      diagnostics: { otel: { logs: false } },
+    },
+    {
+      logging: {
+        level: "info",
+        consoleLevel: "info",
+        consoleStyle: "pretty",
+        redactSensitive: "tools",
+      },
+      diagnostics: { otel: { logs: false } },
+    },
+    {
+      logging: {
+        level: "info",
+        consoleLevel: "info",
+        consoleStyle: "json",
+        redactSensitive: "tools",
+      },
+      diagnostics: { otel: { logs: true } },
+    },
+    {
+      logging: {
+        level: "info",
+        consoleLevel: "info",
+        consoleStyle: "json",
+        redactSensitive: "off",
+      },
+      diagnostics: { otel: { logs: false } },
+    },
+  ]) {
+    assert.throws(() => admittedLoggingLevel(configuration), /admitted|Admitted/);
   }
 });
 

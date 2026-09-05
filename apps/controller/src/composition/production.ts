@@ -13,6 +13,7 @@ import type {
   ServiceAccountDriverFactory,
 } from "./installation-config.ts";
 import { providerSummariesFromDefinitions } from "./installation-config.ts";
+import type { OccLogger } from "../logging.ts";
 import { resolveApprovedProductionHarness } from "./production-harness.ts";
 import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import { createWorkspaceFilesAccess, validateWorkspaceFilesApiKeyPath } from "./workspace-files.ts";
@@ -25,6 +26,7 @@ export interface ProductionConfig {
   readonly authBaseURL: string;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
+  readonly logger?: OccLogger;
   readonly serviceAccountDriverFactory?: ServiceAccountDriverFactory;
   readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
   readonly gatewayApiKeyPath?: string;
@@ -116,6 +118,7 @@ export async function composeProduction(config: ProductionConfig) {
       state,
       recordOperations: true,
       providers: installation.provider,
+      loggingLevel: config.drivers.installation.logging.level,
     });
     controller.registerDriver(iamDriver);
     if (controller.selectDriver("iam", driverId) !== iamDriver)
@@ -159,6 +162,7 @@ export async function composeProduction(config: ProductionConfig) {
       auditSink: state.auditSink,
       providerSummaries: providerSummariesFromDefinitions(installation.provider),
       auth,
+      ...(config.logger === undefined ? {} : { logger: config.logger }),
       provisionAuthAccount,
       development: {
         enabled: false,

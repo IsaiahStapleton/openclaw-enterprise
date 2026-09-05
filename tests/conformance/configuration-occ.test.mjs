@@ -6,6 +6,7 @@ import {
   resolveApprovedProductionHarness,
 } from "../../apps/controller/src/composition/production-harness.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import {
   AuthorizationDeniedError,
   DependencyUnavailableError,
@@ -238,7 +239,7 @@ test("Agent deployment snapshots its selected Configuration and Compute identity
   assert.equal(revision.configurationId, configuration.id);
   assert.equal(revision.configurationKind, "agent");
   assert.equal(revision.configurationGeneration, configuration.generation);
-  assert.deepEqual(revision.configuration, configuration.values);
+  assert.deepEqual(revision.configuration, admitLoggingConfiguration(configuration.values, "info"));
   assert.equal(Object.isFrozen(configuration.values.models.providers.openai.apiKey), true);
   assert.equal(Object.isFrozen(revision.configuration.plugins.entries.example.regions), true);
   assert.equal(agent.executionMode, "embedded");
@@ -512,8 +513,9 @@ for (const scope of ["primary", "default-fallback", "entry-fallback", "provider-
       resolveApprovedProductionHarness,
     );
 
+    assert.deepEqual(configuration.values, values);
     // Admission freezes the original fallback order for the runtime to execute.
-    assert.deepEqual(admitted.configuration, values);
+    assert.deepEqual(admitted.configuration, admitLoggingConfiguration(values, "info"));
     assert.deepEqual(admitted.harness, { id: "codex", version: "1.0.0", mode: "dedicated" });
     assert.equal(admitted.compute.id, "configuration-occ-compute");
   });

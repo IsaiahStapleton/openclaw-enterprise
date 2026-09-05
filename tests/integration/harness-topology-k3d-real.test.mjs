@@ -26,6 +26,11 @@ import {
   createEnvoyWorkspaceGatewayPlan,
   requestNativeGatewayModelTurn,
 } from "../helpers/envoy-workspace-gateway.mjs";
+import {
+  assertKubernetesRuntimeOtelSettings,
+  createOtelLogObservation,
+  OTEL_RESOURCE,
+} from "../helpers/logging-otel-observation.mjs";
 
 const kubeconfigPath = process.env.OCC_TEST_KUBERNETES_KUBECONFIG;
 const kubernetesContext = process.env.OCC_TEST_KUBERNETES_CONTEXT;
@@ -50,6 +55,12 @@ const requiresProductionCluster = {
   skip: selected
     ? false
     : "Set an explicit k3d kubeconfig/context, immutable real OpenClaw/Codex runtime image references, a dedicated openclaw_k8s_* PostgreSQL database, and OPENAI_API_KEY for production model-turn proof.",
+};
+const requiresProductionClusterOtelLogs = {
+  skip:
+    selected && process.env.OCC_TEST_OTEL_LOGS === "1"
+      ? false
+      : "Set OCC_TEST_OTEL_LOGS=1 plus the explicit k3d kubeconfig/context, immutable real OpenClaw/Codex runtime image references, dedicated openclaw_k8s_* PostgreSQL database, OPENAI_API_KEY, and an OTLP observation source for production runtime log proof.",
 };
 const requiresGatewayRouting = {
   skip:
@@ -802,6 +813,7 @@ async function provisionAgentChannelSecret(directory, namespace, agentId, slack)
 }
 
 async function arrangeProductionTopology(context, mode, slack, options = {}) {
+  const loggingObservationStartedAt = Date.now();
   const modelCredential = options.modelCredential ?? "service-account";
   assert.ok(
     modelCredential === "service-account" ||
@@ -1601,6 +1613,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     agentServiceName,
     gatewayPod,
     harnessPod,
+    loggingObservationStartedAt,
     gatewayToken,
     directory,
     gatewayUrl: forwarding?.url,
@@ -1728,6 +1741,45 @@ async function assertActualModelTurn(topology) {
     );
     throw new Error(`${error.message}\n${logs.join("\n")}`, { cause: error });
   }
+}
+
+async function assertKubernetesOtelLogs(topology) {
+  const observation = createOtelLogObservation(undefined, {
+    description: `k3d ${topology.mode} runtime OTel logs`,
+    startedAt: topology.loggingObservationStartedAt,
+  });
+  assertKubernetesRuntimeOtelSettings(observation, [topology.gatewayPod, topology.harnessPod]);
+  await observation.assertRecords({
+    forbidden: [process.env.OPENAI_API_KEY, topology.gatewayToken],
+    expected: [
+      {
+        label: `${topology.mode} gateway operational record`,
+        serviceName: "openclaw-gateway",
+        resource: {
+          [OTEL_RESOURCE.namespaceId]: topology.agent.namespaceId,
+          [OTEL_RESOURCE.agentId]: topology.agent.id,
+          [OTEL_RESOURCE.revisionId]: topology.revision.id,
+        },
+        attributes: { "event.name": "gateway.operational" },
+        body: "gateway.operational",
+      },
+      ...(topology.harnessPod === undefined
+        ? []
+        : [
+            {
+              label: "dedicated Codex app-server operational record",
+              serviceName: "codex-app-server",
+              resource: {
+                [OTEL_RESOURCE.namespaceId]: topology.agent.namespaceId,
+                [OTEL_RESOURCE.agentId]: topology.agent.id,
+                [OTEL_RESOURCE.revisionId]: topology.revision.id,
+              },
+              attributes: { "event.name": "codex.operational" },
+              body: "codex.operational",
+            },
+          ]),
+    ],
+  });
 }
 
 function sharedWorkspaceClaimName(agentId) {
@@ -3614,6 +3666,28 @@ test(
 );
 
 test(
+  "production embedded runtime emits actual OTLP logs during a real model turn",
+  { ...requiresProductionClusterOtelLogs, timeout: 600_000 },
+  async (context) => {
+    const topology = await arrangeProductionTopology(context, "embedded");
+    assert.equal(topology.harnessPod, undefined, "embedded execution must not create a Codex Pod");
+    await assertActualModelTurn(topology);
+    await assertKubernetesOtelLogs(topology);
+  },
+);
+
+test(
+  "production dedicated runtime emits actual OTLP logs during a real model turn",
+  { ...requiresProductionClusterOtelLogs, timeout: 600_000 },
+  async (context) => {
+    const topology = await arrangeProductionTopology(context, "dedicated");
+    assert.ok(topology.harnessPod, "dedicated production must start a real separate Codex Pod");
+    await assertActualModelTurn(topology);
+    await assertKubernetesOtelLogs(topology);
+  },
+);
+
+test(
   "production dedicated Codex preserves gateway SQLite conversations and retained images across Pod replacement",
   { ...requiresProductionCluster, timeout: 1_200_000 },
   async (context) => {
@@ -3730,6 +3804,7 @@ test(
     ]);
     assert.deepEqual(environment, {
       OPENAI_API_KEY: true,
+      SECRET_ROTATION_PROBE: false,
       APP_SERVER_TOKEN: false,
       APP_SERVER_URL: false,
       OPENCLAW_GATEWAY_TOKEN: true,

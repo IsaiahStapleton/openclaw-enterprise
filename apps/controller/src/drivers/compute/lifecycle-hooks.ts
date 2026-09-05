@@ -22,7 +22,7 @@ interface SelectedDriver {
 const ENVIRONMENT_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
 const OPAQUE_PLACEHOLDER = /^opaque-[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const RESERVED_ENVIRONMENT_NAME =
-  /^(?:HOME|PATH|TMPDIR|CODEX_HOME|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|XDG_.*|OPENCLAW_.*|LD_.*|DYLD_.*)$/;
+  /^(?:HOME|PATH|TMPDIR|CODEX_HOME|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|LOG_FORMAT|RUST_LOG|XDG_.*|OPENCLAW_.*|OTEL_.*|LD_.*|DYLD_.*)$/;
 const FALLBACK_SIGNAL = new AbortController().signal;
 
 function validateLaunch({ environment }: WorkloadLaunchContext): void {

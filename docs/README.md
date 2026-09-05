@@ -7,6 +7,7 @@ OpenClaw Enterprise is the open platform for managing agents.
 - [Concepts](guides/concepts.md): understand tenancy, Agents, execution, configuration, and access.
 - [Quickstart](guides/quickstart.md): start locally, sign in, and make an authenticated request.
 - [Deploy](guides/deploy.md): configure Docker Compose or Kubernetes, verify your deployment, run the development end-to-end TUI proof, and troubleshoot startup.
+- [Observability](guides/observability.md): configure operational log export, Collector metrics, and delivery checks.
 - [Testing](testing.md): choose test suites, prepare credentials and infrastructure, and interpret results.
 
 ## Architecture
@@ -36,7 +37,7 @@ OpenClaw Enterprise is the open platform for managing agents.
   [Controller reconciliation](reference/controller.md): runtime topology, deployment,
   and revision activation.
 - [Security controls](reference/security.md), [settings](reference/settings.md),
-  and [HTTP API](reference/api.md): access controls, deployment configuration, and request schemas.
+  and [HTTP API](reference/api.md): access controls, deployment configuration, operational logging, and request schemas.
 - [Drivers](reference/README.md#drivers): select and configure compute, configuration,
   identity, and Secret implementations.
 
@@ -47,8 +48,9 @@ OpenClaw Enterprise is the open platform for managing agents.
   [production TUI attachment](flows/production-tui.md), and
   [shared platform startup](flows/platform-startup.md).
 - [Platform console requests](flows/platform-console.md).
-- [Controller worker](flows/controller-worker.md) and
-  [Harness execution and shared storage](flows/harness-execution-topology.md).
+- [Controller worker](flows/controller-worker.md),
+  [Harness execution and shared storage](flows/harness-execution-topology.md), and
+  [common operational logging](flows/common-logging.md).
 - [Configuration and Agent revision](flows/configuration-driver.md),
   [Secret storage and gateway delivery](flows/secret-storage-and-delivery.md),
   [Driver loading](flows/driver-plugin-loading.md), and
