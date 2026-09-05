@@ -581,7 +581,7 @@ default remains `gpt-4.1`.
 | `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`    | Optional shared image fallback for both gateway and Agent when it contains both real runtimes.         |
 | `OCC_TEST_KUBERNETES_CODEX_IMAGE`      | Optional legacy fallback for the Agent image when the explicit Agent image is absent.                  |
 | `OCC_TEST_KUBERNETES_OPENCLAW_VERSION` | Optional exact OpenClaw version expectation for the selected real gateway image.                       |
-| `OCC_TEST_KUBERNETES_CODEX_VERSION`    | Optional Codex image version expectation; defaults to `0.147.0`.                                       |
+| `OCC_TEST_KUBERNETES_CODEX_VERSION`    | Optional Codex image version expectation; defaults to `0.152.1`.                                       |
 | `OCC_TEST_DATABASE_URL`                | Migrated disposable loopback database named `openclaw_k8s_*`; the ordinary development database fails. |
 | `OPENAI_API_KEY`                       | Existing authorized provider credential for real embedded and dedicated model turns.                   |
 | `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-4.1`.                                                      |

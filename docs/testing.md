@@ -468,7 +468,7 @@ itself. The independent Slack case is expected to skip in this run.
 This suite uses the real production API and worker in the Node test process.
 It does not install the controller with Helm. Missing selected-suite
 prerequisites fail; an unselected suite skips. Default Codex version expectation
-is `0.147.0`; see [runtime settings](reference/settings.md#kubernetes-real-runtime-test-environment)
+is `0.152.1`; see [runtime settings](reference/settings.md#kubernetes-real-runtime-test-environment)
 for version assertions and alternate image variables.
 
 ## Slack

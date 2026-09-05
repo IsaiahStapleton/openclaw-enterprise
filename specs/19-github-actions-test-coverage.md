@@ -14,9 +14,9 @@ The user removed the workflow prohibition from [AGENTS.md](../AGENTS.md) and aut
 
 ## Scope
 
-**Included:** PR-safe integration, protected provider-backed execution, current conformance/browser coverage, skip accounting, disposable setup/cleanup, bounded failure evidence, and repairs needed to exercise supported tests. The complete inventory remains the target; partial delivery must name its remaining lanes.
+**Included:** PR-safe integration, protected provider-backed execution, current conformance/browser coverage, skip accounting, disposable setup/cleanup, bounded failure evidence, and repairs needed to exercise supported tests. The September 4 continuation also authorizes runtime/API compatibility repairs for routing identity scopes, dedicated Codex sandbox execution, outgoing image visibility, and OpenShell packet filtering, while preserving authorization and isolation. The complete inventory remains the target; partial delivery must name its remaining lanes.
 
-**Excluded:** production/customer resources; live credentialed execution without the approved dedicated resources and budget below; product API/auth changes; Vitest migration; wholesale upstream CI import; native-platform matrices and timing/sharding infrastructure without measured need.
+**Excluded:** production/customer resources; live credentialed execution without the approved dedicated resources and budget below; unrelated product API/auth changes; Vitest migration; wholesale upstream CI import; native-platform matrices and timing/sharding infrastructure without measured need.
 
 ## Contract
 
@@ -129,7 +129,7 @@ The user approved branch/PR creation, browser provisioning, bounded live model/s
 
 - Administrators: six protected environments are configured with main-only deployment policies, a required reviewer, and prevention of self-review. Protected workflow execution still requires the exact main revision and its environment review.
 - Test owners: supply the dedicated ChatGPT workspace/admin credential and Slack app/bot/sender/channel/proxy inputs; approval alone does not supply missing credentials.
-- Runtime owners: resolve the routing auth contract, dedicated Codex user-namespace requirement, embedded outgoing-image visibility, and OpenShell packet-filter compatibility. Routing repair crosses the excluded product API/auth scope; that expansion remains an open decision. Preserve the existing authorization, sandbox and artifact-visibility requirements.
+- Runtime owners: resolve the routing auth contract, dedicated Codex user-namespace requirement, embedded outgoing-image visibility, and OpenShell packet-filter compatibility. The user approved this runtime/API scope expansion in the continuation. Prefer maintained compatible releases and supported runtime configuration; verify each repair against its existing live contract. Preserve the existing authorization, sandbox and artifact-visibility requirements.
 - Verification: after compatible runtime changes and dedicated test inputs are available, complete the remaining live proofs and execute the protected workflow at the reviewed main SHA.
 
 ## Manual Notes
@@ -137,6 +137,8 @@ The user approved branch/PR creation, browser provisioning, bounded live model/s
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-04 20:04: Recorded approval to repair runtime/API compatibility while preserving authorization, sandbox and media-visibility requirements. (01a06dd0-9fff-7e90-aae3-4e7099a6d154 - f7a85e72d70c46d05022aa0877665514d2cfd84d)
 
 - 2026-09-04 19:44: Recorded green PR CI, TUI and OTLP proof, verified OpenShell admission/cleanup repair, and source-backed runtime compatibility blockers. (01a06dd0-9fff-7e90-aae3-4e7099a6d154 - 82ce1569d51b092d2d60d80aa7b0baf758600ae1)
 

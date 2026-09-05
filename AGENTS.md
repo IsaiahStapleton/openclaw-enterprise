@@ -234,7 +234,7 @@ the k3s container with
 otherwise Kubernetes attempts a remote pull and reports `ImagePullBackOff`.
 Optional
 `OCC_TEST_KUBERNETES_OPENCLAW_VERSION` and `OCC_TEST_KUBERNETES_CODEX_VERSION`
-assert the actual image versions; Codex defaults to `0.147.0`. The ordinary
+assert the actual image versions; Codex defaults to `0.152.1`. The ordinary
 real-runtime suite has four cases: one OCC gateway administration case,
 `dedicated` Codex, `embedded` OpenClaw with a persisted provider credential, and
 `embedded` OpenClaw with the Secret API. The gateway administration case also
