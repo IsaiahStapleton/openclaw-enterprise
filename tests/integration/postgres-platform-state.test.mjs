@@ -464,6 +464,21 @@ async function pollUntil(description, operation, { worker, timeoutMs = 15_000 } 
   );
 }
 
+async function waitForControllerWorkToQuiesce(pool, worker, description) {
+  await pollUntil(
+    description,
+    async () => {
+      const pending = await pool.query(
+        `SELECT count(*)::integer AS count
+         FROM occ.controller_work
+         WHERE state IN ('queued', 'claimed')`,
+      );
+      return pending.rows[0].count === 0 ? pending.rows[0] : undefined;
+    },
+    { worker, timeoutMs: 60_000 },
+  );
+}
+
 function parseJsonLines(output) {
   return output
     .trim()
@@ -686,6 +701,14 @@ test(
     assert.equal(persisted.rows[0].queued_operations, 1);
     assert.equal(persisted.rows[0].configurations, 1);
     assert.equal(persisted.rows[0].agent_service_principals, 1);
+
+    // The independent worker records durable reconcile audit rows as it completes
+    // queued work, so drain real work before measuring the unauthenticated request.
+    await waitForControllerWorkToQuiesce(
+      pool,
+      worker,
+      "independent worker audit-producing controller work to quiesce",
+    );
 
     const auditBeforeUnauthenticatedRequest = await pool.query(
       "SELECT count(*)::integer AS count FROM occ.audit_events",
