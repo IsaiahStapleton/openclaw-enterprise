@@ -309,6 +309,37 @@ async function assertWorkerCompleted(options) {
   }
 }
 
+function instrumentCodexLoginFailure(command, diagnosticDirectory) {
+  assert.equal(command[0], "node");
+  assert.equal(command[1], "-e");
+  assert.equal(typeof command[2], "string");
+  const marker =
+    'if (login.status !== 0) throw new Error("Codex model authentication initialization failed.");';
+  const segments = command[2].split(marker);
+  assert.equal(
+    segments.length,
+    2,
+    "OpenShell diagnostic marker must match the Codex login failure throw exactly once.",
+  );
+  const diagnosticPath = `${diagnosticDirectory}/codex-login-failure.json`;
+  const diagnostic = `if (login.status !== 0) {
+  try {
+    let stderr = login.stderr ?? "";
+    for (const value of [process.env.OPENAI_API_KEY, process.env.CODEX_ACCESS_TOKEN, process.env.APP_SERVER_TOKEN]) {
+      if (typeof value === "string" && value.length > 0) stderr = stderr.split(value).join("[redacted]");
+    }
+    require("node:fs").writeFileSync(${JSON.stringify(diagnosticPath)}, JSON.stringify({
+      status: login.status,
+      signal: login.signal,
+      errorCode: login.error?.code ?? null,
+      stderr: stderr.slice(0, 8192),
+    }) + "\\n", { mode: 0o600 });
+  } catch {}
+  throw new Error("Codex model authentication initialization failed.");
+}`;
+  return [command[0], command[1], `${segments[0]}${diagnostic}${segments[1]}`, ...command.slice(3)];
+}
+
 // TODO(OpenShell secretKeyRef support): remove credential Jobs, PVC-backed secret files, the
 // startup wrapper, and cleanup once the upstream gateway accepts Kubernetes Secret references.
 function credentialJobName(revisionId) {
@@ -449,6 +480,10 @@ function bridgeRequirements(context) {
   assert.ok(claimName, "the credential bridge requires the Agent shared PVC claim.");
   const subPath = `.openclaw/integration-credentials/${hash(context.revision.id, 32)}`;
   const diagnosticDirectory = `/sandbox/enterprise/.openclaw/openshell-diagnostics/${hash(context.revision.id, 32)}`;
+  const instrumentedCommand = instrumentCodexLoginFailure(
+    context.requirements.command,
+    diagnosticDirectory,
+  );
   const command = [
     "sh",
     "-ceu",
@@ -462,7 +497,7 @@ function bridgeRequirements(context) {
       'exec "$@"',
     ].join("\n"),
     "--",
-    ...context.requirements.command,
+    ...instrumentedCommand,
   ];
   return {
     ...context.requirements,
