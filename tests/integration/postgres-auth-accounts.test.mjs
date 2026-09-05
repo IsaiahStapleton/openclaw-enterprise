@@ -201,20 +201,20 @@ test(
     });
     assert.equal(authorized.statusCode, 200, authorized.body);
     assert.equal(authorized.json().data.id, installation.id);
-    const queuedWork = await observerPool.query(
+    const defaultNamespace = await observerPool.query(
       `SELECT namespace.id, namespace.name, namespace.status, work.idempotency_key
        FROM occ.namespaces AS namespace
        JOIN occ.controller_work AS work ON work.namespace_id = namespace.id
        WHERE namespace.name = $1`,
       [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
     );
-    assert.equal(queuedWork.rowCount, 1);
-    assert.match(queuedWork.rows[0].id, /^ns_/);
-    assert.equal(queuedWork.rows[0].name, BOOTSTRAP_DEFAULT_NAMESPACE_NAME);
-    assert.equal(queuedWork.rows[0].status, "provisioning");
+    assert.equal(defaultNamespace.rows.length, 1);
+    assert.match(defaultNamespace.rows[0].id, /^ns_/);
+    assert.equal(defaultNamespace.rows[0].name, BOOTSTRAP_DEFAULT_NAMESPACE_NAME);
+    assert.equal(defaultNamespace.rows[0].status, "provisioning");
     assert.equal(
-      queuedWork.rows[0].idempotency_key,
-      `namespace:${queuedWork.rows[0].id}:reconcile:ready`,
+      defaultNamespace.rows[0].idempotency_key,
+      `namespace:${defaultNamespace.rows[0].id}:reconcile:ready`,
     );
 
     const session = await signInWithEmailPassword({

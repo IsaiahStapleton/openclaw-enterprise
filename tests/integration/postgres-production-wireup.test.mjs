@@ -70,7 +70,7 @@ function createPassiveComputeDriver() {
 function parseLogEvents(stderr) {
   return stderr
     .trim()
-    .split("\n")
+    .split(/\r?\n/)
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line));
 }
@@ -255,18 +255,26 @@ test(
       const bootstrapFailure = parseLogEvents(administratorMismatch.stderr).find(
         (line) => line.event === "installation.bootstrap-failed",
       );
+      assert.ok(bootstrapFailure, administratorMismatch.stderr);
       assert.deepEqual(
         {
-          service: bootstrapFailure?.service,
-          event: bootstrapFailure?.event,
-          code: bootstrapFailure?.code,
+          severity: bootstrapFailure.severity,
+          service: bootstrapFailure.service,
+          event: bootstrapFailure.event,
+          code: bootstrapFailure.code,
         },
         {
+          severity: "ERROR",
           service: "occ-bootstrap",
           event: "installation.bootstrap-failed",
           code: "BOOTSTRAP_FAILED",
         },
       );
+
+      const rejectedAdministrator = await pool.query('SELECT id FROM occ."user" WHERE email = $1', [
+        "different-admin@example.test",
+      ]);
+      assert.equal(rejectedAdministrator.rowCount, 0);
 
       // Verify persisted Better Auth ownership, the real IAM Principal, and bootstrap audit evidence.
       const installation = await pool.query(

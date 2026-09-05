@@ -549,13 +549,16 @@ test(
     const startupFailure = parseJsonLines(prematureWorker.output()).find(
       (line) => line.event === "worker.startup-error",
     );
+    assert.ok(startupFailure, prematureWorker.output());
     assert.deepEqual(
       {
-        service: startupFailure?.service,
-        event: startupFailure?.event,
-        code: startupFailure?.code,
+        severity: startupFailure.severity,
+        service: startupFailure.service,
+        event: startupFailure.event,
+        code: startupFailure.code,
       },
       {
+        severity: "ERROR",
         service: "occ-worker",
         event: "worker.startup-error",
         code: "WORKER_STARTUP_FAILED",
