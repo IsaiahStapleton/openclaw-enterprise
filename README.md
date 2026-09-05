@@ -65,6 +65,7 @@ see [Testing](docs/testing.md) for suite coverage, credentials, setup, and comma
 
 - [Concepts](docs/guides/concepts.md): tenancy, revisions, execution, [configuration and Secrets](docs/guides/concepts.md#configuration-and-secrets), and access.
 - [Documentation map](docs/README.md): guides, references, and runtime flows.
+- [Observability](docs/guides/observability.md): configure operational log export, Collector metrics, and delivery checks.
 - [Platform design](docs/design.md) and [current architecture](docs/ARCHITECTURE.md): target design and implemented components.
 - [Feature reference](docs/reference/README.md): supported behavior and Driver contracts.
 - [Platform console](docs/reference/console.md): login, Namespace selection, Agent creation, revision inspection, and supported channel draft edits.

@@ -29,7 +29,8 @@ metadata:
   name: {{ .Release.Name }}-openclaw-log-metadata
 rules:
   - apiGroups: [""]
-    resources: [namespaces, nodes, pods]
+    # Namespace and node names come from Pod fields; no other object reads are needed.
+    resources: [pods]
     verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

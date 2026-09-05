@@ -115,26 +115,24 @@ The normal development stack works without a Collector. Adding
 Codex Agent containers through Docker's nonblocking `fluentd` logging driver.
 Docker Compute applies the managed runtime `LogConfig` from
 `OCC_DOCKER_LOGGING_ADDRESS`; the address must be reachable from the Docker
-Engine. The deployment guide owns the runnable command.
+Engine. The [Docker observability procedure](../guides/observability.md#docker-compose)
+owns setup and verification.
 
 ### 6. Kubernetes collection is bundled or equivalent
 
 `deploy/helm/openclaw-enterprise/templates/collector.yaml:logging.collector.enabled`
 
-Production can reuse an existing cluster Collector only when that Collector
-already reads the OCC and tenant CRI log files and applies the same native
-receiver, metadata, filtering, privacy, routing, egress, credential, and bounded
-queue/state contract. Otherwise operators enable the bundled Collector or
-install the same native Collector policy in their existing Collector.
+Helm renders a Collector DaemonSet that reads node CRI files and uses Pod metadata
+to associate records with managed workloads. The
+[Kubernetes observability procedure](../guides/observability.md#kubernetes-and-helm)
+owns enablement and existing-Collector reuse; the
+[security reference](../reference/security.md#operational-log-collection-boundary)
+owns deployment isolation limits.
 
-When enabled, Helm renders a pinned Collector DaemonSet with dedicated config
-and exporter Secrets, read-only `/var/log/pods`, file offset storage under
-`/var/lib/otelcol`, self-metrics on port `8888`, k8s metadata RBAC, restricted
-Pod/container security settings, and egress only to DNS, the Kubernetes API, and
-one approved exporter or proxy `/32`. The `k8sattributes` processor maps
-identity onto each record before `transform/kubernetes-resource` removes
-internal Pod labels; removing shared labels in the record loop would discard
-later records in the same batch.
+The `k8sattributes` processor maps identity onto each record before
+`transform/kubernetes-resource` removes internal Pod labels. Removing shared
+labels in the record loop would discard identity for later records in the same
+batch.
 
 ### 7. Collector exports only operational classes
 
@@ -155,11 +153,8 @@ reconciliation, or PostgreSQL audit persistence.
   logging does not match the expected level; compare admitted AgentRevision
   logging fields with rendered Docker or Kubernetes container settings for
   runtime workloads.
-- For Docker collection, verify `compose.logging.yaml`, the Collector endpoint,
-  and Docker Engine reachability for `OCC_DOCKER_LOGGING_ADDRESS`; for
-  Kubernetes collection, verify dedicated Collector Secrets, fixed
-  `/var/log/pods` and `/var/lib/otelcol` mounts, exporter `/32` egress, and
-  Collector drop/queue/export metrics.
+- For delivery checks, Collector metrics, and deployment troubleshooting, use
+  the [observability guide](../guides/observability.md#tests).
 - Packaging and Collector configuration tests prove rendered configuration,
   filtering, bounded queues, and startup boundaries. Real runtime suites must be
   selected separately before claiming gateway, Codex, model-turn, or OpenShell
@@ -169,6 +164,7 @@ reconciliation, or PostgreSQL audit persistence.
 
 - [Settings reference](../reference/settings.md)
 - [Security controls](../reference/security.md)
+- [Observability guide](../guides/observability.md)
 - [Deployment guide](../guides/deploy.md)
 - [Common OpenTelemetry logging spec](../../specs/20-common-otel-logging.md)
 

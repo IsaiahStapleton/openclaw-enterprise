@@ -268,7 +268,7 @@ test(
     assert.deepEqual(metadataRole.rules, [
       {
         apiGroups: [""],
-        resources: ["namespaces", "nodes", "pods"],
+        resources: ["pods"],
         verbs: ["get", "list", "watch"],
       },
     ]);

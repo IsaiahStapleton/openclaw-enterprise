@@ -1972,6 +1972,36 @@ async function assertConversation(topology, sessionKey, nonce) {
   });
 }
 
+function assistantMessageContaining(history, nonce) {
+  return history.messages.find(
+    (message) => message.role === "assistant" && messageText(message).includes(nonce),
+  );
+}
+
+function artifactSummaryForDiagnostics({
+  id,
+  type,
+  title,
+  mimeType,
+  sizeBytes,
+  sessionKey,
+  messageSeq,
+  source,
+  download,
+}) {
+  return {
+    id,
+    type,
+    title,
+    ...(mimeType === undefined ? {} : { mimeType }),
+    ...(sizeBytes === undefined ? {} : { sizeBytes }),
+    ...(sessionKey === undefined ? {} : { sessionKey }),
+    ...(messageSeq === undefined ? {} : { messageSeq }),
+    ...(source === undefined ? {} : { source }),
+    download: { mode: download?.mode },
+  };
+}
+
 async function inspectGatewayPersistence(topology, imageDigest, sessionKey) {
   // Read existing persisted state only. Missing/corrupt files fail; the probe never creates one.
   return JSON.parse(
@@ -2055,16 +2085,31 @@ async function inspectGatewayPersistence(topology, imageDigest, sessionKey) {
   );
 }
 
-async function assertRetainedImage(topology, sessionKey, expectedId) {
-  const artifact = await waitFor("the model reply's managed image artifact", async () => {
+async function assertRetainedImage(
+  topology,
+  sessionKey,
+  { expectedId, expectedData = continuityImage, messageSeq } = {},
+) {
+  const deadline = Date.now() + 240_000;
+  let lastArtifacts = [];
+  let artifact;
+  while (Date.now() < deadline && artifact === undefined) {
     const { artifacts } = await gatewayCall(topology, "artifacts.list", { sessionKey });
-    return artifacts.find(
-      ({ type, id }) =>
+    lastArtifacts = artifacts.map(artifactSummaryForDiagnostics);
+    artifact = artifacts.find(
+      ({ type, id, source, messageSeq: artifactMessageSeq }) =>
         type === "image" &&
-        id.startsWith("artifact_managed_image_") &&
-        (expectedId === undefined || id === expectedId),
+        /^artifact_[A-Za-z0-9_-]+$/.test(id) &&
+        source === "session-transcript" &&
+        (expectedId === undefined || id === expectedId) &&
+        (messageSeq === undefined || artifactMessageSeq === messageSeq),
     );
-  });
+    if (artifact === undefined) await delay(750);
+  }
+  assert.ok(
+    artifact,
+    `Timed out waiting for retained image artifact. Last artifacts: ${JSON.stringify(lastArtifacts)}`,
+  );
   assert.equal(artifact.download.mode, "url");
   // Mint a fresh ticket after each restart. The capability stays inside the Pod, out of kubectl args/logs.
   const downloaded = JSON.parse(
@@ -2092,7 +2137,7 @@ async function assertRetainedImage(topology, sessionKey, expectedId) {
   `,
     ),
   );
-  assert.deepEqual(Buffer.from(downloaded.data, "base64"), Buffer.from(continuityImage, "base64"));
+  assert.deepEqual(Buffer.from(downloaded.data, "base64"), Buffer.from(expectedData, "base64"));
   return artifact.id;
 }
 
@@ -2125,8 +2170,17 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
     idempotencyKey: randomUUID(),
     message: `Return these exact two lines without tools or code fences:\n${imageNonce}\nMEDIA:${inboundPath}`,
   });
-  await assertConversation(topology, sessionKey, imageNonce);
-  const artifactId = await assertRetainedImage(topology, sessionKey);
+  const imageHistory = await assertConversation(topology, sessionKey, imageNonce);
+  const imageMessageSeq = assistantMessageContaining(imageHistory, imageNonce)?.__openclaw?.seq;
+  assert.equal(
+    typeof imageMessageSeq,
+    "number",
+    "chat.history must expose the assistant transcript seq for the returned image artifact",
+  );
+  const artifactId = await assertRetainedImage(topology, sessionKey, {
+    expectedData: continuityImage,
+    messageSeq: imageMessageSeq,
+  });
   const before = await inspectGatewayPersistence(topology, digest, sessionKey);
   for (const database of before.databases) assert.deepEqual(database.integrity, ["ok"]);
   assert.equal(before.sessionStore.key, sessionKey);
@@ -2179,7 +2233,7 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
   const retained = await assertGatewayPrivateResources(topology);
   assert.equal(retained.metadata.uid, privateClaim.metadata.uid);
   await assertConversation(topology, sessionKey, nonce);
-  await assertRetainedImage(topology, sessionKey, artifactId);
+  await assertRetainedImage(topology, sessionKey, { expectedId: artifactId });
   const restored = await inspectGatewayPersistence(topology, digest, sessionKey);
   for (const database of restored.databases) assert.deepEqual(database.integrity, ["ok"]);
   assert.deepEqual(
@@ -2244,6 +2298,65 @@ async function readFileInPod(namespace, pod, file) {
     pod,
     `const { readFileSync } = require("node:fs");process.stdout.write(readFileSync(${JSON.stringify(file)}, "utf8"));`,
   );
+}
+
+async function inspectFileInPod(namespace, pod, file) {
+  return JSON.parse(
+    await execNode(
+      namespace,
+      pod,
+      `
+        const { existsSync, readFileSync } = require("node:fs");
+        const file = ${JSON.stringify(file)};
+        if (!existsSync(file)) {
+          process.stdout.write(JSON.stringify({ exists: false }));
+          process.exit(0);
+        }
+        const content = readFileSync(file, "utf8");
+        process.stdout.write(JSON.stringify({
+          exists: true,
+          sizeBytes: Buffer.byteLength(content),
+          tail: content.slice(-1000),
+        }));
+      `,
+    ),
+  );
+}
+
+async function promiseResult(read) {
+  try {
+    return await read();
+  } catch (error) {
+    return { error: error?.message ?? String(error) };
+  }
+}
+
+async function inspectDedicatedAgentsInstructionsDiagnostics(
+  topology,
+  sessionKey,
+  instructionsPath,
+) {
+  const [gatewayInstructions, harnessInstructions, history] = await Promise.all([
+    promiseResult(() =>
+      inspectFileInPod(topology.placement, topology.gatewayPod.metadata.name, instructionsPath),
+    ),
+    promiseResult(() =>
+      inspectFileInPod(topology.placement, topology.harnessPod.metadata.name, instructionsPath),
+    ),
+    promiseResult(() => gatewayCall(topology, "chat.history", { sessionKey, limit: 10 })),
+  ]);
+  return {
+    gatewayInstructions,
+    harnessInstructions,
+    history: Array.isArray(history.messages)
+      ? history.messages.map((message) => ({
+          role: message.role,
+          stopReason: message.stopReason,
+          text: messageText(message).slice(0, 800),
+          seq: message.__openclaw?.seq,
+        }))
+      : history,
+  };
 }
 
 async function requestDedicatedAgentTurn(topology, sessionKey, prompt) {
@@ -2371,17 +2484,53 @@ async function assertDedicatedAgentsInstructionsInFreshSession(topology) {
     sessionKey,
     `Use your file-editing tools to update ${instructionsPath}. Preserve its existing contents and append this exact instruction on a new line: End every response with the exact lowercase phrase ${suffix}. If the file does not exist, create it. Edit the file before you respond.`,
   );
-  const [gatewayInstructions, harnessInstructions] = await Promise.all([
-    readFileInPod(topology.placement, topology.gatewayPod.metadata.name, instructionsPath),
-    readFileInPod(topology.placement, topology.harnessPod.metadata.name, instructionsPath),
-  ]);
-  assert.equal(
-    /^End every response with the exact lowercase phrase enterprise openclaw\.$/m.test(
-      harnessInstructions,
+  const [gatewayInstructionsResult, harnessInstructionsResult] = await Promise.all([
+    promiseResult(() =>
+      readFileInPod(topology.placement, topology.gatewayPod.metadata.name, instructionsPath),
     ),
-    true,
-    `The Agent did not persist its requested instruction. Response: ${editResponse.slice(0, 1500)}`,
-  );
+    promiseResult(() =>
+      readFileInPod(topology.placement, topology.harnessPod.metadata.name, instructionsPath),
+    ),
+  ]);
+  if (
+    typeof gatewayInstructionsResult !== "string" ||
+    typeof harnessInstructionsResult !== "string"
+  ) {
+    const diagnostics = await inspectDedicatedAgentsInstructionsDiagnostics(
+      topology,
+      sessionKey,
+      instructionsPath,
+    );
+    assert.fail(
+      `The Agent did not persist a readable instruction file. Diagnostics: ${JSON.stringify({
+        modelResponse: editResponse.slice(0, 1500),
+        readResults: {
+          gatewayInstructions: gatewayInstructionsResult,
+          harnessInstructions: harnessInstructionsResult,
+        },
+        ...diagnostics,
+      })}`,
+    );
+  }
+  const gatewayInstructions = gatewayInstructionsResult;
+  const harnessInstructions = harnessInstructionsResult;
+  if (
+    !/^End every response with the exact lowercase phrase enterprise openclaw\.$/m.test(
+      harnessInstructions,
+    )
+  ) {
+    const diagnostics = await inspectDedicatedAgentsInstructionsDiagnostics(
+      topology,
+      sessionKey,
+      instructionsPath,
+    );
+    assert.fail(
+      `The Agent did not persist its requested instruction. Diagnostics: ${JSON.stringify({
+        modelResponse: editResponse.slice(0, 1500),
+        ...diagnostics,
+      })}`,
+    );
+  }
   assert.equal(gatewayInstructions, harnessInstructions);
 
   // A new native harness thread must load persisted instructions absent from its neutral prompt.

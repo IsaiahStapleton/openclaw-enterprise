@@ -267,10 +267,10 @@ exhausted.
 
 ## Observability
 
-The API and worker use the shared OCC Pino logger. `logging.level` in the
-trusted startup YAML selects `debug`, `info`, `warn`, or `error`; omitted
-configuration uses `info`. The API disables Fastify's default request logging
-and emits one sanitized `http.completed` record per response with the generated
+Use the [observability guide](../guides/observability.md) to set log levels,
+configure export, and verify delivery. The API and worker share the OCC Pino
+logger. The API disables Fastify's default request logging and emits one
+sanitized `http.completed` record per response with the generated
 request ID, method, route template, status, and duration. Unexpected internal
 failures add `http.unexpected_error` with a bounded error code.
 
