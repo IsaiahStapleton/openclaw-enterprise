@@ -7,7 +7,6 @@ import { request } from "node:https";
 
 const openShellVersion = "0.0.113";
 const agentSandboxVersion = "v0.5.2";
-const gvisorVersion = "release-20260831.0";
 const kubectlVersion = "v1.36.4";
 const k3sImage =
   "rancher/k3s:v1.36.4-k3s1@sha256:edad48e12bf81c3a09ac1c05c0c0ffaaa22145980b989d6fae84543a76b83657";
@@ -35,17 +34,6 @@ const cliAssets = Object.freeze({
   "linux:x64": {
     name: "openshell-x86_64-unknown-linux-musl.tar.gz",
     sha256: "e6bab4e7298f311a8e04a53a089ab836d239a90ca65f66f247f71a8d5926bdd7",
-  },
-});
-
-const gvisorAssets = Object.freeze({
-  "linux:arm64": {
-    name: "gvisor-aarch64.tar.bz2",
-    sha256: "24e91d9b2e02079d18837380a7c9d32cb04c58ccbb1f95901f09d10057f1261d",
-  },
-  "linux:x64": {
-    name: "gvisor-x86_64.tar.bz2",
-    sha256: "014b3871a5c698c802fd7a03758e0dbf4c1683f9e3f8c743979ea66bbf6553a4",
   },
 });
 
@@ -200,82 +188,20 @@ function normalizeArchitecture(arch) {
   }
 }
 
-function selectGvisorAsset(platform = "linux", arch = process.arch) {
-  const normalizedPlatform = String(platform).toLowerCase();
-  const normalizedArch = normalizeArchitecture(String(arch).toLowerCase());
-  if (normalizedPlatform !== "linux") {
-    throw new Error(
-      `OpenShell gVisor node image provisioning requires a Linux Docker daemon; got ${platform}/${arch}.`,
-    );
-  }
-  const asset = gvisorAssets[`${normalizedPlatform}:${normalizedArch}`];
-  if (!asset) {
-    throw new Error(
-      `OpenShell ${openShellVersion} has no pinned gVisor asset for Docker daemon ${platform}/${arch}.`,
-    );
-  }
-  return asset;
-}
-
 function selectKubectlAsset(platform = process.platform, arch = process.arch) {
   const normalizedPlatform = String(platform).toLowerCase();
   const normalizedArch = normalizeArchitecture(String(arch).toLowerCase());
   const asset = kubectlAssets[`${normalizedPlatform}:${normalizedArch}`];
   if (!asset) {
     throw new Error(
-      `OpenShell node image bootstrap has no pinned kubectl ${kubectlVersion} asset for host ${platform}/${arch}.`,
+      `OpenShell bootstrap has no pinned kubectl ${kubectlVersion} asset for host ${platform}/${arch}.`,
     );
   }
   return asset;
 }
 
-function gvisorReleaseUrl(asset) {
-  return `https://github.com/google/gvisor/releases/download/${gvisorVersion}/${asset}`;
-}
-
 function kubectlReleaseUrl(asset) {
   return `https://dl.k8s.io/release/${kubectlVersion}/bin/${asset.path}`;
-}
-
-function assertOwnedLocalImageTag(imageTag) {
-  if (typeof imageTag !== "string" || imageTag.length === 0) {
-    throw new Error("OpenShell node image tag must be provided.");
-  }
-  if (imageTag.includes("@") || /\s/.test(imageTag)) {
-    throw new Error("OpenShell node image tag must be a mutable local Docker tag.");
-  }
-  if (!/^localhost\/[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9_.-]+$/.test(imageTag)) {
-    throw new Error("OpenShell node image tag must be a run-owned local Docker tag.");
-  }
-}
-
-function nodeImageContainerdConfig(runtimeHandler) {
-  return [
-    '{{ template "base" . }}',
-    "",
-    `[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'${runtimeHandler}']`,
-    '  runtime_type = "io.containerd.runsc.v1"',
-    "",
-  ].join("\n");
-}
-
-function nodeImageDockerfile(assetName) {
-  return [
-    `FROM ${k3sImage}`,
-    `COPY ${assetName} /tmp/gvisor.tar.bz2`,
-    "COPY config-v3.toml.tmpl /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl",
-    "RUN set -eux; \\",
-    "    mkdir -p /tmp/gvisor-extract /usr/local/bin; \\",
-    "    tar -xjf /tmp/gvisor.tar.bz2 -C /tmp/gvisor-extract; \\",
-    '    runsc_path="$(find /tmp/gvisor-extract -type f -name runsc -print -quit)"; \\',
-    '    shim_path="$(find /tmp/gvisor-extract -type f -name containerd-shim-runsc-v1 -print -quit)"; \\',
-    '    test -n "$runsc_path"; \\',
-    '    test -n "$shim_path"; \\',
-    '    install -m 0755 "$runsc_path" /usr/local/bin/runsc; \\',
-    '    install -m 0755 "$shim_path" /usr/local/bin/containerd-shim-runsc-v1; \\',
-    "    rm -rf /tmp/gvisor-extract /tmp/gvisor.tar.bz2",
-    "",
-  ].join("\n");
 }
 
 function assertKubernetesName(value, description) {
@@ -309,6 +235,10 @@ function chartDeployableImageReference(image, name) {
 
 function kubectlArgs(cluster, args) {
   return ["--kubeconfig", cluster.kubeconfig, "--context", cluster.context, ...args];
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function acquireOpenShellCli(execFile, directory) {
@@ -374,7 +304,7 @@ async function runOpenShellRuntimeSmoke(
   runtimeClass,
   image,
 ) {
-  const podName = "openshell-gvisor-smoke";
+  const podName = "openshell-runtimeclass-smoke";
   const manifestPath = join(directory, `${podName}.yaml`);
   const manifest = [
     "apiVersion: v1",
@@ -393,7 +323,7 @@ async function runOpenShellRuntimeSmoke(
     "      command:",
     "        - /bin/sh",
     "        - -c",
-    "        - echo openshell-gvisor-smoke",
+    "        - echo openshell-runtimeclass-smoke",
     "",
   ].join("\n");
   await rm(manifestPath, { force: true });
@@ -420,7 +350,7 @@ async function runOpenShellRuntimeSmoke(
       .join("\n")
       .trim();
     throw new Error(
-      `OpenShell gVisor runtime smoke pod failed for RuntimeClass ${runtimeClass}: ${error.message}${
+      `OpenShell Kubernetes RuntimeClass smoke pod failed for RuntimeClass ${runtimeClass}: ${error.message}${
         details ? `\n${details}` : ""
       }`,
     );
@@ -452,22 +382,22 @@ async function ensureRuntimeClass(execFile, kubectl, cluster, directory, runtime
   );
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function containerdRuntimePattern(handler) {
-  const escaped = escapeRegExp(handler);
-  return new RegExp(`(?:runtimes\\.(?:\'|")?${escaped}(?:\'|")?\\]|containerd-shim-${escaped})`);
-}
-
-async function inspectDockerDaemon(execFile, docker) {
-  const result = await execFile(docker, ["info", "--format", "{{.OSType}}/{{.Architecture}}"]);
-  const [osType, architecture] = result.stdout.trim().split("/");
-  if (!osType || !architecture) {
-    throw new Error("Unable to determine Docker daemon OS and architecture for OpenShell.");
+async function assertKubernetesRuntimeHandlerAvailable(execFile, docker, cluster, handler) {
+  const result = await execFile(docker, [
+    "exec",
+    `k3d-${cluster.name}-server-0`,
+    "sh",
+    "-c",
+    "cat /var/lib/rancher/k3s/agent/etc/containerd/config.toml /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl 2>/dev/null || true",
+  ]);
+  const runtimeHandlerPattern = new RegExp(
+    `runtimes\\.(?:'|")?${escapeRegExp(handler)}(?:'|")?\\]`,
+  );
+  if (!runtimeHandlerPattern.test(result.stdout)) {
+    throw new Error(
+      `OpenShell requires the k3d node containerd runtime handler "${handler}" before this lane can run. The selected k3d node does not advertise that handler in its containerd configuration.`,
+    );
   }
-  return { osType, architecture };
 }
 
 async function acquireKubectl(execFile, directory, platform, arch, downloadArtifact) {
@@ -531,21 +461,6 @@ async function prepareOpenShellPodSecurityAdmission({ directory, runtimeClass })
       `--kube-apiserver-arg=admission-control-config-file=${podSecurityAdmissionContainerPath}@server:0`,
     ],
   };
-}
-
-async function assertGvisorRuntimeAvailable(execFile, docker, cluster, handler) {
-  const result = await execFile(docker, [
-    "exec",
-    `k3d-${cluster.name}-server-0`,
-    "sh",
-    "-c",
-    "cat /var/lib/rancher/k3s/agent/etc/containerd/config.toml /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl 2>/dev/null || true",
-  ]);
-  if (!containerdRuntimePattern(handler).test(result.stdout)) {
-    throw new Error(
-      `OpenShell requires the k3d node containerd runtime handler "${handler}" before this lane can run. The selected k3d node does not advertise that handler in its containerd configuration; RuntimeClass alone is not proof of sandbox isolation.`,
-    );
-  }
 }
 
 function violatingPodSecurityManifest(namespace, runtimeClass) {
@@ -647,76 +562,37 @@ async function assertOpenShellPodSecurityAdmissionExemption(
   }
 }
 
-async function prepareOpenShellNodeImage({
+async function prepareOpenShellClusterBootstrap({
   directory,
-  imageTag,
   execFile,
   env = process.env,
   hostPlatform = process.platform,
   hostArch = process.arch,
   runtimeClass = env.OCC_TEST_OPENSHELL_RUNTIME_CLASS ?? "openshell-sandbox",
-  runtimeHandler = env.OCC_TEST_OPENSHELL_RUNTIME_HANDLER ?? "runsc",
+  runtimeHandler = env.OCC_TEST_OPENSHELL_RUNTIME_HANDLER ?? "runc",
   downloadArtifact = downloadVerified,
 }) {
   if (typeof execFile !== "function") {
-    throw new Error("OpenShell node image bootstrap requires execFile.");
+    throw new Error("OpenShell cluster bootstrap requires execFile.");
   }
   assertKubernetesName(runtimeClass, "OpenShell RuntimeClass");
   assertRuntimeHandler(runtimeHandler);
-  assertOwnedLocalImageTag(imageTag);
 
   if (typeof directory !== "string" || directory.length === 0) {
-    throw new Error("OpenShell node image directory must be provided.");
+    throw new Error("OpenShell cluster bootstrap directory must be provided.");
   }
-  if (!isAbsolute(directory)) throw new Error("OpenShell node image directory must be absolute.");
+  if (!isAbsolute(directory))
+    throw new Error("OpenShell cluster bootstrap directory must be absolute.");
   const root = resolve(directory);
   await assertPrivateDirectory(await stat(root), root);
-  const buildDirectory = join(root, "openshell-node-image");
-  assertInsideDirectory(root, buildDirectory, "OpenShell node image build directory");
-  await rm(buildDirectory, { recursive: true, force: true });
-  await ensurePrivateDirectory(buildDirectory);
-
-  const docker = env.OCC_DOCKER_BIN ?? "docker";
-  const daemon = await inspectDockerDaemon(execFile, docker);
-  const asset = selectGvisorAsset(daemon.osType, daemon.architecture);
-  const archive = join(buildDirectory, asset.name);
-  const dockerfile = join(buildDirectory, "Dockerfile");
-  const containerdConfig = join(buildDirectory, "config-v3.toml.tmpl");
-  assertInsideDirectory(buildDirectory, archive, "gVisor archive");
-  assertInsideDirectory(buildDirectory, dockerfile, "OpenShell node image Dockerfile");
-  assertInsideDirectory(buildDirectory, containerdConfig, "OpenShell node image containerd config");
 
   const kubectl = await acquireKubectl(execFile, root, hostPlatform, hostArch, downloadArtifact);
-  await downloadArtifact(gvisorReleaseUrl(asset.name), archive, asset.sha256);
-  await writeFile(containerdConfig, nodeImageContainerdConfig(runtimeHandler), { mode: 0o600 });
-  await chmod(containerdConfig, 0o600);
-  await writeFile(dockerfile, nodeImageDockerfile(asset.name), { mode: 0o600 });
-  await chmod(dockerfile, 0o600);
-
-  await execFile(docker, ["build", "--pull=true", "-t", imageTag, buildDirectory]);
-  await execFile(docker, ["image", "inspect", imageTag]);
-  await execFile(docker, [
-    "run",
-    "--rm",
-    "--entrypoint",
-    "/bin/sh",
-    imageTag,
-    "-c",
-    [
-      "test -x /usr/local/bin/runsc",
-      "test -x /usr/local/bin/containerd-shim-runsc-v1",
-      `grep -F "[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'${runtimeHandler}']" /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl`,
-      "grep -F 'runtime_type = \"io.containerd.runsc.v1\"' /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl",
-    ].join(" && "),
-  ]);
 
   return {
-    image: imageTag,
+    k3sImage,
     runtimeClass,
     runtimeHandler,
     kubectl,
-    k3sImage,
-    gvisorVersion,
     kubectlVersion,
   };
 }
@@ -736,7 +612,7 @@ async function prepareOpenShell({ cluster, execFile, registerImage, env = proces
   const helm = env.OCC_HELM_BIN ?? "helm";
   const docker = env.OCC_DOCKER_BIN ?? "docker";
   const runtimeClass = env.OCC_TEST_OPENSHELL_RUNTIME_CLASS ?? "openshell-sandbox";
-  const runtimeHandler = env.OCC_TEST_OPENSHELL_RUNTIME_HANDLER ?? "runsc";
+  const runtimeHandler = env.OCC_TEST_OPENSHELL_RUNTIME_HANDLER ?? "runc";
   const gatewaySourceImage = env.OCC_TEST_OPENSHELL_GATEWAY_IMAGE || openShellGatewayImage;
   const supervisorSourceImage = env.OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE || openShellSupervisorImage;
   assertKubernetesName(runtimeClass, "OpenShell RuntimeClass");
@@ -755,7 +631,7 @@ async function prepareOpenShell({ cluster, execFile, registerImage, env = proces
     runtimeClass,
     runtimeHandler,
   );
-  await assertGvisorRuntimeAvailable(execFile, docker, selectedCluster, runtimeHandler);
+  await assertKubernetesRuntimeHandlerAvailable(execFile, docker, selectedCluster, runtimeHandler);
   await assertOpenShellPodSecurityAdmissionExemption(
     execFile,
     kubectl,
@@ -801,15 +677,13 @@ async function prepareOpenShell({ cluster, execFile, registerImage, env = proces
 
 export {
   agentSandboxVersion,
-  gvisorVersion,
   k3sImage,
   kubectlVersion,
   openShellChartReference,
   openShellVersion,
   prepareOpenShell,
-  prepareOpenShellNodeImage,
+  prepareOpenShellClusterBootstrap,
   prepareOpenShellPodSecurityAdmission,
   selectCliAsset,
-  selectGvisorAsset,
   selectKubectlAsset,
 };

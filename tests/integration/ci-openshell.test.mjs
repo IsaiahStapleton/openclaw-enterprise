@@ -4,13 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  gvisorVersion,
   k3sImage,
   kubectlVersion,
   prepareOpenShell,
-  prepareOpenShellNodeImage,
+  prepareOpenShellClusterBootstrap,
   selectCliAsset,
-  selectGvisorAsset,
   selectKubectlAsset,
 } from "../../scripts/ci/openshell.mjs";
 import { openShellChartImageValues } from "../helpers/openshell-kubernetes-real.mjs";
@@ -36,10 +34,8 @@ test("selectCliAsset rejects unsupported OpenShell host artifacts", () => {
   assert.throws(() => selectCliAsset("darwin", "x64"), /no pinned CLI asset/);
 });
 
-test("node-image asset selection keeps Docker daemon and kubectl host platforms separate", () => {
-  assert.equal(selectGvisorAsset("linux", "aarch64").name, "gvisor-aarch64.tar.bz2");
+test("kubectl asset selection supports the pinned OpenShell CI host platforms", () => {
   assert.equal(selectKubectlAsset("darwin", "arm64").name, "kubectl-darwin-arm64");
-  assert.throws(() => selectGvisorAsset("windows", "amd64"), /requires a Linux Docker daemon/);
   assert.throws(() => selectKubectlAsset("darwin", "x64"), /no pinned kubectl/);
 });
 
@@ -70,123 +66,41 @@ test("OpenShell Helm chart image values preserve immutable digests in rendered t
   );
 });
 
-test("prepareOpenShellNodeImage builds a pinned gVisor k3d node image", async (t) => {
-  const root = await fixture(t, "openshell-node-image-test");
+test("prepareOpenShellClusterBootstrap selects pinned K3s and kubectl with runc", async (t) => {
+  const root = await fixture(t, "openshell-cluster-bootstrap-test");
   const calls = [];
-  const imageTag = "localhost/openclaw-ci-image-openshell/node:local";
 
   async function execFile(command, args) {
     calls.push([command, args]);
-    if (command === "docker" && args[0] === "info") {
-      return { stdout: "linux/aarch64\n", stderr: "" };
-    }
     return { stdout: "", stderr: "" };
   }
 
-  const result = await prepareOpenShellNodeImage({
+  const result = await prepareOpenShellClusterBootstrap({
     directory: root,
-    imageTag,
     execFile,
     hostPlatform: "darwin",
     hostArch: "arm64",
     downloadArtifact: async (url, destination, sha256) => {
-      assert.match(url, /(?:kubectl|gvisor-aarch64\.tar\.bz2)$/);
+      assert.match(url, /kubectl$/);
       assert.equal(sha256.length, 64);
-      await writeFile(destination, "fake archive", { mode: 0o600 });
+      await writeFile(destination, "fake kubectl", { mode: 0o700 });
     },
   });
 
   assert.deepEqual(result, {
-    image: imageTag,
-    runtimeClass: "openshell-sandbox",
-    runtimeHandler: "runsc",
-    kubectl: join(root, "bin", `kubectl-darwin-arm64-${kubectlVersion}`),
     k3sImage,
-    gvisorVersion,
+    runtimeClass: "openshell-sandbox",
+    runtimeHandler: "runc",
+    kubectl: join(root, "bin", `kubectl-darwin-arm64-${kubectlVersion}`),
     kubectlVersion,
   });
   assert.deepEqual(
     calls.map(([command]) =>
       command.endsWith("kubectl-darwin-arm64-v1.36.4") ? "kubectl" : command,
     ),
-    ["docker", "kubectl", "docker", "docker", "docker"],
+    ["kubectl"],
   );
-  assert.deepEqual(calls[0][1], ["info", "--format", "{{.OSType}}/{{.Architecture}}"]);
-  assert.deepEqual(calls[2][1], [
-    "build",
-    "--pull=true",
-    "-t",
-    imageTag,
-    join(root, "openshell-node-image"),
-  ]);
-  assert.deepEqual(calls[3][1], ["image", "inspect", imageTag]);
-  assert.equal(calls[4][1][0], "run");
-  assert.ok(calls[4][1].includes(imageTag));
-
-  const dockerfile = await readFile(join(root, "openshell-node-image", "Dockerfile"), "utf8");
-  assert.ok(dockerfile.includes(`FROM ${k3sImage}`));
-  assert.match(dockerfile, /COPY gvisor-aarch64\.tar\.bz2 \/tmp\/gvisor\.tar\.bz2/);
-  const config = await readFile(join(root, "openshell-node-image", "config-v3.toml.tmpl"), "utf8");
-  assert.match(config, /{{ template "base" \. }}/);
-  assert.match(config, /runtimes\.'runsc'\]/);
-  assert.match(config, /runtime_type = "io\.containerd\.runsc\.v1"/);
-});
-
-test("prepareOpenShellNodeImage fails before downloads or build on unsupported Docker daemons", async (t) => {
-  const root = await fixture(t, "openshell-node-image-test");
-  const cases = [
-    { stdout: "windows/amd64\n", error: /requires a Linux Docker daemon/ },
-    { stdout: "linux/s390x\n", error: /no pinned gVisor asset/ },
-  ];
-
-  for (const row of cases) {
-    const calls = [];
-    await assert.rejects(
-      () =>
-        prepareOpenShellNodeImage({
-          directory: root,
-          imageTag: "localhost/openclaw-ci-image-openshell/node:local",
-          execFile: async (command, args) => {
-            calls.push([command, args]);
-            if (command === "docker" && args[0] === "info")
-              return { stdout: row.stdout, stderr: "" };
-            return { stdout: "", stderr: "" };
-          },
-          hostPlatform: "darwin",
-          hostArch: "arm64",
-          downloadArtifact: async () => {
-            throw new Error("download should not run");
-          },
-        }),
-      row.error,
-    );
-    assert.deepEqual(calls, [["docker", ["info", "--format", "{{.OSType}}/{{.Architecture}}"]]]);
-  }
-});
-
-test("prepareOpenShellNodeImage rejects nonlocal image tags before downloads or Docker", async (t) => {
-  const root = await fixture(t, "openshell-node-image-test");
-  const calls = [];
-
-  await assert.rejects(
-    () =>
-      prepareOpenShellNodeImage({
-        directory: root,
-        imageTag: "ghcr.io/openclaw/node:latest",
-        execFile: async (command, args) => {
-          calls.push([command, args]);
-          return { stdout: "", stderr: "" };
-        },
-        hostPlatform: "linux",
-        hostArch: "x64",
-        downloadArtifact: async () => {
-          throw new Error("download should not run");
-        },
-      }),
-    /run-owned local Docker tag/,
-  );
-
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls[0][1], ["version", "--client=true"]);
 });
 
 test("prepareOpenShell rejects foreign clusters before kubectl, Docker, or image registration", async (t) => {
@@ -247,7 +161,7 @@ test("prepareOpenShell rejects mutable OpenShell image overrides before kubectl 
   assert.equal(registerCalls, 0);
 });
 
-test("prepareOpenShell fails before downloads when the gVisor smoke Pod fails", async (t) => {
+test("prepareOpenShell fails before downloads when the RuntimeClass smoke Pod fails", async (t) => {
   const clusterName = "openclaw-k8s-openshell-test";
   const root = await fixture(t, clusterName);
   const calls = [];
@@ -260,7 +174,7 @@ test("prepareOpenShell fails before downloads when the gVisor smoke Pod fails", 
     calls.push([command, args]);
     if (command === "docker" && args[0] === "exec") {
       return {
-        stdout: "[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'runsc']\n",
+        stdout: "[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'runc']\n",
         stderr: "",
       };
     }
@@ -277,7 +191,7 @@ test("prepareOpenShell fails before downloads when the gVisor smoke Pod fails", 
       throw new Error("pod reached Failed phase");
     }
     if (command === "kubectl" && args.includes("describe")) {
-      return { stdout: "FailedCreatePodSandBox runsc permission denied", stderr: "" };
+      return { stdout: "FailedCreatePodSandBox runc unavailable", stderr: "" };
     }
     return { stdout: "", stderr: "" };
   }
@@ -297,7 +211,7 @@ test("prepareOpenShell fails before downloads when the gVisor smoke Pod fails", 
           OCC_TEST_KUBERNETES_AGENT_IMAGE: agentImage,
         },
       }),
-    /FailedCreatePodSandBox runsc permission denied/,
+    /FailedCreatePodSandBox runc unavailable/,
   );
 
   assert.equal(registerCalls, 0);
@@ -312,17 +226,22 @@ test("prepareOpenShell fails before downloads when the gVisor smoke Pod fails", 
   assert.ok(
     calls.some(
       ([command, args]) =>
-        command === "kubectl" && args.includes("delete") && args.includes("openshell-gvisor-smoke"),
+        command === "kubectl" &&
+        args.includes("delete") &&
+        args.includes("openshell-runtimeclass-smoke"),
     ),
   );
 
-  const manifest = await readFile(join(root, "openshell", "openshell-gvisor-smoke.yaml"), "utf8");
+  const manifest = await readFile(
+    join(root, "openshell", "openshell-runtimeclass-smoke.yaml"),
+    "utf8",
+  );
   assert.match(manifest, /runtimeClassName: openshell-sandbox/);
   assert.match(manifest, new RegExp(`image: "${agentImage}"`));
   assert.match(manifest, /imagePullPolicy: Never/);
 });
 
-test("prepareOpenShell fails before downloads when the k3d node lacks gVisor", async (t) => {
+test("prepareOpenShell fails before downloads when the k3d node lacks the selected handler", async (t) => {
   const clusterName = "openclaw-k8s-openshell-test";
   const root = await fixture(t, clusterName);
   const calls = [];
@@ -349,7 +268,7 @@ test("prepareOpenShell fails before downloads when the k3d node lacks gVisor", a
           OCC_DOCKER_BIN: "docker",
         },
       }),
-    /RuntimeClass alone is not proof of sandbox isolation/,
+    /does not advertise that handler/,
   );
 
   assert.equal(registerCalls, 0);

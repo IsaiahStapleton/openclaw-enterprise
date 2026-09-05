@@ -179,6 +179,10 @@ Edit the protected YAML copies before provisioning anything:
   selectors, the service-principal token settings, the runtime Secret prefixes,
   and `runtime.gatewayStorageClassName`. Keep
   `drivers.compute.configuration.images.requireImmutableDigest: true`.
+  For dedicated Codex command execution on nodes whose default syscall policy
+  blocks user namespaces, install a reviewed compatibility profile on every
+  eligible node and set `runtime.codexSeccompProfile` to its relative kubelet
+  profile path. See the [Kubernetes runtime requirements](../reference/drivers/kubernetes-compute.md#requirements).
 - `$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml`: set the bootstrap PVC name,
   namespace, size, and protected `storageClassName` for the cluster.
 

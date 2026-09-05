@@ -40,6 +40,7 @@ const codexImage =
   process.env.OCC_TEST_KUBERNETES_AGENT_IMAGE ??
   process.env.OCC_TEST_KUBERNETES_CODEX_IMAGE ??
   runtimeImage;
+const codexSeccompProfile = process.env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE;
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const providerModel = (process.env.OCC_TEST_OPENAI_MODEL ?? "gpt-4.1").replace(
   /^(?:openai|codex)\//,
@@ -276,6 +277,7 @@ function installationConfiguration(authentication, platformNamespace, slack, opt
     platformNamespace,
     gatewayImage,
     codexImage,
+    codexSeccompProfile,
     cluster: "k3d-production-harness-topology",
   });
   configuration.drivers.secret.configuration.authentication = authentication;
@@ -1593,6 +1595,11 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     assert.ok(gatewayVersion.includes(process.env.OCC_TEST_KUBERNETES_OPENCLAW_VERSION));
   }
   context.diagnostic(`${mode}: ${gatewayVersion}`);
+  await assertGatewayEffectiveDefaultModel(
+    context,
+    { mode, placement, gatewayPod },
+    `${harnessId === "codex" ? "codex" : "openai"}/${providerModel}`,
+  );
 
   if (slack === undefined) forwarding = await startPortForward(placement, gatewayServiceName);
   return {
@@ -1947,6 +1954,35 @@ async function gatewayCall(topology, method, params) {
   );
 }
 
+async function assertGatewayEffectiveDefaultModel(context, topology, expectedModel) {
+  const actualModel = JSON.parse(
+    await execNode(
+      topology.placement,
+      topology.gatewayPod.metadata.name,
+      `
+    (async () => {
+      const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
+      const model = loadConfig({ pin: false }).agents?.defaults?.model;
+      const primary = typeof model === "string" ? model : model?.primary;
+      if (typeof primary !== "string" || !primary.trim()) {
+        throw new Error("Effective runtime config did not expose agents.defaults.model");
+      }
+      process.stdout.write(JSON.stringify(primary));
+    })().catch(error => {
+      console.error(error);
+      process.exit(1);
+    });
+  `,
+    ),
+  );
+  assert.equal(
+    actualModel,
+    expectedModel,
+    `gateway effective default model changed before live model calls: ${actualModel}`,
+  );
+  context.diagnostic(`${topology.mode}: effective default model ${actualModel}`);
+}
+
 function messageText(message) {
   if (typeof message.content === "string") return message.content;
   return (message.content ?? [])
@@ -2005,8 +2041,8 @@ function artifactSummaryForDiagnostics({
   };
 }
 
-async function inspectGatewayPersistence(topology, imageDigest, sessionKey) {
-  // Read existing persisted state only. Missing/corrupt files fail; the probe never creates one.
+async function inspectGatewayPersistence(topology, imageDigest, sessionKey, sessionId) {
+  // Read existing persisted state only. Missing/corrupt storage fails; the probe never creates it.
   return JSON.parse(
     await execNode(
       topology.placement,
@@ -2022,67 +2058,65 @@ async function inspectGatewayPersistence(topology, imageDigest, sessionKey) {
       return (message.content ?? []).filter(block => block.type === "text").map(block => block.text).join("\\n");
     }
 
-    function resolveWithinDirectory(root, candidate) {
-      const realRoot = fs.realpathSync(root);
-      const resolved = path.isAbsolute(candidate) ? candidate : path.join(realRoot, candidate);
-      const realPath = fs.realpathSync(resolved);
-      const relative = path.relative(realRoot, realPath);
-      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-        throw new Error("Session artifact escaped its owning sessions directory");
-      }
-      return realPath;
-    }
-
-    const stateDatabase = "/home/node/.openclaw/state/openclaw.sqlite";
-    const databases = [stateDatabase].map(file => {
-      const db = new DatabaseSync(file, { readOnly: true });
-      try {
-        db.exec("PRAGMA busy_timeout=5000");
-        return { file, integrity: db.prepare("PRAGMA integrity_check").all().map(row => Object.values(row)[0]) };
-      } finally { db.close(); }
-    });
-
-    const sessionsDir = "/home/node/.openclaw/agents/main/sessions";
-    const sessionStoreFile = resolveWithinDirectory(sessionsDir, "sessions.json");
-    const canonicalSessionKey = ${JSON.stringify(sessionKey)}.trim().toLowerCase();
-    if (${JSON.stringify(sessionKey)} !== canonicalSessionKey) {
-      throw new Error("Test generated a noncanonical session key");
-    }
-    const sessionStore = JSON.parse(fs.readFileSync(sessionStoreFile, "utf8"));
-    const entry = sessionStore[canonicalSessionKey];
-    if (!entry || typeof entry !== "object" || typeof entry.sessionId !== "string") {
-      throw new Error("actual chat session missing from the session store");
-    }
-    const transcriptFile = resolveWithinDirectory(
-      sessionsDir,
-      typeof entry.sessionFile === "string" && entry.sessionFile.trim()
-        ? entry.sessionFile.trim()
-        : entry.sessionId + ".jsonl",
-    );
-    const transcriptMessages = fs.readFileSync(transcriptFile, "utf8")
-      .split(/\\r?\\n/)
-      .filter(line => line.trim())
-      .flatMap((line, seq) => {
-        const event = JSON.parse(line);
-        return event.type === "message" ? [{seq, role: event.message.role, text: messageText(event.message)}] : [];
-      });
-    const transcript = {
-      file: transcriptFile,
-      sessionId: entry.sessionId,
-      messages: transcriptMessages,
-    };
-
     function files(dir) { return fs.readdirSync(dir, {withFileTypes:true}).flatMap(entry => {
       const file=path.join(dir,entry.name); return entry.isDirectory() ? files(file) : entry.isFile() ? [file] : [];
     }); }
-    const media = files("/home/node/.openclaw/media").filter(file =>
-      createHash("sha256").update(fs.readFileSync(file)).digest("hex") === ${JSON.stringify(imageDigest)});
-    process.stdout.write(JSON.stringify({
-      databases,
-      media,
-      sessionStore: { file: sessionStoreFile, key: canonicalSessionKey, sessionId: entry.sessionId },
-      transcript,
-    }));
+
+    (async () => {
+      const {
+        readVisibleSessionTranscriptMessageEntries,
+        resolveSessionTranscriptTarget,
+      } = await import("openclaw/plugin-sdk/session-transcript-runtime");
+      const canonicalSessionKey = ${JSON.stringify(sessionKey)}.trim().toLowerCase();
+      if (${JSON.stringify(sessionKey)} !== canonicalSessionKey) {
+        throw new Error("Test generated a noncanonical session key");
+      }
+      const expectedSessionId = ${JSON.stringify(sessionId)};
+      if (typeof expectedSessionId !== "string" || !expectedSessionId.trim()) {
+        throw new Error("Test must probe persistence with the exact session id exposed by chat.history");
+      }
+
+      const stateDatabase = "/home/node/.openclaw/state/openclaw.sqlite";
+      const transcriptDatabase = "/home/node/.openclaw/agents/main/agent/openclaw-agent.sqlite";
+      const databases = [stateDatabase, transcriptDatabase].map(file => {
+        const db = new DatabaseSync(file, { readOnly: true });
+        try {
+          db.exec("PRAGMA busy_timeout=5000");
+          return { file, integrity: db.prepare("PRAGMA integrity_check").all().map(row => Object.values(row)[0]) };
+        } finally { db.close(); }
+      });
+
+      const target = await resolveSessionTranscriptTarget({
+        sessionId: expectedSessionId,
+        sessionKey: canonicalSessionKey,
+      });
+      const entries = await readVisibleSessionTranscriptMessageEntries(target);
+      const transcript = {
+        agentId: target.agentId,
+        memoryKey: target.memoryKey,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        targetKind: target.targetKind,
+        messages: entries.map(({entryId, parentId, role, seq, message}) => ({
+          entryId,
+          parentId: parentId ?? null,
+          role,
+          seq,
+          text: messageText(message),
+        })),
+      };
+
+      const media = files("/home/node/.openclaw/media").filter(file =>
+        createHash("sha256").update(fs.readFileSync(file)).digest("hex") === ${JSON.stringify(imageDigest)});
+      process.stdout.write(JSON.stringify({
+        databases,
+        media,
+        transcript,
+      }));
+    })().catch(error => {
+      console.error(error);
+      process.exit(1);
+    });
   `,
     ),
   );
@@ -2162,7 +2196,7 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
   });
   const history = await assertConversation(topology, sessionKey, nonce);
   const digest = createHash("sha256").update(Buffer.from(continuityImage, "base64")).digest("hex");
-  const uploaded = await inspectGatewayPersistence(topology, digest, sessionKey);
+  const uploaded = await inspectGatewayPersistence(topology, digest, sessionKey, history.sessionId);
   const inboundPath = uploaded.media.find((file) => file.includes("/media/inbound/"));
   assert.ok(inboundPath, "chat.send must persist the actual PNG under private media");
   // A real model returns the uploaded PNG through the supported MEDIA directive. No image-generation bill
@@ -2184,16 +2218,16 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
     expectedData: continuityImage,
     messageSeq: imageMessageSeq,
   });
-  const before = await inspectGatewayPersistence(topology, digest, sessionKey);
+  const before = await inspectGatewayPersistence(topology, digest, sessionKey, history.sessionId);
   for (const database of before.databases) assert.deepEqual(database.integrity, ["ok"]);
-  assert.equal(before.sessionStore.key, sessionKey);
+  assert.equal(before.transcript.sessionKey, sessionKey);
   assert.equal(before.transcript.sessionId, history.sessionId);
   for (const role of ["user", "assistant"]) {
     assert.ok(
       before.transcript.messages.some(
         (message) => message.role === role && message.text.includes(nonce),
       ),
-      `the exact ${role} turn must be persisted in the session JSONL transcript`,
+      `the initial ${role} turn must be exposed through the retained session transcript`,
     );
   }
   if (topology.harnessPod !== undefined) {
@@ -2202,13 +2236,13 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
       topology.harnessPod.metadata.name,
       `
       const fs = require("node:fs");
-      process.stdout.write(JSON.stringify(${JSON.stringify([...before.databases.map(({ file }) => file), before.sessionStore.file, before.transcript.file, ...before.media])}.filter(file => fs.existsSync(file))));
+      process.stdout.write(JSON.stringify(${JSON.stringify([...before.databases.map(({ file }) => file), ...before.media])}.filter(file => fs.existsSync(file))));
     `,
     );
     assert.deepEqual(
       JSON.parse(hidden),
       [],
-      "Codex must not see the gateway private state, session transcript, or retained image files",
+      "Codex must not see the gateway private state, transcript database, or retained image files",
     );
   }
 
@@ -2237,12 +2271,17 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
   assert.equal(retained.metadata.uid, privateClaim.metadata.uid);
   await assertConversation(topology, sessionKey, nonce);
   await assertRetainedImage(topology, sessionKey, { expectedId: artifactId });
-  const restored = await inspectGatewayPersistence(topology, digest, sessionKey);
+  const restored = await inspectGatewayPersistence(
+    topology,
+    digest,
+    sessionKey,
+    before.transcript.sessionId,
+  );
   for (const database of restored.databases) assert.deepEqual(database.integrity, ["ok"]);
   assert.deepEqual(
     restored.transcript,
     before.transcript,
-    "the exact session JSONL messages must survive Pod replacement",
+    "the exact visible session transcript messages must survive Pod replacement",
   );
   for (const file of before.media)
     assert.ok(restored.media.includes(file), "all retained PNG files must survive");
@@ -2253,14 +2292,20 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
     message: `Reply with exactly ${afterNonce}. Do not use tools.`,
   });
   await assertConversation(topology, sessionKey, afterNonce);
-  const continued = await inspectGatewayPersistence(topology, digest, sessionKey);
+  const continued = await inspectGatewayPersistence(
+    topology,
+    digest,
+    sessionKey,
+    before.transcript.sessionId,
+  );
   assert.equal(continued.transcript.sessionId, before.transcript.sessionId);
+  assert.equal(continued.transcript.sessionKey, before.transcript.sessionKey);
   for (const role of ["user", "assistant"]) {
     assert.ok(
       continued.transcript.messages.some(
         (message) => message.role === role && message.text.includes(afterNonce),
       ),
-      `the continued ${role} turn must write to the retained session JSONL transcript`,
+      `the post-restart ${role} turn must write to the retained session transcript`,
     );
   }
   context.diagnostic(

@@ -52,7 +52,7 @@ node scripts/ci/run-tests.mjs audit
 
 The PR workflow runs exactly five lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, and logging collector. The protected workflow uses an immutable main commit and separately approved environments for model, routing, Slack, ChatGPT account, OpenShell, and additional OpenTelemetry integrations. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
 
-Implementation status: routing, OpenShell, and logging now have concrete CI preparation contracts. Routing installs pinned Gateway API, cert-manager v1.18.4, and Envoy Gateway v1.6.7 controller manifests and generates a private test CA. OpenShell prepares an owned K3s v1.36.4 node image with gVisor release-20260831.0, a matched kubectl, RuntimeClass smoke coverage, OpenShell CLI/chart assets, gateway and supervisor images, Agent Sandbox resources, and runtime setup. Only the disposable CI OpenShell cluster exempts its selected RuntimeClass from Pod Security Admission. Preparation proves that a violating ordinary Pod is rejected in a restricted namespace and that the same Pod is admitted with the selected class, then runs the real gVisor smoke. Logging preparation owns a real OpenTelemetry Collector backend with JSONL evidence, and `OCC_TEST_OTEL_LOGS_URL` is no longer a required external input. The Collector and Docker-model jobs use the shared [setup-test-docker action](../.github/actions/setup-test-docker/action.yml) to pin Docker 29.4.0, which supports the production `fluentd-write-timeout` logging option. The action stops the preinstalled daemon on the ephemeral runner, installs Docker 29.4.0 through the SHA-pinned official Docker setup action, and points `/var/run/docker.sock` at the action socket so the CLI, production Compose, and Driver use one daemon. Other jobs keep the runner Docker daemon. Full-suite acceptance remains incomplete until main-only protected hosted execution records every selected lane. See the [delivery status](../specs/19-github-actions-test-coverage.md#delivery-status) for current proof boundaries and live gaps.
+Implementation status: routing, OpenShell, and logging now have concrete CI preparation contracts. Routing installs pinned Gateway API, cert-manager v1.18.4, and Envoy Gateway v1.6.7 controller manifests and generates a private test CA. OpenShell creates an owned K3s v1.36.4 cluster, installs a matched kubectl, configures the selected RuntimeClass with the cluster's `runc` handler, verifies handler availability with a smoke Pod, installs OpenShell CLI/chart assets, imports gateway and supervisor images, and installs Agent Sandbox resources. Only the disposable CI OpenShell cluster exempts its selected RuntimeClass from Pod Security Admission. Preparation proves that a violating ordinary Pod is rejected in a restricted namespace and that the same Pod is admitted with the selected class. The full OpenShell suite proves provider-owned supervisor enforcement for filesystem, endpoint/L7 network, and process boundaries while preserving the current binary-unaware sidecar policy. Logging preparation owns a real OpenTelemetry Collector backend with JSONL evidence, and `OCC_TEST_OTEL_LOGS_URL` is no longer a required external input. The Collector and Docker-model jobs use the shared [setup-test-docker action](../.github/actions/setup-test-docker/action.yml) to pin Docker 29.4.0, which supports the production `fluentd-write-timeout` logging option. The action stops the preinstalled daemon on the ephemeral runner, installs Docker 29.4.0 through the SHA-pinned official Docker setup action, and points `/var/run/docker.sock` at the action socket so the CLI, production Compose, and Driver use one daemon. Other jobs keep the runner Docker daemon. Full-suite acceptance remains incomplete until main-only protected hosted execution records every selected lane. See the [delivery status](../specs/19-github-actions-test-coverage.md#delivery-status) for current proof boundaries and live gaps.
 
 The runner validates actual Node case results, including expected names and explicitly owned counterpart skips. Missing results, zero cases, unexpected skips, failures and cleanup errors cannot satisfy a required lane. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use trusted main inputs.
 
@@ -522,15 +522,16 @@ scoped resource cleanup; investigate any reported cleanup failure before rerunni
 ## OpenShell Sandbox
 
 This suite needs the owned OpenShell CI recipe: a disposable K3s v1.36.4 k3d
-cluster using the run-owned gVisor release-20260831.0 node image, matched
-kubectl, the selected RuntimeClass, a successful RuntimeClass smoke Pod, Agent
-Sandbox CRDs/controller, OpenShell CLI/Helm/chart files, imported immutable
-OpenShell gateway and supervisor images, real gateway/Codex images, the
-Kubernetes test database, `openssl`, and `OPENAI_API_KEY`. The standard k3d
-recipe alone is insufficient.
+cluster, matched kubectl, the selected RuntimeClass bound to the cluster's
+`runc` handler, a successful RuntimeClass smoke Pod, Agent Sandbox
+CRDs/controller, OpenShell CLI/Helm/chart files, imported immutable OpenShell
+gateway and supervisor images, real gateway/Codex images, the Kubernetes test
+database, `openssl`, and `OPENAI_API_KEY`. The standard k3d recipe alone is
+insufficient because it does not install the CI-owned admission config,
+RuntimeClass, Agent Sandbox, or OpenShell assets.
 
-For CI-shaped setup, let `prepare.mjs` build the node image, create the cluster,
-install OpenShell prerequisites, and export the lane environment before
+For CI-shaped setup, let `prepare.mjs` create the pinned K3s cluster, install
+OpenShell prerequisites, and export the lane environment before
 `run-tests.mjs` invokes the case:
 
 ```sh

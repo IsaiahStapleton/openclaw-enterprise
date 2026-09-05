@@ -9,9 +9,10 @@ import { fileURLToPath } from "node:url";
 import { cleanupResourceIds } from "./cleanup.mjs";
 import { prepareGatewayRouting } from "./routing.mjs";
 import { prepareLogging } from "./logging.mjs";
+import { prepareCodexSeccompProfile } from "./codex-seccomp.mjs";
 import {
   prepareOpenShell,
-  prepareOpenShellNodeImage,
+  prepareOpenShellClusterBootstrap,
   prepareOpenShellPodSecurityAdmission,
 } from "./openshell.mjs";
 
@@ -60,6 +61,13 @@ const k3dLanes = new Set([
   "slack",
   "provider-account",
   "openshell",
+  "k3d-otel",
+]);
+const codexSeccompLanes = new Set([
+  "k3d-model",
+  "gateway-routing",
+  "slack",
+  "provider-account",
   "k3d-otel",
 ]);
 
@@ -233,6 +241,17 @@ function execFile(command, args, options = {}) {
       env: { ...process.env, ...(options.env ?? {}) },
       stdio: options.stdio ?? ["ignore", "pipe", "pipe"],
     });
+    let settled = false;
+    let timedOut = false;
+    let killTimer;
+    let timeoutTimer;
+    if (Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      }, options.timeoutMs);
+    }
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (chunk) => {
@@ -241,14 +260,54 @@ function execFile(command, args, options = {}) {
     child.stderr?.on("data", (chunk) => {
       stderr += chunk.toString();
     });
-    child.on("error", reject);
+    function commandError(message, properties = {}) {
+      const error = new Error(message);
+      error.command = command;
+      error.args = args;
+      error.stdout = stdout;
+      error.stderr = stderr;
+      Object.assign(error, properties);
+      return error;
+    }
+    function finish(callback) {
+      if (settled) return;
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
+      callback();
+    }
+    child.on("error", (error) =>
+      finish(() => {
+        error.command = command;
+        error.args = args;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+      }),
+    );
     child.on("exit", (code, signal) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-      } else {
-        const message = stderr.trim() || stdout.trim() || signal || String(code);
-        reject(new Error(`${command} ${args.join(" ")} failed: ${message}`));
-      }
+      finish(() => {
+        if (timedOut) {
+          reject(
+            commandError(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`, {
+              exitCode: code,
+              signal,
+              timedOut: true,
+            }),
+          );
+        } else if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          const message = stderr.trim() || stdout.trim() || signal || String(code);
+          reject(
+            commandError(`${command} ${args.join(" ")} failed: ${message}`, {
+              exitCode: code,
+              signal,
+              timedOut: false,
+            }),
+          );
+        }
+      });
     });
   });
 }
@@ -576,12 +635,6 @@ async function ensureK3dCluster(statePath, state) {
   const directory = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), `${cluster}-`));
   await chmod(directory, 0o700);
   const kubeconfig = join(directory, "kubeconfig");
-  // Register the node image before its cluster so reverse cleanup removes containers first.
-  const nodeImageResource = openShell
-    ? addResource(state, "image-tag", {
-        name: `localhost/${ownedName("openclaw-ci-image", state.prefix, { maxLength: 48 })}/k3s:local`,
-      })
-    : undefined;
   const resource = addResource(state, "k3d-cluster", {
     name: cluster,
     directory,
@@ -589,25 +642,23 @@ async function ensureK3dCluster(statePath, state) {
     context: `k3d-${cluster}`,
   });
   await writeState(statePath, state);
-  if (nodeImageResource) {
-    const node = await prepareOpenShellNodeImage({
+  if (openShell) {
+    const bootstrap = await prepareOpenShellClusterBootstrap({
       directory,
-      imageTag: nodeImageResource.name,
       execFile,
     });
-    resource.nodeImage = node.image;
-    resource.nodeImageSource = node.k3sImage;
-    resource.kubectl = node.kubectl;
-    resource.runtimeClass = node.runtimeClass;
-    resource.runtimeHandler = node.runtimeHandler;
+    resource.nodeImage = bootstrap.k3sImage;
+    resource.kubectl = bootstrap.kubectl;
+    resource.runtimeClass = bootstrap.runtimeClass;
+    resource.runtimeHandler = bootstrap.runtimeHandler;
     const podSecurityAdmission = await prepareOpenShellPodSecurityAdmission({
       directory,
-      runtimeClass: node.runtimeClass,
+      runtimeClass: bootstrap.runtimeClass,
     });
     resource.podSecurityAdmissionConfig = podSecurityAdmission.path;
     resource.podSecurityAdmissionContainerPath = podSecurityAdmission.containerPath;
     resource.podSecurityAdmissionK3dArgs = podSecurityAdmission.k3dArgs;
-    await markResourceReady(statePath, state, nodeImageResource);
+    await writeState(statePath, state);
   }
   await execFile(process.env.OPENCLAW_CI_K3D_BIN ?? "k3d", [
     "cluster",
@@ -885,6 +936,22 @@ async function prepareK3dRuntimeImages(
   }
   // Replace the build tag with its imported digest before publishing the next step's inputs.
   env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE = env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE;
+  if (codexSeccompLanes.has(state.lane)) {
+    const seccomp = await prepareCodexSeccompProfile({
+      cluster,
+      image: env.OCC_TEST_KUBERNETES_AGENT_IMAGE,
+      execFile,
+      kubectl: cluster.kubectl ?? process.env.OCC_KUBECTL_BIN ?? "kubectl",
+      codexVersion:
+        env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
+        process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
+        "0.152.1",
+    });
+    env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE = seccomp.profileName;
+    cluster.codexSeccompProfile = seccomp.profileName;
+    cluster.codexSeccompProfiles = seccomp.nodes;
+    await writeState(statePath, state);
+  }
 }
 
 async function prepareProductionImages(statePath, state, cluster, env) {

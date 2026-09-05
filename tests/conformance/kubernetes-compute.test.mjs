@@ -831,6 +831,81 @@ test("the canonical Kubernetes runtime isolates transport and model Agent Secret
   );
 });
 
+test("dedicated Codex localhost seccomp profile is validated and rendered only on the Agent container", () => {
+  const runtime = {
+    transportSecretPrefix: "transport",
+    gatewayStorageClassName: "local-path",
+    modelSecretPrefix: "model",
+  };
+  const profile = "profiles/codex-0.152.1.json";
+  const driver = createKubernetesComputeDriver(
+    options({ runtime: { ...runtime, codexSeccompProfile: profile } }),
+  );
+  const defaultDriver = createKubernetesComputeDriver(options({ runtime }));
+  const ownership = { namespaceId: tenant.id, agentId: "agent-seccomp" };
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const workload = (computeDriver, role, embedded = false) =>
+    computeDriver.deployment(
+      role,
+      ownership,
+      namespace,
+      `${role}:local`,
+      role,
+      role,
+      {},
+      "info",
+      undefined,
+      embedded,
+    ).spec.template.spec;
+
+  const agent = workload(driver, "agent");
+  assert.deepEqual(agent.securityContext.seccompProfile, { type: "RuntimeDefault" });
+  assert.deepEqual(agent.containers[0].securityContext.seccompProfile, {
+    type: "Localhost",
+    localhostProfile: profile,
+  });
+
+  for (const pod of [
+    workload(driver, "gateway"),
+    workload(driver, "gateway", true),
+    workload(defaultDriver, "agent"),
+  ]) {
+    assert.deepEqual(pod.securityContext.seccompProfile, { type: "RuntimeDefault" });
+    assert.equal(pod.containers[0].securityContext.seccompProfile, undefined);
+  }
+
+  for (const codexSeccompProfile of [
+    "",
+    " ",
+    "/profiles/codex.json",
+    "../codex.json",
+    "profiles/../codex.json",
+    "profiles//codex.json",
+    "unconfined",
+    "profiles/unconfined",
+    { type: "Unconfined" },
+  ]) {
+    assert.throws(
+      () =>
+        createKubernetesComputeDriver(options({ runtime: { ...runtime, codexSeccompProfile } })),
+      /Codex seccomp localhost profile/i,
+    );
+  }
+
+  assert.throws(
+    () =>
+      createKubernetesComputeDriver(
+        options({
+          runtime: {
+            ...runtime,
+            securityContext: { seccompProfile: { type: "Unconfined" } },
+          },
+        }),
+      ),
+    /unsupported option securityContext/i,
+  );
+});
+
 test("account-owned Kubernetes Secrets reject invalid or foreign credentials before cluster access", async () => {
   const driver = createKubernetesComputeDriver(options());
   const serviceAccountId = "sa_00000000-0000-4000-8000-000000000001";

@@ -5,6 +5,12 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import {
+  codexBwrapAdditionalSyscalls,
+  deriveCodexBwrapProfile,
+  prepareCodexSeccompProfile,
+} from "../../scripts/ci/codex-seccomp.mjs";
+import { createKubernetesInstallationConfiguration } from "../helpers/kubernetes-real.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const preparePath = join(repositoryRoot, "scripts/ci/prepare.mjs");
@@ -32,6 +38,247 @@ function runPrepare(args, env = {}) {
 const digest = "a".repeat(64);
 const immutableImage = `registry.example/openclaw/runtime@sha256:${digest}`;
 const mutableImage = "registry.example/openclaw/runtime:latest";
+const runtimeDefaultBaseline = Object.freeze({
+  architectures: ["SCMP_ARCH_X86_64"],
+  defaultAction: "SCMP_ACT_ERRNO",
+  syscalls: [
+    { names: ["read"], action: "SCMP_ACT_ALLOW" },
+    { names: ["clone3"], action: "SCMP_ACT_ERRNO", errnoRet: 38 },
+  ],
+});
+
+test("codex seccomp profile derivation preserves the RuntimeDefault baseline and adds only reviewed bwrap rules", () => {
+  const profile = deriveCodexBwrapProfile(runtimeDefaultBaseline);
+  const added = profile.syscalls.slice(runtimeDefaultBaseline.syscalls.length);
+
+  assert.deepEqual(profile.architectures, runtimeDefaultBaseline.architectures);
+  assert.deepEqual(profile.syscalls.slice(0, runtimeDefaultBaseline.syscalls.length), [
+    ...runtimeDefaultBaseline.syscalls,
+  ]);
+  assert.equal(profile.defaultAction, "SCMP_ACT_ERRNO");
+  assert.equal(added.length, 78);
+  assert.deepEqual(added, codexBwrapAdditionalSyscalls());
+  assert.deepEqual(
+    added.filter((rule) => rule.names.includes("unshare")),
+    [
+      {
+        names: ["unshare"],
+        action: "SCMP_ACT_ALLOW",
+        args: [{ index: 0, op: "SCMP_CMP_EQ", value: 0x10000000 }],
+      },
+    ],
+  );
+  assert.deepEqual(
+    added.filter((rule) => rule.names.includes("pivot_root")),
+    [{ names: ["pivot_root"], action: "SCMP_ACT_ALLOW" }],
+  );
+  assert.deepEqual(
+    added.filter((rule) => rule.names.includes("umount2")),
+    [
+      {
+        names: ["umount2"],
+        action: "SCMP_ACT_ALLOW",
+        args: [{ index: 1, op: "SCMP_CMP_EQ", value: 2 }],
+      },
+    ],
+  );
+  assert.equal(
+    added.some((rule) => rule.names.includes("clone3")),
+    false,
+    "clone3 must remain governed by the RuntimeDefault ENOSYS rule",
+  );
+});
+
+test("codex seccomp profile derivation rejects non-denying or malformed baselines", () => {
+  assert.throws(
+    () =>
+      deriveCodexBwrapProfile({
+        ...runtimeDefaultBaseline,
+        defaultAction: "SCMP_ACT_ALLOW",
+      }),
+    /default-deny/,
+  );
+  assert.throws(
+    () =>
+      deriveCodexBwrapProfile({
+        ...runtimeDefaultBaseline,
+        syscalls: [{ names: ["read"], action: "SCMP_ACT_ALLOW" }],
+      }),
+    /clone3 ENOSYS/,
+  );
+});
+
+test("Kubernetes test helper passes an explicit Codex localhost seccomp profile into runtime config", () => {
+  const profile = "openclaw/codex-bwrap.json";
+  const configuration = createKubernetesInstallationConfiguration({
+    authentication: { mode: "inCluster" },
+    platformNamespace: "openclaw-platform",
+    gatewayImage: immutableImage,
+    codexImage: immutableImage,
+    cluster: "k3d-openclaw-ci",
+    codexSeccompProfile: profile,
+  });
+
+  assert.equal(configuration.drivers.compute.configuration.runtime.codexSeccompProfile, profile);
+});
+
+test("codex seccomp preparation fails closed for unverified Codex versions and foreign clusters", async () => {
+  const execFile = async () => {
+    throw new Error("execFile should not run before validation fails");
+  };
+  const cluster = {
+    name: "openclaw-k8s-test",
+    directory: "/tmp/openclaw-k8s-test-abcdef",
+    kubeconfig: "/tmp/openclaw-k8s-test-abcdef/kubeconfig",
+    context: "k3d-openclaw-k8s-test",
+  };
+
+  await assert.rejects(
+    () =>
+      prepareCodexSeccompProfile({
+        cluster,
+        image: immutableImage,
+        execFile,
+        codexVersion: "0.153.0",
+      }),
+    /pinned to Codex 0\.152\.1/,
+  );
+  await assert.rejects(
+    () =>
+      prepareCodexSeccompProfile({
+        cluster: { ...cluster, name: "shared-cluster", context: "shared-cluster" },
+        image: immutableImage,
+        execFile,
+      }),
+    /run-owned openclaw-k8s k3d cluster/,
+  );
+  await assert.rejects(
+    () =>
+      prepareCodexSeccompProfile({
+        cluster,
+        image: immutableImage,
+        profileName: "openclaw\\codex-bwrap.json",
+        execFile,
+      }),
+    /POSIX path separators/,
+  );
+  await assert.rejects(
+    () =>
+      prepareCodexSeccompProfile({
+        cluster: {
+          ...cluster,
+          directory: "relative-openclaw-k8s-test",
+          kubeconfig: "/tmp/openclaw-k8s-test-abcdef/kubeconfig",
+        },
+        image: immutableImage,
+        execFile,
+      }),
+    /cluster\.directory must be absolute/,
+  );
+});
+
+test("codex seccomp preparation requires a namespace/seccomp RuntimeDefault denial before node writes", async (t) => {
+  const root = await fixture(t);
+  const clusterDirectory = join(root, "openclaw-k8s-test-owned");
+  await mkdir(clusterDirectory);
+  const cluster = {
+    name: "openclaw-k8s-test",
+    directory: clusterDirectory,
+    kubeconfig: join(clusterDirectory, "kubeconfig"),
+    context: "k3d-openclaw-k8s-test",
+  };
+  const dockerCalls = [];
+  const execFileForRuntimeDefaultFailure = (failure) => async (command, args) => {
+    if (command === "kubectl") {
+      if (args.includes("create") && args.includes("namespace")) return { stdout: "", stderr: "" };
+      if (args.includes("delete") && args.includes("namespace")) return { stdout: "", stderr: "" };
+      if (args.includes("apply")) return { stdout: "", stderr: "" };
+      if (args.includes("nodes")) {
+        return {
+          stdout: JSON.stringify({
+            items: [{ metadata: { name: "k3d-openclaw-k8s-test-server-0" } }],
+          }),
+          stderr: "",
+        };
+      }
+      if (args.includes("pod")) {
+        return {
+          stdout: JSON.stringify({
+            metadata: { name: "runtime-default-probe" },
+            status: {
+              containerStatuses: [
+                {
+                  name: "probe",
+                  ready: true,
+                  containerID: "containerd://runtime-default-container",
+                },
+              ],
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (args.includes("exec")) throw failure(command, args);
+    }
+    if (command === "docker") {
+      dockerCalls.push(args);
+      throw new Error("docker should not be reached");
+    }
+    throw new Error(`Unexpected command: ${command}`);
+  };
+
+  await assert.rejects(
+    () =>
+      prepareCodexSeccompProfile({
+        cluster,
+        image: immutableImage,
+        execFile: execFileForRuntimeDefaultFailure((command, args) => {
+          const commandText = `${command} ${args.join(" ")}`;
+          assert.match(commandText, /--namespace/);
+          assert.match(commandText, /codex-seccomp-ok/);
+          const error = new Error(`${commandText} failed: unrelated setup failure`);
+          error.stderr = "unrelated setup failure";
+          error.stdout = "";
+          error.exitCode = 1;
+          error.timedOut = false;
+          return error;
+        }),
+      }),
+    /RuntimeDefault Codex sandbox denial must mention/,
+  );
+  await assert.rejects(
+    () =>
+      prepareCodexSeccompProfile({
+        cluster,
+        image: immutableImage,
+        execFile: execFileForRuntimeDefaultFailure((command, args) => {
+          const error = new Error(`${command} ${args.join(" ")} timed out after 195000ms`);
+          error.stderr = "operation not permitted";
+          error.stdout = "";
+          error.timedOut = true;
+          return error;
+        }),
+      }),
+    /timed out after 195000ms/,
+  );
+  await assert.rejects(
+    () =>
+      prepareCodexSeccompProfile({
+        cluster,
+        image: immutableImage,
+        execFile: execFileForRuntimeDefaultFailure((command, args) => {
+          const error = new Error(`${command} ${args.join(" ")} failed: version mismatch`);
+          error.stderr = "Codex version mismatch: expected 0.152.1, got 0.153.0";
+          error.stdout = "";
+          error.exitCode = 64;
+          error.timedOut = false;
+          return error;
+        }),
+      }),
+    /version mismatch/,
+  );
+  assert.deepEqual(dockerCalls, []);
+});
 
 test("prepareLane fails closed instead of overwriting an existing CI state file", async (t) => {
   const root = await fixture(t);

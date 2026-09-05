@@ -192,6 +192,7 @@ export function createKubernetesInstallationConfiguration({
   gatewayImage,
   codexImage,
   cluster,
+  codexSeccompProfile,
 }) {
   const configuration = createInstallationDriverConfiguration();
   const compute = configuration.drivers.compute.configuration;
@@ -205,6 +206,7 @@ export function createKubernetesInstallationConfiguration({
   compute.authentication = structuredClone(authentication);
   compute.images.gateway = gatewayImage;
   compute.images.agent = codexImage;
+  if (codexSeccompProfile !== undefined) compute.runtime.codexSeccompProfile = codexSeccompProfile;
   compute.resources.gateway = structuredClone(workload);
   compute.resources.agent = structuredClone(workload);
   compute.resources.namespace.containerDefaults = structuredClone(workload);
