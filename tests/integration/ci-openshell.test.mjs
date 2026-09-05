@@ -264,6 +264,15 @@ test("prepareOpenShell fails before downloads when the gVisor smoke Pod fails", 
         stderr: "",
       };
     }
+    if (
+      command === "kubectl" &&
+      args.includes("--dry-run=server") &&
+      args.some((arg) => arg.endsWith("openshell-psa-restricted-rejection.yaml"))
+    ) {
+      throw new Error(
+        'Error from server (Forbidden): pods "openshell-psa-violation" is forbidden: violates PodSecurity "restricted:latest": privileged',
+      );
+    }
     if (command === "kubectl" && args.includes("--for=jsonpath={.status.phase}=Succeeded")) {
       throw new Error("pod reached Failed phase");
     }

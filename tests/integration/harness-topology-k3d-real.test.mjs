@@ -945,22 +945,25 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   let placement;
   let forwarding;
   context.after(async () => {
-    forwarding?.stop();
-    if (worker !== undefined) await worker.stop();
-    else if (workerPool !== undefined) await workerPool.end();
-    if (productionApp !== undefined) await productionApp.close();
-    await observerPool.end();
-    if (placement !== undefined) {
-      await kubectl(
-        "delete",
-        "namespace",
-        placement,
-        "--ignore-not-found=true",
-        "--wait=true",
-        "--timeout=120s",
-      );
+    try {
+      await forwarding?.stop();
+    } finally {
+      if (worker !== undefined) await worker.stop();
+      else if (workerPool !== undefined) await workerPool.end();
+      if (productionApp !== undefined) await productionApp.close();
+      await observerPool.end();
+      if (placement !== undefined) {
+        await kubectl(
+          "delete",
+          "namespace",
+          placement,
+          "--ignore-not-found=true",
+          "--wait=true",
+          "--timeout=120s",
+        );
+      }
+      await rm(directory, { recursive: true, force: true });
     }
-    await rm(directory, { recursive: true, force: true });
   });
 
   const existing = await new PostgresPlatformState(observerPool).loadInstallation();
@@ -1622,7 +1625,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     gatewayUrl: forwarding?.url,
     async refreshGatewayUrl() {
       // kubectl selects one Pod; a gateway restart invalidates the previous tunnel.
-      forwarding?.stop();
+      await forwarding?.stop();
       forwarding = await startPortForward(placement, gatewayServiceName);
       return forwarding.url;
     },
@@ -3015,7 +3018,7 @@ async function assertSameNamespaceSecretSharing(context, topology) {
   context.after(() => forwarding?.stop());
   peerTopology.gatewayUrl = forwarding.url;
   peerTopology.refreshGatewayUrl = async () => {
-    forwarding?.stop();
+    await forwarding?.stop();
     forwarding = await startPortForward(topology.placement, peerTopology.gatewayServiceName);
     return forwarding.url;
   };

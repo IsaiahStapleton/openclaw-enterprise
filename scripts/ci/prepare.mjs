@@ -9,7 +9,11 @@ import { fileURLToPath } from "node:url";
 import { cleanupResourceIds } from "./cleanup.mjs";
 import { prepareGatewayRouting } from "./routing.mjs";
 import { prepareLogging } from "./logging.mjs";
-import { prepareOpenShell, prepareOpenShellNodeImage } from "./openshell.mjs";
+import {
+  prepareOpenShell,
+  prepareOpenShellNodeImage,
+  prepareOpenShellPodSecurityAdmission,
+} from "./openshell.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const composePostgresFile = join(repositoryRoot, "compose.postgres.yaml");
@@ -596,6 +600,13 @@ async function ensureK3dCluster(statePath, state) {
     resource.kubectl = node.kubectl;
     resource.runtimeClass = node.runtimeClass;
     resource.runtimeHandler = node.runtimeHandler;
+    const podSecurityAdmission = await prepareOpenShellPodSecurityAdmission({
+      directory,
+      runtimeClass: node.runtimeClass,
+    });
+    resource.podSecurityAdmissionConfig = podSecurityAdmission.path;
+    resource.podSecurityAdmissionContainerPath = podSecurityAdmission.containerPath;
+    resource.podSecurityAdmissionK3dArgs = podSecurityAdmission.k3dArgs;
     await markResourceReady(statePath, state, nodeImageResource);
   }
   await execFile(process.env.OPENCLAW_CI_K3D_BIN ?? "k3d", [
@@ -603,6 +614,7 @@ async function ensureK3dCluster(statePath, state) {
     "create",
     cluster,
     ...(resource.nodeImage ? ["--image", resource.nodeImage] : []),
+    ...(resource.podSecurityAdmissionK3dArgs ?? []),
     "--servers",
     "1",
     "--agents",

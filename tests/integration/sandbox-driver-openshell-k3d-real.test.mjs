@@ -530,6 +530,11 @@ function projectedTokenGatewayClient(
   };
 }
 
+function throwOpenShellAbortReason(signal) {
+  if (!signal.aborted) return;
+  throw signal.reason ?? new Error("OpenShell management port-forward operation was aborted.");
+}
+
 function createIntegrationSandboxDriverFactory(
   OpenShellSandboxDriver,
   GrpcOpenShellGatewayClient,
@@ -538,30 +543,61 @@ function createIntegrationSandboxDriverFactory(
   const gatewayState = new Map();
   const credentialBridges = new Map();
 
-  function stopGatewayForward(namespaceName) {
+  async function stopGatewayForward(namespaceName, expectedState) {
     const state = gatewayState.get(namespaceName);
-    state?.forward?.stop();
+    if (state === undefined || (expectedState !== undefined && state !== expectedState)) return;
     gatewayState.delete(namespaceName);
+    await state.forward.stop();
+  }
+
+  async function disposeGatewayForwards() {
+    const cleanup = await Promise.allSettled(
+      [...gatewayState.entries()].map(([namespaceName, state]) =>
+        stopGatewayForward(namespaceName, state),
+      ),
+    );
+    const failures = cleanup.filter((result) => result.status === "rejected");
+    if (failures.length > 0) throw new AggregateError(failures.map(({ reason }) => reason));
   }
 
   // TODO(OpenShell per-Sandbox ServiceAccount support): stop reconfiguring the namespace gateway
   // once the upstream gateway can bind each Sandbox to Compute's exact Agent ServiceAccount.
   async function endpointForNamespace(context, { sandboxServiceAccountName } = {}) {
     const namespaceName = context.namespace.name;
+    throwOpenShellAbortReason(context.signal);
     const prior = gatewayState.get(namespaceName);
     if (prior !== undefined && prior.sandboxServiceAccountName === sandboxServiceAccountName) {
       return prior.endpoint;
     }
 
-    prior?.forward?.stop();
-    await installOpenShellGateway(namespaceName, { sandboxServiceAccountName });
-    const forward = await startOpenShellGatewayPortForward(namespaceName);
-    const state = { endpoint: forward.url, forward, sandboxServiceAccountName };
-    gatewayState.set(namespaceName, state);
-    context.signal.addEventListener("abort", () => stopGatewayForward(namespaceName), {
-      once: true,
-    });
-    return state.endpoint;
+    await stopGatewayForward(namespaceName, prior);
+    let ownedState;
+    const stopOwnedForward = () => {
+      if (ownedState === undefined) return;
+      void stopGatewayForward(namespaceName, ownedState).catch((error) => {
+        process.stderr.write(
+          `OpenShell management port-forward abort cleanup failed for ${namespaceName}: ${error.message}\n`,
+        );
+      });
+    };
+    context.signal.addEventListener("abort", stopOwnedForward, { once: true });
+    try {
+      throwOpenShellAbortReason(context.signal);
+      await installOpenShellGateway(namespaceName, { sandboxServiceAccountName });
+      throwOpenShellAbortReason(context.signal);
+      const forward = await startOpenShellGatewayPortForward(namespaceName);
+      ownedState = { endpoint: forward.url, forward, sandboxServiceAccountName };
+      gatewayState.set(namespaceName, ownedState);
+      if (context.signal.aborted) {
+        await stopGatewayForward(namespaceName, ownedState);
+        throwOpenShellAbortReason(context.signal);
+      }
+      return ownedState.endpoint;
+    } catch (error) {
+      if (ownedState !== undefined) await stopGatewayForward(namespaceName, ownedState);
+      context.signal.removeEventListener("abort", stopOwnedForward);
+      throw error;
+    }
   }
 
   function existingEndpointForNamespace(context) {
@@ -574,7 +610,7 @@ function createIntegrationSandboxDriverFactory(
     return state.endpoint;
   }
 
-  return (selection) => {
+  const createDriver = (selection) => {
     function optionsFor(requirements, namespaceName, endpoint) {
       const options = structuredClone(selection.configuration);
       options.gateway.endpoint = endpoint;
@@ -679,6 +715,9 @@ function createIntegrationSandboxDriverFactory(
             await delegate(undefined, context.namespace.name, endpoint).cleanup(context);
           }
         } finally {
+          if (context.revision === undefined) {
+            await stopGatewayForward(context.namespace.name);
+          }
           if (context.revision !== undefined) {
             const bridge = credentialBridges.get(context.revision.id);
             if (bridge !== undefined) {
@@ -718,6 +757,8 @@ function createIntegrationSandboxDriverFactory(
       },
     };
   };
+  createDriver.disposeGatewayForwards = disposeGatewayForwards;
+  return createDriver;
 }
 
 async function prepareProductionInstallation(context) {
@@ -783,14 +824,15 @@ async function prepareProductionInstallation(context) {
     cluster: "k3d-openshell-sandboxdriver",
   });
   await writeFile(startupPath, JSON.stringify(configuration), { mode: 0o600 });
+  const createSandboxDriver = createIntegrationSandboxDriverFactory(
+    OpenShellSandboxDriver,
+    GrpcOpenShellGatewayClient,
+    operatorKubernetes,
+  );
   const drivers = await loadInstallationConfiguration({
     mode: "production",
     environment: { OCC_CONFIG_PATH: startupPath },
-    createSandboxDriver: createIntegrationSandboxDriverFactory(
-      OpenShellSandboxDriver,
-      GrpcOpenShellGatewayClient,
-      operatorKubernetes,
-    ),
+    createSandboxDriver,
   });
   assert.equal(drivers.sandboxDriver?.capability, "sandbox");
   assert.equal(drivers.sandboxDriver?.id, configuration.drivers.sandbox.id);
@@ -802,22 +844,52 @@ async function prepareProductionInstallation(context) {
   let placement;
   let gatewayForward;
   context.after(async () => {
-    gatewayForward?.stop();
-    if (worker !== undefined) await worker.stop();
-    else if (workerPool !== undefined) await workerPool.end();
-    if (productionApp !== undefined) await productionApp.close();
-    await observerPool.end();
-    if (placement !== undefined) {
-      await kubectl(
-        "delete",
-        "namespace",
-        placement,
-        "--ignore-not-found=true",
-        "--wait=true",
-        "--timeout=120s",
+    const cleanupFailures = [];
+    const cleanupStep = async (description, operation) => {
+      try {
+        await operation();
+      } catch (error) {
+        cleanupFailures.push(new Error(`${description}: ${error.message}`, { cause: error }));
+      }
+    };
+
+    await cleanupStep("controller worker", async () => {
+      if (worker !== undefined) await worker.stop();
+      else if (workerPool !== undefined) await workerPool.end();
+    });
+    await cleanupStep("OpenShell management port-forwards", async () => {
+      await createSandboxDriver.disposeGatewayForwards();
+    });
+    await cleanupStep("OpenShell gateway port-forward", async () => {
+      await gatewayForward?.stop();
+    });
+    await cleanupStep("production app", async () => {
+      if (productionApp !== undefined) await productionApp.close();
+    });
+    await cleanupStep("observer pool", async () => {
+      await observerPool.end();
+    });
+    await cleanupStep("Kubernetes namespace", async () => {
+      if (placement !== undefined) {
+        await kubectl(
+          "delete",
+          "namespace",
+          placement,
+          "--ignore-not-found=true",
+          "--wait=true",
+          "--timeout=120s",
+        );
+      }
+    });
+    await cleanupStep("temporary directory", async () => {
+      await rm(directory, { recursive: true, force: true });
+    });
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError(
+        cleanupFailures,
+        `OpenShell integration cleanup reported ${cleanupFailures.length} failure(s).`,
       );
     }
-    await rm(directory, { recursive: true, force: true });
   });
 
   const existing = await new PostgresPlatformState(observerPool).loadInstallation();

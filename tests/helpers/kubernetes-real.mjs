@@ -2,6 +2,7 @@ import { sha256Hex } from "../../packages/utils/src/index.ts";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -380,27 +381,93 @@ export function createRealKubernetesFixture({
       stderr = `${stderr}${chunk.toString()}`.slice(-2048);
     });
     const url = await new Promise((resolve, reject) => {
+      let settled = false;
       const timer = setTimeout(() => {
-        child.kill();
-        reject(new Error(`The production gateway port-forward did not become ready: ${stderr}`));
+        void rejectAfterCleanup(
+          reject,
+          new Error(`The production gateway port-forward did not become ready: ${stderr}`),
+        );
       }, 30_000);
-      child.stdout.on("data", (chunk) => {
+      timer.unref();
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        child.stdout.off("data", onStdout);
+        child.off("error", onError);
+        child.off("exit", onExit);
+        return true;
+      };
+      const finish = (complete, value) => {
+        if (!settle()) return;
+        complete(value);
+      };
+      const rejectAfterCleanup = async (reject, error) => {
+        if (!settle()) return;
+        const cleanupFailures = [];
+        if (child.pid !== undefined) {
+          await stopPortForward(child, target).catch((cleanupError) => {
+            cleanupFailures.push(cleanupError);
+          });
+        }
+        if (cleanupFailures.length > 0) {
+          reject(
+            new AggregateError(
+              [error, ...cleanupFailures],
+              `Production gateway port-forward startup failed and cleanup reported ${cleanupFailures.length} failure(s).`,
+            ),
+          );
+          return;
+        }
+        reject(error);
+      };
+      const onStdout = (chunk) => {
         const match = chunk.toString().match(/Forwarding from 127\.0\.0\.1:(\d+)/);
         if (match !== null) {
-          clearTimeout(timer);
-          resolve(`http://127.0.0.1:${match[1]}`);
+          finish(resolve, `http://127.0.0.1:${match[1]}`);
         }
-      });
-      child.once("error", (error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-      child.once("exit", (code) => {
-        clearTimeout(timer);
-        reject(new Error(`Production gateway port-forward exited (${code}): ${stderr}`));
-      });
+      };
+      const onError = (error) => void rejectAfterCleanup(reject, error);
+      const onExit = (code) =>
+        finish(reject, new Error(`Production gateway port-forward exited (${code}): ${stderr}`));
+      child.stdout.on("data", onStdout);
+      child.once("error", onError);
+      child.once("exit", onExit);
     });
-    return { url, stop: () => child.kill() };
+    let stopping;
+    return {
+      url,
+      stop: () => {
+        stopping ??= stopPortForward(child, target);
+        return stopping;
+      },
+    };
+  }
+
+  async function stopPortForward(child, target) {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = once(child, "exit");
+    child.kill("SIGTERM");
+    if (await waitForExit(exited, 2_000)) return;
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    child.kill("SIGKILL");
+    if (await waitForExit(exited, 2_000)) return;
+    throw new Error(`Timed out stopping Kubernetes port-forward for ${target}.`);
+  }
+
+  async function waitForExit(exited, timeoutMs) {
+    let timer;
+    try {
+      return await Promise.race([
+        exited.then(() => true),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   return {

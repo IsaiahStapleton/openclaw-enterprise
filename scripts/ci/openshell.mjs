@@ -20,6 +20,8 @@ const openShellGatewayImage =
   "ghcr.io/nvidia/openshell/gateway:0.0.113@sha256:0f8210db6590f02a2007271794104a6fcdcec0cee7a97a1cb015fafd1609ff9d";
 const openShellSupervisorImage =
   "ghcr.io/nvidia/openshell/supervisor:0.0.113@sha256:28f6a05314fb9aba73b0c6518aed3ffbde4b51565bfe92477241d2c94488cfbb";
+const podSecurityAdmissionConfigName = "openshell-pod-security-admission.yaml";
+const podSecurityAdmissionContainerPath = `/etc/openclaw-ci/${podSecurityAdmissionConfigName}`;
 
 const cliAssets = Object.freeze({
   "darwin:arm64": {
@@ -480,6 +482,57 @@ async function acquireKubectl(execFile, directory, platform, arch, downloadArtif
   return kubectlPath;
 }
 
+function podSecurityAdmissionConfiguration(runtimeClass) {
+  return [
+    "apiVersion: apiserver.config.k8s.io/v1",
+    "kind: AdmissionConfiguration",
+    "plugins:",
+    "  - name: PodSecurity",
+    "    configuration:",
+    "      apiVersion: pod-security.admission.config.k8s.io/v1",
+    "      kind: PodSecurityConfiguration",
+    "      defaults:",
+    "        enforce: privileged",
+    "        enforce-version: latest",
+    "        audit: privileged",
+    "        audit-version: latest",
+    "        warn: privileged",
+    "        warn-version: latest",
+    "      exemptions:",
+    "        usernames: []",
+    "        runtimeClasses:",
+    `          - ${runtimeClass}`,
+    "        namespaces: []",
+    "",
+  ].join("\n");
+}
+
+async function prepareOpenShellPodSecurityAdmission({ directory, runtimeClass }) {
+  assertKubernetesName(runtimeClass, "OpenShell RuntimeClass");
+  if (typeof directory !== "string" || directory.length === 0) {
+    throw new Error("OpenShell Pod Security admission directory must be provided.");
+  }
+  if (!isAbsolute(directory)) {
+    throw new Error("OpenShell Pod Security admission directory must be absolute.");
+  }
+  const root = resolve(directory);
+  await assertPrivateDirectory(await stat(root), root);
+  const path = join(root, podSecurityAdmissionConfigName);
+  assertInsideDirectory(root, path, "OpenShell Pod Security admission configuration");
+  await writeFile(path, podSecurityAdmissionConfiguration(runtimeClass), { mode: 0o600 });
+  await chmod(path, 0o600);
+  return {
+    path,
+    containerPath: podSecurityAdmissionContainerPath,
+    k3dArgs: [
+      "--volume",
+      `${path}:${podSecurityAdmissionContainerPath}:ro@server:0`,
+      "--k3s-arg",
+      `--kube-apiserver-arg=admission-control-config-file=${podSecurityAdmissionContainerPath}@server:0`,
+    ],
+  };
+}
+
 async function assertGvisorRuntimeAvailable(execFile, docker, cluster, handler) {
   const result = await execFile(docker, [
     "exec",
@@ -492,6 +545,105 @@ async function assertGvisorRuntimeAvailable(execFile, docker, cluster, handler) 
     throw new Error(
       `OpenShell requires the k3d node containerd runtime handler "${handler}" before this lane can run. The selected k3d node does not advertise that handler in its containerd configuration; RuntimeClass alone is not proof of sandbox isolation.`,
     );
+  }
+}
+
+function violatingPodSecurityManifest(namespace, runtimeClass) {
+  return [
+    "apiVersion: v1",
+    "kind: Pod",
+    "metadata:",
+    "  name: openshell-psa-violation",
+    `  namespace: ${namespace}`,
+    "spec:",
+    "  restartPolicy: Never",
+    ...(runtimeClass ? [`  runtimeClassName: ${runtimeClass}`] : []),
+    "  containers:",
+    "    - name: probe",
+    "      image: busybox:1.36",
+    "      command:",
+    "        - sh",
+    "        - -c",
+    "        - 'true'",
+    "      securityContext:",
+    "        privileged: true",
+    "",
+  ].join("\n");
+}
+
+function errorDetails(error) {
+  return [error?.stdout, error?.stderr, error?.message].filter(Boolean).join("\n").trim();
+}
+
+async function assertOpenShellPodSecurityAdmissionExemption(
+  execFile,
+  kubectl,
+  cluster,
+  directory,
+  runtimeClass,
+) {
+  const namespace = "openshell-psa-probe";
+  const rejectedManifestPath = join(directory, "openshell-psa-restricted-rejection.yaml");
+  const exemptManifestPath = join(directory, "openshell-psa-runtimeclass-exemption.yaml");
+  assertInsideDirectory(directory, rejectedManifestPath, "OpenShell Pod Security rejection probe");
+  assertInsideDirectory(directory, exemptManifestPath, "OpenShell Pod Security exemption probe");
+  await writeFile(rejectedManifestPath, violatingPodSecurityManifest(namespace), { mode: 0o600 });
+  await chmod(rejectedManifestPath, 0o600);
+  await writeFile(exemptManifestPath, violatingPodSecurityManifest(namespace, runtimeClass), {
+    mode: 0o600,
+  });
+  await chmod(exemptManifestPath, 0o600);
+
+  try {
+    await execFile(kubectl, kubectlArgs(cluster, ["create", "namespace", namespace]));
+    await execFile(
+      kubectl,
+      kubectlArgs(cluster, [
+        "label",
+        "namespace",
+        namespace,
+        "pod-security.kubernetes.io/enforce=restricted",
+        "pod-security.kubernetes.io/enforce-version=latest",
+        "--overwrite",
+      ]),
+    );
+
+    let restrictedRejection;
+    try {
+      await execFile(
+        kubectl,
+        kubectlArgs(cluster, ["apply", "--dry-run=server", "-f", rejectedManifestPath]),
+      );
+    } catch (error) {
+      restrictedRejection = error;
+    }
+    const details = errorDetails(restrictedRejection);
+    if (!restrictedRejection) {
+      throw new Error(
+        "OpenShell Pod Security admission probe unexpectedly admitted a restricted-violating Pod without the selected RuntimeClass.",
+      );
+    }
+    if (!/violates PodSecurity ["']restricted/.test(details)) {
+      throw new Error(
+        `OpenShell Pod Security admission probe expected a restricted PodSecurity rejection without RuntimeClass, but received: ${details}`,
+      );
+    }
+
+    await execFile(
+      kubectl,
+      kubectlArgs(cluster, ["apply", "--dry-run=server", "-f", exemptManifestPath]),
+    );
+  } finally {
+    await execFile(
+      kubectl,
+      kubectlArgs(cluster, [
+        "delete",
+        "namespace",
+        namespace,
+        "--ignore-not-found=true",
+        "--wait=false",
+      ]),
+    ).catch(() => undefined);
   }
 }
 
@@ -604,6 +756,13 @@ async function prepareOpenShell({ cluster, execFile, registerImage, env = proces
     runtimeHandler,
   );
   await assertGvisorRuntimeAvailable(execFile, docker, selectedCluster, runtimeHandler);
+  await assertOpenShellPodSecurityAdmissionExemption(
+    execFile,
+    kubectl,
+    selectedCluster,
+    directory,
+    runtimeClass,
+  );
   await runOpenShellRuntimeSmoke(
     execFile,
     kubectl,
@@ -649,6 +808,7 @@ export {
   openShellVersion,
   prepareOpenShell,
   prepareOpenShellNodeImage,
+  prepareOpenShellPodSecurityAdmission,
   selectCliAsset,
   selectGvisorAsset,
   selectKubectlAsset,
