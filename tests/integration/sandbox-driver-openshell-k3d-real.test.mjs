@@ -68,6 +68,8 @@ const adminCredentials = Object.freeze({
   password: "openshell-sandboxdriver-admin-password",
 });
 const credentialMountPath = "/run/enterprise-credentials";
+const diagnosticQueryTimeoutMs = 3_000;
+const observerPoolConnectionTimeoutMs = 5_000;
 const controllerRequire = createRequire(
   new URL("../../apps/controller/package.json", import.meta.url),
 );
@@ -203,6 +205,108 @@ function nativeCodexConfiguration() {
     fs: { workspaceOnly: true },
   };
   return configuration;
+}
+
+function summarizeWorkerEvent(event) {
+  return Object.fromEntries(
+    ["event", "operation", "revisionId", "outcome", "code", "attempt"]
+      .map((key) => [key, event[key]])
+      .filter(([, value]) => typeof value === "string" || typeof value === "number"),
+  );
+}
+
+function summarizeWorkerEvents(events, revisionId) {
+  return events
+    .map(summarizeWorkerEvent)
+    .filter(
+      (event) =>
+        event.revisionId === revisionId ||
+        event.event === "worker.completed" ||
+        event.event === "worker.error",
+    )
+    .slice(-40);
+}
+
+async function diagnosticQuery(pool, text, values) {
+  return pool.query({ text, values, query_timeout: diagnosticQueryTimeoutMs });
+}
+
+async function readWorkerRevisionState(pool, { namespaceId, agentId, revisionId }) {
+  const [agent, revision, work] = await Promise.all([
+    diagnosticQuery(
+      pool,
+      "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+      [namespaceId, agentId],
+    ),
+    diagnosticQuery(
+      pool,
+      `SELECT revision_number
+       FROM occ.agent_revisions
+       WHERE namespace_id = $1 AND agent_id = $2 AND id = $3`,
+      [namespaceId, agentId, revisionId],
+    ),
+    diagnosticQuery(
+      pool,
+      `SELECT revision_id, namespace_target, state, attempt_count, completed_at IS NOT NULL AS completed
+       FROM occ.controller_work
+       WHERE namespace_id = $1 AND (revision_id = $2 OR agent_id = $3)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 8`,
+      [namespaceId, revisionId, agentId],
+    ),
+  ]);
+
+  return {
+    activeRevisionId: agent.rows[0]?.active_revision_id,
+    revision: revision.rows[0]
+      ? { revisionId, revisionNumber: revision.rows[0].revision_number }
+      : undefined,
+    queue: work.rows.map((row) => ({
+      operation:
+        row.revision_id === null
+          ? row.namespace_target === null
+            ? "work.reconcile"
+            : `namespace.${row.namespace_target}`
+          : "agent_revision.reconcile",
+      revisionId: row.revision_id ?? undefined,
+      state: row.state,
+      attempt: row.attempt_count,
+      completed: row.completed,
+    })),
+  };
+}
+
+async function writeWorkerCompletionDiagnostics(options) {
+  let persisted;
+  try {
+    persisted = await readWorkerRevisionState(options.pool, options);
+  } catch (error) {
+    persisted = { readError: error?.name ?? "Error" };
+  }
+  process.stderr.write(
+    `OpenShell worker completion diagnostic: ${JSON.stringify({
+      operation: "agent_revision.reconcile",
+      revisionId: options.revisionId,
+      events: summarizeWorkerEvents(options.events, options.revisionId),
+      persisted,
+    })}\n`,
+  );
+}
+
+async function assertWorkerCompleted(options) {
+  try {
+    await waitFor(options.description, () =>
+      options.events.find(
+        (event) =>
+          event.event === "worker.completed" &&
+          event.revisionId === options.revisionId &&
+          event.outcome === "success",
+      ),
+    );
+  } catch (error) {
+    await writeWorkerCompletionDiagnostics(options);
+    throw error;
+  }
 }
 
 // TODO(OpenShell secretKeyRef support): remove credential Jobs, PVC-backed secret files, the
@@ -837,7 +941,12 @@ async function prepareProductionInstallation(context) {
   assert.equal(drivers.sandboxDriver?.capability, "sandbox");
   assert.equal(drivers.sandboxDriver?.id, configuration.drivers.sandbox.id);
 
-  const observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+  const observerPool = new pg.Pool({
+    connectionString: databaseUrl,
+    max: 4,
+    connectionTimeoutMillis: observerPoolConnectionTimeoutMs,
+    statement_timeout: diagnosticQueryTimeoutMs,
+  });
   let workerPool;
   let worker;
   let productionApp;
@@ -1037,14 +1146,14 @@ async function prepareProductionInstallation(context) {
     assert.equal(observed.status, 200, JSON.stringify(observed.error));
     return observed.data.activeRevisionId === deployed.data.id ? observed.data : undefined;
   });
-  await waitFor(`worker completion for ${deployed.data.id}`, () =>
-    events.find(
-      (event) =>
-        event.event === "worker.completed" &&
-        event.revisionId === deployed.data.id &&
-        event.outcome === "success",
-    ),
-  );
+  await assertWorkerCompleted({
+    description: `worker completion for ${deployed.data.id}`,
+    events,
+    pool: observerPool,
+    namespaceId,
+    agentId: agent.data.id,
+    revisionId: deployed.data.id,
+  });
 
   const sandbox = await waitForSandbox(placement, deployed.data);
   const harnessPod = await waitForProviderHarnessPod(placement, deployed.data);
@@ -1097,6 +1206,7 @@ async function prepareProductionInstallation(context) {
     gatewayToken: transport.gatewayToken,
     gatewayUrl: gatewayForward.url,
     firstGatewayPodUid: firstGatewayPods[0]?.metadata.uid,
+    observerPool,
   };
 }
 
@@ -1218,14 +1328,14 @@ async function assertDuplicateReconciliationDoesNotDuplicateOpenShell(topology) 
   });
   const activeSandboxName = `os-${hash(redeployed.data.id, 16)}`;
   const retiredSandboxName = `os-${hash(topology.revision.id, 16)}`;
-  await waitFor(`replacement revision ${redeployed.data.id} finalization`, () =>
-    topology.events.find(
-      (event) =>
-        event.event === "worker.completed" &&
-        event.revisionId === redeployed.data.id &&
-        event.outcome === "success",
-    ),
-  );
+  await assertWorkerCompleted({
+    description: `replacement revision ${redeployed.data.id} finalization`,
+    events: topology.events,
+    pool: topology.observerPool,
+    namespaceId: topology.namespaceId,
+    agentId: topology.agent.id,
+    revisionId: redeployed.data.id,
+  });
   // Retirement of the previous revision must leave the provider's replacement routable.
   const activeService = await resource(
     "service",
