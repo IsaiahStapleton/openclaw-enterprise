@@ -36,6 +36,7 @@ const kubeconfigPath = process.env.OCC_TEST_KUBERNETES_KUBECONFIG;
 const kubernetesContext = process.env.OCC_TEST_KUBERNETES_CONTEXT;
 const runtimeImage = process.env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE;
 const gatewayImage = process.env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE ?? runtimeImage;
+const gatewayPublisherImage = process.env.OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE;
 const codexImage =
   process.env.OCC_TEST_KUBERNETES_AGENT_IMAGE ??
   process.env.OCC_TEST_KUBERNETES_CODEX_IMAGE ??
@@ -67,7 +68,7 @@ const requiresGatewayRouting = {
   skip:
     process.env.OCC_TEST_GATEWAY_ROUTING_REAL === "1"
       ? requiresProductionCluster.skip
-      : "Set OCC_TEST_GATEWAY_ROUTING_REAL=1 with Envoy Gateway and cert-manager for private routing proof.",
+      : "Set OCC_TEST_GATEWAY_ROUTING_REAL=1 with Envoy Gateway, cert-manager, and OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE for private routing proof.",
 };
 const requiresLiveSlack = {
   skip: slackSelected
@@ -160,6 +161,13 @@ async function validatePrerequisites() {
     process.env.OPENAI_API_KEY,
     "OPENAI_API_KEY is required: an actual production provider turn cannot be mocked or skipped.",
   );
+  if (process.env.OCC_TEST_GATEWAY_ROUTING_REAL === "1") {
+    assert.match(
+      gatewayPublisherImage ?? "",
+      /^sha256:[a-f0-9]{64}$/i,
+      "OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE must be the prepared Docker-local gateway image ID for routing proof.",
+    );
+  }
   const kubeconfig = await validateKubernetesPrerequisites();
   await configureExistingK3dLocalPathSharedFileSystem({ kubeconfigPath, kubernetesContext });
   return kubeconfig;
@@ -1607,6 +1615,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     placement,
     platformNamespace,
     gatewayImage,
+    gatewayPublisherImage,
     workspaceGateway,
     workspaceRequest,
     approvedClient,

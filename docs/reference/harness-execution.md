@@ -113,6 +113,17 @@ activation audit when durable completion succeeds; recovery repeats safe effects
 under the current claim. Exact ordering and failure handling are explained in
 the [worker flow](../flows/controller-worker.md).
 
+The pinned OpenClaw Codex plugin permits fresh remote work when OCC owns the
+native process configuration, but it lacks a supported managed-remote resume path
+for an existing ordinary session after gateway restart. Retained gateway session
+state and persistent volume data prove storage continuity; they do not prove
+continued native execution. Current dedicated restart acceptance remains
+incomplete, and the existing ownership and persistence requirements remain.
+Current evidence is tracked in the
+[test coverage delivery status](../../specs/19-github-actions-test-coverage.md#delivery-status),
+and the upstream restriction is documented in
+[openclaw/openclaw@759e127](https://github.com/openclaw/openclaw/commit/759e127777b54426c922e8ab4c228523ddac04e9).
+
 ## Optional sandbox provisioning
 
 The current optional SandboxDriver contract declares supported `networking`,

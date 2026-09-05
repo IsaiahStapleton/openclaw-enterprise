@@ -10,6 +10,7 @@ import {
   deriveCodexBwrapProfile,
   prepareCodexSeccompProfile,
 } from "../../scripts/ci/codex-seccomp.mjs";
+import { resolveGatewayPublisherImage } from "../helpers/envoy-workspace-gateway.mjs";
 import { createKubernetesInstallationConfiguration } from "../helpers/kubernetes-real.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -120,6 +121,35 @@ test("Kubernetes test helper passes an explicit Codex localhost seccomp profile 
   });
 
   assert.equal(configuration.drivers.compute.configuration.runtime.codexSeccompProfile, profile);
+});
+
+test("Envoy host publisher requires the prepared Docker-local gateway image identity", () => {
+  const k3dRuntimeReference =
+    "localhost/openclaw-k8s-test/occ-test-kubernetes-gateway-image@sha256:" + digest;
+  const dockerImageId = `sha256:${"b".repeat(64)}`;
+
+  assert.equal(
+    resolveGatewayPublisherImage({
+      gatewayImage: k3dRuntimeReference,
+      gatewayPublisherImage: dockerImageId,
+    }),
+    dockerImageId,
+  );
+  assert.throws(
+    () =>
+      resolveGatewayPublisherImage({
+        gatewayImage: k3dRuntimeReference,
+      }),
+    /OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE/,
+  );
+  assert.throws(
+    () =>
+      resolveGatewayPublisherImage({
+        gatewayImage: k3dRuntimeReference,
+        gatewayPublisherImage: k3dRuntimeReference,
+      }),
+    /immutable Docker image ID/,
+  );
 });
 
 test("codex seccomp preparation fails closed for unverified Codex versions and foreign clusters", async () => {

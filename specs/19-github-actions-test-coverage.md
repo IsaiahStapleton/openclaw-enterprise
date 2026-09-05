@@ -125,6 +125,8 @@ The runtime pin change in `d189689` pins OpenClaw, Codex-plugin and Slack-plugin
 
 Fresh bootstrap at `87234e1` passed the exact v2 seccomp preparation, but the embedded runtime then entered startup `CrashLoopBackOff` before a model turn. Admission injected the retired `logging.redactSensitive` key, and runtime configuration locking failed against the read-only `/etc/openclaw` mount. Cleanup passed. The run was intentionally interrupted (exit 130) before final reporter output, so it is not a completed 0/1 acceptance result. Current repairs remove the retired logging admission key from admitted configurations and add an actual admitted read-only Configuration smoke; neither establishes a new live pass until rerun against the credentialed suites.
 
+Current evidence at `e491e76`: hosted CI passed in [run 33943928798](https://github.com/openclaw/openclaw-enterprise/actions/runs/33943928798). The embedded live case at 04:12 UTC on 2026-09-05 passed (1/1 in 127124.8 ms), preserving the exact artifact, session and PVC across restart; owned cleanup passed. Routing has not passed: the 04:16 UTC on 2026-09-05 run failed without raw evidence, the 04:24 UTC on 2026-09-05 direct wrapper missed file-database setup, and the corrected 04:27 UTC on 2026-09-05 run failed (0/1 in 92417.8 ms) because the host publisher received a node-containerd image reference and Docker reported `No such image`; cleanup passed. Current source now carries the prepared immutable Docker ID separately for the host publisher, and live retry is pending. Dedicated Codex has not passed: the 04:32 UTC on 2026-09-05 raw Node run reached initial model work and post-restart artifact/PVC continuity, and the Pod proved `unshare`/Bubblewrap under UID 1000 with zero capabilities and `no_new_privs=1`, but the launcher was intentionally interrupted (exit 130) before final JSON after the current OpenClaw Codex plugin rejected cold resume of the existing ordinary session without a supported managed-remote resume path. The API-key remote-control informational logs were unrelated to that cause. OpenShell is still running at `e491e76` with no recorded result.
+
 Local live proofs use authorized credentials and are separate from a protected hosted workflow run. PR #16 merged separately at `b020ea50` with a PR16-only waiver; PR #23 remains based on the retained remote logging branch and has not been retargeted or merged. The protected workflow dispatches from main only and has not run at the reviewed main revision. These results do not establish full-suite acceptance at one SHA.
 
 ## Open Decisions
@@ -141,6 +143,8 @@ The user approved branch/PR creation, browser provisioning, bounded live model/s
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-04 21:44: Added current e491 evidence for hosted CI, embedded live pass, routing host-publisher failure, dedicated cold-resume limitation and pending OpenShell result. (01a06dd0-9fff-7e90-aae3-4e7099a6d154 - e491e7618ee894e6cf0c2336e5d16081be512b73)
 
 - 2026-09-04 21:04: Recorded the 87234e1 live bootstrap result: seccomp preparation passed, embedded startup blocked before model turn, cleanup passed, and no final reporter result was produced. (01a06dd0-9fff-7e90-aae3-4e7099a6d154 - 87234e1766e5802b45424523246a52a4b2d45590)
 

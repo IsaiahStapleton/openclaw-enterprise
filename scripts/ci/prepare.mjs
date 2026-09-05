@@ -782,6 +782,38 @@ async function dockerImageHasRepoDigest(image) {
   return repoDigests.some((reference) => reference.toLowerCase().endsWith(`@sha256:${expected}`));
 }
 
+async function dockerImageId(image) {
+  const inspected = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
+    "image",
+    "inspect",
+    "--format",
+    "{{.Id}}",
+    image,
+  ]);
+  const id = inspected.stdout.trim();
+  assertDockerImageId(id, `Docker image ${image}`);
+  return id;
+}
+
+function assertDockerImageId(id, description) {
+  if (!/^sha256:[a-f0-9]{64}$/i.test(id)) {
+    throw new Error(`${description} did not resolve to an immutable local image ID.`);
+  }
+}
+
+async function ensureDockerSourceImage(state, image, envName) {
+  if (stateOwnsImageTag(state, image)) {
+    await execFile(process.env.OCC_DOCKER_BIN ?? "docker", ["image", "inspect", image]);
+    return dockerImageId(image);
+  }
+  assertImmutableImageReference(image, envName);
+  await execFile(process.env.OCC_DOCKER_BIN ?? "docker", ["pull", image]);
+  if (!(await dockerImageHasRepoDigest(image))) {
+    throw new Error(`${envName} pull did not materialize the requested registry digest.`);
+  }
+  return dockerImageId(image);
+}
+
 async function assertK3dImageReference(cluster, reference, envName) {
   const listed = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
     "exec",
@@ -812,20 +844,18 @@ async function registerImageInK3d(statePath, state, cluster, image, envName) {
       (resource.sourceImage === image || resource.name === image || resource.reference === image),
   );
   if (existing) {
+    if (!existing.hostImageId && existing.sourceImage) {
+      existing.hostImageId = await ensureDockerSourceImage(state, existing.sourceImage, envName);
+      await writeState(statePath, state);
+    }
+    assertDockerImageId(existing.hostImageId, envName);
     await assertK3dImageReference(cluster, existing.reference, envName);
-    return existing.reference;
+    return existing;
   }
 
-  const isStateOwnedTag = stateOwnsImageTag(state, image);
+  const hostImageId = await ensureDockerSourceImage(state, image, envName);
   let importReference = image;
-  if (isStateOwnedTag) {
-    await execFile(process.env.OCC_DOCKER_BIN ?? "docker", ["image", "inspect", image]);
-  } else {
-    assertImmutableImageReference(image, envName);
-    await execFile(process.env.OCC_DOCKER_BIN ?? "docker", ["pull", image]);
-    if (!(await dockerImageHasRepoDigest(image))) {
-      throw new Error(`${envName} pull did not materialize the requested registry digest.`);
-    }
+  if (!stateOwnsImageTag(state, image)) {
     importReference = localImportTag(cluster, envName);
     const tagResource = addResource(state, "image-tag", { name: importReference });
     await writeState(statePath, state);
@@ -836,6 +866,7 @@ async function registerImageInK3d(statePath, state, cluster, image, envName) {
   const resource = addResource(state, "k3d-image", {
     name: importReference,
     sourceImage: image,
+    hostImageId,
     cluster: cluster.name,
     envName,
   });
@@ -905,7 +936,7 @@ async function registerImageInK3d(statePath, state, cluster, image, envName) {
   await assertK3dImageReference(cluster, runtimeReference, envName);
   resource.reference = runtimeReference;
   await markResourceReady(statePath, state, resource);
-  return runtimeReference;
+  return resource;
 }
 
 async function prepareK3dRuntimeImages(
@@ -932,7 +963,11 @@ async function prepareK3dRuntimeImages(
   };
   requireEnv(Object.keys(inputs), inputs);
   for (const [name, value] of Object.entries(inputs)) {
-    env[name] = await registerImageInK3d(statePath, state, cluster, value, name);
+    const image = await registerImageInK3d(statePath, state, cluster, value, name);
+    env[name] = image.reference;
+    if (name === "OCC_TEST_KUBERNETES_GATEWAY_IMAGE") {
+      env.OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE = image.hostImageId;
+    }
   }
   // Replace the build tag with its imported digest before publishing the next step's inputs.
   env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE = env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE;
@@ -957,35 +992,43 @@ async function prepareK3dRuntimeImages(
 async function prepareProductionImages(statePath, state, cluster, env) {
   const built = await buildRuntimeImages(statePath, state, { controller: true, runtime: true });
   Object.assign(env, built.env);
-  env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE = await registerImageInK3d(
-    statePath,
-    state,
-    cluster,
-    env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE,
-    "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
-  );
-  env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE = await registerImageInK3d(
-    statePath,
-    state,
-    cluster,
-    env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE,
-    "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
-  );
+  env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE = (
+    await registerImageInK3d(
+      statePath,
+      state,
+      cluster,
+      env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE,
+      "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
+    )
+  ).reference;
+  env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE = (
+    await registerImageInK3d(
+      statePath,
+      state,
+      cluster,
+      env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE,
+      "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
+    )
+  ).reference;
   requireEnv(["OCC_TEST_PRODUCTION_POSTGRES_IMAGE", "OCC_TEST_PRODUCTION_NODE_IMAGE"]);
-  env.OCC_TEST_PRODUCTION_POSTGRES_IMAGE = await registerImageInK3d(
-    statePath,
-    state,
-    cluster,
-    process.env.OCC_TEST_PRODUCTION_POSTGRES_IMAGE,
-    "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
-  );
-  env.OCC_TEST_PRODUCTION_NODE_IMAGE = await registerImageInK3d(
-    statePath,
-    state,
-    cluster,
-    process.env.OCC_TEST_PRODUCTION_NODE_IMAGE,
-    "OCC_TEST_PRODUCTION_NODE_IMAGE",
-  );
+  env.OCC_TEST_PRODUCTION_POSTGRES_IMAGE = (
+    await registerImageInK3d(
+      statePath,
+      state,
+      cluster,
+      process.env.OCC_TEST_PRODUCTION_POSTGRES_IMAGE,
+      "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
+    )
+  ).reference;
+  env.OCC_TEST_PRODUCTION_NODE_IMAGE = (
+    await registerImageInK3d(
+      statePath,
+      state,
+      cluster,
+      process.env.OCC_TEST_PRODUCTION_NODE_IMAGE,
+      "OCC_TEST_PRODUCTION_NODE_IMAGE",
+    )
+  ).reference;
   for (const name of [
     "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
     "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
@@ -1121,7 +1164,9 @@ async function prepareLane({ lane, statePath }) {
           execFile,
           env: { ...process.env, ...env },
           registerImage: (image, name) =>
-            registerImageInK3d(resolvedStatePath, state, cluster, image, name),
+            registerImageInK3d(resolvedStatePath, state, cluster, image, name).then(
+              (registered) => registered.reference,
+            ),
         }),
       );
       break;

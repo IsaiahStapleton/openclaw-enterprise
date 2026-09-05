@@ -577,6 +577,7 @@ default remains `gpt-4.1`.
 | `OCC_TEST_KUBERNETES_KUBECONFIG`            | Absolute path to the dedicated disposable k3d kubeconfig.                                                                                                                                                  |
 | `OCC_TEST_KUBERNETES_CONTEXT`               | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                                                                                                               |
 | `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`         | Imported real OpenClaw gateway image pinned with an immutable SHA-256 digest.                                                                                                                              |
+| `OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE`  | Docker-local image ID used only by the Envoy routing host TCP publisher; CI derives it from the prepared gateway source image before k3d import.                                                           |
 | `OCC_TEST_KUBERNETES_AGENT_IMAGE`           | Imported real pinned Codex runtime image with an immutable SHA-256 digest.                                                                                                                                 |
 | `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`         | Optional shared image fallback for both gateway and Agent when it contains both real runtimes.                                                                                                             |
 | `OCC_TEST_KUBERNETES_CODEX_IMAGE`           | Optional legacy fallback for the Agent image when the explicit Agent image is absent.                                                                                                                      |
@@ -591,9 +592,12 @@ The separate workspace-file routing case requires
 `OCC_TEST_GATEWAY_ROUTING_REAL=1` and the same runtime prerequisites. It also
 requires ready Envoy Gateway and cert-manager controllers, free local port
 443, `OCC_TEST_GATEWAY_CA_CERT_PATH`, `OCC_TEST_GATEWAY_CA_KEY_PATH`, and
-`NODE_EXTRA_CA_CERTS` set before Node starts. Controller namespace overrides
-are `OCC_TEST_ENVOY_GATEWAY_NAMESPACE` (default `envoy-gateway-system`) and
-`OCC_TEST_CERT_MANAGER_NAMESPACE` (default `cert-manager`). See the
+`NODE_EXTRA_CA_CERTS` set before Node starts. The host TCP publisher also
+requires CI-generated `OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE`; do not replace
+it with the k3d-only `OCC_TEST_KUBERNETES_GATEWAY_IMAGE` runtime reference.
+Controller namespace overrides are `OCC_TEST_ENVOY_GATEWAY_NAMESPACE` (default
+`envoy-gateway-system`) and `OCC_TEST_CERT_MANAGER_NAMESPACE` (default
+`cert-manager`). See the
 [focused routing proof](../testing.md#kubernetes-model-turns-and-secrets) for
 the disposable CA and command. The CA private key is test setup only; the
 production OCC API mounts only a public trust bundle.
