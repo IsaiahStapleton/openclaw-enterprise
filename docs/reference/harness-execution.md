@@ -58,10 +58,12 @@ Compute identity, and any selected sandbox or account binding.
 Admission also stamps the platform-owned native logging settings after any
 SandboxDriver transformation and before validation. The frozen AgentRevision
 contains `logging.level`, matching `logging.consoleLevel`, JSON console style,
-tool-sensitive redaction, and disabled native OTLP log export. Later edits to
-the source Configuration or to OCC startup `logging.level` cannot mutate that
-snapshot; deploy the Agent again to create a new revision with a changed runtime
-level.
+and disabled native OTLP log export. Runtime-owned console and tool redaction
+remain enabled by the gateway and Codex runtime; the admitted native
+Configuration does not carry the retired `logging.redactSensitive` key. Later
+edits to the source Configuration or to OCC startup `logging.level` cannot mutate
+that snapshot; deploy the Agent again to create a new revision with a changed
+runtime level.
 
 Later edits affect a future explicit deployment. The worker checks the admitted
 combination and exact ownership before runtime effects. Unsupported combinations,
@@ -75,7 +77,9 @@ queue guarantees.
 For level changes, collection, and backend verification, use the
 [observability guide](../guides/observability.md).
 
-Compute renders logging from the admitted revision. Gateway containers receive
+Compute renders logging from the admitted revision. Kubernetes mounts the
+admitted native Configuration read-only under `/etc/openclaw`, with
+`OPENCLAW_CONFIG_PATH` pointing at that document. Gateway containers receive
 native JSON console logging at the admitted level and keep their own OTLP log
 export disabled. Dedicated Codex app-servers receive `LOG_FORMAT=json`,
 `RUST_LOG=<level>,codex_otel=off`, and host-owned `codex` configuration that

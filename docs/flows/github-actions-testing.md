@@ -75,7 +75,7 @@ The OpenShell test owns its management port-forwards for the full test lifetime.
 
 The runner discovers active test files and verifies that the map owns every file. It invokes exact files with invocation-scoped environment inputs. A custom Node reporter exposes case names, locations and outcomes; arbitrary test output and credential-bearing error payloads are excluded from published results.
 
-Required named cases must pass. A permitted counterpart skip belongs to a separate invocation, and a full run requires that invocation too. A synthetic file-wrapper success, missing result output or zero executed cases cannot establish coverage. The runner retains failure, timeout and cleanup outcomes in the lane result.
+Required named cases must pass. A permitted counterpart skip belongs to a separate invocation, and a full run requires that invocation too. A synthetic file-wrapper success, missing result output, zero executed cases or an interrupted run without final reporter output cannot establish coverage. The runner retains failure, timeout and cleanup outcomes in the lane result.
 
 ### 4. Clean up and publish the bounded result
 
@@ -106,6 +106,8 @@ The aggregate runs after success or failure and checks expected job outcomes plu
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-04 21:04: Clarified that interrupted runs without final reporter output are not completed lane results. (01a06dd0-9fff-7e90-aae3-4e7099a6d154 - 87234e1766e5802b45424523246a52a4b2d45590)
 
 - 2026-09-04 20:44: Clarified the dedicated Codex seccomp preparation order and the effective-model guard before live turns. (01a06dd0-9fff-7e90-aae3-4e7099a6d154 - d189689018ab11faa9b97d01d9c1310b597482f0)
 

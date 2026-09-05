@@ -7,12 +7,13 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { GATEWAY_RUNTIME_ENTRYPOINT as KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
 const execute = promisify(execFile);
 const docker = process.env.OCC_DOCKER_BIN ?? "docker";
 const image = process.env.OCC_TEST_RUNTIME_IMAGE;
-const openClawRuntimeImageModel = "gpt-5.1";
+const runtimeImageModel = "gpt-5.1";
 const imageTestOptions =
   image === undefined
     ? {
@@ -53,7 +54,7 @@ async function temporaryGatewayConfiguration(t, harnessId) {
   t.after(() => rm(directory, { recursive: true, force: true }));
 
   const path = join(directory, "openclaw.json");
-  await writeFile(path, JSON.stringify(createRuntimeImageConfiguration(harnessId, "gpt-4.1")));
+  await writeFile(path, JSON.stringify(createAdmittedRuntimeImageConfiguration(harnessId)));
   return path;
 }
 
@@ -83,6 +84,13 @@ function createRuntimeImageConfiguration(harnessId, providerModel, options = {})
   };
 
   return configuration;
+}
+
+function createAdmittedRuntimeImageConfiguration(harnessId, options = {}) {
+  return admitLoggingConfiguration(
+    createRuntimeImageConfiguration(harnessId, runtimeImageModel, options),
+    "info",
+  );
 }
 
 async function waitForGatewayReady(containerName) {
@@ -159,6 +167,26 @@ function assertGatewayLogEntry(entries, predicate, description) {
   assert.ok(
     entries.some(predicate),
     `${description}\nRecent gateway logs:\n${gatewayLogDiagnostic(entries)}`,
+  );
+}
+
+function assertGatewayReadyLog(entries) {
+  assertGatewayLogEntry(
+    entries,
+    (entry) =>
+      entry.subsystem === "gateway" && entry.level === "info" && entry.message === "gateway ready",
+    "runtime image must emit gateway ready at native info level",
+  );
+}
+
+function assertGatewayModelLog(entries, modelReference) {
+  assertGatewayLogEntry(
+    entries,
+    (entry) =>
+      entry.subsystem === "gateway" &&
+      entry.level === "info" &&
+      entry.message.includes(`agent model: ${modelReference}`),
+    `runtime image must emit ${modelReference} at native info level`,
   );
 }
 
@@ -285,7 +313,7 @@ try {
 async function runGatewaySmoke(t, harnessId, options = {}) {
   const {
     collectPlugins = harnessId === "codex",
-    configuration = createRuntimeImageConfiguration(harnessId, "gpt-4.1", {
+    configuration = createAdmittedRuntimeImageConfiguration(harnessId, {
       enableSlack: harnessId === "openclaw",
     }),
     configurationPath,
@@ -388,15 +416,9 @@ test(
   "runtime image gateway ignores inherited OPENCLAW_LOG_LEVEL in favor of native configuration",
   imageTestOptions,
   async (t) => {
-    const configuration = createRuntimeImageConfiguration("openclaw", openClawRuntimeImageModel, {
+    const configuration = createAdmittedRuntimeImageConfiguration("openclaw", {
       enableSlack: true,
     });
-    configuration.logging = {
-      level: "info",
-      consoleLevel: "info",
-      consoleStyle: "json",
-    };
-    configuration.diagnostics = { otel: { logs: false } };
 
     const { logs } = await runGatewaySmoke(t, "openclaw", {
       collectPlugins: false,
@@ -405,22 +427,8 @@ test(
     });
 
     const entries = jsonLogEntries(logs);
-    assertGatewayLogEntry(
-      entries,
-      (entry) =>
-        entry.subsystem === "gateway" &&
-        entry.level === "info" &&
-        entry.message === "gateway ready",
-      "runtime image must emit gateway ready at native info level",
-    );
-    assertGatewayLogEntry(
-      entries,
-      (entry) =>
-        entry.subsystem === "gateway" &&
-        entry.level === "info" &&
-        entry.message.includes(`agent model: openai/${openClawRuntimeImageModel}`),
-      "runtime image must emit the configured OpenClaw agent model at native info level",
-    );
+    assertGatewayReadyLog(entries);
+    assertGatewayModelLog(entries, `openai/${runtimeImageModel}`);
     assertNoPackagingFailure(logs);
   },
 );
@@ -431,13 +439,14 @@ test(
   async (t) => {
     const { logs, pluginList } = await runGatewaySmoke(t, "openclaw", {
       collectPlugins: true,
-      configuration: createRuntimeImageConfiguration("openclaw", openClawRuntimeImageModel, {
+      configuration: createAdmittedRuntimeImageConfiguration("openclaw", {
         enableSlack: true,
       }),
     });
 
-    assert.match(logs, /\[gateway\] ready/);
-    assert.match(logs, new RegExp(`agent model: openai/${openClawRuntimeImageModel}`));
+    const entries = jsonLogEntries(logs);
+    assertGatewayReadyLog(entries);
+    assertGatewayModelLog(entries, `openai/${runtimeImageModel}`);
     assertBundledSlackPluginLoaded(pluginList);
     assertNoPackagingFailure(logs);
   },
@@ -449,8 +458,9 @@ test(
   async (t) => {
     const { logs, containerName, pluginList } = await runGatewaySmoke(t, "codex");
 
-    assert.match(logs, /\[gateway\] ready/);
-    assert.match(logs, /agent model: codex\/gpt-4\.1/);
+    const entries = jsonLogEntries(logs);
+    assertGatewayReadyLog(entries);
+    assertGatewayModelLog(entries, `codex/${runtimeImageModel}`);
     assertBundledCodexPluginLoaded(pluginList);
     await assertCodexAppServerHandshake(containerName);
     assertNoPackagingFailure(logs);
@@ -473,8 +483,9 @@ test(
       volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
     });
 
-    assert.match(logs, /\[gateway\] ready/);
-    assert.match(logs, /agent model: codex\/gpt-4\.1/);
+    const entries = jsonLogEntries(logs);
+    assertGatewayReadyLog(entries);
+    assertGatewayModelLog(entries, `codex/${runtimeImageModel}`);
     await assertDedicatedRuntimeAssets(containerName);
     assertNoPackagingFailure(logs);
   },

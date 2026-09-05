@@ -123,6 +123,8 @@ OpenShell 0.0.113 requires [nftables reject expressions](https://github.com/NVID
 
 The runtime pin change in `d189689` pins OpenClaw, Codex-plugin and Slack-plugin `2026.9.1` with Codex app-server `0.152.1`. The pending repair delta adds and proves the current local repair paths without claiming new live acceptance: runtime startup passed 4/4, including actual OpenClaw and Codex startup paths, and offline `gpt-5.1` retention covered both embedded and dedicated flows. The dedicated Codex seccomp helper uses each node's actual `RuntimeDefault` OCI profile, proves the pinned Codex Bubblewrap sandbox is denied before the generated Localhost profile allows it, verifies the effective OCI policy, and keeps the selected `runtime.codexSeccompProfile` limited to the dedicated Codex container. The native arm64 offline Codex profile proof v2 passed. Current OpenShell preparation uses the digest-pinned stock K3s/runc path; it does not claim VM-equivalent OpenShell enforcement. These repairs await fresh live routing, ordinary Kubernetes and OpenShell acceptance.
 
+Fresh bootstrap at `87234e1` passed the exact v2 seccomp preparation, but the embedded runtime then entered startup `CrashLoopBackOff` before a model turn. Admission injected the retired `logging.redactSensitive` key, and runtime configuration locking failed against the read-only `/etc/openclaw` mount. Cleanup passed. The run was intentionally interrupted (exit 130) before final reporter output, so it is not a completed 0/1 acceptance result. Current repairs remove the retired logging admission key from admitted configurations and add an actual admitted read-only Configuration smoke; neither establishes a new live pass until rerun against the credentialed suites.
+
 Local live proofs use authorized credentials and are separate from a protected hosted workflow run. PR #16 merged separately at `b020ea50` with a PR16-only waiver; PR #23 remains based on the retained remote logging branch and has not been retargeted or merged. The protected workflow dispatches from main only and has not run at the reviewed main revision. These results do not establish full-suite acceptance at one SHA.
 
 ## Open Decisions
@@ -139,6 +141,8 @@ The user approved branch/PR creation, browser provisioning, bounded live model/s
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-04 21:04: Recorded the 87234e1 live bootstrap result: seccomp preparation passed, embedded startup blocked before model turn, cleanup passed, and no final reporter result was produced. (01a06dd0-9fff-7e90-aae3-4e7099a6d154 - 87234e1766e5802b45424523246a52a4b2d45590)
 
 - 2026-09-04 20:44: Distinguished prior live failures from current runtime repairs awaiting new proof, including runtime pins, startup, seccomp and runc OpenShell preparation. (01a06dd0-9fff-7e90-aae3-4e7099a6d154 - d189689018ab11faa9b97d01d9c1310b597482f0)
 
