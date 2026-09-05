@@ -63,6 +63,9 @@ function createPassiveComputeDriver() {
 
 function productionDrivers() {
   const installation = createInstallationDriverConfiguration();
+  // Production composition receives these defaults from startup YAML normalization.
+  installation.logging = { level: "info" };
+  installation.provider = [];
   installation.drivers.iam.id = "native-iam";
   return {
     installation,
@@ -217,8 +220,25 @@ test(
           cwd: repository,
           env: { ...environment, OCC_BOOTSTRAP_ADMIN_EMAIL: "different-admin@example.test" },
         }),
-        ({ stderr }) => /configured administrator account/.test(stderr),
+        ({ stderr }) => {
+          const failure = stderr
+            .trim()
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+            .find((line) => line.event === "installation.bootstrap-failed");
+          return (
+            failure?.severity === "ERROR" &&
+            failure?.service === "occ-bootstrap" &&
+            failure?.code === "BOOTSTRAP_FAILED"
+          );
+        },
       );
+
+      const rejectedAdministrator = await pool.query('SELECT id FROM occ."user" WHERE email = $1', [
+        "different-admin@example.test",
+      ]);
+      assert.equal(rejectedAdministrator.rowCount, 0);
 
       // Verify persisted Better Auth ownership, the real IAM Principal, and bootstrap audit evidence.
       const installation = await pool.query(
