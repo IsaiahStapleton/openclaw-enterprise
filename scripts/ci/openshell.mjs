@@ -12,7 +12,7 @@ const kubectlVersion = "v1.36.4";
 const k3sImage =
   "rancher/k3s:v1.36.4-k3s1@sha256:edad48e12bf81c3a09ac1c05c0c0ffaaa22145980b989d6fae84543a76b83657";
 const openShellChartReference = "oci://ghcr.io/nvidia/openshell/helm-chart";
-const openShellChartArchive = `openshell-${openShellVersion}.tgz`;
+const openShellChartArchive = `helm-chart-${openShellVersion}.tgz`;
 const openShellChartSha256 = "7bf2df0e490282ab4b7fd55217e5a79dfdd0b1b19ea87cb50a2cc229ccd0400e";
 const agentSandboxManifestSha256 =
   "230ee446d6035f631577e1c6b857f6973a8f09a0a853675d3cc34ebfe47abd6b";
@@ -263,17 +263,14 @@ function nodeImageDockerfile(assetName) {
     `COPY ${assetName} /tmp/gvisor.tar.bz2`,
     "COPY config-v3.toml.tmpl /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl",
     "RUN set -eux; \\",
-    "    mkdir -p /tmp/gvisor-extract; \\",
+    "    mkdir -p /tmp/gvisor-extract /usr/local/bin; \\",
     "    tar -xjf /tmp/gvisor.tar.bz2 -C /tmp/gvisor-extract; \\",
     '    runsc_path="$(find /tmp/gvisor-extract -type f -name runsc -print -quit)"; \\',
     '    shim_path="$(find /tmp/gvisor-extract -type f -name containerd-shim-runsc-v1 -print -quit)"; \\',
-    '    gvisor_bin_path="$(find /tmp/gvisor-extract -type f -name gvisor-bin -print -quit)"; \\',
     '    test -n "$runsc_path"; \\',
     '    test -n "$shim_path"; \\',
-    '    test -n "$gvisor_bin_path"; \\',
     '    install -m 0755 "$runsc_path" /usr/local/bin/runsc; \\',
     '    install -m 0755 "$shim_path" /usr/local/bin/containerd-shim-runsc-v1; \\',
-    '    install -m 0755 "$gvisor_bin_path" /usr/local/bin/gvisor-bin; \\',
     "    rm -rf /tmp/gvisor-extract /tmp/gvisor.tar.bz2",
     "",
   ].join("\n");
@@ -295,6 +292,17 @@ function assertImmutableImageReference(image, name) {
   if (!/^\S+@sha256:[a-f0-9]{64}$/i.test(image ?? "")) {
     throw new Error(`${name} must be an immutable image@sha256 reference.`);
   }
+}
+
+function chartDeployableImageReference(image, name) {
+  assertImmutableImageReference(image, name);
+  const digestStart = image.search(/@sha256:[a-f0-9]{64}$/i);
+  const withoutDigest = image.slice(0, digestStart);
+  const digest = image.slice(digestStart);
+  const lastSlash = withoutDigest.lastIndexOf("/");
+  const tagSeparator = withoutDigest.lastIndexOf(":");
+  if (tagSeparator > lastSlash) return image;
+  return `${withoutDigest}:local${digest}`;
 }
 
 function kubectlArgs(cluster, args) {
@@ -611,13 +619,14 @@ async function prepareOpenShell({ cluster, execFile, registerImage, env = proces
   ]);
   await installAgentSandbox(execFile, kubectl, selectedCluster, directory);
 
-  const gatewayImage = await registerImage(gatewaySourceImage, "OCC_TEST_OPENSHELL_GATEWAY_IMAGE");
-  const supervisorImage = await registerImage(
-    supervisorSourceImage,
+  const gatewayImage = chartDeployableImageReference(
+    await registerImage(gatewaySourceImage, "OCC_TEST_OPENSHELL_GATEWAY_IMAGE"),
+    "OCC_TEST_OPENSHELL_GATEWAY_IMAGE",
+  );
+  const supervisorImage = chartDeployableImageReference(
+    await registerImage(supervisorSourceImage, "OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE"),
     "OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE",
   );
-  assertImmutableImageReference(gatewayImage, "OCC_TEST_OPENSHELL_GATEWAY_IMAGE");
-  assertImmutableImageReference(supervisorImage, "OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE");
 
   return {
     OCC_TEST_OPENSHELL_K3D_REAL: "1",

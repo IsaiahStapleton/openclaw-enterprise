@@ -396,7 +396,7 @@
         {
           "path": "tests/integration/harness-topology-k3d-real.test.mjs",
           "expectedTests": [
-            "production dedicated Codex preserves gateway SQLite conversations and retained images across Pod replacement",
+            "production dedicated Codex preserves gateway conversations and retained images across Pod replacement",
             "production service account powers embedded OpenClaw through its exact persisted provider credential",
             "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings"
           ],
@@ -406,7 +406,7 @@
             "production dedicated runtime emits actual OTLP logs during a real model turn",
             "production k3d gateway replies to a real Slack message through its approved proxy and Codex Agent"
           ],
-          "namePattern": "^(?:production dedicated Codex preserves gateway SQLite conversations and retained images across Pod replacement|production service account powers embedded OpenClaw through its exact persisted provider credential|production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings)$"
+          "namePattern": "^(?:production dedicated Codex preserves gateway conversations and retained images across Pod replacement|production service account powers embedded OpenClaw through its exact persisted provider credential|production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings)$"
         }
       ]
     },
@@ -434,7 +434,7 @@
           "allowedSkips": [
             "production embedded runtime emits actual OTLP logs during a real model turn",
             "production dedicated runtime emits actual OTLP logs during a real model turn",
-            "production dedicated Codex preserves gateway SQLite conversations and retained images across Pod replacement",
+            "production dedicated Codex preserves gateway conversations and retained images across Pod replacement",
             "production service account powers embedded OpenClaw through its exact persisted provider credential",
             "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings",
             "production k3d gateway replies to a real Slack message through its approved proxy and Codex Agent"
@@ -495,7 +495,7 @@
             "production dedicated Codex consumes Envoy-routed workspace files through OCC",
             "production embedded runtime emits actual OTLP logs during a real model turn",
             "production dedicated runtime emits actual OTLP logs during a real model turn",
-            "production dedicated Codex preserves gateway SQLite conversations and retained images across Pod replacement",
+            "production dedicated Codex preserves gateway conversations and retained images across Pod replacement",
             "production service account powers embedded OpenClaw through its exact persisted provider credential",
             "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings"
           ],
@@ -621,7 +621,7 @@
           ],
           "allowedSkips": [
             "production dedicated Codex consumes Envoy-routed workspace files through OCC",
-            "production dedicated Codex preserves gateway SQLite conversations and retained images across Pod replacement",
+            "production dedicated Codex preserves gateway conversations and retained images across Pod replacement",
             "production service account powers embedded OpenClaw through its exact persisted provider credential",
             "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings",
             "production k3d gateway replies to a real Slack message through its approved proxy and Codex Agent"

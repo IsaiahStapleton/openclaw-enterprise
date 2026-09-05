@@ -1,7 +1,7 @@
 # Feature Spec: GitHub Actions integration and test coverage for Enterprise
 
 **Date:** 2026-09-04
-**Status:** Implementation authorized — protected execution resources and proof remain prerequisites
+**Status:** Implementation in progress — PR coverage verified; specialized live acceptance remains
 **Owner:** Enterprise maintainers (suite coverage and cleanup); repository administrators (Actions policy and protected environments)
 
 ## Problem and Decision
@@ -103,7 +103,20 @@ Measure cold setup time, Docker disk/memory, image artifact size and provider to
 
 The five PR lanes, 66-file suite map, result validation, resource ownership, and current-contract Configuration repairs are implemented. Routing installs pinned controllers and generates a private CA. OpenShell builds an owned gVisor-enabled K3s image and verifies a real RuntimeClass smoke Pod before its suite. Docker and Kubernetes logging preparation create owned Collector backends and JSONL observation sources.
 
-Local baseline/browser, PostgreSQL, image packaging, Kubernetes fixture/Configuration, logging collector, timeout, image transport, and Docker model proofs passed. Hosted baseline/browser, PostgreSQL, and image packaging jobs passed at `16c227b`; hosted Kubernetes fixture/Configuration and logging collector failures are under investigation. Specialized Kubernetes runtime proofs are in progress. Dedicated Slack and ChatGPT test inputs remain missing. These results do not establish full-suite acceptance.
+All PR lanes passed at [`27bd0e9`](https://github.com/openclaw/openclaw-enterprise/commit/27bd0e90a5821d7f0e3f9e842244900b3403289a) in [run 33929955618](https://github.com/openclaw/openclaw-enterprise/actions/runs/33929955618): baseline/browser, PostgreSQL, images/packaging, Kubernetes fixture/Configuration, and logging Collector (3/3). The Collector jobs use Docker 29.4.0, which supports the production Fluentd options.
+
+| Acceptance                         | Latest verified result                                                                                                                                                                                    |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PR-safe checks                     | All five hosted lanes passed; local baseline, browser, PostgreSQL, packaging, fixture/Configuration and Collector proofs also passed.                                                                     |
+| Docker model and logs              | Local live test passed (1/1), including real model responses and JSONL OTLP observations; owned resources removed.                                                                                        |
+| Ordinary Kubernetes model          | Secret API case passed. Two persistence cases were repaired to the pinned runtime's current configuration and JSONL session contracts; focused live rerun in progress.                                    |
+| Gateway routing                    | Controller/CA preparation passed. Earlier acceptance attempt was invalidated by local capacity pressure; serialized retry pending.                                                                        |
+| Kubernetes OTLP and production TUI | Serialized live execution pending.                                                                                                                                                                        |
+| OpenShell                          | Real gVisor RuntimeClass smoke passed. Full acceptance exposed a Helm image-reference mismatch; the reviewed repair preserves digests in rendered gateway/supervisor references, with live rerun pending. |
+| Helper timeout                     | Real 300-second deadline case passed.                                                                                                                                                                     |
+| Slack and ChatGPT service account  | Dedicated test inputs remain missing.                                                                                                                                                                     |
+
+Local live proofs use authorized credentials and are separate from a protected hosted workflow run. The protected workflow dispatches from main only; it has not run from this stacked PR. These results do not establish full-suite acceptance at one SHA.
 
 ## Open Decisions
 
@@ -111,7 +124,7 @@ The user approved branch/PR creation, browser provisioning, bounded live model/s
 
 - Administrators: six protected environments are configured with main-only deployment policies, a required reviewer, and prevention of self-review. Protected workflow execution still requires the exact main revision and its environment review.
 - Test owners: supply the dedicated ChatGPT workspace/admin credential and Slack app/bot/sender/channel/proxy inputs; approval alone does not supply missing credentials.
-- Verification: complete Envoy/cert-manager, OpenShell, Kubernetes model/logging, and production TUI live proofs; resolve fresh-hosted-runner failures. Select larger ephemeral capacity only if measured needs require it.
+- Verification: complete Envoy/cert-manager, OpenShell, Kubernetes model/logging, and production TUI live proofs, then execute the protected workflow at the reviewed main SHA. Select larger ephemeral capacity only if measured needs require it.
 
 ## Manual Notes
 

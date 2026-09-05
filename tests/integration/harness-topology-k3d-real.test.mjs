@@ -333,8 +333,11 @@ function nativeConfiguration(harnessId, slack, options = {}) {
     };
   }
   if (harnessId === "codex" && slack === undefined) {
+    // Native Codex file tools require a writable app-server sandbox plus an omitted or wildcard
+    // OpenClaw dynamic-tool allowlist; this case explicitly edits AGENTS.md in the workspace.
+    configuration.plugins.entries.codex.config.appServer.sandbox = "workspace-write";
     configuration.tools = {
-      allow: ["read", "write", "edit"],
+      allow: ["*"],
       fs: { workspaceOnly: true },
     };
   }
@@ -1970,7 +1973,7 @@ async function assertConversation(topology, sessionKey, nonce) {
 }
 
 async function inspectGatewayPersistence(topology, imageDigest, sessionKey) {
-  // Read existing databases only. Missing/corrupt databases fail; the probe never creates one.
+  // Read existing persisted state only. Missing/corrupt files fail; the probe never creates one.
   return JSON.parse(
     await execNode(
       topology.placement,
@@ -1980,33 +1983,73 @@ async function inspectGatewayPersistence(topology, imageDigest, sessionKey) {
     const fs = require("node:fs");
     const path = require("node:path");
     const { createHash } = require("node:crypto");
-    const agentDatabase = "/home/node/.openclaw/agents/main/agent/openclaw-agent.sqlite";
-    let transcript;
-    const databases = ["/home/node/.openclaw/state/openclaw.sqlite", agentDatabase].map(file => {
+
+    function messageText(message) {
+      if (typeof message.content === "string") return message.content;
+      return (message.content ?? []).filter(block => block.type === "text").map(block => block.text).join("\\n");
+    }
+
+    function resolveWithinDirectory(root, candidate) {
+      const realRoot = fs.realpathSync(root);
+      const resolved = path.isAbsolute(candidate) ? candidate : path.join(realRoot, candidate);
+      const realPath = fs.realpathSync(resolved);
+      const relative = path.relative(realRoot, realPath);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+        throw new Error("Session artifact escaped its owning sessions directory");
+      }
+      return realPath;
+    }
+
+    const stateDatabase = "/home/node/.openclaw/state/openclaw.sqlite";
+    const databases = [stateDatabase].map(file => {
       const db = new DatabaseSync(file, { readOnly: true });
       try {
         db.exec("PRAGMA busy_timeout=5000");
-        if (file === agentDatabase) {
-          const session = db.prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?")
-            .get(${JSON.stringify(sessionKey)});
-          if (!session) throw new Error("actual chat session missing from the agent SQLite database");
-          const rows = db.prepare("SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
-            .all(session.current_session_id);
-          transcript = { sessionId: session.current_session_id, messages: rows.flatMap(({seq, event_json}) => {
-            const event = JSON.parse(event_json);
-            return event.type === "message" ? [{seq, role: event.message.role,
-              text: typeof event.message.content === "string" ? event.message.content : (event.message.content ?? []).filter(block => block.type === "text").map(block => block.text).join("\\n")}] : [];
-          }) };
-        }
         return { file, integrity: db.prepare("PRAGMA integrity_check").all().map(row => Object.values(row)[0]) };
       } finally { db.close(); }
     });
+
+    const sessionsDir = "/home/node/.openclaw/agents/main/sessions";
+    const sessionStoreFile = resolveWithinDirectory(sessionsDir, "sessions.json");
+    const canonicalSessionKey = ${JSON.stringify(sessionKey)}.trim().toLowerCase();
+    if (${JSON.stringify(sessionKey)} !== canonicalSessionKey) {
+      throw new Error("Test generated a noncanonical session key");
+    }
+    const sessionStore = JSON.parse(fs.readFileSync(sessionStoreFile, "utf8"));
+    const entry = sessionStore[canonicalSessionKey];
+    if (!entry || typeof entry !== "object" || typeof entry.sessionId !== "string") {
+      throw new Error("actual chat session missing from the session store");
+    }
+    const transcriptFile = resolveWithinDirectory(
+      sessionsDir,
+      typeof entry.sessionFile === "string" && entry.sessionFile.trim()
+        ? entry.sessionFile.trim()
+        : entry.sessionId + ".jsonl",
+    );
+    const transcriptMessages = fs.readFileSync(transcriptFile, "utf8")
+      .split(/\\r?\\n/)
+      .filter(line => line.trim())
+      .flatMap((line, seq) => {
+        const event = JSON.parse(line);
+        return event.type === "message" ? [{seq, role: event.message.role, text: messageText(event.message)}] : [];
+      });
+    const transcript = {
+      file: transcriptFile,
+      sessionId: entry.sessionId,
+      messages: transcriptMessages,
+    };
+
     function files(dir) { return fs.readdirSync(dir, {withFileTypes:true}).flatMap(entry => {
       const file=path.join(dir,entry.name); return entry.isDirectory() ? files(file) : entry.isFile() ? [file] : [];
     }); }
     const media = files("/home/node/.openclaw/media").filter(file =>
       createHash("sha256").update(fs.readFileSync(file)).digest("hex") === ${JSON.stringify(imageDigest)});
-    process.stdout.write(JSON.stringify({databases, media, transcript}));
+    process.stdout.write(JSON.stringify({
+      databases,
+      media,
+      sessionStore: { file: sessionStoreFile, key: canonicalSessionKey, sessionId: entry.sessionId },
+      transcript,
+    }));
   `,
     ),
   );
@@ -2086,13 +2129,14 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
   const artifactId = await assertRetainedImage(topology, sessionKey);
   const before = await inspectGatewayPersistence(topology, digest, sessionKey);
   for (const database of before.databases) assert.deepEqual(database.integrity, ["ok"]);
+  assert.equal(before.sessionStore.key, sessionKey);
   assert.equal(before.transcript.sessionId, history.sessionId);
   for (const role of ["user", "assistant"]) {
     assert.ok(
       before.transcript.messages.some(
         (message) => message.role === role && message.text.includes(nonce),
       ),
-      `the exact ${role} turn must be persisted in agent SQLite transcript_events`,
+      `the exact ${role} turn must be persisted in the session JSONL transcript`,
     );
   }
   if (topology.harnessPod !== undefined) {
@@ -2101,13 +2145,13 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
       topology.harnessPod.metadata.name,
       `
       const fs = require("node:fs");
-      process.stdout.write(JSON.stringify(${JSON.stringify([...before.databases.map(({ file }) => file), ...before.media])}.filter(file => fs.existsSync(file))));
+      process.stdout.write(JSON.stringify(${JSON.stringify([...before.databases.map(({ file }) => file), before.sessionStore.file, before.transcript.file, ...before.media])}.filter(file => fs.existsSync(file))));
     `,
     );
     assert.deepEqual(
       JSON.parse(hidden),
       [],
-      "Codex must not see the gateway databases or retained image files",
+      "Codex must not see the gateway private state, session transcript, or retained image files",
     );
   }
 
@@ -2141,7 +2185,7 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
   assert.deepEqual(
     restored.transcript,
     before.transcript,
-    "the exact SQLite session messages must survive Pod replacement",
+    "the exact session JSONL messages must survive Pod replacement",
   );
   for (const file of before.media)
     assert.ok(restored.media.includes(file), "all retained PNG files must survive");
@@ -2159,7 +2203,7 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
       continued.transcript.messages.some(
         (message) => message.role === role && message.text.includes(afterNonce),
       ),
-      `the continued ${role} turn must write to the retained agent SQLite session`,
+      `the continued ${role} turn must write to the retained session JSONL transcript`,
     );
   }
   context.diagnostic(
@@ -3688,7 +3732,7 @@ test(
 );
 
 test(
-  "production dedicated Codex preserves gateway SQLite conversations and retained images across Pod replacement",
+  "production dedicated Codex preserves gateway conversations and retained images across Pod replacement",
   { ...requiresProductionCluster, timeout: 1_200_000 },
   async (context) => {
     const topology = await arrangeProductionTopology(context, "dedicated");

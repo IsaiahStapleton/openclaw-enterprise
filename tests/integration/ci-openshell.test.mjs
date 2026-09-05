@@ -13,6 +13,7 @@ import {
   selectGvisorAsset,
   selectKubectlAsset,
 } from "../../scripts/ci/openshell.mjs";
+import { openShellChartImageValues } from "../helpers/openshell-kubernetes-real.mjs";
 
 async function fixture(t, prefix = "ci-openshell-test") {
   const root = await mkdtemp(join(tmpdir(), `${prefix}-`));
@@ -40,6 +41,33 @@ test("node-image asset selection keeps Docker daemon and kubectl host platforms 
   assert.equal(selectKubectlAsset("darwin", "arm64").name, "kubectl-darwin-arm64");
   assert.throws(() => selectGvisorAsset("windows", "amd64"), /requires a Linux Docker daemon/);
   assert.throws(() => selectKubectlAsset("darwin", "x64"), /no pinned kubectl/);
+});
+
+test("OpenShell Helm chart image values preserve immutable digests in rendered tags", () => {
+  const digest = "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+  assert.deepEqual(
+    openShellChartImageValues("image", `localhost/example/gateway:local${digest}`, "0.0.113"),
+    [
+      "--set-string=image.repository=localhost/example/gateway",
+      `--set-string=image.tag=local${digest}`,
+    ],
+  );
+  assert.deepEqual(
+    openShellChartImageValues(
+      "supervisor.image",
+      `localhost/example/supervisor${digest}`,
+      "0.0.113",
+    ),
+    [
+      "--set-string=supervisor.image.repository=localhost/example/supervisor",
+      `--set-string=supervisor.image.tag=0.0.113${digest}`,
+    ],
+  );
+  assert.throws(
+    () => openShellChartImageValues("image", "localhost/example/gateway:local", "0.0.113"),
+    /immutable OpenShell image digest/,
+  );
 });
 
 test("prepareOpenShellNodeImage builds a pinned gVisor k3d node image", async (t) => {
