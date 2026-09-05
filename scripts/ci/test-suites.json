@@ -286,6 +286,7 @@
             "runtime image gateway ignores inherited OPENCLAW_LOG_LEVEL in favor of native configuration",
             "runtime image starts an embedded OpenClaw gateway with the Docker driver entrypoint",
             "runtime image discovers the bundled Codex plugin from a fresh gateway home",
+            "runtime image keeps Codex auth writable with a nested generated images mount",
             "runtime image publishes dedicated assets with the Kubernetes gateway entrypoint"
           ]
         },

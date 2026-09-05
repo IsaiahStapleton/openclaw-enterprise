@@ -14,6 +14,7 @@ const execute = promisify(execFile);
 const docker = process.env.OCC_DOCKER_BIN ?? "docker";
 const image = process.env.OCC_TEST_RUNTIME_IMAGE;
 const runtimeImageModel = "gpt-5.1";
+const syntheticCodexApiKey = "sk-openclaw-runtime-image-smoke-synthetic";
 const imageTestOptions =
   image === undefined
     ? {
@@ -31,6 +32,10 @@ async function runDocker(args, options = {}) {
 
 function commandOutput(error) {
   return `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
+}
+
+function sanitizeSyntheticCredential(output) {
+  return output.replaceAll(syntheticCodexApiKey, "[REDACTED_SYNTHETIC_KEY]");
 }
 
 function assertNoPackagingFailure(output) {
@@ -464,6 +469,105 @@ test(
     assertBundledCodexPluginLoaded(pluginList);
     await assertCodexAppServerHandshake(containerName);
     assertNoPackagingFailure(logs);
+  },
+);
+
+test(
+  "runtime image keeps Codex auth writable with a nested generated images mount",
+  imageTestOptions,
+  async (t) => {
+    const containerName = `oce-runtime-image-codex-auth-${randomBytes(6).toString("hex")}`;
+    t.after(() => runDocker(["rm", "-f", containerName]).catch(() => {}));
+
+    const probe = String.raw`
+set -eu
+printf "%s\n" "$SYNTHETIC_CODEX_API_KEY" | timeout 20s codex login --with-api-key >/tmp/codex-login.stdout 2>/tmp/codex-login.stderr || {
+  sed -E "s/sk-[A-Za-z0-9_-]+/[REDACTED_SYNTHETIC_KEY]/g" /tmp/codex-login.stderr >&2
+  exit 1
+}
+node - <<'NODE'
+const { accessSync, constants, statSync } = require("node:fs");
+function entry(path) {
+  const stat = statSync(path);
+  return {
+    uid: stat.uid,
+    gid: stat.gid,
+    mode: (stat.mode & 0o777).toString(8),
+    directory: stat.isDirectory(),
+    file: stat.isFile(),
+  };
+}
+accessSync("/home/node/.codex", constants.W_OK);
+accessSync("/home/node/.codex/generated_images", constants.W_OK);
+process.stdout.write(JSON.stringify({
+  uid: process.getuid(),
+  gid: process.getgid(),
+  codexHome: entry("/home/node/.codex"),
+  generatedImages: entry("/home/node/.codex/generated_images"),
+  authJson: entry("/home/node/.codex/auth.json"),
+}));
+NODE
+`;
+
+    const { stdout } = await runDocker(
+      [
+        "run",
+        "--rm",
+        "--name",
+        containerName,
+        "--user",
+        "1000:1000",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--tmpfs",
+        "/home/node/.codex/generated_images:size=64m,uid=1000,gid=1000,mode=700",
+        "--tmpfs",
+        "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
+        "--network",
+        "none",
+        "-e",
+        "HOME=/home/node",
+        "-e",
+        "CODEX_HOME=/home/node/.codex",
+        "-e",
+        `SYNTHETIC_CODEX_API_KEY=${syntheticCodexApiKey}`,
+        "--entrypoint",
+        "sh",
+        image,
+        "-c",
+        probe,
+      ],
+      { timeout: 30_000 },
+    ).catch((error) => {
+      throw new Error(sanitizeSyntheticCredential(commandOutput(error)));
+    });
+
+    const result = JSON.parse(stdout);
+    assert.equal(result.uid, 1000);
+    assert.equal(result.gid, 1000);
+    assert.deepEqual(result.codexHome, {
+      uid: 1000,
+      gid: 1000,
+      mode: "700",
+      directory: true,
+      file: false,
+    });
+    assert.deepEqual(result.generatedImages, {
+      uid: 1000,
+      gid: 1000,
+      mode: "700",
+      directory: true,
+      file: false,
+    });
+    assert.deepEqual(result.authJson, {
+      uid: 1000,
+      gid: 1000,
+      mode: "600",
+      directory: false,
+      file: true,
+    });
   },
 );
 
