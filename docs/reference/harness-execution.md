@@ -72,6 +72,9 @@ queue guarantees.
 
 ## Runtime logging
 
+For level changes, collection, and backend verification, use the
+[observability guide](../guides/observability.md).
+
 Compute renders logging from the admitted revision. Gateway containers receive
 native JSON console logging at the admitted level and keep their own OTLP log
 export disabled. Dedicated Codex app-servers receive `LOG_FORMAT=json`,

@@ -218,6 +218,9 @@ Driver selection alone. See the [SandboxDriver contract](drivers/sandbox.md) and
 
 ## Operational log collection boundary
 
+The [observability guide](../guides/observability.md) owns setup, metrics, and
+verification procedures. This section defines the security guarantees and limits.
+
 Operational logging does not replace PostgreSQL audit evidence. OCC emits
 reviewed controller events for debugging and operations; audit remains the
 durable record for bootstrap, mutation, authorization denial, and lifecycle
@@ -242,8 +245,10 @@ Collector credentials and TLS material live only in Collector-owned deployment
 configuration. In Helm, the bundled Collector uses dedicated config and exporter
 Secrets, read-only `/var/log/pods`, a non-root UID with supplementary group
 `0` for CRI file read access, and restricted Pod and container security
-settings, and egress only to DNS, the Kubernetes API for metadata, and one
-approved exporter or proxy `/32`. Its file offsets and exporter queue use a
+settings. Its dedicated egress policy permits DNS, the Kubernetes API for
+metadata, and one approved exporter or proxy `/32`. The shared dependency
+egress policy also selects Collector Pods and permits the configured database
+destination; NetworkPolicy permissions are additive. Its file offsets and exporter queue use a
 bounded `emptyDir`; they are best-effort across process or container restart and
 are lost with Pod or node replacement. In Docker development, forwarding is
 nonblocking with finite Engine and container-local buffers. Export outage or
