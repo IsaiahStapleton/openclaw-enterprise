@@ -448,10 +448,15 @@ function bridgeRequirements(context) {
   const claimName = context.requirements.workspaceMounts[0]?.claimName;
   assert.ok(claimName, "the credential bridge requires the Agent shared PVC claim.");
   const subPath = `.openclaw/integration-credentials/${hash(context.revision.id, 32)}`;
+  const diagnosticDirectory = `/sandbox/enterprise/.openclaw/openshell-diagnostics/${hash(context.revision.id, 32)}`;
   const command = [
     "sh",
     "-ceu",
     [
+      // Capture immediate child-process stderr on the shared workspace PVC before credential reads.
+      "umask 077",
+      `mkdir -p ${diagnosticDirectory}`,
+      `exec 2> ${diagnosticDirectory}/main-stderr.log`,
       `export APP_SERVER_TOKEN="$(cat ${credentialMountPath}/app-server-token)"`,
       `export OPENAI_API_KEY="$(cat ${credentialMountPath}/openai-api-key)"`,
       'exec "$@"',
