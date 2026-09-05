@@ -871,7 +871,8 @@ async function prepareK3dRuntimeImages(
   for (const [name, value] of Object.entries(inputs)) {
     env[name] = await registerImageInK3d(statePath, state, cluster, value, name);
   }
-  env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE ??= env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE;
+  // Replace the build tag with its imported digest before publishing the next step's inputs.
+  env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE = env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE;
 }
 
 async function prepareProductionImages(statePath, state, cluster, env) {
