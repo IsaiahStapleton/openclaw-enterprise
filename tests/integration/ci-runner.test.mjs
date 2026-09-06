@@ -547,7 +547,7 @@ test("audit rejects obsolete manifest selectors", async (t) => {
   ]);
 });
 
-test("audit requires current discovered test files and rejects duplicate broad ownership", async (t) => {
+test("audit requires current discovered test files and rejects duplicate ownership", async (t) => {
   const root = await fixture(t);
   await writeFile(join(root, "tests/integration/mapped.test.mjs"), "import 'node:test';\n");
   await writeFile(join(root, "tests/integration/unmapped.test.mjs"), "import 'node:test';\n");
@@ -564,7 +564,7 @@ test("audit requires current discovered test files and rejects duplicate broad o
         files: [{ path: "tests/integration/mapped.test.mjs", expectedTests: ["case b"] }],
       },
       broad: {
-        files: [{ path: "tests/integration/mapped.test.mjs" }],
+        files: [{ path: "tests/integration/mapped.test.mjs", expectedTests: ["case c"] }],
       },
       empty: {
         files: [],

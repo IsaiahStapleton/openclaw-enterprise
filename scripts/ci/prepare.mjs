@@ -44,6 +44,12 @@ function applyLaneEnv(name, env) {
   }
 }
 
+function effectiveLaneEnv(name, env = {}) {
+  const effective = { ...process.env, ...env };
+  applyLaneEnv(name, effective);
+  return effective;
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -438,35 +444,41 @@ function assertNodeBaseImage(image) {
   }
 }
 
-function assertImmutableEnvImages(names) {
+function assertImmutableEnvImages(names, env = process.env) {
   for (const name of names) {
-    assertImmutableImageReference(process.env[name], name);
+    assertImmutableImageReference(env[name], name);
   }
 }
 
-function assertImmutableOptionalEnvImages(names) {
+function assertImmutableOptionalEnvImages(names, env = process.env) {
   for (const name of names) {
-    if (process.env[name]) assertImmutableImageReference(process.env[name], name);
+    if (env[name]) assertImmutableImageReference(env[name], name);
   }
 }
 
-async function validateLaneInputsBeforeSideEffects(lane) {
-  const prepare = lanePrepare(laneName(lane));
-  requireEnv(prepare.requireEnv ?? []);
+async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
+  const name = laneName(lane);
+  const prepare = lanePrepare(name);
+  const effectiveEnv = effectiveLaneEnv(name, env);
+  requireEnv(prepare.requireEnv ?? [], effectiveEnv);
   if (prepare.nodeBaseImage) {
-    assertNodeBaseImage(process.env.NODE_BASE_IMAGE);
+    assertNodeBaseImage(effectiveEnv.NODE_BASE_IMAGE);
   }
-  assertImmutableEnvImages(prepare.immutableEnvImages ?? []);
-  assertImmutableOptionalEnvImages(prepare.immutableOptionalEnvImages ?? []);
+  assertImmutableEnvImages(prepare.immutableEnvImages ?? [], effectiveEnv);
+  assertImmutableOptionalEnvImages(prepare.immutableOptionalEnvImages ?? [], effectiveEnv);
   if (prepare.mode0600Env) {
     await requirePathMode0600(
-      process.env[prepare.mode0600Env],
+      effectiveEnv[prepare.mode0600Env],
       prepare.mode0600Description ?? prepare.mode0600Env,
     );
   }
 }
 
-async function buildRuntimeImages(statePath, state, { controller = false, runtime = false } = {}) {
+async function buildRuntimeImages(
+  statePath,
+  state,
+  { controller = false, runtime = false, nodeBaseImage = process.env.NODE_BASE_IMAGE } = {},
+) {
   await commandAvailable(process.env.OCC_DOCKER_BIN ?? "docker", [
     "version",
     "--format",
@@ -476,7 +488,7 @@ async function buildRuntimeImages(statePath, state, { controller = false, runtim
   const resources = [];
   const tagBase = `localhost/${ownedName("openclaw-ci-image", state.prefix, { maxLength: 48 })}`;
   if (controller) {
-    assertNodeBaseImage(process.env.NODE_BASE_IMAGE);
+    assertNodeBaseImage(nodeBaseImage);
     const tag = `${tagBase}/controller:local`;
     const resource = addResource(state, "image-tag", { name: tag, owner: state.prefix });
     resources.push(resource);
@@ -487,7 +499,7 @@ async function buildRuntimeImages(statePath, state, { controller = false, runtim
       "--target",
       "runtime",
       "--build-arg",
-      `NODE_BASE_IMAGE=${process.env.NODE_BASE_IMAGE}`,
+      `NODE_BASE_IMAGE=${nodeBaseImage}`,
       "-t",
       tag,
       ".",
@@ -887,7 +899,11 @@ async function prepareK3dRuntimeImages(
 }
 
 async function prepareProductionImages(statePath, state, cluster, env) {
-  const built = await buildRuntimeImages(statePath, state, { controller: true, runtime: true });
+  const built = await buildRuntimeImages(statePath, state, {
+    controller: true,
+    runtime: true,
+    nodeBaseImage: effectiveLaneEnv(state.lane, env).NODE_BASE_IMAGE,
+  });
   Object.assign(env, built.env);
   env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE = (
     await registerImageInK3d(
@@ -987,8 +1003,13 @@ async function prepareLane({ lane, statePath }) {
       await commandAvailable(process.env.OCC_YQ_BIN ?? "yq", ["--version"]);
       Object.assign(
         env,
-        (await buildRuntimeImages(resolvedStatePath, state, { controller: true, runtime: true }))
-          .env,
+        (
+          await buildRuntimeImages(resolvedStatePath, state, {
+            controller: true,
+            runtime: true,
+            nodeBaseImage: effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
+          })
+        ).env,
       );
       break;
     case "k3d-fixture-configuration": {

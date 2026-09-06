@@ -220,10 +220,6 @@ async function discoverTests(root) {
   return files.sort();
 }
 
-function expectedCaseEvidence(file) {
-  return file.expectedTests.length > 0;
-}
-
 async function auditManifest(root, manifest) {
   const issues = [...manifest.issues];
   const discovered = await discoverTests(root);
@@ -268,9 +264,9 @@ async function auditManifest(root, manifest) {
   }
 
   for (const [file, entries] of selections.entries()) {
-    if (entries.length > 1 && entries.some((entry) => !expectedCaseEvidence(entry.file))) {
+    if (entries.length > 1) {
       issues.push(
-        issue("duplicate-file", `file is mapped by multiple broad lane entries: ${file}`, {
+        issue("duplicate-file", `file is mapped by multiple lane entries: ${file}`, {
           file,
           lanes: entries.map((entry) => entry.lane),
         }),

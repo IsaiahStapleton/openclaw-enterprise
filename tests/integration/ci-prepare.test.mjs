@@ -360,6 +360,38 @@ test("prepareLane preserves an explicit logging Collector Node image over its de
   assert.match(exported, new RegExp(`OCC_TEST_LOGGING_NODE_IMAGE=${customNodeImage}`));
 });
 
+test("prepareFile applies the images packaging Node base default without hiding invalid overrides", async (t) => {
+  const root = await fixture(t);
+  const statePath = join(root, "missing-state.json");
+  const file = "tests/integration/runtime-image-startup.test.mjs";
+  const customNodeBaseImage =
+    "node:24-bookworm@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+  const defaulted = runPrepare(
+    ["--lane", "images-packaging", "--file", file, "--state", statePath],
+    {
+      NODE_BASE_IMAGE: "",
+    },
+  );
+  assert.equal(defaulted.status, 1);
+  assert.match(defaulted.stderr, /requires a prior prepareLane/);
+
+  const explicit = runPrepare(
+    ["--lane", "images-packaging", "--file", file, "--state", statePath],
+    {
+      NODE_BASE_IMAGE: customNodeBaseImage,
+    },
+  );
+  assert.equal(explicit.status, 1);
+  assert.match(explicit.stderr, /requires a prior prepareLane/);
+
+  const invalid = runPrepare(["--lane", "images-packaging", "--file", file, "--state", statePath], {
+    NODE_BASE_IMAGE: "node:24-bookworm",
+  });
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /NODE_BASE_IMAGE must be an immutable/);
+});
+
 test("prepareLane rejects mutable Kubernetes image inputs before creating state", async (t) => {
   const root = await fixture(t);
   const adminKeyPath = join(root, "admin.key");
