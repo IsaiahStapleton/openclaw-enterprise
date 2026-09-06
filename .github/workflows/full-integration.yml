@@ -154,50 +154,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: ${{ matrix.lane }}
+          profile: ${{ matrix.profile }}
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: ./.github/actions/setup-test-docker
-        if: matrix.lane == 'logging-collector'
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-        if: matrix.profile == 'images' || matrix.profile == 'k3d'
-      - run: bash scripts/ci/setup-tools.sh "${{ matrix.profile }}"
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - if: matrix.lane == 'checks-baseline'
-        run: bash scripts/ci/setup-tools.sh browser
-      - if: matrix.lane == 'checks-baseline'
-        run: pnpm check:workspace
-      - if: matrix.lane == 'checks-baseline'
-        run: pnpm format:check
-      - if: matrix.lane == 'checks-baseline'
-        run: pnpm openapi:check
-      - if: matrix.lane == 'checks-baseline'
-        run: pnpm typecheck
-      - if: matrix.lane == 'logging-collector'
-        run: echo "OCC_TEST_LOGGING_NODE_IMAGE=node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584" >> "$GITHUB_ENV"
-      - if: matrix.lane == 'images-packaging'
-        run: echo "NODE_BASE_IMAGE=node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584" >> "$GITHUB_ENV"
-      - run: node scripts/ci/prepare.mjs --lane "${{ matrix.lane }}" --state "$RUNNER_TEMP/state/${{ matrix.lane }}.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run "${{ matrix.lane }}" --state "$RUNNER_TEMP/state/${{ matrix.lane }}.json" --results "$RUNNER_TEMP/results/${{ matrix.lane }}.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/${{ matrix.lane }}.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-${{ matrix.lane }}
-          path: ${{ runner.temp }}/results/${{ matrix.lane }}.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: full-results
 
   docker-model:
     name: Docker Model Runtime
@@ -216,34 +178,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: docker-model
+          profile: images
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: ./.github/actions/setup-test-docker
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - run: bash scripts/ci/setup-tools.sh images
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - run: node scripts/ci/prepare.mjs --lane docker-model --state "$RUNNER_TEMP/state/docker-model.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run docker-model --state "$RUNNER_TEMP/state/docker-model.json" --results "$RUNNER_TEMP/results/docker-model.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/docker-model.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-docker-model
-          path: ${{ runner.temp }}/results/docker-model.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: full-results
 
   k3d-model:
     name: k3d Model Runtime
@@ -263,33 +203,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: k3d-model
+          profile: full
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - run: bash scripts/ci/setup-tools.sh full
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - run: node scripts/ci/prepare.mjs --lane k3d-model --state "$RUNNER_TEMP/state/k3d-model.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run k3d-model --state "$RUNNER_TEMP/state/k3d-model.json" --results "$RUNNER_TEMP/results/k3d-model.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/k3d-model.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-k3d-model
-          path: ${{ runner.temp }}/results/k3d-model.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: full-results
 
   gateway-routing:
     name: Gateway Routing
@@ -308,33 +227,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: gateway-routing
+          profile: full
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - run: bash scripts/ci/setup-tools.sh full
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - run: node scripts/ci/prepare.mjs --lane gateway-routing --state "$RUNNER_TEMP/state/gateway-routing.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run gateway-routing --state "$RUNNER_TEMP/state/gateway-routing.json" --results "$RUNNER_TEMP/results/gateway-routing.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/gateway-routing.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-gateway-routing
-          path: ${{ runner.temp }}/results/gateway-routing.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: full-results
 
   production-tui:
     name: Production TUI
@@ -356,33 +254,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: production-tui
+          profile: full
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - run: bash scripts/ci/setup-tools.sh full
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - run: node scripts/ci/prepare.mjs --lane production-tui --state "$RUNNER_TEMP/state/production-tui.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run production-tui --state "$RUNNER_TEMP/state/production-tui.json" --results "$RUNNER_TEMP/results/production-tui.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/production-tui.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-production-tui
-          path: ${{ runner.temp }}/results/production-tui.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: full-results
 
   slack:
     name: Slack Live
@@ -406,33 +283,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: slack
+          profile: full
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - run: bash scripts/ci/setup-tools.sh full
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - run: node scripts/ci/prepare.mjs --lane slack --state "$RUNNER_TEMP/state/slack.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run slack --state "$RUNNER_TEMP/state/slack.json" --results "$RUNNER_TEMP/results/slack.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/slack.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-slack
-          path: ${{ runner.temp }}/results/slack.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: full-results
 
   provider-account:
     name: Provider Account
@@ -452,15 +308,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
       - name: Materialize provider admin key
         run: |
           install -m 0700 -d "$RUNNER_TEMP/secrets"
@@ -468,24 +315,12 @@ jobs:
           printf '%s' "$OCC_TEST_CHATGPT_ADMIN_KEY_JSON" > "$RUNNER_TEMP/secrets/chatgpt-admin-key.json"
           chmod 0600 "$RUNNER_TEMP/secrets/chatgpt-admin-key.json"
           echo "OCC_TEST_CHATGPT_ADMIN_KEY_PATH=$RUNNER_TEMP/secrets/chatgpt-admin-key.json" >> "$GITHUB_ENV"
-      - run: bash scripts/ci/setup-tools.sh full
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
+      - uses: ./.github/actions/run-ci-lane
         with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - run: node scripts/ci/prepare.mjs --lane provider-account --state "$RUNNER_TEMP/state/provider-account.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run provider-account --state "$RUNNER_TEMP/state/provider-account.json" --results "$RUNNER_TEMP/results/provider-account.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/provider-account.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-provider-account
-          path: ${{ runner.temp }}/results/provider-account.json
-          if-no-files-found: error
-          retention-days: 7
+          lane: provider-account
+          profile: full
+          node-version: ${{ env.NODE_VERSION }}
+          artifact-prefix: full-results
 
   openshell:
     name: OpenShell
@@ -506,33 +341,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: openshell
+          profile: full
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - run: bash scripts/ci/setup-tools.sh full
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - run: node scripts/ci/prepare.mjs --lane openshell --state "$RUNNER_TEMP/state/openshell.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run openshell --state "$RUNNER_TEMP/state/openshell.json" --results "$RUNNER_TEMP/results/openshell.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/openshell.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-openshell
-          path: ${{ runner.temp }}/results/openshell.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: full-results
 
   k3d-otel:
     name: k3d OTEL
@@ -552,33 +366,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: k3d-otel
+          profile: full
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - run: bash scripts/ci/setup-tools.sh full
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - run: node scripts/ci/prepare.mjs --lane k3d-otel --state "$RUNNER_TEMP/state/k3d-otel.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run k3d-otel --state "$RUNNER_TEMP/state/k3d-otel.json" --results "$RUNNER_TEMP/results/k3d-otel.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/k3d-otel.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-k3d-otel
-          path: ${{ runner.temp }}/results/k3d-otel.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: full-results
 
   helper-timeout:
     name: Helper Timeout
@@ -591,32 +384,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: helper-timeout
+          profile: baseline
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - run: bash scripts/ci/setup-tools.sh baseline
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - run: node scripts/ci/prepare.mjs --lane helper-timeout --state "$RUNNER_TEMP/state/helper-timeout.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run helper-timeout --state "$RUNNER_TEMP/state/helper-timeout.json" --results "$RUNNER_TEMP/results/helper-timeout.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/helper-timeout.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-helper-timeout
-          path: ${{ runner.temp }}/results/helper-timeout.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: full-results
 
   logging-collector:
     name: Logging Collector
@@ -629,35 +402,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: logging-collector
+          profile: images
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: ./.github/actions/setup-test-docker
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - run: bash scripts/ci/setup-tools.sh images
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - run: echo "OCC_TEST_LOGGING_NODE_IMAGE=node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584" >> "$GITHUB_ENV"
-      - run: node scripts/ci/prepare.mjs --lane logging-collector --state "$RUNNER_TEMP/state/logging-collector.json" --github-env "$GITHUB_ENV"
-      - run: node scripts/ci/run-tests.mjs run logging-collector --state "$RUNNER_TEMP/state/logging-collector.json" --results "$RUNNER_TEMP/results/logging-collector.json"
-      - if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/logging-collector.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: full-results-logging-collector
-          path: ${{ runner.temp }}/results/logging-collector.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: full-results
 
   full-aggregate:
     name: Full Integration Aggregate

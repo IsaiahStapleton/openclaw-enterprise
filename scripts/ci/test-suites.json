@@ -123,9 +123,6 @@
             "dev-up fails closed when the worker exits before readiness",
             "dev-up preserves a copied key when the authenticated installation check is rejected",
             "dev-up rejects an authenticated installation response for a different Installation"
-          ],
-          "allowedSkips": [
-            "dev-up waits the full helper deadline before failing a running but unready worker"
           ]
         },
         {
@@ -133,14 +130,6 @@
           "expectedTests": [
             "before-commit Compute Drivers must expose an activation operation",
             "Compute Driver maintenance intervals must be positive safe integers"
-          ],
-          "allowedSkips": [
-            "a worker binds persisted Namespace, Agent, and service principal before provider effects",
-            "a production singleton driver activates under its claim heartbeat before CAS and retires only after CAS",
-            "failed singleton activation retries without publishing or retiring the previous revision",
-            "production Drivers without an activation preference retain after-commit Kubernetes ordering",
-            "an opted-in active runtime continuously repairs under its original authorized actor",
-            "active maintenance recovers after its convergence deadline and stops when its actor is denied"
           ]
         },
         {
@@ -162,13 +151,15 @@
           "path": "tests/browser/console.test.mjs"
         },
         {
-          "path": "tests/integration/ci-logging.test.mjs",
-          "namePattern": "^(?!prepareLogging backend receives real OTLP/HTTP logs and writes JSONL$)",
-          "allowedSkips": ["prepareLogging backend receives real OTLP/HTTP logs and writes JSONL"]
+          "path": "tests/integration/ci-logging.test.mjs"
         }
       ]
     },
     "postgres": {
+      "prepare": {
+        "postgres": true,
+        "requiresPreparedStateForFile": true
+      },
       "files": [
         {
           "path": "tests/integration/postgres-auth-accounts.test.mjs",
@@ -194,12 +185,6 @@
             "real OCC Namespace lifecycle persists provisioning, readiness, deletion, and its tombstone",
             "PostgreSQL platform state satisfies memory adapter ownership, immutability, and atomicity",
             "the PostgreSQL worker reloads exact Namespace restrictions and never dispatches revoked provisioning"
-          ],
-          "allowedSkips": [
-            "real OCC subprocesses retain Installation, Namespace, Agent, IAM, audit, and work after restart",
-            "real OCC creates concurrent Namespace Agents and durably associates revisions with their owner",
-            "independent PostgreSQL API and worker provision isolated Namespaces, activate admitted revisions, and tombstone deletion",
-            "PostgreSQL API and worker preserve immutable deployments, stable identities, and tenant isolation"
           ]
         },
         {
@@ -263,10 +248,8 @@
           ]
         },
         {
-          "path": "tests/integration/compute-singleton-worker.test.mjs",
+          "path": "tests/integration/compute-singleton-worker-postgres.test.mjs",
           "expectedTests": [
-            "before-commit Compute Drivers must expose an activation operation",
-            "Compute Driver maintenance intervals must be positive safe integers",
             "a worker binds persisted Namespace, Agent, and service principal before provider effects",
             "a production singleton driver activates under its claim heartbeat before CAS and retires only after CAS",
             "failed singleton activation retries without publishing or retiring the previous revision",
@@ -279,6 +262,11 @@
     },
     "images-packaging": {
       "requiredEnv": ["OCC_TEST_RUNTIME_IMAGE", "OCC_TEST_PRODUCTION_IMAGE"],
+      "prepare": {
+        "requiresPreparedStateForFile": true,
+        "requireEnv": ["NODE_BASE_IMAGE"],
+        "nodeBaseImage": true
+      },
       "files": [
         {
           "path": "tests/integration/runtime-image-startup.test.mjs",
@@ -331,6 +319,11 @@
       "env": {
         "OCC_TEST_KUBERNETES_CONFIGURATION": "1"
       },
+      "prepare": {
+        "postgres": true,
+        "k3d": true,
+        "requiresPreparedStateForFile": true
+      },
       "files": [
         {
           "path": "tests/integration/kubernetes-compute-real.test.mjs",
@@ -341,20 +334,13 @@
           ]
         },
         {
-          "path": "tests/integration/postgres-platform-state.test.mjs",
+          "path": "tests/integration/postgres-platform-state-kubernetes.test.mjs",
           "expectedTests": [
             "real OCC subprocesses retain Installation, Namespace, Agent, IAM, audit, and work after restart",
             "real OCC creates concurrent Namespace Agents and durably associates revisions with their owner",
             "independent PostgreSQL API and worker provision isolated Namespaces, activate admitted revisions, and tombstone deletion",
             "PostgreSQL API and worker preserve immutable deployments, stable identities, and tenant isolation"
-          ],
-          "allowedSkips": [
-            "PostgreSQL rejects platform writes until the singleton Installation is bootstrapped",
-            "real OCC Namespace lifecycle persists provisioning, readiness, deletion, and its tombstone",
-            "PostgreSQL platform state satisfies memory adapter ownership, immutability, and atomicity",
-            "the PostgreSQL worker reloads exact Namespace restrictions and never dispatches revoked provisioning"
-          ],
-          "namePattern": "^(?:real OCC subprocesses retain Installation, Namespace, Agent, IAM, audit, and work after restart|real OCC creates concurrent Namespace Agents and durably associates revisions with their owner|independent PostgreSQL API and worker provision isolated Namespaces, activate admitted revisions, and tombstone deletion|PostgreSQL API and worker preserve immutable deployments, stable identities, and tenant isolation)$"
+          ]
         }
       ]
     },
@@ -369,6 +355,11 @@
       "env": {
         "OCC_TEST_DOCKER_COMPUTE_REAL": "1",
         "OCC_TEST_OTEL_LOGS": "1"
+      },
+      "prepare": {
+        "requiresPreparedStateForFile": true,
+        "requireEnv": ["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL", "NODE_BASE_IMAGE"],
+        "nodeBaseImage": true
       },
       "files": [
         {
@@ -393,6 +384,19 @@
         "OCC_TEST_SLACK_LIVE": "0",
         "OCC_TEST_GATEWAY_ROUTING_REAL": "0"
       },
+      "prepare": {
+        "postgres": true,
+        "k3d": true,
+        "codexSeccomp": true,
+        "requiresPreparedStateForFile": true,
+        "requireEnv": ["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"],
+        "immutableOptionalEnvImages": [
+          "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
+          "OCC_TEST_KUBERNETES_AGENT_IMAGE",
+          "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
+          "OCC_TEST_KUBERNETES_CODEX_IMAGE"
+        ]
+      },
       "files": [
         {
           "path": "tests/integration/harness-topology-k3d-real.test.mjs",
@@ -400,14 +404,7 @@
             "production dedicated Codex preserves gateway conversations and retained images across Pod replacement",
             "production service account powers embedded OpenClaw through its exact persisted provider credential",
             "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings"
-          ],
-          "allowedSkips": [
-            "production dedicated Codex consumes Envoy-routed workspace files through OCC",
-            "production embedded runtime emits actual OTLP logs during a real model turn",
-            "production dedicated runtime emits actual OTLP logs during a real model turn",
-            "production k3d gateway replies to a real Slack message through its approved proxy and Codex Agent"
-          ],
-          "namePattern": "^(?:production dedicated Codex preserves gateway conversations and retained images across Pod replacement|production service account powers embedded OpenClaw through its exact persisted provider credential|production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings)$"
+          ]
         }
       ]
     },
@@ -426,21 +423,23 @@
         "OCC_TEST_GATEWAY_ROUTING_REAL": "1",
         "OCC_TEST_SLACK_LIVE": "0"
       },
+      "prepare": {
+        "postgres": true,
+        "k3d": true,
+        "codexSeccomp": true,
+        "requiresPreparedStateForFile": true,
+        "requireEnv": ["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"],
+        "immutableOptionalEnvImages": [
+          "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
+          "OCC_TEST_KUBERNETES_AGENT_IMAGE"
+        ]
+      },
       "files": [
         {
-          "path": "tests/integration/harness-topology-k3d-real.test.mjs",
+          "path": "tests/integration/harness-topology-k3d-routing-real.test.mjs",
           "expectedTests": [
             "production dedicated Codex consumes Envoy-routed workspace files through OCC"
-          ],
-          "allowedSkips": [
-            "production embedded runtime emits actual OTLP logs during a real model turn",
-            "production dedicated runtime emits actual OTLP logs during a real model turn",
-            "production dedicated Codex preserves gateway conversations and retained images across Pod replacement",
-            "production service account powers embedded OpenClaw through its exact persisted provider credential",
-            "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings",
-            "production k3d gateway replies to a real Slack message through its approved proxy and Codex Agent"
-          ],
-          "namePattern": "^(?:production dedicated Codex consumes Envoy-routed workspace files through OCC)$"
+          ]
         }
       ]
     },
@@ -459,6 +458,23 @@
       "env": {
         "OCC_TEST_PRODUCTION_TUI_REAL": "1",
         "OCC_TEST_OTEL_LOGS": "1"
+      },
+      "prepare": {
+        "postgres": true,
+        "k3d": true,
+        "requiresPreparedStateForFile": true,
+        "requireEnv": [
+          "OPENAI_API_KEY",
+          "OCC_TEST_OPENAI_MODEL",
+          "NODE_BASE_IMAGE",
+          "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
+          "OCC_TEST_PRODUCTION_NODE_IMAGE"
+        ],
+        "nodeBaseImage": true,
+        "immutableEnvImages": [
+          "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
+          "OCC_TEST_PRODUCTION_NODE_IMAGE"
+        ]
       },
       "files": [
         {
@@ -486,21 +502,33 @@
       "env": {
         "OCC_TEST_SLACK_LIVE": "1"
       },
+      "prepare": {
+        "postgres": true,
+        "k3d": true,
+        "codexSeccomp": true,
+        "requiresPreparedStateForFile": true,
+        "requireEnv": [
+          "OPENAI_API_KEY",
+          "OCC_TEST_OPENAI_MODEL",
+          "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
+          "OCC_TEST_KUBERNETES_AGENT_IMAGE",
+          "OCC_TEST_SLACK_PROXY_URL",
+          "OCC_TEST_SLACK_CHANNEL_ID",
+          "OCC_TEST_SLACK_SENDER_BOT_TOKEN",
+          "SLACK_APP_TOKEN",
+          "SLACK_BOT_TOKEN"
+        ],
+        "immutableEnvImages": [
+          "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
+          "OCC_TEST_KUBERNETES_AGENT_IMAGE"
+        ]
+      },
       "files": [
         {
-          "path": "tests/integration/harness-topology-k3d-real.test.mjs",
+          "path": "tests/integration/harness-topology-k3d-slack-real.test.mjs",
           "expectedTests": [
             "production k3d gateway replies to a real Slack message through its approved proxy and Codex Agent"
-          ],
-          "allowedSkips": [
-            "production dedicated Codex consumes Envoy-routed workspace files through OCC",
-            "production embedded runtime emits actual OTLP logs during a real model turn",
-            "production dedicated runtime emits actual OTLP logs during a real model turn",
-            "production dedicated Codex preserves gateway conversations and retained images across Pod replacement",
-            "production service account powers embedded OpenClaw through its exact persisted provider credential",
-            "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings"
-          ],
-          "namePattern": "^(?:production k3d gateway replies to a real Slack message through its approved proxy and Codex Agent)$"
+          ]
         }
       ]
     },
@@ -516,6 +544,25 @@
       ],
       "env": {
         "OCC_TEST_CHATGPT_SERVICE_ACCOUNT_REAL": "1"
+      },
+      "prepare": {
+        "postgres": true,
+        "k3d": true,
+        "codexSeccomp": true,
+        "requiresPreparedStateForFile": true,
+        "requireEnv": [
+          "OCC_TEST_OPENAI_MODEL",
+          "OCC_TEST_CHATGPT_WORKSPACE_ID",
+          "OCC_TEST_CHATGPT_ADMIN_KEY_PATH",
+          "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
+          "OCC_TEST_KUBERNETES_AGENT_IMAGE"
+        ],
+        "immutableEnvImages": [
+          "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
+          "OCC_TEST_KUBERNETES_AGENT_IMAGE"
+        ],
+        "mode0600Env": "OCC_TEST_CHATGPT_ADMIN_KEY_PATH",
+        "mode0600Description": "ChatGPT admin key"
       },
       "files": [
         {
@@ -544,6 +591,18 @@
       "env": {
         "OCC_TEST_OPENSHELL_K3D_REAL": "1"
       },
+      "prepare": {
+        "postgres": true,
+        "k3d": true,
+        "requiresPreparedStateForFile": true,
+        "requireEnv": ["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"],
+        "immutableOptionalEnvImages": [
+          "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
+          "OCC_TEST_KUBERNETES_AGENT_IMAGE",
+          "OCC_TEST_OPENSHELL_GATEWAY_IMAGE",
+          "OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE"
+        ]
+      },
       "files": [
         {
           "path": "tests/integration/sandbox-driver-openshell-k3d-real.test.mjs",
@@ -556,33 +615,27 @@
     "helper-timeout": {
       "files": [
         {
-          "path": "tests/integration/dev-up.test.mjs",
+          "path": "tests/integration/dev-up-timeout.test.mjs",
           "expectedTests": [
             "dev-up waits the full helper deadline before failing a running but unready worker"
-          ],
-          "allowedSkips": [
-            "dev-up builds the default runtime only when real Compose leaves runtime images unselected",
-            "dev-up preserves a selected custom runtime image and skips the quickstart build",
-            "dev-up applies per-image overrides on top of the shared runtime image",
-            "dev-up rejects a public controller port rendered by real Compose",
-            "dev-up refuses an existing key destination before invoking Compose",
-            "dev-up fails closed when bootstrap exits unsuccessfully",
-            "dev-up fails closed when the worker exits before readiness",
-            "dev-up preserves a copied key when the authenticated installation check is rejected",
-            "dev-up rejects an authenticated installation response for a different Installation"
-          ],
-          "namePattern": "^(?:dev-up waits the full helper deadline before failing a running but unready worker)$"
+          ]
         }
       ],
       "env": {
         "OCC_TEST_DEV_UP_REAL_TIMEOUT": "1"
-      }
+      },
+      "prepare": {}
     },
     "logging-collector": {
       "env": {
         "OCC_TEST_LOGGING_COLLECTOR": "1"
       },
       "requiredEnv": ["OCC_TEST_LOGGING_NODE_IMAGE"],
+      "prepare": {
+        "defaultEnv": {
+          "OCC_TEST_LOGGING_NODE_IMAGE": "node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584"
+        }
+      },
       "files": [
         {
           "path": "tests/integration/logging-collector.test.mjs",
@@ -592,9 +645,8 @@
           ]
         },
         {
-          "path": "tests/integration/ci-logging.test.mjs",
-          "expectedTests": ["prepareLogging backend receives real OTLP/HTTP logs and writes JSONL"],
-          "namePattern": "^prepareLogging backend receives real OTLP/HTTP logs and writes JSONL$"
+          "path": "tests/integration/ci-logging-collector.test.mjs",
+          "expectedTests": ["prepareLogging backend receives real OTLP/HTTP logs and writes JSONL"]
         }
       ]
     },
@@ -603,6 +655,19 @@
         "OCC_TEST_HARNESS_K3D_REAL": "1",
         "OCC_TEST_OTEL_LOGS": "1",
         "OCC_TEST_SLACK_LIVE": "0"
+      },
+      "prepare": {
+        "postgres": true,
+        "k3d": true,
+        "codexSeccomp": true,
+        "requiresPreparedStateForFile": true,
+        "requireEnv": ["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"],
+        "immutableOptionalEnvImages": [
+          "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
+          "OCC_TEST_KUBERNETES_AGENT_IMAGE",
+          "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
+          "OCC_TEST_KUBERNETES_CODEX_IMAGE"
+        ]
       },
       "requiredEnv": [
         "OCC_TEST_KUBERNETES_KUBECONFIG",
@@ -615,19 +680,11 @@
       ],
       "files": [
         {
-          "path": "tests/integration/harness-topology-k3d-real.test.mjs",
+          "path": "tests/integration/harness-topology-k3d-otel-real.test.mjs",
           "expectedTests": [
             "production embedded runtime emits actual OTLP logs during a real model turn",
             "production dedicated runtime emits actual OTLP logs during a real model turn"
-          ],
-          "allowedSkips": [
-            "production dedicated Codex consumes Envoy-routed workspace files through OCC",
-            "production dedicated Codex preserves gateway conversations and retained images across Pod replacement",
-            "production service account powers embedded OpenClaw through its exact persisted provider credential",
-            "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings",
-            "production k3d gateway replies to a real Slack message through its approved proxy and Codex Agent"
-          ],
-          "namePattern": "^(?:production embedded runtime emits actual OTLP logs during a real model turn|production dedicated runtime emits actual OTLP logs during a real model turn)$"
+          ]
         }
       ]
     }

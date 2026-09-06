@@ -68,7 +68,7 @@ later account mutations cannot change the admitted immutable revision.
 
 ### 3. Materialize the exact source through its independent owner
 
-`tests/integration/harness-topology-k3d-real.test.mjs:arrangeProductionTopology`
+`tests/helpers/harness-topology-k3d-real.mjs:arrangeProductionTopology`
 
 An independent operator verifies ownership, reads only the exact persisted
 source key, replaces the exact-Agent `OPENAI_API_KEY` Secret, and checks safe

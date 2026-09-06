@@ -44,17 +44,19 @@ Each linked section contains the setup requirements and commands for that suite.
 
 ## GitHub Actions
 
-The [suite map](../scripts/ci/test-suites.json) assigns each active test file and gated scenario to a lane. Check its coverage after adding or renaming tests:
+The [suite map](../scripts/ci/test-suites.json) assigns each active test file to exactly one lane, with its required inputs and preparation resources. Check its coverage after adding or renaming tests:
 
 ```sh
 node scripts/ci/run-tests.mjs audit
 ```
 
+Both workflows reuse the [run-ci-lane action](../.github/actions/run-ci-lane/action.yml) for setup, tests and cleanup; each job retains its own environment and credentials.
+
 The PR workflow runs exactly five lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, and logging collector. The protected workflow uses an immutable main commit and separately approved environments for model, routing, Slack, ChatGPT account, OpenShell, and additional OpenTelemetry integrations. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
 
 Implementation status: routing, OpenShell, and logging now have concrete CI preparation contracts. Routing installs pinned Gateway API, cert-manager v1.18.4, and Envoy Gateway v1.6.7 controller manifests and generates a private test CA. OpenShell creates an owned K3s v1.36.4 cluster, installs a matched kubectl, configures the selected RuntimeClass with the cluster's `runc` handler, verifies handler availability with a smoke Pod, installs OpenShell CLI/chart assets, imports gateway and supervisor images, and installs Agent Sandbox resources. Only the disposable CI OpenShell cluster exempts its selected RuntimeClass from Pod Security Admission. Preparation proves that a violating ordinary Pod is rejected in a restricted namespace and that the same Pod is admitted with the selected class. The full OpenShell suite proves provider-owned supervisor enforcement for filesystem, endpoint/L7 network, and process boundaries while preserving the current binary-unaware sidecar policy. Logging preparation owns a real OpenTelemetry Collector backend with JSONL evidence, and `OCC_TEST_OTEL_LOGS_URL` is no longer a required external input. The Collector and Docker-model jobs use the shared [setup-test-docker action](../.github/actions/setup-test-docker/action.yml) to pin Docker 29.4.0, which supports the production `fluentd-write-timeout` logging option. The action stops the preinstalled daemon on the ephemeral runner, installs Docker 29.4.0 through the SHA-pinned official Docker setup action, and points `/var/run/docker.sock` at the action socket so the CLI, production Compose, and Driver use one daemon. Other jobs keep the runner Docker daemon. Full-suite acceptance remains incomplete until main-only protected hosted execution records every selected lane. See the [delivery status](../specs/19-github-actions-test-coverage.md#delivery-status) for current proof boundaries and live gaps.
 
-The runner validates actual Node case results, including expected names and explicitly owned counterpart skips. Missing results, zero cases, unexpected skips, failures and cleanup errors cannot satisfy a required lane. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use trusted main inputs.
+Each lane runs whole test files. The runner validates actual Node case results and required names; any skip or TODO fails a selected lane. Missing results, zero cases, failures and cleanup errors also fail. The aggregate checks required job and lane results at the same source commit without repeating case validation. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use trusted main inputs.
 
 Prepare infrastructure only on a disposable host or through the reviewed CI helpers. Each run owns its Compose project, file-specific databases, cluster and temporary files. CI writes private cleanup state under `RUNNER_TEMP` and uploads only sanitized result JSON, so hosted-runner cleanup state is unavailable after the job ends. Local failures can retain cleanup state while the host and state path still exist. On local Docker Desktop or equivalent VM-backed Docker hosts, run one Kubernetes lane at a time when disk or network pressure has caused measured instability. The GitHub matrix remains parallel; this local guidance is for reproducible operator runs. Model/service tests require the approved credentials and spend policy described in the [implementation specification](../specs/19-github-actions-test-coverage.md); configuring workflow files does not prove those tests have passed.
 
@@ -184,8 +186,8 @@ The local [integration tests](../tests/integration/) include these groups:
   request admission, HTTP cancellation, and readiness-marker behavior.
 - `driver-plugin-installation` and `git-hooks`: local package installation,
   Driver selection, and hook installation/preservation in temporary checkouts.
-- `compute-singleton-worker`: two local validation cases and six additional
-  database-backed cases when `OCC_TEST_DATABASE_URL` is supplied.
+- `compute-singleton-worker`: two local validation cases. The six database-backed
+  cases live in `compute-singleton-worker-postgres` and require `OCC_TEST_DATABASE_URL`.
 
 To target a file or one named case:
 
@@ -232,7 +234,7 @@ production bootstrap still needs its own URL:
   export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_test_local
   export OCC_PRODUCTION_WIREUP_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_bootstrap_local
   pnpm test:postgres
-  node --test tests/integration/compute-singleton-worker.test.mjs
+  node --test tests/integration/compute-singleton-worker-postgres.test.mjs
 )
 ```
 
@@ -433,8 +435,7 @@ export NODE_EXTRA_CA_CERTS="$TEST_GATEWAY_CA_DIR/cert.pem"
 
 OCC_TEST_GATEWAY_ROUTING_REAL=1 OCC_TEST_SLACK_LIVE=0 \
   node --env-file="$TEST_ENV_FILE" --test \
-  --test-name-pattern='Envoy-routed workspace files' \
-  tests/integration/harness-topology-k3d-real.test.mjs
+  tests/integration/harness-topology-k3d-routing-real.test.mjs
 ```
 
 The focused fixture currently requires Docker Desktop and free local port 443.
@@ -463,7 +464,8 @@ Three non-Slack runtime cases must pass: dedicated Codex, embedded OpenClaw with
 a persisted service-account credential, and embedded OpenClaw using the Secret
 API. The Secret API case verifies native SecretRefs, exact grants and denial,
 shared Secrets, rotation, and redeployment. It prepares those Secrets and grants
-itself. The independent Slack case is expected to skip in this run.
+itself. Routing, Slack and OTLP cases live in separate files, so this invocation
+contains only its three required runtime cases.
 
 This suite uses the real production API and worker in the Node test process.
 It does not install the controller with Helm. Missing selected-suite
@@ -488,14 +490,13 @@ to receive the test messages.
 
 ```sh
 OCC_TEST_SLACK_LIVE=1 \
-  node --env-file="$TEST_ENV_FILE" --test tests/integration/harness-topology-k3d-real.test.mjs
+  node --env-file="$TEST_ENV_FILE" --test tests/integration/harness-topology-k3d-slack-real.test.mjs
 ```
 
 This posts real Slack messages and leaves them in the channel. It verifies the
 reply and exact runtime/session evidence. The sender bot must differ from the
-Agent bot; its credential remains with the test runner. This selection skips
-the ordinary runtime cases, so run both selections for complete Harness
-coverage. See [Slack test settings](reference/settings.md#slack-test-environment).
+Agent bot; its credential remains with the test runner. Run this file and the
+ordinary runtime file for both coverage groups. See [Slack test settings](reference/settings.md#slack-test-environment).
 
 ## ChatGPT service accounts
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -20,56 +21,28 @@ const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const composePostgresFile = join(repositoryRoot, "compose.postgres.yaml");
 const runtimeDockerfile = join(repositoryRoot, "deploy/runtime/Dockerfile");
 const fixtureDockerContext = join(repositoryRoot, "tests/fixtures/kubernetes");
-const defaultLoggingNodeImage =
-  "node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584";
+const testSuitesManifestPath = join(repositoryRoot, "scripts/ci/test-suites.json");
 const defaultStatePath = join(
   process.env.RUNNER_TEMP ?? tmpdir(),
   "openclaw-enterprise-ci-state.json",
 );
-const allowedLanes = new Set([
-  "checks-baseline",
-  "postgres",
-  "images-packaging",
-  "k3d-fixture-configuration",
-  "docker-model",
-  "k3d-model",
-  "gateway-routing",
-  "production-tui",
-  "slack",
-  "provider-account",
-  "openshell",
-  "helper-timeout",
-  "logging-collector",
-  "k3d-otel",
-]);
-const postgresLanes = new Set([
-  "postgres",
-  "k3d-fixture-configuration",
-  "k3d-model",
-  "gateway-routing",
-  "production-tui",
-  "slack",
-  "provider-account",
-  "openshell",
-  "k3d-otel",
-]);
-const k3dLanes = new Set([
-  "k3d-fixture-configuration",
-  "k3d-model",
-  "gateway-routing",
-  "production-tui",
-  "slack",
-  "provider-account",
-  "openshell",
-  "k3d-otel",
-]);
-const codexSeccompLanes = new Set([
-  "k3d-model",
-  "gateway-routing",
-  "slack",
-  "provider-account",
-  "k3d-otel",
-]);
+const laneDefinitions = JSON.parse(readFileSync(testSuitesManifestPath, "utf8")).lanes ?? {};
+const allowedLanes = new Set(Object.keys(laneDefinitions));
+
+function laneDefinition(name) {
+  return laneDefinitions[name] ?? {};
+}
+
+function lanePrepare(name) {
+  return laneDefinition(name).prepare ?? {};
+}
+
+function applyLaneEnv(name, env) {
+  Object.assign(env, laneDefinition(name).env ?? {});
+  for (const [envName, defaultValue] of Object.entries(lanePrepare(name).defaultEnv ?? {})) {
+    env[envName] = process.env[envName] || env[envName] || defaultValue;
+  }
+}
 
 function parseArgs(argv) {
   const args = {};
@@ -478,94 +451,18 @@ function assertImmutableOptionalEnvImages(names) {
 }
 
 async function validateLaneInputsBeforeSideEffects(lane) {
-  switch (laneName(lane)) {
-    case "images-packaging":
-      requireEnv(["NODE_BASE_IMAGE"]);
-      assertNodeBaseImage(process.env.NODE_BASE_IMAGE);
-      break;
-    case "docker-model":
-      requireEnv(["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL", "NODE_BASE_IMAGE"]);
-      assertNodeBaseImage(process.env.NODE_BASE_IMAGE);
-      break;
-    case "k3d-model":
-      requireEnv(["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"]);
-      assertImmutableOptionalEnvImages([
-        "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-        "OCC_TEST_KUBERNETES_AGENT_IMAGE",
-        "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
-        "OCC_TEST_KUBERNETES_CODEX_IMAGE",
-      ]);
-      break;
-    case "gateway-routing":
-      requireEnv(["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"]);
-      assertImmutableOptionalEnvImages([
-        "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-        "OCC_TEST_KUBERNETES_AGENT_IMAGE",
-      ]);
-      break;
-    case "production-tui":
-      requireEnv([
-        "OPENAI_API_KEY",
-        "OCC_TEST_OPENAI_MODEL",
-        "NODE_BASE_IMAGE",
-        "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
-        "OCC_TEST_PRODUCTION_NODE_IMAGE",
-      ]);
-      assertNodeBaseImage(process.env.NODE_BASE_IMAGE);
-      assertImmutableEnvImages([
-        "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
-        "OCC_TEST_PRODUCTION_NODE_IMAGE",
-      ]);
-      break;
-    case "slack":
-      requireEnv([
-        "OPENAI_API_KEY",
-        "OCC_TEST_OPENAI_MODEL",
-        "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-        "OCC_TEST_KUBERNETES_AGENT_IMAGE",
-        "OCC_TEST_SLACK_PROXY_URL",
-        "OCC_TEST_SLACK_CHANNEL_ID",
-        "OCC_TEST_SLACK_SENDER_BOT_TOKEN",
-        "SLACK_APP_TOKEN",
-        "SLACK_BOT_TOKEN",
-      ]);
-      assertImmutableEnvImages([
-        "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-        "OCC_TEST_KUBERNETES_AGENT_IMAGE",
-      ]);
-      break;
-    case "provider-account":
-      requireEnv([
-        "OCC_TEST_OPENAI_MODEL",
-        "OCC_TEST_CHATGPT_WORKSPACE_ID",
-        "OCC_TEST_CHATGPT_ADMIN_KEY_PATH",
-        "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-        "OCC_TEST_KUBERNETES_AGENT_IMAGE",
-      ]);
-      assertImmutableEnvImages([
-        "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-        "OCC_TEST_KUBERNETES_AGENT_IMAGE",
-      ]);
-      await requirePathMode0600(process.env.OCC_TEST_CHATGPT_ADMIN_KEY_PATH, "ChatGPT admin key");
-      break;
-    case "openshell":
-      requireEnv(["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"]);
-      assertImmutableOptionalEnvImages([
-        "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-        "OCC_TEST_KUBERNETES_AGENT_IMAGE",
-        "OCC_TEST_OPENSHELL_GATEWAY_IMAGE",
-        "OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE",
-      ]);
-      break;
-    case "k3d-otel":
-      requireEnv(["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"]);
-      assertImmutableOptionalEnvImages([
-        "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-        "OCC_TEST_KUBERNETES_AGENT_IMAGE",
-        "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
-        "OCC_TEST_KUBERNETES_CODEX_IMAGE",
-      ]);
-      break;
+  const prepare = lanePrepare(laneName(lane));
+  requireEnv(prepare.requireEnv ?? []);
+  if (prepare.nodeBaseImage) {
+    assertNodeBaseImage(process.env.NODE_BASE_IMAGE);
+  }
+  assertImmutableEnvImages(prepare.immutableEnvImages ?? []);
+  assertImmutableOptionalEnvImages(prepare.immutableOptionalEnvImages ?? []);
+  if (prepare.mode0600Env) {
+    await requirePathMode0600(
+      process.env[prepare.mode0600Env],
+      prepare.mode0600Description ?? prepare.mode0600Env,
+    );
   }
 }
 
@@ -971,7 +868,7 @@ async function prepareK3dRuntimeImages(
   }
   // Replace the build tag with its imported digest before publishing the next step's inputs.
   env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE = env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE;
-  if (codexSeccompLanes.has(state.lane)) {
+  if (lanePrepare(state.lane).codexSeccomp) {
     const seccomp = await prepareCodexSeccompProfile({
       cluster,
       image: env.OCC_TEST_KUBERNETES_AGENT_IMAGE,
@@ -1101,7 +998,6 @@ async function prepareLane({ lane, statePath }) {
       env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
       env.OCC_TEST_KUBERNETES_IMAGE = fixture.image;
-      env.OCC_TEST_KUBERNETES_CONFIGURATION = "1";
       break;
     }
     case "docker-model":
@@ -1110,15 +1006,10 @@ async function prepareLane({ lane, statePath }) {
         (await buildRuntimeImages(resolvedStatePath, state, { runtime: true })).env,
       );
       await prepareLaneLogging(resolvedStatePath, state, env);
-      env.OCC_TEST_DOCKER_COMPUTE_REAL = "1";
-      env.OCC_TEST_OTEL_LOGS = "1";
       break;
     case "k3d-model":
       await ensurePostgresServer(resolvedStatePath, state);
       await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: true });
-      env.OCC_TEST_HARNESS_K3D_REAL = "1";
-      env.OCC_TEST_SLACK_LIVE = "0";
-      env.OCC_TEST_GATEWAY_ROUTING_REAL = "0";
       break;
     case "gateway-routing": {
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
@@ -1138,19 +1029,15 @@ async function prepareLane({ lane, statePath }) {
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
       await prepareProductionImages(resolvedStatePath, state, cluster, env);
       await prepareLaneLogging(resolvedStatePath, state, env, cluster);
-      env.OCC_TEST_PRODUCTION_TUI_REAL = "1";
-      env.OCC_TEST_OTEL_LOGS = "1";
       break;
     }
     case "slack":
       await ensurePostgresServer(resolvedStatePath, state);
       await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: false });
-      env.OCC_TEST_SLACK_LIVE = "1";
       break;
     case "provider-account":
       await ensurePostgresServer(resolvedStatePath, state);
       await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: false });
-      env.OCC_TEST_CHATGPT_SERVICE_ACCOUNT_REAL = "1";
       break;
     case "openshell": {
       await ensurePostgresServer(resolvedStatePath, state);
@@ -1172,12 +1059,7 @@ async function prepareLane({ lane, statePath }) {
       break;
     }
     case "helper-timeout":
-      env.OCC_TEST_DEV_UP_REAL_TIMEOUT = "1";
-      break;
     case "logging-collector":
-      env.OCC_TEST_LOGGING_COLLECTOR = "1";
-      env.OCC_TEST_LOGGING_NODE_IMAGE =
-        process.env.OCC_TEST_LOGGING_NODE_IMAGE ?? defaultLoggingNodeImage;
       break;
     case "k3d-otel": {
       await ensurePostgresServer(resolvedStatePath, state);
@@ -1185,13 +1067,11 @@ async function prepareLane({ lane, statePath }) {
         buildRuntime: true,
       });
       await prepareLaneLogging(resolvedStatePath, state, env, cluster);
-      env.OCC_TEST_HARNESS_K3D_REAL = "1";
-      env.OCC_TEST_OTEL_LOGS = "1";
-      env.OCC_TEST_SLACK_LIVE = "0";
       break;
     }
   }
 
+  applyLaneEnv(name, env);
   await saveLaneEnv(resolvedStatePath, state, env);
   return { env, cleanup: async () => cleanupResourceIds(resolvedStatePath) };
 }
@@ -1214,10 +1094,8 @@ async function prepareFile({ lane, file, statePath }) {
   const relativeFile = toRepositoryRelative(filePath(file));
   const resolvedStatePath = normalizeStatePath(statePath);
   const state = await readState(resolvedStatePath);
-  if (
-    !state &&
-    (postgresLanes.has(name) || name.includes("model") || name === "images-packaging")
-  ) {
+  const prepare = lanePrepare(name);
+  if (!state && prepare.requiresPreparedStateForFile) {
     throw new Error(
       `prepareFile for ${name} requires a prior prepareLane call using the same state path.`,
     );
@@ -1226,8 +1104,8 @@ async function prepareFile({ lane, file, statePath }) {
   const env = baseEnv(resolvedStatePath, effectiveState);
   const resourceIds = [];
 
-  if (postgresLanes.has(name)) {
-    const dbKind = k3dLanes.has(name) ? "k8s" : "ci";
+  if (prepare.postgres) {
+    const dbKind = prepare.k3d ? "k8s" : "ci";
     const database = await createAndMigrateDatabase(resolvedStatePath, effectiveState, {
       kind: dbKind,
       label: fileStem(relativeFile),
@@ -1258,36 +1136,7 @@ async function prepareFile({ lane, file, statePath }) {
     env.OCC_PRODUCTION_WIREUP_DATABASE_URL = production.appUrl;
   }
 
-  if (name === "k3d-fixture-configuration") {
-    env.OCC_TEST_KUBERNETES_CONFIGURATION = "1";
-  } else if (name === "docker-model") {
-    env.OCC_TEST_DOCKER_COMPUTE_REAL = "1";
-  } else if (name === "k3d-model") {
-    env.OCC_TEST_HARNESS_K3D_REAL = "1";
-    env.OCC_TEST_SLACK_LIVE = "0";
-    env.OCC_TEST_GATEWAY_ROUTING_REAL = "0";
-  } else if (name === "gateway-routing") {
-    env.OCC_TEST_GATEWAY_ROUTING_REAL = "1";
-    env.OCC_TEST_SLACK_LIVE = "0";
-  } else if (name === "production-tui") {
-    env.OCC_TEST_PRODUCTION_TUI_REAL = "1";
-  } else if (name === "slack") {
-    env.OCC_TEST_SLACK_LIVE = "1";
-  } else if (name === "provider-account") {
-    env.OCC_TEST_CHATGPT_SERVICE_ACCOUNT_REAL = "1";
-  } else if (name === "openshell") {
-    env.OCC_TEST_OPENSHELL_K3D_REAL = "1";
-  } else if (name === "helper-timeout") {
-    env.OCC_TEST_DEV_UP_REAL_TIMEOUT = "1";
-  } else if (name === "logging-collector") {
-    env.OCC_TEST_LOGGING_COLLECTOR = "1";
-    env.OCC_TEST_LOGGING_NODE_IMAGE =
-      process.env.OCC_TEST_LOGGING_NODE_IMAGE ?? defaultLoggingNodeImage;
-  } else if (name === "k3d-otel") {
-    env.OCC_TEST_HARNESS_K3D_REAL = "1";
-    env.OCC_TEST_OTEL_LOGS = "1";
-    env.OCC_TEST_SLACK_LIVE = "0";
-  }
+  applyLaneEnv(name, env);
 
   if (state) await writeState(resolvedStatePath, effectiveState);
   return {

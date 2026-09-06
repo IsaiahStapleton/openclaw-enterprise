@@ -340,6 +340,26 @@ test("prepareLane fails closed instead of overwriting an existing CI state file"
   assert.equal((await stat(statePath)).mode & 0o777, 0o600);
 });
 
+test("prepareLane preserves an explicit logging Collector Node image over its default", async (t) => {
+  const root = await fixture(t);
+  const statePath = join(root, "logging-state.json");
+  const githubEnv = join(root, "github.env");
+  const customNodeImage =
+    "node:24-bookworm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+  const result = runPrepare(
+    ["--lane", "logging-collector", "--state", statePath, "--github-env", githubEnv],
+    {
+      OCC_TEST_LOGGING_NODE_IMAGE: customNodeImage,
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const exported = await readFile(githubEnv, "utf8");
+  assert.match(exported, /OCC_TEST_LOGGING_COLLECTOR=1/);
+  assert.match(exported, new RegExp(`OCC_TEST_LOGGING_NODE_IMAGE=${customNodeImage}`));
+});
+
 test("prepareLane rejects mutable Kubernetes image inputs before creating state", async (t) => {
   const root = await fixture(t);
   const adminKeyPath = join(root, "admin.key");

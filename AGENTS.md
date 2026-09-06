@@ -235,11 +235,9 @@ otherwise Kubernetes attempts a remote pull and reports `ImagePullBackOff`.
 Optional
 `OCC_TEST_KUBERNETES_OPENCLAW_VERSION` and `OCC_TEST_KUBERNETES_CODEX_VERSION`
 assert the actual image versions; Codex defaults to `0.152.1`. The ordinary
-real-runtime suite has four cases: one OCC gateway administration case,
-`dedicated` Codex, `embedded` OpenClaw with a persisted provider credential, and
-`embedded` OpenClaw with the Secret API. The gateway administration case also
-requires `helm` on `PATH`, or an executable selected by `OCC_HELM_BIN`, to render
-and apply the checked-in chart RBAC for the fixed `pods/exec` helper path. Each
+real-runtime file has three cases: `dedicated` Codex, `embedded` OpenClaw with
+a persisted provider credential, and `embedded` OpenClaw with the Secret API.
+Routing, Slack and OTLP coverage use separate prerequisite-specific files. Each
 case must produce real provider-backed model responses or real gateway command
 evidence. Embedded OpenClaw uses one combined gateway/Agent Pod; dedicated Codex
 uses separate gateway and authenticated app-server Pods. All cases require
@@ -255,8 +253,8 @@ under `models.providers.codex`, with `api: "openai-responses"` and a fail-closed
 `baseUrl: "http://127.0.0.1:9"`; authenticated WebSocket execution remains in
 the Codex Agent, which alone receives the model credential.
 
-`OCC_TEST_SLACK_LIVE=1` selects the separate live Slack case and suppresses the
-ordinary four real-runtime cases. That case posts real Slack messages and waits
+`OCC_TEST_SLACK_LIVE=1` enables the separate
+`tests/integration/harness-topology-k3d-slack-real.test.mjs` file. That case posts real Slack messages and waits
 for a gateway-authored reply; follow
 [the Slack testing guide](docs/testing.md#slack) before selecting it.
 

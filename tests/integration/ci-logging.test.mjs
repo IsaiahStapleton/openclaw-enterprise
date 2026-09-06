@@ -1,57 +1,14 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
-import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { promisify } from "node:util";
-
 import {
   ciOtelBackendResourceKind,
   cleanupLogging,
+  collectorImage,
+  fixture,
   prepareLogging,
-} from "../../scripts/ci/logging.mjs";
-
-const digest = "a".repeat(64);
-const collectorImage = `registry.example/otelcol@sha256:${digest}`;
-const execute = promisify(execFile);
-const selectedCollectorSmoke = process.env.OCC_TEST_LOGGING_COLLECTOR === "1";
-
-async function readJsonlPayloads(path) {
-  try {
-    const text = await readFile(path, "utf8");
-    return text
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-  } catch (error) {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  }
-}
-
-async function waitFor(check, description) {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    if (await check()) return;
-    await delay(250);
-  }
-  assert.fail(`Timed out waiting for ${description}.`);
-}
-
-function payloadContains(value, payloads) {
-  return JSON.stringify(payloads).includes(value);
-}
-
-async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), "ci-logging-test-"));
-  await chmod(root, 0o700);
-  t.after(() => rm(root, { recursive: true, force: true }));
-  return root;
-}
+} from "../helpers/ci-logging.mjs";
 
 test("prepareLogging registers an owned Collector backend before starting Docker", async (t) => {
   const root = await fixture(t);
@@ -209,64 +166,6 @@ test("prepareLogging installs k3d Collector from the canonical Helm template", a
     /OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http:\/\/172[.]18[.]0[.]23:4318\/v1\/logs"/,
   );
 });
-
-test(
-  "prepareLogging backend receives real OTLP/HTTP logs and writes JSONL",
-  {
-    skip: selectedCollectorSmoke
-      ? false
-      : "Set OCC_TEST_LOGGING_COLLECTOR=1 for the real Docker Collector backend smoke.",
-    timeout: 120_000,
-  },
-  async (t) => {
-    const root = await fixture(t);
-    let resource;
-    const result = await prepareLogging({
-      laneName: "logging-collector",
-      directory: root,
-      env: process.env,
-      execFile: execute,
-      registerResource: async (kind, details) => {
-        resource = { id: "resource-1", kind, owner: "openclaw-ci-local-test", ...details };
-        return resource;
-      },
-    });
-    try {
-      const canary = `ci-logging-smoke-${randomUUID()}`;
-      const response = await fetch(result.artifacts.localEndpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          resourceLogs: [
-            {
-              resource: {
-                attributes: [{ key: "service.name", value: { stringValue: "ci-logging-smoke" } }],
-              },
-              scopeLogs: [
-                {
-                  logRecords: [
-                    {
-                      timeUnixNano: String(Date.now() * 1_000_000),
-                      severityText: "INFO",
-                      body: { stringValue: canary },
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        }),
-      });
-      assert.equal(response.status, 200);
-      await waitFor(
-        async () => payloadContains(canary, await readJsonlPayloads(result.artifacts.logsJsonl)),
-        "Collector file exporter JSONL output",
-      );
-    } finally {
-      if (resource) await cleanupLogging(resource, { execFile: execute });
-    }
-  },
-);
 
 test("cleanupLogging removes the owned Collector backend and rejects foreign paths", async (t) => {
   const root = await fixture(t);

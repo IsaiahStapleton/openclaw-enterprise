@@ -88,34 +88,21 @@ function envObject(value, path, issues) {
   return env;
 }
 
-function compilePattern(namePattern, path, issues) {
-  if (namePattern === undefined) {
-    return undefined;
-  }
-  if (typeof namePattern !== "string") {
-    issues.push(issue("invalid-manifest", `${path}.namePattern must be a string`));
-    return undefined;
-  }
-  try {
-    new RegExp(namePattern);
-  } catch (error) {
-    issues.push(issue("invalid-manifest", `${path}.namePattern is invalid`, { error: error.name }));
-  }
-  return namePattern;
-}
-
 function normalizeFile(file, laneName, index, issues) {
   const path = `lanes.${laneName}.files.${index}`;
   if (!isObject(file) || typeof file.path !== "string") {
     issues.push(issue("invalid-manifest", `${path} must be an object with a path string`));
     return null;
   }
+  for (const selector of ["allowedSkips", "namePattern"]) {
+    if (Object.hasOwn(file, selector)) {
+      issues.push(issue("invalid-manifest", `${path}.${selector} is no longer supported`));
+    }
+  }
 
   return {
     path: file.path,
     expectedTests: stringArray(file.expectedTests, `${path}.expectedTests`, issues),
-    allowedSkips: stringArray(file.allowedSkips, `${path}.allowedSkips`, issues),
-    namePattern: compilePattern(file.namePattern, path, issues),
   };
 }
 
@@ -233,12 +220,8 @@ async function discoverTests(root) {
   return files.sort();
 }
 
-function splitSelection(file) {
-  return (
-    file.expectedTests.length > 0 ||
-    file.allowedSkips.length > 0 ||
-    typeof file.namePattern === "string"
-  );
+function expectedCaseEvidence(file) {
+  return file.expectedTests.length > 0;
 }
 
 async function auditManifest(root, manifest) {
@@ -285,7 +268,7 @@ async function auditManifest(root, manifest) {
   }
 
   for (const [file, entries] of selections.entries()) {
-    if (entries.length > 1 && entries.some((entry) => !splitSelection(entry.file))) {
+    if (entries.length > 1 && entries.some((entry) => !expectedCaseEvidence(entry.file))) {
       issues.push(
         issue("duplicate-file", `file is mapped by multiple broad lane entries: ${file}`, {
           file,
@@ -519,10 +502,9 @@ async function runFile(root, lane, file, statePath, prepareFile) {
   let tests = [];
   try {
     if (issues.length === 0) {
-      const patternArgs = file.namePattern ? ["--test-name-pattern", file.namePattern] : [];
       nodeResult = spawnSync(
         process.execPath,
-        ["--test", "--test-reporter", reporterPath, ...patternArgs, absolutePath],
+        ["--test", "--test-reporter", reporterPath, absolutePath],
         {
           cwd: root,
           encoding: "utf8",
@@ -608,15 +590,13 @@ async function runFile(root, lane, file, statePath, prepareFile) {
     for (const skipped of tests.filter((testCase) =>
       ["skipped", "todo"].includes(testCase.status),
     )) {
-      if (!file.allowedSkips.includes(skipped.name)) {
-        issues.push(
-          issue("unexpected-skip", `unexpected skipped test: ${skipped.name}`, {
-            file: relativePath,
-            name: skipped.name,
-            status: skipped.status,
-          }),
-        );
-      }
+      issues.push(
+        issue("unexpected-skip", `selected test did not run to completion: ${skipped.name}`, {
+          file: relativePath,
+          name: skipped.name,
+          status: skipped.status,
+        }),
+      );
     }
   }
 
@@ -748,7 +728,12 @@ function validateLaneEvidence(summary, laneName, lane, issues) {
         }),
       );
     }
-    if (!observed.counts || observed.counts.total < 1) {
+    if (
+      !observed.counts ||
+      !Number.isInteger(observed.counts.total) ||
+      observed.counts.total < 1 ||
+      !Array.isArray(observed.tests)
+    ) {
       issues.push(
         issue("missing-lane-evidence", `lane ${laneName} file has no test evidence`, {
           lane: laneName,
@@ -756,34 +741,13 @@ function validateLaneEvidence(summary, laneName, lane, issues) {
         }),
       );
     }
-
-    const tests = Array.isArray(observed.tests) ? observed.tests : [];
-    for (const name of expectedFile.expectedTests) {
-      const testCase = tests.find((test) => test.name === name);
-      if (!testCase || testCase.status !== "passed") {
-        issues.push(
-          issue("missing-expected-test", `lane ${laneName} lacks a passing expected test`, {
-            lane: laneName,
-            file: expectedFile.path,
-            name,
-          }),
-        );
-      }
-    }
-    for (const testCase of tests) {
-      if (
-        ["skipped", "todo"].includes(testCase.status) &&
-        !expectedFile.allowedSkips.includes(testCase.name)
-      ) {
-        issues.push(
-          issue("unexpected-skip", `lane ${laneName} contains an unexpected skip`, {
-            lane: laneName,
-            file: expectedFile.path,
-            name: testCase.name,
-            status: testCase.status,
-          }),
-        );
-      }
+    if (observed.cleanup?.status === "failed") {
+      issues.push(
+        issue("cleanup-failed", `lane ${laneName} file cleanup did not pass`, {
+          lane: laneName,
+          file: expectedFile.path,
+        }),
+      );
     }
   }
 }

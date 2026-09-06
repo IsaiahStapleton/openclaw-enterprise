@@ -71,62 +71,12 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: ./.github/actions/run-ci-lane
         with:
+          lane: ${{ matrix.lane }}
+          profile: ${{ matrix.profile }}
           node-version: ${{ env.NODE_VERSION }}
-      - id: pnpm-store
-        uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@97abb65691d97ee95c977a9a4ede2ef221d6929c
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: read-write
-      - uses: ./.github/actions/setup-test-docker
-        if: matrix.lane == 'logging-collector'
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-        if: matrix.profile == 'images' || matrix.profile == 'k3d'
-      - name: Set up CI tools
-        run: bash scripts/ci/setup-tools.sh "${{ matrix.profile }}"
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
-        with:
-          path: ${{ steps.pnpm-store.outputs.store-path }}
-          key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
-      - name: Install browser dependencies
-        if: matrix.lane == 'checks-baseline'
-        run: bash scripts/ci/setup-tools.sh browser
-      - name: Run workspace boundary check
-        if: matrix.lane == 'checks-baseline'
-        run: pnpm check:workspace
-      - name: Run format check
-        if: matrix.lane == 'checks-baseline'
-        run: pnpm format:check
-      - name: Run OpenAPI check
-        if: matrix.lane == 'checks-baseline'
-        run: pnpm openapi:check
-      - name: Run typecheck
-        if: matrix.lane == 'checks-baseline'
-        run: pnpm typecheck
-      - name: Select logging collector Node image
-        if: matrix.lane == 'logging-collector'
-        run: echo "OCC_TEST_LOGGING_NODE_IMAGE=node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584" >> "$GITHUB_ENV"
-      - name: Select image build Node base
-        if: matrix.lane == 'images-packaging'
-        run: echo "NODE_BASE_IMAGE=node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584" >> "$GITHUB_ENV"
-      - name: Prepare lane
-        run: node scripts/ci/prepare.mjs --lane "${{ matrix.lane }}" --state "$RUNNER_TEMP/state/${{ matrix.lane }}.json" --github-env "$GITHUB_ENV"
-      - name: Run lane
-        run: node scripts/ci/run-tests.mjs run "${{ matrix.lane }}" --state "$RUNNER_TEMP/state/${{ matrix.lane }}.json" --results "$RUNNER_TEMP/results/${{ matrix.lane }}.json"
-      - name: Cleanup lane
-        if: always()
-        run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/${{ matrix.lane }}.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: ci-results-${{ matrix.lane }}
-          path: ${{ runner.temp }}/results/${{ matrix.lane }}.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-prefix: ci-results
 
   ci-required:
     name: CI Required

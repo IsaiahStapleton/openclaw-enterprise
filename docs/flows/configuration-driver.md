@@ -224,6 +224,7 @@ Run focused Configuration conformance and integration checks:
 ```bash
 node --test tests/conformance/configuration-occ.test.mjs tests/conformance/kubernetes-configuration.test.mjs
 node --test tests/integration/configuration-controller.test.mjs tests/integration/postgres-platform-state.test.mjs
+node --test tests/integration/postgres-platform-state-kubernetes.test.mjs
 ```
 
 PostgreSQL integration requires configured database URLs; skipped cases do not

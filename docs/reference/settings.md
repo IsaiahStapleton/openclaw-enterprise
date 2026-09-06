@@ -588,7 +588,7 @@ default remains `gpt-4.1`.
 | `OPENAI_API_KEY`                            | Existing authorized provider credential for real embedded and dedicated model turns.                                                                                                                       |
 | `OCC_TEST_OPENAI_MODEL`                     | Authorized provider model; defaults to `gpt-4.1`.                                                                                                                                                          |
 
-The separate workspace-file routing case requires
+The separate [`harness-topology-k3d-routing-real.test.mjs`](../../tests/integration/harness-topology-k3d-routing-real.test.mjs) requires
 `OCC_TEST_GATEWAY_ROUTING_REAL=1` and the same runtime prerequisites. It also
 requires ready Envoy Gateway and cert-manager controllers, free local port
 443, `OCC_TEST_GATEWAY_CA_CERT_PATH`, `OCC_TEST_GATEWAY_CA_KEY_PATH`, and
@@ -604,8 +604,9 @@ production OCC API mounts only a public trust bundle.
 
 ### Slack test environment
 
-`OCC_TEST_SLACK_LIVE=1` selects the separate live Slack case and suppresses the
-ordinary runtime suite. The Slack case uses the same production k3d,
+`OCC_TEST_SLACK_LIVE=1` enables
+[`harness-topology-k3d-slack-real.test.mjs`](../../tests/integration/harness-topology-k3d-slack-real.test.mjs).
+Run the ordinary runtime file separately for its coverage. The Slack case uses the same production k3d,
 PostgreSQL, image, and model-turn prerequisites, then posts a real message and
 waits for a gateway-authored reply. It does not delete the Slack messages it
 creates.

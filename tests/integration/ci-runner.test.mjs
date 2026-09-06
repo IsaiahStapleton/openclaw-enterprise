@@ -64,7 +64,7 @@ async function writePrepare(root) {
   );
 }
 
-test("run uses prepareFile env per file and records real named pass and skip accounting", async (t) => {
+test("run uses prepareFile env per file and records real named pass accounting", async (t) => {
   const root = await fixture(t);
   const statePath = join(root, "state/lane.jsonl");
   const resultsPath = join(root, "results/baseline.json");
@@ -78,7 +78,6 @@ test("run uses prepareFile env per file and records real named pass and skip acc
       'test("first file sees scoped env", () => {',
       '  assert.equal(process.env.CI_RUNNER_SCOPED_VALUE, "one");',
       "});",
-      'test("allowed skip", { skip: "counterpart lane" }, () => {});',
       "",
     ].join("\n"),
   );
@@ -101,7 +100,6 @@ test("run uses prepareFile env per file and records real named pass and skip acc
           {
             path: "tests/integration/first.test.mjs",
             expectedTests: ["first file sees scoped env"],
-            allowedSkips: ["allowed skip"],
           },
           {
             path: "tests/integration/second.test.mjs",
@@ -133,7 +131,7 @@ test("run uses prepareFile env per file and records real named pass and skip acc
   assert.equal(summary.sourceSha, currentSha());
   assert.equal(summary.status, "passed");
   assert.equal(summary.counts.passed, 2);
-  assert.equal(summary.counts.skipped, 1);
+  assert.equal(summary.counts.skipped, 0);
   assert.equal(summary.files[0].cleanup.status, "passed");
   assert.match(await readFile(statePath, "utf8"), /first\.test\.mjs/);
 });
@@ -193,7 +191,7 @@ test("run preserves nonzero child Node exits and rejects zero-case files", async
   );
 });
 
-test("run fails missing expected tests, expected skips, unexpected skips, and missing required env", async (t) => {
+test("run fails missing expected tests, skipped expected tests, skips, todos, and missing required env", async (t) => {
   const root = await fixture(t);
   const resultsPath = join(root, "results/lane.json");
 
@@ -205,6 +203,7 @@ test("run fails missing expected tests, expected skips, unexpected skips, and mi
       'test("ordinary pass", () => assert.equal(1, 1));',
       'test("expected but skipped", { skip: "not allowed for expected" }, () => {});',
       'test("unexpected skipped case", { skip: "missing prerequisite" }, () => {});',
+      'test("todo case", { todo: "missing prerequisite" }, () => {});',
       "",
     ].join("\n"),
   );
@@ -267,6 +266,7 @@ test("run fails missing expected tests, expected skips, unexpected skips, and mi
     "missing-expected-test",
     "unexpected-skip",
     "unexpected-skip",
+    "unexpected-skip",
   ]);
 });
 
@@ -293,7 +293,6 @@ test("run records failed, skipped, todo, and passed dispositions separately", as
         files: [
           {
             path: "tests/integration/dispositions.test.mjs",
-            allowedSkips: ["skips", "todo case"],
           },
         ],
       },
@@ -518,83 +517,37 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
   assert.equal(customFailure.error.location.line, 11);
 });
 
-test("namePattern selects exact cases and fails when it selects zero cases", async (t) => {
+test("audit rejects obsolete manifest selectors", async (t) => {
   const root = await fixture(t);
-  await writeFile(
-    join(root, "tests/integration/pattern.test.mjs"),
-    [
-      'import test from "node:test";',
-      'test("selected case", () => {});',
-      'test("other case", () => {});',
-      "",
-    ].join("\n"),
-  );
+  await writeFile(join(root, "tests/integration/pattern.test.mjs"), "import 'node:test';\n");
   await writeJson(join(root, "manifest.json"), {
     version: 1,
     lanes: {
-      selected: {
+      obsolete: {
         files: [
           {
             path: "tests/integration/pattern.test.mjs",
-            expectedTests: ["selected case"],
             namePattern: "^selected case$",
-          },
-        ],
-      },
-      zero: {
-        files: [
-          {
-            path: "tests/integration/pattern.test.mjs",
-            namePattern: "^missing$",
+            allowedSkips: ["skipped case"],
           },
         ],
       },
     },
     groups: {
-      ci: ["selected", "zero"],
+      ci: ["obsolete"],
     },
   });
 
-  const selected = run(root, [
-    "run",
-    "selected",
-    "--manifest",
-    "manifest.json",
-    "--root",
-    root,
-    "--state",
-    "state/selected.jsonl",
-    "--results",
-    "results/selected.json",
+  const result = run(root, ["audit", "--manifest", "manifest.json", "--root", root]);
+  assert.equal(result.status, 1);
+  const summary = JSON.parse(result.stdout);
+  assert.deepEqual(summary.issues.map((entry) => entry.message).sort(), [
+    "lanes.obsolete.files.0.allowedSkips is no longer supported",
+    "lanes.obsolete.files.0.namePattern is no longer supported",
   ]);
-  assert.equal(selected.status, 0, selected.stderr);
-  const selectedSummary = JSON.parse(await readFile(join(root, "results/selected.json"), "utf8"));
-  assert.deepEqual(
-    selectedSummary.files[0].tests.map((entry) => entry.name),
-    ["selected case"],
-  );
-
-  const zero = run(root, [
-    "run",
-    "zero",
-    "--manifest",
-    "manifest.json",
-    "--root",
-    root,
-    "--state",
-    "state/zero.jsonl",
-    "--results",
-    "results/zero.json",
-  ]);
-  assert.equal(zero.status, 1);
-  const zeroSummary = JSON.parse(await readFile(join(root, "results/zero.json"), "utf8"));
-  assert.deepEqual(
-    zeroSummary.issues.map((entry) => entry.code),
-    ["selected-zero"],
-  );
 });
 
-test("audit requires current discovered test files while permitting explicit scenario splits", async (t) => {
+test("audit requires current discovered test files and rejects duplicate broad ownership", async (t) => {
   const root = await fixture(t);
   await writeFile(join(root, "tests/integration/mapped.test.mjs"), "import 'node:test';\n");
   await writeFile(join(root, "tests/integration/unmapped.test.mjs"), "import 'node:test';\n");
@@ -608,7 +561,7 @@ test("audit requires current discovered test files while permitting explicit sce
         ],
       },
       two: {
-        files: [{ path: "tests/integration/mapped.test.mjs", namePattern: "^case b$" }],
+        files: [{ path: "tests/integration/mapped.test.mjs", expectedTests: ["case b"] }],
       },
       broad: {
         files: [{ path: "tests/integration/mapped.test.mjs" }],
