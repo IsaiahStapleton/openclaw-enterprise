@@ -28,6 +28,8 @@ OpenClaw Enterprise is the open platform for managing agents.
 - [Gateway routing with Envoy](reference/gateway-routing.md): private routes, service-key bootstrap, TLS, and network enforcement.
 - [Kubernetes Secret Driver](reference/drivers/kubernetes-secret.md): store Secrets
   and bind them to selected Agent gateways.
+- [SSH Compute Driver](reference/drivers/ssh-compute.md): run embedded OpenClaw
+  Agents on preprovisioned Linux hosts with SSH and one systemd unit per Agent.
 - [Authentication](reference/authentication.md),
   [Authorization](reference/authorization.md), and
   [Service accounts](reference/service-accounts.md): sign-in, permissions, and credentials.

@@ -86,7 +86,7 @@ Agent Configuration. Native connection failures remain dependency failures.
 
 Bundled Kubernetes Compute uses this capability for
 [private Agent routes](kubernetes-compute.md#private-agent-gateway-routes).
-Docker does not implement it. Optional resolution does not change the required
+Docker and SSH do not implement it. Optional resolution does not change the required
 revision lifecycle operations or grant the API Kubernetes route permissions.
 
 ## Optional active-runtime maintenance
@@ -127,6 +127,7 @@ cancelled rollback receives a bounded cleanup signal.
 
 - [Docker ComputeDriver](docker-compute.md)
 - [Kubernetes ComputeDriver](kubernetes-compute.md)
+- [SSH ComputeDriver](ssh-compute.md): raw Linux hosts, embedded OpenClaw, and systemd lifecycle.
 - [SandboxDriver contract](sandbox.md)
 - [Docker Compose development flow](../../flows/docker-compose-development.md)
 - [ComputeDriver lifecycle-hook execution flow](../../flows/compute-driver-lifecycle-hooks.md)

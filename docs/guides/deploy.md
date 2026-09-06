@@ -4,6 +4,13 @@ Start OpenClaw Control Center (OCC), verify authenticated access, then deploy
 Agents when you are ready to prove a workload. Run commands from the repository
 root. Startup needs no model credential.
 
+Trusted Installation YAML can also select the bundled
+[SSH Compute Driver](../reference/drivers/ssh-compute.md) for embedded OpenClaw
+on preprovisioned Linux hosts. That reference owns host configuration,
+credentials, and operational limits; [SSH raw-host testing](../testing.md#ssh-raw-hosts)
+owns the disposable verification rig. The Compose and Helm procedures below
+retain their existing control-plane and Kubernetes packaging boundaries.
+
 ## Development
 
 Prerequisites: Docker Engine with Docker Compose, socket access, Bash, `curl`,

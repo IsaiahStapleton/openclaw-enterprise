@@ -106,13 +106,13 @@ and [API reference](reference/api.md) for operational details.
 
 OCC selects the Drivers used by its Installation:
 
-| Driver                 | Responsibility                                                  | Available implementations                        |
-| ---------------------- | --------------------------------------------------------------- | ------------------------------------------------ |
-| `IAMDriver`            | Resolve identities and authorize exact-resource access.         | Bundled native IAM or an installed Driver.       |
-| `ComputeDriver`        | Provision tenant infrastructure and Agent workloads.            | Bundled Docker, Kubernetes, or installed Driver. |
-| `ConfigurationDriver`  | Store Namespace-owned OpenClaw configuration documents.         | Filesystem, Kubernetes ConfigMaps, or installed. |
-| `SecretDriver`         | Store Namespace-owned Secret values and validate delivery refs. | Bundled Kubernetes Secrets.                      |
-| `ServiceAccountDriver` | Provision upstream provider accounts and their credentials.     | Optional ChatGPT Provider member.                |
+| Driver                 | Responsibility                                                  | Available implementations                             |
+| ---------------------- | --------------------------------------------------------------- | ----------------------------------------------------- |
+| `IAMDriver`            | Resolve identities and authorize exact-resource access.         | Bundled native IAM or an installed Driver.            |
+| `ComputeDriver`        | Provision tenant infrastructure and Agent workloads.            | Bundled Docker, Kubernetes, SSH, or installed Driver. |
+| `ConfigurationDriver`  | Store Namespace-owned OpenClaw configuration documents.         | Filesystem, Kubernetes ConfigMaps, or installed.      |
+| `SecretDriver`         | Store Namespace-owned Secret values and validate delivery refs. | Bundled Kubernetes Secrets.                           |
+| `ServiceAccountDriver` | Provision upstream provider accounts and their credentials.     | Optional ChatGPT Provider member.                     |
 
 A configured [Provider](reference/providers.md) owns a client and its related
 Driver membership. Only the API constructs the ChatGPT client and injects its
@@ -227,10 +227,23 @@ PostgreSQL. The selected Kubernetes Compute Driver creates isolated tenant
 namespaces, Agent-owned gateways, and embedded or dedicated Agent workloads.
 The production API is internal-only.
 
+**SSH host execution** selects `compute-ssh` in trusted Installation YAML in
+development or production. The Compute Driver manages embedded OpenClaw on
+operator-provisioned Linux hosts through SSH, with one systemd unit per Agent,
+immutable snapshots, and persistent Agent state. Revision preparation performs
+a bounded restart; activation verifies readiness. This adds host execution to
+the existing control plane, not a new control-plane installer. Host networking
+and Unix-account isolation remain operator responsibilities; dedicated Codex,
+SandboxDriver composition, and OCC Secret delivery are unsupported. Local proof
+uses transport/systemd fixtures; the opt-in real-host integration passed against
+the disposable systemd container rig with OpenClaw `2026.7.1`.
+
 Reviewed installed Drivers can be selected in both development and production.
 See [Docker development](reference/drivers/docker-compute.md),
 [Kubernetes deployment](guides/deploy.md), and the
-[Kubernetes Compute Driver](reference/drivers/kubernetes-compute.md).
+[Kubernetes Compute Driver](reference/drivers/kubernetes-compute.md), plus
+[SSH Compute](reference/drivers/ssh-compute.md) and its
+[real-host test rig](testing.md#ssh-raw-hosts).
 
 ## Current limitations
 
