@@ -132,6 +132,7 @@ export interface KubernetesComputeDriverOptions {
     readonly transportSecretPrefix: string;
     readonly modelSecretPrefix: string;
     readonly gatewayStorageClassName: string;
+    readonly codexSeccompProfile?: string;
     readonly channels?: {
       readonly secretPrefix: string;
       readonly proxyUrl: string;
@@ -334,6 +335,22 @@ function validateKubernetesResourceName(value: string, description: string): voi
   }
 }
 
+function validateCodexSeccompProfile(value: unknown): string {
+  const profile = required(value, "Codex seccomp localhost profile");
+  const segments = profile.split("/");
+  if (
+    isAbsolute(profile) ||
+    profile.includes("\\") ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..") ||
+    segments.some((segment) => segment.toLowerCase() === "unconfined")
+  ) {
+    throw new ConfigurationFailure(
+      "Codex seccomp localhost profile must be a relative profile path without traversal or unconfined mode.",
+    );
+  }
+  return profile;
+}
+
 function labelsToSelector(labels: Readonly<Record<string, string>>): string {
   return Object.entries(labels)
     .map(([key, value]) => `${key}=${value}`)
@@ -519,6 +536,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           transportSecretPrefix: { type: "string" },
           modelSecretPrefix: { type: "string" },
           gatewayStorageClassName: { type: "string", minLength: 1 },
+          codexSeccompProfile: { type: "string", minLength: 1 },
           channels: {
             type: "object",
             required: ["secretPrefix", "proxyUrl"],
@@ -668,9 +686,26 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     if (options.runtime !== undefined) {
       const { transportSecretPrefix, modelSecretPrefix, channels } = options.runtime;
+      const runtimeProperties = asRecord(
+        KubernetesComputeDriver.configurationSchema.properties.runtime.properties,
+      );
+      if (runtimeProperties === undefined) {
+        throw new ConfigurationFailure("Kubernetes runtime configuration schema is invalid.");
+      }
+      const runtimeKeys = new Set(Object.keys(runtimeProperties));
+      for (const key of Object.keys(options.runtime)) {
+        if (!runtimeKeys.has(key)) {
+          throw new ConfigurationFailure(
+            `The Kubernetes runtime configuration contains unsupported option ${key}.`,
+          );
+        }
+      }
       required(transportSecretPrefix, "Agent transport Secret name prefix");
       required(modelSecretPrefix, "Agent model Secret name prefix");
       required(options.runtime.gatewayStorageClassName, "SQLite-compatible gateway storage class");
+      if (options.runtime.codexSeccompProfile !== undefined) {
+        validateCodexSeccompProfile(options.runtime.codexSeccompProfile);
+      }
       if (transportSecretPrefix === modelSecretPrefix) {
         throw new ConfigurationFailure(
           "Gateway, Agent transport, and model credentials must remain separate.",
@@ -3414,6 +3449,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
       role === "agent" && runtime !== undefined
         ? AGENT_TRANSPORT_PORT
         : this.options.network.gatewayPort;
+    const codexSeccompProfile =
+      role === "agent" && runtime?.codexSeccompProfile !== undefined
+        ? {
+            seccompProfile: {
+              type: "Localhost",
+              localhostProfile: runtime.codexSeccompProfile,
+            },
+          }
+        : {};
     return {
       ...deployment,
       metadata: {
@@ -3483,6 +3527,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
                   allowPrivilegeEscalation: false,
                   readOnlyRootFilesystem: true,
                   capabilities: { drop: ["ALL"] },
+                  ...codexSeccompProfile,
                 },
                 ...(volumeMounts.length === 0 ? {} : { volumeMounts }),
                 ...(runtime === undefined

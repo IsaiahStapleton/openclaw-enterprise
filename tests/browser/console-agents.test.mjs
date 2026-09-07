@@ -350,7 +350,6 @@ test("Agent creation leaves optional lists disabled when discovery is inaccessib
   await page.route(serviceAccounts, async (route) => {
     await route.abort("failed");
   });
-  t.after(() => page.unroute(serviceAccounts));
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();

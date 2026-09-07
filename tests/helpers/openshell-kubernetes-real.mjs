@@ -161,6 +161,67 @@ export function createOpenShellInstallationConfiguration({
   return configuration;
 }
 
+export function openShellChartImageValues(prefix, image, defaultTag) {
+  assert.ok(image, `${prefix}.repository requires an explicit OpenShell image.`);
+  const digest = image.match(/@sha256:[a-f0-9]{64}$/i)?.[0];
+  assert.ok(digest, `${prefix}.tag requires an immutable OpenShell image digest.`);
+  const withoutDigest = image.slice(0, -digest.length);
+  const lastSlash = withoutDigest.lastIndexOf("/");
+  const tagSeparator = withoutDigest.lastIndexOf(":");
+  if (tagSeparator > lastSlash) {
+    return [
+      `--set-string=${prefix}.repository=${withoutDigest.slice(0, tagSeparator)}`,
+      `--set-string=${prefix}.tag=${withoutDigest.slice(tagSeparator + 1)}${digest}`,
+    ];
+  }
+  return [
+    `--set-string=${prefix}.repository=${withoutDigest}`,
+    `--set-string=${prefix}.tag=${defaultTag}${digest}`,
+  ];
+}
+
+function renderedOpenShellImage(image, defaultTag) {
+  const digest = image.match(/@sha256:[a-f0-9]{64}$/i)?.[0];
+  assert.ok(digest, "OpenShell image reference must include an immutable digest.");
+  const withoutDigest = image.slice(0, -digest.length);
+  const lastSlash = withoutDigest.lastIndexOf("/");
+  const tagSeparator = withoutDigest.lastIndexOf(":");
+  if (tagSeparator > lastSlash) return image;
+  return `${withoutDigest}:${defaultTag}${digest}`;
+}
+
+function regexpEscape(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function assertRenderedOpenShellImages({
+  gatewayPod,
+  statefulSet,
+  configMap,
+  gatewayImage,
+  supervisorImage,
+  defaultTag,
+}) {
+  const expectedGatewayImage = renderedOpenShellImage(gatewayImage, defaultTag);
+  const expectedSupervisorImage = renderedOpenShellImage(supervisorImage, defaultTag);
+  assert.equal(
+    statefulSet.spec?.template?.spec?.containers?.find(({ name }) => name === "openshell-gateway")
+      ?.image,
+    expectedGatewayImage,
+    "OpenShell gateway StatefulSet image must retain the imported immutable digest after Helm rendering.",
+  );
+  assert.equal(
+    gatewayPod.spec?.containers?.find(({ name }) => name === "openshell-gateway")?.image,
+    expectedGatewayImage,
+    "OpenShell gateway Pod image must retain the imported immutable digest after Helm rendering.",
+  );
+  assert.match(
+    configMap.data?.["gateway.toml"] ?? "",
+    new RegExp(`supervisor_image\\s*=\\s*${regexpEscape(JSON.stringify(expectedSupervisorImage))}`),
+    "OpenShell supervisor image in gateway.toml must retain the imported immutable digest after Helm rendering.",
+  );
+}
+
 export function createOpenShellKubernetesFixture({
   kubeconfigPath,
   kubernetesContext,
@@ -280,20 +341,7 @@ export function createOpenShellKubernetesFixture({
   }
 
   function chartImageValues(prefix, image) {
-    assert.ok(image, `${prefix}.repository requires an explicit OpenShell image.`);
-    const withoutDigest = image.replace(/@sha256:[a-f0-9]{64}$/i, "");
-    const lastSlash = withoutDigest.lastIndexOf("/");
-    const tagSeparator = withoutDigest.lastIndexOf(":");
-    if (tagSeparator > lastSlash) {
-      return [
-        `--set-string=${prefix}.repository=${withoutDigest.slice(0, tagSeparator)}`,
-        `--set-string=${prefix}.tag=${withoutDigest.slice(tagSeparator + 1)}`,
-      ];
-    }
-    return [
-      `--set-string=${prefix}.repository=${withoutDigest}`,
-      `--set-string=${prefix}.tag=${openShellChartVersion}`,
-    ];
+    return openShellChartImageValues(prefix, image, openShellChartVersion);
   }
 
   async function ensureOpenShellJwtSecret(namespace) {
@@ -481,7 +529,17 @@ export function createOpenShellKubernetesFixture({
       ],
       { maxBuffer: 8 * 1024 * 1024 },
     );
-    return await waitForOpenShellGateway(namespace);
+    const gateway = await waitForOpenShellGateway(namespace);
+    const instance = openShellGatewayServiceName(namespace);
+    assertRenderedOpenShellImages({
+      gatewayPod: gateway,
+      statefulSet: await base.resource("statefulset", instance, namespace),
+      configMap: await base.resource("configmap", `${instance}-config`, namespace),
+      gatewayImage: openShellGatewayImage,
+      supervisorImage: openShellSupervisorImage,
+      defaultTag: openShellChartVersion,
+    });
+    return gateway;
   }
 
   async function startOpenShellGatewayPortForward(namespace) {

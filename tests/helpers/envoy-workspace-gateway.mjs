@@ -45,6 +45,19 @@ function nonempty(value, name) {
   return value;
 }
 
+export function resolveGatewayPublisherImage(topology) {
+  const image = nonempty(
+    topology.gatewayPublisherImage,
+    "Docker-local gateway publisher image; set OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE",
+  );
+  assert.match(
+    image,
+    /^sha256:[a-f0-9]{64}$/i,
+    "Docker-local gateway publisher image must be an immutable Docker image ID.",
+  );
+  return image;
+}
+
 function hash(value) {
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
@@ -544,6 +557,7 @@ spec:
   // Both forwarders copy encrypted bytes only. Envoy remains the sole TLS/authentication proxy.
   const publisherName = `oce-envoy-publisher-${hash(topology.agent.id)}`;
   const localPort = Number(new URL(forwarding.url).port);
+  const publisherImage = resolveGatewayPublisherImage(topology);
   await command("docker", [
     "run",
     "--detach",
@@ -561,7 +575,7 @@ spec:
     "--no-healthcheck",
     "--entrypoint",
     "node",
-    topology.gatewayImage,
+    publisherImage,
     "-e",
     `const net=require("node:net");net.createServer(client=>{const upstream=net.connect(${localPort},"host.docker.internal");client.on("error",()=>upstream.destroy());upstream.on("error",()=>client.destroy());client.pipe(upstream);upstream.pipe(client)}).listen(${tcpForwarderPort},"0.0.0.0")`,
   ]);

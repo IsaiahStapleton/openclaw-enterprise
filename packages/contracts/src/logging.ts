@@ -32,16 +32,18 @@ export function admitLoggingConfiguration(
   level: LoggingLevel,
 ): OpenClawConfigurationDocument {
   const logging = record(configuration.logging);
+  const admittedLogging: Record<string, OpenClawConfigurationValue> = { ...logging };
+  // Native OpenClaw owns redaction; admitted read-only runtime config must omit this retired setting.
+  delete admittedLogging.redactSensitive;
   const diagnostics = record(configuration.diagnostics);
   const otel = record(diagnostics.otel);
   return Object.freeze({
     ...configuration,
     logging: Object.freeze({
-      ...logging,
+      ...admittedLogging,
       level,
       consoleLevel: level,
       consoleStyle: "json",
-      redactSensitive: "tools",
     }),
     diagnostics: Object.freeze({
       ...diagnostics,
@@ -63,8 +65,8 @@ export function admittedLoggingLevel(configuration: OpenClawConfigurationDocumen
   if (logging.consoleStyle !== "json") {
     throw new Error("Admitted logging.consoleStyle must be json before workload rendering.");
   }
-  if (logging.redactSensitive !== "tools") {
-    throw new Error("Admitted logging.redactSensitive must be tools before workload rendering.");
+  if (Object.hasOwn(logging, "redactSensitive")) {
+    throw new Error("Admitted logging.redactSensitive is retired before workload rendering.");
   }
   const diagnostics = record(configuration.diagnostics);
   const otel = record(diagnostics.otel);

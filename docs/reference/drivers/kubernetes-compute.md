@@ -25,6 +25,9 @@ controller.
   selecting a production StorageClass.
 - For dedicated Agents, a default StorageClass that supports `40Gi`
   `ReadWriteMany` PersistentVolumeClaims.
+- If `runtime.codexSeccompProfile` is configured, install that relative
+  localhost seccomp profile on every eligible node before Agent startup.
+  Kubernetes fails the Codex Pod when the configured profile is missing.
 
 The worker manages PersistentVolumeClaims and, when private gateway routing is
 enabled, HTTPRoutes through tenant-local RoleBindings. Only the controller API
@@ -112,6 +115,8 @@ drivers:
         gatewayStorageClassName: sqlite-block
         transportSecretPrefix: openclaw-agent-transport
         modelSecretPrefix: openclaw-agent-model
+        # Optional; first install this reviewed profile on every eligible node.
+        codexSeccompProfile: profiles/codex-0.152.1.json
 ```
 
 This example shows only the Compute Driver portion of the Installation
@@ -281,10 +286,16 @@ existing-namespace selection with `409`.
 See [tenant RoleBindings](../../guides/deploy.md#grant-tenant-rolebindings)
 for the required worker and API grants.
 
-Workload Pods run as nonroot, use `RuntimeDefault` seccomp, drop Linux
-capabilities, disable privilege escalation, and use read-only root filesystems.
-Agent identity is provided through an audience-scoped, short-lived projected
-ServiceAccount token. Workloads never receive controller credentials.
+Workload Pods run as nonroot, use `RuntimeDefault` seccomp by default, drop
+Linux capabilities, disable privilege escalation, and use read-only root
+filesystems. When `runtime.codexSeccompProfile` is configured, only the
+dedicated Codex Agent container uses
+`seccompProfile: { type: "Localhost", localhostProfile: <profile> }`; the Pod,
+gateway container, embedded runtime, controller, and init containers keep their
+default seccomp settings. The profile path must be relative to the kubelet's
+localhost seccomp profile root and cannot be empty, absolute, traversing, or
+unconfined. Agent identity is provided through an audience-scoped, short-lived
+projected ServiceAccount token. Workloads never receive controller credentials.
 
 The driver deletes Kubernetes namespaces it created when their corresponding
 OpenClaw Namespaces are deleted. For an operator-owned existing namespace, it
@@ -382,6 +393,14 @@ dedicated gateway, never to its Codex Harness.
 Use an approved secret manager, protected files, or standard input when
 creating Secrets. Never expose credentials in command-line arguments or logs.
 Missing or incorrectly scoped credentials fail deployment.
+
+Use `runtime.codexSeccompProfile` only for a reviewed Codex compatibility
+allowlist. The optional profile exists for source-backed compatibility cases
+where Codex `0.152.1` cannot start because `RuntimeDefault` denies the
+user-namespace `clone`, `unshare`, and `mount` calls used by bubblewrap. It
+does not relax filesystem or network policy: Codex and bubblewrap still own
+runtime filesystem boundaries, while Kubernetes NetworkPolicies and the
+configured runtime channel proxy own network enforcement.
 
 See [service-account credential delivery](../service-accounts.md#provider-managed-access-tokens)
 for provider-issued credentials and supported execution modes.
