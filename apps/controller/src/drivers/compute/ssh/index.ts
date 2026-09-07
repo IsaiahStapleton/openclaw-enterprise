@@ -20,7 +20,7 @@ import {
   sha256Hex,
 } from "@openclaw-enterprise/utils";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
-import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
+import { currentComputeAbortSignal } from "../operation-context.ts";
 import { SystemSshCommandExecutor, type SshCommandExecutor } from "./executor.ts";
 
 export interface SshComputeHost {
@@ -60,9 +60,16 @@ class ConfigurationFailure extends Error {}
 
 const HELPER = readFileSync(new URL("./remote-helper.cjs", import.meta.url), "utf8");
 const OPERATION_TIMEOUT_MS = 180_000;
+// The helper enforces its own deadline below the transport timeout.
+const HELPER_DEADLINE_MS = OPERATION_TIMEOUT_MS - 10_000;
 // SSH joins remote argv through the login shell; systemd also expands specifiers.
 const PATH_PATTERN = "^/[A-Za-z0-9_./:@+-]*$";
+const PATH = new RegExp(PATH_PATTERN);
 const PATH_SCHEMA = { type: "string", pattern: PATH_PATTERN };
+const ADDRESS_PATTERN = "^[A-Za-z0-9:][A-Za-z0-9.:-]*$";
+const ADDRESS = new RegExp(ADDRESS_PATTERN);
+const ACCOUNT_PATTERN = "^[a-z_][a-z0-9_-]*[$]?$";
+const ACCOUNT = new RegExp(ACCOUNT_PATTERN);
 const IDENTITY = /^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/;
 
 function required(value: unknown, description: string): string {
@@ -90,16 +97,26 @@ function closed(
 }
 
 function path(value: unknown, description: string): void {
-  if (!new RegExp(PATH_PATTERN).test(required(value, description))) {
+  if (!PATH.test(required(value, description))) {
     throw new ConfigurationFailure(
       `${description} must be an absolute path without whitespace, quotes, control characters, or shell/systemd expansions.`,
     );
   }
 }
 
-function port(value: unknown, minimum: number, description: string): void {
+function port(value: unknown, minimum: number, description: string): number {
   if (!isPositiveSafeInteger(value) || value < minimum || value > 65_535) {
     throw new ConfigurationFailure(`${description} must be an integer from ${minimum} to 65535.`);
+  }
+  return value;
+}
+
+// Heartbeat lines precede the helper's single JSON result line.
+function helperResult(stdout: string): Record<string, unknown> | undefined {
+  try {
+    return asRecord(JSON.parse(stdout.trim().split("\n").at(-1) ?? ""));
+  } catch {
+    return undefined;
   }
 }
 
@@ -133,7 +150,7 @@ export class SshComputeDriver implements ComputeDriver {
           additionalProperties: false,
           required: ["address", "user"],
           properties: {
-            address: { type: "string", pattern: "^[A-Za-z0-9:][A-Za-z0-9.:-]*$" },
+            address: { type: "string", pattern: ADDRESS_PATTERN },
             port: { type: "integer", minimum: 1, maximum: 65_535 },
             user: { const: "root" },
             nodePath: PATH_SCHEMA,
@@ -150,7 +167,7 @@ export class SshComputeDriver implements ComputeDriver {
           openclawPath: PATH_SCHEMA,
           root: PATH_SCHEMA,
           systemdUnitDirectory: PATH_SCHEMA,
-          user: { type: "string", pattern: "^[a-z_][a-z0-9_-]*[$]?$" },
+          user: { type: "string", pattern: ACCOUNT_PATTERN },
         },
       },
       network: {
@@ -195,7 +212,7 @@ export class SshComputeDriver implements ComputeDriver {
     for (const key of ["nodePath", "openclawPath", "root"]) path(runtime[key], `runtime.${key}`);
     if (runtime.systemdUnitDirectory !== undefined)
       path(runtime.systemdUnitDirectory, "runtime.systemdUnitDirectory");
-    if (!/^[a-z_][a-z0-9_-]*[$]?$/.test(required(runtime.user, "runtime.user"))) {
+    if (!ACCOUNT.test(required(runtime.user, "runtime.user"))) {
       throw new ConfigurationFailure("runtime.user must be a host account name.");
     }
     const hosts = asRecord(options.hosts);
@@ -209,7 +226,7 @@ export class SshComputeDriver implements ComputeDriver {
         ["address", "port", "user", "nodePath", "openclawPath"],
         "SSH host",
       );
-      if (!/^[A-Za-z0-9:][A-Za-z0-9.:-]*$/.test(required(host.address, "Host address"))) {
+      if (!ADDRESS.test(required(host.address, "Host address"))) {
         throw new ConfigurationFailure("Host address must be a hostname or IP address.");
       }
       if (host.user !== "root")
@@ -222,9 +239,9 @@ export class SshComputeDriver implements ComputeDriver {
     }
     const network = closed(options.network, ["gatewayPortRange"], "network");
     const range = closed(network.gatewayPortRange, ["start", "end"], "gatewayPortRange");
-    port(range.start, 1024, "Gateway port range start");
-    port(range.end, 1024, "Gateway port range end");
-    if ((range.start as number) > (range.end as number))
+    const start = port(range.start, 1024, "Gateway port range start");
+    const end = port(range.end, 1024, "Gateway port range end");
+    if (start > end)
       throw new ConfigurationFailure("Gateway port range start must not exceed end.");
   }
 
@@ -258,9 +275,8 @@ export class SshComputeDriver implements ComputeDriver {
 
   async preflight(): Promise<void> {
     for (const key of ["identityFile", "knownHostsFile"] as const) {
-      try {
-        if (!(await stat(this.options.ssh[key])).isFile()) throw new Error();
-      } catch {
+      const info = await stat(this.options.ssh[key]).catch(() => undefined);
+      if (info?.isFile() !== true) {
         throw new ConfigurationFailure(`SSH ${key} must identify an existing local file.`);
       }
     }
@@ -360,7 +376,7 @@ export class SshComputeDriver implements ComputeDriver {
 
   async deactivateRevision(revision: AgentRevision): Promise<void> {
     this.lifecycleStarted = true;
-    await this.revisionOperation("probe", revision);
+    await this.revisionOperation("verify-revision", revision);
   }
 
   async retireRevision(revision: AgentRevision): Promise<void> {
@@ -374,9 +390,12 @@ export class SshComputeDriver implements ComputeDriver {
     identity(namespace.id, "Namespace ID");
     if (namespace.existingNamespace !== undefined)
       throw new ConfigurationFailure("SSH Compute does not support existingNamespace adoption.");
-    if (!Object.hasOwn(this.options.hosts, namespace.name))
+    const host = Object.hasOwn(this.options.hosts, namespace.name)
+      ? this.options.hosts[namespace.name]
+      : undefined;
+    if (host === undefined)
       throw new ConfigurationFailure("SSH Namespace name is not mapped to a host.");
-    return this.options.hosts[namespace.name]!;
+    return host;
   }
 
   private bindNamespace(namespace: Namespace): void {
@@ -386,9 +405,10 @@ export class SshComputeDriver implements ComputeDriver {
     this.namespaces.set(namespace.id, immutableCopy(namespace));
   }
 
-  private validateRevision(revision: AgentRevision): void {
+  private validateRevision(revision: AgentRevision): Readonly<Namespace> {
+    const namespace = this.namespaces.get(revision.namespaceId);
     const binding = this.agents.get(revision.agentId);
-    if (!this.namespaces.has(revision.namespaceId) || binding === undefined)
+    if (namespace === undefined || binding === undefined)
       throw new ConfigurationFailure("SSH revision requires a bound Namespace and Agent.");
     if (
       binding.namespace.id !== revision.namespaceId ||
@@ -406,21 +426,18 @@ export class SshComputeDriver implements ComputeDriver {
     ) {
       throw new ConfigurationFailure("AgentRevision Configuration ownership is invalid.");
     }
+    return namespace;
   }
 
   private async revisionOperation(
     operation: string,
     revision: AgentRevision,
   ): Promise<Record<string, unknown>> {
-    this.validateRevision(revision);
-    const namespace = this.namespaces.get(revision.namespaceId)!;
+    const namespace = this.validateRevision(revision);
     return this.execute(this.host(namespace), {
       operation,
       namespace,
       revision,
-      namespaceHash: sha256Hex(namespace.id, 12),
-      agentHash: sha256Hex(revision.agentId, 12),
-      revisionHash: sha256Hex(revision.id, 12),
       configurationHash: sha256Hex(JSON.stringify(revision.configuration)),
     });
   }
@@ -436,50 +453,40 @@ export class SshComputeDriver implements ComputeDriver {
       openclawPath: host.openclawPath ?? this.options.runtime.openclawPath,
     };
     const owner = currentComputeAbortSignal();
-    const timeout = AbortSignal.timeout(OPERATION_TIMEOUT_MS);
-    const signal = owner === undefined ? timeout : AbortSignal.any([owner, timeout]);
-    return withComputeAbortSignal(signal, async () => {
-      const result = await this.executor.execute({
-        ...this.options.ssh,
-        connectTimeoutSeconds: this.options.ssh.connectTimeoutSeconds ?? 10,
-        address: host.address,
-        port: host.port ?? 22,
-        user: host.user,
-        nodePath: runtime.nodePath,
-        helper: HELPER,
-        timeoutMs: OPERATION_TIMEOUT_MS,
-        signal,
-        operation: Buffer.from(
-          JSON.stringify({
-            ...operation,
-            driverId: this.id,
-            implementation: this.implementation,
-            runtime,
-            network: this.options.network,
-            deadlineMs: OPERATION_TIMEOUT_MS - 10_000,
-          }),
-        ).toString("base64"),
-      });
-      signal.throwIfAborted();
-      let value: Record<string, unknown> | undefined;
-      try {
-        // Heartbeat lines precede the single JSON result line.
-        value = asRecord(JSON.parse(result.stdout.trim().split("\n").at(-1) ?? ""));
-      } catch {
-        /* Transport diagnostics are not helper results. */
-      }
-      if (result.code !== 0) {
-        if (value?.failure === "ownership")
-          throw new OwnershipFailure(
-            "SSH helper refused foreign ownership or an immutable snapshot mismatch.",
-          );
-        if (value?.failure === "configuration")
-          throw new ConfigurationFailure("SSH helper rejected host or revision configuration.");
-        throw new Error("SSH host operation failed or timed out.");
-      }
-      if (value?.ok !== true) throw new Error("SSH helper returned an invalid result.");
-      return value;
+    const result = await this.executor.execute({
+      ...this.options.ssh,
+      connectTimeoutSeconds: this.options.ssh.connectTimeoutSeconds ?? 10,
+      address: host.address,
+      port: host.port ?? 22,
+      user: host.user,
+      nodePath: runtime.nodePath,
+      helper: HELPER,
+      timeoutMs: OPERATION_TIMEOUT_MS,
+      ...(owner === undefined ? {} : { signal: owner }),
+      operation: Buffer.from(
+        JSON.stringify({
+          ...operation,
+          driverId: this.id,
+          implementation: this.implementation,
+          runtime,
+          network: this.options.network,
+          deadlineMs: HELPER_DEADLINE_MS,
+        }),
+      ).toString("base64"),
     });
+    owner?.throwIfAborted();
+    const value = helperResult(result.stdout);
+    if (result.code !== 0) {
+      if (value?.failure === "ownership")
+        throw new OwnershipFailure(
+          "SSH helper refused foreign ownership or an immutable snapshot mismatch.",
+        );
+      if (value?.failure === "configuration")
+        throw new ConfigurationFailure("SSH helper rejected host or revision configuration.");
+      throw new Error("SSH host operation failed or timed out.");
+    }
+    if (value?.ok !== true) throw new Error("SSH helper returned an invalid result.");
+    return value;
   }
 }
 

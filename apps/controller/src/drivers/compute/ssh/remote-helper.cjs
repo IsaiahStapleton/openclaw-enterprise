@@ -1,5 +1,5 @@
 const fs = require("node:fs");
-const { join, dirname } = require("node:path");
+const { join } = require("node:path");
 const { createHash, randomBytes } = require("node:crypto");
 const { execFile, spawn } = require("node:child_process");
 const { setTimeout: delay } = require("node:timers/promises");
@@ -9,7 +9,6 @@ class ConfigurationFailure extends Error {}
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const temporary = (path) => `${path}.pending-${process.pid}-${randomBytes(8).toString("hex")}`;
-let lock;
 let child;
 
 function inspect(path) {
@@ -157,11 +156,11 @@ function ownership(input) {
   };
 }
 
-function agentOwnership(input, revision = input.revision) {
+function agentOwnership(input) {
   return {
     ...ownership(input),
-    agentId: revision.agentId,
-    servicePrincipalId: revision.servicePrincipalId,
+    agentId: input.revision.agentId,
+    servicePrincipalId: input.revision.servicePrincipalId,
   };
 }
 
@@ -193,7 +192,6 @@ function verifyNamespace(input) {
   directory(join(input.runtime.root, "namespaces"));
   directory(path);
   verify(readJson(join(path, "namespace.json")), ownership(input));
-  return path;
 }
 
 function verifyAgent(input, path) {
@@ -240,9 +238,9 @@ function snapshot(input, agentDir, revisionId, expected) {
 
 function currentSnapshot(input, agentDir) {
   const path = join(agentDir, "current");
-  if (inspect(path) === undefined) return undefined;
-  if (!inspect(path).isSymbolicLink())
-    throw new OwnershipFailure("Current pointer is not a symlink.");
+  const info = inspect(path);
+  if (info === undefined) return undefined;
+  if (!info.isSymbolicLink()) throw new OwnershipFailure("Current pointer is not a symlink.");
   const target = fs.readlinkSync(path);
   if (!/^revisions\/[a-f0-9]{12}$/.test(target))
     throw new OwnershipFailure("Current pointer escapes Agent revisions.");
@@ -373,7 +371,7 @@ async function prepare(input, nsDir) {
   directory(agents);
   const agentDir = join(agents, hash(revision.agentId).slice(0, 12));
   const expected = agentOwnership(input);
-  verifyUnit(input, expected);
+  const existingUnit = verifyUnit(input, expected);
   const owner = await runtimeOwner(input.runtime);
   if (inspect(agentDir) === undefined) {
     const used = allocatedPorts(input);
@@ -396,8 +394,8 @@ async function prepare(input, nsDir) {
   const agent = verifyAgent(input, agentDir);
   const current = currentSnapshot(input, agentDir);
   const revisionDir = join(agentDir, "revisions", hash(revision.id).slice(0, 12));
-  if (inspect(revisionDir) !== undefined)
-    snapshot(input, agentDir, revision.id, revisionMetadata(input));
+  const snapshotExists = inspect(revisionDir) !== undefined;
+  if (snapshotExists) snapshot(input, agentDir, revision.id, revisionMetadata(input));
   // A late worker must not write snapshots, tokens, units, or pointers over a newer revision.
   if (current !== undefined && current.revision > revision.revision) return { ready: false };
   if (
@@ -407,7 +405,7 @@ async function prepare(input, nsDir) {
   ) {
     throw new OwnershipFailure("Revision number belongs to another immutable revision.");
   }
-  if (inspect(revisionDir) === undefined) {
+  if (!snapshotExists) {
     atomicDirectory(revisionDir, (pending) => {
       // Controller-owned and group-readable: the runtime account can read but never
       // rewrite the admitted document, so a live gateway cannot bypass admission.
@@ -428,7 +426,7 @@ async function prepare(input, nsDir) {
   const unit = unitName(revision.agentId);
   const unitPath = join(input.runtime.systemdUnitDirectory, unit);
   const content = renderUnit(input, agentDir, agent.port);
-  const changed = verifyUnit(input, agent) !== content;
+  const changed = existingUnit !== content;
   if (changed) atomicWrite(unitPath, content, 0o644);
   await systemctl("daemon-reload");
   await systemctl("enable", unit);
@@ -497,7 +495,7 @@ async function removeNamespace(input, nsDir) {
 }
 
 async function run(input) {
-  if (input.operation === "probe" && input.revision === undefined) {
+  if (input.operation === "probe") {
     await probe(input.runtime);
     return {};
   }
@@ -527,7 +525,7 @@ async function run(input) {
     const revisionDir = join(agentDir, "revisions", hash(revision.id).slice(0, 12));
     if (input.operation === "retire-revision" && inspect(revisionDir) === undefined) return {};
     snapshot(input, agentDir, revision.id, revisionMetadata(input));
-    if (input.operation === "probe") return {};
+    if (input.operation === "verify-revision") return {};
     if (input.operation === "activate-revision") {
       if (current?.revisionId !== revision.id || servedRevision(agentDir) !== revision.id)
         throw new OwnershipFailure("Current or served revision differs from the activated one.");
@@ -574,22 +572,24 @@ const heartbeat = setInterval(() => {
   }
 }, 1_000);
 
-let input;
-try {
-  input = JSON.parse(Buffer.from(process.argv[2], "base64").toString("utf8"));
-} catch {
-  input = undefined;
+function parseInput() {
+  try {
+    const input = JSON.parse(Buffer.from(process.argv[2], "base64").toString("utf8"));
+    if (Number.isSafeInteger(input.deadlineMs) && input.deadlineMs > 0) return input;
+  } catch {
+    /* Reported below as invalid input. */
+  }
+  return undefined;
 }
+
+const input = parseInput();
 // Enforce a deadline below the transport timeout so a hung host step cannot
 // outlive the controller operation that owns it.
-const deadline = setTimeout(
-  () => {
-    process.stdout.write(`${JSON.stringify({ ok: false, failure: "retryable" })}\n`);
-    process.stderr.write("Host operation deadline exceeded.\n");
-    abandon();
-  },
-  Number.isSafeInteger(input?.deadlineMs) && input.deadlineMs > 0 ? input.deadlineMs : 170_000,
-);
+const deadline = setTimeout(() => {
+  process.stdout.write(`${JSON.stringify({ ok: false, failure: "retryable" })}\n`);
+  process.stderr.write("Host operation deadline exceeded.\n");
+  abandon();
+}, input?.deadlineMs ?? 0);
 
 Promise.resolve()
   .then(() => {
@@ -597,13 +597,9 @@ Promise.resolve()
     return run(input);
   })
   .then((result) => {
-    clearInterval(heartbeat);
-    clearTimeout(deadline);
     process.stdout.write(`${JSON.stringify({ ok: true, ...result })}\n`);
   })
   .catch((error) => {
-    clearInterval(heartbeat);
-    clearTimeout(deadline);
     let failure = "retryable";
     let message = "SSH host operation failed or timed out.";
     if (error instanceof OwnershipFailure) {
@@ -616,4 +612,8 @@ Promise.resolve()
     process.stdout.write(`${JSON.stringify({ ok: false, failure })}\n`);
     process.stderr.write(`${message.replace(/[\r\n\x00-\x1f\x7f]/g, " ")}\n`);
     process.exitCode = 1;
+  })
+  .finally(() => {
+    clearInterval(heartbeat);
+    clearTimeout(deadline);
   });

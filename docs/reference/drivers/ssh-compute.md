@@ -6,9 +6,9 @@ Each Agent has one systemd gateway unit. OCC still owns resources, authorization
 immutable admission, and activation; the Driver owns only their host realization.
 Trusted Installation YAML can select this bundled Driver in development or production.
 
-Local conformance and startup coverage exercise the implementation. The opt-in
-real-host integration below passed on 2026-09-05 against the disposable systemd
-container rig with OpenClaw `2026.7.1`; rerun it for any host or runtime you
+Local conformance and startup coverage exercise the implementation with
+transport and systemd fixtures. The opt-in real-host integration is the host
+proof; run it against the disposable container rig or any host and runtime you
 intend to operate. Neither suite proves a model turn.
 
 ## Requirements and configuration

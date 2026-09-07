@@ -371,8 +371,8 @@ SSH and does not need a published container port. The suite creates unique
 Namespace and Agent identities and removes only its Namespace and units. When
 selected, missing settings, unreachable SSH, failed systemd, or unready OpenClaw
 fail the test. Successful local conformance or an unselected skip does not
-establish real-host proof. The suite passed against this rig on 2026-09-05 with
-OpenClaw `2026.7.1`; rerun it after changing the Driver, helper, or fixture.
+establish real-host proof; rerun this suite after changing the Driver, helper,
+or fixture.
 
 After testing, remove only the rig and its generated keys:
 

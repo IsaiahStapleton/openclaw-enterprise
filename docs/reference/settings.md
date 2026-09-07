@@ -553,7 +553,7 @@ The suite uses ports `18800`–`18899`, creates unique Namespace/Agent identitie
 verifies readiness through SSH, cuts over two revisions, proves state
 persistence, retires the first snapshot, and deletes its Namespace. It requires
 no model credential and proves no model turn. Use the
-[container rig](../testing.md#ssh-raw-hosts); it passed there on 2026-09-05.
+[container rig](../testing.md#ssh-raw-hosts) or a disposable host of your own.
 
 ### Kubernetes fixture test environment
 

@@ -235,8 +235,8 @@ a bounded restart; activation verifies readiness. This adds host execution to
 the existing control plane, not a new control-plane installer. Host networking
 and Unix-account isolation remain operator responsibilities; dedicated Codex,
 SandboxDriver composition, and OCC Secret delivery are unsupported. Local proof
-uses transport/systemd fixtures; the opt-in real-host integration passed against
-the disposable systemd container rig with OpenClaw `2026.7.1`.
+uses transport/systemd fixtures; the opt-in real-host integration is the host
+proof.
 
 Reviewed installed Drivers can be selected in both development and production.
 See [Docker development](reference/drivers/docker-compute.md),
