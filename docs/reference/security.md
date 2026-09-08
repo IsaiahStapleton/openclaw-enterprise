@@ -68,7 +68,8 @@ and initialization Pod templates apply the same restricted Pod and container
 settings:
 
 - `runAsNonRoot: true` with user and group `1000`.
-- `seccompProfile.type: RuntimeDefault`.
+- Pod `seccompProfile.type: RuntimeDefault`; only the dedicated Codex Agent
+  container can use a configured Localhost seccomp profile.
 - `allowPrivilegeEscalation: false`.
 - `capabilities.drop: ["ALL"]`.
 - `readOnlyRootFilesystem: true`.
@@ -96,6 +97,22 @@ An independently bounded `64Mi` `emptyDir` provides the real runtime's required
 `/tmp` directory.
 The Agent's projected ServicePrincipal token remains mounted read-only. The Pod
 root filesystem remains read-only; only declared runtime state is writable.
+
+`runtime.codexSeccompProfile` is an optional Kubernetes Compute Driver setting
+for a reviewed Codex compatibility allowlist. It renders only on the dedicated
+Codex Agent container as `seccompProfile.type: Localhost` with a relative
+`localhostProfile`; the Pod, gateway, embedded runtime, controller, and init
+templates keep `RuntimeDefault`. The Driver rejects empty, absolute, traversing,
+or unconfined profile paths and does not accept arbitrary security context
+overrides. The operator must install the pinned profile on every eligible node
+before workload startup; kubelet fails closed when the profile is absent.
+
+The optional profile is for cases where `RuntimeDefault` blocks the
+user-namespace `clone`, `unshare`, and `mount` calls used by Codex `0.152.1`
+and bubblewrap. The profile is a syscall compatibility allowlist, not the
+filesystem or network boundary. Codex and bubblewrap continue to own runtime
+filesystem enforcement, and Kubernetes NetworkPolicies plus the configured
+runtime proxy continue to own network enforcement.
 
 The initialization Job uses a read-only root filesystem. Its migration
 init-container and bootstrap container receive separate database credentials.

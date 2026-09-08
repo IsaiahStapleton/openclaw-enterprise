@@ -261,8 +261,8 @@ of the gateway's persisted `/home/node/.openclaw` state.
 ### 10. The TUI turn travels through the local gateway session
 
 `tests/integration/docker-compute-real.test.mjs:assertInteractiveTuiConversation`,
-`tests/integration/harness-topology-k3d-real.test.mjs:gatewayCall`,
-`tests/integration/harness-topology-k3d-real.test.mjs:transcript_events`
+`tests/helpers/harness-topology-k3d-real.mjs:gatewayCall`,
+`tests/helpers/harness-topology-k3d-real.mjs:transcript_events`
 
 From inside the gateway container, the TUI authenticates to the gateway over the
 container-local gateway endpoint. The TUI sends the first prompt as a native

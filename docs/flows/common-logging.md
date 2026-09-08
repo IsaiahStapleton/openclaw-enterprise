@@ -1,7 +1,7 @@
 ---
 created: 2026-09-02
-updated: 2026-09-03
-last_updated_session: cody/01a05fa0-6720-7f42-891b-c2c0495c8d12
+updated: 2026-09-04
+last_updated_session: cody/01a06dd0-9fff-7e90-aae3-4e7099a6d154
 ---
 
 # Common Operational Logging Flow
@@ -11,10 +11,12 @@ last_updated_session: cody/01a05fa0-6720-7f42-891b-c2c0495c8d12
 Trusted startup configuration selects one OCC operational logging level for API,
 worker, migration, and bootstrap processes. Authorized Agent deployment freezes
 that level into the immutable AgentRevision, and Compute renders gateway and
-Codex runtime logging from the saved revision. Optional Docker Compose or Helm
-Collector configuration exports only reviewed operational records. This flow
-ends at the Collector exporter; PostgreSQL audit remains separate durable
-evidence.
+Codex runtime logging from the saved revision. The admitted native Configuration
+keeps JSON console levels and native OTLP logs disabled while the runtime owns
+console and tool redaction without a `logging.redactSensitive` configuration key.
+Optional Docker Compose or Helm Collector configuration exports only reviewed
+operational records. This flow ends at the Collector exporter; PostgreSQL audit
+remains separate durable evidence.
 
 ## Entry Points
 
@@ -89,10 +91,13 @@ step 7.
 
 Deployment reads the exact Namespace-owned Configuration and allows the selected
 SandboxDriver to transform a frozen copy. OCC then stamps platform-owned native
-logging fields after sandbox configuration and before validation. The stored
-source Configuration is unchanged, and the admitted document is persisted inside
-the immutable AgentRevision, so later startup restarts or Configuration edits do
-not change that revision's runtime logging policy.
+logging fields after sandbox configuration and before validation. The admitted
+document keeps `logging.level`, matching `logging.consoleLevel`, JSON console
+style, and `diagnostics.otel.logs=false`; it drops the retired
+`logging.redactSensitive` key instead of persisting a runtime redaction setting.
+The stored source Configuration is unchanged, and the admitted document is
+persisted inside the immutable AgentRevision, so later startup restarts or
+Configuration edits do not change that revision's runtime logging policy.
 
 ### 4. Compute renders settings from the revision
 
@@ -101,7 +106,9 @@ not change that revision's runtime logging policy.
 Kubernetes rendering follows
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.deployment`.
 Both Drivers require the admitted native logging fields to agree before they
-render gateway and Codex settings. Gateway receives native JSON console logging.
+render gateway and Codex settings. Kubernetes mounts the admitted document
+read-only under `/etc/openclaw/openclaw.json`; runtime code must treat that file
+as immutable startup input. Gateway receives native JSON console logging.
 Dedicated Codex app-servers receive JSON stderr logging and host-owned arguments
 that disable Codex OTLP export and prompt logging. Lifecycle hooks and
 SecretBindings cannot override those reserved destinations.
@@ -159,6 +166,10 @@ reconciliation, or PostgreSQL audit persistence.
   filtering, bounded queues, and startup boundaries. Real runtime suites must be
   selected separately before claiming gateway, Codex, model-turn, or OpenShell
   deployment proof.
+- If a runtime Pod enters `CrashLoopBackOff` before a model turn and reports a
+  configuration lock failure under `/etc/openclaw`, inspect the admitted native
+  Configuration for retired fields before treating the run as a completed test
+  case.
 
 ## Related docs
 
@@ -173,6 +184,8 @@ reconciliation, or PostgreSQL audit persistence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-04 21:04: Documented that native logging admission drops the retired redaction key while preserving JSON levels, disabled OTLP logs, runtime redaction ownership and read-only Kubernetes config mounting. (cody/01a06dd0-9fff-7e90-aae3-4e7099a6d154 - 87234e1766e5802b45424523246a52a4b2d45590)
 
 - 2026-09-02 10:42: Added the source-backed common logging flow for startup policy, revision admission, runtime rendering, and Collector export. (cody/01a06333-d27e-7b00-b27d-f4a17262849b - 1242406b6863c8953abe4827c601c2173129ee50)
 - 2026-09-03 17:56: Simplified repeated settings and guide detail while preserving the logging lifecycle, admission, Collector filtering, and audit boundaries. (cody/01a05fa0-6720-7f42-891b-c2c0495c8d12 - 61ef68bc61129c90130bb65b0fc48373f0c70866)

@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import {
   createKubernetesComputeDriver,
   KubernetesComputeDriver,
@@ -835,6 +836,81 @@ test("the canonical Kubernetes runtime isolates transport and model Agent Secret
   );
 });
 
+test("dedicated Codex localhost seccomp profile is validated and rendered only on the Agent container", () => {
+  const runtime = {
+    transportSecretPrefix: "transport",
+    gatewayStorageClassName: "local-path",
+    modelSecretPrefix: "model",
+  };
+  const profile = "profiles/codex-0.152.1.json";
+  const driver = createKubernetesComputeDriver(
+    options({ runtime: { ...runtime, codexSeccompProfile: profile } }),
+  );
+  const defaultDriver = createKubernetesComputeDriver(options({ runtime }));
+  const ownership = { namespaceId: tenant.id, agentId: "agent-seccomp" };
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const workload = (computeDriver, role, embedded = false) =>
+    computeDriver.deployment(
+      role,
+      ownership,
+      namespace,
+      `${role}:local`,
+      role,
+      role,
+      {},
+      "info",
+      undefined,
+      embedded,
+    ).spec.template.spec;
+
+  const agent = workload(driver, "agent");
+  assert.deepEqual(agent.securityContext.seccompProfile, { type: "RuntimeDefault" });
+  assert.deepEqual(agent.containers[0].securityContext.seccompProfile, {
+    type: "Localhost",
+    localhostProfile: profile,
+  });
+
+  for (const pod of [
+    workload(driver, "gateway"),
+    workload(driver, "gateway", true),
+    workload(defaultDriver, "agent"),
+  ]) {
+    assert.deepEqual(pod.securityContext.seccompProfile, { type: "RuntimeDefault" });
+    assert.equal(pod.containers[0].securityContext.seccompProfile, undefined);
+  }
+
+  for (const codexSeccompProfile of [
+    "",
+    " ",
+    "/profiles/codex.json",
+    "../codex.json",
+    "profiles/../codex.json",
+    "profiles//codex.json",
+    "unconfined",
+    "profiles/unconfined",
+    { type: "Unconfined" },
+  ]) {
+    assert.throws(
+      () =>
+        createKubernetesComputeDriver(options({ runtime: { ...runtime, codexSeccompProfile } })),
+      /Codex seccomp localhost profile/i,
+    );
+  }
+
+  assert.throws(
+    () =>
+      createKubernetesComputeDriver(
+        options({
+          runtime: {
+            ...runtime,
+            securityContext: { seccompProfile: { type: "Unconfined" } },
+          },
+        }),
+      ),
+    /unsupported option securityContext/i,
+  );
+});
+
 test("account-owned Kubernetes Secrets reject invalid or foreign credentials before cluster access", async () => {
   const driver = createKubernetesComputeDriver(options());
   const serviceAccountId = "sa_00000000-0000-4000-8000-000000000001";
@@ -1146,7 +1222,6 @@ test("native channel providers supply only owning gateway secrets and reviewed p
         level: "info",
         consoleLevel: "info",
         consoleStyle: "json",
-        redactSensitive: "tools",
       },
       diagnostics: { otel: { logs: false } },
     },
@@ -1174,7 +1249,6 @@ test("native channel providers supply only owning gateway secrets and reviewed p
           level: "info",
           consoleLevel: "info",
           consoleStyle: "json",
-          redactSensitive: "tools",
         },
         diagnostics: { otel: { logs: false } },
       },
@@ -1201,7 +1275,6 @@ test("native channel providers supply only owning gateway secrets and reviewed p
           level: "info",
           consoleLevel: "info",
           consoleStyle: "json",
-          redactSensitive: "tools",
         },
         diagnostics: { otel: { logs: false } },
       },
@@ -1228,7 +1301,6 @@ test("native channel providers supply only owning gateway secrets and reviewed p
         level: "info",
         consoleLevel: "info",
         consoleStyle: "json",
-        redactSensitive: "tools",
       },
       diagnostics: { otel: { logs: false } },
     },
@@ -1284,7 +1356,6 @@ test("embedded replacement preparation recovers past an unready active gateway w
         level: "info",
         consoleLevel: "info",
         consoleStyle: "json",
-        redactSensitive: "tools",
       },
       diagnostics: { otel: { logs: false } },
       gateway: {
@@ -1311,7 +1382,6 @@ test("embedded replacement preparation recovers past an unready active gateway w
         level: "info",
         consoleLevel: "info",
         consoleStyle: "json",
-        redactSensitive: "tools",
       },
       diagnostics: { otel: { logs: false } },
       gateway: {
@@ -1666,7 +1736,6 @@ test("Kubernetes lifecycle hooks never run before cluster ownership and workload
         level: "info",
         consoleLevel: "info",
         consoleStyle: "json",
-        redactSensitive: "tools",
       },
       diagnostics: { otel: { logs: false } },
     },
@@ -1960,7 +2029,10 @@ function providerReadinessFixture({ provisionHarness, lifecycleDrivers = [] } = 
   );
   const revision = routedRevision(driver, {
     sandboxDriverId: "sandbox-provider",
-    configuration: { gateway: { controlUi: { enabled: false } } },
+    configuration: admitLoggingConfiguration(
+      { gateway: { controlUi: { enabled: false } } },
+      "info",
+    ),
   });
   const namespace = kubernetesNamespaceName(tenant.id);
   const agentName = `agent-${digest(revision.agentId)}`;
@@ -1976,6 +2048,8 @@ function providerReadinessFixture({ provisionHarness, lifecycleDrivers = [] } = 
     "agent:local",
     agentName,
     "agent",
+    {},
+    "info",
   );
   const { labels } = driver.harnessRequirementsFromDeployment(deployment);
   const requests = [];
@@ -2218,6 +2292,7 @@ test("provider Harness preparation preserves readiness and cleanup contracts", a
     gatewayName,
     "gateway",
     {},
+    "info",
     driver.gatewayConfiguration(revision),
   );
   gateway.metadata.generation = 1;
@@ -2372,7 +2447,6 @@ test("revision lifecycle rejects another driver or missing identity before clust
         level: "info",
         consoleLevel: "info",
         consoleStyle: "json",
-        redactSensitive: "tools",
       },
       diagnostics: { otel: { logs: false } },
     },

@@ -45,6 +45,7 @@ OpenClaw Enterprise is the open platform for managing agents.
 
 ## Understand the code
 
+- [GitHub Actions test execution](flows/github-actions-testing.md): five PR-safe lanes, protected integrations, disposable resources, case accounting, and cleanup.
 - [Docker Compose development](flows/docker-compose-development.md),
   [production startup](flows/production-startup.md),
   [production TUI attachment](flows/production-tui.md), and

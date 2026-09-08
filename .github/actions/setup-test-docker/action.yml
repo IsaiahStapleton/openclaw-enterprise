@@ -1,0 +1,26 @@
+name: Set up test Docker
+description: Install the Docker version required by the production Fluentd logging options.
+runs:
+  using: composite
+  steps:
+    - name: Stop the preinstalled Docker daemon
+      shell: bash
+      run: sudo systemctl stop docker.service docker.socket
+    - name: Install pinned Docker Engine
+      id: engine
+      uses: docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1 # v5.4.0
+      with:
+        version: v29.4.0
+        set-host: true
+    - name: Expose the daemon at the production socket path
+      shell: bash
+      env:
+        TEST_DOCKER_SOCKET_URL: ${{ steps.engine.outputs.sock }}
+      run: |
+        docker_socket_path="${TEST_DOCKER_SOCKET_URL#unix://}"
+        test -S "$docker_socket_path"
+        # Production Compose mounts this socket; CLI and controller must use one daemon.
+        sudo ln -sfn "$docker_socket_path" /var/run/docker.sock
+        test "$(docker version --format '{{.Server.Version}}')" = "29.4.0"
+    # Keep both post actions in this composite so Buildx is removed before Docker stops.
+    - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0

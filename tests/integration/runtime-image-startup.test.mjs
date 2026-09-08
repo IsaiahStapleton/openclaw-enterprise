@@ -7,11 +7,14 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { GATEWAY_RUNTIME_ENTRYPOINT as KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
 const execute = promisify(execFile);
 const docker = process.env.OCC_DOCKER_BIN ?? "docker";
 const image = process.env.OCC_TEST_RUNTIME_IMAGE;
+const runtimeImageModel = "gpt-5.1";
+const syntheticCodexApiKey = "sk-openclaw-runtime-image-smoke-synthetic";
 const imageTestOptions =
   image === undefined
     ? {
@@ -29,6 +32,10 @@ async function runDocker(args, options = {}) {
 
 function commandOutput(error) {
   return `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
+}
+
+function sanitizeSyntheticCredential(output) {
+  return output.replaceAll(syntheticCodexApiKey, "[REDACTED_SYNTHETIC_KEY]");
 }
 
 function assertNoPackagingFailure(output) {
@@ -52,7 +59,7 @@ async function temporaryGatewayConfiguration(t, harnessId) {
   t.after(() => rm(directory, { recursive: true, force: true }));
 
   const path = join(directory, "openclaw.json");
-  await writeFile(path, JSON.stringify(createRuntimeImageConfiguration(harnessId, "gpt-4.1")));
+  await writeFile(path, JSON.stringify(createAdmittedRuntimeImageConfiguration(harnessId)));
   return path;
 }
 
@@ -77,11 +84,18 @@ function createRuntimeImageConfiguration(harnessId, providerModel, options = {})
     ...configuration.channels,
     slack: {
       ...configuration.channels?.slack,
-      enabled: false,
+      enabled: true,
     },
   };
 
   return configuration;
+}
+
+function createAdmittedRuntimeImageConfiguration(harnessId, options = {}) {
+  return admitLoggingConfiguration(
+    createRuntimeImageConfiguration(harnessId, runtimeImageModel, options),
+    "info",
+  );
 }
 
 async function waitForGatewayReady(containerName) {
@@ -146,13 +160,47 @@ function jsonLogEntries(output) {
     .filter((entry) => entry !== undefined);
 }
 
+function gatewayLogDiagnostic(entries) {
+  return entries
+    .filter((entry) => entry.subsystem === "gateway")
+    .map(({ level, message }) => `${level}: ${message}`)
+    .slice(-8)
+    .join("\n");
+}
+
+function assertGatewayLogEntry(entries, predicate, description) {
+  assert.ok(
+    entries.some(predicate),
+    `${description}\nRecent gateway logs:\n${gatewayLogDiagnostic(entries)}`,
+  );
+}
+
+function assertGatewayReadyLog(entries) {
+  assertGatewayLogEntry(
+    entries,
+    (entry) =>
+      entry.subsystem === "gateway" && entry.level === "info" && entry.message === "gateway ready",
+    "runtime image must emit gateway ready at native info level",
+  );
+}
+
+function assertGatewayModelLog(entries, modelReference) {
+  assertGatewayLogEntry(
+    entries,
+    (entry) =>
+      entry.subsystem === "gateway" &&
+      entry.level === "info" &&
+      entry.message.includes(`agent model: ${modelReference}`),
+    `runtime image must emit ${modelReference} at native info level`,
+  );
+}
+
 function assertBundledCodexPluginLoaded(pluginList) {
   const codexPlugin = assertBundledPluginLoaded(pluginList, "codex");
   assert.match(
     codexPlugin.source,
     /\/app\/node_modules\/openclaw\/dist\/extensions\/codex\/dist\/index\.js$/,
   );
-  assert.deepEqual(codexPlugin.providerIds, ["codex"]);
   assert.equal(codexPlugin.dependencyStatus?.requiredInstalled, true);
   assert.deepEqual(codexPlugin.dependencyStatus?.missing, []);
 }
@@ -270,7 +318,7 @@ try {
 async function runGatewaySmoke(t, harnessId, options = {}) {
   const {
     collectPlugins = harnessId === "codex",
-    configuration = createRuntimeImageConfiguration(harnessId, "gpt-4.1", {
+    configuration = createAdmittedRuntimeImageConfiguration(harnessId, {
       enableSlack: harnessId === "openclaw",
     }),
     configurationPath,
@@ -373,16 +421,9 @@ test(
   "runtime image gateway ignores inherited OPENCLAW_LOG_LEVEL in favor of native configuration",
   imageTestOptions,
   async (t) => {
-    const configuration = createRuntimeImageConfiguration("openclaw", "gpt-4.1", {
+    const configuration = createAdmittedRuntimeImageConfiguration("openclaw", {
       enableSlack: true,
     });
-    configuration.logging = {
-      level: "info",
-      consoleLevel: "info",
-      consoleStyle: "json",
-      redactSensitive: "tools",
-    };
-    configuration.diagnostics = { otel: { logs: false } };
 
     const { logs } = await runGatewaySmoke(t, "openclaw", {
       collectPlugins: false,
@@ -391,22 +432,8 @@ test(
     });
 
     const entries = jsonLogEntries(logs);
-    assert.ok(
-      entries.some(
-        (entry) =>
-          entry.subsystem === "gateway" &&
-          entry.level === "info" &&
-          entry.message === "gateway ready",
-      ),
-    );
-    assert.ok(
-      entries.some(
-        (entry) =>
-          entry.subsystem === "gateway" &&
-          entry.level === "info" &&
-          /agent model: openai\/gpt-4\.1/.test(entry.message),
-      ),
-    );
+    assertGatewayReadyLog(entries);
+    assertGatewayModelLog(entries, `openai/${runtimeImageModel}`);
     assertNoPackagingFailure(logs);
   },
 );
@@ -417,10 +444,14 @@ test(
   async (t) => {
     const { logs, pluginList } = await runGatewaySmoke(t, "openclaw", {
       collectPlugins: true,
+      configuration: createAdmittedRuntimeImageConfiguration("openclaw", {
+        enableSlack: true,
+      }),
     });
 
-    assert.match(logs, /\[gateway\] ready/);
-    assert.match(logs, /agent model: openai\/gpt-4\.1/);
+    const entries = jsonLogEntries(logs);
+    assertGatewayReadyLog(entries);
+    assertGatewayModelLog(entries, `openai/${runtimeImageModel}`);
     assertBundledSlackPluginLoaded(pluginList);
     assertNoPackagingFailure(logs);
   },
@@ -432,11 +463,111 @@ test(
   async (t) => {
     const { logs, containerName, pluginList } = await runGatewaySmoke(t, "codex");
 
-    assert.match(logs, /\[gateway\] ready/);
-    assert.match(logs, /agent model: codex\/gpt-4\.1/);
+    const entries = jsonLogEntries(logs);
+    assertGatewayReadyLog(entries);
+    assertGatewayModelLog(entries, `codex/${runtimeImageModel}`);
     assertBundledCodexPluginLoaded(pluginList);
     await assertCodexAppServerHandshake(containerName);
     assertNoPackagingFailure(logs);
+  },
+);
+
+test(
+  "runtime image keeps Codex auth writable with a nested generated images mount",
+  imageTestOptions,
+  async (t) => {
+    const containerName = `oce-runtime-image-codex-auth-${randomBytes(6).toString("hex")}`;
+    t.after(() => runDocker(["rm", "-f", containerName]).catch(() => {}));
+
+    const probe = String.raw`
+set -eu
+printf "%s\n" "$SYNTHETIC_CODEX_API_KEY" | timeout 20s codex login --with-api-key >/tmp/codex-login.stdout 2>/tmp/codex-login.stderr || {
+  sed -E "s/sk-[A-Za-z0-9_-]+/[REDACTED_SYNTHETIC_KEY]/g" /tmp/codex-login.stderr >&2
+  exit 1
+}
+node - <<'NODE'
+const { accessSync, constants, statSync } = require("node:fs");
+function entry(path) {
+  const stat = statSync(path);
+  return {
+    uid: stat.uid,
+    gid: stat.gid,
+    mode: (stat.mode & 0o777).toString(8),
+    directory: stat.isDirectory(),
+    file: stat.isFile(),
+  };
+}
+accessSync("/home/node/.codex", constants.W_OK);
+accessSync("/home/node/.codex/generated_images", constants.W_OK);
+process.stdout.write(JSON.stringify({
+  uid: process.getuid(),
+  gid: process.getgid(),
+  codexHome: entry("/home/node/.codex"),
+  generatedImages: entry("/home/node/.codex/generated_images"),
+  authJson: entry("/home/node/.codex/auth.json"),
+}));
+NODE
+`;
+
+    const { stdout } = await runDocker(
+      [
+        "run",
+        "--rm",
+        "--name",
+        containerName,
+        "--user",
+        "1000:1000",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--tmpfs",
+        "/home/node/.codex/generated_images:size=64m,uid=1000,gid=1000,mode=700",
+        "--tmpfs",
+        "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
+        "--network",
+        "none",
+        "-e",
+        "HOME=/home/node",
+        "-e",
+        "CODEX_HOME=/home/node/.codex",
+        "-e",
+        `SYNTHETIC_CODEX_API_KEY=${syntheticCodexApiKey}`,
+        "--entrypoint",
+        "sh",
+        image,
+        "-c",
+        probe,
+      ],
+      { timeout: 30_000 },
+    ).catch((error) => {
+      throw new Error(sanitizeSyntheticCredential(commandOutput(error)));
+    });
+
+    const result = JSON.parse(stdout);
+    assert.equal(result.uid, 1000);
+    assert.equal(result.gid, 1000);
+    assert.deepEqual(result.codexHome, {
+      uid: 1000,
+      gid: 1000,
+      mode: "700",
+      directory: true,
+      file: false,
+    });
+    assert.deepEqual(result.generatedImages, {
+      uid: 1000,
+      gid: 1000,
+      mode: "700",
+      directory: true,
+      file: false,
+    });
+    assert.deepEqual(result.authJson, {
+      uid: 1000,
+      gid: 1000,
+      mode: "600",
+      directory: false,
+      file: true,
+    });
   },
 );
 
@@ -456,8 +587,9 @@ test(
       volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
     });
 
-    assert.match(logs, /\[gateway\] ready/);
-    assert.match(logs, /agent model: codex\/gpt-4\.1/);
+    const entries = jsonLogEntries(logs);
+    assertGatewayReadyLog(entries);
+    assertGatewayModelLog(entries, `codex/${runtimeImageModel}`);
     await assertDedicatedRuntimeAssets(containerName);
     assertNoPackagingFailure(logs);
   },

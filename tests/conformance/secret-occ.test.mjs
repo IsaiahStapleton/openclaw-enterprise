@@ -547,11 +547,10 @@ test("deployment admission stamps immutable native logging after sandbox policy"
     ...originalValues,
     sandboxed: true,
     logging: {
-      ...originalValues.logging,
       level: "info",
       consoleLevel: "info",
       consoleStyle: "json",
-      redactSensitive: "tools",
+      tenant: "kept",
     },
     diagnostics: { otel: { logs: false, traces: true } },
   });

@@ -67,7 +67,6 @@ function revision(driver, overrides = {}) {
         level: "info",
         consoleLevel: "info",
         consoleStyle: "json",
-        redactSensitive: "tools",
       },
       diagnostics: { otel: { logs: false } },
       secrets: {

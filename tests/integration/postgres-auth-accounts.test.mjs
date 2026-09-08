@@ -6,8 +6,10 @@ import { join } from "node:path";
 import test from "node:test";
 import pg from "pg";
 import { AuditEventFactory } from "../../packages/audit/src/index.ts";
-import { BOOTSTRAP_DEFAULT_NAMESPACE_NAME } from "../../packages/occ/src/index.ts";
-import { PostgresPlatformState } from "../../packages/occ/src/state/postgres-state.ts";
+import {
+  BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  PostgresPlatformState,
+} from "../../packages/occ/src/index.ts";
 import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";

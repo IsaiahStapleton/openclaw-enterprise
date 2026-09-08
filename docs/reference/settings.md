@@ -597,36 +597,42 @@ runtime are tested together. For dedicated Codex coverage, set `OCC_TEST_OPENAI_
 authorized model that supports Codex custom tools, such as `gpt-5.1`; the source
 default remains `gpt-4.1`.
 
-| Variable                               | Requirement or default                                                                                 |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `OCC_TEST_HARNESS_K3D_REAL`            | Set to `1` to explicitly opt into the real-runtime Kubernetes suite.                                   |
-| `OCC_TEST_KUBERNETES_KUBECONFIG`       | Absolute path to the dedicated disposable k3d kubeconfig.                                              |
-| `OCC_TEST_KUBERNETES_CONTEXT`          | Explicit `k3d-*` context with a verified loopback HTTPS API.                                           |
-| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`    | Imported real OpenClaw gateway image pinned with an immutable SHA-256 digest.                          |
-| `OCC_TEST_KUBERNETES_AGENT_IMAGE`      | Imported real pinned Codex runtime image with an immutable SHA-256 digest.                             |
-| `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`    | Optional shared image fallback for both gateway and Agent when it contains both real runtimes.         |
-| `OCC_TEST_KUBERNETES_CODEX_IMAGE`      | Optional legacy fallback for the Agent image when the explicit Agent image is absent.                  |
-| `OCC_TEST_KUBERNETES_OPENCLAW_VERSION` | Optional exact OpenClaw version expectation for the selected real gateway image.                       |
-| `OCC_TEST_KUBERNETES_CODEX_VERSION`    | Optional Codex image version expectation; defaults to `0.147.0`.                                       |
-| `OCC_TEST_DATABASE_URL`                | Migrated disposable loopback database named `openclaw_k8s_*`; the ordinary development database fails. |
-| `OPENAI_API_KEY`                       | Existing authorized provider credential for real embedded and dedicated model turns.                   |
-| `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-4.1`.                                                      |
+| Variable                                    | Requirement or default                                                                                                                                                                                     |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OCC_TEST_HARNESS_K3D_REAL`                 | Set to `1` to explicitly opt into the real-runtime Kubernetes suite.                                                                                                                                       |
+| `OCC_TEST_KUBERNETES_KUBECONFIG`            | Absolute path to the dedicated disposable k3d kubeconfig.                                                                                                                                                  |
+| `OCC_TEST_KUBERNETES_CONTEXT`               | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                                                                                                               |
+| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`         | Imported real OpenClaw gateway image pinned with an immutable SHA-256 digest.                                                                                                                              |
+| `OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE`  | Docker-local image ID used only by the Envoy routing host TCP publisher; CI derives it from the prepared gateway source image before k3d import.                                                           |
+| `OCC_TEST_KUBERNETES_AGENT_IMAGE`           | Imported real pinned Codex runtime image with an immutable SHA-256 digest.                                                                                                                                 |
+| `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`         | Optional shared image fallback for both gateway and Agent when it contains both real runtimes.                                                                                                             |
+| `OCC_TEST_KUBERNETES_CODEX_IMAGE`           | Optional legacy fallback for the Agent image when the explicit Agent image is absent.                                                                                                                      |
+| `OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE` | Optional CI-published kubelet Localhost seccomp profile path for dedicated Codex Agents; generated from each selected k3d node's effective `RuntimeDefault` profile and installed only on run-owned nodes. |
+| `OCC_TEST_KUBERNETES_OPENCLAW_VERSION`      | Optional exact OpenClaw version expectation for the selected real gateway image.                                                                                                                           |
+| `OCC_TEST_KUBERNETES_CODEX_VERSION`         | Optional Codex image version expectation; defaults to `0.152.1`.                                                                                                                                           |
+| `OCC_TEST_DATABASE_URL`                     | Migrated disposable loopback database named `openclaw_k8s_*`; the ordinary development database fails.                                                                                                     |
+| `OPENAI_API_KEY`                            | Existing authorized provider credential for real embedded and dedicated model turns.                                                                                                                       |
+| `OCC_TEST_OPENAI_MODEL`                     | Authorized provider model; defaults to `gpt-4.1`.                                                                                                                                                          |
 
-The separate workspace-file routing case requires
+The separate [`harness-topology-k3d-routing-real.test.mjs`](../../tests/integration/harness-topology-k3d-routing-real.test.mjs) requires
 `OCC_TEST_GATEWAY_ROUTING_REAL=1` and the same runtime prerequisites. It also
 requires ready Envoy Gateway and cert-manager controllers, free local port
 443, `OCC_TEST_GATEWAY_CA_CERT_PATH`, `OCC_TEST_GATEWAY_CA_KEY_PATH`, and
-`NODE_EXTRA_CA_CERTS` set before Node starts. Controller namespace overrides
-are `OCC_TEST_ENVOY_GATEWAY_NAMESPACE` (default `envoy-gateway-system`) and
-`OCC_TEST_CERT_MANAGER_NAMESPACE` (default `cert-manager`). See the
+`NODE_EXTRA_CA_CERTS` set before Node starts. The host TCP publisher also
+requires CI-generated `OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE`; do not replace
+it with the k3d-only `OCC_TEST_KUBERNETES_GATEWAY_IMAGE` runtime reference.
+Controller namespace overrides are `OCC_TEST_ENVOY_GATEWAY_NAMESPACE` (default
+`envoy-gateway-system`) and `OCC_TEST_CERT_MANAGER_NAMESPACE` (default
+`cert-manager`). See the
 [focused routing proof](../testing.md#kubernetes-model-turns-and-secrets) for
 the disposable CA and command. The CA private key is test setup only; the
 production OCC API mounts only a public trust bundle.
 
 ### Slack test environment
 
-`OCC_TEST_SLACK_LIVE=1` selects the separate live Slack case and suppresses the
-ordinary runtime suite. The Slack case uses the same production k3d,
+`OCC_TEST_SLACK_LIVE=1` enables
+[`harness-topology-k3d-slack-real.test.mjs`](../../tests/integration/harness-topology-k3d-slack-real.test.mjs).
+Run the ordinary runtime file separately for its coverage. The Slack case uses the same production k3d,
 PostgreSQL, image, and model-turn prerequisites, then posts a real message and
 waits for a gateway-authored reply. It does not delete the Slack messages it
 creates.
@@ -651,23 +657,23 @@ image, database, or OpenShell-specific prerequisite. If any of those variables
 is present while the flag is not `1`, prerequisite validation still fails; use a
 scoped environment file for this suite.
 
-| Variable                              | Requirement or default                                                                                           |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_OPENSHELL_K3D_REAL`         | Set to `1` to explicitly opt into the real OpenShell integration.                                                |
-| `OPENAI_API_KEY`                      | Existing authorized provider credential for the required real model turn.                                        |
-| `OCC_TEST_OPENAI_MODEL`               | Authorized provider model; defaults to `gpt-5.6-sol`.                                                            |
-| `OCC_TEST_KUBERNETES_KUBECONFIG`      | Absolute kubeconfig path for the dedicated disposable k3d cluster.                                               |
-| `OCC_TEST_KUBERNETES_CONTEXT`         | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                     |
-| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`   | Imported immutable real OpenClaw gateway image; `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` is accepted as a fallback.   |
-| `OCC_TEST_KUBERNETES_AGENT_IMAGE`     | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_CODEX_IMAGE` and runtime image fallbacks are accepted. |
-| `OCC_TEST_DATABASE_URL`               | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                                         |
-| `OCC_TEST_OPENSHELL_CLI`              | Official OpenShell CLI binary.                                                                                   |
-| `OCC_TEST_OPENSHELL_HELM`             | Helm binary used to install the namespace-scoped OpenShell gateway.                                              |
-| `OCC_TEST_OPENSHELL_HELM_CHART`       | OpenShell Helm chart path or chart archive.                                                                      |
-| `OCC_TEST_OPENSHELL_GATEWAY_IMAGE`    | Imported immutable OpenShell gateway image pinned by SHA-256 digest.                                             |
-| `OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE` | Imported immutable OpenShell supervisor image pinned by SHA-256 digest.                                          |
-| `OCC_TEST_OPENSHELL_CHART_VERSION`    | Optional OpenShell chart version; defaults to `0.0.113`.                                                         |
-| `OCC_TEST_OPENSHELL_RUNTIME_CLASS`    | Existing RuntimeClass used by Agent Sandbox Pods; defaults to `openshell-sandbox`.                               |
+| Variable                              | Requirement or default                                                                                                                              |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OCC_TEST_OPENSHELL_K3D_REAL`         | Set to `1` to explicitly opt into the real OpenShell integration.                                                                                   |
+| `OPENAI_API_KEY`                      | Existing authorized provider credential for the required real model turn.                                                                           |
+| `OCC_TEST_OPENAI_MODEL`               | Authorized provider model; defaults to `gpt-5.6-sol`.                                                                                               |
+| `OCC_TEST_KUBERNETES_KUBECONFIG`      | Absolute kubeconfig path for the dedicated disposable k3d cluster.                                                                                  |
+| `OCC_TEST_KUBERNETES_CONTEXT`         | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                                                        |
+| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`   | Imported immutable real OpenClaw gateway image; `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` is accepted as a fallback.                                      |
+| `OCC_TEST_KUBERNETES_AGENT_IMAGE`     | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_CODEX_IMAGE` and runtime image fallbacks are accepted.                                    |
+| `OCC_TEST_DATABASE_URL`               | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                                                                            |
+| `OCC_TEST_OPENSHELL_CLI`              | Official OpenShell CLI binary.                                                                                                                      |
+| `OCC_TEST_OPENSHELL_HELM`             | Helm binary used to install the namespace-scoped OpenShell gateway.                                                                                 |
+| `OCC_TEST_OPENSHELL_HELM_CHART`       | OpenShell Helm chart path or chart archive.                                                                                                         |
+| `OCC_TEST_OPENSHELL_GATEWAY_IMAGE`    | Imported immutable OpenShell gateway image pinned by SHA-256 digest.                                                                                |
+| `OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE` | Imported immutable OpenShell supervisor image pinned by SHA-256 digest.                                                                             |
+| `OCC_TEST_OPENSHELL_CHART_VERSION`    | Optional OpenShell chart version; defaults to `0.0.113`.                                                                                            |
+| `OCC_TEST_OPENSHELL_RUNTIME_CLASS`    | Existing RuntimeClass used by Agent Sandbox Pods; CI creates the selected RuntimeClass, defaulting to `openshell-sandbox`, with the `runc` handler. |
 
 The selected cluster must already expose the Agent Sandbox CRD and a ready Agent
 Sandbox controller. See the
