@@ -16,7 +16,7 @@
     "typecheck": "tsc --build tsconfig.json --pretty false"
   },
   "dependencies": {
-    "@better-auth/api-key": "1.7.2",
+    "@better-auth/api-key": "1.7.3",
     "@fastify/swagger": "9.8.1",
     "@fastify/type-provider-typebox": "6.1.0",
     "@grpc/grpc-js": "1.14.4",
@@ -29,7 +29,7 @@
     "@openclaw-enterprise/occ": "workspace:*",
     "@openclaw-enterprise/utils": "workspace:*",
     "ajv-formats": "3.0.1",
-    "better-auth": "1.7.2",
+    "better-auth": "1.7.3",
     "fastify": "5.12.3",
     "pino": "10.3.1",
     "pg": "8.23.0",
