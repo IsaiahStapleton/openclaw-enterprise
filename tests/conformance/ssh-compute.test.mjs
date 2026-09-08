@@ -13,6 +13,7 @@ import {
   readlink,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -100,6 +101,10 @@ function bind(driver, rev, namespace = tenant) {
       createdAt: namespace.createdAt,
     },
   });
+}
+
+function runtimeAccountName(namespace, agentId, prefix) {
+  return `${prefix.slice(0, 19)}-${digest(`${namespace.id}:${agentId}`).slice(0, 12)}`;
 }
 
 async function freePortRange() {
@@ -264,10 +269,16 @@ async function holdLock(f) {
   };
 }
 
-async function prepare(f, rev = revision(f.driver)) {
+async function stage(f, rev = revision(f.driver)) {
   assert.equal((await f.driver.ensureNamespace(tenant)).namespaceReady, true);
   bind(f.driver, rev);
   assert.equal((await f.driver.prepareRevision(rev, { secretEnvironment: [] })).ready, true);
+  return rev;
+}
+
+async function prepare(f, rev = revision(f.driver)) {
+  await stage(f, rev);
+  await f.driver.activateRevision(rev, { secretEnvironment: [] });
   return rev;
 }
 
@@ -311,6 +322,7 @@ test("SSH closed schema and semantic validation reject every invalid option", ()
     [["hosts", "stable", "port"], 0],
     [["hosts", "stable", "port"], 65536],
     [["hosts", "stable", "port"], 1.2],
+    [["runtime", "user"], "root"],
     [["runtime", "user"], "bad user"],
     [["runtime", "user"], ""],
     [["network", "gatewayPortRange", "start"], 1023],
@@ -431,6 +443,30 @@ test("SSH Namespace preparation creates exact ownership, rejects adoption, and c
   }
   await rm(marker);
   assert.equal((await f.driver.ensureNamespace(tenant)).failure, "permanent");
+  await writeFile(
+    marker,
+    JSON.stringify({
+      driverId: "compute-ssh",
+      implementation: "occ/ssh",
+      namespaceId: tenant.id,
+      namespaceName: tenant.name,
+    }),
+  );
+  const unowned = revision(f.driver, 1, "agent-ssh-unowned");
+  const account = runtimeAccountName(tenant, unowned.agentId, f.configured.runtime.user);
+  await Promise.all([
+    mkdir(join(f.state, "accounts", "users"), { recursive: true }),
+    mkdir(join(f.state, "accounts", "groups"), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(
+      join(f.state, "accounts", "users", account),
+      `${process.getuid()}\n${process.getgid()}\n`,
+    ),
+    writeFile(join(f.state, "accounts", "groups", account), `${process.getgid()}\n`),
+  ]);
+  bind(f.driver, unowned);
+  await assert.rejects(f.driver.prepareRevision(unowned), /foreign ownership|snapshot/);
   const transport = createSshComputeDriver(options(), {
     executor: {
       execute: async () => {
@@ -441,14 +477,16 @@ test("SSH Namespace preparation creates exact ownership, rejects adoption, and c
   assert.equal((await transport.ensureNamespace(tenant)).failure, "retryable");
 });
 
-test("SSH embedded preparation writes exact unit, protected snapshots, token and persistent runtime directories", async (t) => {
+test("SSH embedded preparation stages snapshots and activation serves them as the Agent account", async (t) => {
   const f = await fixture(t);
-  const rev = await prepare(f);
+  const rev = await stage(f);
   const dir = f.agentDir(rev);
   const port = f.configured.network.gatewayPortRange.start;
   const agent = await json(join(dir, "agent.json"));
   assert.equal(agent.port, port);
   assert.equal(agent.servicePrincipalId, rev.servicePrincipalId);
+  assert.match(agent.runtimeUser, /^.+-[a-f0-9]{12}$/);
+  assert.equal(agent.runtimeGroup, agent.runtimeUser);
   for (const name of ["home", "state"]) {
     const info = await stat(join(dir, name));
     assert.equal(info.mode & 0o777, 0o700);
@@ -458,20 +496,25 @@ test("SSH embedded preparation writes exact unit, protected snapshots, token and
     join(dir, "agent.json"),
     join(dir, "gateway.env"),
     join(f.revisionDir(rev), "revision.json"),
-    join(dir, "served.json"),
   ])
     assert.equal((await stat(path)).mode & 0o777, 0o600);
   // The admitted document is controller-owned and only group-readable by the
-  // runtime account, so a live gateway cannot rewrite it and bypass admission.
+  // Agent runtime account, so a live gateway cannot rewrite it and bypass admission.
   const snapshot = await stat(join(f.revisionDir(rev), "openclaw.json"));
   assert.equal(snapshot.mode & 0o777, 0o640);
   assert.equal(snapshot.uid, process.getuid());
-  assert.deepEqual(await json(join(dir, "served.json")), { revisionId: rev.id });
   assert.deepEqual(await json(join(f.revisionDir(rev), "openclaw.json")), rev.configuration);
   assert.equal(
     (await json(join(f.revisionDir(rev), "revision.json"))).configurationHash,
     digest(JSON.stringify(rev.configuration)),
   );
+  await missing(join(dir, "current"));
+  await missing(join(dir, "served.json"));
+  await missing(join(f.units, f.unit(rev)));
+  await missing(join(f.state, "systemctl.log"));
+  await f.driver.activateRevision(rev, { secretEnvironment: [] });
+  assert.equal((await stat(join(dir, "served.json"))).mode & 0o777, 0o600);
+  assert.deepEqual(await json(join(dir, "served.json")), { revisionId: rev.id });
   assert.equal(await readlink(join(dir, "current")), `revisions/${digest(rev.id).slice(0, 12)}`);
   assert.match(
     await readFile(join(dir, "gateway.env"), "utf8"),
@@ -488,7 +531,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=${f.configured.runtime.user}
+User=${agent.runtimeUser}
 WorkingDirectory=${dir}/state
 Environment=HOME=${dir}/home
 Environment=OPENCLAW_STATE_DIR=${dir}/state
@@ -529,9 +572,14 @@ test("SSH trusted-proxy omits gateway.env, and allocation spans Agents and Names
   });
   bind(f.driver, second);
   assert.equal((await f.driver.prepareRevision(second)).ready, true);
+  await f.driver.activateRevision(second);
   assert.equal(
     (await json(join(f.agentDir(second), "agent.json"))).port,
     f.configured.network.gatewayPortRange.start + 1,
+  );
+  assert.notEqual(
+    (await json(join(f.agentDir(second), "agent.json"))).runtimeUser,
+    (await json(join(f.agentDir(first), "agent.json"))).runtimeUser,
   );
   assert.doesNotMatch(
     await readFile(join(f.units, f.unit(second)), "utf8"),
@@ -553,6 +601,11 @@ test("SSH trusted-proxy omits gateway.env, and allocation spans Agents and Names
     (await json(join(otherDir, "agents", digest(third.agentId).slice(0, 12), "agent.json"))).port,
     f.configured.network.gatewayPortRange.start + 2,
   );
+  assert.notEqual(
+    (await json(join(otherDir, "agents", digest(third.agentId).slice(0, 12), "agent.json")))
+      .runtimeGroup,
+    (await json(join(f.agentDir(second), "agent.json"))).runtimeGroup,
+  );
   const exhausted = revision(f.driver, 1, "agent-ssh-4");
   bind(f.driver, exhausted);
   await assert.rejects(f.driver.prepareRevision(exhausted), /configuration/);
@@ -560,6 +613,49 @@ test("SSH trusted-proxy omits gateway.env, and allocation spans Agents and Names
   assert.equal((await stat(otherDir)).isDirectory(), true);
   await f.driver.activateRevision(third);
   assert.equal((await f.driver.deleteNamespace(other)).namespaceDeleted, true);
+});
+
+test("SSH activation invokes lifecycle start hooks and cleans them up after activation failure", async (t) => {
+  const hooks = [];
+  const f = await fixture(t, {
+    lifecycleDrivers: [
+      {
+        id: "hooks",
+        implementation: "test",
+        capability: "configuration",
+        computeLifecycleHooks: {
+          async beforeWorkloadStart(rev, launch) {
+            hooks.push(`start:${rev.id}`);
+            launch.environment.PLUGIN_TOKEN = "opaque-plugin-token";
+          },
+          async beforeWorkloadStop(rev) {
+            hooks.push(`stop:${rev.id}`);
+          },
+        },
+      },
+    ],
+  });
+  const rev = await stage(f);
+  assert.deepEqual(hooks, []);
+  await f.driver.activateRevision(rev);
+  assert.deepEqual(hooks, [`start:${rev.id}`]);
+  assert.match(
+    await readFile(join(f.units, f.unit(rev)), "utf8"),
+    /^Environment=PLUGIN_TOKEN=opaque-plugin-token$/m,
+  );
+  await f.driver.retireRevision(rev);
+  assert.deepEqual(hooks, [`start:${rev.id}`, `stop:${rev.id}`]);
+
+  const failed = revision(f.driver, 2);
+  await stage(f, failed);
+  await writeFile(join(f.revisionDir(failed), "revision.json"), JSON.stringify({ broken: true }));
+  await assert.rejects(f.driver.activateRevision(failed), /snapshot|ownership/i);
+  assert.deepEqual(hooks, [
+    `start:${rev.id}`,
+    `stop:${rev.id}`,
+    `start:${failed.id}`,
+    `stop:${failed.id}`,
+  ]);
 });
 
 test("SSH revisions fail closed on unbound identities, unsupported topology, sandbox and Secret delivery", async (t) => {
@@ -622,11 +718,20 @@ test("SSH rejects foreign Agent, revision and unit ownership without mutating th
     await writeFile(path, original);
   }
   const unit = join(f.units, f.unit(rev));
+  const originalUnit = await readFile(unit, "utf8");
   await writeFile(unit, "[Unit]\nDescription=foreign\n");
   const log = await readFile(join(f.state, "systemctl.log"), "utf8");
   await assert.rejects(f.driver.prepareRevision(rev), /ownership/);
   assert.equal((await f.driver.deleteNamespace(tenant)).failure, "permanent");
   assert.equal(await readFile(unit, "utf8"), "[Unit]\nDescription=foreign\n");
+  assert.equal(await readFile(join(f.state, "systemctl.log"), "utf8"), log);
+  await writeFile(unit, originalUnit);
+  const agent = await json(join(f.agentDir(rev), "agent.json"));
+  const account = join(f.root, "accounts", `${agent.runtimeUser}.json`);
+  const originalAccount = await json(account);
+  await writeFile(account, JSON.stringify({ ...originalAccount, uid: originalAccount.uid + 1 }));
+  await assert.rejects(f.driver.activateRevision(rev), /foreign ownership|snapshot/);
+  assert.equal((await f.driver.deleteNamespace(tenant)).failure, "permanent");
   assert.equal(await readFile(join(f.state, "systemctl.log"), "utf8"), log);
 });
 
@@ -666,11 +771,11 @@ test("SSH immutable snapshots, supersession, cutover, retirement and deletion pr
   const second = revision(f.driver, 2);
   assert.equal((await f.driver.prepareRevision(second)).ready, true);
   const log = await readFile(join(f.state, "systemctl.log"), "utf8");
-  assert.equal((await f.driver.prepareRevision(first)).ready, false);
+  assert.equal((await f.driver.prepareRevision(first)).ready, true);
   assert.equal(await readFile(join(f.state, "systemctl.log"), "utf8"), log);
   assert.equal(await readFile(join(dir, "state", "persisted"), "utf8"), "state survives");
-  await assert.rejects(f.driver.activateRevision(first), /ownership/);
   await f.driver.activateRevision(second);
+  await assert.rejects(f.driver.activateRevision(first), /ownership/);
   await f.driver.retireRevision(first);
   await f.driver.retireRevision(first);
   await missing(f.revisionDir(first));
@@ -683,7 +788,15 @@ test("SSH immutable snapshots, supersession, cutover, retirement and deletion pr
   await missing(join(dir, "current"));
   await missing(f.revisionDir(second));
   assert.equal(await readFile(join(dir, "state", "persisted"), "utf8"), "state survives");
+  await writeFile(join(f.state, "groupdel.fail"), "once");
+  assert.deepEqual(await f.driver.deleteNamespace(tenant), {
+    namespaceId: tenant.id,
+    namespaceDeleted: false,
+    failure: "retryable",
+  });
+  await missing(f.nsDir);
   assert.equal((await f.driver.deleteNamespace(tenant)).namespaceDeleted, true);
+  assert.deepEqual(await readdir(join(f.root, "accounts")), []);
   assert.equal((await f.driver.deleteNamespace(tenant)).namespaceDeleted, true);
   await missing(f.nsDir);
   await missing(join(f.units, f.unit(first)));
@@ -711,25 +824,25 @@ test("SSH local executor cancellation terminates the real helper waiting for the
   await missing(f.nsDir);
 });
 
-test("SSH interrupted cutover restarts instead of accepting a pointer that was never served", async (t) => {
+test("SSH activation repairs an interrupted cutover instead of accepting an unserved pointer", async (t) => {
   const f = await fixture(t);
   const first = await prepare(f);
   const second = revision(f.driver, 2);
   assert.equal((await f.driver.prepareRevision(second)).ready, true);
   const dir = f.agentDir(first);
-  // Simulate a helper that died between replacing `current` and `systemctl restart`:
-  // the pointer names the second revision while the served marker still names the first.
-  await writeFile(join(dir, "served.json"), JSON.stringify({ revisionId: first.id }));
-  await assert.rejects(f.driver.activateRevision(second), /ownership/);
   const restarts = async () =>
     (await readFile(join(f.state, "systemctl.log"), "utf8"))
       .split("\n")
       .filter((line) => line.startsWith("restart ")).length;
   const before = await restarts();
-  assert.equal((await f.driver.prepareRevision(second)).ready, true);
+  assert.equal(await readlink(join(dir, "current")), `revisions/${digest(first.id).slice(0, 12)}`);
+  assert.deepEqual(await json(join(dir, "served.json")), { revisionId: first.id });
+  // Simulate a helper that died between replacing `current` and `systemctl restart`.
+  await rm(join(dir, "current"));
+  await symlink(`revisions/${digest(second.id).slice(0, 12)}`, join(dir, "current"));
+  await f.driver.activateRevision(second);
   assert.equal(await restarts(), before + 1);
   assert.deepEqual(await json(join(dir, "served.json")), { revisionId: second.id });
-  await f.driver.activateRevision(second);
   await f.driver.retireRevision(second);
   await missing(join(dir, "served.json"));
 });

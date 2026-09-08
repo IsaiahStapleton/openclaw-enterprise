@@ -93,21 +93,29 @@ async function systemctl(...args) {
   return command("systemctl", args);
 }
 
-async function runtimeOwner(runtime) {
-  const uid = Number((await command("id", ["-u", runtime.user])).stdout);
-  const gid = Number((await command("id", ["-g", runtime.user])).stdout);
+async function userOwner(user) {
+  const uid = Number((await command("id", ["-u", user])).stdout);
+  const gid = Number((await command("id", ["-g", user])).stdout);
   if (!Number.isSafeInteger(uid) || !Number.isSafeInteger(gid)) {
     throw new ConfigurationFailure("Runtime user is unavailable.");
   }
+  if (uid === 0) throw new ConfigurationFailure("Runtime user must not resolve to uid 0.");
   return { uid, gid };
 }
 
 async function probe(runtime) {
   await systemctl("--version");
   await command("sh", ["-c", "command -v flock"]);
+  await command("sh", ["-c", "command -v getent"]);
+  await command("sh", ["-c", "command -v groupadd"]);
+  await command("sh", ["-c", "command -v useradd"]);
+  await command("sh", ["-c", "command -v userdel"]);
+  await command("sh", ["-c", "command -v groupdel"]);
   fs.accessSync(runtime.nodePath, fs.constants.X_OK);
   fs.accessSync(runtime.openclawPath, fs.constants.R_OK);
-  await runtimeOwner(runtime);
+  if (!/^(?!root$)[a-z_][a-z0-9_-]*$/.test(runtime.user)) {
+    throw new ConfigurationFailure("Runtime user prefix is invalid.");
+  }
 }
 
 const LOCK_NAME = ".compute-lock";
@@ -164,6 +172,24 @@ function agentOwnership(input) {
   };
 }
 
+function accountName(input) {
+  return `${input.runtime.user.slice(0, 19)}-${hash(
+    `${input.namespace.id}:${input.revision.agentId}`,
+  ).slice(0, 12)}`;
+}
+
+function accountOwnership(input, name = accountName(input)) {
+  return {
+    ...agentOwnership(input),
+    runtimeUser: name,
+    runtimeGroup: name,
+  };
+}
+
+function accountMarker(input, name = accountName(input)) {
+  return join(input.runtime.root, "accounts", `${name}.json`);
+}
+
 function namespaceDirectory(input) {
   return join(input.runtime.root, "namespaces", hash(input.namespace.id).slice(0, 12));
 }
@@ -199,6 +225,9 @@ function verifyAgent(input, path) {
   const marker = verify(readJson(join(path, "agent.json")), agentOwnership(input));
   if (!Number.isSafeInteger(marker.port) || marker.port < 1024 || marker.port > 65535) {
     throw new OwnershipFailure("Invalid Agent port marker.");
+  }
+  if (marker.runtimeUser !== accountName(input) || marker.runtimeGroup !== marker.runtimeUser) {
+    throw new OwnershipFailure("Invalid Agent runtime account marker.");
   }
   for (const name of ["home", "state", "revisions"]) directory(join(path, name));
   verifyUnit(input, marker);
@@ -264,6 +293,143 @@ function revisionMetadata(input) {
   };
 }
 
+async function userExists(name) {
+  return (await command("id", ["-u", name], true)).success;
+}
+
+async function groupExists(name) {
+  return (await command("getent", ["group", name], true)).success;
+}
+
+async function groupGid(name) {
+  const result = await command("getent", ["group", name]);
+  const gid = Number(result.stdout.split(":")[2]);
+  if (!Number.isSafeInteger(gid) || gid === 0) {
+    throw new OwnershipFailure("Runtime group ownership marker differs.");
+  }
+  return gid;
+}
+
+async function ensureRuntimeIdentity(input) {
+  const name = accountName(input);
+  const accounts = join(input.runtime.root, "accounts");
+  directory(input.runtime.root, true);
+  directory(accounts, true);
+  const markerPath = accountMarker(input, name);
+  const marker = inspect(markerPath) === undefined ? undefined : readJson(markerPath);
+  if (marker === undefined) {
+    if ((await userExists(name)) || (await groupExists(name))) {
+      throw new OwnershipFailure("Refusing to adopt an unowned runtime account.");
+    }
+    let groupCreated = false;
+    let userCreated = false;
+    try {
+      await command("groupadd", ["--system", name]);
+      groupCreated = true;
+      await command("useradd", [
+        "--system",
+        "--gid",
+        name,
+        "--home-dir",
+        join(
+          namespaceDirectory(input),
+          "agents",
+          hash(input.revision.agentId).slice(0, 12),
+          "home",
+        ),
+        "--shell",
+        "/usr/sbin/nologin",
+        "--no-create-home",
+        name,
+      ]);
+      userCreated = true;
+      const owner = await userOwner(name);
+      atomicWrite(
+        markerPath,
+        JSON.stringify({ ...accountOwnership(input, name), uid: owner.uid, gid: owner.gid }),
+      );
+      return owner;
+    } catch (error) {
+      if (userCreated) await command("userdel", [name], true);
+      if (groupCreated) await command("groupdel", [name], true);
+      throw error;
+    }
+  }
+
+  verify(marker, accountOwnership(input, name));
+  const owner = await userOwner(name);
+  if (marker.uid !== owner.uid || marker.gid !== owner.gid) {
+    throw new OwnershipFailure("Runtime account ownership marker differs.");
+  }
+  return owner;
+}
+
+async function verifyRuntimeIdentity(input, agent) {
+  const name = agent.runtimeUser;
+  if (typeof name !== "string" || agent.runtimeGroup !== name || name !== accountName(input)) {
+    throw new OwnershipFailure("Runtime account marker is invalid.");
+  }
+  const marker = readJson(accountMarker(input, name));
+  verify(marker, accountOwnership(input, name));
+  const owner = await userOwner(name);
+  if (marker.uid !== owner.uid || marker.gid !== owner.gid) {
+    throw new OwnershipFailure("Runtime account ownership marker differs.");
+  }
+  return owner;
+}
+
+async function removeRuntimeIdentity(input, agent) {
+  const name = agent.runtimeUser;
+  if (typeof name !== "string" || agent.runtimeGroup !== name) {
+    throw new OwnershipFailure("Runtime account marker is invalid.");
+  }
+  const markerPath = accountMarker(input, name);
+  const marker = readJson(markerPath);
+  verify(marker, accountOwnership(input, name));
+  if (await userExists(name)) {
+    const owner = await userOwner(name);
+    if (marker.uid !== owner.uid || marker.gid !== owner.gid) {
+      throw new OwnershipFailure("Runtime account ownership marker differs.");
+    }
+    await command("userdel", [name]);
+  }
+  if (await groupExists(name)) {
+    if (marker.gid !== (await groupGid(name))) {
+      throw new OwnershipFailure("Runtime group ownership marker differs.");
+    }
+    await command("groupdel", [name]);
+  }
+  fs.unlinkSync(markerPath);
+}
+
+async function removeNamespaceRuntimeIdentities(input, knownAgents) {
+  const agents = [...knownAgents];
+  const accounts = join(input.runtime.root, "accounts");
+  if (inspect(accounts) !== undefined) {
+    for (const name of fs.readdirSync(accounts)) {
+      if (!name.endsWith(".json")) continue;
+      const marker = readJson(join(accounts, name));
+      if (
+        marker.driverId === input.driverId &&
+        marker.implementation === input.implementation &&
+        marker.namespaceId === input.namespace.id &&
+        marker.namespaceName === input.namespace.name &&
+        typeof marker.agentId === "string" &&
+        typeof marker.servicePrincipalId === "string"
+      ) {
+        agents.push(marker);
+      }
+    }
+  }
+  const seen = new Set();
+  for (const agent of agents) {
+    const name = agent.runtimeUser;
+    if (typeof name !== "string" || seen.has(name)) continue;
+    seen.add(name);
+    await removeRuntimeIdentity({ ...input, revision: agent }, agent);
+  }
+}
+
 function allocatedPorts(input) {
   const ports = new Set();
   const namespaces = join(input.runtime.root, "namespaces");
@@ -303,9 +469,41 @@ function allocatedPorts(input) {
   return ports;
 }
 
-function renderUnit(input, agentDir, port) {
+const ENVIRONMENT_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
+const OPAQUE_PLACEHOLDER = /^opaque-[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const RESERVED_ENVIRONMENT_NAME =
+  /^(?:HOME|PATH|TMPDIR|CODEX_HOME|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|LOG_FORMAT|RUST_LOG|XDG_.*|OPENCLAW_.*|OTEL_.*|LD_.*|DYLD_.*)$/;
+
+function launchEnvironment(input) {
+  const environment = input.launchEnvironment ?? {};
+  if (
+    environment === null ||
+    typeof environment !== "object" ||
+    Array.isArray(environment) ||
+    Object.getPrototypeOf(environment) !== Object.prototype
+  ) {
+    throw new ConfigurationFailure("Invalid workload launch environment.");
+  }
+  const entries = Object.entries(environment);
+  if (
+    entries.length > 64 ||
+    entries.some(
+      ([name, value]) =>
+        !ENVIRONMENT_NAME.test(name) ||
+        RESERVED_ENVIRONMENT_NAME.test(name) ||
+        typeof value !== "string" ||
+        !OPAQUE_PLACEHOLDER.test(value),
+    )
+  ) {
+    throw new ConfigurationFailure("Invalid workload launch environment.");
+  }
+  return entries.map(([name, value]) => `Environment=${name}=${value}\n`).join("");
+}
+
+function renderUnit(input, agentDir, port, runtimeUser) {
   const { runtime, revision } = input;
   const token = revision.configuration.gateway?.auth?.mode !== "trusted-proxy";
+  const extraEnvironment = launchEnvironment(input);
   return `[Unit]
 Description=OpenClaw Enterprise gateway ${revision.agentId}
 ${unitHeader(revision.namespaceId, revision.agentId)}
@@ -314,13 +512,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=${runtime.user}
+User=${runtimeUser}
 WorkingDirectory=${agentDir}/state
 Environment=HOME=${agentDir}/home
 Environment=OPENCLAW_STATE_DIR=${agentDir}/state
 Environment=OPENCLAW_CONFIG_PATH=${agentDir}/current/openclaw.json
 Environment=OPENCLAW_GATEWAY_PORT=${port}
-${token ? `EnvironmentFile=${agentDir}/gateway.env\n` : ""}EnvironmentFile=-${agentDir}/env
+${extraEnvironment}${token ? `EnvironmentFile=${agentDir}/gateway.env\n` : ""}EnvironmentFile=-${agentDir}/env
 ExecStart=${runtime.nodePath} ${runtime.openclawPath} gateway --port ${port}
 Restart=always
 RestartSec=2
@@ -371,8 +569,8 @@ async function prepare(input, nsDir) {
   directory(agents);
   const agentDir = join(agents, hash(revision.agentId).slice(0, 12));
   const expected = agentOwnership(input);
-  const existingUnit = verifyUnit(input, expected);
-  const owner = await runtimeOwner(input.runtime);
+  const account = accountOwnership(input);
+  const owner = await ensureRuntimeIdentity(input);
   if (inspect(agentDir) === undefined) {
     const used = allocatedPorts(input);
     const range = input.network.gatewayPortRange;
@@ -380,7 +578,7 @@ async function prepare(input, nsDir) {
     while (used.has(port) && port <= range.end) port++;
     if (port > range.end) throw new ConfigurationFailure("Host gateway port range is exhausted.");
     atomicDirectory(agentDir, (pending) => {
-      fs.writeFileSync(join(pending, "agent.json"), JSON.stringify({ ...expected, port }), {
+      fs.writeFileSync(join(pending, "agent.json"), JSON.stringify({ ...account, port }), {
         mode: 0o600,
       });
       for (const name of ["home", "state"]) {
@@ -422,10 +620,26 @@ async function prepare(input, nsDir) {
       atomicWrite(tokenFile, `OPENCLAW_GATEWAY_TOKEN=${randomBytes(32).toString("hex")}\n`);
     else regular(tokenFile);
   }
+  return { ready: true };
+}
+
+async function activate(input, agentDir, agent, current) {
+  const revision = input.revision;
+  if (current !== undefined && current.revision > revision.revision) {
+    throw new OwnershipFailure("A newer revision is already current.");
+  }
+  if (
+    current !== undefined &&
+    current.revision === revision.revision &&
+    current.revisionId !== revision.id
+  ) {
+    throw new OwnershipFailure("Revision number belongs to another immutable revision.");
+  }
   directory(input.runtime.systemdUnitDirectory);
   const unit = unitName(revision.agentId);
   const unitPath = join(input.runtime.systemdUnitDirectory, unit);
-  const content = renderUnit(input, agentDir, agent.port);
+  const existingUnit = verifyUnit(input, agent);
+  const content = renderUnit(input, agentDir, agent.port, agent.runtimeUser);
   const changed = existingUnit !== content;
   if (changed) atomicWrite(unitPath, content, 0o644);
   await systemctl("daemon-reload");
@@ -448,7 +662,7 @@ async function prepare(input, nsDir) {
   await systemctl("restart", unit);
   await waitReady(unit, agent.port);
   atomicWrite(join(agentDir, "served.json"), JSON.stringify({ revisionId: revision.id }));
-  return { ready: true };
+  return {};
 }
 
 async function removeNamespace(input, nsDir) {
@@ -469,6 +683,7 @@ async function removeNamespace(input, nsDir) {
     }
     const scoped = { ...input, revision: agent };
     verifyAgent(scoped, agentDir);
+    await verifyRuntimeIdentity(scoped, agent);
     currentSnapshot(scoped, agentDir);
     for (const revision of fs.readdirSync(join(agentDir, "revisions"))) {
       const marker = readJson(join(agentDir, "revisions", revision, "revision.json"));
@@ -491,6 +706,7 @@ async function removeNamespace(input, nsDir) {
   }
   await systemctl("daemon-reload");
   fs.rmSync(nsDir, { recursive: true });
+  await removeNamespaceRuntimeIdentities(input, agents);
   return {};
 }
 
@@ -500,9 +716,12 @@ async function run(input) {
     return {};
   }
   const nsDir = namespaceDirectory(input);
-  if (input.operation === "delete-namespace" && inspect(nsDir) === undefined) return {};
   await acquireLock(input.runtime.root);
   try {
+    if (input.operation === "delete-namespace" && inspect(nsDir) === undefined) {
+      await removeNamespaceRuntimeIdentities(input, []);
+      return {};
+    }
     if (input.operation === "ensure-namespace") {
       directory(join(input.runtime.root, "namespaces"), true);
       if (inspect(nsDir) === undefined) {
@@ -521,18 +740,14 @@ async function run(input) {
     const agentDir = join(nsDir, "agents", hash(revision.agentId).slice(0, 12));
     if (input.operation === "retire-revision" && inspect(agentDir) === undefined) return {};
     const agent = verifyAgent(input, agentDir);
+    await verifyRuntimeIdentity(input, agent);
     const current = currentSnapshot(input, agentDir);
     const revisionDir = join(agentDir, "revisions", hash(revision.id).slice(0, 12));
     if (input.operation === "retire-revision" && inspect(revisionDir) === undefined) return {};
     snapshot(input, agentDir, revision.id, revisionMetadata(input));
     if (input.operation === "verify-revision") return {};
-    if (input.operation === "activate-revision") {
-      if (current?.revisionId !== revision.id || servedRevision(agentDir) !== revision.id)
-        throw new OwnershipFailure("Current or served revision differs from the activated one.");
-      if (!(await active(unitName(revision.agentId))) || !(await ready(agent.port)))
-        throw new Error("Activated gateway is not ready.");
-      return {};
-    }
+    if (input.operation === "activate-revision")
+      return await activate(input, agentDir, agent, current);
     if (input.operation === "retire-revision") {
       if (current?.revisionId === revision.id) {
         const unit = unitName(revision.agentId);

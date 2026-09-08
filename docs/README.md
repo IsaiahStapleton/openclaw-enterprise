@@ -64,6 +64,8 @@ OpenClaw Enterprise is the open platform for managing agents.
   and [Driver-issued credentials](flows/service-account-driver-credential-delivery.md).
 - [Existing Kubernetes namespace placement](flows/kubernetes-existing-namespace-placement.md).
 - [Agent workspace files](flows/workspace-files.md).
+- [SSH Compute lifecycle](flows/pr-24-ssh-compute.md): host preparation,
+  revision activation, and cleanup.
 
 ## Implementation history
 

@@ -63,7 +63,10 @@ and immutable revision admission.
 `activateRevision(revision)` and `deactivateRevision(revision)` are optional in
 the shared TypeScript contract. Trusted startup requires **both** on every
 production-selected Compute Driver before returning a runtime; development
-Drivers can implement only the four core operations. The worker fails closed if
+Drivers can implement only the four core operations. When a development Driver
+implements `activateRevision`, the worker invokes it after the active-revision
+commit and on finalization retry, unless the Driver selects `beforeCommit`.
+The worker fails closed if
 a required stage becomes unavailable during execution. Replacement preparation
 preserves the predecessor's Service selector until fenced activation succeeds.
 

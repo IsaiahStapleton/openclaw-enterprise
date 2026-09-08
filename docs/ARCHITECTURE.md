@@ -230,10 +230,11 @@ The production API is internal-only.
 **SSH host execution** selects `compute-ssh` in trusted Installation YAML in
 development or production. The Compute Driver manages embedded OpenClaw on
 operator-provisioned Linux hosts through SSH, with one systemd unit per Agent,
-immutable snapshots, and persistent Agent state. Revision preparation performs
-a bounded restart; activation verifies readiness. This adds host execution to
-the existing control plane, not a new control-plane installer. Host networking
-and Unix-account isolation remain operator responsibilities; dedicated Codex,
+immutable snapshots, and persistent Agent state. Each Agent receives a distinct
+Unix user and group. Revision preparation stages its snapshot; activation
+switches the systemd gateway after OCC commits the active revision. The existing
+control plane remains responsible for admission and activation. Host networking
+remains an operator responsibility; dedicated Codex,
 SandboxDriver composition, and OCC Secret delivery are unsupported. Local proof
 uses transport/systemd fixtures; the opt-in real-host integration is the host
 proof.

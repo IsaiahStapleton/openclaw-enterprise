@@ -27,16 +27,54 @@ const INSPECT = String.raw`
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const input = JSON.parse(Buffer.from(process.argv[2], "base64").toString("utf8"));
+function readJson(path) {
+  return JSON.parse(fs.readFileSync(path, "utf8"));
+}
+function output(command, args) {
+  const result = spawnSync(command, args, { encoding: "utf8" });
+  return { status: result.status, stdout: result.stdout.trim() };
+}
 (async () => {
   if (input.operation === "deleted") {
     const active = spawnSync("systemctl", ["is-active", "--quiet", input.unit]);
     return { directoryExists: fs.existsSync(input.namespaceDir), unitExists: fs.existsSync(input.unitPath), active: active.status === 0 };
   }
   if (input.operation === "marker") {
-    fs.writeFileSync(input.agentDir + "/state/proof-marker", input.marker, { mode: 0o600 });
-    return { written: true };
+    const agent = readJson(input.agentDir + "/agent.json");
+    const written = output("runuser", [
+      "-u",
+      agent.runtimeUser,
+      "--",
+      process.execPath,
+      "-e",
+      "require('node:fs').writeFileSync(process.argv[1], process.argv[2], { mode: 0o600 })",
+      input.agentDir + "/state/proof-marker",
+      input.marker,
+    ]);
+    return { written: written.status === 0 };
   }
-  const agent = JSON.parse(fs.readFileSync(input.agentDir + "/agent.json", "utf8"));
+  if (input.operation === "isolation") {
+    const first = readJson(input.agentDir + "/agent.json");
+    const sibling = readJson(input.siblingAgentDir + "/agent.json");
+    const firstUid = output("id", ["-u", first.runtimeUser]);
+    const firstGid = output("id", ["-g", first.runtimeUser]);
+    const siblingUid = output("id", ["-u", sibling.runtimeUser]);
+    const siblingGid = output("id", ["-g", sibling.runtimeUser]);
+    const ownState = output("runuser", ["-u", first.runtimeUser, "--", "cat", input.agentDir + "/state/proof-marker"]);
+    const ownConfig = output("runuser", ["-u", sibling.runtimeUser, "--", "cat", input.siblingAgentDir + "/current/openclaw.json"]);
+    const foreignState = output("runuser", ["-u", sibling.runtimeUser, "--", "cat", input.agentDir + "/state/proof-marker"]);
+    const foreignConfig = output("runuser", ["-u", sibling.runtimeUser, "--", "cat", input.agentDir + "/current/openclaw.json"]);
+    return {
+      firstUser: first.runtimeUser, siblingUser: sibling.runtimeUser,
+      firstUid: firstUid.stdout, firstGid: firstGid.stdout,
+      siblingUid: siblingUid.stdout, siblingGid: siblingGid.stdout,
+      ownStateReadable: ownState.status === 0,
+      ownConfigReadable: ownConfig.status === 0,
+      foreignStateReadable: foreignState.status === 0,
+      foreignConfigReadable: foreignConfig.status === 0,
+    };
+  }
+  const agent = readJson(input.agentDir + "/agent.json");
   const active = spawnSync("systemctl", ["is-active", "--quiet", input.unit]);
   const response = await fetch("http://127.0.0.1:" + agent.port + "/readyz", { signal: AbortSignal.timeout(5000), redirect: "error" });
   await response.body?.cancel();
@@ -87,6 +125,7 @@ test(
       createdAt: new Date().toISOString(),
     };
     const agentId = `agent-${randomUUID()}`;
+    const siblingAgentId = `agent-${randomUUID()}`;
     const configuration = admitLoggingConfiguration(
       {
         gateway: {
@@ -133,9 +172,18 @@ test(
         "info",
       ),
     };
+    const sibling = {
+      ...first,
+      id: `revision-${randomUUID()}`,
+      agentId: siblingAgentId,
+      configurationId: `cfg-${randomUUID()}`,
+      servicePrincipalId: `sp-${randomUUID()}`,
+    };
     const namespaceDir = `${runtime.root}/namespaces/${sha256Hex(namespace.id, 12)}`;
     const agentDir = `${namespaceDir}/agents/${sha256Hex(agentId, 12)}`;
+    const siblingAgentDir = `${namespaceDir}/agents/${sha256Hex(siblingAgentId, 12)}`;
     const unit = `openclaw-enterprise-gateway-${sha256Hex(agentId, 12)}.service`;
+    const siblingUnit = `openclaw-enterprise-gateway-${sha256Hex(siblingAgentId, 12)}.service`;
     const executor = new SystemSshCommandExecutor();
     const inspect = async (operation, extra = {}) => {
       const result = await executor.execute({
@@ -147,6 +195,7 @@ test(
           JSON.stringify({
             operation,
             agentDir,
+            siblingAgentDir,
             namespaceDir,
             unit,
             unitPath: `${runtime.systemdUnitDirectory}/${unit}`,
@@ -186,6 +235,29 @@ test(
       assert.equal(observedFirst.readyStatus, 200);
       const marker = randomUUID();
       assert.deepEqual(await inspect("marker", { marker }), { written: true });
+      driver.bindAgent({
+        namespace,
+        agent: {
+          id: siblingAgentId,
+          namespaceId: namespace.id,
+          name: "SSH sibling proof",
+          configurationId: sibling.configurationId,
+          providerId: null,
+          executionMode: "embedded",
+          servicePrincipalId: sibling.servicePrincipalId,
+          createdAt: namespace.createdAt,
+        },
+      });
+      assert.equal((await driver.prepareRevision(sibling, { secretEnvironment: [] })).ready, true);
+      await driver.activateRevision(sibling);
+      const isolation = await inspect("isolation", { siblingUnit });
+      assert.notEqual(isolation.firstUser, isolation.siblingUser);
+      assert.notEqual(isolation.firstUid, isolation.siblingUid);
+      assert.notEqual(isolation.firstGid, isolation.siblingGid);
+      assert.equal(isolation.ownStateReadable, true);
+      assert.equal(isolation.ownConfigReadable, true);
+      assert.equal(isolation.foreignStateReadable, false);
+      assert.equal(isolation.foreignConfigReadable, false);
       driver.bindAgent(binding);
       assert.equal((await driver.prepareRevision(second, { secretEnvironment: [] })).ready, true);
       await driver.activateRevision(second);

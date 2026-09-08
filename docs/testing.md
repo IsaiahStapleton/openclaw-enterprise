@@ -179,8 +179,9 @@ resources; they do not exercise a live cluster.
 SSH conformance executes the real host helper with local transport, a fixture
 `systemctl` that starts loopback readiness listeners, and a fixture `flock`
 that wraps the same `flock(2)` syscall because macOS lacks util-linux `flock`.
-It does not prove SSH reachability, real systemd, util-linux `flock`, or real
-OpenClaw.
+Account-management fixtures exercise ownership and failure handling. They do
+not prove OS account isolation, SSH reachability, real systemd, util-linux
+`flock`, or real OpenClaw.
 
 The local [integration tests](../tests/integration/) include these groups:
 
@@ -326,10 +327,18 @@ for separate gateway and Agent images.
 
 ## SSH raw hosts
 
+The `checks-baseline` CI lane runs SSH conformance and startup coverage. The
+`ssh-host` lane selects the real-host test with required operator-provided SSH
+settings: `node scripts/ci/run-tests.mjs run ssh-host`. It is not part of the
+automatic `ci` or `full` groups because those jobs do not provision an SSH host.
+Prepare the disposable rig below before selecting this lane; missing inputs or
+skipped tests fail the lane.
+
 The bundled [SSH Compute Driver](reference/drivers/ssh-compute.md) has an opt-in
 real-host integration. Use a disposable Linux systemd host only. The test
-proves gateway readiness, two-revision cutover, state persistence, retirement,
-and Namespace deletion over real SSH. It makes no model call and needs no
+checks gateway readiness, two-revision cutover, state persistence, retirement,
+and Namespace deletion over real SSH. It also checks distinct Agent UID/GID
+assignments and sibling state/configuration read denial using Linux `runuser`. It makes no model call and needs no
 model credential. The ordinary local test command reports an explicit skip:
 
 ```sh

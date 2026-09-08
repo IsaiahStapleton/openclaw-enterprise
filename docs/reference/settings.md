@@ -545,13 +545,13 @@ selected, missing inputs or unavailable hosts fail; there is no fixture fallback
 | `OCC_TEST_SSH_KNOWN_HOSTS_FILE` | Required absolute verified known-hosts path on the test worker.         |
 | `OCC_TEST_SSH_NODE_PATH`        | Required absolute Node.js 24 executable path on the host.               |
 | `OCC_TEST_SSH_OPENCLAW_PATH`    | Required absolute OpenClaw entrypoint path on the host.                 |
-| `OCC_TEST_SSH_RUNTIME_USER`     | Required existing host account for gateway execution.                   |
+| `OCC_TEST_SSH_RUNTIME_USER`     | Required prefix for Driver-managed per-Agent Unix accounts.             |
 | `OCC_TEST_SSH_ROOT`             | Optional host state root, default `/var/lib/openclaw-enterprise`.       |
 | `OCC_TEST_SSH_UNIT_DIRECTORY`   | Optional host unit directory, default `/etc/systemd/system`.            |
 
 The suite uses ports `18800`–`18899`, creates unique Namespace/Agent identities,
-verifies readiness through SSH, cuts over two revisions, proves state
-persistence, retires the first snapshot, and deletes its Namespace. It requires
+verifies readiness through SSH, cuts over two revisions, checks private Agent
+UID/GID isolation and state persistence, retires the first snapshot, and deletes its Namespace. It requires
 no model credential and proves no model turn. Use the
 [container rig](../testing.md#ssh-raw-hosts) or a disposable host of your own.
 
@@ -911,7 +911,9 @@ accept `ssh`, a `hosts` map keyed by exact Namespace name, `runtime`, and
 `network.gatewayPortRange` as documented in the
 [SSH reference](drivers/ssh-compute.md#requirements-and-configuration). The
 closed static schema and `validateConfiguration` reject unknown keys, unsafe
-paths, non-root SSH users, and invalid ports/ranges.
+paths, non-root SSH users, and invalid ports/ranges. `runtime.user` is the prefix
+for Driver-managed per-Agent system users and private groups, rather than an
+existing shared gateway account. The Driver refuses to adopt unowned accounts.
 
 The optional constructor/factory `selection` accepts `id`, `implementation`,
 `lifecycleDrivers`, and the internal `SshCommandExecutor` transport seam.

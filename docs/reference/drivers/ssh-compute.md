@@ -13,8 +13,9 @@ intend to operate. Neither suite proves a model turn.
 
 ## Requirements and configuration
 
-Provision Linux with systemd, util-linux `flock`, a root SSH account, Node.js 24,
-a readable OpenClaw entrypoint, and the configured gateway runtime account. The controller processes
+Provision Linux with systemd, util-linux `flock`, `getent`, the shadow account
+management tools (`useradd`, `userdel`, `groupadd`, `groupdel`), a root SSH
+account, Node.js 24, and a readable OpenClaw entrypoint. The controller processes
 need the system `ssh` executable and protected identity and known-hosts files;
 the controller image's `node:24-bookworm` base ships the OpenSSH client.
 The Driver never installs or upgrades host software and has no `sudo` fallback.
@@ -69,7 +70,7 @@ installer or alter the existing production API security requirements.
 | `hosts.<name>.port`                      | Integer `1`–`65535`, default `22`.                                                                                                                     |
 | `hosts.<name>.nodePath`, `.openclawPath` | Optional absolute host-specific overrides.                                                                                                             |
 | `runtime.nodePath`, `.openclawPath`      | Required absolute shared host executable/entrypoint paths.                                                                                             |
-| `runtime.user`                           | Required existing host account running the gateways.                                                                                                   |
+| `runtime.user`                           | Required non-root account-name prefix for Driver-managed per-Agent users and private groups.                                                           |
 | `runtime.root`                           | Required absolute state root; `/var/lib/openclaw-enterprise` is recommended. Never under `/tmp` or `/var/tmp`: `PrivateTmp` hides those from the unit. |
 | `runtime.systemdUnitDirectory`           | Absolute path, default `/etc/systemd/system`.                                                                                                          |
 | `network.gatewayPortRange`               | Inclusive integers `1024 <= start <= end <= 65535`.                                                                                                    |
@@ -94,6 +95,7 @@ the host.
 SHA-256 of the exact Namespace, Agent, and AgentRevision IDs.
 
 ```text
+<root>/accounts/<runtimeUser>.json
 <root>/namespaces/<nsHash>/namespace.json
 <root>/namespaces/<nsHash>/agents/<agentHash>/agent.json
 <root>/namespaces/<nsHash>/agents/<agentHash>/home/
@@ -107,14 +109,23 @@ SHA-256 of the exact Namespace, Agent, and AgentRevision IDs.
 <systemdUnitDirectory>/openclaw-enterprise-gateway-<agentHash>.service
 ```
 
+Each Agent uses a distinct system user and private group. The account name is
+the first 19 characters of `runtime.user`, a hyphen, and the first 12 hex
+characters of SHA-256 of `<namespaceId>:<agentId>`. The Driver creates accounts
+with a non-login shell and records their exact ownership and UID/GID under
+`accounts/`. An existing account or group without its matching ownership marker
+is refused. Accounts persist across revision retirement and are removed with
+the Namespace.
+
 Markers record exact Driver, Namespace, Agent, and ServicePrincipal ownership.
 Revision markers also record revision ID/number, configuration hash, and
 Harness. Foreign markers, changed snapshots, unexpected symlinks, and units
 without the exact Namespace/Agent ownership header are refused rather than
 adopted. JSON markers and `gateway.env` are `0600`; `home/` and `state/` are
-`0700` and owned by `runtime.user`. The native configuration snapshot stays owned
-by the SSH account with mode `0640` and the runtime account's group, so the
-gateway can read but never rewrite its admitted document. `served.json` records
+`0700` and owned by the Agent's private user and group. The native configuration
+snapshot stays owned by the SSH account with mode `0640` and the Agent's
+private group, so its gateway can read but never rewrite the admitted document
+and sibling Agents cannot read it. `served.json` records
 the revision whose restart last reached readiness; a pointer flip alone never
 counts as served. Writes and the `current` symlink are replaced atomically.
 
@@ -131,8 +142,8 @@ belonging to unrelated host processes.
 ## Namespace and revision lifecycle
 
 Preflight verifies both local SSH files, then probes every host for SSH
-reachability, `systemctl --version`, `flock` on `PATH`, executable Node, readable
-OpenClaw, and runtime account resolution. Failure names the configured host and stops
+reachability, `systemctl --version`, `flock` and account-management commands on
+`PATH`, executable Node, and readable OpenClaw. Failure names the configured host and stops
 production startup.
 
 `ensureNamespace` creates or verifies the Namespace marker and invokes selected
@@ -141,25 +152,28 @@ revision operations, the worker calls `bindAgent` with server-owned Namespace,
 Agent, and ServicePrincipal identities; an unbound revision fails closed.
 
 `prepareRevision` accepts only `openclaw`/`embedded` without OCC Secret bindings.
-It verifies ownership, allocates or reuses the Agent port, writes the immutable
-snapshot, and renders the stable systemd unit. A superseded candidate returns
-not-ready without changing host state. A revision that is current, recorded in
-`served.json`, active, and ready returns immediately. Otherwise preparation
-atomically replaces `current`, restarts the unit, polls
-`http://127.0.0.1:<port>/readyz`, and only then records `served.json`, so a
-helper interrupted between the pointer flip and the restart is repaired by a
-restart on the next attempt instead of being accepted. An inactive unit or
-readiness timeout fails the attempt. This is a bounded restart with interrupted
-Agent service, not zero-downtime cutover.
+It verifies ownership, creates or verifies the Agent's Unix identity, allocates
+or reuses the Agent port, and writes the immutable snapshot. A superseded
+candidate returns not-ready. Preparation does not replace `current`, write the
+systemd unit, or restart the running gateway. An OCC publication failure leaves
+the previous gateway serving its existing revision.
 
-The unit runs `<nodePath> <openclawPath> gateway --port <port>` as `runtime.user`,
+After OCC commits the active revision, `activateRevision` runs selected
+Configuration and IAM `beforeWorkloadStart` hooks, renders the systemd unit,
+switches `current`, restarts the unit, and waits for loopback `/readyz`. The
+bounded opaque environment placeholders returned by those hooks are projected
+into the gateway unit. Hook failure prevents launch; activation failure invokes
+bounded `beforeWorkloadStop` compensation for prepared bindings. Only successful
+readiness writes `served.json`; retries must establish both the exact revision
+and readiness. Activation is a bounded restart with interrupted Agent service.
+
+The unit runs `<nodePath> <openclawPath> gateway --port <port>` as the Agent's private Unix account,
 with `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and
 `OPENCLAW_GATEWAY_PORT`. It uses `Restart=always`, `RestartSec=2`, `SIGTERM`,
 `TimeoutStopSec=30`, `NoNewPrivileges=true`, and `PrivateTmp=true`. The admitted
 document owns logging; the Driver sets no `OPENCLAW_LOG_LEVEL`. Logs go to journald.
 
-`activateRevision` verifies exact current and served revision, ownership, active
-unit, and readiness without performing another cutover. `deactivateRevision` verifies
+`deactivateRevision` verifies
 ownership and returns; the worker only needs deactivation for the dedicated
 topology, which SSH preparation rejects. `retireRevision` invokes selected
 `beforeWorkloadStop` hooks and removes only that snapshot. If it is still
@@ -168,7 +182,8 @@ Home, state, operator credentials, and other revisions remain.
 
 `deleteNamespace` invokes `beforeNamespaceDelete`, verifies all owned Agents,
 stops/disables their units, removes the unit files, reloads systemd, and removes
-the Namespace tree including state. A missing Namespace is already deleted.
+the Namespace tree including state and its owned runtime accounts. If the Namespace tree is already gone, deletion retries cleanup of any remaining
+owned account markers.
 Foreign ownership or configuration failures are permanent; transport, timeouts,
 and unexpected helper failures are retryable.
 
@@ -187,9 +202,10 @@ as root; keep it `root:root 0600`. Protect the state root and SSH identity and
 never put plaintext credentials in native Configuration or Installation YAML.
 
 Embedded Agents may use any channel provider supported by the host's OpenClaw
-build. They share one configured Unix runtime account and the host's networking;
-SSH does not provide Kubernetes NetworkPolicy isolation or the channel isolation
-of dedicated execution. Operators own host/network trust and credential access.
+build. Separate Unix users and private groups protect sibling state and native
+configuration snapshots. Agents still share host networking; SSH does not
+provide Kubernetes NetworkPolicy isolation or the channel isolation of
+dedicated execution. Operators own host/network trust and credential access.
 
 Dedicated Codex, SandboxDriver composition, OCC Secret delivery, workspace-file
 API endpoint resolution, `existingNamespace` adoption, active-runtime
@@ -209,13 +225,14 @@ node --test tests/integration/ssh-compute-startup.test.mjs
 Conformance executes the actual helper locally with SSH and systemd fixtures.
 Use [SSH raw-host testing](../../testing.md#ssh-raw-hosts) for the disposable
 systemd/sshd container and real OpenClaw proof. Unselected real-host tests report
-an explicit skip naming their environment inputs. That proof covers readiness,
-cutover, persistence, retirement, and deletion; it does not cover a model turn
+an explicit skip naming their environment inputs. That suite checks readiness,
+cutover, persistence, private UID/GID isolation, retirement, and deletion; it does not cover a model turn
 or any host other than the one it ran against.
 
 For host failures, inspect the exact unit with `systemctl status` and
 `journalctl -u openclaw-enterprise-gateway-<agentHash>.service`. Verify executable
-paths, the runtime user, snapshot readability, and operator environment inputs.
+paths, the Agent runtime account and ownership marker, snapshot readability,
+and operator environment inputs.
 An SSH preflight failure usually indicates a missing key/known-host entry,
 wrong host path/account, or unavailable systemd. Never disable host-key checking
 to bypass it. Ownership errors require operator inspection of the exact markers,

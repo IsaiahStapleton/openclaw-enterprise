@@ -10,6 +10,7 @@ import type {
   Namespace,
   NamespaceDeleteResult,
   NamespaceEnsureResult,
+  WorkloadLaunchContext,
 } from "@openclaw-enterprise/contracts";
 import { admittedLoggingLevel } from "@openclaw-enterprise/contracts";
 import {
@@ -68,7 +69,7 @@ const PATH = new RegExp(PATH_PATTERN);
 const PATH_SCHEMA = { type: "string", pattern: PATH_PATTERN };
 const ADDRESS_PATTERN = "^[A-Za-z0-9:][A-Za-z0-9.:-]*$";
 const ADDRESS = new RegExp(ADDRESS_PATTERN);
-const ACCOUNT_PATTERN = "^[a-z_][a-z0-9_-]*[$]?$";
+const ACCOUNT_PATTERN = "^(?!root$)[a-z_][a-z0-9_-]*$";
 const ACCOUNT = new RegExp(ACCOUNT_PATTERN);
 const IDENTITY = /^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/;
 
@@ -213,7 +214,7 @@ export class SshComputeDriver implements ComputeDriver {
     if (runtime.systemdUnitDirectory !== undefined)
       path(runtime.systemdUnitDirectory, "runtime.systemdUnitDirectory");
     if (!ACCOUNT.test(required(runtime.user, "runtime.user"))) {
-      throw new ConfigurationFailure("runtime.user must be a host account name.");
+      throw new ConfigurationFailure("runtime.user must be a non-root account-name prefix.");
     }
     const hosts = asRecord(options.hosts);
     if (hosts === undefined || Object.keys(hosts).length === 0) {
@@ -369,9 +370,42 @@ export class SshComputeDriver implements ComputeDriver {
     };
   }
 
-  async activateRevision(revision: AgentRevision): Promise<void> {
+  async activateRevision(revision: AgentRevision, context?: ComputeRevisionContext): Promise<void> {
     this.lifecycleStarted = true;
-    await this.revisionOperation("activate-revision", revision);
+    this.validateRevision(revision);
+    if (revision.harness.id !== "openclaw" || revision.harness.mode !== "embedded") {
+      throw new ConfigurationFailure(
+        "SSH Compute supports only embedded OpenClaw; dedicated Codex is not implemented.",
+      );
+    }
+    if (
+      (context?.secretEnvironment.length ?? 0) > 0 ||
+      Object.keys(revision.secretBindings ?? {}).length > 0
+    ) {
+      throw new ConfigurationFailure(
+        "SSH OCC Secret delivery is not implemented; provision credentials in the operator-owned <agentDir>/env file.",
+      );
+    }
+    if (revision.sandboxDriverId !== undefined)
+      throw new ConfigurationFailure("SSH Compute does not support SandboxDriver composition.");
+    admittedLoggingLevel(revision.configuration);
+
+    let launch: Readonly<WorkloadLaunchContext> | undefined;
+    try {
+      launch = await this.lifecycle.beforeWorkloadStart(revision);
+      await this.revisionOperation("activate-revision", revision, launch);
+    } catch (error) {
+      if (launch === undefined) throw error;
+      try {
+        await this.lifecycle.beforeWorkloadStop(revision, { cleanup: true });
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "SSH workload activation and lifecycle cleanup failed.",
+        );
+      }
+      throw error;
+    }
   }
 
   async deactivateRevision(revision: AgentRevision): Promise<void> {
@@ -432,6 +466,7 @@ export class SshComputeDriver implements ComputeDriver {
   private async revisionOperation(
     operation: string,
     revision: AgentRevision,
+    launch?: Readonly<WorkloadLaunchContext>,
   ): Promise<Record<string, unknown>> {
     const namespace = this.validateRevision(revision);
     return this.execute(this.host(namespace), {
@@ -439,6 +474,7 @@ export class SshComputeDriver implements ComputeDriver {
       namespace,
       revision,
       configurationHash: sha256Hex(JSON.stringify(revision.configuration)),
+      ...(launch === undefined ? {} : { launchEnvironment: launch.environment }),
     });
   }
 
