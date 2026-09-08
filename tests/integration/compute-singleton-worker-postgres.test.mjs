@@ -293,7 +293,9 @@ test(
       releaseRetry();
     }
 
-    assert.equal((await fixture.work(second)).attempt_count, 2);
+    // Pending finalization restores the retry budget despite making two activation calls.
+    assert.equal((await fixture.work(second)).attempt_count, 1);
+    assert.equal(secondActivationAttempts, 2);
     assert.equal(await fixture.activeRevision(owner), second.id);
     assert.deepEqual(effects, [
       { action: "prepare", revisionId: first.id, activeRevisionId: null },
