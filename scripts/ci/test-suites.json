@@ -142,6 +142,9 @@
           "path": "tests/integration/ci-runner.test.mjs"
         },
         {
+          "path": "tests/integration/full-integration-preflight.test.mjs"
+        },
+        {
           "path": "tests/integration/ci-cleanup.test.mjs"
         },
         {
@@ -577,11 +580,9 @@
         "requireEnv": [
           "OCC_TEST_OPENAI_MODEL",
           "OCC_TEST_CHATGPT_WORKSPACE_ID",
-          "OCC_TEST_CHATGPT_ADMIN_KEY_PATH",
-          "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
-          "OCC_TEST_KUBERNETES_AGENT_IMAGE"
+          "OCC_TEST_CHATGPT_ADMIN_KEY_PATH"
         ],
-        "immutableEnvImages": [
+        "immutableOptionalEnvImages": [
           "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
           "OCC_TEST_KUBERNETES_AGENT_IMAGE"
         ],
