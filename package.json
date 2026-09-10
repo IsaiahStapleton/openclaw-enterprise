@@ -40,11 +40,11 @@
   },
   "devDependencies": {
     "@types/node": "26.4.1",
-    "@types/pg": "8.21.0",
+    "@types/pg": "8.23.1",
     "drizzle-kit": "0.31.10",
     "pg": "8.23.0",
     "playwright": "1.62.1",
-    "prettier": "3.9.4",
+    "prettier": "3.9.6",
     "typescript": "7.0.2"
   }
 }
