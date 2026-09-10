@@ -1,14 +1,14 @@
 # Concepts
 
-Use these concepts to understand what you configure and deploy in OpenClaw Enterprise.
+Use these concepts to understand what you configure and deploy in **OpenClaw Enterprise (OCE)**.
 
 ## Control and data planes
 
 ### Control plane
 
-The **control plane** configures and manages Agent deployments.
-**OpenClaw Control Center (OCC)** provides this plane: its API authorizes resource
-changes, and its worker uses Drivers to provision and update workloads asynchronously.
+**OpenClaw Control Plane (OCC)** configures and manages Agent deployments.
+Its API authorizes resource changes, and its worker uses Drivers to provision
+and update workloads asynchronously.
 
 ### Data plane
 

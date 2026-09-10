@@ -2,8 +2,8 @@
 
 <img src="docs/assets/lobster-mech-transparent.png" alt="Comic-style lobster in a mech suit" width="200" />
 
-The open [control plane](docs/guides/concepts.md#control-plane-and-tenancy) for
-deploying and managing [Agents](docs/guides/concepts.md#agents-and-revisions).
+OpenClaw Enterprise (OCE) includes the [OpenClaw Control Plane (OCC)](docs/guides/concepts.md#control-plane)
+for deploying and managing [Agents](docs/guides/concepts.md#agents-and-revisions).
 
 ## Getting Started
 

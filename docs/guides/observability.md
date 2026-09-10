@@ -1,6 +1,6 @@
 # Configure platform observability
 
-Configure and verify operational log export for OpenClaw Control Center (OCC),
+Configure and verify operational log export for OpenClaw Control Plane (OCC),
 managed gateways, and Codex workloads. Run commands from the repository root.
 
 | Signal                                     | Available path                                                                                      |

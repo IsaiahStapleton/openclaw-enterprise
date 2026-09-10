@@ -21,6 +21,13 @@ The authoritative architecture is the repository's
 [platform design](docs/design.md).
 Do not create a competing architecture specification in this checkout.
 
+## Product terminology
+
+- **OCE** means **OpenClaw Enterprise**, the product.
+- **OCC** means **OpenClaw Control Plane**, its control plane.
+
+Use these expansions consistently in documentation and interface labels.
+
 ## User-facing documentation
 
 Use the [documentation map](docs/README.md) and keep these ownership boundaries:

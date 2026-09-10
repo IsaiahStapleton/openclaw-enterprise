@@ -1,6 +1,6 @@
 # Configuration
 
-OpenClaw Control Center (OCC) stores reusable Agent configuration as
+OpenClaw Control Plane (OCC) stores reusable Agent configuration as
 Namespace-scoped Configuration resources. Each resource explicitly identifies
 its consumer with the required, immutable `kind: "agent"`. Its `values` is the
 actual nested OpenClaw configuration document, including native OpenClaw

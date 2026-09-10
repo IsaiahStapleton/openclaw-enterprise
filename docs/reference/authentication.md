@@ -1,6 +1,6 @@
 # Authentication
 
-OpenClaw Control Center (OCC) authenticates human controller API clients with
+OpenClaw Control Plane (OCC) authenticates human controller API clients with
 user sessions established through email/password sign-in. Programmatic
 non-Agent automation authenticates with service API keys. Better Auth owns
 password verification, revocable session cookies, and hashed API-key storage.

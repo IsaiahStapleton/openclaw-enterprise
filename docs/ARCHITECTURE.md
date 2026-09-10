@@ -1,6 +1,6 @@
 # OpenClaw Enterprise architecture
 
-OpenClaw Control Center (OCC) stores desired Agent state and runs a worker that
+OpenClaw Control Plane (OCC) stores desired Agent state and runs a worker that
 turns it into workloads through selected Drivers. This page describes the current
 implementation; the [platform design](design.md) defines the authoritative target,
 including capabilities that have not shipped.

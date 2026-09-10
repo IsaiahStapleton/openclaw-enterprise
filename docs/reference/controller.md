@@ -2,7 +2,7 @@
 
 The controller worker advances Namespaces from `provisioning` to `ready`,
 finishes deleting empty Namespaces, and prepares and activates admitted Agent
-revisions. It runs separately from the OpenClaw Control Center
+revisions. It runs separately from the OpenClaw Control Plane
 (OCC) HTTP API, polls durable PostgreSQL work, and calls its selected Compute
 Driver. The supported development default is the bundled Docker Compute
 Driver, which creates one Docker network per Namespace and starts real

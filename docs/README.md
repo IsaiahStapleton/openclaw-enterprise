@@ -1,6 +1,6 @@
 # OpenClaw Enterprise
 
-Deploy and manage Agents through OpenClaw Control Center (OCC).
+Deploy and manage Agents through OpenClaw Control Plane (OCC).
 Start locally, install a production control plane, or look up supported behavior.
 
 ## Start and deploy

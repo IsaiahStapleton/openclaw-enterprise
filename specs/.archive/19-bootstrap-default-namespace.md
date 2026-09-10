@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01
 **Status:** Completed — implemented and locally verified in PR #11; merge and deployment are outside this task.
-**Owner:** OpenClaw Control Center
+**Owner:** OpenClaw Control Plane
 
 ## Problem and Decision
 
