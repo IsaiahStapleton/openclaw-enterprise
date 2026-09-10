@@ -14,8 +14,9 @@ node scripts/ci/run-tests.mjs audit
 Both workflows reuse the [run-ci-lane action](../../.github/actions/run-ci-lane/action.yml) for setup, tests and cleanup; each job retains its own environment and credentials.
 
 The `checks-baseline` lane runs `pnpm docs:check`: pages above 1,500 visible words
-are flagged for review, pages above 2,500 fail, and the generated API, site build,
-navigation, and links must pass. Run `pnpm docs:check-length` for the word-count
+are flagged for review and pages above 2,500 fail, except the approved single-page
+[API reference](../reference/api.md). The generated API, site build, navigation,
+and links must pass. Run `pnpm docs:check-length` for the word-count
 check alone.
 
 The PR workflow runs exactly five lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, and logging collector. Full Integration runs only through manual dispatch from `main`, using that immutable commit. Environment gates apply only to lanes that declare an environment; `helper-timeout` and standalone `logging-collector` declare none. The ChatGPT `provider-account` lane keeps its main-only credential environment without per-run approval. Other model, routing, Slack, OpenShell, and additional OpenTelemetry lanes require separately approved environments. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.

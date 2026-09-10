@@ -128,6 +128,11 @@ export function checkMarkdownWordCounts({
 } = {}) {
   const md = createDocsMarkdown();
   const markdownFiles = collectMarkdownFiles({ root, files });
+  // The approved exception belongs to this file, not aliases pointing elsewhere.
+  const apiReference = path.join(
+    fs.realpathSync.native(path.resolve(root)),
+    "docs/reference/api.md",
+  );
   const rows = markdownFiles.map((file) => {
     const markdown = fs.readFileSync(file.absolutePath, "utf8");
     const counts = countMarkdownWords(markdown, {
@@ -135,15 +140,22 @@ export function checkMarkdownWordCounts({
       sourceFile: file.absolutePath,
       root: path.dirname(file.absolutePath),
     });
+    const isApiReference = file.realPath === apiReference;
     return {
       ...file,
       ...counts,
+      path: isApiReference ? "docs/reference/api.md" : file.path,
+      aliases: isApiReference
+        ? [file.path, ...file.aliases].filter((alias) => alias !== "docs/reference/api.md")
+        : file.aliases,
       lineCount: markdown.split("\n").length,
+      lengthException: isApiReference ? "User-approved single-page API reference" : undefined,
     };
   });
-  const violations = rows.filter((row) => row.totalWords > maxWords);
+  const exceptions = rows.filter((row) => row.lengthException);
+  const violations = rows.filter((row) => !row.lengthException && row.totalWords > maxWords);
   const reviewPages = rows.filter(
-    (row) => row.totalWords > reviewWords && row.totalWords <= maxWords,
+    (row) => !row.lengthException && row.totalWords > reviewWords && row.totalWords <= maxWords,
   );
   return {
     maxWords,
@@ -151,6 +163,7 @@ export function checkMarkdownWordCounts({
     fileCount: rows.length,
     rows,
     reviewPages,
+    exceptions,
     violations,
     ok: violations.length === 0,
   };
@@ -160,6 +173,11 @@ export function formatWordCountReport(result) {
   const lines = [
     `Checked ${result.fileCount} Markdown files; hard limit ${result.maxWords} words; review threshold ${result.reviewWords} words.`,
   ];
+  for (const row of result.exceptions) {
+    lines.push(
+      `- ${row.path}: ${row.totalWords} words (approved length exception: ${row.lengthException}).`,
+    );
+  }
   if (result.reviewPages.length) {
     lines.push(
       `${result.reviewPages.length} Markdown file${
@@ -177,7 +195,11 @@ export function formatWordCountReport(result) {
   }
 
   if (!result.violations.length) {
-    lines.push(`No Markdown files exceed the ${result.maxWords}-word hard limit.`);
+    lines.push(
+      result.exceptions.length
+        ? `No Markdown files without an approved exception exceed the ${result.maxWords}-word hard limit.`
+        : `No Markdown files exceed the ${result.maxWords}-word hard limit.`,
+    );
     return lines.join("\n");
   }
 
@@ -246,9 +268,11 @@ export function runWordCountCli(argv = process.argv.slice(2)) {
             codeWords: row.codeWords,
             totalWords: row.totalWords,
             lineCount: row.lineCount,
+            lengthException: row.lengthException,
             sections: row.sections,
           })),
           reviewPages: result.reviewPages.map((row) => row.path),
+          exceptions: result.exceptions.map((row) => row.path),
           violations: result.violations.map((row) => row.path),
         },
         null,

@@ -103,7 +103,7 @@ another write.
 
 See [gateway routing](gateway-routing.md) for transport configuration and
 [workspace-file setup](../guides/deploy/workspace-routing.md#agent-workspace-files) to enable
-access, the [HTTP API](api/agents-workspace.md#get-namespacesnamespaceidagentsagentidworkspacefilesname)
+access, the [HTTP API](api.md#get-namespacesnamespaceidagentsagentidworkspacefilesname)
 for request and response schemas, and the [execution flow](../flows/workspace-files.md)
 for implementation details.
 

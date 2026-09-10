@@ -67,7 +67,13 @@ through their generator. Preserve historical decisions, statuses, and Manual Not
 
 Exceeding 2,500 words requires **no logical destination for the excess content**
 and **explicit human approval**. Record the approved scope and reason before
-adding a narrow checker allowance. No exceptions are currently approved.
+adding a narrow checker allowance.
+
+Approved exception: `docs/reference/api.md` may exceed the length thresholds.
+The user approved keeping the complete generated HTTP API reference in one page
+for browsing and search. Keep it generated from the OpenAPI contract; the checker
+reports its word count without requiring a split. This exception covers no other
+page.
 
 ## Documentation editing
 
@@ -212,7 +218,7 @@ not verify shared-cluster admission guardrails.
 - Format active workspace changes with `pnpm format:fix` and verify them with
   `pnpm format:check` when an installed dependency graph matches the current
   manifests. These checks include authored `docs/**/*.md`; the generated
-  `docs/reference/api.md` and its generated child pages are excluded and verified by `pnpm openapi:check`.
+  `docs/reference/api.md` is excluded and verified by `pnpm openapi:check`.
   Never reconcile or install dependencies as a side effect of agent
   verification; use dependency-independent Node tests if manifests changed.
 - Check root workspace isolation with `pnpm check:workspace`.

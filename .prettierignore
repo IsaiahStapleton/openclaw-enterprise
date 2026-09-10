@@ -4,4 +4,3 @@ node_modules/
 **/dist/
 pnpm-lock.yaml
 docs/reference/api.md
-docs/reference/api/

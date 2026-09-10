@@ -40,8 +40,9 @@ Markdown links in full-line comments under `deploy/examples/` (`.yaml` and
 `word-count.mjs` checks every tracked or nonignored Markdown file returned by
 Git, including root documentation, specs, generated reference, and new author
 drafts. It reports pages above the 1,500-word review threshold and fails pages
-above the 2,500-word hard limit. Passing `--max <words>` changes the hard limit
-for that run. It counts visible prose, headings, lists, tables, and fenced
+above the 2,500-word hard limit. The approved single-page API reference exception
+covers only `docs/reference/api.md`; its word count and exception are still
+reported. Passing `--max <words>` changes the hard limit for other pages. It counts visible prose, headings, lists, tables, and fenced
 examples, while excluding frontmatter, HTML comments, Markdown syntax, and link
 destinations. Symlinks resolve to one real file so aliases cannot duplicate
 counts or bypass the limit.

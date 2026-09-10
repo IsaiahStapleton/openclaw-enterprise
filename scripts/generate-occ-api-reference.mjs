@@ -7,8 +7,6 @@ const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const documentPath = new URL("../packages/contracts/openapi/occ-api.openapi.json", import.meta.url);
 const referenceDirectoryPath = new URL("../docs/reference/api/", import.meta.url);
 
-export const API_REFERENCE_WORD_LIMIT = 2500;
-
 function slugifySegment(value) {
   return (
     String(value)
@@ -124,6 +122,7 @@ function schemaTable(schema, document) {
 }
 
 function operationReference(path, method, operation, document, { headingLevel = 2 } = {}) {
+  const childHeading = "#".repeat(Math.min(headingLevel + 1, 6));
   const sections = [
     `${"#".repeat(headingLevel)} \`${method.toUpperCase()} ${path}\``,
     `<span id="${operationAnchor(path, method)}"></span>`,
@@ -154,7 +153,7 @@ function operationReference(path, method, operation, document, { headingLevel = 
 
   if (operation.parameters?.length) {
     sections.push(
-      "## Parameters",
+      `${childHeading} Parameters`,
       [
         "| Name | In | Type | Required | Constraints |",
         "| --- | --- | --- | --- | --- |",
@@ -174,7 +173,7 @@ function operationReference(path, method, operation, document, { headingLevel = 
 
   if (operation.requestBody) {
     sections.push(
-      "## Request body",
+      `${childHeading} Request body`,
       `**Required:** ${operation.requestBody.required ? "Yes" : "No"}`,
     );
 
@@ -184,7 +183,7 @@ function operationReference(path, method, operation, document, { headingLevel = 
   }
 
   sections.push(
-    "## Responses",
+    `${childHeading} Responses`,
     [
       "| Status | Meaning |",
       "| --- | --- |",
@@ -209,86 +208,12 @@ function operationReference(path, method, operation, document, { headingLevel = 
   return sections.join("\n\n");
 }
 
-const pageDefinitions = [
-  {
-    title: "Authentication",
-    slug: "authentication",
-    operationIds: [
-      "createAuthAccount",
-      "createServiceKey",
-      "revokeServiceKey",
-      "getAuthSession",
-      "signInEmail",
-      "signOut",
-    ],
-  },
-  {
-    title: "Platform",
-    slug: "platform",
-    operationIds: ["getInstallation", "bootstrapInstallation", "listProviders"],
-  },
-  {
-    title: "Namespaces",
-    slug: "namespaces",
-    operationIds: ["listNamespaces", "createNamespace", "deleteNamespace", "getNamespace"],
-  },
-  {
-    title: "Agents",
-    slug: "agents",
-    operationIds: ["listAgents", "createAgent", "getAgent", "updateAgent"],
-  },
-  { title: "Agent deployment", slug: "agents-deployment", operationIds: ["deployAgent"] },
-  {
-    title: "Agent runtime credentials",
-    slug: "agents-runtime-credentials",
-    operationIds: ["getAgentRuntimeCredentials", "provisionAgentRuntimeCredentials"],
-  },
-  {
-    title: "Agent workspace files",
-    slug: "agents-workspace",
-    operationIds: ["getAgentWorkspaceFile", "putAgentWorkspaceFile"],
-  },
-  {
-    title: "Agent revisions",
-    slug: "agent-revisions",
-    operationIds: ["listAgentRevisions", "getAgentRevision"],
-  },
-  {
-    title: "Configurations",
-    slug: "configurations",
-    operationIds: [
-      "createConfiguration",
-      "deleteConfiguration",
-      "getConfiguration",
-      "updateConfiguration",
-    ],
-  },
-  {
-    title: "Secrets",
-    slug: "secrets",
-    operationIds: ["createSecret", "deleteSecret", "getSecret", "updateSecret"],
-  },
-  {
-    title: "Service accounts",
-    slug: "service-accounts",
-    operationIds: [
-      "listServiceAccounts",
-      "createServiceAccount",
-      "deleteServiceAccount",
-      "getServiceAccount",
-      "updateServiceAccountCredential",
-      "createServiceAccountCredential",
-    ],
-  },
-];
-
 function operationRows(operations) {
   return [
     "| Operation | Summary |",
     "| --- | --- |",
-    ...operations.map(({ anchor, method, operation, pagePath, path }) => {
-      const href = `${pagePath.replace("docs/reference/", "")}#${anchor}`;
-      return `| <span id="${anchor}"></span>[\`${method.toUpperCase()} ${path}\`](${href}) | ${operation.summary ?? "No summary."} |`;
+    ...operations.map(({ anchor, method, operation, path }) => {
+      return `| [\`${method.toUpperCase()} ${path}\`](#${anchor}) | ${operation.summary ?? "No summary."} |`;
     }),
   ].join("\n");
 }
@@ -324,7 +249,7 @@ function introduction(document) {
       "This reference is generated from the",
       "[checked-in OpenAPI contract](../../packages/contracts/openapi/occ-api.openapi.json).",
       "Run `pnpm openapi:generate` after changing an API route or schema;",
-      "`pnpm openapi:check` verifies the generated contract and API reference pages.",
+      "`pnpm openapi:check` verifies the generated contract and API reference.",
     ].join("\n"),
     [
       "The exported contract comes from the development-enabled OCC app, which is",
@@ -349,37 +274,31 @@ function operationEntries(document) {
       operation,
       operationId: operation.operationId,
       path,
+      tag: operation.tags?.[0] ?? "Untagged",
     })),
   );
 }
 
-function referencePages(document) {
-  const entries = operationEntries(document);
-  const byOperationId = new Map(entries.map((entry) => [entry.operationId, entry]));
-  const assigned = new Set();
-  const pages = pageDefinitions.map((definition) => {
-    const pagePath = `docs/reference/api/${definition.slug}.md`;
-    const operations = definition.operationIds.map((operationId) => {
-      const entry = byOperationId.get(operationId);
-      if (!entry)
-        throw new Error(`OpenAPI operation ${operationId} is missing from the generated contract.`);
-      assigned.add(operationId);
-      return { ...entry, pagePath };
-    });
-    return { ...definition, anchor: tagAnchor(definition.title), pagePath, operations };
-  });
-
-  const unassigned = entries.filter((entry) => !assigned.has(entry.operationId));
-  if (unassigned.length) {
-    throw new Error(
-      `OpenAPI operations need API reference page assignments: ${unassigned.map((entry) => entry.operationId).join(", ")}.`,
-    );
+function referenceGroups(document) {
+  const groups = [];
+  const byTag = new Map();
+  for (const entry of operationEntries(document)) {
+    let group = byTag.get(entry.tag);
+    if (!group) {
+      group = {
+        title: entry.tag,
+        anchor: tagAnchor(entry.tag),
+        operations: [],
+      };
+      byTag.set(entry.tag, group);
+      groups.push(group);
+    }
+    group.operations.push(entry);
   }
-
-  return pages;
+  return groups;
 }
 
-function indexPage(document, pages) {
+function referencePage(document, groups) {
   const sections = [
     `# ${document.info.title} reference`,
     generatedComment(),
@@ -403,17 +322,26 @@ function indexPage(document, pages) {
     [
       "| Resource | Operations |",
       "| --- | --- |",
-      ...pages.map((page) => {
+      ...groups.map((group) => {
         const operations =
-          page.operations.length === 1 ? "1 operation" : `${page.operations.length} operations`;
-        return `| [${page.title}](api/${page.slug}.md#${page.anchor}) | ${operations} |`;
+          group.operations.length === 1 ? "1 operation" : `${group.operations.length} operations`;
+        return `| [${group.title}](#${group.anchor}) | ${operations} |`;
       }),
     ].join("\n"),
   );
 
   sections.push("## Operations");
-  for (const page of pages) {
-    sections.push(`### ${page.title}`, operationRows(page.operations));
+  for (const group of groups) {
+    sections.push(
+      `<span id="${group.anchor}"></span>`,
+      `### ${group.title}`,
+      operationRows(group.operations),
+      ...group.operations.map((entry) =>
+        operationReference(entry.path, entry.method, entry.operation, document, {
+          headingLevel: 4,
+        }),
+      ),
+    );
   }
 
   const schemas = Object.entries(document.components?.schemas ?? {});
@@ -435,57 +363,15 @@ function indexPage(document, pages) {
   return `${sections.join("\n\n")}\n`;
 }
 
-function apiPage(page, document) {
-  return (
-    [
-      `# ${page.title} API operations`,
-      generatedComment(),
-      `<span id="${page.anchor}"></span>`,
-      `This generated page documents ${page.title.toLowerCase()} API operations. Use the [API index](../api.md) for the full operation list.`,
-      ...page.operations.map((entry) =>
-        operationReference(entry.path, entry.method, entry.operation, document),
-      ),
-      "## Related",
-      "- [API index](../api.md)",
-    ].join("\n\n") + "\n"
-  );
-}
-
-export function estimateReferenceWords(markdown) {
-  const text = markdown.replace(/<!--[^]*?-->/g, " ").replace(/<[^>]*>/g, " ");
-  return text.match(/[\p{L}\p{N}]+(?:[._:/{}-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
-}
-
-export function validateApiReferenceOutputs(outputs) {
-  const oversized = outputs
-    .map((output) => ({ ...output, words: estimateReferenceWords(output.content) }))
-    .filter((output) => output.words > API_REFERENCE_WORD_LIMIT);
-
-  if (oversized.length) {
-    const details = oversized
-      .map((output) => `${output.path} has ${output.words} words`)
-      .join("; ");
-    throw new Error(
-      `Generated API reference pages must stay at or below ${API_REFERENCE_WORD_LIMIT} words: ${details}.`,
-    );
-  }
-}
-
 export function generateApiReferenceOutputs(document) {
-  const pages = referencePages(document);
+  const groups = referenceGroups(document);
   const outputs = [
     {
-      label: "API reference index",
+      label: "API reference",
       path: "docs/reference/api.md",
-      content: indexPage(document, pages),
+      content: referencePage(document, groups),
     },
-    ...pages.map((page) => ({
-      label: `${page.title} API reference`,
-      path: page.pagePath,
-      content: apiPage(page, document),
-    })),
   ];
-  validateApiReferenceOutputs(outputs);
   return outputs;
 }
 

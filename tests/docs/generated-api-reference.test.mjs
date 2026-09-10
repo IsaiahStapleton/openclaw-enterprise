@@ -2,61 +2,56 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { generateApiReferenceOutputs } from "../../scripts/generate-occ-api-reference.mjs";
-import { DEFAULT_MAX_WORDS, countMarkdownWords } from "../../scripts/docs-site/word-count.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
-const docsRoot = fileURLToPath(new URL("../../docs/", import.meta.url));
 const contractPath = fileURLToPath(
   new URL("../../packages/contracts/openapi/occ-api.openapi.json", import.meta.url),
 );
 
-test("generated API reference is split into bounded index, resource, and topic pages", async () => {
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+test("generated API reference stays on the approved single page", async () => {
   const document = JSON.parse(await readFile(contractPath, "utf8"));
   const outputs = generateApiReferenceOutputs(document);
-  const paths = new Set(outputs.map((output) => output.path));
 
-  assert.ok(paths.has("docs/reference/api.md"));
-  assert.ok(paths.has("docs/reference/api/agents.md"));
-  assert.ok(paths.has("docs/reference/api/agents-workspace.md"));
-  assert.ok(paths.has("docs/reference/api/agents-deployment.md"));
+  assert.deepEqual(
+    outputs.map((output) => output.path),
+    ["docs/reference/api.md"],
+  );
 
-  for (const output of outputs) {
-    const counts = countMarkdownWords(output.content, {
-      sourceFile: join(repositoryRoot, output.path),
-      root: docsRoot,
-    });
-    assert.ok(
-      counts.totalWords <= DEFAULT_MAX_WORDS,
-      `${output.path} has ${counts.totalWords} words`,
-    );
+  const page = outputs[0].content;
+  assert.match(page, /\| \[Agents\]\(#agents\) \| 9 operations \|/);
+  assert.match(page, /\| \[Providers\]\(#providers\) \| 1 operation \|/);
+  assert.match(
+    page,
+    /\[`GET \/namespaces\/\{namespaceId\}\/agents\/\{agentId\}\/workspace\/files\/\{name\}`\]\(#get-namespacesnamespaceidagentsagentidworkspacefilesname\)/,
+  );
+  assert.match(
+    page,
+    /^#### `GET \/namespaces\/\{namespaceId\}\/agents\/\{agentId\}\/workspace\/files\/\{name\}`/m,
+  );
+  assert.match(
+    page,
+    /<span id="get-namespacesnamespaceidagentsagentidworkspacefilesname"><\/span>/,
+  );
+  assert.doesNotMatch(page, /api\/agents-workspace\.md/);
+
+  const operationIds = Object.values(document.paths)
+    .flatMap((operations) => Object.values(operations))
+    .map((operation) => operation.operationId);
+  for (const operationId of operationIds) {
+    const matches =
+      page.match(new RegExp(`\\*\\*Operation ID:\\*\\* \`${escapeRegExp(operationId)}\``, "g")) ??
+      [];
+    assert.equal(matches.length, 1, `${operationId} appears ${matches.length} times`);
   }
-
-  const index = outputs.find((output) => output.path === "docs/reference/api.md").content;
-  assert.match(
-    index,
-    /<span id="get-namespacesnamespaceidagentsagentidworkspacefilesname"><\/span>/,
-  );
-  assert.match(
-    index,
-    /api\/agents-workspace\.md#get-namespacesnamespaceidagentsagentidworkspacefilesname/,
-  );
-
-  const operation = outputs.find(
-    (output) => output.path === "docs/reference/api/agents-workspace.md",
-  ).content;
-  assert.match(
-    operation,
-    /^## `GET \/namespaces\/\{namespaceId\}\/agents\/\{agentId\}\/workspace\/files\/\{name\}`/m,
-  );
-  assert.match(
-    operation,
-    /<span id="get-namespacesnamespaceidagentsagentidworkspacefilesname"><\/span>/,
-  );
 });
 
 test("OpenAPI check rejects unexpected generated API child pages in an isolated CLI fixture", async (t) => {
@@ -85,10 +80,10 @@ test("OpenAPI check rejects unexpected generated API child pages in an isolated 
   });
   assert.equal(generateResult.status, 0, generateResult.stderr + generateResult.stdout);
 
+  await mkdir(join(fixture, "docs/reference/api"), { recursive: true });
   await writeFile(
     join(fixture, "docs/reference/api/unexpected-ci-check.md"),
     "# Unexpected API page\n",
-    "utf8",
   );
 
   const result = spawnSync(process.execPath, ["scripts/generate-occ-openapi.mjs", "--check"], {

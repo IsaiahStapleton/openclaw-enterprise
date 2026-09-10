@@ -82,13 +82,64 @@ identities and an Agent-owned shared workspace. See
 
 ### Agent provisioning sequence
 
-1. The API admits a Namespace and queues infrastructure provisioning.
-2. The worker claims the work, reauthorizes the original operation, and asks
-   Compute to prepare the backing infrastructure.
-3. After the Namespace is ready, creating an Agent records its definition.
-   Deploying admits an immutable AgentRevision and queues execution work.
-4. The worker reauthorizes deployment and referenced resources, then asks Compute
-   to prepare the revision, activate it, and retire the prior revision.
+Agent creation records a definition; deployment admits an immutable
+AgentRevision for the worker to provision asynchronously. The sequence below
+shows successful provisioning and activation.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API as OCC API
+    participant IAM as IAMDriver
+    participant OCC as OpenClawController
+    participant DB as PostgreSQL state
+    participant Worker
+    participant Compute as ComputeDriver
+    participant Runtime
+
+    Client->>API: Create Namespace
+    API->>API: Authenticate caller
+    API->>IAM: Authorize Namespace creation
+    IAM-->>API: Allowed with evidence
+    API->>OCC: Create Namespace in provisioning
+    OCC->>DB: Commit Namespace, audit, and work
+    API-->>Client: 201 Namespace
+    Worker->>DB: Claim Namespace work
+    Worker->>IAM: Reauthorize original actor
+    Worker->>Compute: ensureNamespace(namespace)
+    Compute->>Runtime: Prepare backing network or namespace
+    Worker->>DB: Commit Namespace readiness, audit, and completion
+
+    Client->>API: Create Configuration and Agent
+    API->>IAM: Authorize exact resources
+    API->>OCC: Record resource definitions
+    OCC->>DB: Commit resource state and audit
+    API-->>Client: Created resources, no Agent runtime yet
+
+    Client->>API: Deploy Agent
+    API->>IAM: Authorize deployment and referenced resources
+    API->>OCC: Admit immutable AgentRevision
+    OCC->>DB: Commit revision, audit, and work
+    API-->>Client: 202 AgentRevision
+    Worker->>DB: Claim revision work
+    Worker->>IAM: Reauthorize deployment and references
+    Worker->>Compute: prepareRevision(revision)
+    alt dedicated Codex
+        Compute->>Runtime: Prepare Agent gateway and separate Codex Harness
+    else embedded OpenClaw
+        Compute->>Runtime: Prepare combined gateway and Harness
+    end
+    Compute-->>Worker: Revision ready for activation
+    opt Driver activates before commit
+        Worker->>Compute: Activate prepared revision
+    end
+    Worker->>DB: Commit active revision under the live claim
+    opt Driver activates after commit
+        Worker->>Compute: Activate committed revision
+    end
+    Worker->>Compute: Retire prior revision when present
+    Worker->>DB: Commit activation audit and work completion
+```
 
 Editing a draft does not change the running revision. Admission alone does not
 prove runtime readiness. The [controller reference](reference/controller.md)

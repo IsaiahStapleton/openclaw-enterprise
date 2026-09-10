@@ -171,3 +171,53 @@ test("word-count CLI checks tracked and nonignored Markdown once per real file",
     false,
   );
 });
+
+test("word-count CLI reports the approved API exception without exempting other pages", async (t) => {
+  const directory = await fixture(t);
+  await mkdir(join(directory, "docs/reference/api"), { recursive: true });
+  await writeFile(join(directory, "docs/reference/api.md"), words(3000));
+
+  const exempt = readJson(runWordCount(directory, ["--json"]));
+  assert.deepEqual(exempt.exceptions, ["docs/reference/api.md"]);
+  assert.deepEqual(exempt.violations, []);
+  assert.deepEqual(exempt.reviewPages, []);
+  assert.equal(exempt.rows[0].totalWords, 3000);
+  assert.match(exempt.rows[0].lengthException, /single-page API reference/);
+  const report = runWordCount(directory);
+  assert.equal(report.status, 0, report.stderr || report.stdout);
+  assert.match(report.stdout, /docs\/reference\/api\.md: 3000 words/);
+  assert.match(report.stdout, /approved length exception/i);
+
+  // Neither the API basename nor its former child directory extends the exception.
+  await writeFile(join(directory, "api.md"), words(2501));
+  await writeFile(join(directory, "docs/reference/api/agents.md"), words(2501));
+  const rejected = runWordCount(directory, ["--json"]);
+  assert.equal(rejected.status, 1);
+  assert.deepEqual(readJsonOutput(rejected).violations, ["api.md", "docs/reference/api/agents.md"]);
+});
+
+test("word-count CLI does not exempt another file through an API path symlink", async (t) => {
+  const directory = await fixture(t);
+  await mkdir(join(directory, "docs/reference"), { recursive: true });
+  await writeFile(join(directory, "guide.md"), words(2501));
+  await symlink("../../guide.md", join(directory, "docs/reference/api.md"));
+
+  const result = runWordCount(directory, ["--json"]);
+  assert.equal(result.status, 1);
+  const json = readJsonOutput(result);
+  assert.deepEqual(json.exceptions, []);
+  assert.equal(json.violations.length, 1);
+});
+
+test("word-count CLI names the canonical API exception when it has an alias", async (t) => {
+  const directory = await fixture(t);
+  await mkdir(join(directory, "docs/reference"), { recursive: true });
+  await writeFile(join(directory, "docs/reference/api.md"), words(3000));
+  await symlink("docs/reference/api.md", join(directory, "api.md"));
+
+  const json = readJson(runWordCount(directory, ["--json"]));
+  assert.deepEqual(json.exceptions, ["docs/reference/api.md"]);
+  assert.equal(json.rows.length, 1);
+  assert.equal(json.rows[0].path, "docs/reference/api.md");
+  assert.deepEqual(json.rows[0].aliases, ["api.md"]);
+});
