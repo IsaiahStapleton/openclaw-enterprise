@@ -158,7 +158,7 @@ bindings only after the host operation succeeds.
   configuration loading and worker construction. Account-command fixtures do
   not prove OS isolation. These tests also do not prove live SSH, systemd,
   database reconciliation, or model execution.
-- Follow the [disposable real-host procedure](../testing.md#ssh-raw-hosts) for
+- Follow the [disposable real-host procedure](../testing/ssh.md#ssh-raw-hosts) for
   real SSH, systemd, readiness, cutover, persistence, retirement, and deletion.
   The opt-in suite makes no model call; an unselected skip is not host proof.
 - Inspect the exact unit with `systemctl status` and `journalctl -u`, and compare

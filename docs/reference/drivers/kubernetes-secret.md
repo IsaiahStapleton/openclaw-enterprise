@@ -234,13 +234,6 @@ metadata cleanup after OCC verifies the stored backend identity.
   Deploy or restart each consuming Agent and verify the new process or revision
   became active.
 
-## Verification status
-
-The approved implementation must pass API, PostgreSQL, and real Kubernetes
-runtime coverage before this guide is proof of production behavior. Until that
-manager-owned proof is reported, treat route/schema checks and documentation
-formatting as documentation verification only.
-
 ## Related
 
 - [Namespace configuration](../configuration.md)

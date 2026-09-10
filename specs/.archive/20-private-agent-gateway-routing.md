@@ -103,7 +103,7 @@ exact workload selectors; public exposure is not part of this integration.
    [deployment](../../docs/guides/deploy.md#agent-workspace-files),
    [settings](../../docs/reference/settings.md), [Compute](../../docs/reference/drivers/compute.md),
    [Kubernetes Compute](../../docs/reference/drivers/kubernetes-compute.md), and
-   [testing](../../docs/testing.md). Replace the hand-built proxy proof with the
+   [testing](../../docs/testing/README.md). Replace the hand-built proxy proof with the
    actual Envoy Gateway and cert-manager path.
 
 ## Verification

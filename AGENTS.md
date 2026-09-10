@@ -30,6 +30,10 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
 - `docs/reference/` owns living specifications for supported features and Driver
   contracts. State development, production, and verification-only limits explicitly;
   do not promote a proposed capability into current reference before implementation.
+- `docs/testing/` owns contributor test setup, test-only environment variables,
+  fixtures, real-runtime test hooks, and coverage or proof notes. Keep those details
+  out of `docs/reference/`; link to the relevant testing page instead. Supported
+  configuration and operator verification remain in the feature references and guides.
 - `docs/flows/` explains runtime execution through the current source. Link to
   reference for normative behavior and to guides for operator procedures.
 - Keep `docs/guides/` limited to `concepts.md`, `quickstart.md`, and `deploy.md`
@@ -125,8 +129,8 @@ Run all integration tests with `pnpm test:integration`, or target one case with
 `node --test tests/integration/<name>.test.mjs`. Real-runtime coverage uses the
 Docker Compose or Kubernetes integrations with explicitly selected runtime
 images and existing authorized model credentials. Follow the
-[testing guide](docs/testing.md) and
-[test environment settings](docs/reference/settings.md#docker-compose-development-test-environment)
+[testing guide](docs/testing/README.md) and
+[test environment settings](docs/testing/docker.md#docker-compose-development-test-environment)
 for each selected suite. Never substitute a fake runtime or skip a requested
 runtime integration.
 
@@ -134,7 +138,7 @@ For PostgreSQL integration, start the reviewed local database, migrate it with
 the migrator role, and run tests with the less-privileged application role.
 Before enabling production bootstrap coverage, separately prepare its empty
 disposable database using the
-[PostgreSQL test database instructions](docs/reference/settings.md#postgresql-test-environment):
+[PostgreSQL test database instructions](docs/testing/postgresql.md#postgresql-test-environment):
 
 ```sh
 pnpm db:up
@@ -256,7 +260,7 @@ the Codex Agent, which alone receives the model credential.
 `OCC_TEST_SLACK_LIVE=1` enables the separate
 `tests/integration/harness-topology-k3d-slack-real.test.mjs` file. That case posts real Slack messages and waits
 for a gateway-authored reply; follow
-[the Slack testing guide](docs/testing.md#slack) before selecting it.
+[the Slack testing guide](docs/testing/slack.md#slack) before selecting it.
 
 A separate genuine production installation additionally requires the real
 Helm-installed controller and PostgreSQL, tenant-local RoleBindings, a model

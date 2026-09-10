@@ -5,9 +5,9 @@ Sign in, select a Namespace, inspect accessible Agents, Providers, and
 Namespaces, create Agents with editable Configuration JSON and Slack/Teams settings,
 edit channel drafts, provision initial runtime credentials, deploy saved drafts, and read or replace supported live workspace files. Rollback,
 live runtime health, and Agent deletion are unavailable in the console.
-The [operator workflow](../flows/operator-workflow.md) connects the supported
-management API commands and runtime checks, including current lifecycle and
-retention limits. Browser chat is not exposed by this console.
+The [deployment guide](../guides/deploy.md) owns runtime checks and operator
+procedures; the [generated API reference](api.md) owns supported management API
+shapes. Browser chat is not exposed by this console.
 
 ## Start and sign in
 
@@ -160,8 +160,9 @@ explicitly show **Serving status unavailable**, including when a revision is
 selected. There is no observation time, generation, serving revision, failed
 activation, or shutdown outcome in the current Agent API response. The console
 does not infer these from selection or admission. Follow the
-[operator checks](../flows/operator-workflow.md#inspect-selection-and-runtime)
-for the installed runtime.
+[deployment guide](../guides/deploy.md#configure-the-agent-runtime) and
+[Agent deployment reference](agents.md#revisions-and-deployment) for the
+installed runtime.
 
 The Channels tab edits Slack and Microsoft Teams settings on the saved
 Configuration draft. Saving a channel change patches only `values` on the
@@ -189,11 +190,12 @@ supports application ID, tenant ID, require-mention, and a fixed unresolved
 environment reference to `MSTEAMS_APP_PASSWORD`. Both channel integrations
 require dedicated execution and Kubernetes runtime projection. Initial Slack credentials
 can be provisioned in the console; Teams credentials remain operator-provided.
-Only Slack Socket Mode has live proof in the current test guide; Teams also
-requires separately configured Bot Framework ingress. The simple editor may
-reject native channel documents it cannot round-trip, including non-Socket Slack
-settings, non-standard credential references, mixed per-channel mention settings,
-or unsupported plugin shapes. The native Configuration view remains available for inspection; unsupported
+Only Slack Socket Mode has live proof in current
+[Slack testing](../testing/slack.md); Teams also requires separately configured
+Bot Framework ingress. The simple editor may reject native channel documents it
+cannot round-trip, including non-Socket Slack settings, non-standard credential
+references, mixed per-channel mention settings, or unsupported plugin shapes.
+The native Configuration view remains available for inspection; unsupported
 settings require the API or operator workflow.
 
 Agent deletion is unavailable in the current API, so the console cannot delete
@@ -250,5 +252,5 @@ and opens Agents. Unknown console paths show a generic not-found page.
 Static HTML, CSS, and browser modules ship inside the controller image; no
 separate frontend service or build is required. Console fallback does not handle
 API routes or expose controller source files. See the
-[request flow](../flows/platform-console.md) and [test guide](../testing.md) for
-implementation and verification.
+[request flow](../flows/platform-console.md) and
+[local testing](../testing/local.md) for implementation and verification.

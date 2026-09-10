@@ -2,7 +2,7 @@
 
 Configure the OpenClaw Enterprise Docker Compose development stack,
 internal-only production controller, PostgreSQL database, database migrations,
-and integration tests. Development retains local admission and uses PostgreSQL
+and runtime configuration. Development retains local admission and uses PostgreSQL
 plus bundled Docker Compute and filesystem Configuration Drivers by default.
 Production reads Installation settings and selected Driver options from
 trusted startup YAML and requires durable state, the singleton Installation,
@@ -20,7 +20,7 @@ Secrets, dedicated migration credentials, and exact network selectors, see
 [Production Kubernetes deployment](../guides/deploy.md).
 
 For a public Docker-only runtime image recipe used by the quickstart and
-real-runtime tests, see [`deploy/runtime`](../../deploy/runtime/README.md).
+Agent execution, see [`deploy/runtime`](../../deploy/runtime/README.md).
 
 The controller reads environment variables directly from its process. It does
 not automatically load `.env` or [`.env.example`](../../.env.example). Export values
@@ -82,6 +82,9 @@ Kubernetes Compute Driver before workers reconcile revisions, and fails startup
 when paired with SSH or an installed Compute Driver. OpenShell-selected Agents must use
 dedicated Codex execution; embedded OpenClaw remains unsupported for this
 SandboxDriver.
+
+For contributor test variables, fixtures, and commands, see the
+[testing guides](../testing/README.md).
 
 ## Deployment and startup
 
@@ -410,340 +413,6 @@ directory, the `occ` application schema, and
 `drizzle.__drizzle_migrations` as the migration-history table. `strict` and
 `verbose` are enabled. There are no environment overrides for these settings.
 
-### PostgreSQL test environment
-
-| Variable                                       | Required by                                | Behavior                                                                                                                                                                                   |
-| ---------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OCC_TEST_DATABASE_URL`                        | Real PostgreSQL integration tests.         | Must use an initialized application-role database. General PostgreSQL and queue cases are skipped when absent.                                                                             |
-| `OCC_MIGRATION_DATABASE_URL`                   | `db:migrate` setup before tests.           | Uses the separate migrator role for schema and migration-history ownership; the test process should use application-role URLs.                                                             |
-| `OCC_PRODUCTION_WIREUP_DATABASE_URL`           | Production bootstrap integration.          | Uses a separately migrated, disposable, initially empty application-role database; the production bootstrap skips when absent.                                                             |
-| `OCC_BOOTSTRAP_FAILURE_DATABASE_URL`           | Bootstrap race and uncertain-commit tests. | Application-role URL for a migrated, disposable loopback database named `openclaw_failures_*`. The suite resets its tables; skipped when absent.                                           |
-| `OCC_BOOTSTRAP_FAILURE_MIGRATION_DATABASE_URL` | Bootstrap failure fixture setup/reset.     | Optional for the local `occ_app` fixture, which uses `occ_migrator` and its local test password; otherwise required. Must target the same host, port, and database as the application URL. |
-| `OCC_TEST_KUBERNETES_CONFIGURATION`            | Optional live Configuration coverage.      | Set to `1` only when the PostgreSQL integration also has an explicitly configured live Kubernetes Configuration Driver.                                                                    |
-
-The production-bootstrap integration must use a separately migrated,
-disposable database without an existing Installation. Once both required
-databases are ready, run the real-database suite with their application-role
-connections:
-
-```bash
-export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_enterprise
-export OCC_PRODUCTION_WIREUP_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_production_bootstrap
-
-node --test --test-concurrency=1 \
-  tests/integration/postgres-*.test.mjs
-```
-
-The production queue coverage now uses `OCC_TEST_DATABASE_URL` with the other
-PostgreSQL tests. The bootstrap database can be prepared with the Compose
-PostgreSQL service, then migrated with `OCC_MIGRATION_DATABASE_URL` pointed at
-that disposable database. See the
-[PostgreSQL testing guide](../testing.md#postgresql) for the full setup sequence.
-
-The bootstrap integration creates its own exact Installation and administrators;
-do not rerun it against a previous bootstrap database or point it at an
-existing development Installation. Use a dedicated disposable database for any
-other case when existing local platform state must be preserved.
-
-The [bootstrap failure suite](../../tests/integration/postgres-bootstrap-failures.test.mjs)
-requires a separate migrated `openclaw_failures_*` database on loopback. Its
-migration-role fixture installs a temporary delay trigger and resets tables
-between cases; run it without any other process using that database. Both
-initializer modes run with the application role.
-After preparing that disposable database using the existing PostgreSQL setup:
-
-```bash
-OCC_BOOTSTRAP_FAILURE_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_failures_local \
-  node --test tests/integration/postgres-bootstrap-failures.test.mjs
-```
-
-### Production image startup test environment
-
-[`production-image-startup.test.mjs`](../../tests/integration/production-image-startup.test.mjs)
-verifies a locally built production controller image before Helm installation.
-It runs the image with no network, deliberately points it at an unreachable
-database, checks that startup reaches that expected database boundary without
-missing bundled production modules, and verifies that the OpenShell gRPC proto
-asset is present.
-
-| Variable                    | Requirement or default                                      |
-| --------------------------- | ----------------------------------------------------------- |
-| `OCC_TEST_PRODUCTION_IMAGE` | Locally built production controller image tag; unset skips. |
-| `OCC_DOCKER_BIN`            | Optional Docker executable path; defaults to `docker`.      |
-
-This check does not prove PostgreSQL connectivity, Helm rendering, Kubernetes
-reconciliation, runtime image execution, or a model turn.
-
-### Runtime image startup test environment
-
-[`runtime-image-startup.test.mjs`](../../tests/integration/runtime-image-startup.test.mjs)
-verifies a locally built OpenClaw runtime image before Docker Compose or
-Kubernetes execution. It starts task-owned containers with the Docker Compute
-Driver gateway entrypoint, UID `1000:1000`, a read-only root filesystem, and
-tmpfs-backed `/home/node` and `/tmp`. Host Node.js 24+ is required to run the
-test.
-
-| Variable                 | Requirement or default                                 |
-| ------------------------ | ------------------------------------------------------ |
-| `OCC_TEST_RUNTIME_IMAGE` | Locally built OpenClaw runtime image tag; unset skips. |
-| `OCC_DOCKER_BIN`         | Optional Docker executable path; defaults to `docker`. |
-
-This check proves an embedded OpenClaw gateway reaches `/readyz` from a fresh
-runtime home and the bundled Codex plugin can be discovered without missing
-package dependencies. It does not prove Docker Compose orchestration,
-Kubernetes reconciliation, model credentials, or a model turn.
-
-### Docker Compose development test environment
-
-The Docker Compose development integration exercises the supported local stack.
-It requires Docker Engine, a locally available runtime image, PostgreSQL, the
-OCC API, the worker, host Python 3 with PTY support for the TUI helper, and a
-real provider response. Set `OCC_TEST_DOCKER_COMPUTE_REAL=1` or any
-`OCC_DOCKER_*_IMAGE` variable to select the suite; once selected, missing
-Docker, image, bootstrap, worker, Python, or model prerequisites fail instead
-of skipping.
-
-| Variable                       | Requirement or default                                                                  |
-| ------------------------------ | --------------------------------------------------------------------------------------- |
-| `OCC_TEST_DOCKER_COMPUTE_REAL` | Set to `1` to explicitly opt into the real Docker Compute proof.                        |
-| `OCC_DOCKER_GATEWAY_IMAGE`     | Existing production-equivalent OpenClaw gateway image; defaults to the runtime image.   |
-| `OCC_DOCKER_AGENT_IMAGE`       | Existing production-equivalent Codex Agent image; defaults to the runtime image.        |
-| `OCC_DOCKER_RUNTIME_IMAGE`     | Optional shared image fallback for both gateway and Agent.                              |
-| `OPENAI_API_KEY`               | Existing authorized provider credential for real embedded and dedicated model turns.    |
-| `OCC_TEST_OPENAI_MODEL`        | Authorized provider model; defaults to exact API model ID `gpt-5.6-sol`.                |
-| `PYTHON`                       | Optional host Python interpreter for `tests/helpers/tui-pty.py`; defaults to `python3`. |
-
-The selected model must support Codex custom tools as well as the embedded
-OpenClaw path. `gpt-4.1` does not support the dedicated Codex request shape.
-The test generates its own Compose bridge CIDR and Configuration Driver root;
-`OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` and
-`OCC_DEVELOPMENT_CONFIGURATION_ROOT` are not external test inputs.
-The embedded Docker case also proves that a fresh TUI client with an invalid
-gateway token is rejected, then uses one valid TUI process for two same-session
-model-backed replies and exits that client with Ctrl+D while the gateway remains
-ready.
-
-Missing Docker Engine access, runtime images, bootstrap, worker startup, or
-model credentials fails the Compose integration. Missing host Python or PTY
-support fails the TUI helper before that embedded proof can pass. Do not replace
-this path with controller-only shortcuts, a mocked Docker API, or readiness-only
-checks.
-
-### SSH real-host test environment
-
-`node --test tests/integration/ssh-compute-real.test.mjs` is selected only by
-`OCC_TEST_SSH_REAL=1`. Otherwise it explicitly skips and lists its inputs. When
-selected, missing inputs or unavailable hosts fail; there is no fixture fallback.
-
-| Variable                        | Meaning                                                                 |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| `OCC_TEST_SSH_REAL`             | Set to `1` for a disposable Linux systemd/sshd host with real OpenClaw. |
-| `OCC_TEST_SSH_ADDRESS`          | Required host address.                                                  |
-| `OCC_TEST_SSH_PORT`             | Required SSH port, `1`–`65535`.                                         |
-| `OCC_TEST_SSH_USER`             | Required; currently `root`.                                             |
-| `OCC_TEST_SSH_IDENTITY_FILE`    | Required absolute private-key path on the test worker.                  |
-| `OCC_TEST_SSH_KNOWN_HOSTS_FILE` | Required absolute verified known-hosts path on the test worker.         |
-| `OCC_TEST_SSH_NODE_PATH`        | Required absolute Node.js 24 executable path on the host.               |
-| `OCC_TEST_SSH_OPENCLAW_PATH`    | Required absolute OpenClaw entrypoint path on the host.                 |
-| `OCC_TEST_SSH_RUNTIME_USER`     | Required prefix for Driver-managed per-Agent Unix accounts.             |
-| `OCC_TEST_SSH_ROOT`             | Optional host state root, default `/var/lib/openclaw-enterprise`.       |
-| `OCC_TEST_SSH_UNIT_DIRECTORY`   | Optional host unit directory, default `/etc/systemd/system`.            |
-
-The suite uses ports `18800`–`18899`, creates unique Namespace/Agent identities,
-verifies readiness through SSH, cuts over two revisions, checks private Agent
-UID/GID isolation and state persistence, retires the first snapshot, and deletes its Namespace. It requires
-no model credential and proves no model turn. Use the
-[container rig](../testing.md#ssh-raw-hosts) or a disposable host of your own.
-
-### Kubernetes fixture test environment
-
-Real-cluster integration is opt-in for ordinary development and required when
-explicitly requested or validating the production-capable Kubernetes driver for
-release. Set all three Kubernetes variables to enable it; setting only some
-fails rather than silently skipping. The test harness requires a dedicated
-loopback-only k3d context, and all three HTTP fixture cases have been
-verified against a k3d-managed cluster. The driver itself also supports verified
-remote HTTPS API servers and in-cluster ServiceAccount authentication. These
-variables do not configure `server.mjs`, `worker.mjs`, the normal controller, or
-its default Compute Driver.
-
-| Variable                         | Requirement                                                                                        |
-| -------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_KUBERNETES_KUBECONFIG` | Absolute path to the dedicated disposable local-cluster kubeconfig.                                |
-| `OCC_TEST_KUBERNETES_CONTEXT`    | Explicit context whose HTTPS API server is loopback-only with an explicit port.                    |
-| `OCC_TEST_KUBERNETES_IMAGE`      | Locally available fixture image already imported into the selected cluster.                        |
-| `OCC_TEST_DATABASE_URL`          | Required for API-and-worker coverage; must select a dedicated, migrated `openclaw_k8s_*` database. |
-
-Follow the canonical
-[Kubernetes HTTP fixture testing guide](../testing.md#kubernetes-http-fixture)
-for disposable `k3d` setup, fixture image import, and PostgreSQL-backed
-coverage. Kubernetes API-and-worker coverage rejects the ordinary
-`openclaw_enterprise` development database. The real-cluster suite uses an HTTP
-fixture and does not establish a real gateway, authenticated Codex connection,
-or model turn. A separate real-runtime lane below provides model-turn proof.
-
-### Kubernetes real-runtime test environment
-
-[`harness-topology-k3d-real.test.mjs`](../../tests/integration/harness-topology-k3d-real.test.mjs)
-is independently opt-in. Set `OCC_TEST_HARNESS_K3D_REAL=1` or explicitly select
-a real runtime image to enable the ordinary runtime suite. Once selected,
-missing cluster, image, database, credential, or NetworkPolicy prerequisites
-fail instead of skipping. The ordinary suite verifies dedicated Codex, embedded
-OpenClaw with a persisted provider credential, and embedded OpenClaw with the
-Secret API through real Enterprise gateways on an explicitly selected disposable
-k3d cluster. It does not prove Agent workspace-file private routing until
-Compute HTTPRoutes, real Envoy Gateway, cert-manager, OCC, and the native Agent
-runtime are tested together. For dedicated Codex coverage, set `OCC_TEST_OPENAI_MODEL` to an
-authorized model that supports Codex custom tools, such as `gpt-5.1`; the source
-default remains `gpt-4.1`.
-
-| Variable                                    | Requirement or default                                                                                                                                                                                     |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_HARNESS_K3D_REAL`                 | Set to `1` to explicitly opt into the real-runtime Kubernetes suite.                                                                                                                                       |
-| `OCC_TEST_KUBERNETES_KUBECONFIG`            | Absolute path to the dedicated disposable k3d kubeconfig.                                                                                                                                                  |
-| `OCC_TEST_KUBERNETES_CONTEXT`               | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                                                                                                               |
-| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`         | Imported real OpenClaw gateway image pinned with an immutable SHA-256 digest.                                                                                                                              |
-| `OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE`  | Docker-local image ID used only by the Envoy routing host TCP publisher; CI derives it from the prepared gateway source image before k3d import.                                                           |
-| `OCC_TEST_KUBERNETES_AGENT_IMAGE`           | Imported real pinned Codex runtime image with an immutable SHA-256 digest.                                                                                                                                 |
-| `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`         | Optional shared image fallback for both gateway and Agent when it contains both real runtimes.                                                                                                             |
-| `OCC_TEST_KUBERNETES_CODEX_IMAGE`           | Optional legacy fallback for the Agent image when the explicit Agent image is absent.                                                                                                                      |
-| `OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE` | Optional CI-published kubelet Localhost seccomp profile path for dedicated Codex Agents; generated from each selected k3d node's effective `RuntimeDefault` profile and installed only on run-owned nodes. |
-| `OCC_TEST_KUBERNETES_OPENCLAW_VERSION`      | Optional exact OpenClaw version expectation for the selected real gateway image.                                                                                                                           |
-| `OCC_TEST_KUBERNETES_CODEX_VERSION`         | Optional Codex image version expectation; defaults to `0.152.1`.                                                                                                                                           |
-| `OCC_TEST_DATABASE_URL`                     | Migrated disposable loopback database named `openclaw_k8s_*`; the ordinary development database fails.                                                                                                     |
-| `OPENAI_API_KEY`                            | Existing authorized provider credential for real embedded and dedicated model turns.                                                                                                                       |
-| `OCC_TEST_OPENAI_MODEL`                     | Authorized provider model; defaults to `gpt-4.1`.                                                                                                                                                          |
-
-The separate [`harness-topology-k3d-routing-real.test.mjs`](../../tests/integration/harness-topology-k3d-routing-real.test.mjs) requires
-`OCC_TEST_GATEWAY_ROUTING_REAL=1` and the same runtime prerequisites. It also
-requires ready Envoy Gateway and cert-manager controllers, free local port
-443, `OCC_TEST_GATEWAY_CA_CERT_PATH`, `OCC_TEST_GATEWAY_CA_KEY_PATH`, and
-`NODE_EXTRA_CA_CERTS` set before Node starts. The host TCP publisher also
-requires CI-generated `OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE`; do not replace
-it with the k3d-only `OCC_TEST_KUBERNETES_GATEWAY_IMAGE` runtime reference.
-Controller namespace overrides are `OCC_TEST_ENVOY_GATEWAY_NAMESPACE` (default
-`envoy-gateway-system`) and `OCC_TEST_CERT_MANAGER_NAMESPACE` (default
-`cert-manager`). See the
-[focused routing proof](../testing.md#kubernetes-model-turns-and-secrets) for
-the disposable CA and command. The CA private key is test setup only; the
-production OCC API mounts only a public trust bundle.
-
-### Slack test environment
-
-`OCC_TEST_SLACK_LIVE=1` enables
-[`harness-topology-k3d-slack-real.test.mjs`](../../tests/integration/harness-topology-k3d-slack-real.test.mjs).
-Run the ordinary runtime file separately for its coverage. The Slack case uses the same production k3d,
-PostgreSQL, image, and model-turn prerequisites, then posts a real message and
-waits for a gateway-authored reply. It does not delete the Slack messages it
-creates.
-
-| Variable                          | Requirement                                                                                |
-| --------------------------------- | ------------------------------------------------------------------------------------------ |
-| `OCC_TEST_SLACK_LIVE`             | Set to `1` to run the selected live Slack case instead of the ordinary real-runtime cases. |
-| `OCC_TEST_SLACK_PROXY_URL`        | Approved exact literal-IP proxy URL with an explicit port for channel egress.              |
-| `OCC_TEST_SLACK_CHANNEL_ID`       | Shared test channel joined by the gateway bot and the sender bot.                          |
-| `SLACK_APP_TOKEN`                 | Gateway Socket Mode token; must start with `xapp-`.                                        |
-| `SLACK_BOT_TOKEN`                 | Gateway bot token; must start with `xoxb-`.                                                |
-| `OCC_TEST_SLACK_SENDER_BOT_TOKEN` | Distinct sender bot token in the same Slack workspace; must start with `xoxb-`.            |
-
-See the [Slack testing guide](../testing.md#slack) for setup and cleanup
-expectations before selecting the live case.
-
-### OpenShell test environment
-
-[`sandbox-driver-openshell-k3d-real.test.mjs`](../../tests/integration/sandbox-driver-openshell-k3d-real.test.mjs)
-is selected by `OCC_TEST_OPENSHELL_K3D_REAL=1` or by setting any Kubernetes,
-image, database, or OpenShell-specific prerequisite. If any of those variables
-is present while the flag is not `1`, prerequisite validation still fails; use a
-scoped environment file for this suite.
-
-| Variable                              | Requirement or default                                                                                                                              |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_OPENSHELL_K3D_REAL`         | Set to `1` to explicitly opt into the real OpenShell integration.                                                                                   |
-| `OPENAI_API_KEY`                      | Existing authorized provider credential for the required real model turn.                                                                           |
-| `OCC_TEST_OPENAI_MODEL`               | Authorized provider model; defaults to `gpt-5.6-sol`.                                                                                               |
-| `OCC_TEST_KUBERNETES_KUBECONFIG`      | Absolute kubeconfig path for the dedicated disposable k3d cluster.                                                                                  |
-| `OCC_TEST_KUBERNETES_CONTEXT`         | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                                                        |
-| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`   | Imported immutable real OpenClaw gateway image; `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` is accepted as a fallback.                                      |
-| `OCC_TEST_KUBERNETES_AGENT_IMAGE`     | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_CODEX_IMAGE` and runtime image fallbacks are accepted.                                    |
-| `OCC_TEST_DATABASE_URL`               | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                                                                            |
-| `OCC_TEST_OPENSHELL_CLI`              | Official OpenShell CLI binary.                                                                                                                      |
-| `OCC_TEST_OPENSHELL_HELM`             | Helm binary used to install the namespace-scoped OpenShell gateway.                                                                                 |
-| `OCC_TEST_OPENSHELL_HELM_CHART`       | OpenShell Helm chart path or chart archive.                                                                                                         |
-| `OCC_TEST_OPENSHELL_GATEWAY_IMAGE`    | Imported immutable OpenShell gateway image pinned by SHA-256 digest.                                                                                |
-| `OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE` | Imported immutable OpenShell supervisor image pinned by SHA-256 digest.                                                                             |
-| `OCC_TEST_OPENSHELL_CHART_VERSION`    | Optional OpenShell chart version; defaults to `0.0.113`.                                                                                            |
-| `OCC_TEST_OPENSHELL_RUNTIME_CLASS`    | Existing RuntimeClass used by Agent Sandbox Pods; CI creates the selected RuntimeClass, defaulting to `openshell-sandbox`, with the `runc` handler. |
-
-The selected cluster must already expose the Agent Sandbox CRD and a ready Agent
-Sandbox controller. See the
-[OpenShell SandboxDriver testing guide](../testing.md#openshell-sandbox) for
-the required cluster, image, database, RuntimeClass, and chart setup.
-
-### Production TUI Helm test environment
-
-[`production-tui-k3d-real.test.mjs`](../../tests/integration/production-tui-k3d-real.test.mjs)
-is the opt-in end-to-end production TUI proof. It installs the actual Helm
-chart into the selected disposable k3d cluster, starts task-owned PostgreSQL and
-HTTPS operator proxy Pods, provisions a Namespace and embedded OpenClaw Agent
-through the production API, drives the native TUI with a PTY, verifies revision
-cutover, and records nonsecret evidence as it progresses. The test sets
-`agents.defaults.skipBootstrap` to `true` in the disposable demo Agent
-Configuration so fresh-workspace `BOOTSTRAP.md` onboarding does not replace the
-nonce reply; existing workspaces with bootstrap files are unaffected. Missing
-prerequisites fail the selected test instead of skipping.
-
-| Variable                               | Requirement or default                                                                                                  |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_PRODUCTION_TUI_REAL`         | Set to `1` to explicitly opt into the Helm-backed production TUI suite.                                                 |
-| `OCC_TEST_KUBERNETES_KUBECONFIG`       | Absolute path to the dedicated disposable k3d kubeconfig.                                                               |
-| `OCC_TEST_KUBERNETES_CONTEXT`          | Explicit `k3d-*` context with a verified loopback HTTPS Kubernetes API.                                                 |
-| `OCC_TEST_PRODUCTION_CONTROLLER_IMAGE` | Imported immutable controller image reference used by the Helm chart.                                                   |
-| `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`    | Imported immutable runtime image reference used for the embedded OpenClaw gateway.                                      |
-| `OCC_TEST_PRODUCTION_POSTGRES_IMAGE`   | Imported immutable PostgreSQL image reference for the task-owned database Pod.                                          |
-| `OCC_TEST_PRODUCTION_NODE_IMAGE`       | Imported immutable Node image reference for the operator HTTPS proxy and network probes.                                |
-| `OPENAI_API_KEY`                       | Existing authorized provider credential used only by the Agent-owned embedded gateway path.                             |
-| `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-5.1`.                                                                       |
-| `OCC_TEST_PRODUCTION_TUI_KEEP`         | Optional `1` retains the owned Helm release, namespaces, final gateway, `attach.sh`, and `proof.json` rehearsal output. |
-
-Use the production TUI suite only with image references that already exist in
-the selected cluster, including the Node, PostgreSQL, controller, and runtime
-digests. Default cleanup uninstalls the Helm release and deletes only the
-task-owned namespaces. `OCC_TEST_PRODUCTION_TUI_KEEP=1` changes that finalizer
-for operator rehearsal: it keeps the owned setup running, leaves an executable
-`attach.sh` for the final gateway TUI session, and writes `proof.json` with the
-cluster, image, Namespace, Agent, revision, Pod, and nonce-response evidence.
-Do not treat an in-progress run as passing live proof until the test completes.
-
-### ChatGPT service-account integration test environment
-
-[`service-account-driver-real.test.mjs`](../../tests/integration/service-account-driver-real.test.mjs)
-creates an actual ChatGPT service account, issues its credential, deploys the
-associated dedicated Codex Agent, and requires one genuine provider-backed
-model turn. Set `OCC_TEST_CHATGPT_SERVICE_ACCOUNT_REAL=1` to opt in; missing
-prerequisites then fail rather than skip.
-
-| Variable                                | Requirement                                                                              |
-| --------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `OCC_TEST_CHATGPT_SERVICE_ACCOUNT_REAL` | Set to `1` to enable the real provider-backed account and model-turn test.               |
-| `OCC_TEST_CHATGPT_ADMIN_KEY`            | Explicit admin key; takes precedence over the path when set.                             |
-| `OCC_TEST_CHATGPT_ADMIN_KEY_PATH`       | Protected `0600` admin-key file read only when `OCC_TEST_CHATGPT_ADMIN_KEY` is unset.    |
-| `OCC_TEST_CHATGPT_WORKSPACE_ID`         | ChatGPT workspace authorized for account and credential creation.                        |
-| `OCC_TEST_KUBERNETES_KUBECONFIG`        | Absolute kubeconfig path for the dedicated disposable local cluster.                     |
-| `OCC_TEST_KUBERNETES_CONTEXT`           | Explicit `k3d-*` context with a verified loopback HTTPS API.                             |
-| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`     | Imported immutable real OpenClaw gateway image.                                          |
-| `OCC_TEST_KUBERNETES_CODEX_IMAGE`       | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_AGENT_IMAGE` is also accepted. |
-| `OCC_TEST_DATABASE_URL`                 | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                 |
-
-This scenario uses its newly issued access token, not `OPENAI_API_KEY`. Its
-optional `OCC_TEST_OPENAI_MODEL` defaults to `gpt-5.6-sol`; select a model
-available to the issued ChatGPT account's Codex credentials. API-key model
-availability does not establish support for this authentication mode.
-When using the file path, unset `OCC_TEST_CHATGPT_ADMIN_KEY` first so the test
-actually reads the protected file. See the
-[ChatGPT service-account testing guide](../testing.md#chatgpt-service-accounts)
-for the complete setup.
-
 ### Production operational logging collection
 
 `logging.collector` configures the bundled Helm Collector; `enabled` defaults to
@@ -781,14 +450,6 @@ See [chart defaults](../../deploy/helm/openclaw-enterprise/values.yaml) for
 `resources`, `state.sizeLimit`, and `tmp.sizeLimit`. The
 [security reference](security.md#operational-log-collection-boundary) owns the
 credential, runtime-export, and workload isolation boundaries.
-
-### Helm packaging test environment
-
-The checked-in production packaging integration renders the real Helm chart
-and inspects it with an existing `yq` executable. `OCC_HELM_BIN` optionally
-selects an existing Helm executable; otherwise the test resolves `helm` from
-`PATH`. Missing Helm or `yq` skips this packaging check. Rendering does not
-install the chart, reconcile a cluster, or establish a real model turn.
 
 ## Fixed development security settings
 
@@ -976,45 +637,3 @@ to the queue without consuming a failure attempt and remains bounded by
 `OCC_WORKER_CONVERGENCE_TIMEOUT_MS`.
 Retry backoff, queue jitter, claim-race retries, and stale-recovery limits have
 no environment-variable overrides.
-
-## Repository and tooling configuration
-
-The active workspace requires Node.js 24 or newer and pins pnpm `11.15.1` in
-[`package.json`](../../package.json). Repository-wide settings are defined in:
-
-- [`pnpm-workspace.yaml`](../../pnpm-workspace.yaml): one controller application
-  and five platform packages.
-- [`tsconfig.base.json`](../../tsconfig.base.json): strict TypeScript,
-  `NodeNext` modules, ES2022 output, and declaration generation.
-- [`tsconfig.json`](../../tsconfig.json): the six active TypeScript project
-  references.
-- [`.prettierrc.json`](../../.prettierrc.json): a `100`-column print width.
-- [`.githooks/pre-push`](../../.githooks/pre-push): the repository-managed
-  formatting check invoked by a normal Git push. It runs the installed Prettier
-  executable directly without invoking a package manager or installing
-  dependencies, and blocks pushes when Prettier is unavailable.
-
-Dependency installation installs the hook in Git's native hooks directory.
-Run `pnpm hooks:install` to reinstall it. Installation preserves an existing
-`core.hooksPath` setting and refuses to replace an unmanaged pre-push hook.
-The hook checks active source and root files; authored documentation also needs
-the full formatting check below.
-
-The root formatting scripts cover active source files, root Markdown, and
-authored `docs/**/*.md`. The generated API reference is excluded and verified by
-`pnpm openapi:check`. Run the complete authored-file check with:
-
-```bash
-pnpm format:check
-git diff --check
-```
-
-After changing API routes or schemas, regenerate the API artifacts with
-`pnpm openapi:generate` and verify them with `pnpm openapi:check`. To check the
-generated Markdown against the checked-in OpenAPI contract without loading
-controller dependencies, run `node scripts/generate-occ-api-reference.mjs --check`.
-
-See the [architecture guide](../ARCHITECTURE.md) for ownership and runtime
-boundaries, the [quickstart](../guides/quickstart.md) for the default local
-startup helper, and the [deployment guide](../guides/deploy.md) for production
-example files and Helm installation.

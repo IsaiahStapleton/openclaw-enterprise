@@ -144,9 +144,9 @@ keep `occ-chatgpt-admin`, `admin-key`, and an empty CIDR. See the
 
 The [lifecycle flow](../flows/service-account-driver-credential-delivery.md) names code and proof
 boundaries. Local API, PostgreSQL, Driver, and packaging tests do not prove live
-provider calls or model execution. The
-[real provider suite](../../tests/integration/service-account-driver-real.test.mjs)
-requires authorized credentials and selected disposable Kubernetes runtimes.
+provider calls or model execution. See
+[service-account testing](../testing/service-accounts.md) for real provider
+verification requirements.
 
 ## Deferred behavior
 

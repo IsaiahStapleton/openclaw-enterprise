@@ -257,4 +257,4 @@ allow rule for your scraper.
 - [Settings and supported inputs](../reference/settings.md).
 - [Common operational logging flow](../flows/common-logging.md).
 - [Operational logging security boundary](../reference/security.md#operational-log-collection-boundary).
-- [Integration test setup](../testing.md).
+- [Integration test setup](../testing/README.md).

@@ -162,7 +162,7 @@ workload is ready.
 - [Controller configuration](settings.md)
 - [Implementation architecture](../ARCHITECTURE.md)
 - [Namespace lifecycle implementation](../../packages/occ/src/index.ts)
-- [API isolation coverage](../../tests/conformance/occ-api-security.test.mjs)
+- [Local testing](../testing/local.md)
 
 ## Manual Notes
 

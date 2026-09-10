@@ -155,13 +155,13 @@ implicit permissions.
   protected output, and key access; it skips when an Installation already exists.
 - `node --test tests/integration/bootstrap-output.test.mjs` covers exclusive
   output and rejected unsafe paths. Failed writes retain any created file.
-  Database cases require the [disposable PostgreSQL setup](../reference/settings.md#postgresql-test-environment);
+  Database cases require the [disposable PostgreSQL setup](../testing/postgresql.md#postgresql-test-environment);
   an unconfigured/skipped suite is not runtime proof.
 - `node --test tests/integration/postgres-bootstrap-failures.test.mjs` with
   `OCC_BOOTSTRAP_FAILURE_DATABASE_URL` exercises concurrent production attempts
   and preserves both environment modes' credentials when a test fault discards the
   acknowledgement after a real COMMIT. The suite resets a dedicated loopback
-  database; see [its settings](../reference/settings.md#postgresql-test-environment).
+  database; see [its settings](../testing/postgresql.md#postgresql-test-environment).
 - Verify copied output is `0600` without printing it; use a key-authenticated
   `GET /installation` and Namespace create/read to check current authority.
   A `401` indicates credential rejection; `403` indicates identity/scope/policy

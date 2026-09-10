@@ -134,19 +134,11 @@ image. Operators are responsible for choosing an approved, immutable base;
 the Dockerfile checks the Node major version but does not independently verify
 registry provenance or enforce a digest on its build argument.
 
-Disposable k3d integration uses the nonroot `tests/fixtures/kubernetes` image
-with the same Compute Driver-generated namespace labels, quota, LimitRange,
-NetworkPolicies, Pod security context, container security context, and bounded
-resources. Its local fixture image may intentionally use a mutable tag, and its
-`node:24-bookworm` base is not digest-pinned. This exception applies only to
-explicitly selected disposable k3d verification; it is not production image
-approval or supply-chain attestation.
-
-Fixture-based infrastructure tests prove only their documented Pod and network
-model. A live Agent turn additionally requires real OpenClaw and Codex images,
-tenant Secrets provisioned through the authorized initial credential API or
-operator workflow, enforcing NetworkPolicy, and a model API
-credential.
+Disposable verification fixtures intentionally do not satisfy production image
+approval. The approved production boundary is the digest-pinned controller,
+gateway, and Agent image set above; local k3d fixtures and mutable local tags are
+testing inputs only. See [image and Helm testing](../testing/images.md) and
+[Kubernetes testing](../testing/kubernetes.md).
 
 ## Temporary runtime credential exceptions
 
@@ -284,30 +276,7 @@ nonblocking with finite Engine and container-local buffers. Export outage or
 overflow can lose operational logs but cannot block reconciliation, weaken IAM,
 or change audit persistence.
 
-## Verify controls
-
-Run the actual production Helm chart and manifest-boundary integration tests:
-
-```bash
-OCC_HELM_BIN=/absolute/path/to/helm \
-  node --test tests/integration/production-kubernetes-packaging.test.mjs
-```
-
-This test proves the rendered private Service, dedicated workload identities,
-tenant-scoped RoleBinding boundaries, mounted Secrets, restrictive network
-configuration, and rejection of unsafe image or policy inputs. It does not
-prove live cluster admission or NetworkPolicy enforcement.
-
-For disposable k3d setup, fixture-image import, Kubernetes environment
-selection, and the real-cluster test invocation, use the
-[canonical integration testing instructions](../../AGENTS.md#running-integration-tests).
-
-The real-cluster tests inspect the restricted tenant labels, `ResourceQuota`,
-`LimitRange`, NetworkPolicies, nonroot Pod settings, `RuntimeDefault` seccomp,
-dropped capabilities, denied privilege escalation, read-only root filesystem,
-and bounded container resources. Without the required disposable cluster and
-fixture image, these tests skip explicitly; skipped tests are not evidence that
-a production cluster enforces the declared controls.
+## Agent runtime isolation
 
 Production Agent dispatch supports embedded OpenClaw and dedicated Codex. Each
 Agent has its own gateway, one selected active revision, and an exact-owner
@@ -326,6 +295,9 @@ workload-bound transport authentication, and restricted model egress remain
 future work.
 
 ## Related
+
+- [Image and Helm testing](../testing/images.md)
+- [Kubernetes testing](../testing/kubernetes.md)
 
 - [Production Kubernetes deployment](../guides/deploy.md)
 - [Service accounts and credential ownership](service-accounts.md)

@@ -64,7 +64,7 @@ custom `OCC_DOCKER_RUNTIME_IMAGE`, build or pull that selected tag yourself.
 For Kubernetes, publish the rebuilt image and update both Installation image
 references to its verified immutable digest. Separate gateway and Codex images
 require verification of that exact pair through the
-[Kubernetes runtime tests](../../docs/testing.md#kubernetes-model-turns-and-secrets).
+[Kubernetes runtime tests](../../docs/testing/kubernetes.md#kubernetes-model-turns-and-secrets).
 
 ## Verify the local image
 
@@ -96,6 +96,6 @@ run without external network access or provider credentials. They do not make a
 model call or establish a Slack connection.
 
 Before enabling Slack in an Installation, run the
-[live Slack test](../../docs/testing.md#slack) with the verified image, projected
+[live Slack test](../../docs/testing/slack.md#slack) with the verified image, projected
 credentials, and the required proxy configuration. It must prove a real mention,
 Codex turn, and gateway-authored reply; gateway readiness alone is insufficient.

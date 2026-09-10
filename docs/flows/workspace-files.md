@@ -154,7 +154,7 @@ replays it. The native client closes in the operation's cleanup path.
 - An authenticated native upgrade failure can indicate missing trusted-proxy
   configuration, a simultaneous token, a loopback real IP, or absent native
   identity scopes. Do not fix it by inventing a forwarded address.
-- [Testing](../testing.md) separates API conformance, Helm rendering, and the
+- [Testing](../testing/README.md) separates API conformance, Helm rendering, and the
   real Envoy/cert-manager/native-runtime proof. A calculated URL, ready proxy,
   or rendered chart does not establish file writes or model consumption.
 

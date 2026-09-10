@@ -244,7 +244,7 @@ See [Docker development](reference/drivers/docker-compute.md),
 [Kubernetes deployment](guides/deploy.md), and the
 [Kubernetes Compute Driver](reference/drivers/kubernetes-compute.md), plus
 [SSH Compute](reference/drivers/ssh-compute.md) and its
-[real-host test rig](testing.md#ssh-raw-hosts).
+[real-host test rig](testing/ssh.md#ssh-raw-hosts).
 
 ## Current limitations
 

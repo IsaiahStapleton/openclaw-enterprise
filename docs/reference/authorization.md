@@ -215,16 +215,13 @@ ambiguous identity fails closed.
 
 ## Evidence and related references
 
-[Native IAM conformance tests](../../tests/conformance/iam.test.mjs) cover
-explicit identities, exact scopes, Group membership, Restrictions, current
-policy loading, and failures. [API integration tests](../../tests/integration/occ-api.test.mjs)
-cover resource filtering, Namespace isolation, attributable audit events, and
-failures without orphaned state. The current policy implementation is
+The current policy implementation is
 [the IAM package](../../packages/iam/src/index.ts).
 
 For a working authenticated request, see the
 [quickstart](../guides/quickstart.md#read-the-installation-with-the-bootstrap-service-key).
 
+- [Authorization tests](../testing/local.md#authentication-and-authorization-coverage)
 - [API reference](api.md)
 - [Namespaces](namespaces.md)
 - [Agents](agents.md)

@@ -7,7 +7,7 @@ root. Startup needs no model credential.
 Trusted Installation YAML can also select the bundled
 [SSH Compute Driver](../reference/drivers/ssh-compute.md) for embedded OpenClaw
 on preprovisioned Linux hosts. That reference owns host configuration,
-credentials, and operational limits; [SSH raw-host testing](../testing.md#ssh-raw-hosts)
+credentials, and operational limits; [SSH raw-host testing](../testing/ssh.md#ssh-raw-hosts)
 owns the disposable verification rig. The Compose and Helm procedures below
 retain their existing control-plane and Kubernetes packaging boundaries.
 
@@ -687,7 +687,7 @@ Without routing/key configuration, with an unsupported Driver, or when the
 proxy/native gateway is unavailable, file requests return
 `503 DEPENDENCY_UNAVAILABLE`. Docker does not implement this automatic routing
 path. The [Agents reference](../reference/agents.md#workspace-files) owns file
-limits and authorization behavior; [testing](../testing.md) distinguishes live
+limits and authorization behavior; [testing](../testing/README.md) distinguishes live
 integration evidence from rendering and conformance checks.
 
 ### Verify production workloads

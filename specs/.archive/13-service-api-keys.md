@@ -154,7 +154,7 @@ remaining delivery work are complete before further implementation changes.
 Run the listed focused files with `node --test <file-path>`. For the persistent
 case, set `OCC_TEST_DATABASE_URL` to the limited application-role connection
 and run `node --test tests/integration/postgres-service-api-keys.test.mjs`; use
-the existing [PostgreSQL test environment](../../docs/reference/settings.md#postgresql-test-environment)
+the existing [PostgreSQL test environment](../../docs/testing/postgresql.md#postgresql-test-environment)
 instructions.
 
 Use the existing isolated dependency-compatible verification copy. The original

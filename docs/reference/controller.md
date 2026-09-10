@@ -315,9 +315,7 @@ worker does not expose an HTTP health endpoint.
   the API and worker selected the same configured driver and the worker uses
   the bootstrapped singleton Installation; check explicit cluster authentication,
   externally provisioned tenant-local RBAC, enforced NetworkPolicies, image
-  availability, and gateway EndpointSlices. For local Kubernetes runs, confirm the
-  dedicated context uses a loopback-only API and the fixture image was imported;
-  see the
+  availability, and gateway EndpointSlices. See the
   [Kubernetes Compute Driver guide](drivers/kubernetes-compute.md).
 - **Installation is not bootstrapped:** Confirm the Compose `bootstrap` service
   or Helm initialization Job succeeded against the API/worker database. For

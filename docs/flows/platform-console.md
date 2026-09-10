@@ -171,8 +171,8 @@ retains existing bindings. The preflight reads do not prevent a later concurrent
 An interrupted or unavailable PATCH reply keeps the result unknown and blocks
 another channel write until Refresh. Draft channel disablement changes only
 Configuration values; it does not stop a running Agent. The
-[operator workflow](operator-workflow.md) records the executable management
-commands and the lifecycle procedures still unavailable in this API.
+[console reference](../reference/console.md#inspect-detail-revisions-and-channel-drafts)
+describes the supported edits and their deployment boundaries.
 
 ### 5. Provision initial runtime credentials
 
@@ -241,7 +241,7 @@ this client never infers it from a network error.
   runtime dispatch, worker lease handling, or Compute Driver effects.
 - API tests cover safe discovery, permission boundaries, empty versus missing
   wiring, static MIME/allowlisting, and unchanged API JSON errors. See
-  [Testing](../testing.md) for commands and the image smoke boundary.
+  [Testing](../testing/README.md) for commands and the image smoke boundary.
 
 ## Related docs
 

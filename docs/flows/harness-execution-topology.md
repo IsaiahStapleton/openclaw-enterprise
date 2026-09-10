@@ -144,7 +144,7 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
   embedded and dedicated model turns, or
   `node --test tests/integration/harness-topology-k3d-real.test.mjs` for real Kubernetes
   model turns. Select each suite's runtime images, infrastructure, and credentials through the
-  [test environment settings](../reference/settings.md#docker-compose-development-test-environment).
+  [test environment settings](../testing/docker.md#docker-compose-development-test-environment).
 - Verify provider-backed dedicated Codex separately with
   `node --test tests/integration/service-account-driver-real.test.mjs`,
   `OCC_TEST_CHATGPT_SERVICE_ACCOUNT_REAL=1`, and an authorized mounted

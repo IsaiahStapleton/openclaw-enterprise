@@ -24,8 +24,7 @@
                   "guides/concepts",
                   "guides/quickstart",
                   "guides/deploy",
-                  "guides/observability",
-                  "testing"
+                  "guides/observability"
                 ]
               },
               {
@@ -106,6 +105,30 @@
                   "flows/workspace-files",
                   "flows/pr-24-ssh-compute"
                 ]
+              }
+            ]
+          },
+          {
+            "tab": "Testing",
+            "groups": [
+              {
+                "group": "Start testing",
+                "pages": ["testing/README", "testing/local", "testing/ci"]
+              },
+              {
+                "group": "Infrastructure",
+                "pages": [
+                  "testing/postgresql",
+                  "testing/images",
+                  "testing/docker",
+                  "testing/ssh",
+                  "testing/kubernetes",
+                  "testing/production-tui"
+                ]
+              },
+              {
+                "group": "External services",
+                "pages": ["testing/slack", "testing/service-accounts", "testing/openshell"]
               }
             ]
           }

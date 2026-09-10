@@ -303,7 +303,7 @@ combinations are rejected.
 - [Implementation architecture](../ARCHITECTURE.md)
 - [Agent lifecycle implementation](../../packages/occ/src/index.ts)
 - [HTTP resource schemas](../../packages/contracts/src/api/resources.ts)
-- [API integration coverage](../../tests/integration/occ-api.test.mjs)
+- [Local testing](../testing/local.md)
 
 ## Manual Notes
 

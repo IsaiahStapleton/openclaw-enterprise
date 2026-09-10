@@ -269,22 +269,9 @@ The [authentication implementation](../../apps/controller/src/auth/index.ts)
 owns session verification and safe responses; the
 [HTTP routes](../../apps/controller/src/index.ts) own public endpoint exposure
 and account-provisioning authorization.
-[API integration tests](../../tests/integration/occ-api.test.mjs) cover safe
-session inspection and administrator-provisioned accounts with scoped IAM
-access. These tests are not proof of a production installation.
 
-[Service-key HTTP integration tests](../../tests/integration/service-api-keys.test.mjs)
-exercise real Fastify HTTP with Better Auth memory storage and native IAM,
-including valid, invalid, expired, revoked, unauthorized, and cross-Namespace
-requests, IAM-authorized service-key management, human session preservation,
-Agent exclusion, and audit attribution.
-[PostgreSQL service-key tests](../../tests/integration/postgres-service-api-keys.test.mjs)
-separately cover stored hashing, foreign-Installation rejection, cross-instance
-revocation, and deletion during concurrent verification. These focused tests
-do not prove a production installation; their commands and required
-[test environment](settings.md#postgresql-test-environment) are linked from the
-[service API key flow](../flows/service-api-keys.md#debugging-and-verification).
-
+- [Local authentication tests](../testing/local.md#authentication-and-authorization-coverage)
+- [Service-key persistence tests](../testing/postgresql.md#service-key-persistence)
 - [Service API key flow](../flows/service-api-keys.md)
 - [Deployment procedure](../guides/deploy.md#service-api-keys-for-automation)
 - [Authorization](authorization.md)

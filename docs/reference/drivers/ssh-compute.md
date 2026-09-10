@@ -6,11 +6,6 @@ Each Agent has one systemd gateway unit. OCC still owns resources, authorization
 immutable admission, and activation; the Driver owns only their host realization.
 Trusted Installation YAML can select this bundled Driver in development or production.
 
-Local conformance and startup coverage exercise the implementation with
-transport and systemd fixtures. The opt-in real-host integration is the host
-proof; run it against the disposable container rig or any host and runtime you
-intend to operate. Neither suite proves a model turn.
-
 ## Requirements and configuration
 
 Provision Linux with systemd, util-linux `flock`, `getent`, the shadow account
@@ -213,21 +208,7 @@ maintenance, macOS launchd, non-root SSH, and zero-downtime rollout are
 unsupported. Host runtime upgrades are operator changes followed by explicit
 redeployment of each Agent.
 
-## Verification and troubleshooting
-
-Run local conformance and startup checks:
-
-```sh
-node --test tests/conformance/ssh-compute.test.mjs
-node --test tests/integration/ssh-compute-startup.test.mjs
-```
-
-Conformance executes the actual helper locally with SSH and systemd fixtures.
-Use [SSH raw-host testing](../../testing.md#ssh-raw-hosts) for the disposable
-systemd/sshd container and real OpenClaw proof. Unselected real-host tests report
-an explicit skip naming their environment inputs. That suite checks readiness,
-cutover, persistence, private UID/GID isolation, retirement, and deletion; it does not cover a model turn
-or any host other than the one it ran against.
+## Troubleshooting
 
 For host failures, inspect the exact unit with `systemctl status` and
 `journalctl -u openclaw-enterprise-gateway-<agentHash>.service`. Verify executable
@@ -246,4 +227,4 @@ never leaves it held, so it needs no manual cleanup.
 - [Driver selection](selection.md)
 - [Settings](../settings.md#ssh-compute-driver)
 - [Deployment](../../guides/deploy.md)
-- [SSH real-host test settings](../settings.md#ssh-real-host-test-environment)
+- [SSH testing](../../testing/ssh.md)

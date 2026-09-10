@@ -8,7 +8,6 @@ OpenClaw Enterprise is the open platform for managing agents.
 - [Quickstart](guides/quickstart.md): start locally, sign in, and make an authenticated request.
 - [Deploy](guides/deploy.md): configure Docker Compose or Kubernetes, verify your deployment, run the development end-to-end TUI proof, and troubleshoot startup.
 - [Observability](guides/observability.md): configure operational log export, Collector metrics, and delivery checks.
-- [Testing](testing.md): choose test suites, prepare credentials and infrastructure, and interpret results.
 
 ## Architecture
 
@@ -67,8 +66,9 @@ OpenClaw Enterprise is the open platform for managing agents.
 - [SSH Compute lifecycle](flows/pr-24-ssh-compute.md): host preparation,
   revision activation, and cleanup.
 
-## Contribute documentation
+## Contribute
 
+- [Testing](testing/README.md): choose a suite, prepare its environment, and interpret results.
 - [Local preview](local-preview.md): render, check, and edit these pages locally.
 
 ## Implementation history

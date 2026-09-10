@@ -385,12 +385,10 @@ union of enabled providers' credentials from an Agent-specific Kubernetes
 Secret. See
 [Kubernetes runtime credentials](drivers/kubernetes-compute.md#configuration).
 
-Only Slack has live integration coverage. Its automated two-bot integration
-temporarily adds `allowBots: "mentions"`, `users: ["<sender-bot-user-id>"]`, and
-`replyToMode: "off"` only to the exact test channel; `requireMention` remains
-enabled. Never allow bots account-wide. Teams message ingress requires a
-separately deployed and reviewed public Bot Framework `/api/messages` webhook;
-that webhook and end-to-end Teams verification are outside this milestone.
+Teams message ingress requires a separately deployed and reviewed public Bot
+Framework `/api/messages` webhook. Enterprise does not provide that webhook;
+end-to-end Teams behavior remains unverified. See [Slack testing](../testing/slack.md)
+for channel integration coverage.
 
 ## Failure semantics and limitations
 
@@ -413,11 +411,6 @@ that webhook and end-to-end Teams verification are outside this milestone.
   tenant placement is ready, exact namespaced ConfigMap access exists, and the
   tenant-owned ConfigMap contains one valid `openclaw.json` document.
 
-Live Kubernetes ConfigMap CRUD and least-privilege RBAC proof requires an
-explicitly configured disposable cluster and tenant credentials. When those
-dependencies are unavailable, the live-cluster case is explicitly skipped;
-schema, controller, and SDK-fixture coverage is not live-cluster evidence.
-
 ## Related
 
 - [Quickstart](../guides/quickstart.md)
@@ -428,7 +421,8 @@ schema, controller, and SDK-fixture coverage is not live-cluster evidence.
 - [Kubernetes Compute Driver](drivers/kubernetes-compute.md)
 - [Identity and access management](authorization.md)
 - [Configuration lifecycle implementation](../../packages/occ/src/index.ts)
-- [Configuration integration coverage](../../tests/integration/configuration-controller.test.mjs)
+- [Local testing](../testing/local.md)
+- [Kubernetes testing](../testing/kubernetes.md)
 
 ## Manual Notes
 

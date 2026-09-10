@@ -190,7 +190,7 @@ schedule rotation.
   run `node --test tests/integration/postgres-service-api-keys.test.mjs`.
   This separately checks stored hashing, foreign-Installation rejection,
   cross-instance revocation, and deletion during concurrent verification.
-  Use the existing [test environment instructions](../reference/settings.md#postgresql-test-environment).
+  Use the existing [test environment instructions](../testing/postgresql.md#postgresql-test-environment).
 - [IAM conformance](../../tests/conformance/iam.test.mjs) verifies identity lookup.
   Run `pnpm openapi:check` to check that the generated API contract and Markdown
   reference remain current with the controller routes.

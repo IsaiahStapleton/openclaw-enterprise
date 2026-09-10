@@ -180,8 +180,4 @@ enable workspace-file access through the standard OCC composition.
   and [API mounts](../../deploy/helm/openclaw-enterprise/templates/deployments.yaml).
 - [Kubernetes route contract](drivers/kubernetes-compute.md#private-agent-gateway-routes)
   and [workspace-file execution flow](../flows/workspace-files.md).
-- [Real routing integration](../testing.md) runs in an explicitly configured k3d
-  cluster. The opt-in `OCC_TEST_GATEWAY_ROUTING_REAL=1` case exercises native
-  file operations, credential denial/rotation, listener renewal, and gateway
-  replacement. Test coverage is not evidence that a particular installation
-  has passed those checks.
+- [Private-routing testing](../testing/kubernetes.md#kubernetes-model-turns-and-secrets).

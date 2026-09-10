@@ -454,27 +454,6 @@ hook ordering and environment restrictions, and the
 [lifecycle-hook flow](../../flows/compute-driver-lifecycle-hooks.md) traces the
 implementation.
 
-## Verification evidence
-
-[Real Kubernetes integration](../../../tests/integration/kubernetes-compute-real.test.mjs)
-exercises disposable-cluster API, RBAC, workload, reconciliation, and networking
-behavior. Its HTTP fixture does not prove a real gateway or model turn.
-[Harness topology integration](../../../tests/integration/harness-topology-k3d-real.test.mjs)
-adds actual OpenClaw and Codex runtimes and provider responses. Required cluster,
-database, runtime, and credential inputs are listed in the
-[repository integration instructions](../../../AGENTS.md#running-integration-tests).
-The persistence cases for both topologies require an audited gateway image that
-actually stores transcripts in SQLite. They query the test conversation through
-`session_nodes` and `transcript_events`, then verify its history and media
-after gateway Pod replacement. An older published image that writes JSONL
-transcripts cannot prove this storage path, even if it contains SQLite code
-for authentication or memory. Setting `OCC_TEST_KUBERNETES_OPENCLAW_VERSION`
-alone is not proof of transcript storage behavior.
-
-Neither suite should be treated as evidence for a live production installation
-without its separate deployment and runtime checks. Missing cluster or runtime
-prerequisites leave the persistence proof unverified.
-
 ## Related documentation
 
 - [Production Kubernetes deployment](../../guides/deploy.md)
@@ -486,4 +465,4 @@ prerequisites leave the persistence proof unverified.
 - [OpenShell SandboxDriver](openshell-sandbox.md)
 - [Controller worker](../controller.md)
 - [Harness execution topology](../../flows/harness-execution-topology.md)
-- [Integration-test instructions](../../../AGENTS.md#running-integration-tests)
+- [Kubernetes testing](../../testing/kubernetes.md)
