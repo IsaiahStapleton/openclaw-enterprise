@@ -73,8 +73,6 @@ Configuration listing, and live gateway health remain API or operator procedures
 - Operator-managed HTTPS access for approved clients; the chart does not create TLS or Ingress.
 - Operator-created startup, database, authentication, optional Provider Secrets,
   fresh protected bootstrap PVC, gateway storage, and exact egress destinations.
-- Exact Driver lifecycle egress destinations when selected hooks call external
-  systems.
 
 ### Production installation sequence
 
