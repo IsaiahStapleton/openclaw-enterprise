@@ -1,6 +1,6 @@
 # Quickstart
 
-Start [OpenClaw Control Center (OCC)](concepts.md#control-plane-and-tenancy)
+Start [OpenClaw Control Center (OCC)](concepts.md#control-plane)
 locally, sign in to the console, and read the Installation through an
 authenticated API request. This proves controller access; it does not deploy an
 [Agent](concepts.md#agents-and-revisions) or make a model call.
@@ -17,7 +17,7 @@ commands from the repository root.
 The helper starts PostgreSQL, migration, bootstrap, API, and worker services,
 then copies the bootstrap service-key response into a private local file. Fresh
 bootstrap also creates the initial platform
-[Namespace](concepts.md#control-plane-and-tenancy) named `default`.
+[Namespace](concepts.md#tenancy) named `default`.
 
 The helper reuses the local quickstart runtime image tag. After changing the
 runtime recipe or package versions, [rebuild and verify the image](../../deploy/runtime/README.md#rebuild-an-existing-image)
@@ -34,9 +34,12 @@ Expected output includes:
 ## Open the platform console
 
 Open `/console/` on the API URL printed by `dev-up`, normally
-`http://127.0.0.1:3000/console/`. Enter the provisioned human account email as
-**Username** and use its password. An existing database keeps its original
-password. Browser login uses the human session path, not service keys.
+`http://127.0.0.1:3000/console/`. For a fresh database with default settings, use
+`admin@openclaw.local` as **Username** and `openclaw-development-password` as the
+password. If you set `OPENCLAW_DEV_EMAIL` or `OPENCLAW_DEV_PASSWORD` in `.env` or
+the environment, use those values; see [development settings](../reference/settings/development.md#required-development-controller-environment).
+An existing database keeps its original password. Browser login uses the human
+session path, not service keys.
 
 A fresh Installation has a `default` Namespace and no Agents. Use the
 [console reference](../reference/console.md) for supported pages, Agent creation,

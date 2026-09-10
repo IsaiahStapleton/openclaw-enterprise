@@ -34,6 +34,8 @@ validates links and anchors, emits Enterprise HTML and local assets, and leaves
 Pagefind indexing to the root `docs:build` command. `--check` validates without
 writing output. Paths resolve against Markdown source files; README pages map to
 folder indexes and links outside `docs/` point to the Enterprise GitHub source.
+Markdown links in full-line comments under `deploy/examples/` (`.yaml` and
+`.yml`) use the same validation.
 
 `word-count.mjs` checks every tracked or nonignored Markdown file returned by
 Git, including root documentation, specs, generated reference, and new author

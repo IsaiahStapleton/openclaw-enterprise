@@ -44,9 +44,13 @@ For production, edit the protected Installation YAML and update its mounted
 startup Secret through your deployment process. This is separate from Helm's
 `logging.collector` values.
 
-Restart the API and worker after a level change; migration and bootstrap read
-it on their next execution. Existing AgentRevisions retain their admitted level.
-Deploy an Agent again to apply the new level to its gateway or Codex runtime.
+Restart the API and worker after a level change. With the Docker logging
+override, migration and bootstrap read the YAML on their next execution. The
+current Helm initialization Job does not mount that YAML or set `OCC_CONFIG_PATH`,
+so its migration and bootstrap processes use `info`.
+
+Existing AgentRevisions retain their admitted level. Deploy an Agent again to
+apply the new level to its gateway or Codex runtime.
 The [settings reference](../reference/configuration.md#installation-startup-configuration)
 owns the accepted startup configuration.
 
