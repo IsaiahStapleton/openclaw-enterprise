@@ -115,9 +115,7 @@ Edit the protected YAML copies before provisioning anything:
   `bootstrap.adminEmail` to the first administrator, `database.cidr` to the
   exact PostgreSQL endpoint CIDR, `cluster.cidr` to the Kubernetes API endpoint
   CIDR, `api.clients` to approved client selectors, and
-  `bootstrap.password.claimName` to the bootstrap PVC name. If selected Driver
-  lifecycle hooks call external systems, set `driverLifecycle.egress` to the
-  exact `/32` TCP destinations they require.
+  `bootstrap.password.claimName` to the bootstrap PVC name.
 - `$OCC_INPUT_DIRECTORY/installation.yaml`: set `occ.cluster`, `logging.level`,
   both `drivers.compute.configuration.images` digests, the DNS and gateway-client
   selectors, the service-principal token settings, the runtime Secret prefixes,
@@ -243,9 +241,9 @@ helm upgrade --install oce deploy/helm/openclaw-enterprise \
   --wait --timeout 5m
 ```
 
-Helm owns migration, bootstrap, and Driver lifecycle apply ordering through its
-initialization hook. Readiness covers the API and worker probes. It does not
-prove authenticated API access, Agent deployment, or a model turn.
+Helm owns migration and bootstrap ordering through its initialization hook.
+Readiness covers the API and worker probes. It does not prove authenticated API
+access, Agent deployment, or a model turn.
 
 ## Authenticate to the production API
 

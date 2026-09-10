@@ -44,7 +44,6 @@ See the [OpenClaw testing infrastructure report](reports/openclaw-testing-infras
 
 | Implementation record | Recorded status | Current reference |
 | --- | --- | --- |
-| [Driver installation lifecycle hooks](22-driver-installation-lifecycle-hooks.md) | Implemented locally; focused verification passed | [Driver selection](../docs/reference/drivers/selection.md) |
 | [SSH Compute Driver](21-ssh-compute-driver.md) | Completed; conformance, startup, and real-host container proof passed 2026-09-05 | [SSH Compute Driver](../docs/reference/drivers/ssh-compute.md) |
 | [Agent workload tags](21-agent-workload-tags.md) | Planning; draft awaiting review and user direction | Proposed; [Agent](../docs/reference/agents.md) and [Sandbox](../docs/reference/drivers/sandbox.md) contracts remain unchanged |
 | [Common OpenTelemetry logging](20-common-otel-logging.md) | Implemented; Docker, Kubernetes and Helm logging proof passed; OpenShell live proof unavailable | [Settings](../docs/reference/settings.md), [Harness execution](../docs/reference/harness-execution.md) |

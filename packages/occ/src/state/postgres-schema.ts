@@ -59,43 +59,6 @@ export const installation = occSchema.table(
   ],
 );
 
-export const driverLifecycleReceipts = occSchema.table(
-  "driver_lifecycle_receipts",
-  {
-    installationId: text("installation_id")
-      .notNull()
-      .references(() => installation.id, { onDelete: "restrict", onUpdate: "restrict" }),
-    capability: text("capability").notNull(),
-    driverId: text("driver_id").notNull(),
-    implementationFamily: text("implementation_family").notNull(),
-    version: text("version").notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
-  },
-  (table) => [
-    uniqueIndex("driver_lifecycle_receipts_identity").on(
-      table.installationId,
-      table.capability,
-      table.driverId,
-    ),
-    check(
-      "driver_lifecycle_receipts_capability_valid",
-      sql`${table.capability} IN ('iam', 'compute', 'configuration', 'service_account', 'secret', 'sandbox')`,
-    ),
-    check(
-      "driver_lifecycle_receipts_driver_id_valid",
-      sql`char_length(${table.driverId}) BETWEEN 1 AND 200 AND ${table.driverId} = btrim(${table.driverId}) AND ${table.driverId} !~ '[[:cntrl:]]'`,
-    ),
-    check(
-      "driver_lifecycle_receipts_family_valid",
-      sql`char_length(${table.implementationFamily}) BETWEEN 1 AND 200 AND ${table.implementationFamily} = btrim(${table.implementationFamily}) AND ${table.implementationFamily} !~ '[[:cntrl:]]'`,
-    ),
-    check(
-      "driver_lifecycle_receipts_version_valid",
-      sql`char_length(${table.version}) BETWEEN 1 AND 200 AND ${table.version} = btrim(${table.version}) AND ${table.version} !~ '[[:cntrl:]]'`,
-    ),
-  ],
-);
-
 export const namespaces = occSchema.table(
   "namespaces",
   {

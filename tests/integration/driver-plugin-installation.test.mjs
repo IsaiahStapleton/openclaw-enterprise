@@ -22,20 +22,6 @@ const provisionPath = "/tmp/local-test";
 const computePackage = "@fixture/test-compute-driver";
 const configurationPackage = "@fixture/test-configuration-driver";
 const iamPackage = "@fixture/test-iam-driver";
-
-const emptyNativeIAMStateStore = Object.freeze({
-  async loadNativeIAMState() {
-    return {
-      identities: [],
-      groups: [],
-      memberships: [],
-      roles: [],
-      bindings: [],
-      restrictions: [],
-    };
-  },
-});
-
 function selectedConfiguration() {
   return {
     id: "configuration-installed-fixture",
@@ -292,67 +278,6 @@ test("reviewed scoped Driver packages install, activate, and fail closed", async
       configuration.drivers.compute = selectedCompute();
       configuration.drivers.iam = selectedIAM();
       const drivers = await load(owner, configuration, "production");
-      assert.deepEqual(
-        drivers.lifecycleDriverSelections.map(
-          ({ capability, driverId, implementation, implementationFamily, version }) => ({
-            capability,
-            driverId,
-            implementation,
-            implementationFamily,
-            version,
-          }),
-        ),
-        [
-          {
-            capability: "configuration",
-            driverId: "configuration-installed-fixture",
-            implementation: `${configurationPackage}@1.0.0`,
-            implementationFamily: configurationPackage,
-            version: "1.0.0",
-          },
-          {
-            capability: "compute",
-            driverId: "compute-installed-fixture",
-            implementation: `${computePackage}@1.0.0`,
-            implementationFamily: computePackage,
-            version: "1.0.0",
-          },
-          {
-            capability: "secret",
-            driverId: "secret-kubernetes",
-            implementation: "occ/kubernetes-secret",
-            implementationFamily: "occ/kubernetes-secret",
-            version: "0.1.0",
-          },
-          {
-            capability: "iam",
-            driverId: "iam-installed-fixture",
-            implementation: `${iamPackage}@1.0.0`,
-            implementationFamily: iamPackage,
-            version: "1.0.0",
-          },
-        ],
-      );
-      const lifecycleDrivers = drivers.createLifecycleDrivers({
-        iamState: emptyNativeIAMStateStore,
-      });
-      assert.deepEqual(
-        lifecycleDrivers.map(({ driver, ...metadata }) => metadata),
-        drivers.lifecycleDriverSelections,
-      );
-      const lifecycleSignal = new AbortController().signal;
-      for (const entry of lifecycleDrivers) {
-        assert.equal(entry.driver.id, entry.driverId);
-        assert.equal(entry.driver.capability, entry.capability);
-        assert.equal(entry.driver.implementation, entry.implementation);
-        await entry.driver.lifecycleHooks?.onInstall?.({
-          installationId: "ins_lifecycle_loader_test",
-          capability: entry.capability,
-          driverId: entry.driverId,
-          version: entry.version,
-          signal: lifecycleSignal,
-        });
-      }
       const cancellation = new AbortController();
       assert.equal(drivers.computeDriver.currentOperationAbortSignal(), undefined);
       await withComputeAbortSignal(cancellation.signal, async () => {
@@ -544,15 +469,6 @@ test("reviewed scoped Driver packages install, activate, and fail closed", async
           },
           "production",
           /iam|capability|package|version|configuration/i,
-        ],
-        [
-          "invalid lifecycle hook callback",
-          (value) => {
-            value.drivers.configuration = selectedConfiguration();
-            value.drivers.configuration.configuration.endpoint = "memory:invalid-lifecycle-hook";
-          },
-          "production",
-          /lifecycleHooks\.onInstall.*function/i,
         ],
       ]) {
         const configuration = installation();

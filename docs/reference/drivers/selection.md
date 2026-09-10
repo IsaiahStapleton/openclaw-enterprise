@@ -208,33 +208,6 @@ exports or configuration, incorrect capability/identity, and missing production
 Compute methods. These checks do not prove that installed IAM honors policy or
 that installed Compute isolates workloads; operator review remains mandatory.
 
-## Installation lifecycle hooks
-
-Selected Drivers can expose optional Installation lifecycle hooks:
-`onInstall`, `onUpdate`, and `onUninstall`. Deployment runs
-`node scripts/driver-lifecycle.mjs apply` after database migrations and
-singleton bootstrap, before the API and worker use the new selection. The
-command reads `OCC_CONFIG_PATH`, connects through `OCC_DATABASE_URL`, compares
-selected Driver identities with stored receipts, invokes the needed hook, and
-records the successful version. Missing hooks are successful no-ops.
-
-The receipt key is `(installationId, capability, driverId)`. A missing receipt
-calls `onInstall`; the same implementation family at a different version calls
-`onUpdate`; the same version calls no hook, including configuration-only edits.
-Removing a Driver from YAML never uninstalls it. Run
-`node scripts/driver-lifecycle.mjs uninstall --capability <capability> --id <id>`
-from the retained outgoing image, configuration, and credentials before
-removing the package or applying incompatible migrations.
-
-Lifecycle hooks may start packaged subprocesses, but those subprocesses must
-remain in the lifecycle command's process group and stop when its signal aborts.
-Detached or daemonized work is unsupported.
-
-For the first hook-aware rollout of an existing Installation, run
-`node scripts/driver-lifecycle.mjs apply --record-existing` only from the exact
-outgoing image and Installation YAML. It records loaded versions without hooks
-and refuses nonempty receipt state.
-
 ## Related
 
 - [Packaged-driver testing](../../testing/local.md#packaged-driver-integration)

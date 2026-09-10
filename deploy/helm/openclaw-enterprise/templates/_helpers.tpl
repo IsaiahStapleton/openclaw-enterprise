@@ -29,14 +29,6 @@
 {{- fail (printf "api.clients[%d] requires an exact namespace and nonempty Pod selector" $index) -}}
 {{- end -}}
 {{- end -}}
-{{- range $index, $entry := .Values.driverLifecycle.egress -}}
-{{- if not (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/32$" $entry.cidr) -}}
-{{- fail (printf "driverLifecycle.egress[%d].cidr must identify exactly one approved IPv4 host with /32" $index) -}}
-{{- end -}}
-{{- if or (lt (int $entry.port) 1) (gt (int $entry.port) 65535) -}}
-{{- fail (printf "driverLifecycle.egress[%d].port must be a valid TCP port" $index) -}}
-{{- end -}}
-{{- end -}}
 {{- if or (not .Values.dns.namespace) (not .Values.dns.podLabels) -}}
 {{- fail "dns requires an exact namespace and nonempty Pod selector" -}}
 {{- end -}}

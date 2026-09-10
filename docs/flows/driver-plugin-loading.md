@@ -1,27 +1,24 @@
 ---
 created: 2026-08-21
-updated: 2026-09-09
-last_updated_session: codex/01a08890-87c8-7293-bd75-d7fc58e52cf2
+updated: 2026-09-01
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Installation Driver Package Loading Flow
 
 ## Overview
 
-Deployment applies selected Driver installation hooks before the API and worker
-load trusted Installation YAML. The API and worker then independently construct
+The API and worker independently load trusted Installation YAML and construct
 their selected IAM, Compute, Configuration, Secret, and optional Sandbox
 capabilities. Only the API constructs the optional Provider client and
-ServiceAccount Driver. This trace follows deployment-time lifecycle dispatch,
-package resolution, process composition, and stops at request serving or worker
-reconciliation. Development without startup YAML uses the defaults traced in
-[platform startup](platform-startup.md).
+ServiceAccount Driver. This trace follows package resolution through process
+composition and stops at request serving or worker reconciliation. Development
+without startup YAML uses the defaults traced in [platform startup](platform-startup.md).
 
 ## Entry Points
 
-- Trigger: Run `node scripts/driver-lifecycle.mjs apply`, then start
-  `apps/controller/src/server.mjs` or `apps/controller/src/worker.mjs` with
-  trusted Installation configuration.
+- Trigger: Start `apps/controller/src/server.mjs` or
+  `apps/controller/src/worker.mjs` with trusted Installation configuration.
 - Source:
   `apps/controller/src/composition/installation-config.ts:loadInstallationConfiguration`,
   `apps/controller/src/composition/production.ts:composeProduction`, and
@@ -34,18 +31,13 @@ reconciliation. Development without startup YAML uses the defaults traced in
 
 ```mermaid
 graph TD
-  subgraph Deploy["Deployment lifecycle command"]
+  subgraph Startup["Independent API or worker startup"]
     A["Read trusted Installation selections"] --> B{"Bundled or packaged"}
     B -->|bundled| C["Resolve built-in implementation"]
     B -->|packaged| D["Resolve package identity and import code"]
     C --> E["Validate Driver configuration and capability"]
     D --> E
-    E --> R["Compare receipts and run install or update hooks"]
-  end
-
-  subgraph Startup["Independent API or worker startup"]
-    R --> S["Read the same trusted selections"]
-    S --> F["Construct Configuration, optional Sandbox, Compute, Secret, and IAM factory"]
+    E --> F["Construct Configuration, optional Sandbox, Compute, Secret, and IAM factory"]
   end
 
   subgraph OCC["Control-plane ownership"]
@@ -62,12 +54,10 @@ graph TD
 
 ### 1. Resolve and validate selected Driver implementations
 
-`scripts/driver-lifecycle.mjs`,
 `apps/controller/src/composition/installation-config.ts:loadInstallationConfiguration`
 
-The deployment lifecycle command and each later process read the same trusted
-startup YAML. Configuration, IAM, Compute, and optional Sandbox selections may
-name an operator-installed package;
+Each process reads the same trusted startup YAML. Configuration, IAM, Compute,
+and optional Sandbox selections may name an operator-installed package;
 implementation identity comes from its installed metadata. Secret selection is
 required in this YAML path and accepts only bundled Kubernetes Secrets.
 Optional `service_account` selection identifies the bundled Provider member;
@@ -75,8 +65,8 @@ it has no package-loading path. The
 [operator installation guide](../reference/drivers/selection.md) defines the package,
 pinning, registry, and configuration contract. TypeBox checks each selected
 Driver's closed schema before implementation-owned semantic validation;
-invalid package exports, identity, capability, or lifecycle wiring reject the
-command or startup without fallback.
+invalid package exports, identity, capability, or lifecycle wiring reject
+startup without fallback.
 
 For packageless Compute, the exact id `compute-ssh` selects `SshComputeDriver`
 with implementation `occ/ssh`. Every other packageless id retains Kubernetes
@@ -90,26 +80,7 @@ credential, Kubernetes, tenant, and authorization authority. An untrusted or
 malicious package can violate authorization and tenant isolation; package
 validation and lockfile integrity do not establish publisher trust.
 
-### 2. Apply installation lifecycle receipts
-
-`scripts/driver-lifecycle.mjs`
-
-After migration and bootstrap succeed, deployment runs
-`node scripts/driver-lifecycle.mjs apply` with `OCC_CONFIG_PATH` and
-`OCC_DATABASE_URL`. The command holds the Installation-scoped PostgreSQL lock
-while comparing selected Drivers with lifecycle receipts. New selected Drivers
-receive `onInstall`; same-family version changes receive `onUpdate`; unchanged
-versions receive no hook. Missing hooks are recorded as successful no-ops.
-Packaged subprocesses remain inside the lifecycle command's process group and
-must stop when its signal aborts; detached daemon work is unsupported.
-
-This command is the only automatic deployment-time lifecycle path. Removing a
-Driver from YAML does not call `onUninstall`; operators run
-`node scripts/driver-lifecycle.mjs uninstall --capability <capability> --id <id>`
-from the retained outgoing image and configuration before removing a package or
-applying incompatible migrations.
-
-### 3. Construct the single authoritative runtime bundle
+### 2. Construct the single authoritative runtime bundle
 
 `apps/controller/src/composition/installation-config.ts:loadInstallationConfiguration`
 
@@ -130,7 +101,7 @@ each configured host. Startup enforces the
 before returning any production runtime; development can use a four-operation
 Driver, and the worker still fails closed if a required stage becomes unavailable.
 
-### 4. Construct the API-only Provider branch
+### 3. Construct the API-only Provider branch
 
 [`server.mjs:start`](../../apps/controller/src/server.mjs) handles a selected
 ServiceAccount Driver after loading the common bundle. It requires PostgreSQL,
@@ -141,7 +112,7 @@ nonsecret Provider metadata; it constructs neither the client nor this Driver.
 The [managed credential flow](service-account-driver-credential-delivery.md)
 continues through account creation, issuance, and deployment checks.
 
-### 5. Load current policy and hand off lifecycle ownership
+### 4. Load current policy and hand off lifecycle ownership
 
 `apps/controller/src/worker.ts:ControllerWorker.start`
 
@@ -165,8 +136,6 @@ their existing Harness-owned runtime topology.
   real installed IAM, Compute, and Configuration packages; production admission;
   IAM allow/deny evidence; Configuration CRUD; and OCC provisioning of
   `/tmp/local-test`.
-- Run `node --test tests/integration/production-kubernetes-packaging.test.mjs` for
-  deployment ordering and Helm packaging.
 - Startup failures emit `startup-error` or `worker.startup-error`; inspect
   Driver identity, persisted policy, capability contracts, and lifecycle stages.
 - The integration uses `InMemoryPlatformState`; it does not prove a running
@@ -186,7 +155,6 @@ their existing Harness-owned runtime topology.
 
 ## Changelog
 
-- 2026-09-09 17:25: Added the deployment-time Driver installation lifecycle command before API and worker startup. (01a08890-87c8-7293-bd75-d7fc58e52cf2 - ee53c7b562ab0d593a3bfb8ecfd6e700ee98a716)
 - 2026-09-01 19:09: Include Secret and Sandbox construction and the API-only Provider/ServiceAccount branch in the current loading trace. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-28 17:58: Updated moved feature-reference links for the documentation organization. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-24 19:46: Pass controller-owned platform state directly to bundled and installed IAM Drivers. (01a036c0-9a0e-7ee0-8428-17824f5172a0 - 786b7ce)

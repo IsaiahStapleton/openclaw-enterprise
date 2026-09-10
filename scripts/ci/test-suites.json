@@ -128,8 +128,7 @@
             "dev-up fails closed when bootstrap exits unsuccessfully",
             "dev-up fails closed when the worker exits before readiness",
             "dev-up preserves a copied key when the authenticated installation check is rejected",
-            "dev-up rejects an authenticated installation response for a different Installation",
-            "dev-up fails closed when Driver lifecycle apply exits unsuccessfully"
+            "dev-up rejects an authenticated installation response for a different Installation"
           ]
         },
         {
@@ -281,31 +280,6 @@
             "production Drivers without an activation preference retain after-commit Kubernetes ordering",
             "an opted-in active runtime continuously repairs under its original authorized actor",
             "active maintenance recovers after its convergence deadline and stops when its actor is denied"
-          ]
-        },
-        {
-          "path": "tests/integration/postgres-driver-lifecycle.test.mjs",
-          "expectedTests": [
-            "Driver lifecycle receipts follow install, update, no-op, uninstall, and reinstall",
-            "external command abort skips hooks and receipt writes",
-            "record-existing writes only once and never runs hooks",
-            "later hook failure preserves earlier successful receipts",
-            "family changes require explicit uninstall before install",
-            "timeout aborts the hook and leaves the receipt unchanged",
-            "database session loss aborts the hook and leaves the receipt unchanged",
-            "session advisory lock contention rejects another lifecycle command",
-            "uninstall blocks Drivers that still have conservative platform references",
-            "configuration rows block Configuration Driver uninstall before hooks",
-            "Secret ownership blocks Secret Driver uninstall before hooks",
-            "ServiceAccount Provider bindings block ServiceAccount Driver uninstall before hooks",
-            "retained AgentRevisions block uninstall before hooks",
-            "failed-permanent controller work blocks uninstall before hooks"
-          ]
-        },
-        {
-          "path": "tests/integration/postgres-driver-lifecycle-cli.test.mjs",
-          "expectedTests": [
-            "driver lifecycle CLI applies receipts, replays crashes, and cleans interrupted subprocesses"
           ]
         }
       ]

@@ -11,9 +11,8 @@ last_updated_session: codex/01a08890-87c8-7293-bd75-d7fc58e52cf2
 `scripts/dev-up` is the supported local OpenClaw Enterprise development entry
 point. The helper performs host preflight, selects or verifies runtime images,
 wraps Docker Compose, waits for PostgreSQL migration, Installation bootstrap,
-Driver lifecycle apply, API health, and worker readiness, then proves
-authenticated `/installation` access with a protected local copy of the
-bootstrap service key. That startup
+API health, and worker readiness, then proves authenticated `/installation`
+access with a protected local copy of the bootstrap service key. That startup
 proof does not create an Agent, deploy an AgentRevision, or start a TUI.
 
 After startup, the operator uses authenticated API calls to select a Namespace,
@@ -36,7 +35,6 @@ the first authenticated development API checks.
   from the repository root, followed by authenticated API calls and optional
   `docker exec -it` TUI attachment.
 - Source: `scripts/dev-up`, `compose.yaml`,
-  `scripts/driver-lifecycle.mjs`,
   `apps/controller/src/server.mjs:start`,
   `apps/controller/src/worker.ts:ControllerWorker`, and
   `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`.
@@ -56,12 +54,11 @@ the first authenticated development API checks.
 graph TD
   A["scripts/dev-up"] --> B["Preflight host tools and resolved Compose config"]
   B --> C["Select quickstart runtime image or validate custom images"]
-  C --> D["Docker Compose runs PostgreSQL, migrate, bootstrap, and driver-lifecycle"]
-  D --> E["Docker Compose starts API and worker after lifecycle success"]
-  E --> F["Copy bootstrap service-key response to private local file"]
-  F --> G["scripts/occ-api GET /installation proves authenticated access"]
-  G --> T["Operator sends authenticated API provisioning and deploy calls"]
-  T --> H["Worker claims durable Namespace and AgentRevision work"]
+  C --> D["Docker Compose starts PostgreSQL, migrate, bootstrap, API, and worker"]
+  D --> E["Copy bootstrap service-key response to private local file"]
+  E --> F["scripts/occ-api GET /installation proves authenticated access"]
+  F --> G["Operator sends authenticated API provisioning and deploy calls"]
+  G --> H["Worker claims durable Namespace and AgentRevision work"]
   H --> I["Docker driver ensures one network per Namespace"]
   H --> J{"Harness topology"}
   J -->|embedded OpenClaw| K["Start one gateway plus embedded Harness container"]

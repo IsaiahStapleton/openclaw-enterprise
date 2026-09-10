@@ -25,18 +25,6 @@ export function createDriver({ id, implementation, configuration, getOperationAb
     id,
     capability: "compute",
     implementation,
-    lifecycleHooks: Object.freeze({
-      async onInstall(context) {
-        if (
-          context.capability !== "compute" ||
-          context.driverId !== id ||
-          context.version !== "1.0.0" ||
-          context.signal === undefined
-        ) {
-          throw new Error("The test Compute lifecycle context was invalid.");
-        }
-      },
-    }),
     currentOperationAbortSignal: getOperationAbortSignal,
     async ensureNamespace(namespace) {
       const evidence = JSON.stringify({ namespaceId: namespace.id, driverId: id, implementation });

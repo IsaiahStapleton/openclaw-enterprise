@@ -26,8 +26,6 @@ test("secret-driver-startup constructs the bundled KubernetesSecretDriver from I
   assert.deepEqual(drivers.installation.drivers.secret, {
     id: "secret-kubernetes",
     implementation: "occ/kubernetes-secret",
-    implementationFamily: "occ/kubernetes-secret",
-    version: "0.1.0",
     configuration: { authentication: { mode: "inCluster" } },
   });
   assert.ok(drivers.secretDriver instanceof KubernetesSecretDriver);

@@ -96,20 +96,6 @@ services:
       collector:
         condition: service_started
 
-  driver-lifecycle:
-    environment:
-      OCC_CONFIG_PATH: /etc/openclaw/occ.yaml
-    labels:
-      org.openclaw.enterprise.managed: "true"
-      org.openclaw.enterprise.role: driver-lifecycle
-      org.openclaw.enterprise.version: 0.1.0
-    logging: *otel-fluentd-logging
-    volumes:
-      - ./deploy/logging/occ.yaml:/etc/openclaw/occ.yaml:ro
-    depends_on:
-      collector:
-        condition: service_started
-
   worker:
     environment:
       OCC_CONFIG_PATH: /etc/openclaw/occ.yaml
