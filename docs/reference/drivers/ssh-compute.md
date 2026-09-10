@@ -225,6 +225,6 @@ never leaves it held, so it needs no manual cleanup.
 
 - [ComputeDriver contract](compute.md)
 - [Driver selection](selection.md)
-- [Settings](../settings.md#ssh-compute-driver)
+- [Settings](../settings/programmatic.md#ssh-compute-driver)
 - [Deployment](../../guides/deploy.md)
 - [SSH testing](../../testing/ssh.md)

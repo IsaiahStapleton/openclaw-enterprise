@@ -45,7 +45,7 @@ services:
     volumes:
       - occ_configuration_data:/app/.development/configurations
     depends_on:
-      bootstrap:
+      driver-lifecycle:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -75,6 +75,18 @@ services:
       - occ_bootstrap_data:/var/lib/openclaw/bootstrap
     depends_on:
       migrate:
+        condition: service_completed_successfully
+    networks:
+      development:
+
+  driver-lifecycle:
+    build: *development-build
+    environment:
+      NODE_ENV: development
+      OCC_DATABASE_URL: postgresql://occ_app:occ-app-local@postgres:5432/openclaw_enterprise
+    command: ["scripts/driver-lifecycle.mjs", "apply"]
+    depends_on:
+      bootstrap:
         condition: service_completed_successfully
     networks:
       development:

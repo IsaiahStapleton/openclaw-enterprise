@@ -64,6 +64,8 @@ test("dev-up builds the default runtime only when real Compose leaves runtime im
         entry.args.includes("up") &&
         entry.args.includes("--build") &&
         entry.args.includes("-d") &&
+        entry.args.includes("--force-recreate") &&
+        entry.args.includes("driver-lifecycle") &&
         entry.env.OCC_DOCKER_RUNTIME_IMAGE === defaultRuntimeImage,
     ),
   );
@@ -192,6 +194,27 @@ test("dev-up fails closed when bootstrap exits unsuccessfully", async (t) => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /startup failed: bootstrap exited with 1/);
   assert.match(result.stderr, /diagnostic: docker compose .* ps --all bootstrap/);
+  assert.doesNotMatch(result.stdout + result.stderr, new RegExp(serviceKey));
+  const dockerLogs = await readJsonLines(fixture.dockerLog);
+  assert.equal(
+    dockerLogs.some((entry) => entry.args[0] === "compose" && entry.args.includes("cp")),
+    false,
+  );
+  assert.equal((await readJsonLines(fixture.curlLog)).length, 0);
+});
+
+test("dev-up fails closed when Driver lifecycle apply exits unsuccessfully", async (t) => {
+  const fixture = await createFixture(t, { scenario: "driver-lifecycle-failed" });
+  const keyOutput = join(fixture.directory, "driver-lifecycle-failure-key.json");
+
+  const result = runDevUp(
+    ["--key-output", keyOutput, "--", ...composeOptions(fixture)],
+    fixture.env,
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /startup failed: driver-lifecycle exited with 1/);
+  assert.match(result.stderr, /diagnostic: docker compose .* ps --all driver-lifecycle/);
   assert.doesNotMatch(result.stdout + result.stderr, new RegExp(serviceKey));
   const dockerLogs = await readJsonLines(fixture.dockerLog);
   assert.equal(

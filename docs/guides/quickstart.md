@@ -74,7 +74,7 @@ The helper sends the key as `x-api-key` without exposing it in process
 arguments or terminal output.
 
 Export `OCC_URL` and `OCC_SERVICE_KEY_FILE` if you are continuing to
-[Development end-to-end TUI](deploy.md#development-end-to-end-tui). The OCC key
+[Development end-to-end TUI](deploy/local-operations.md#development-end-to-end-tui). The OCC key
 stays with the operator; it is separate from the Agent
 [gateway](concepts.md#gateways-and-harnesses) token and model credential and must
 never enter a workload or TUI.

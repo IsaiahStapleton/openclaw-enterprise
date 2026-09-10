@@ -37,6 +37,10 @@ const gatewayRoutingValues = {
   "gatewayRouting.gatewayClassName": "private-envoy-gateway",
   "gatewayRouting.apiKeySecretName": "occ-gateway-api-key",
 };
+const driverLifecycleEgressValues = {
+  "driverLifecycle.egress[0].cidr": "198.51.100.40/32",
+  "driverLifecycle.egress[0].port": "443",
+};
 const externalGatewayRoutingValues = {
   ...gatewayRoutingValues,
   "gatewayRouting.hostname": "agents.example.internal",
@@ -186,19 +190,30 @@ test(
     assert.equal(services[0].spec.type, "ClusterIP");
     assert.ok(!objects.some(({ kind }) => ["Ingress", "Gateway"].includes(kind)));
 
-    // Initialization, API, and worker use distinct identities; database credentials remain isolated.
-    for (const component of ["initialization", "api", "worker"]) {
+    // Initialization, Driver lifecycle, API, and worker use distinct identities;
+    // database credentials remain isolated.
+    for (const component of ["initialization", "driver-lifecycle", "api", "worker"]) {
       assert.ok(selected("ServiceAccount", component));
     }
     const initialization = selected("Job", "initialization");
+    const lifecycle = selected("Job", "driver-lifecycle");
     assert.equal(initialization.spec.backoffLimit, 0);
+    assert.equal(lifecycle.spec.backoffLimit, 0);
+    assert.ok(
+      Number(initialization.metadata.annotations["helm.sh/hook-weight"]) <
+        Number(lifecycle.metadata.annotations["helm.sh/hook-weight"]),
+    );
     const pod = initialization.spec.template.spec;
+    const lifecyclePod = lifecycle.spec.template.spec;
     assert.equal(pod.automountServiceAccountToken, false);
+    assert.equal(lifecyclePod.automountServiceAccountToken, false);
     assert.equal(pod.securityContext.fsGroupChangePolicy, "OnRootMismatch");
     assert.equal(pod.initContainers[0].name, "migration");
     assert.deepEqual(pod.initContainers[0].args, ["scripts/migrate-production.mjs"]);
     assert.equal(pod.containers[0].name, "bootstrap");
     assert.deepEqual(pod.containers[0].args, ["scripts/bootstrap-installation.mjs"]);
+    assert.equal(lifecyclePod.containers[0].name, "driver-lifecycle");
+    assert.deepEqual(lifecyclePod.containers[0].args, ["scripts/driver-lifecycle.mjs", "apply"]);
     assert.ok(pod.initContainers[0].env.some(({ name }) => name === "OCC_MIGRATION_DATABASE_URL"));
     assert.ok(!pod.initContainers[0].env.some(({ name }) => name === "OCC_DATABASE_URL"));
     assert.ok(pod.containers[0].env.some(({ name }) => name === "OCC_DATABASE_URL"));
@@ -252,8 +267,34 @@ test(
           readOnly === undefined,
       ),
     );
+    assert.ok(
+      lifecyclePod.containers[0].env.some(
+        ({ name, valueFrom }) =>
+          name === "OCC_DATABASE_URL" &&
+          valueFrom?.secretKeyRef?.name === "occ-database" &&
+          valueFrom.secretKeyRef.key === "application-url",
+      ),
+    );
+    assert.ok(lifecyclePod.containers[0].env.some(({ name }) => name === "OCC_CONFIG_PATH"));
+    assert.ok(
+      !lifecyclePod.containers[0].env.some(({ name }) => name === "OCC_MIGRATION_DATABASE_URL"),
+    );
+    assert.ok(!lifecyclePod.containers[0].env.some(({ name }) => name === "OCC_AUTH_SECRET"));
+    assert.ok(
+      lifecyclePod.containers[0].volumeMounts.some(
+        ({ name, mountPath, readOnly }) =>
+          name === "installation-startup" &&
+          mountPath === "/etc/openclaw/installation" &&
+          readOnly === true,
+      ),
+    );
+    assert.ok(
+      !lifecyclePod.containers[0].volumeMounts.some(
+        ({ name }) => name === "bootstrap-password-output",
+      ),
+    );
 
-    // The privileged initialization Pod is isolated before its pre-install hook starts.
+    // The privileged initialization and lifecycle Pods are isolated before their hooks start.
     const bootstrapPolicies = objects.filter(
       ({ kind, metadata }) =>
         kind === "NetworkPolicy" && metadata.name.startsWith("oce-bootstrap-"),
@@ -271,6 +312,22 @@ test(
     assert.deepEqual(isolation.spec.policyTypes, ["Ingress", "Egress"]);
     assert.equal(isolation.spec.ingress, undefined);
     assert.equal(isolation.spec.egress.length, 2);
+    const lifecycleIsolation = objects.find(
+      ({ kind, metadata }) =>
+        kind === "NetworkPolicy" && metadata.name === "oce-driver-lifecycle-isolation",
+    );
+    assert.ok(lifecycleIsolation);
+    assert.ok(
+      Number(lifecycleIsolation.metadata.annotations["helm.sh/hook-weight"]) <
+        Number(lifecycle.metadata.annotations["helm.sh/hook-weight"]),
+    );
+    assert.equal(
+      lifecycleIsolation.spec.podSelector.matchLabels["app.kubernetes.io/component"],
+      "driver-lifecycle",
+    );
+    assert.deepEqual(lifecycleIsolation.spec.policyTypes, ["Ingress", "Egress"]);
+    assert.equal(lifecycleIsolation.spec.ingress, undefined);
+    assert.equal(lifecycleIsolation.spec.egress.length, 2);
 
     // Worker tenant authority excludes Secret access and remains unbound until operators authorize each tenant.
     const roles = objects.filter(({ kind }) => kind === "ClusterRole");
@@ -367,7 +424,7 @@ test(
 );
 
 test(
-  "the optional ChatGPT Provider isolates admin credentials, tenant Secrets, and provider egress to the API",
+  "the optional ChatGPT Provider isolates admin credentials to API and lifecycle Pods",
   tooling,
   async () => {
     const { stdout } = await render(chatgptValues);
@@ -378,7 +435,8 @@ test(
           kind === "Deployment" && metadata.labels?.["app.kubernetes.io/component"] === component,
       );
 
-    // The operator-owned admin Secret is available only to the API through its fixed file path.
+    // The operator-owned admin Secret is available to API serving and lifecycle hooks
+    // through the fixed file path.
     const apiPod = deployment("api").spec.template.spec;
     const adminVolume = apiPod.volumes.find(({ name }) => name === "chatgpt-admin");
     assert.deepEqual(adminVolume.secret, {
@@ -388,6 +446,29 @@ test(
     assert.deepEqual(
       apiPod.containers[0].volumeMounts.find(({ name }) => name === "chatgpt-admin"),
       { name: "chatgpt-admin", mountPath: "/etc/openclaw/chatgpt", readOnly: true },
+    );
+    const lifecycle = objects.find(
+      ({ kind, metadata }) =>
+        kind === "Job" && metadata.labels?.["app.kubernetes.io/component"] === "driver-lifecycle",
+    );
+    const lifecyclePod = lifecycle.spec.template.spec;
+    assert.deepEqual(lifecyclePod.volumes.find(({ name }) => name === "chatgpt-admin").secret, {
+      secretName: "occ-chatgpt-admin",
+      items: [{ key: "admin-key", path: "admin-key" }],
+    });
+    assert.deepEqual(
+      lifecyclePod.containers[0].volumeMounts.find(({ name }) => name === "chatgpt-admin"),
+      { name: "chatgpt-admin", mountPath: "/etc/openclaw/chatgpt", readOnly: true },
+    );
+    const initializationPod = objects.find(
+      ({ kind, metadata }) =>
+        kind === "Job" && metadata.labels?.["app.kubernetes.io/component"] === "initialization",
+    ).spec.template.spec;
+    assert.ok(!initializationPod.volumes.some(({ name }) => name === "chatgpt-admin"));
+    assert.ok(
+      ![...(initializationPod.initContainers ?? []), ...initializationPod.containers].some(
+        (container) => container.volumeMounts?.some(({ name }) => name === "chatgpt-admin"),
+      ),
     );
     const workerPod = deployment("worker").spec.template.spec;
     assert.ok(!workerPod.volumes.some(({ name }) => name === "chatgpt-admin"));
@@ -454,6 +535,20 @@ test(
       ["unrestricted client namespace", { "api.clients[0].namespace": "" }],
       ["broad database egress", { "database.cidr": "0.0.0.0/0" }],
       ["broad Kubernetes API egress", { "cluster.cidr": "10.43.0.0/16" }],
+      [
+        "broad Driver lifecycle egress",
+        {
+          "driverLifecycle.egress[0].cidr": "198.51.100.0/24",
+          "driverLifecycle.egress[0].port": "443",
+        },
+      ],
+      [
+        "invalid Driver lifecycle egress port",
+        {
+          "driverLifecycle.egress[0].cidr": "198.51.100.40/32",
+          "driverLifecycle.egress[0].port": "0",
+        },
+      ],
       ["shared migration database credentials", { "database.migrationUrlKey": "application-url" }],
       [
         "retired ChatGPT integration key",
@@ -567,16 +662,30 @@ test(
   },
 );
 
-test("development packaging isolates bootstrap service key output to the bootstrap service", async () => {
+test("development packaging orders Driver lifecycle apply before API and worker startup", async () => {
   const configuration = await composeConfiguration();
-  const { bootstrap, controller, migrate, worker } = configuration.services;
+  const {
+    bootstrap,
+    controller,
+    "driver-lifecycle": driverLifecycle,
+    migrate,
+    worker,
+  } = configuration.services;
   assert.ok(bootstrap);
   assert.ok(controller);
+  assert.ok(driverLifecycle);
   assert.ok(migrate);
   assert.ok(worker);
 
   assert.deepEqual(bootstrap.command, ["scripts/bootstrap-installation.mjs"]);
+  assert.deepEqual(driverLifecycle.command, ["scripts/driver-lifecycle.mjs", "apply"]);
   assert.equal(bootstrap.environment.NODE_ENV, "development");
+  assert.equal(driverLifecycle.environment.NODE_ENV, "development");
+  assert.equal(
+    driverLifecycle.environment.OCC_DATABASE_URL,
+    "postgresql://occ_app:occ-app-local@postgres:5432/openclaw_enterprise",
+  );
+  assert.equal(driverLifecycle.environment.OCC_CONFIG_PATH, undefined);
   assert.equal(
     bootstrap.environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE,
     "/var/lib/openclaw/bootstrap/initial-admin-service-key.json",
@@ -589,13 +698,21 @@ test("development packaging isolates bootstrap service key output to the bootstr
   assert.equal(controller.environment.OPENCLAW_DEV_PASSWORD, undefined);
   assert.equal(controller.environment.OPENCLAW_DEV_INSTALLATION_NAME, undefined);
   assert.equal(migrate.environment?.OCC_BOOTSTRAP_SERVICE_KEY_FILE, undefined);
+  assert.equal(driverLifecycle.environment?.OCC_BOOTSTRAP_SERVICE_KEY_FILE, undefined);
+  assert.equal(driverLifecycle.environment?.OCC_AUTH_SECRET, undefined);
+  assert.equal(driverLifecycle.environment?.OCC_MIGRATION_DATABASE_URL, undefined);
   assert.equal(worker.environment?.OCC_BOOTSTRAP_SERVICE_KEY_FILE, undefined);
 
-  assert.deepEqual(controller.depends_on.bootstrap, {
+  assert.deepEqual(controller.depends_on["driver-lifecycle"], {
     condition: "service_completed_successfully",
     required: true,
   });
+  assert.equal(controller.depends_on.bootstrap, undefined);
   assert.equal(controller.depends_on.migrate, undefined);
+  assert.deepEqual(driverLifecycle.depends_on.bootstrap, {
+    condition: "service_completed_successfully",
+    required: true,
+  });
   assert.deepEqual(bootstrap.depends_on.migrate, {
     condition: "service_completed_successfully",
     required: true,
@@ -620,6 +737,12 @@ test("development packaging isolates bootstrap service key output to the bootstr
       }),
   );
   assert.ok(
+    driverLifecycle.volumes === undefined ||
+      driverLifecycle.volumes.every(({ source, target }) => {
+        return source !== "occ_bootstrap_data" && target !== "/var/lib/openclaw/bootstrap";
+      }),
+  );
+  assert.ok(
     migrate.volumes === undefined ||
       migrate.volumes.every(({ source, target }) => {
         return source !== "occ_bootstrap_data" && target !== "/var/lib/openclaw/bootstrap";
@@ -631,6 +754,24 @@ test("development packaging isolates bootstrap service key output to the bootstr
         return source !== "occ_bootstrap_data" && target !== "/var/lib/openclaw/bootstrap";
       }),
   );
+});
+
+test("production Driver lifecycle egress is explicitly scoped", tooling, async () => {
+  const { stdout } = await render(driverLifecycleEgressValues);
+  const objects = await resources(stdout);
+  const bootstrapIsolation = objects.find(
+    ({ kind, metadata }) => kind === "NetworkPolicy" && metadata.name === "oce-bootstrap-isolation",
+  );
+  const isolation = objects.find(
+    ({ kind, metadata }) =>
+      kind === "NetworkPolicy" && metadata.name === "oce-driver-lifecycle-isolation",
+  );
+  assert.equal(bootstrapIsolation.spec.egress.length, 2);
+  assert.ok(isolation);
+  assert.deepEqual(isolation.spec.egress.at(-1), {
+    to: [{ ipBlock: { cidr: "198.51.100.40/32" } }],
+    ports: [{ protocol: "TCP", port: 443 }],
+  });
 });
 
 test(

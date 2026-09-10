@@ -63,3 +63,65 @@ spec:
           volumeMounts:
             - name: bootstrap-password-output
               mountPath: {{ .Values.bootstrap.password.mountPath }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-driver-lifecycle
+  labels:
+    {{- include "openclaw.labels" (dict "root" . "component" "driver-lifecycle") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "openclaw.labels" (dict "root" . "component" "driver-lifecycle") | nindent 8 }}
+    spec:
+      serviceAccountName: openclaw-enterprise-driver-lifecycle
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        {{- include "openclaw.podSecurity" . | nindent 8 }}
+      volumes:
+        - name: installation-startup
+          secret:
+            secretName: {{ .Values.installation.secretName }}
+            items:
+              - key: {{ .Values.installation.key }}
+                path: installation.yaml
+        {{- if .Values.provider.chatgpt.enabled }}
+        {{- $chatgpt := .Values.provider.chatgpt }}
+        - name: chatgpt-admin
+          secret:
+            secretName: {{ $chatgpt.secretName }}
+            items:
+              - key: {{ $chatgpt.key }}
+                path: admin-key
+        {{- end }}
+      containers:
+        - name: driver-lifecycle
+          image: {{ .Values.images.controller | quote }}
+          args: ["scripts/driver-lifecycle.mjs", "apply"]
+          securityContext:
+            {{- include "openclaw.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: OCC_CONFIG_PATH
+              value: /etc/openclaw/installation/installation.yaml
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_DATABASE_URL" "secretName" .Values.database.secretName "key" .Values.database.appUrlKey) | nindent 12 }}
+          volumeMounts:
+            - name: installation-startup
+              mountPath: /etc/openclaw/installation
+              readOnly: true
+            {{- if .Values.provider.chatgpt.enabled }}
+            - name: chatgpt-admin
+              mountPath: /etc/openclaw/chatgpt
+              readOnly: true
+            {{- end }}

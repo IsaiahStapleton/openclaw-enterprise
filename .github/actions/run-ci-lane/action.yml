@@ -57,6 +57,10 @@ runs:
       if: inputs.lane == 'checks-baseline'
       shell: bash
       run: pnpm openapi:check
+    - name: Run docs check
+      if: inputs.lane == 'checks-baseline'
+      shell: bash
+      run: pnpm docs:install && pnpm docs:check
     - name: Run typecheck
       if: inputs.lane == 'checks-baseline'
       shell: bash

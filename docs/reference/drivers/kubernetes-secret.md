@@ -115,7 +115,7 @@ never returned by OCC.
 ## Bind a Secret to gateway environment
 
 Add the returned reference to `secretBindings` on the Agent's Configuration. The
-[Configuration reference](../configuration.md#secret-bindings) owns the binding
+[Configuration reference](../configuration/secrets.md#secret-bindings) owns the binding
 shape and full native OpenClaw example. OCC validates binding sources, env
 delivery, and reserved environment destinations; the selected SecretDriver only
 resolves and validates the stored backend identity:
@@ -240,5 +240,5 @@ metadata cleanup after OCC verifies the stored backend identity.
 - [Settings](../settings.md)
 - [Production Kubernetes deployment](../../guides/deploy.md)
 - [Kubernetes Compute Driver](kubernetes-compute.md)
-- [Platform design](../../design.md#secret-access)
+- [Platform design](../../design/safeguards.md#secret-access)
 - [SecretDriver storage and delivery spec](../../../specs/.archive/14-secret-driver.md)

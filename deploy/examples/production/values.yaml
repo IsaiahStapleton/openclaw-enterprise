@@ -16,6 +16,9 @@ bootstrap:
 database:
   cidr: 10.45.0.12/32
 
+driverLifecycle:
+  egress: []
+
 api:
   clients:
     - namespace: operator-tools

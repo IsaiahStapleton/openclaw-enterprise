@@ -49,7 +49,7 @@ requirement. Run the compatibility check below against the resulting image.
 Production Kubernetes installations can use this recipe as a starting point,
 but must push the resulting image to an operator-controlled registry and
 configure the Kubernetes Compute Driver with immutable `@sha256:` image
-references. Follow [Build and publish production images](../../docs/guides/deploy.md#build-and-publish-production-images)
+references. Follow [Build and publish production images](../../docs/guides/deploy/production-installation.md#build-and-publish-production-images)
 for the controller and runtime build commands, registry publishing, and digest
 configuration.
 

@@ -28,6 +28,9 @@ installation:
   secretName: occ-installation-startup
   key: installation.yaml
 
+driverLifecycle:
+  egress: []
+
 auth:
   baseUrl: ""
   secretName: occ-auth

@@ -119,7 +119,7 @@ ownership and do not rewrite existing credentials.
 
 Unsupported pre-Provider state requires explicit cleanup and recreation of the
 selected disposable state, as recorded in the
-[implementation specification](../../specs/17-provider-driver-abstraction.md#migration-and-implementation-boundaries).
+[implementation specification](../../specs/17-provider-driver-abstraction/contract.md#migration-and-implementation-boundaries).
 Ownership is never inferred or backfilled. Draft edits and API shutdown do not
 stop workloads; exact upstream cleanup still needs the original configuration.
 
@@ -160,4 +160,4 @@ remain out of scope.
 - [Agents](agents.md)
 - [Service accounts](service-accounts.md)
 - [Driver selection](drivers/selection.md)
-- [Platform design](../design.md#drivers-and-providers)
+- [Platform design](../design/drivers.md#drivers-and-providers)

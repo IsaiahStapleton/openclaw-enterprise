@@ -268,20 +268,22 @@ if ! compose config --quiet >"$temporary_directory/compose-validated" 2>"$tempor
   fail "configuration" "docker compose config validation failed" docker compose "${compose_args[@]}" config --quiet
 fi
 
-if ! compose up --build -d; then
-  fail "startup" "docker compose up failed" docker compose "${compose_args[@]}" ps -a
+if ! compose up --build -d --force-recreate driver-lifecycle; then
+  fail "startup" "docker compose initialization failed" docker compose "${compose_args[@]}" ps -a
 fi
 
 poll_services() {
+  local phase="$1"
   local output="$temporary_directory/ps-all.json"
   if ! compose ps --all --format json >"$output" 2>"$temporary_directory/ps-all.err"; then
     return 1
   fi
-  python3 - "$output" <<'PY'
+  python3 - "$output" "$phase" <<'PY'
 import json
 import sys
 
 raw = open(sys.argv[1], encoding="utf-8").read().strip()
+phase = sys.argv[2]
 if not raw:
     raise SystemExit("missing compose service status")
 payload = []
@@ -315,7 +317,7 @@ def exit_code(value):
     return "" if code is None else str(code)
 
 
-for name in ("migrate", "bootstrap"):
+for name in ("migrate", "bootstrap", "driver-lifecycle"):
     current = entry(name)
     current_state = state(current)
     current_exit = exit_code(current)
@@ -325,6 +327,10 @@ for name in ("migrate", "bootstrap"):
         print(f"fail\tstartup\t{name} exited with {current_exit or 'unknown'}\tps\t{name}")
         raise SystemExit(0)
     print(f"wait\tstartup\t{name} has not completed\tps\t{name}")
+    raise SystemExit(0)
+
+if phase == "initialization":
+    print("ready\tstartup\tdriver lifecycle completed\tps\tdriver-lifecycle")
     raise SystemExit(0)
 
 controller = entry("controller")
@@ -350,9 +356,37 @@ PY
 }
 
 deadline=$((SECONDS + STARTUP_TIMEOUT_SECONDS))
+initialization_ready=0
+while [ "$SECONDS" -le "$deadline" ]; do
+  if ! service_report="$(poll_services initialization)"; then
+    fail "startup" "could not inspect Compose initialization services" docker compose "${compose_args[@]}" ps --all
+  fi
+  IFS=$'\t' read -r service_status service_stage service_message diagnostic_kind diagnostic_service <<<"$service_report"
+  if [ "$service_status" = "ready" ]; then
+    initialization_ready=1
+    break
+  fi
+  if [ "$service_status" = "fail" ]; then
+    if [ "$diagnostic_kind" = "logs" ]; then
+      fail "$service_stage" "$service_message" docker compose "${compose_args[@]}" logs "$diagnostic_service"
+    fi
+    fail "$service_stage" "$service_message" docker compose "${compose_args[@]}" ps --all "$diagnostic_service"
+  fi
+  sleep 2
+done
+
+if [ "$initialization_ready" -ne 1 ]; then
+  fail "startup" "driver lifecycle did not complete within ${STARTUP_TIMEOUT_SECONDS}s" docker compose "${compose_args[@]}" ps --all driver-lifecycle
+fi
+
+if ! compose up --build -d controller worker; then
+  fail "startup" "docker compose runtime failed" docker compose "${compose_args[@]}" ps -a
+fi
+
+deadline=$((SECONDS + STARTUP_TIMEOUT_SECONDS))
 startup_ready=0
 while [ "$SECONDS" -le "$deadline" ]; do
-  if ! service_report="$(poll_services)"; then
+  if ! service_report="$(poll_services runtime)"; then
     fail "startup" "could not inspect Compose services" docker compose "${compose_args[@]}" ps --all
   fi
   IFS=$'\t' read -r service_status service_stage service_message diagnostic_kind diagnostic_service <<<"$service_report"
@@ -367,7 +401,7 @@ while [ "$SECONDS" -le "$deadline" ]; do
       startup_ready=1
       break
     fi
-    if ! service_report="$(poll_services)"; then
+    if ! service_report="$(poll_services runtime)"; then
       fail "readiness" "worker readiness probe did not pass" docker compose "${compose_args[@]}" logs worker
     fi
     IFS=$'\t' read -r service_status service_stage service_message diagnostic_kind diagnostic_service <<<"$service_report"

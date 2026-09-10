@@ -87,6 +87,29 @@ OCC_BOOTSTRAP_FAILURE_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:
   node --test tests/integration/postgres-bootstrap-failures.test.mjs
 ```
 
+## Driver lifecycle
+
+The receipt tests require `OCC_LIFECYCLE_STATE_DATABASE_URL` pointing to a fresh, migrated
+disposable database. Their retained-revision and failed-work cases intentionally
+leave records that cannot be removed through normal application APIs; discard
+that database after the file finishes. They skip under the shared PostgreSQL
+package script unless this separate URL is explicitly supplied. CI provides a
+dedicated database for them. The packaged CLI suite uses its own
+disposable database and explicitly supplied application and migrator URLs:
+
+```sh
+OCC_LIFECYCLE_CLI_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_driver_hooks \
+OCC_LIFECYCLE_CLI_MIGRATION_DATABASE_URL=postgresql://occ_migrator:occ-migrator-local@127.0.0.1:55432/openclaw_driver_hooks \
+  node --test tests/integration/postgres-driver-lifecycle-cli.test.mjs
+```
+
+Prepare that database with the roles and schemas shown above. The CLI suite
+resets its `occ` and `drizzle` schemas, bootstraps an Installation, and runs
+actual packaged Drivers through install, update, downgrade, uninstall, crash
+replay and cancellation. It also waits for the real five-minute command deadline.
+Do not share this database with another process. CI provisions one database per
+test file and supplies both URLs automatically.
+
 ## Service-key persistence
 
 `tests/integration/postgres-service-api-keys.test.mjs` covers stored hashing,

@@ -78,6 +78,19 @@ function retiredChatgptInstallation() {
   return configuration;
 }
 
+const emptyNativeIAMStateStore = Object.freeze({
+  async loadNativeIAMState() {
+    return {
+      identities: [],
+      groups: [],
+      memberships: [],
+      roles: [],
+      bindings: [],
+      restrictions: [],
+    };
+  },
+});
+
 test("startup loads singleton Installation YAML and validates Drivers before construction", async (t) => {
   const path = await fixture(t);
   const drivers = await loadInstallationConfiguration({
@@ -123,6 +136,27 @@ test("shared startup loads provider metadata without reading the API-only ChatGP
   assert.deepEqual(drivers.installation.drivers.service_account, {
     id: "chatgpt-service-accounts",
   });
+  assert.deepEqual(drivers.lifecycleDriverSelections.at(-1), {
+    capability: "service_account",
+    driverId: "chatgpt-service-accounts",
+    implementation: "chatgpt",
+    implementationFamily: "chatgpt",
+    version: "0.1.0",
+  });
+  assert.throws(
+    () => drivers.createLifecycleDrivers({ iamState: emptyNativeIAMStateStore }),
+    /ServiceAccount lifecycle Driver requires API-side construction/,
+  );
+  const serviceAccountDriver = Object.freeze({
+    id: "chatgpt-service-accounts",
+    capability: "service_account",
+    implementation: "chatgpt",
+  });
+  const lifecycleDrivers = drivers.createLifecycleDrivers({
+    iamState: emptyNativeIAMStateStore,
+    serviceAccountDriver,
+  });
+  assert.equal(lifecycleDrivers.at(-1).driver, serviceAccountDriver);
   assert.equal(Object.hasOwn(drivers, "serviceAccountDriver"), false);
   assert.equal(Object.hasOwn(drivers, "chatgptClient"), false);
 });

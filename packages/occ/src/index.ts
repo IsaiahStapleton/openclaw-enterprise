@@ -108,6 +108,21 @@ export {
   type TransactionalAuditWriter,
 } from "./state/platform-state.ts";
 export {
+  applyDriverLifecycle,
+  recordExistingDriverLifecycle,
+  uninstallDriverLifecycle,
+  DriverLifecycleAbortedError,
+  DriverLifecycleConnectionLostError,
+  DriverLifecycleTimeoutError,
+  type DriverLifecycleContext,
+  type DriverLifecycleHooks,
+  type DriverLifecycleOptions,
+  type DriverLifecycleReceipt,
+  type DriverLifecycleResult,
+  type DriverLifecycleTarget,
+  type DriverLifecycleUninstallOptions,
+} from "./state/driver-lifecycle.ts";
+export {
   PostgresPlatformState,
   PostgresPlatformStateStore,
   type PersistedNativeIAMState,

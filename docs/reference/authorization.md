@@ -71,7 +71,7 @@ principal types:
   non-Agent automation.
 
 The controller authenticates a user session for the human Principal or a
-[service API key](authentication.md#service-api-keys) for an explicitly provisioned,
+[service API key](authentication/service-api-keys.md#service-api-keys) for an explicitly provisioned,
 non-Agent ServicePrincipal. Service-key lookup supplies the verified
 `servicePrincipalId` and its stored Namespace to the selected IAM Driver; it does
 not reinterpret a human issuer/subject as an automation identity.

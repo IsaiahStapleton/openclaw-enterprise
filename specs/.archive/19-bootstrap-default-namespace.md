@@ -51,7 +51,7 @@ The [platform design](../../docs/design.md) remains authoritative, and
    intact. Repeated HTTP bootstrap retains its `409` response.
 6. Authorization failure or an uncommitted platform transaction does not leave
    a partial Namespace/work item. An ambiguous commit still requires the
-   [existing recovery procedure](../../docs/guides/deploy.md#recover-an-incomplete-bootstrap).
+   [existing recovery procedure](../../docs/guides/deploy/service-keys.md#recover-an-incomplete-bootstrap).
    Concurrent initializers use existing singleton/transaction constraints.
 
 ## Implementation
@@ -64,7 +64,7 @@ The [platform design](../../docs/design.md) remains authoritative, and
    Preserve distinct authorization, concurrency, rollback, retry, and configured
    Namespace-state evidence; remove redundant branch-only setup/assertions.
 3. Update the quickstart, deployment guide, current reference, and
-   [development](../../docs/flows/development-startup.md) and
+   [development](../../docs/flows/docker-compose-development.md) and
    [production](../../docs/flows/production-startup.md) startup flows. Users discover
    the platform ID through `GET /namespaces`; Kubernetes operators discover the
    backing namespace by its existing `openclaw.dev/namespace` label before RBAC.

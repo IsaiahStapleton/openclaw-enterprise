@@ -32,6 +32,18 @@ export function createDriver({ id, implementation, configuration, platformState 
     id,
     capability: "iam",
     implementation,
+    lifecycleHooks: Object.freeze({
+      async onInstall(context) {
+        if (
+          context.capability !== "iam" ||
+          context.driverId !== id ||
+          context.version !== "1.0.0" ||
+          context.signal === undefined
+        ) {
+          throw new Error("The test IAM lifecycle context was invalid.");
+        }
+      },
+    }),
     async lookupIdentity({ issuer, subject }) {
       const state = await persistedState();
       const matches = state.identities.filter(

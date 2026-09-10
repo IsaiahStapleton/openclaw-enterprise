@@ -81,14 +81,21 @@ const command = args[commandIndex];
 if (command === "config") delegateComposeConfig();
 if (command === "up") exit(0);
 if (command === "ps") {
-  const serviceNames = ["migrate", "bootstrap", "controller", "worker"];
-  const requested = serviceNames.includes(args[args.length - 1]) ? [args[args.length - 1]] : serviceNames;
+  const serviceNames = ["migrate", "bootstrap", "driver-lifecycle", "controller", "worker"];
+  const requested = serviceNames.includes(args[args.length - 1])
+    ? [args[args.length - 1]]
+    : serviceNames;
   const entries = requested.map((service) => {
     let serviceState = "running";
     let exitCode = 0;
     let health = "";
-    if (service === "migrate" || service === "bootstrap") serviceState = "exited";
+    if (service === "migrate" || service === "bootstrap" || service === "driver-lifecycle") {
+      serviceState = "exited";
+    }
     if (service === "bootstrap" && scenario === "bootstrap-failed") exitCode = 1;
+    if (service === "driver-lifecycle" && scenario === "driver-lifecycle-failed") {
+      exitCode = 1;
+    }
     if (service === "controller") health = "healthy";
     if (service === "worker" && scenario === "worker-exited") {
       serviceState = "exited";

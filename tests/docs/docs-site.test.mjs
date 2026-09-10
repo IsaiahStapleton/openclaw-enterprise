@@ -44,12 +44,23 @@ test("docs build renders every authored page and preserves repository ownership"
   assert.match(index, /href="\/guides\/quickstart\//);
   assert.match(index, /github\.com\/openclaw\/openclaw-enterprise\/blob\/main\/specs\/README\.md/);
   const api = await readFile(join(root, "dist/docs/reference/api/index.html"), "utf8");
-  assert.match(api, /POST/);
+  assert.match(api, /Development OCC API reference/);
   assert.match(api, /id="get-namespacesnamespaceidagentsagentidworkspacefilesname"/);
+  assert.match(api, /\/reference\/api\/agents-workspace\//);
   assert.ok((await readFile(join(root, "dist/docs/pagefind/pagefind.js"))).length > 0);
   assert.ok((await readFile(join(root, "dist/docs/pagefind/pagefind-ui.js"))).length > 0);
   assert.match(api, /<table\b/);
   assert.match(api, /\/reference\/authentication\//);
+  const workspaceFileApi = await readFile(
+    join(root, "dist/docs/reference/api/agents-workspace/index.html"),
+    "utf8",
+  );
+  assert.match(
+    workspaceFileApi,
+    /GET \/namespaces\/\{namespaceId\}\/agents\/\{agentId\}\/workspace\/files\/\{name\}/,
+  );
+  assert.match(workspaceFileApi, /id="get-namespacesnamespaceidagentsagentidworkspacefilesname"/);
+  assert.match(workspaceFileApi, /<table\b/);
   const architecture = await readFile(join(root, "dist/docs/ARCHITECTURE/index.html"), "utf8");
   assert.match(architecture, /mermaid/);
   const asset = await readFile(join(root, "dist/docs/assets/lobster-mech-transparent.png"));

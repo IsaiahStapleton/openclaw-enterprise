@@ -1,0 +1,11 @@
+{
+  "name": "@fixture/lifecycle-configuration-driver",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./compiled/index.js"
+  },
+  "files": [
+    "compiled"
+  ]
+}

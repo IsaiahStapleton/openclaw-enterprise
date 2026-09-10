@@ -41,7 +41,7 @@ optional Namespace at issuance, but it does not snapshot or grant permissions.
 The controller already has configured Better Auth storage and its selected IAM
 Driver. Native IAM requires an explicitly provisioned ServicePrincipal, Role,
 and AccessBinding; issuance creates none of them. Request fields and lifetime
-limits are defined in the [authentication reference](../reference/authentication.md#issuance)
+limits are defined in the [authentication reference](../reference/authentication/service-api-keys.md#issuance)
 and [API reference](../reference/api.md).
 
 ## Flow
@@ -205,11 +205,11 @@ These commands describe the proof hooks, not a new runtime execution record.
 
 ## Related docs
 
-- [Authentication reference](../reference/authentication.md#service-api-keys)
-- [Deployment procedure](../guides/deploy.md#service-api-keys-for-automation)
+- [Authentication reference](../reference/authentication/service-api-keys.md#service-api-keys)
+- [Deployment procedure](../guides/deploy/service-keys.md#service-api-keys-for-automation)
 - [Human password/session flow](local-password-authentication.md)
 - [Authorization reference](../reference/authorization.md)
-- [Platform identity and authority](../design.md#iam-and-authority)
+- [Platform identity and authority](../design/access.md#iam-and-authority)
 - [Service API key implementation spec](../../specs/.archive/13-service-api-keys.md)
 
 ## Manual Notes

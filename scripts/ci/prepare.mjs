@@ -1136,6 +1136,13 @@ async function prepareFile({ lane, file, statePath }) {
     });
     resourceIds.push(database.resourceId);
     env.OCC_TEST_DATABASE_URL = database.appUrl;
+    if (relativeFile.endsWith("postgres-driver-lifecycle.test.mjs")) {
+      env.OCC_LIFECYCLE_STATE_DATABASE_URL = database.appUrl;
+    }
+    if (relativeFile.endsWith("postgres-driver-lifecycle-cli.test.mjs")) {
+      env.OCC_LIFECYCLE_CLI_DATABASE_URL = database.appUrl;
+      env.OCC_LIFECYCLE_CLI_MIGRATION_DATABASE_URL = database.migrationUrl;
+    }
   }
 
   if (relativeFile.endsWith("postgres-bootstrap-failures.test.mjs")) {

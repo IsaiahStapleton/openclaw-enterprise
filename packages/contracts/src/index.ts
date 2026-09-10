@@ -399,7 +399,23 @@ export interface Driver {
   readonly id: string;
   readonly capability: DriverCapability;
   readonly implementation: string;
+  readonly lifecycleHooks?: DriverLifecycleHooks;
   readonly computeLifecycleHooks?: ComputeLifecycleHooks;
+}
+
+export type DriverLifecycleContext = Readonly<{
+  installationId: string;
+  capability: DriverCapability;
+  driverId: string;
+  version: string;
+  previousVersion?: string;
+  signal: AbortSignal;
+}>;
+
+export interface DriverLifecycleHooks {
+  onInstall?(context: DriverLifecycleContext): Promise<void>;
+  onUpdate?(context: DriverLifecycleContext): Promise<void>;
+  onUninstall?(context: DriverLifecycleContext): Promise<void>;
 }
 
 export interface WorkloadLaunchContext {

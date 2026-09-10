@@ -7,12 +7,15 @@ import { loadYaml } from "@kubernetes/client-node";
 import type {
   ComputeDriver,
   ConfigurationDriver,
+  Driver,
+  DriverCapability,
   DriverImplementation,
   IAMDriver,
   ProviderDefinition,
   ProviderSummary,
   SandboxDriver,
   SecretDriver,
+  ServiceAccountDriver,
 } from "@openclaw-enterprise/contracts";
 import { NativeIAMDriver, type NativeIAMStateStore } from "@openclaw-enterprise/iam";
 import {
@@ -47,8 +50,22 @@ export interface StartupConfigurationSnapshot {
 export interface SelectedDriverConfiguration<T = ConfigurationRecord> {
   readonly id: string;
   readonly implementation: string;
+  readonly implementationFamily: string;
+  readonly version: string;
   readonly package?: string;
   readonly configuration: T;
+}
+
+export interface DriverLifecycleSelection {
+  readonly capability: DriverCapability;
+  readonly driverId: string;
+  readonly implementation: string;
+  readonly implementationFamily: string;
+  readonly version: string;
+}
+
+export interface RuntimeDriverLifecycleSelection extends DriverLifecycleSelection {
+  readonly driver: Driver;
 }
 
 export interface InstallationStartupConfiguration {
@@ -72,11 +89,16 @@ export type ServiceAccountDriverFactory = (
 
 export interface InstallationRuntimeDrivers {
   readonly installation: InstallationStartupConfiguration;
+  readonly lifecycleDriverSelections: readonly DriverLifecycleSelection[];
   readonly computeDriver: ComputeDriver;
   readonly configurationDriver: ConfigurationDriver;
   readonly secretDriver: SecretDriver;
   readonly sandboxDriver?: SandboxDriver;
   readonly createIAMDriver: (state: NativeIAMStateStore) => IAMDriver;
+  readonly createLifecycleDrivers: (options: {
+    readonly iamState: NativeIAMStateStore;
+    readonly serviceAccountDriver?: ServiceAccountDriver;
+  }) => readonly RuntimeDriverLifecycleSelection[];
 }
 
 async function startupConfiguration(
@@ -152,6 +174,14 @@ interface ExternalDriverModule extends DriverImplementation {
 interface LoadedDriverPackage {
   readonly module: ExternalDriverModule;
   readonly implementation: string;
+  readonly implementationFamily: string;
+  readonly version: string;
+}
+
+interface BundledDriverDescriptor {
+  readonly implementation: string;
+  readonly implementationFamily: string;
+  readonly version: string;
 }
 
 interface BundledOpenShellSandboxDriverModule extends DriverImplementation {
@@ -162,6 +192,43 @@ interface BundledOpenShellSandboxDriverModule extends DriverImplementation {
 }
 
 const PACKAGE_NAME = /^(?:@[a-zA-Z0-9][a-zA-Z0-9._~-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._~-]*$/;
+const BUNDLED_DRIVER_DESCRIPTORS = Object.freeze({
+  configuration: Object.freeze({
+    implementation: "occ/kubernetes-configmap",
+    implementationFamily: "occ/kubernetes-configmap",
+    version: "0.1.0",
+  }),
+  iam: Object.freeze({
+    implementation: "occ/native-iam",
+    implementationFamily: "occ/native-iam",
+    version: "0.1.0",
+  }),
+  computeKubernetes: Object.freeze({
+    implementation: "occ/kubernetes",
+    implementationFamily: "occ/kubernetes",
+    version: "0.1.0",
+  }),
+  computeSsh: Object.freeze({
+    implementation: "occ/ssh",
+    implementationFamily: "occ/ssh",
+    version: "0.1.0",
+  }),
+  secret: Object.freeze({
+    implementation: "occ/kubernetes-secret",
+    implementationFamily: "occ/kubernetes-secret",
+    version: "0.1.0",
+  }),
+  sandboxOpenShell: Object.freeze({
+    implementation: "openshell",
+    implementationFamily: "openshell",
+    version: "0.1.0",
+  }),
+  serviceAccountChatGPT: Object.freeze({
+    implementation: "chatgpt",
+    implementationFamily: "chatgpt",
+    version: "0.1.0",
+  }),
+});
 const FORBIDDEN_SECRET_KEY =
   /(?:password|passwd|api[_-]?key|(?:access[_-]?)?token|private[_-]?key|(?:client[_-]?)?secret|credentials?)$/i;
 const FORBIDDEN_SECRET_VALUE =
@@ -372,13 +439,69 @@ async function loadDriverPackage(
   return Object.freeze({
     module: module as unknown as ExternalDriverModule,
     implementation: `${packageName}@${installedVersion}`,
+    implementationFamily: packageName,
+    version: installedVersion,
   });
+}
+
+function lifecycleSelection(
+  capability: DriverCapability,
+  driverId: string,
+  descriptor: BundledDriverDescriptor,
+): DriverLifecycleSelection {
+  return Object.freeze({
+    capability,
+    driverId,
+    implementation: descriptor.implementation,
+    implementationFamily: descriptor.implementationFamily,
+    version: descriptor.version,
+  });
+}
+
+function selectedLifecycleSelection(
+  capability: DriverCapability,
+  selection: SelectedDriverConfiguration,
+): DriverLifecycleSelection {
+  return Object.freeze({
+    capability,
+    driverId: selection.id,
+    implementation: selection.implementation,
+    implementationFamily: selection.implementationFamily,
+    version: selection.version,
+  });
+}
+
+function validateLifecycleHooks(driver: ConfigurationRecord, path: string): void {
+  if (driver.lifecycleHooks === undefined) return;
+  const hooks = object(driver.lifecycleHooks, `${path}.lifecycleHooks`);
+  closed(hooks, ["onInstall", "onUpdate", "onUninstall"], `${path}.lifecycleHooks`);
+  for (const name of ["onInstall", "onUpdate", "onUninstall"] as const) {
+    if (hooks[name] !== undefined && typeof hooks[name] !== "function") {
+      throw new Error(`${path}.lifecycleHooks.${name} must be a function.`);
+    }
+  }
+}
+
+function runtimeLifecycleSelection(
+  selection: DriverLifecycleSelection,
+  driver: Driver,
+): RuntimeDriverLifecycleSelection {
+  const created = object(driver, `drivers.${selection.capability} lifecycle Driver`);
+  if (
+    created.capability !== selection.capability ||
+    created.id !== selection.driverId ||
+    created.implementation !== selection.implementation
+  ) {
+    throw new Error(`drivers.${selection.capability} lifecycle Driver identity changed.`);
+  }
+  validateLifecycleHooks(created, `drivers.${selection.capability}`);
+  return Object.freeze({ ...selection, driver });
 }
 
 function selected(
   value: unknown,
   capability: "configuration" | "iam" | "compute" | "secret" | "sandbox",
-  implementation: string,
+  descriptor: BundledDriverDescriptor,
   driver: DriverImplementation,
 ): SelectedDriverConfiguration {
   const path = `drivers.${capability}`;
@@ -401,7 +524,9 @@ function selected(
   driver.validateConfiguration(configuration);
   return Object.freeze({
     id,
-    implementation,
+    implementation: descriptor.implementation,
+    implementationFamily: descriptor.implementationFamily,
+    version: descriptor.version,
     ...(Object.hasOwn(selection, "package")
       ? { package: nonempty(selection.package, `${path}.package`) }
       : {}),
@@ -531,25 +656,28 @@ export async function loadInstallationConfiguration(options: {
   const configured = selected(
     configurationSelection,
     "configuration",
-    configurationPackage?.implementation ?? "occ/kubernetes-configmap",
+    configurationPackage ?? BUNDLED_DRIVER_DESCRIPTORS.configuration,
     configurationPackage?.module ?? KubernetesConfigurationDriver,
   );
   const iam = selected(
     iamSelection,
     "iam",
-    iamPackage?.implementation ?? "occ/native-iam",
+    iamPackage ?? BUNDLED_DRIVER_DESCRIPTORS.iam,
     iamPackage?.module ?? NativeIAMDriver,
   );
   const compute = selected(
     computeSelection,
     "compute",
-    computePackage?.implementation ?? (sshCompute ? "occ/ssh" : "occ/kubernetes"),
+    computePackage ??
+      (sshCompute
+        ? BUNDLED_DRIVER_DESCRIPTORS.computeSsh
+        : BUNDLED_DRIVER_DESCRIPTORS.computeKubernetes),
     computePackage?.module ?? (sshCompute ? SshComputeDriver : KubernetesComputeDriver),
   );
   const secret = selected(
     secretSelection,
     "secret",
-    "occ/kubernetes-secret",
+    BUNDLED_DRIVER_DESCRIPTORS.secret,
     KubernetesSecretDriver,
   );
   const sandbox =
@@ -558,7 +686,7 @@ export async function loadInstallationConfiguration(options: {
       : selected(
           sandboxSelection,
           "sandbox",
-          sandboxPackage?.implementation ?? "openshell",
+          sandboxPackage ?? BUNDLED_DRIVER_DESCRIPTORS.sandboxOpenShell,
           sandboxPackage?.module ?? bundledSandboxPackage!,
         );
   if (sandbox !== undefined && computePackage !== undefined) {
@@ -591,6 +719,28 @@ export async function loadInstallationConfiguration(options: {
       ...(serviceAccount === undefined ? {} : { service_account: serviceAccount }),
     }),
   });
+  const configurationLifecycle = selectedLifecycleSelection("configuration", configured);
+  const sandboxLifecycle =
+    sandbox === undefined ? undefined : selectedLifecycleSelection("sandbox", sandbox);
+  const computeLifecycle = selectedLifecycleSelection("compute", compute);
+  const secretLifecycle = selectedLifecycleSelection("secret", secret);
+  const iamLifecycle = selectedLifecycleSelection("iam", iam);
+  const serviceAccountLifecycle =
+    serviceAccount === undefined
+      ? undefined
+      : lifecycleSelection(
+          "service_account",
+          serviceAccount.id,
+          BUNDLED_DRIVER_DESCRIPTORS.serviceAccountChatGPT,
+        );
+  const lifecycleDriverSelections = Object.freeze([
+    configurationLifecycle,
+    ...(sandboxLifecycle === undefined ? [] : [sandboxLifecycle]),
+    computeLifecycle,
+    secretLifecycle,
+    iamLifecycle,
+    ...(serviceAccountLifecycle === undefined ? [] : [serviceAccountLifecycle]),
+  ]);
   const configurationDriver =
     configurationPackage === undefined
       ? new KubernetesConfigurationDriver(
@@ -649,6 +799,33 @@ export async function loadInstallationConfiguration(options: {
       ? new NativeIAMDriver(state, { id: iam.id, implementation: iam.implementation })
       : (createExternalDriver(iamPackage.module, iam, "iam", state) as IAMDriver);
   };
+  const createLifecycleDrivers = (options: {
+    readonly iamState: NativeIAMStateStore;
+    readonly serviceAccountDriver?: ServiceAccountDriver;
+  }): readonly RuntimeDriverLifecycleSelection[] => {
+    const serviceAccountDriver = options.serviceAccountDriver;
+    if (serviceAccountLifecycle !== undefined && serviceAccountDriver === undefined) {
+      throw new Error(
+        "The selected ServiceAccount lifecycle Driver requires API-side construction.",
+      );
+    }
+    if (serviceAccountLifecycle === undefined && serviceAccountDriver !== undefined) {
+      throw new Error("An unselected ServiceAccount lifecycle Driver was supplied.");
+    }
+    const iamDriver = createIAMDriver(options.iamState);
+    return Object.freeze([
+      runtimeLifecycleSelection(configurationLifecycle, configurationDriver),
+      ...(sandboxLifecycle === undefined
+        ? []
+        : [runtimeLifecycleSelection(sandboxLifecycle, sandboxDriver!)]),
+      runtimeLifecycleSelection(computeLifecycle, computeDriver),
+      runtimeLifecycleSelection(secretLifecycle, secretDriver),
+      runtimeLifecycleSelection(iamLifecycle, iamDriver),
+      ...(serviceAccountLifecycle === undefined
+        ? []
+        : [runtimeLifecycleSelection(serviceAccountLifecycle, serviceAccountDriver!)]),
+    ]);
+  };
   if (
     options.mode === "production" &&
     (typeof computeDriver.activateRevision !== "function" ||
@@ -660,11 +837,13 @@ export async function loadInstallationConfiguration(options: {
   }
   return Object.freeze({
     installation,
+    lifecycleDriverSelections,
     computeDriver,
     configurationDriver,
     secretDriver,
     ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
     createIAMDriver,
+    createLifecycleDrivers,
   });
 }
 
@@ -713,6 +892,7 @@ function validateCreatedSandboxDriver(
   ) {
     throw new Error("drivers.sandbox factory returned an invalid Driver contract.");
   }
+  validateLifecycleHooks(created, "drivers.sandbox");
   return driver;
 }
 
@@ -767,5 +947,6 @@ function createExternalDriver(
   ) {
     throw new Error("drivers.compute factory returned invalid lifecycle Driver wiring.");
   }
+  validateLifecycleHooks(created, `drivers.${capability}`);
   return created as unknown as ConfigurationDriver | IAMDriver | ComputeDriver | SandboxDriver;
 }

@@ -1,0 +1,128 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const root = fileURLToPath(new URL("../../", import.meta.url));
+const cli = join(root, "scripts/docs-site/word-count.mjs");
+
+async function fixture(t) {
+  const directory = await mkdtemp(join(tmpdir(), "enterprise-docs-length-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  execFileSync("git", ["init"], { cwd: directory, stdio: "ignore" });
+  return directory;
+}
+
+function runWordCount(directory, args = []) {
+  return spawnSync(process.execPath, [cli, "--root", directory, ...args], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+}
+
+function readJson(result) {
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout);
+}
+
+function words(count) {
+  return Array.from({ length: count }, (_, index) => `word${index}`).join(" ");
+}
+
+test("word-count CLI accepts Markdown at the 1500-word limit", async (t) => {
+  const directory = await fixture(t);
+  await writeFile(join(directory, "README.md"), `# Title\n\n${words(1499)}\n`);
+
+  const result = runWordCount(directory);
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /all are at or below 1500 words/);
+});
+
+test("word-count CLI rejects Markdown above the 1500-word limit", async (t) => {
+  const directory = await fixture(t);
+  await writeFile(join(directory, "README.md"), `# Title\n\n${words(1500)}\n`);
+
+  const result = runWordCount(directory);
+
+  assert.notEqual(result.status, 0, "CLI accepted an over-budget page");
+  assert.match(result.stderr, /README\.md: 1501 words/);
+});
+
+test("word-count CLI excludes Markdown syntax, frontmatter, comments, and link destinations", async (t) => {
+  const directory = await fixture(t);
+  await writeFile(
+    join(directory, "README.md"),
+    `---
+title: ${words(2000)}
+---
+# Heading
+
+[Visible label][target] and **bold words** with \`inline code\`.
+
+[target]: https://example.com/docs " ${words(2000)} "
+<!-- ${words(2000)} -->
+`,
+  );
+
+  const json = readJson(runWordCount(directory, ["--json"]));
+
+  assert.equal(json.rows[0].path, "README.md");
+  assert.equal(json.rows[0].proseWords, 9);
+  assert.equal(json.rows[0].codeWords, 0);
+  assert.equal(json.rows[0].totalWords, 9);
+});
+
+test("word-count CLI includes table text and fenced examples", async (t) => {
+  const directory = await fixture(t);
+  await writeFile(
+    join(directory, "README.md"),
+    `# Demo
+
+| First | Second |
+| --- | --- |
+| alpha beta | gamma |
+
+\`\`\`sh
+curl example command
+\`\`\`
+`,
+  );
+
+  const json = readJson(runWordCount(directory, ["--json"]));
+
+  assert.equal(json.rows[0].proseWords, 6);
+  assert.equal(json.rows[0].codeWords, 3);
+  assert.equal(json.rows[0].totalWords, 9);
+});
+
+test("word-count CLI checks tracked and nonignored Markdown once per real file", async (t) => {
+  const directory = await fixture(t);
+  await mkdir(join(directory, "docs"), { recursive: true });
+  await mkdir(join(directory, "dist"), { recursive: true });
+  await writeFile(join(directory, ".gitignore"), "dist/\n");
+  await writeFile(join(directory, "AGENTS.md"), "# Agents\n\nshared words\n");
+  await symlink("AGENTS.md", join(directory, "CLAUDE.md"));
+  await writeFile(join(directory, "docs/tracked.md"), "# Tracked\n");
+  await writeFile(join(directory, "draft.md"), "# Draft\n");
+  await writeFile(join(directory, "dist/ignored.md"), "# Ignored\n");
+  execFileSync("git", ["add", ".gitignore", "AGENTS.md", "docs/tracked.md"], {
+    cwd: directory,
+    stdio: "ignore",
+  });
+
+  const json = readJson(runWordCount(directory, ["--json"]));
+  const paths = json.rows.map((row) => row.path);
+  const agents = json.rows.find((row) => row.path === "AGENTS.md");
+
+  assert.deepEqual(paths, ["AGENTS.md", "docs/tracked.md", "draft.md"]);
+  assert.deepEqual(agents.aliases, ["CLAUDE.md"]);
+  assert.equal(
+    json.rows.some((row) => row.path === "dist/ignored.md"),
+    false,
+  );
+});
