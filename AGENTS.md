@@ -49,23 +49,40 @@ or per-migration database preparation guidance unless explicitly requested.
 
 ## Documentation length budget
 
-Every documentation page has a maximum of **1,500 visible words**, including
-headings, tables, lists, and code examples. Aim for 800–1,200 words; shorter is welcome. Markdown syntax, link destinations,
-frontmatter, and comments do not count. Run `pnpm docs:check-length` before
-publishing documentation changes; CI enforces the same count across repository
-Markdown, including instructions, historical specifications, and generated pages.
+Review pages above **1,500 visible words** for repetition and scope. Pages of
+1,500–2,500 words may stay together when they cover one complete workflow or
+coherent reference topic; record that rationale in the change review. **2,500
+words is the hard limit.** These are thresholds, not writing targets: overview
+pages often need only 150–300 words.
 
-When a page exceeds the budget, remove repetition or move a coherent topic to
-an existing destination or a named child document. Keep the original page as an
-overview and repair navigation and incoming links. Split generated references
-through their generator. Preserve historical decisions, statuses, and Manual
-Notes when splitting specifications.
+Count headings, tables, lists, and examples; exclude Markdown syntax, link
+destinations, frontmatter, and comments. Run `pnpm docs:check-length` before
+publishing. It reports pages needing review and fails above the hard limit
+across repository Markdown, including instructions, specs, and generated pages.
 
-An exception requires both **no logical destination for the excess content** and
-**explicit human approval before exceeding the limit**. Record the approved scope
-and reason in the review, then implement a narrowly scoped checker allowance.
-No exceptions are currently approved; do not exclude a class of documents or
-raise the limit to make a check pass.
+Remove repetition before splitting. Keep required inputs, commands, expected
+results, consequential limits, and recovery together. Split only independently
+useful topics; repair navigation and incoming links. Change generated references
+through their generator. Preserve historical decisions, statuses, and Manual Notes.
+
+Exceeding 2,500 words requires **no logical destination for the excess content**
+and **explicit human approval**. Record the approved scope and reason before
+adding a narrow checker allowance. No exceptions are currently approved.
+
+## Documentation editing
+
+- Give each fact one owning page: concepts define terms, references define
+  behavior, guides give procedures, and flows explain implementation. Other pages
+  link to that owner and state only the consequence relevant to their reader.
+- Lead with the reader's task and first useful action. Prefer a command and its
+  expected result over narration of the helper's internal steps.
+- Remove repeated background, feature inventories, and implementation details
+  from overview and task pages. Link existing detail instead of creating more pages.
+- Keep permissions, credential handling, destructive effects, concurrency limits,
+  and recovery beside the affected action. Consolidate repeated caveats without
+  removing their scope or force.
+- Verify current behavior before tightening prose. Update stale current claims;
+  do not rewrite historical specifications to match later implementation.
 
 ## Deferred implementation
 

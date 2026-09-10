@@ -8,7 +8,8 @@ import {
   parseFrontmatter,
 } from "./vendor/docs-markdown.mjs";
 
-export const DEFAULT_MAX_WORDS = 1500;
+export const DEFAULT_REVIEW_WORDS = 1500;
+export const DEFAULT_MAX_WORDS = 2500;
 
 const __filename = fileURLToPath(import.meta.url);
 const markdownWord = /[\p{L}\p{N}]/u;
@@ -122,6 +123,7 @@ export function countMarkdownWords(markdown, options = {}) {
 export function checkMarkdownWordCounts({
   root = process.cwd(),
   maxWords = DEFAULT_MAX_WORDS,
+  reviewWords = DEFAULT_REVIEW_WORDS,
   files,
 } = {}) {
   const md = createDocsMarkdown();
@@ -140,24 +142,52 @@ export function checkMarkdownWordCounts({
     };
   });
   const violations = rows.filter((row) => row.totalWords > maxWords);
+  const reviewPages = rows.filter(
+    (row) => row.totalWords > reviewWords && row.totalWords <= maxWords,
+  );
   return {
     maxWords,
+    reviewWords,
     fileCount: rows.length,
     rows,
+    reviewPages,
     violations,
     ok: violations.length === 0,
   };
 }
 
 export function formatWordCountReport(result) {
-  if (result.ok) {
-    return `Checked ${result.fileCount} Markdown files; all are at or below ${result.maxWords} words.`;
-  }
   const lines = [
+    `Checked ${result.fileCount} Markdown files; hard limit ${result.maxWords} words; review threshold ${result.reviewWords} words.`,
+  ];
+  if (result.reviewPages.length) {
+    lines.push(
+      `${result.reviewPages.length} Markdown file${
+        result.reviewPages.length === 1 ? "" : "s"
+      } ${result.reviewPages.length === 1 ? "exceeds" : "exceed"} the ${
+        result.reviewWords
+      }-word review threshold:`,
+    );
+    for (const row of result.reviewPages) {
+      const aliases = row.aliases.length ? ` (aliases: ${row.aliases.join(", ")})` : "";
+      lines.push(`- ${row.path}${aliases}: ${row.totalWords} words`);
+    }
+  } else {
+    lines.push("No Markdown files are in the review-only range.");
+  }
+
+  if (!result.violations.length) {
+    lines.push(`No Markdown files exceed the ${result.maxWords}-word hard limit.`);
+    return lines.join("\n");
+  }
+
+  lines.push(
     `${result.violations.length} Markdown file${
       result.violations.length === 1 ? "" : "s"
-    } exceed the ${result.maxWords}-word limit:`,
-  ];
+    } ${result.violations.length === 1 ? "exceeds" : "exceed"} the ${
+      result.maxWords
+    }-word hard limit:`,
+  );
   for (const row of result.violations) {
     const aliases = row.aliases.length ? ` (aliases: ${row.aliases.join(", ")})` : "";
     lines.push(`- ${row.path}${aliases}: ${row.totalWords} words`);
@@ -178,7 +208,12 @@ export function formatWordCountReport(result) {
 }
 
 function parseCliArgs(argv) {
-  const options = { root: process.cwd(), maxWords: DEFAULT_MAX_WORDS, json: false };
+  const options = {
+    root: process.cwd(),
+    maxWords: DEFAULT_MAX_WORDS,
+    reviewWords: DEFAULT_REVIEW_WORDS,
+    json: false,
+  };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === "--json") options.json = true;
@@ -201,6 +236,7 @@ export function runWordCountCli(argv = process.argv.slice(2)) {
     ? JSON.stringify(
         {
           maxWords: result.maxWords,
+          reviewWords: result.reviewWords,
           fileCount: result.fileCount,
           ok: result.ok,
           rows: result.rows.map((row) => ({
@@ -212,6 +248,7 @@ export function runWordCountCli(argv = process.argv.slice(2)) {
             lineCount: row.lineCount,
             sections: row.sections,
           })),
+          reviewPages: result.reviewPages.map((row) => row.path),
           violations: result.violations.map((row) => row.path),
         },
         null,

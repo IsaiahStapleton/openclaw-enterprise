@@ -7,7 +7,7 @@ const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const documentPath = new URL("../packages/contracts/openapi/occ-api.openapi.json", import.meta.url);
 const referenceDirectoryPath = new URL("../docs/reference/api/", import.meta.url);
 
-export const API_REFERENCE_WORD_LIMIT = 1500;
+export const API_REFERENCE_WORD_LIMIT = 2500;
 
 function slugifySegment(value) {
   return (
@@ -466,7 +466,7 @@ export function validateApiReferenceOutputs(outputs) {
       .map((output) => `${output.path} has ${output.words} words`)
       .join("; ");
     throw new Error(
-      `Generated API reference pages must stay below ${API_REFERENCE_WORD_LIMIT} words: ${details}.`,
+      `Generated API reference pages must stay at or below ${API_REFERENCE_WORD_LIMIT} words: ${details}.`,
     );
   }
 }

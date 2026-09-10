@@ -29,28 +29,73 @@ function readJson(result) {
   return JSON.parse(result.stdout);
 }
 
+function readJsonOutput(result) {
+  return JSON.parse(result.stdout || result.stderr);
+}
+
 function words(count) {
   return Array.from({ length: count }, (_, index) => `word${index}`).join(" ");
 }
 
-test("word-count CLI accepts Markdown at the 1500-word limit", async (t) => {
+test("word-count CLI accepts Markdown at the 1500-word review threshold", async (t) => {
   const directory = await fixture(t);
   await writeFile(join(directory, "README.md"), `# Title\n\n${words(1499)}\n`);
 
   const result = runWordCount(directory);
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.match(result.stdout, /all are at or below 1500 words/);
+  assert.match(result.stdout, /No Markdown files are in the review-only range/);
+  assert.match(result.stdout, /No Markdown files exceed the 2500-word hard limit/);
 });
 
-test("word-count CLI rejects Markdown above the 1500-word limit", async (t) => {
+test("word-count CLI reports Markdown above the review threshold without failing", async (t) => {
   const directory = await fixture(t);
   await writeFile(join(directory, "README.md"), `# Title\n\n${words(1500)}\n`);
 
   const result = runWordCount(directory);
 
-  assert.notEqual(result.status, 0, "CLI accepted an over-budget page");
-  assert.match(result.stderr, /README\.md: 1501 words/);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /README\.md: 1501 words/);
+  assert.match(result.stdout, /No Markdown files exceed the 2500-word hard limit/);
+});
+
+test("word-count CLI accepts Markdown at the hard limit while reporting review", async (t) => {
+  const directory = await fixture(t);
+  await writeFile(join(directory, "README.md"), `# Title\n\n${words(2499)}\n`);
+
+  const result = runWordCount(directory);
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /README\.md: 2500 words/);
+  assert.match(result.stdout, /No Markdown files exceed the 2500-word hard limit/);
+});
+
+test("word-count CLI rejects Markdown above the hard limit", async (t) => {
+  const directory = await fixture(t);
+  await writeFile(join(directory, "README.md"), `# Title\n\n${words(2500)}\n`);
+
+  const result = runWordCount(directory);
+
+  assert.notEqual(result.status, 0, "CLI accepted a hard-limit violation");
+  assert.match(result.stderr, /README\.md: 2501 words/);
+  assert.match(result.stderr, /exceeds the 2500-word hard limit/);
+  assert.match(result.stderr, /No Markdown files are in the review-only range/);
+});
+
+test("word-count CLI JSON separates review pages from hard violations", async (t) => {
+  const directory = await fixture(t);
+  await writeFile(join(directory, "review.md"), `# Title\n\n${words(1500)}\n`);
+  await writeFile(join(directory, "violation.md"), `# Title\n\n${words(2500)}\n`);
+
+  const result = runWordCount(directory, ["--json"]);
+  const json = readJsonOutput(result);
+
+  assert.equal(result.status, 1);
+  assert.equal(json.ok, false);
+  assert.equal(json.reviewWords, 1500);
+  assert.equal(json.maxWords, 2500);
+  assert.deepEqual(json.reviewPages, ["review.md"]);
+  assert.deepEqual(json.violations, ["violation.md"]);
 });
 
 test("word-count CLI excludes Markdown syntax, frontmatter, comments, and link destinations", async (t) => {
