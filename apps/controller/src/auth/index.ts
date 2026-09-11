@@ -10,7 +10,10 @@ import type { ApiKey } from "@better-auth/api-key/types";
 import { parse as parseDomain } from "tldts";
 import type { ServicePrincipal } from "@openclaw-enterprise/contracts";
 import { createAuthPrincipalSeed, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
-import type { SchemaAuthPoolV1 } from "@openclaw-enterprise/occ/auth-persistence/schema-auth-boundary-v1";
+import type {
+  SchemaAuthAdapterOptionsV1,
+  SchemaAuthPoolV1,
+} from "@openclaw-enterprise/occ/auth-persistence/schema-auth-boundary-v1";
 import { createPostgresAuthBinding } from "@openclaw-enterprise/occ/auth-persistence/postgres-auth-binding";
 import type {
   AdmissionHeaders,
@@ -370,7 +373,7 @@ async function createOccAuthDatabase(
     schema: binding.schema,
     camelCase: true,
     transaction: true,
-  });
+  } satisfies SchemaAuthAdapterOptionsV1);
 }
 
 export class ControllerAdmissionVerifier implements AdmissionVerifier {
