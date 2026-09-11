@@ -1,4 +1,5 @@
 import type {
+  AgentDesiredRuntimeState,
   HarnessExecutionMode,
   PluginDesiredState,
   SecretBindings,
@@ -229,6 +230,10 @@ export const agents = occSchema.table(
     servicePrincipalId: text("service_principal_id").notNull(),
     serviceAccountId: text("service_account_id"),
     activeRevisionId: text("active_revision_id"),
+    desiredRuntimeState: text("desired_runtime_state")
+      .$type<AgentDesiredRuntimeState>()
+      .notNull()
+      .default("stopped"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (table): PgTableExtraConfigValue[] => [
@@ -242,6 +247,10 @@ export const agents = occSchema.table(
     check("agents_id_format", sql`${table.id} ~ ${identifierPatterns.agent}`),
     check("agents_name_length", sql`char_length(${table.name}) BETWEEN 1 AND 200`),
     check("agents_execution_mode_valid", sql`${table.executionMode} IN ('embedded', 'dedicated')`),
+    check(
+      "agents_desired_runtime_state_valid",
+      sql`${table.desiredRuntimeState} IN ('running', 'stopped')`,
+    ),
     check(
       "agents_provider_id_valid",
       sql`${table.providerId} IS NULL OR (char_length(${table.providerId}) BETWEEN 1 AND 200 AND ${table.providerId} = btrim(${table.providerId}) AND ${table.providerId} !~ '[[:cntrl:]]')`,
@@ -664,6 +673,7 @@ export const controllerWork = occSchema.table(
     revisionId: text("revision_id"),
     actorId: text("actor_id").notNull(),
     namespaceTarget: text("namespace_target"),
+    agentTarget: text("agent_target"),
     state: text("state").notNull().default("queued"),
     availableAt: timestamp("available_at", { withTimezone: true }).notNull(),
     attemptCount: integer("attempt_count").notNull().default(0),
@@ -706,9 +716,13 @@ export const controllerWork = occSchema.table(
       sql`(
         (${table.agentId} IS NULL AND ${table.revisionId} IS NULL
           AND ${table.namespaceTarget} IS NOT NULL
-          AND ${table.namespaceTarget} IN ('ready', 'deleted'))
+          AND ${table.namespaceTarget} IN ('ready', 'deleted')
+          AND ${table.agentTarget} IS NULL)
+        OR (${table.agentId} IS NOT NULL AND ${table.revisionId} IS NULL
+          AND ${table.namespaceTarget} IS NULL
+          AND ${table.agentTarget} = 'stopped')
         OR (${table.agentId} IS NOT NULL AND ${table.revisionId} IS NOT NULL
-          AND ${table.namespaceTarget} IS NULL)
+          AND ${table.namespaceTarget} IS NULL AND ${table.agentTarget} IS NULL)
       )`,
     ),
     check(

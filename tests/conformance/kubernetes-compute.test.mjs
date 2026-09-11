@@ -2757,6 +2757,13 @@ test("revision lifecycle rejects another driver or missing identity before clust
     }),
     /another Compute Driver/i,
   );
+  await assert.rejects(
+    driver.stopRevision({
+      ...revision,
+      compute: { id: "another-driver", implementation: "another-implementation" },
+    }),
+    /another Compute Driver/i,
+  );
 });
 
 test("real gateways require an explicit SQLite-compatible storage class", () => {
@@ -3014,6 +3021,84 @@ test("private gateway claim reuse and deletion verify exact ownership and storag
   observed = undefined;
   await driver.deleteGatewayPrivateStateClaim(ownership, namespace);
   assert.equal(mutations.length, 1);
+});
+
+test("stopping a Kubernetes gateway removes routing and execution but retains persistent claims", async () => {
+  const driver = createKubernetesComputeDriver(
+    routedOptions({
+      runtime: {
+        transportSecretPrefix: "transport",
+        modelSecretPrefix: "model",
+        gatewayStorageClassName: "local-path",
+      },
+    }),
+  );
+  const agentId = "agent-stop-storage";
+  const revisionId = "revision-stop-storage";
+  const ownership = { namespaceId: tenant.id, agentId };
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const gatewayName = "gateway-" + createHash("sha256").update(agentId).digest("hex").slice(0, 12);
+  const gateway = driver.manifest("apps/v1", "Deployment", gatewayName, ownership, namespace);
+  gateway.metadata.uid = "gateway-uid";
+  gateway.metadata.annotations["openclaw.dev/agent-revision-id"] = revisionId;
+  const service = driver.service(gatewayName, ownership, namespace, {
+    "app.kubernetes.io/name": gatewayName,
+  });
+  service.metadata.uid = "service-uid";
+  const account = driver.manifest("v1", "ServiceAccount", gatewayName, ownership, namespace);
+  account.metadata.uid = "account-uid";
+  const route = driver.gatewayRoute(
+    { id: revisionId, revision: 1, namespaceId: tenant.id, agentId },
+    ownership,
+    namespace,
+    service,
+  );
+  route.metadata.uid = "route-uid";
+  const deletions = [];
+  driver.apiClients = Promise.resolve({
+    apps: {
+      async readNamespacedDeployment() {
+        return structuredClone(gateway);
+      },
+      async deleteNamespacedDeployment(request) {
+        deletions.push(["Deployment", request]);
+      },
+    },
+    core: {
+      async readNamespacedService() {
+        return structuredClone(service);
+      },
+      async deleteNamespacedService(request) {
+        deletions.push(["Service", request]);
+      },
+      async readNamespacedServiceAccount() {
+        return structuredClone(account);
+      },
+      async deleteNamespacedServiceAccount(request) {
+        deletions.push(["ServiceAccount", request]);
+      },
+      async readNamespacedPersistentVolumeClaim() {
+        throw new Error("stop must not inspect persistent claims");
+      },
+      async deleteNamespacedPersistentVolumeClaim() {
+        throw new Error("stop must not delete persistent claims");
+      },
+    },
+    objects: {
+      async read() {
+        return structuredClone(route);
+      },
+      async delete(spec, _pretty, _dryRun, _grace, _orphan, _propagation, body) {
+        deletions.push(["HTTPRoute", { spec, body }]);
+      },
+    },
+  });
+
+  await driver.removeStoppedGateway({ id: revisionId, agentId, namespaceId: tenant.id }, namespace);
+  assert.deepEqual(
+    deletions.map(([kind]) => kind),
+    ["HTTPRoute", "Service", "ServiceAccount", "Deployment"],
+  );
 });
 
 test("retiring a predecessor preserves both claims and final retirement deletes exact claim UIDs", async () => {

@@ -153,3 +153,16 @@ Verify the assistant replies with the nonce, send a second nonce in the same
 TUI, then press Ctrl+D. Exiting the TUI does not stop the Agent gateway. Do not
 pass OCC service keys, gateway tokens, `--url`, or `--token` on the command
 line.
+
+To stop the Agent without deleting its revision or workspace, submit the
+bodyless operation and poll until the active pointer is absent:
+
+```bash
+scripts/occ-api POST "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID/stop"
+scripts/occ-api GET "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID"
+```
+
+The first response is `202` with `desiredRuntimeState: "stopped"`. The later
+read must retain the Agent and report no `activeRevisionId`; the worker also
+removes its Docker runtime containers. Repeating the stop is safe. Run the
+deployment command again to resume with a new immutable revision.

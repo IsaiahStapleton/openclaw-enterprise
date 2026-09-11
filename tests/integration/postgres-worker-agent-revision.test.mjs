@@ -128,6 +128,12 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
     const idempotencyKey = `agent_revision:${candidate.id}:reconcile`;
     await state.transactWithQueue(async (unit, queue) => {
       await unit.revisions.createRevision(candidate);
+      await unit.agents.transitionAgentDesiredRuntimeState(
+        namespace.id,
+        owner.id,
+        ["stopped", "running"],
+        "running",
+      );
       await queue.enqueue({
         idempotencyKey,
         namespaceId: namespace.id,
@@ -192,6 +198,157 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
     workerPool,
   };
 }
+
+test(
+  "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("stop-target");
+    const sibling = await fixture.agent("stop-sibling");
+    const targetRevision = await fixture.revision(owner, 1);
+    const siblingRevision = await fixture.revision(sibling, 1);
+    const stoppedRevisions = [];
+    await fixture.start({
+      ...fixture.compute,
+      async stopRevision(revision) {
+        stoppedRevisions.push(revision.id);
+      },
+    });
+    await Promise.all([
+      fixture.work(targetRevision, "succeeded"),
+      fixture.work(siblingRevision, "succeeded"),
+    ]);
+
+    async function requestStop() {
+      const operationId = randomUUID();
+      const idempotencyKey = `agent:${owner.id}:reconcile:stopped:${operationId}`;
+      await fixture.state.transactWithQueue(async (unit, queue) => {
+        const current = await unit.agents.lockAgent(fixture.namespace.id, owner.id);
+        assert.ok(current);
+        await unit.agents.transitionAgentDesiredRuntimeState(
+          fixture.namespace.id,
+          owner.id,
+          current.desiredRuntimeState,
+          "stopped",
+        );
+        await queue.enqueue({
+          idempotencyKey,
+          namespaceId: fixture.namespace.id,
+          agentId: owner.id,
+          agentTarget: "stopped",
+          actorId: fixture.actor.id,
+          availableAt: new Date(0),
+        });
+      });
+      return { id: owner.id, idempotencyKey };
+    }
+
+    const firstStop = await requestStop();
+    await fixture.work(firstStop, "succeeded");
+    const [stopped, unaffected, retainedRevision] = await fixture.state.read(async (view) =>
+      Promise.all([
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+        view.agents.findAgent(fixture.namespace.id, sibling.id),
+        view.revisions.findRevision(fixture.namespace.id, owner.id, targetRevision.id),
+      ]),
+    );
+    assert.equal(stopped.desiredRuntimeState, "stopped");
+    assert.equal(stopped.activeRevisionId, undefined);
+    assert.equal(unaffected.activeRevisionId, siblingRevision.id);
+    assert.equal(retainedRevision.id, targetRevision.id);
+    assert.deepEqual(stoppedRevisions, [targetRevision.id]);
+
+    const repeatedStop = await requestStop();
+    await fixture.work(repeatedStop, "succeeded");
+    assert.deepEqual(stoppedRevisions, [targetRevision.id]);
+    const audit = await fixture.observerPool.query(
+      `SELECT action, resource_id, details->>'reasonCode' AS reason_code
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.stop'
+       ORDER BY occurred_at`,
+      [fixture.namespace.id],
+    );
+    assert.deepEqual(audit.rows, [
+      {
+        action: "openclaw.agents.lifecycle.stop",
+        resource_id: owner.id,
+        reason_code: "AGENT_STOPPED",
+      },
+      {
+        action: "openclaw.agents.lifecycle.stop",
+        resource_id: owner.id,
+        reason_code: "AGENT_ALREADY_STOPPED",
+      },
+    ]);
+  },
+);
+
+test(
+  "a stop accepted during revision preparation prevents the candidate from becoming active",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("stop-prepare-race");
+    const candidate = await fixture.revision(owner, 1);
+    let releasePreparation;
+    const preparationReleased = new Promise((resolve) => {
+      releasePreparation = resolve;
+    });
+    let preparationStarted = false;
+    const stoppedRevisions = [];
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        preparationStarted = true;
+        await preparationReleased;
+        return fixture.compute.prepareRevision(revision);
+      },
+      async stopRevision(revision) {
+        stoppedRevisions.push(revision.id);
+      },
+    });
+    await waitFor("revision preparation to start", async () =>
+      preparationStarted ? true : undefined,
+    );
+
+    const stopKey = `agent:${owner.id}:reconcile:stopped:${randomUUID()}`;
+    await fixture.state.transactWithQueue(async (unit, queue) => {
+      const changed = await unit.agents.transitionAgentDesiredRuntimeState(
+        fixture.namespace.id,
+        owner.id,
+        "running",
+        "stopped",
+      );
+      assert.ok(changed);
+      await queue.enqueue({
+        idempotencyKey: stopKey,
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        agentTarget: "stopped",
+        actorId: fixture.actor.id,
+        availableAt: new Date(0),
+      });
+    });
+    releasePreparation();
+    await fixture.work(candidate, "succeeded");
+    await fixture.work({ id: owner.id, idempotencyKey: stopKey }, "succeeded");
+
+    const stopped = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(stopped.activeRevisionId, undefined);
+    assert.equal(stopped.desiredRuntimeState, "stopped");
+    assert.deepEqual(stoppedRevisions, [candidate.id]);
+    const activation = await fixture.observerPool.query(
+      `SELECT id FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.activate'
+         AND resource_id = $2`,
+      [fixture.namespace.id, candidate.id],
+    );
+    assert.deepEqual(activation.rows, []);
+  },
+);
 
 test(
   "maintenance retains its real lease across consecutive short predecessor retirements",

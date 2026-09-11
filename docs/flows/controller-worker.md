@@ -10,7 +10,7 @@ last_updated_session: codex/01a07d92-d866-7731-afe5-abab67d8966c
 
 The worker claims PostgreSQL work committed by the HTTP API, rechecks the
 original actor's authorization, invokes Compute, and persists results under its
-live claim. This trace follows Namespace and AgentRevision work through
+live claim. This trace follows Namespace, Agent-stop, and AgentRevision work through
 completion, deferral, retry, or permanent failure. The
 [controller reference](../reference/controller.md) owns the contract and the
 [deployment guide](../guides/deploy.md) owns process setup.
@@ -18,7 +18,7 @@ completion, deferral, retry, or permanent failure. The
 ## Entry Points
 
 - Trigger: Compose or Helm starts `apps/controller/src/worker.mjs`; an
-  authenticated API mutation commits Namespace or AgentRevision work.
+  authenticated API mutation commits Namespace, Agent-stop, or AgentRevision work.
 - Source: `apps/controller/src/worker.mjs:configuration`,
   `apps/controller/src/worker.ts:ControllerWorker.start`, and
   `packages/occ/src/state/postgres-state.ts:operations.append`.
@@ -85,12 +85,13 @@ Compose and Helm run it separately from the API.
 `packages/occ/src/state/postgres-state.ts:operations.append`
 
 The API authenticates and authorizes the caller before invoking controller
-operations such as `createNamespace`, `deleteNamespace`, or `deployAgent`.
+operations such as `createNamespace`, `deleteNamespace`, `deployAgent`, or `stopAgent`.
 `operations.append` verifies exact ownership and calls `PostgresWorkQueue.enqueue`
 within the transaction. State, admission audit, and work commit or roll back together.
 
 The queue freezes actor, Namespace owner, lifecycle target, and exact Agent and
-immutable AgentRevision for revision work. Its idempotency
+immutable AgentRevision for revision work. Stop work has an exact Agent owner and
+`stopped` target without inventing a revision. Its idempotency
 key identifies the operation. Reusing that key with a different actor, owner, or
 target is rejected. The API returns accepted lifecycle state without waiting for
 Compute; the next owner is the independent worker.
@@ -141,6 +142,10 @@ creation. A revision older than the current active revision completes as
 superseded; an already-active revision enters finalization or maintenance rather
 than changing the active pointer again.
 
+Agent-stop work rechecks current exact-Agent `operate`. Superseded desired state
+completes without shutdown; a stopped Agent with no active revision completes
+idempotently.
+
 ### 5. Invoke Compute while renewing the live claim
 
 `apps/controller/src/worker.ts:ControllerWorker.observe`,
@@ -152,6 +157,10 @@ dispatch optionally binds the exact Agent, then calls `prepareRevision` with its
 immutable snapshot. The worker validates the returned observation's owner and
 shape before treating it as ready. A pending observation defers convergence;
 an invalid observation fails permanently.
+
+Agent-stop dispatch calls `stopRevision` for the observed exact active revision.
+Revision preparation and maintenance recheck `desiredRuntimeState`; a candidate
+that overlaps stop is shut down instead of activated.
 
 `withClaimHeartbeat()` renews the claim before starting each effect and then
 roughly every third of its lease duration while the effect runs. The initial
@@ -192,6 +201,11 @@ revision and claim, appends activation evidence, and completes work in a second
 transaction. This deliberately does not claim that infrastructure effects and
 database state are one atomic transaction. Interrupted finalization is retried;
 the already-active branch finishes activation and retirement safely.
+
+Stop finalization rechecks the live claim and clears `activeRevisionId` only when
+it still equals the revision Compute stopped. It then appends lifecycle-stop
+evidence and completes the same work item. Revision rows and persistent runtime
+state are not deleted.
 
 ### 7. Defer, retry, or stop and hand off the next iteration
 

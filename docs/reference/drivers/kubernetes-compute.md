@@ -174,6 +174,12 @@ execution. Unsupported Harness and execution-mode combinations fail deployment.
 OpenShell sandboxing currently supports only this dedicated Codex path; embedded
 OpenClaw Agents fail closed when the OpenShell SandboxDriver is selected.
 
+Stopping an Agent deletes its exact gateway route and runtime Deployments (or
+delegates dedicated Sandbox cleanup) but retains Agent-owned PersistentVolumeClaims
+and runtime credential Secrets. Retirement remains the destructive revision
+cleanup operation. Repeated stop observes exact ownership and converges when the
+runtime objects are already absent.
+
 See the [Harness execution topology flow](../../flows/harness-execution-topology.md)
 for additional execution details.
 

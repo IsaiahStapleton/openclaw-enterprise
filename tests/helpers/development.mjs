@@ -24,6 +24,7 @@ export function createDevelopmentComputeDriver() {
         ready: true,
       };
     },
+    async stopRevision() {},
     async retireRevision() {},
   });
 }

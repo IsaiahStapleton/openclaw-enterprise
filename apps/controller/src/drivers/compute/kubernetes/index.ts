@@ -1758,6 +1758,68 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
   }
 
+  async stopRevision(revision: AgentRevision): Promise<void> {
+    this.lifecycleStarted = true;
+    if (
+      revision.compute.id !== this.id ||
+      revision.compute.implementation !== this.implementation
+    ) {
+      throw new Error("Refusing to stop an AgentRevision pinned to another Compute Driver.");
+    }
+    required(revision.agentId, "Agent ID");
+    required(revision.id, "AgentRevision ID");
+    required(revision.servicePrincipalId, "Agent ServicePrincipal ID");
+    const clients = await this.clients();
+    const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
+    const existingNamespace = await this.get("Namespace", namespace);
+    if (existingNamespace === undefined) {
+      await this.lifecycle.beforeWorkloadStop(revision);
+      return;
+    }
+    this.verifyNamespaceOwnership(
+      existingNamespace,
+      { namespaceId: revision.namespaceId },
+      external,
+    );
+    await this.lifecycle.beforeWorkloadStop(revision);
+    if (revision.harness.mode === "dedicated") {
+      const sandboxDriver = this.sandboxDriverForRevision(revision);
+      if (sandboxDriver?.provisionHarness !== undefined) {
+        await sandboxDriver.cleanup({
+          ...(await this.sandboxNamespaceContext(
+            this.sandboxNamespaceForRevision(revision, namespace),
+            namespace,
+          )),
+          revision,
+        });
+      } else {
+        const name = `agent-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`;
+        const deployment = await this.getOwned("Deployment", name, namespace, {
+          namespaceId: revision.namespaceId,
+          agentId: revision.agentId,
+          servicePrincipalId: revision.servicePrincipalId,
+          revisionId: revision.id,
+        });
+        if (deployment !== undefined) {
+          await this.request(
+            () =>
+              clients.apps.deleteNamespacedDeployment({
+                name,
+                namespace,
+                ...(deployment.metadata.uid === undefined
+                  ? {}
+                  : { body: { preconditions: { uid: deployment.metadata.uid } } }),
+              }),
+            { mutating: true },
+          );
+        }
+      }
+    } else if (this.sandboxDriverForRevision(revision) !== undefined) {
+      throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
+    }
+    await this.removeStoppedGateway(revision, namespace);
+  }
+
   async retireRevision(revision: AgentRevision): Promise<void> {
     this.lifecycleStarted = true;
     if (
@@ -1824,6 +1886,21 @@ export class KubernetesComputeDriver implements ComputeDriver {
       });
     }
     await this.removeRetiredGateway(revision, namespace);
+  }
+
+  private async removeStoppedGateway(revision: AgentRevision, namespace: string): Promise<void> {
+    const name = `gateway-${sha256Hex(revision.agentId, 12)}`;
+    const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+    const gateway = await this.getOwned("Deployment", name, namespace, ownership);
+    const route = await this.gatewayRouteForRevision(name, ownership, namespace, revision.id);
+    if (
+      gateway?.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revision.id &&
+      route === undefined
+    ) {
+      return;
+    }
+    await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
+    await this.deleteGateway(name, ownership, namespace);
   }
 
   private async removeRetiredGateway(revision: AgentRevision, namespace: string): Promise<void> {

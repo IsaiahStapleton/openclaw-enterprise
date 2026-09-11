@@ -50,6 +50,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     providerId: null,
     executionMode: "embedded",
     servicePrincipalId: identifier("service-agent"),
+    desiredRuntimeState: "stopped",
     createdAt: new Date().toISOString(),
   };
   const revision = {
@@ -672,6 +673,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     executionMode: "embedded",
     servicePrincipalId: identifier("service-agent"),
     serviceAccountId: account.id,
+    desiredRuntimeState: "stopped",
     createdAt: new Date().toISOString(),
   };
   const sharedAccountAgent = {

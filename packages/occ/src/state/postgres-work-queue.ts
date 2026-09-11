@@ -18,6 +18,7 @@ export interface ControllerWork {
   readonly revisionId?: string;
   readonly actorId: string;
   readonly namespaceTarget?: "ready" | "deleted";
+  readonly agentTarget?: "stopped";
   readonly state: ControllerWorkState;
   readonly availableAt: Date;
   readonly attemptCount: number;
@@ -41,6 +42,7 @@ export interface EnqueueWork {
   readonly revisionId?: string;
   readonly actorId: string;
   readonly namespaceTarget?: "ready" | "deleted";
+  readonly agentTarget?: "stopped";
   readonly availableAt?: Date | string;
 }
 
@@ -93,6 +95,7 @@ interface WorkRow {
   readonly revision_id: string | null;
   readonly actor_id: string;
   readonly namespace_target: "ready" | "deleted" | null;
+  readonly agent_target: "stopped" | null;
   readonly state: ControllerWorkState;
   readonly available_at: Date | string;
   readonly attempt_count: number;
@@ -157,6 +160,9 @@ function asWork(value: unknown): ControllerWork {
     ...(row.revision_id === null ? {} : { revisionId: row.revision_id }),
     actorId: row.actor_id,
     ...(row.namespace_target === null ? {} : { namespaceTarget: row.namespace_target }),
+    ...(row.agent_target === null || row.agent_target === undefined
+      ? {}
+      : { agentTarget: row.agent_target }),
     state: row.state,
     availableAt: asDate(row.available_at),
     attemptCount: row.attempt_count,
@@ -278,33 +284,50 @@ export class PostgresWorkQueue {
       input.revisionId === undefined
         ? null
         : nonempty(input.revisionId, "Controller work revision ID");
-    if ((revisionId === null) !== (agentId === null)) {
+    if (revisionId !== null && agentId === null) {
       throw new ScopeViolationError(
         "Controller work revisions require both their exact owning Agent and revision.",
       );
     }
     const namespaceTarget = input.namespaceTarget ?? null;
+    const agentTarget = input.agentTarget ?? null;
     if (
-      (agentId === null && namespaceTarget !== "ready" && namespaceTarget !== "deleted") ||
-      (agentId !== null && namespaceTarget !== null)
+      (agentId === null &&
+        (revisionId !== null ||
+          (namespaceTarget !== "ready" && namespaceTarget !== "deleted") ||
+          agentTarget !== null)) ||
+      (agentId !== null &&
+        revisionId === null &&
+        (namespaceTarget !== null || agentTarget !== "stopped")) ||
+      (revisionId !== null && (namespaceTarget !== null || agentTarget !== null))
     )
       throw new ScopeViolationError(
-        "Namespace work requires an exact lifecycle target and child work cannot have one.",
+        "Controller work requires one exact Namespace, Agent, or revision target shape.",
       );
     const availableAt = input.availableAt === undefined ? null : asDate(input.availableAt);
 
     const inserted = await this.client.query(
       `INSERT INTO occ.controller_work (
          idempotency_key, namespace_id, agent_id, revision_id, actor_id, namespace_target,
+         agent_target,
          state, available_at, attempt_count, created_at, updated_at
        ) VALUES (
-         $1, $2, $3, $4, $5, $6,
-         'queued', COALESCE($7::timestamptz, clock_timestamp()), 0,
+         $1, $2, $3, $4, $5, $6, $7,
+         'queued', COALESCE($8::timestamptz, clock_timestamp()), 0,
          clock_timestamp(), clock_timestamp()
        )
        ON CONFLICT (idempotency_key) DO NOTHING
        RETURNING *`,
-      [idempotencyKey, namespaceId, agentId, revisionId, actorId, namespaceTarget, availableAt],
+      [
+        idempotencyKey,
+        namespaceId,
+        agentId,
+        revisionId,
+        actorId,
+        namespaceTarget,
+        agentTarget,
+        availableAt,
+      ],
     );
 
     if (inserted.rows[0] !== undefined) return asWork(inserted.rows[0]);
@@ -315,10 +338,11 @@ export class PostgresWorkQueue {
           OR agent_id IS DISTINCT FROM $3::text
           OR revision_id IS DISTINCT FROM $4::text
           OR actor_id IS DISTINCT FROM $5::text AS owner_conflict,
-          namespace_target IS DISTINCT FROM $6::text AS target_conflict
+          namespace_target IS DISTINCT FROM $6::text
+          OR agent_target IS DISTINCT FROM $7::text AS target_conflict
        FROM occ.controller_work
        WHERE idempotency_key = $1`,
-      [idempotencyKey, namespaceId, agentId, revisionId, actorId, namespaceTarget],
+      [idempotencyKey, namespaceId, agentId, revisionId, actorId, namespaceTarget, agentTarget],
     );
     const row = existing.rows[0];
     if (row === undefined) {

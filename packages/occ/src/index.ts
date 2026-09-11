@@ -1466,6 +1466,7 @@ export class OpenClawController {
         executionMode,
         ...(plugins === undefined ? {} : { plugins }),
         servicePrincipalId: `service-agent-${agentId}`,
+        desiredRuntimeState: "stopped",
         createdAt: this.timestamp(),
       });
       return agent;
@@ -1755,6 +1756,14 @@ export class OpenClawController {
           createdAt: this.timestamp(),
         }),
       );
+      const running = await state.agents.transitionAgentDesiredRuntimeState(
+        namespace.id,
+        lockedAgent.id,
+        lockedAgent.desiredRuntimeState,
+        "running",
+      );
+      if (running === undefined)
+        throw new ResourceConflictError("The Agent lifecycle changed during deployment.");
       await this.record(state, {
         kind: "agent_revision",
         action: "reconcile",
@@ -1763,6 +1772,48 @@ export class OpenClawController {
         actorId: principalId,
       });
       return revision;
+    });
+  }
+
+  async stopAgent(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<Readonly<Agent>> {
+    if (!isNonEmptyString(namespaceId))
+      throw new ScopeViolationError("The exact Namespace identity is missing.");
+    if (!isNonEmptyString(agentId))
+      throw new ScopeViolationError("The exact Agent identity is missing.");
+    return this.mutate(async (state) => {
+      await this.lockNamespace(state, namespaceId);
+      const agent = await state.agents.lockAgent(namespaceId, agentId);
+      if (agent === undefined)
+        throw new ScopeViolationError(
+          "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      await this.authorize(principalId, "operate", {
+        kind: "agent",
+        id: agent.id,
+        namespaceId: agent.namespaceId,
+      });
+      const stopped = await state.agents.transitionAgentDesiredRuntimeState(
+        namespaceId,
+        agentId,
+        agent.desiredRuntimeState,
+        "stopped",
+      );
+      if (stopped === undefined)
+        throw new ResourceConflictError("The Agent lifecycle changed during stop.");
+      await this.record(state, {
+        kind: "agent",
+        action: "reconcile",
+        target: "stopped",
+        namespaceId,
+        resourceId: agentId,
+        actorId: principalId,
+        operationId: crypto.randomUUID(),
+      });
+      return stopped;
     });
   }
 

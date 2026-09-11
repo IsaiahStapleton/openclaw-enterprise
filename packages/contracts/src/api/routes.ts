@@ -531,6 +531,22 @@ export const occApiRoutes = [
     },
   },
   {
+    operationId: "stopAgent",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/:agentId/stop",
+    action: "openclaw.agents.stop",
+    iamAction: "operate",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Stop one Agent while retaining its revision and persistent state",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: AgentParams,
+      response: { 202: AgentResponse, ...mutationErrors },
+    },
+  },
+  {
     operationId: "getAgentWorkspaceFile",
     method: "GET",
     path: "/namespaces/:namespaceId/agents/:agentId/workspace/files/:name",

@@ -274,6 +274,29 @@ test(
       operations: 1,
       tombstones: 1,
     });
+
+    // The limited application role can insert Agents, so the database must reject
+    // caller-selected running intent instead of relying on repository defaults.
+    await assert.rejects(
+      pool.query(
+        `INSERT INTO occ.agents
+           (id, namespace_id, name, configuration_id, provider_id, execution_mode,
+            service_principal_id, desired_runtime_state, created_at)
+         SELECT $1, namespace_id, $2, configuration_id, provider_id, execution_mode,
+                $3, 'running', clock_timestamp()
+         FROM occ.agents WHERE namespace_id = $4 AND id = $5`,
+        [
+          `agt_${randomUUID()}`,
+          `Invalid running Agent ${randomUUID()}`,
+          `service-agent-${randomUUID()}`,
+          fixture.agent.namespaceId,
+          fixture.agent.id,
+        ],
+      ),
+      ({ code, constraint }) =>
+        code === "23514" && constraint === "agent_initial_runtime_state_is_valid",
+    );
+
     const durableAccount = await pool.query(
       "SELECT id, namespace_id, name, credential " + "FROM occ.service_accounts WHERE id = $1",
       [fixture.serviceAccount.id],
