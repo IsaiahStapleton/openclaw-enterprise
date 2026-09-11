@@ -136,6 +136,7 @@
                       },
                       {
                         "page": "reference/authentication",
+                  "reference/postgres-auth-binding",
                         "label": "Authentication"
                       },
                       {

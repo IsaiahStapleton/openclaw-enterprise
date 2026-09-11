@@ -1,5 +1,4 @@
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
-import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { domainToASCII } from "node:url";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -11,7 +10,8 @@ import type { ApiKey } from "@better-auth/api-key/types";
 import { parse as parseDomain } from "tldts";
 import type { ServicePrincipal } from "@openclaw-enterprise/contracts";
 import { createAuthPrincipalSeed, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
-import type { PostgresPool } from "@openclaw-enterprise/occ";
+import type { SchemaAuthPoolV1 } from "@openclaw-enterprise/occ/auth-persistence/schema-auth-boundary-v1";
+import { createPostgresAuthBinding } from "@openclaw-enterprise/occ/auth-persistence/postgres-auth-binding";
 import type {
   AdmissionHeaders,
   AdmissionRequest,
@@ -53,7 +53,7 @@ export interface PostgresControllerAuthOptions extends Omit<
   ControllerAuthOptions,
   "database" | "memoryDatabase"
 > {
-  readonly pool: PostgresPool;
+  readonly pool: SchemaAuthPoolV1;
 }
 
 export interface AuthenticatedAccount {
@@ -360,33 +360,14 @@ async function sendAuthEndpoint(
   }
 }
 
-const requireOccDependency = createRequire(
-  new URL("../../../../packages/occ/package.json", import.meta.url),
-);
-
 async function createOccAuthDatabase(
-  pool: PostgresPool,
+  pool: SchemaAuthPoolV1,
 ): Promise<NonNullable<BetterAuthOptions["database"]>> {
-  const { drizzle } = (await import(requireOccDependency.resolve("drizzle-orm/node-postgres"))) as {
-    drizzle: (pool: unknown, config: { readonly schema: unknown }) => unknown;
-  };
-  const { drizzleAdapter } = (await import("better-auth/adapters/drizzle")) as unknown as {
-    drizzleAdapter: (
-      database: unknown,
-      options: {
-        readonly provider: "pg";
-        readonly schema: unknown;
-        readonly camelCase: true;
-        readonly transaction: true;
-      },
-    ) => NonNullable<BetterAuthOptions["database"]>;
-  };
-  const occPostgresSchema = await import(
-    new URL("../../../../packages/occ/src/state/postgres-schema.ts", import.meta.url).href
-  );
-  return drizzleAdapter(drizzle(pool, { schema: occPostgresSchema }), {
+  const binding = await createPostgresAuthBinding(pool);
+  const { drizzleAdapter } = await import("better-auth/adapters/drizzle");
+  return drizzleAdapter(binding.database, {
     provider: "pg",
-    schema: occPostgresSchema,
+    schema: binding.schema,
     camelCase: true,
     transaction: true,
   });

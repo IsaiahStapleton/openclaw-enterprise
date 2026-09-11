@@ -201,3 +201,38 @@ through its loopback proxy. It rejects nonloopback targets and TLS connections
 before mutation: inspecting encrypted protocol completion is unsupported, and
 TLS intent is never silently downgraded. Use the ordinary disposable non-TLS
 loopback setup above for this test.
+
+## Authentication binding
+
+With matching workspace dependencies prepared, run the focused constructor,
+consumer, and type-contract checks:
+
+```sh
+node --test tests/conformance/schema-auth-boundary-v1.test.mjs tests/conformance/postgres-auth-binding.test.mjs tests/conformance/postgres-controller-auth-binding.test.mjs
+```
+
+These tests verify real binding and adapter composition, canonical schema and
+caller-pool identity, type rejection, and failure propagation. Dependency
+rejection tests intercept module loading; database refusal tests substitute only
+the external pool boundary. They do not establish successful SQL persistence.
+
+After preparing a disposable database and setting `OCC_TEST_DATABASE_URL` as
+above, run existing application flows through the binding:
+
+```sh
+node --test --test-concurrency=1 tests/integration/postgres-auth-binding.test.mjs tests/integration/postgres-auth-accounts.test.mjs tests/integration/postgres-service-api-keys.test.mjs
+```
+
+These exercise transaction isolation, rollback and caller-pool reuse, account
+provisioning, duplicate-account rejection, IAM audit
+rollback and account cleanup, cross-controller visibility, and service-key
+persistence and revocation. The fresh-bootstrap case requires a database without
+an Installation; use a new disposable database for that proof. Missing database
+configuration explicitly skips PostgreSQL coverage.
+
+If binding construction rejects, verify the installed OCC/Drizzle dependencies.
+If authentication returns a dependency error after construction, verify database
+connectivity and application-role permissions using the setup above. Construction
+alone does not establish connectivity. See the
+[binding reference](../reference/postgres-auth-binding.md) for ownership and
+transaction boundaries.

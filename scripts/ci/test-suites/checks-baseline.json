@@ -330,6 +330,15 @@
     },
     {
       "path": "tests/integration/repository-runtime-materialization.test.mjs"
+    },
+    {
+      "path": "tests/conformance/postgres-auth-binding.test.mjs"
+    },
+    {
+      "path": "tests/conformance/postgres-controller-auth-binding.test.mjs"
+    },
+    {
+      "path": "tests/conformance/schema-auth-boundary-v1.test.mjs"
     }
   ]
 }
