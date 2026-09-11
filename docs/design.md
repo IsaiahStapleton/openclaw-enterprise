@@ -8,6 +8,22 @@ last_updated: 2026-09-11
 
 # OpenClaw as the Open Enterprise Agent Platform
 
+## Implementation status
+
+This page and its design chapters, including their diagrams, define the normative
+**target architecture**, not a record of implemented capabilities. At commit
+`ea6a7d56`, the Kubernetes dedicated gateway and Harness still run in the same
+tenant namespace and share an Agent-owned workspace PVC.
+[Control-plane gateway placement (#75)](https://github.com/openclaw/openclaw-enterprise/issues/75)
+and [removal of the common PVC requirement (#76)](https://github.com/openclaw/openclaw-enterprise/issues/76)
+remain unimplemented. These statements reflect source and test assertions, not
+a live deployment verification.
+
+See [current architecture](ARCHITECTURE.md) and
+[Kubernetes execution modes](reference/drivers/kubernetes-compute.md#execution-modes)
+for implemented behavior, and verify current code and tests before relying on a
+target-design capability. Update this note as these gaps close.
+
 ## Summary
 
 OpenClaw Enterprise provides a multi-tenant control plane for configuring,
@@ -24,9 +40,6 @@ sources accessed through one common Driver abstraction.
 
 The bundled platform deployment uses Kubernetes. An Installation can select its
 bundled or an installed Driver implementation in development and production.
-The runtime placement described here is a target direction; dedicated gateways
-in a control-plane runtime target remain unimplemented. See
-[current architecture](ARCHITECTURE.md) for supported placement.
 
 ## Motivation
 
