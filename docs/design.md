@@ -3,7 +3,7 @@ title: OpenClaw as the Open Enterprise Agent Platform
 authors:
   - Kevin Lin
 created: 2026-07-08
-last_updated: 2026-08-24
+last_updated: 2026-09-11
 ---
 
 # OpenClaw as the Open Enterprise Agent Platform
@@ -14,7 +14,8 @@ OpenClaw Enterprise provides a multi-tenant control plane for configuring,
 deploying, and operating agents. Each deployment owns exactly one Installation
 containing multiple isolated Namespaces.
 
-Enterprise functionality is mediated by the OpenClaw Controller (OCC). This is a new component that is responsible for provisioning and orchestrating agents.
+Enterprise functionality is mediated by OpenClaw Control Plane (OCC). Its
+controller is responsible for provisioning and orchestrating agents.
 
 The platform introduces a small set of resource primitives for managing agents.
 OCC owns these platform resources and their lifecycles; external systems own
@@ -23,6 +24,9 @@ sources accessed through one common Driver abstraction.
 
 The bundled platform deployment uses Kubernetes. An Installation can select its
 bundled or an installed Driver implementation in development and production.
+The runtime placement described here is a target direction; dedicated gateways
+in a control-plane runtime target remain unimplemented. See
+[current architecture](ARCHITECTURE.md) for supported placement.
 
 ## Motivation
 
@@ -93,10 +97,11 @@ runtime detail.
    `ServiceAccount`, `Agent`, `AgentRevision`, `Harness`, `Channel`, `Secret`,
    `SecretBroker`, `SandboxPolicy`, and `Restriction`.
 5. Have OCC manage one OpenClaw gateway for each deployed Agent. The selected
-   `ComputeDriver` creates that gateway with its Agent in the same tenant
-   boundary. The bundled `KubernetesComputeDriver` uses the same exact cluster
-   and Kubernetes namespace. A Namespace may contain multiple independently
-   owned gateways; gateway lifecycle follows its owning Agent.
+   `ComputeDriver` places a dedicated gateway in the control-plane runtime
+   target and its revision-scoped Harness in the selected tenant data-plane
+   target. Embedded execution keeps gateway and Harness together in the tenant
+   data plane. Namespace isolation and Agent ownership apply across both
+   targets; gateway lifecycle follows its owning Agent.
 6. Provision an Agent workload from an admitted immutable `AgentRevision`
    through the selected `ComputeDriver` and enforce its exact `SandboxPolicy`
    through the selected `SandboxDriver`.
@@ -116,8 +121,9 @@ flowchart TB
     USERS["Users and automation"] --> INGRESS["Ingress Gateway"]
     INGRESS <-->|"identity verification and admission"| OAG["OpenClaw Access Gateway"]
 
-    subgraph CONTROL["Control plane"]
+    subgraph CONTROL["OpenClaw Control Plane (OCC)"]
         OCC["OpenClaw Controller"]
+        COMPUTE["Selected ComputeDriver"]
         IAM["IAMDriver"]
         BROKER["SecretBroker (deferred)"]
         API["OCC API"]
@@ -135,24 +141,30 @@ flowchart TB
         CONFIG -->|"configures"| AGENT
         SERVICE_ACCOUNT -->|"supplies credential reference"| AGENT
         AGENT -->|"deployment creates"| REVISION
+
+        subgraph GATEWAY_TARGET["Control-plane runtime target"]
+            GATEWAY["Agent-owned OpenClaw gateway (dedicated)"]
+        end
     end
 
     INGRESS -->|"verified browser access"| CONSOLE
     INGRESS -->|"verified requests"| API
 
-    subgraph DATA_PLANE["Selected data plane"]
-        COMPUTE["Selected ComputeDriver"]
+    subgraph DATA_PLANE["Selected tenant data-plane runtime target"]
         SANDBOX["SandboxDriver"]
 
-        subgraph NAMESPACE["Tenant workload boundary"]
-            GATEWAY["Agent-owned OpenClaw gateway"]
-            WORKLOAD["Agent workload"]
+        subgraph NAMESPACE["Namespace-isolated Agent workloads"]
+            WORKLOAD["Revision-scoped Harness (dedicated)"]
+            EMBEDDED["Combined gateway and Harness (embedded)"]
         end
 
-        COMPUTE -->|"provisions Agent-owned gateway"| GATEWAY
-        COMPUTE -->|"provisions and observes Agent workload"| WORKLOAD
         SANDBOX -->|"enforces admitted containment"| WORKLOAD
+        SANDBOX -->|"enforces admitted containment"| EMBEDDED
     end
+
+    COMPUTE -->|"reconciles exact Agent gateway"| GATEWAY
+    COMPUTE -->|"reconciles exact revision Harness"| WORKLOAD
+    COMPUTE -->|"reconciles combined workload"| EMBEDDED
 
     subgraph EXTERNAL["Selected external integrations"]
         SERVICE_ACCOUNT_DRIVER["ServiceAccountDriver"]
@@ -172,7 +184,7 @@ flowchart TB
         PLUGIN_DRIVER -->|"resolves curated plugin selections"| PROVIDER
     end
 
-    GATEWAY <-->|"Agent-owned runtime traffic"| WORKLOAD
+    GATEWAY <-->|"Exact Agent and active revision traffic"| WORKLOAD
     OCC -->|"namespace-scoped ensureNamespace"| COMPUTE
     OCC -->|"revision-scoped prepareRevision"| COMPUTE
     OCC -->|"dispatches authorized service account operation"| SERVICE_ACCOUNT_DRIVER
@@ -185,12 +197,13 @@ flowchart TB
 The Ingress Gateway is the public control-plane boundary. An external identity
 provider authenticates the caller, OAG verifies the resulting identity evidence
 and tenant admission, and OCC authorizes the exact platform operation. The
-control plane contains OCC. Each Agent's OpenClaw gateway runs alongside its
-workload in the selected data plane. `IAMDriver` evaluates the selected
-authorization policy. The selected `ComputeDriver` reconciles Agent-owned
-gateways and workloads in the same tenant boundary; the bundled
-`KubernetesComputeDriver` uses the same exact Kubernetes cluster and backing
-namespace. OCC owns their lifecycle decisions.
+selected `ComputeDriver` reconciles both runtime targets while OCC owns
+lifecycle decisions. The diagram shows the two alternative execution modes;
+each Agent selects one. Targets initially share a Kubernetes cluster, but may
+later occupy separate clusters or other Compute-backed locations. Physical
+separation does not change the owning Namespace or Agent. See
+[Agent gateways and deployment](design/workloads.md) for placement and lifecycle
+boundaries. `IAMDriver` evaluates the selected authorization policy.
 `SandboxDriver` enforces the admitted policy for the exact Agent workload.
 `InferenceDriver` invokes the selected external provider or local model source.
 `PluginDriver` translates Agent-owned desired plugin selections into native runtime
