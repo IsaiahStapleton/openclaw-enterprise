@@ -1,8 +1,8 @@
 # Controller reconciliation
 
 The controller worker advances Namespaces from `provisioning` to `ready`,
-finishes deleting empty Namespaces, and prepares and activates admitted Agent
-revisions. It runs separately from the OpenClaw Control Plane
+finishes deleting empty Namespaces, stops or deletes Agents, and prepares and
+activates admitted Agent revisions. It runs separately from the OpenClaw Control Plane
 (OCC) HTTP API, polls durable PostgreSQL work, and calls its selected Compute
 Driver. The supported development default is the bundled Docker Compute
 Driver, which creates one Docker network per Namespace and starts real
@@ -89,7 +89,11 @@ Harness/mode combinations and external ingress remain unavailable.
 
 ## Reconciliation lifecycle
 
-Namespace creation and deletion queue infrastructure work. Agent deployment queues an immutable revision; the worker prepares it, activates its route, and retires its predecessor. Read [Namespace and Agent reconciliation](controller/reconciliation.md) for lifecycle, queue-state, authorization, and recovery guarantees.
+Namespace creation and deletion queue infrastructure work. Agent stop and
+deletion queue exact-Agent lifecycle work. Agent deployment queues an immutable
+revision; the worker prepares it, activates its route, and retires its
+predecessor. Read [Namespace and Agent reconciliation](controller/reconciliation.md)
+for lifecycle, queue-state, authorization, and recovery guarantees.
 
 ## Observability
 

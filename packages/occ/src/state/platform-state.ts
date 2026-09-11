@@ -4,6 +4,7 @@ import { createPlatformReadView } from "../ports/platform-read-view.ts";
 import type {
   Agent,
   AgentDesiredRuntimeState,
+  AgentStatus,
   AgentRevision,
   AuditEvent,
   HarnessExecutionMode,
@@ -105,6 +106,20 @@ export interface AgentRepository extends AgentReadRepository {
     agentId: string,
     expected: AgentDesiredRuntimeState | readonly AgentDesiredRuntimeState[],
     next: AgentDesiredRuntimeState,
+  ): Promise<Readonly<Agent> | undefined>;
+  /**
+   * Moves the Agent between lifecycle states, returning undefined when the
+   * Agent is absent or does not currently hold one of `expected`. Deletion is
+   * asynchronous, so the transition is the boundary that stops concurrent
+   * mutations from admitting work the teardown has already enumerated. Callers
+   * that treat an already-deleting Agent as success check its status first,
+   * as `deleteNamespace` does for a Namespace.
+   */
+  transitionAgentStatus(
+    namespaceId: string,
+    agentId: string,
+    expected: AgentStatus | readonly AgentStatus[],
+    next: AgentStatus,
   ): Promise<Readonly<Agent> | undefined>;
 }
 
@@ -433,6 +448,15 @@ export type PlatformOperation =
       readonly kind: "agent";
       readonly target: "stopped";
       readonly operationId: string;
+    })
+  | (PlatformOperationBase & {
+      /**
+       * Agent teardown is scoped to the Agent, not one revision: it retires
+       * every revision the Agent owns.
+       */
+      readonly kind: "agent";
+      readonly target: "deleted";
+      readonly operationId?: never;
     });
 
 export interface PlatformOperationReadRepository {
@@ -1192,6 +1216,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         ...withoutPlugins,
         ...(plugins === undefined ? {} : { plugins }),
         desiredRuntimeState: "stopped" as const,
+        status: "active" as const,
       });
       snapshot.agents.set(key, saved);
       return immutableCopy(saved);
@@ -1209,6 +1234,29 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         return undefined;
       }
       const saved = immutableCopy({ ...agent, desiredRuntimeState: next });
+      snapshot.agents.set(key, saved);
+      return immutableCopy(saved);
+    },
+    transitionAgentStatus: async (namespaceId, agentId, expected, next) => {
+      const key = agentKey(namespaceId, agentId);
+      const agent = snapshot.agents.get(key);
+      const expectedStatuses = Array.isArray(expected) ? expected : [expected];
+      if (
+        agent === undefined ||
+        agent.namespaceId !== namespaceId ||
+        !expectedStatuses.includes(agent.status)
+      ) {
+        return undefined;
+      }
+      // Mirrors agents_status_valid and the one-way active -> deleting path the
+      // database enforces; deletion removes the row, so nothing returns to active.
+      if (agent.status !== next && !(agent.status === "active" && next === "deleting")) {
+        throw new ScopeViolationError("The Agent lifecycle transition is invalid.");
+      }
+      if (next === "deleting" && agent.desiredRuntimeState !== "stopped") {
+        throw new ScopeViolationError("A deleting Agent must already be stopped.");
+      }
+      const saved = immutableCopy({ ...agent, status: next });
       snapshot.agents.set(key, saved);
       return immutableCopy(saved);
     },
@@ -1386,14 +1434,23 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
             "Namespace work does not match its exact lifecycle target.",
           );
         }
-        if (
-          operation.kind === "agent" &&
-          (operation.namespaceId === operation.resourceId ||
-            !snapshot.agents.has(agentKey(operation.namespaceId, operation.resourceId)) ||
-            operation.target !== "stopped" ||
-            !isNonEmptyString(operation.operationId))
-        ) {
-          throw new ScopeViolationError("Agent work does not match its exact lifecycle target.");
+        // Agent-wide work names the Agent itself, never its owning Namespace.
+        // Mirrors the owner resolution and controller_work_agent_owner foreign
+        // key the database applies to the same operation.
+        if (operation.kind === "agent") {
+          if (operation.namespaceId === operation.resourceId) {
+            throw new ScopeViolationError("Agent work must name its exact Agent.");
+          }
+          const owner = snapshot.agents.get(agentKey(operation.namespaceId, operation.resourceId));
+          if (owner === undefined || owner.namespaceId !== operation.namespaceId) {
+            throw new ScopeViolationError("Agent work does not match its exact owner.");
+          }
+          if (operation.target !== "stopped" && operation.target !== "deleted") {
+            throw new ScopeViolationError("Agent work does not match its exact lifecycle target.");
+          }
+          if (operation.target === "stopped" && !isNonEmptyString(operation.operationId)) {
+            throw new ScopeViolationError("Agent stop work requires its exact operation identity.");
+          }
         }
         const duplicate = snapshot.operations.find(
           (existing) =>
@@ -1405,7 +1462,9 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
             (existing.kind !== "agent" ||
               (operation.kind === "agent" &&
                 existing.target === operation.target &&
-                existing.operationId === operation.operationId)),
+                (existing.target === "deleted" ||
+                  (operation.target === "stopped" &&
+                    existing.operationId === operation.operationId)))),
         );
         if (duplicate !== undefined) {
           if (

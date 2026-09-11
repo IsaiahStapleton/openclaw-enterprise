@@ -1,7 +1,10 @@
 # Agent deletion and revision teardown
 
-**Status:** Proposed — revised after second review; awaiting approval.
+**Status:** Implemented and locally verified; PR pending.
 **Issue:** [#94](https://github.com/openclaw/openclaw-enterprise/issues/94) (M3.4).
+**Sequencing:** [Agent stop](29-agent-stop.md) ([#93](https://github.com/openclaw/openclaw-enterprise/issues/93))
+landed first and owns the shared Agent runtime-state and queue model. This work
+is rebased onto it.
 **Current reference this will change:** [Agents](../docs/reference/agents.md),
 [Namespaces](../docs/reference/namespaces.md),
 [Controller reconciliation](../docs/reference/controller.md),
@@ -10,17 +13,33 @@
 
 ## Goal
 
-Provide an authorized, retryable Agent deletion operation that removes the Agent
-and its AgentRevisions, tears down OCC-owned runtime resources, and lets a
-Namespace be offboarded after its last Agent is removed.
+Provide an authorized Agent deletion operation that retries transient cleanup
+failures, removes the Agent and its AgentRevisions, tears down OCC-owned runtime
+resources, and lets a Namespace be offboarded after its last Agent is removed.
+
+## Implementation
+
+Migration `0019_agent_deletion.sql` adds
+`occ.agents.status` (`active` or `deleting`) with `agents_status_valid`, the
+`occ.validate_agent_lifecycle` trigger, and `GRANT UPDATE (status)`; it relaxes
+`controller_work_namespace_target_valid` and recreates
+`agent_revisions_are_immutable` as `UPDATE`-only. `DELETE
+/namespaces/:namespaceId/agents/:agentId` authorizes `delete` on the exact
+Agent, transitions it to `deleting`, queues teardown, and answers `202`.
+`AgentSchema` exposes `status`, and the bootstrap administrator Role gained the
+`delete` action on `agent`, which it had never carried.
+
+The worker binds the Agent, retires its revisions, removes Kubernetes runtime
+credentials, then uses the claim-protected
+`occ.finalize_agent_deletion` function to remove
+the Agent, revisions, service principal, API keys, IAM references, and work rows
+atomically while preserving lifecycle audit evidence.
 
 ## Current state
 
-There is no Agent deletion path at any layer. `packages/contracts/src/api/routes.ts`
-defines `DELETE` for Namespaces, Configurations, Secrets, and ServiceAccounts but
-no `deleteAgent` operation, and `packages/occ/src/index.ts` has no Agent deletion
-method. The limitation is recorded in
-[Agents](../docs/reference/agents.md#current-limitations).
+Before this work, the contracts and OCC exposed no Agent deletion operation;
+the [Agents reference](../docs/reference/agents.md#current-limitations) recorded
+this limitation.
 
 `deleteNamespace` rejects any Namespace that still has an Agent through
 `state.namespaces.hasAgents`, and `occ.validate_namespace_lifecycle`, as
@@ -36,8 +55,9 @@ elsewhere in the schema, for example
 
 Two constraint cycles govern deletion order. `occ.agents.active_revision_id`
 references `agent_revisions` immediately, while `agent_revisions.agent_id`
-references `agents`. Separately, `agent_service_principal_owner` is
-`DEFERRABLE INITIALLY DEFERRED`, while `iam_identities_agent_owner` is immediate.
+references `agents`. Separately, both service-principal ownership edges are
+declared `DEFERRABLE INITIALLY DEFERRED`, but their `ON DELETE RESTRICT` actions
+still run immediately and must become deferred `NO ACTION` checks for teardown.
 `occ.audit_events` stores `resource_kind` and `resource_id` as plain text with no
 foreign key, so audit history survives deletion.
 
@@ -49,9 +69,9 @@ trigger; `iam_group_memberships` carries one too, but needs no cleanup.
 The teardown primitives exist. `ComputeDriver.retireRevision` is implemented by
 all three bundled Drivers and, per the
 [Compute contract](../docs/reference/drivers/compute.md), already delegates
-provider-owned Sandbox cleanup during retirement. The Kubernetes implementation's
-`removeRetiredGateway` deletes the Agent-owned gateway, its route, its private
-state claim, and the dedicated shared workspace claim.
+provider-owned Sandbox cleanup during retirement. Kubernetes waits for exact
+revision Pods, then deletes owned gateway, route, ConfigMaps, claims, Services,
+ServiceAccount, and NetworkPolicies with ownership and observed-UID checks.
 
 ## Resolved decisions
 
@@ -90,69 +110,73 @@ admits
 `delete` on `agent`, so no authorization vocabulary changes. Regenerate the
 contract and verify with `pnpm openapi:check`.
 
+### Shared lifecycle model
+
+Agent stop owns the lifecycle model, and deletion consumes it rather than
+defining a competing one. Two concerns stay separate: `status` (`active` or
+`deleting`) records whether the Agent is being removed, while
+`desired_runtime_state` (`running` or `stopped`) records whether its workload
+should run. They are orthogonal — an Agent can be stopped and then deleted — and
+`0019_agent_deletion.sql` ties them together with
+`CHECK (status <> 'deleting' OR desired_runtime_state = 'stopped')`. Deletion
+therefore inherits the invariant that a deleting Agent is never running, which
+is the precondition its teardown needs.
+
 ### Concurrency boundary
 
-Deletion is asynchronous, so the Agent needs a transient `status` of `active` or
-`deleting` on `occ.agents` and on the `Agent` contract. No `deleted_at` column is
-required, because the row is removed.
-
-Every Agent mutation must reject a `deleting` Agent before doing work: update,
-deploy, runtime credential provisioning, and workspace file writes. Without this,
-a revision could be admitted after the worker enumerated the revisions to retire,
-leaving an orphaned workload behind. Reads may continue to return the Agent as
-`deleting`. The existing `controller_work_one_claim_per_resource` index already
-serializes work per Agent, but it does not gate the synchronous API, so the status
-check is the boundary. Race coverage is required, not optional.
+Deletion is asynchronous, so every Agent mutation must reject a `deleting` Agent
+before doing work: update, deploy, runtime credential provisioning, and workspace
+file writes. Without this, a revision could be admitted after the worker
+enumerated the revisions to retire, leaving an orphaned workload behind. The
+guard also honors `desired_runtime_state`, so it does not admit work that
+contradicts a stop already in progress. Reads may continue to return the Agent
+as `deleting`. These mutation guards return `409 AGENT_DELETING`; a stopped but
+active Agent continues to use `409 RESOURCE_CONFLICT`. The existing
+`controller_work_one_claim_per_resource` index
+serializes work per Agent but does not gate the synchronous API, so this check is
+the boundary. Race coverage is required, not optional.
 
 ### Work item and queue changes
 
-Relaxing the SQL check alone is insufficient; the queue rejects the shape at three
-layers:
+Agent stop supplies this. `controller_work.agent_target` is an explicit
+discriminator admitting `stopped` or `deleted`, `PlatformOperation` carries an
+`agent` kind targeting either, and `PostgresWorkQueue.enqueue` no longer requires
+`agentId` and `revisionId` together. Deletion uses the `deleted` target that
+model already reserves.
 
-- `PlatformOperation` in `packages/occ/src/state/platform-state.ts` admits only
-  `namespace` and `agent_revision`. Add an `agent` kind with
-  `target: "deleted"`.
-- `PostgresWorkQueue.enqueue` in `packages/occ/src/state/postgres-work-queue.ts`
-  throws unless `agentId` and `revisionId` are both present or both absent. Permit
-  an Agent-scoped item with no revision.
-- Operation persistence in `packages/occ/src/state/postgres-state.ts` branches on
-  the two existing kinds and must resolve and validate the Agent owner for the new
-  kind.
-- `controller_work_namespace_target_valid`, as redefined in
-  `0003_agent_drafts.sql`, requires a non-null `revision_id` whenever `agent_id`
-  is set. Admit the Agent-scoped, revision-less shape.
+This supersedes stage 2's implicit owner-column encoding, which was discarded
+during the Agent-stop rebase.
 
 ### Worker teardown
 
-Add an Agent branch to `apps/controller/src/worker.ts`, which dispatches on
-`claim.namespaceTarget` and `claim.agentId`. The handler retires every revision of
-the Agent through the selected `ComputeDriver`, then deletes the Agent's runtime
-credentials, and classifies failures as retryable or permanent the way
-`handleNamespaceLifecycle` does.
+Add an Agent branch to `apps/controller/src/worker.ts`. The handler validates the
+target, ownership, reauthorization, and credential-deletion capability before it
+binds the persisted Agent into Compute, retires revisions, and deletes credentials.
+This rebuilds binding after a worker or SSH Driver restart. Dependency failures
+retry; invalid state, ownership, authorization, or capability fails permanently.
 
 ### Agent credential cleanup
 
-Revision retirement does not remove Agent runtime credentials.
-`provisionAgentRuntimeCredentials` is rejected once any historical revision
-exists, so credentials can only be provisioned before the first revision, but
-they persist afterwards and survive deployment. Deletion therefore has to handle
-both an Agent with credentials and no revision to retire and a deployed Agent
-whose credentials outlived its revisions. The Compute contract has no
-credential-deletion counterpart, and the Kubernetes implementation is documented
-to never delete credentials.
+Runtime credentials can be provisioned only before the first revision but
+outlive deployment. Deletion must therefore handle zero-revision and deployed
+Agents. Revision retirement does not remove them, and Compute has no cleanup
+counterpart.
 
 Add `deleteAgentRuntimeCredentials?(binding: ComputeAgentBinding): Promise<void>`
 to `ComputeDriver`, Agent-scoped and symmetric with the provisioning method. It
 must be idempotent, succeeding when no credential exists, so retries and Agents
-that never had credentials both converge. Implement it in the Kubernetes Driver
-to remove the Agent-owned transport, model, and Slack Secrets; the Docker, SSH,
-and plugin runtimes implement neither method and are unaffected.
+that never had credentials both converge. Kubernetes removes Agent-owned
+transport and Slack Secrets. Model authentication now uses `harnessAuth`; its
+referenced Namespace-owned Secret survives Agent deletion. Docker, SSH, and
+plugin runtimes implement neither method.
 
 A Driver that implements provisioning but not deletion must fail the deletion
-closed rather than leave credentials behind. The worker invokes this primitive
-after revision retirement and before database finalization, so a credential
-failure leaves the Agent `deleting` and retryable rather than deleting the rows
-that identify the leaked Secrets.
+closed on its first attempt with `CREDENTIAL_DELETION_UNSUPPORTED`, rather than
+leave credentials behind or spend retries on a static capability mismatch. The
+worker checks that capability before revision retirement. When supported, it
+invokes the primitive after retirement and before database finalization, so a
+runtime credential failure leaves the Agent `deleting` and retryable rather than
+deleting the rows that identify the leaked Secrets.
 
 Removing credentials contradicts the current documented Kubernetes behavior, so
 [Compute](../docs/reference/drivers/compute.md) must be corrected in the
@@ -184,13 +208,13 @@ Inside one transaction, the function:
    `agent_active_revision_owner`.
 2. Deletes `iam_access_bindings` whose subject is the ServicePrincipal, and
    `iam_access_bindings` and `iam_restrictions` whose `(resource_kind,
-   resource_id)` names the Agent or one of its revisions. Those resource columns
+resource_id)` names the Agent or one of its revisions. Those resource columns
    are textual with no foreign key, so nothing else removes them and the
    authorization state would otherwise be orphaned.
 3. Deletes the Agent's `agent_revisions`.
 4. Deletes the ServicePrincipal `iam_identities` row, then the `occ.agents` row.
-   The deferred `agent_service_principal_owner` permits this order; the reverse
-   fails on the immediate `iam_identities_agent_owner`.
+   Migration `0017` recreates both ownership edges as deferred `NO ACTION`
+   constraints so the cycle validates the empty end state at commit.
 5. Deletes `occ.apikey` rows whose `reference_id` is the ServicePrincipal, which
    also has no foreign key.
 6. Records success evidence and deletes the Agent's `controller_work` rows last,
@@ -223,9 +247,18 @@ place of `complete`. Its claim-token and unexpired-lease predicates must match
 `complete`'s, so a lost or expired lease still fails closed and no deletion
 occurs. Every other worker branch keeps using `complete` unchanged.
 
+### Permanent failure recovery
+
+Permanent results and exhausted retries leave a terminal `failed_permanent` work
+row. The queue does not requeue it automatically, and a repeated `DELETE` returns
+the existing `deleting` Agent without creating new work. The Agent therefore
+remains readable but mutation-blocked and continues to block Namespace offboarding.
+No public or operator recovery path exists.
+
 ### Database changes
 
-One new migration, `0016_agent_deletion.sql`, following `0015_agent_plugins.sql`:
+One new migration, `0019_agent_deletion.sql`, following the upstream harness
+authentication migrations through `0018_runtime_harness_auth.sql`:
 add `status` to `occ.agents` with a check constraint and
 `GRANT UPDATE (status)`; relax `controller_work_namespace_target_valid`; recreate
 `agent_revisions_are_immutable` as `UPDATE`-only; and create the deletion
@@ -237,8 +270,8 @@ Author the SQL by hand, as the existing migrations are. Grants, triggers,
 `SECURITY DEFINER` functions, and these check constraints are not expressible in
 `packages/occ/src/state/postgres-schema.ts`, and `migrations/meta/` holds
 snapshots for only `0000` and `0002`, so generated diffs are not the authoring
-path. Add the matching `_journal.json` entry with `idx: 16` and
-`when: 1787000000016`, continuing the existing sequential timestamps.
+path. Add the matching `_journal.json` entry with `idx: 19` and
+`when: 1787000000019`, continuing the existing sequential timestamps.
 
 The journal timestamp is load-bearing. The PostgreSQL migrator in drizzle-orm
 0.45.2 selects the newest `created_at` from `drizzle.__drizzle_migrations` and
@@ -255,19 +288,21 @@ adds no migration rollout guidance to the documentation set.
 
 ## Work breakdown
 
-1. Migration, `Agent` status field, repository methods, and in-memory adapter
-   parity.
-2. `PlatformOperation` kind, queue enqueue relaxation, and operation persistence.
-3. `deleteAgent` route, OpenAPI regeneration, and the controller method with
-   authorization, status transition, and audit.
-4. Status rejection in every Agent mutation path.
-5. Deletion function, the revision immutability change, and the queue finalizer.
-6. `deleteAgentRuntimeCredentials` on the Compute contract and in the Kubernetes
+1. **Done.** Migration, `Agent` status field, repository methods, and in-memory
+   adapter parity.
+2. **Superseded by Agent stop.** Discard the implicit encoding and adopt
+   `agent_target` during the rebase.
+3. **Done.** `deleteAgent` route, OpenAPI regeneration, and the controller method
+   with authorization, status transition, and audit.
+4. **Done.** Status rejection in every Agent mutation path, honoring `desired_runtime_state`
+   as well as `status`.
+5. **Done.** Deletion function, the revision immutability change, and the queue finalizer.
+6. **Done.** `deleteAgentRuntimeCredentials` on the Compute contract and in the Kubernetes
    Driver, with the corrected Compute reference.
-7. Worker teardown branch with retryable failure classification, reusing the
-   internal shutdown primitive, then credential cleanup and the finalizer.
-8. `hasAgents` and Namespace offboarding coverage.
-9. Documentation: remove the deletion limitation from Agents, correct the
+7. **Done.** Worker teardown with retryable and permanent failure classification,
+   shutdown reuse, credential cleanup, and claim-protected finalization.
+8. **Done.** `hasAgents` and Namespace offboarding coverage.
+9. **Done.** Documentation: remove the deletion limitation from Agents, correct the
    Namespace statement, update the controller worker flow, and record completion
    here.
 
@@ -278,16 +313,19 @@ and is out of scope.
 
 - Conformance: delete an Agent with no revisions, with an admitted but undeployed
   revision, and with a deployed active revision. Assert `202`, the audit events,
-  idempotent repeat deletion, and denial without the `delete` permission.
-- Credentials: provision runtime credentials on a zero-revision Agent, delete it,
-  and assert the credential Secrets are gone; repeat for a deployed Agent. Assert
-  credential cleanup on an Agent that never had credentials succeeds, and that a
-  provisioning Driver without the deletion method fails the deletion closed.
+  repeat deletion while work is nonterminal, and denial without `delete` permission.
+- Credentials and k3d: assert zero-revision credential deletion; directly delete
+  running embedded and dedicated Agents with an immutable runtime image. Assert
+  finalization waits for exact Pods, and credential Secrets,
+  PVCs, Services, ServiceAccounts, revision ConfigMaps, and Agent NetworkPolicies
+  are gone while sibling resources survive. Assert idempotent absence and
+  fail-closed unsupported Drivers.
 - Race: attempt update, deploy, credential provisioning, and a workspace write
   against a `deleting` Agent and assert each is rejected; assert no revision can
   be admitted after teardown enumerates revisions.
 - Retry: fail `retireRevision` once, then assert the retry completes and the rows
-  are gone.
+  are gone; restart the worker with a fresh SSH Driver and prove binding precedes
+  retirement.
 - Isolation: assert a sibling Agent, its revisions, and its ServicePrincipal
   survive, and that the Namespace's Configurations and Secrets are untouched.
 - Privilege and immutability: assert `occ_app` cannot delete an Agent, revision,
@@ -310,9 +348,13 @@ and is out of scope.
 ## Dependencies
 
 [#93](https://github.com/openclaw/openclaw-enterprise/issues/93) owns the
-internal shutdown primitive this work reuses; its public stop endpoint is not a
-prerequisite, so the two can land in either order.
+internal shutdown primitive this work reuses and the shared lifecycle model
+described above. Its public stop endpoint remains no prerequisite for deletion,
+which accepts an active Agent directly; the two are sequenced because they share
+`occ.agents` and `controller_work`, not because deletion depends on the stop
+API. Stop merges first and deletion rebases onto it.
 [#99](https://github.com/openclaw/openclaw-enterprise/issues/99) owns upgrade
-handling for the new lifecycle state. A dedicated rollback API stays out of
-scope; tested recovery is owned by
-[#100](https://github.com/openclaw/openclaw-enterprise/issues/100).
+handling for the new lifecycle state. A dedicated rollback API and recovery from
+terminal Agent-deletion work stay out of scope. Issue #94 delegates deployment
+recovery to [#100](https://github.com/openclaw/openclaw-enterprise/issues/100),
+which does not cover requeueing permanently failed Agent deletion.

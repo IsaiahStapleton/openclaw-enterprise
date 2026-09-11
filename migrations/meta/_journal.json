@@ -141,6 +141,13 @@
       "when": 1787000000019,
       "tag": "0019_controller_work_terminal_outcome",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1787000000020,
+      "tag": "0020_agent_deletion",
+      "breakpoints": true
     }
   ]
 }

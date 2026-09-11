@@ -341,11 +341,18 @@ export interface ServiceAccount extends Scope {
 }
 
 export type AgentDesiredRuntimeState = "running" | "stopped";
+
+/**
+ * `deleting` is a terminal transition: the Agent row is removed once teardown
+ * succeeds, so there is no `deleted` status and no tombstone to observe.
+ */
+export type AgentStatus = "active" | "deleting";
 export interface Agent extends Scope {
   readonly id: string;
   readonly namespaceId: string;
   readonly name: string;
   readonly desiredRuntimeState: AgentDesiredRuntimeState;
+  readonly status: AgentStatus;
   readonly configurationId: string;
   readonly providerId: ProviderRef;
   readonly harnessAuth: HarnessAuthBinding | null;
@@ -738,6 +745,7 @@ export interface ComputeDriver extends Driver {
     binding: ComputeAgentBinding,
     input: AgentRuntimeCredentialsInput,
   ): Promise<AgentRuntimeCredentialStatus>;
+  deleteAgentRuntimeCredentials?(binding: ComputeAgentBinding): Promise<void>;
   getGatewayEndpoint?(revision: AgentRevision): string | undefined;
   ensureNamespace(namespace: Namespace): Promise<NamespaceEnsureResult>;
   deleteNamespace(namespace: Namespace): Promise<NamespaceDeleteResult>;

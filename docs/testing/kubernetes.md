@@ -35,6 +35,11 @@ namespace preservation, and PostgreSQL API-plus-worker reconciliation. No model
 key is needed. Missing all cluster selectors skips the suite; partial selectors
 fail, and a missing database skips the API-plus-worker case.
 
+Set `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` to an imported immutable runtime image
+reference to extend the API-plus-worker case through real runtime credential
+Secret and private-state claim deletion. The case uses nonfunctional fixture
+credentials and performs no model turn.
+
 The tests require an explicit loopback `k3d-*` context and enforcing
 NetworkPolicies. They create scoped RBAC and resources, and configure the
 selected cluster's local-path provisioner for shared filesystem tests. Because
@@ -254,12 +259,13 @@ minimum line; a manually selected server must be 1.35 or later. The test
 exercises the real version endpoint through its scoped controller identity
 before creating tenant resources.
 
-| Variable                         | Requirement                                                                                        |
-| -------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_KUBERNETES_KUBECONFIG` | Absolute path to the dedicated disposable local-cluster kubeconfig.                                |
-| `OCC_TEST_KUBERNETES_CONTEXT`    | Explicit context whose HTTPS API server is loopback-only with an explicit port.                    |
-| `OCC_TEST_KUBERNETES_IMAGE`      | Locally available fixture image already imported into the selected cluster.                        |
-| `OCC_TEST_DATABASE_URL`          | Required for API-and-worker coverage; must select a dedicated, migrated `openclaw_k8s_*` database. |
+| Variable                            | Requirement                                                                                        |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `OCC_TEST_KUBERNETES_KUBECONFIG`    | Absolute path to the dedicated disposable local-cluster kubeconfig.                                |
+| `OCC_TEST_KUBERNETES_CONTEXT`       | Explicit context whose HTTPS API server is loopback-only with an explicit port.                    |
+| `OCC_TEST_KUBERNETES_IMAGE`         | Locally available fixture image already imported into the selected cluster.                        |
+| `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` | Optional immutable runtime image for credential Secret and private-state teardown proof.           |
+| `OCC_TEST_DATABASE_URL`             | Required for API-and-worker coverage; must select a dedicated, migrated `openclaw_k8s_*` database. |
 
 Follow the canonical
 [Kubernetes HTTP fixture testing guide](#kubernetes-http-fixture)
