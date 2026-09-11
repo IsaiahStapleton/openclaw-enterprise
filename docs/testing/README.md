@@ -21,6 +21,9 @@ database, Kubernetes, image, or provider selectors do not accidentally select
 another suite. The test scripts above run `scripts/verify-workspace-boundary.mjs`
 before the Node.js test runner.
 
+For test audits, proof selection, diff cleanup, and independent review, see
+[Developer skills](developer-skills.md).
+
 ## Integration tests
 
 Each suite page owns its setup, environment variables, model defaults, cleanup,
