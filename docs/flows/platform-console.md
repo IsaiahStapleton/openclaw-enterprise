@@ -142,72 +142,9 @@ the Configuration ID and locks its JSON and execution mode; an explicit Agent re
 Configuration. No write retries automatically, and creation alone does not admit
 a revision or start runtime work.
 
-### 4. Render draft, revision, or channels
+### 4–6. Edit the Agent and access runtime files
 
-`apps/controller/src/console/agents/detail.mjs:renderAgentDetail`
-
-The detail page reads the Agent, revision list, and either the saved draft
-Configuration or the selected AgentRevision. `revision=draft` reads the current
-Configuration referenced by the Agent. `revision=<id>` reads that immutable
-snapshot. The Selected revision badge is derived from `activeRevisionId`; the
-newest revision and the viewed snapshot can both differ from that pointer.
-Serving status stays explicitly unavailable because these API responses provide
-no serving observation. Revision snapshots
-are read-only and do not expose rollback, edit, deploy, or live-health controls.
-Agent deletion is unavailable because the API has no Agent delete operation.
-
-`apps/controller/src/console/channels.mjs:renderChannels` renders supported
-Slack and Microsoft Teams channel settings for the saved draft only. Slack uses
-fixed unresolved `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` environment references;
-Teams uses fixed unresolved `MSTEAMS_APP_PASSWORD`. The editor requires
-dedicated execution for enabled channels and may refuse native documents that it
-cannot round-trip, including non-Socket Slack settings, non-standard credential
-references, mixed Slack mention settings, and unsupported plugin shapes.
-
-Saving channels first rereads the Agent and Configuration, then checks that the
-Agent still references the same Configuration generation. The subsequent PATCH
-sends `{ values: updatedValues }` and omits `secretBindings`, so the backend
-retains existing bindings. The preflight reads do not prevent a later concurrent write.
-An interrupted or unavailable PATCH reply keeps the result unknown and blocks
-another channel write until Refresh. Draft channel disablement changes only
-Configuration values; it does not stop a running Agent. The
-[operator workflow](operator-workflow.md) records the executable management
-commands and the lifecycle procedures still unavailable in this API.
-
-### 5. Provision initial runtime credentials
-
-The saved draft reads metadata from the exact Agent's `runtime-credentials`
-endpoint. The console sends masked model and Slack inputs only on explicit
-submission and clears them afterward. The response reports stored groups, not
-provider validity or runtime health; an uncertain response requires a status
-refresh before retrying.
-
-OCC authorizes the exact Agent, locks its Namespace and Agent, and rejects
-provisioning after any historical revision exists. The selected Compute Driver
-derives Secret names and verifies Namespace and Agent ownership before writing.
-Kubernetes creates only missing whole Secrets, generates transport tokens on the
-server, and preserves existing matching groups on retry. Neither Configuration
-nor the audit event receives credential bytes. External Secret creation cannot
-be rolled back by a failed database transaction, so errors require readback.
-
-### 6. Read and replace live workspace files
-
-`apps/controller/src/console/agents/workspace.mjs:renderWorkspaceFiles` opens from
-`tab=workspace` after an exact Agent read. It bypasses Configuration and revision
-history reads, because workspace contents belong to the live Agent. An Agent
-without an active revision gets an unavailable explanation without file requests.
-
-The editor issues one GET for each supported filename. A successful response
-populates that file's editor; `404` permits an explicit create attempt, and other
-failures leave it disabled. Save sends `{ content }` to the same exact-Agent PUT
-route. It neither patches Configuration nor admits a revision. The existing
-[workspace flow](workspace-files.md) owns authorization and native file transport.
-Each result stays local to its file. Unknown write outcomes require a successful
-reload before another save; the editor never retries a write automatically.
-
-Creation uses the channel editor to update the initial Configuration JSON before
-its POST. It cannot send initial workspace files because the create API has no
-file fields and workspace access requires a deployed gateway.
+[Console Agent editing and runtime requests](platform-console/agent-editing.md) traces draft/revision rendering, channel changes, credential provisioning, and workspace reads/writes. Each request returns through the response-ordering checks below.
 
 ### 7. Commit only the current response, or clear the view
 
@@ -229,6 +166,16 @@ login. An unconfirmed logout stays blocked with Retry. The
 [authentication flow](local-password-authentication.md) owns server revocation;
 this client never infers it from a network error.
 
+## Deploy the saved draft
+
+The saved-draft detail view exposes **Deploy saved draft**. It rereads the Agent and
+Configuration, checks their loaded association and generation, then sends the existing
+bodyless `POST /namespaces/:namespaceId/agents/:agentId/deploy`. The server retains
+its existing authorization and admission checks. The returned admitted revision opens
+the workspace view; gateway startup and file availability are checked by subsequent
+workspace reads. An uncertain deployment response disables replay until the user
+refreshes and inspects the Agent and revision history.
+
 ## Debugging and Verification
 
 - Use the displayed request ID to associate API failures with controller logs.
@@ -241,7 +188,7 @@ this client never infers it from a network error.
   runtime dispatch, worker lease handling, or Compute Driver effects.
 - API tests cover safe discovery, permission boundaries, empty versus missing
   wiring, static MIME/allowlisting, and unchanged API JSON errors. See
-  [Testing](../testing.md) for commands and the image smoke boundary.
+  [Testing](../testing/README.md) for commands and the image smoke boundary.
 
 ## Related docs
 
@@ -261,13 +208,3 @@ this client never infers it from a network error.
 - 2026-09-01 19:09: Trace static serving, session resolution, exact collection authorization, Namespace isolation, and logout. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - 97911d361ac02ddf561e46c8af0864ad66a6df45) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-09-01 17:47: Add Agent creation, detail revision selection, and saved channel draft editing flow boundaries. (01a05f94-886b-7122-8784-c4b5aa5c5d1d - b02a07f2e575b13260b8792f87975d51c5ef7a61)
 - 2026-09-01 18:07: Trace association discovery and Configuration-first creation from editable starter JSON. (01a05f89-ff1c-7643-a77f-7e1e3aed9e5f - 1dd4b6b)
-
-## Deploy the saved draft
-
-The saved-draft detail view exposes **Deploy saved draft**. It rereads the Agent and
-Configuration, checks their loaded association and generation, then sends the existing
-bodyless `POST /namespaces/:namespaceId/agents/:agentId/deploy`. The server retains
-its existing authorization and admission checks. The returned admitted revision opens
-the workspace view; gateway startup and file availability are checked by subsequent
-workspace reads. An uncertain deployment response disables replay until the user
-refreshes and inspects the Agent and revision history.

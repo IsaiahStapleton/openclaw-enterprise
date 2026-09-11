@@ -167,7 +167,7 @@ drivers:
 ```
 
 Include the existing required `occ` settings and use the
-[complete production Installation example](../../guides/deploy.md#configure-the-installation)
+[complete production Installation example](../../guides/deploy/production-installation.md#configure-the-installation)
 as the baseline for the selected Drivers. Each Driver owns its closed
 configuration schema; bundled Kubernetes settings apply only when that bundled
 Driver is selected. Startup YAML can select Secret storage but must not contain
@@ -208,21 +208,9 @@ exports or configuration, incorrect capability/identity, and missing production
 Compute methods. These checks do not prove that installed IAM honors policy or
 that installed Compute isolates workloads; operator review remains mandatory.
 
-## Verification evidence
+## Related
 
-[Packaged-driver integration](../../../tests/integration/driver-plugin-installation.test.mjs) installs scoped, precompiled IAM, Compute, and Configuration tarballs
-with real pnpm and lifecycle scripts disabled into an isolated dependency root.
-It selects all three through production startup and user session
-admission backed by in-memory OCC state. Checks include `401`/`403` responses,
-audited IAM identity and restriction evidence, Configuration CRUD, public signup
-remaining unavailable, and Namespace reconciliation writing its identity to
-`/tmp/local-test`. The test removes only its own file; it does not alter
-checkout dependencies.
-
-This test is not a PostgreSQL-backed production deployment and does not
-independently prove cross-process policy visibility. The suite does not prove
-private-registry authentication, a live Kubernetes cluster, a real OpenClaw
-gateway, or a Codex model turn.
+- [Packaged-driver testing](../../testing/local.md#packaged-driver-integration)
 
 The package resolver and startup checks live in
 [Installation composition](../../../apps/controller/src/composition/installation-config.ts).

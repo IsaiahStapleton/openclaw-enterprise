@@ -7,13 +7,13 @@ Version `0.1.0`; OpenAPI `3.1.0`.
 This reference is generated from the
 [checked-in OpenAPI contract](../../packages/contracts/openapi/occ-api.openapi.json).
 Run `pnpm openapi:generate` after changing an API route or schema;
-`pnpm openapi:check` verifies both generated artifacts.
+`pnpm openapi:check` verifies the generated contract and API reference.
 
 The exported contract comes from the development-enabled OCC app, which is
 why the generated title is `Development OCC API`. Use
 `POST /installation/bootstrap` only for development or bootstrap flows
 that create the first Installation; production bootstraps through the
-[Helm initialization Job](../guides/deploy.md#provision-system-secrets-and-install)
+[Helm initialization Job](../guides/deploy/production-installation.md#provision-system-secrets-and-install)
 before serving requests.
 After bootstrap, production uses the same authenticated controller resource
 operations through the selected Drivers and settings described in
@@ -37,9 +37,38 @@ Each operation lists its supported status codes.
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-## Authentication
+## Resources
 
-### `POST /api/auth/accounts`
+| Resource | Operations |
+| --- | --- |
+| [Authentication](#authentication) | 6 operations |
+| [Installation](#installation) | 2 operations |
+| [Namespaces](#namespaces) | 4 operations |
+| [Agents](#agents) | 9 operations |
+| [Agent revisions](#agent-revisions) | 2 operations |
+| [Configurations](#configurations) | 4 operations |
+| [Secrets](#secrets) | 4 operations |
+| [Service accounts](#service-accounts) | 6 operations |
+| [Providers](#providers) | 1 operation |
+
+## Operations
+
+<span id="authentication"></span>
+
+### Authentication
+
+| Operation | Summary |
+| --- | --- |
+| [`POST /api/auth/accounts`](#post-apiauthaccounts) | Create an administrator-controlled local auth account |
+| [`POST /api/auth/service-keys`](#post-apiauthservicekeys) | Issue a service API key |
+| [`DELETE /api/auth/service-keys/{keyId}`](#delete-apiauthservicekeyskeyid) | Revoke a service API key |
+| [`GET /api/auth/session`](#get-apiauthsession) | Inspect authentication without revealing session tokens |
+| [`POST /api/auth/sign-in/email`](#post-apiauthsigninemail) | Sign in with email and password |
+| [`POST /api/auth/sign-out`](#post-apiauthsignout) | Sign out of the current session |
+
+#### `POST /api/auth/accounts`
+
+<span id="post-apiauthaccounts"></span>
 
 Create an administrator-controlled local auth account
 
@@ -51,7 +80,7 @@ Create an administrator-controlled local auth account
 | --- | --- | --- |
 | `administer` | `installation` | `requested` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -64,7 +93,7 @@ Create an administrator-controlled local auth account
 | `password` | `string` | Yes | min length: 12; max length: 128 |
 | `roleId` | `string` | Yes | min length: 1; max length: 200 |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -87,7 +116,9 @@ Create an administrator-controlled local auth account
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
-### `POST /api/auth/service-keys`
+#### `POST /api/auth/service-keys`
+
+<span id="post-apiauthservicekeys"></span>
 
 Issue a service API key
 
@@ -99,7 +130,7 @@ Issue a service API key
 | --- | --- | --- |
 | `administer` | `installation` | `requested` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -112,7 +143,7 @@ Issue a service API key
 | `namespaceId` | `string` | No | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -138,7 +169,9 @@ Issue a service API key
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
-### `DELETE /api/auth/service-keys/{keyId}`
+#### `DELETE /api/auth/service-keys/{keyId}`
+
+<span id="delete-apiauthservicekeyskeyid"></span>
 
 Revoke a service API key
 
@@ -150,13 +183,13 @@ Revoke a service API key
 | --- | --- | --- |
 | `administer` | `installation` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `keyId` | path | `string` | Yes | min length: 1; max length: 200 |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -178,7 +211,9 @@ Revoke a service API key
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
-### `GET /api/auth/session`
+#### `GET /api/auth/session`
+
+<span id="get-apiauthsession"></span>
 
 Inspect authentication without revealing session tokens
 
@@ -186,7 +221,7 @@ Inspect authentication without revealing session tokens
 
 **Permissions:** Returns only authenticated status and public account identity, or null without a valid session; session tokens and credentials are never returned.
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -201,7 +236,9 @@ Inspect authentication without revealing session tokens
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
-### `POST /api/auth/sign-in/email`
+#### `POST /api/auth/sign-in/email`
+
+<span id="post-apiauthsigninemail"></span>
 
 Sign in with email and password
 
@@ -209,7 +246,7 @@ Sign in with email and password
 
 **Permissions:** Authenticates a local account and issues a user session cookie.
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -220,7 +257,7 @@ Sign in with email and password
 | `email` | `string` | Yes | min length: 3; max length: 320 |
 | `password` | `string` | Yes | min length: 12; max length: 128 |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -237,7 +274,9 @@ Sign in with email and password
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
-### `POST /api/auth/sign-out`
+#### `POST /api/auth/sign-out`
+
+<span id="post-apiauthsignout"></span>
 
 Sign out of the current session
 
@@ -245,7 +284,7 @@ Sign out of the current session
 
 **Permissions:** Revokes the current user session cookie.
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -261,9 +300,18 @@ Sign out of the current session
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
-## Installation
+<span id="installation"></span>
 
-### `GET /installation`
+### Installation
+
+| Operation | Summary |
+| --- | --- |
+| [`GET /installation`](#get-installation) | Get the singleton Installation |
+| [`POST /installation/bootstrap`](#post-installationbootstrap) | Bootstrap the singleton Installation |
+
+#### `GET /installation`
+
+<span id="get-installation"></span>
 
 Get the singleton Installation
 
@@ -275,7 +323,7 @@ Get the singleton Installation
 | --- | --- | --- |
 | `read` | `installation` | `requested` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -298,7 +346,9 @@ Get the singleton Installation
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `POST /installation/bootstrap`
+#### `POST /installation/bootstrap`
+
+<span id="post-installationbootstrap"></span>
 
 Bootstrap the singleton Installation
 
@@ -310,7 +360,7 @@ Bootstrap the singleton Installation
 | --- | --- | --- |
 | `administer` | `installation` | `requested` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -320,7 +370,7 @@ Bootstrap the singleton Installation
 | --- | --- | --- | --- |
 | `name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -345,9 +395,20 @@ Bootstrap the singleton Installation
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-## Namespaces
+<span id="namespaces"></span>
 
-### `GET /namespaces`
+### Namespaces
+
+| Operation | Summary |
+| --- | --- |
+| [`GET /namespaces`](#get-namespaces) | List authorized Namespaces |
+| [`POST /namespaces`](#post-namespaces) | Create an Installation-owned Namespace |
+| [`DELETE /namespaces/{namespaceId}`](#delete-namespacesnamespaceid) | Begin deletion of an empty Installation-owned Namespace |
+| [`GET /namespaces/{namespaceId}`](#get-namespacesnamespaceid) | Get an exact Installation-owned Namespace |
+
+#### `GET /namespaces`
+
+<span id="get-namespaces"></span>
 
 List authorized Namespaces
 
@@ -359,7 +420,7 @@ List authorized Namespaces
 | --- | --- | --- |
 | `read` | `namespace` | `each_returned` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -384,7 +445,9 @@ List authorized Namespaces
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `POST /namespaces`
+#### `POST /namespaces`
+
+<span id="post-namespaces"></span>
 
 Create an Installation-owned Namespace
 
@@ -397,7 +460,7 @@ Create an Installation-owned Namespace
 | `create` | `namespace` | `installation` |
 | `administer` | `installation` | `requested` (when selecting an existing namespace) |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -408,7 +471,7 @@ Create an Installation-owned Namespace
 | `existingNamespace` | `string` | No | min length: 1; max length: 63; pattern: `^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$` |
 | `name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -436,7 +499,9 @@ Create an Installation-owned Namespace
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `DELETE /namespaces/{namespaceId}`
+#### `DELETE /namespaces/{namespaceId}`
+
+<span id="delete-namespacesnamespaceid"></span>
 
 Begin deletion of an empty Installation-owned Namespace
 
@@ -448,13 +513,13 @@ Begin deletion of an empty Installation-owned Namespace
 | --- | --- | --- |
 | `delete` | `namespace` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -480,7 +545,9 @@ Begin deletion of an empty Installation-owned Namespace
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `GET /namespaces/{namespaceId}`
+#### `GET /namespaces/{namespaceId}`
+
+<span id="get-namespacesnamespaceid"></span>
 
 Get an exact Installation-owned Namespace
 
@@ -492,13 +559,13 @@ Get an exact Installation-owned Namespace
 | --- | --- | --- |
 | `read` | `namespace` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -523,9 +590,25 @@ Get an exact Installation-owned Namespace
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-## Agents
+<span id="agents"></span>
 
-### `GET /namespaces/{namespaceId}/agents`
+### Agents
+
+| Operation | Summary |
+| --- | --- |
+| [`GET /namespaces/{namespaceId}/agents`](#get-namespacesnamespaceidagents) | List authorized Agents in one exact Namespace |
+| [`POST /namespaces/{namespaceId}/agents`](#post-namespacesnamespaceidagents) | Create a Namespace-owned Agent |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}`](#get-namespacesnamespaceidagentsagentid) | Get an exact Namespace-owned Agent |
+| [`PATCH /namespaces/{namespaceId}/agents/{agentId}`](#patch-namespacesnamespaceidagentsagentid) | Replace an exact Namespace-owned Agent's editable draft |
+| [`POST /namespaces/{namespaceId}/agents/{agentId}/deploy`](#post-namespacesnamespaceidagentsagentiddeploy) | Admit an immutable revision from the Agent's saved draft |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`](#get-namespacesnamespaceidagentsagentidruntimecredentials) | Get metadata for one Agent's provisioned runtime credentials |
+| [`POST /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`](#post-namespacesnamespaceidagentsagentidruntimecredentials) | Provision initial runtime credentials for one undeployed Agent |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}`](#get-namespacesnamespaceidagentsagentidworkspacefilesname) | Read an allowed workspace file from one active Agent |
+| [`PUT /namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}`](#put-namespacesnamespaceidagentsagentidworkspacefilesname) | Create or replace an allowed workspace file for one active Agent |
+
+#### `GET /namespaces/{namespaceId}/agents`
+
+<span id="get-namespacesnamespaceidagents"></span>
 
 List authorized Agents in one exact Namespace
 
@@ -538,13 +621,13 @@ List authorized Agents in one exact Namespace
 | `read` | `namespace` | `requested` |
 | `read` | `agent` | `each_returned` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -573,7 +656,9 @@ List authorized Agents in one exact Namespace
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `POST /namespaces/{namespaceId}/agents`
+#### `POST /namespaces/{namespaceId}/agents`
+
+<span id="post-namespacesnamespaceidagents"></span>
 
 Create a Namespace-owned Agent
 
@@ -588,13 +673,13 @@ Create a Namespace-owned Agent
 | `read` | `service_account` | `requested` (when associated) |
 | `operate` | `secret` | `requested` (when bound) |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -608,7 +693,7 @@ Create a Namespace-owned Agent
 | `providerId` | `string or null` | No | — |
 | `serviceAccountId` | `string` | No | pattern: `^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -640,7 +725,9 @@ Create a Namespace-owned Agent
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `GET /namespaces/{namespaceId}/agents/{agentId}`
+#### `GET /namespaces/{namespaceId}/agents/{agentId}`
+
+<span id="get-namespacesnamespaceidagentsagentid"></span>
 
 Get an exact Namespace-owned Agent
 
@@ -652,14 +739,14 @@ Get an exact Namespace-owned Agent
 | --- | --- | --- |
 | `read` | `agent` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -688,7 +775,9 @@ Get an exact Namespace-owned Agent
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `PATCH /namespaces/{namespaceId}/agents/{agentId}`
+#### `PATCH /namespaces/{namespaceId}/agents/{agentId}`
+
+<span id="patch-namespacesnamespaceidagentsagentid"></span>
 
 Replace an exact Namespace-owned Agent's editable draft
 
@@ -703,14 +792,14 @@ Replace an exact Namespace-owned Agent's editable draft
 | `read` | `service_account` | `requested` (when associated) |
 | `operate` | `secret` | `requested` (when bound) |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -723,7 +812,7 @@ Replace an exact Namespace-owned Agent's editable draft
 | `providerId` | `string or null` | No | — |
 | `serviceAccountId` | `string or null` | No | — |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -755,7 +844,9 @@ Replace an exact Namespace-owned Agent's editable draft
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `POST /namespaces/{namespaceId}/agents/{agentId}/deploy`
+#### `POST /namespaces/{namespaceId}/agents/{agentId}/deploy`
+
+<span id="post-namespacesnamespaceidagentsagentiddeploy"></span>
 
 Admit an immutable revision from the Agent's saved draft
 
@@ -770,14 +861,14 @@ Admit an immutable revision from the Agent's saved draft
 | `read` | `service_account` | `requested` (when associated) |
 | `operate` | `secret` | `requested` (when bound) |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -824,7 +915,9 @@ Admit an immutable revision from the Agent's saved draft
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `GET /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`
+#### `GET /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`
+
+<span id="get-namespacesnamespaceidagentsagentidruntimecredentials"></span>
 
 Get metadata for one Agent's provisioned runtime credentials
 
@@ -836,14 +929,14 @@ Get metadata for one Agent's provisioned runtime credentials
 | --- | --- | --- |
 | `read` | `agent` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -866,7 +959,9 @@ Get metadata for one Agent's provisioned runtime credentials
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `POST /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`
+#### `POST /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`
+
+<span id="post-namespacesnamespaceidagentsagentidruntimecredentials"></span>
 
 Provision initial runtime credentials for one undeployed Agent
 
@@ -879,14 +974,14 @@ Provision initial runtime credentials for one undeployed Agent
 | `operate` | `agent` | `requested` |
 | `read` | `agent` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -899,7 +994,7 @@ Provision initial runtime credentials for one undeployed Agent
 | `slack.appToken` | `string` | Yes | min length: 1; max length: 65536; pattern: `^[^\u0000]*$`; Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value. |
 | `slack.botToken` | `string` | Yes | min length: 1; max length: 65536; pattern: `^[^\u0000]*$`; Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value. |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -925,7 +1020,9 @@ Provision initial runtime credentials for one undeployed Agent
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `GET /namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}`
+#### `GET /namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}`
+
+<span id="get-namespacesnamespaceidagentsagentidworkspacefilesname"></span>
 
 Read an allowed workspace file from one active Agent
 
@@ -937,7 +1034,7 @@ Read an allowed workspace file from one active Agent
 | --- | --- | --- |
 | `read` | `agent` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
@@ -945,7 +1042,7 @@ Read an allowed workspace file from one active Agent
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `name` | path | `"AGENTS.md" or "SOUL.md" or "IDENTITY.md" or "USER.md"` | Yes | — |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -967,7 +1064,9 @@ Read an allowed workspace file from one active Agent
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `PUT /namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}`
+#### `PUT /namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}`
+
+<span id="put-namespacesnamespaceidagentsagentidworkspacefilesname"></span>
 
 Create or replace an allowed workspace file for one active Agent
 
@@ -979,7 +1078,7 @@ Create or replace an allowed workspace file for one active Agent
 | --- | --- | --- |
 | `operate` | `agent` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
@@ -987,7 +1086,7 @@ Create or replace an allowed workspace file for one active Agent
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `name` | path | `"AGENTS.md" or "SOUL.md" or "IDENTITY.md" or "USER.md"` | Yes | — |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -997,7 +1096,7 @@ Create or replace an allowed workspace file for one active Agent
 | --- | --- | --- | --- |
 | `content` | `string` | Yes | max length: 16384; pattern: `^[^\u0000]*$`; Workspace file content. The controller also enforces a 16 KiB UTF-8 byte limit and rejects unpaired UTF-16 surrogates. |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1022,9 +1121,18 @@ Create or replace an allowed workspace file for one active Agent
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-## Agent revisions
+<span id="agent-revisions"></span>
 
-### `GET /namespaces/{namespaceId}/agents/{agentId}/revisions`
+### Agent revisions
+
+| Operation | Summary |
+| --- | --- |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}/revisions`](#get-namespacesnamespaceidagentsagentidrevisions) | List authorized immutable revisions for one exact Agent |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}/revisions/{revisionId}`](#get-namespacesnamespaceidagentsagentidrevisionsrevisionid) | Get an exact authorized immutable Agent revision |
+
+#### `GET /namespaces/{namespaceId}/agents/{agentId}/revisions`
+
+<span id="get-namespacesnamespaceidagentsagentidrevisions"></span>
 
 List authorized immutable revisions for one exact Agent
 
@@ -1037,14 +1145,14 @@ List authorized immutable revisions for one exact Agent
 | `read` | `agent` | `requested` |
 | `read` | `agent_revision` | `each_returned` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1090,7 +1198,9 @@ List authorized immutable revisions for one exact Agent
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `GET /namespaces/{namespaceId}/agents/{agentId}/revisions/{revisionId}`
+#### `GET /namespaces/{namespaceId}/agents/{agentId}/revisions/{revisionId}`
+
+<span id="get-namespacesnamespaceidagentsagentidrevisionsrevisionid"></span>
 
 Get an exact authorized immutable Agent revision
 
@@ -1102,7 +1212,7 @@ Get an exact authorized immutable Agent revision
 | --- | --- | --- |
 | `read` | `agent_revision` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
@@ -1110,7 +1220,7 @@ Get an exact authorized immutable Agent revision
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `revisionId` | path | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1156,9 +1266,20 @@ Get an exact authorized immutable Agent revision
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-## Configurations
+<span id="configurations"></span>
 
-### `POST /namespaces/{namespaceId}/configurations`
+### Configurations
+
+| Operation | Summary |
+| --- | --- |
+| [`POST /namespaces/{namespaceId}/configurations`](#post-namespacesnamespaceidconfigurations) | Create a native Namespace-owned Agent Configuration |
+| [`DELETE /namespaces/{namespaceId}/configurations/{configurationId}`](#delete-namespacesnamespaceidconfigurationsconfigurationid) | Delete an exact unreferenced Namespace-owned Configuration |
+| [`GET /namespaces/{namespaceId}/configurations/{configurationId}`](#get-namespacesnamespaceidconfigurationsconfigurationid) | Get an exact Namespace-owned Configuration |
+| [`PATCH /namespaces/{namespaceId}/configurations/{configurationId}`](#patch-namespacesnamespaceidconfigurationsconfigurationid) | Replace values and increment an exact Namespace-owned Configuration generation |
+
+#### `POST /namespaces/{namespaceId}/configurations`
+
+<span id="post-namespacesnamespaceidconfigurations"></span>
 
 Create a native Namespace-owned Agent Configuration
 
@@ -1171,13 +1292,13 @@ Create a native Namespace-owned Agent Configuration
 | `create` | `configuration` | `namespace` |
 | `operate` | `secret` | `request_body` (when bound) |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -1189,7 +1310,7 @@ Create a native Namespace-owned Agent Configuration
 | `secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination. |
 | `values` | `object<string, SafeJsonValue>` | Yes | A native OpenClaw configuration document. |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1219,7 +1340,9 @@ Create a native Namespace-owned Agent Configuration
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `DELETE /namespaces/{namespaceId}/configurations/{configurationId}`
+#### `DELETE /namespaces/{namespaceId}/configurations/{configurationId}`
+
+<span id="delete-namespacesnamespaceidconfigurationsconfigurationid"></span>
 
 Delete an exact unreferenced Namespace-owned Configuration
 
@@ -1231,14 +1354,14 @@ Delete an exact unreferenced Namespace-owned Configuration
 | --- | --- | --- |
 | `delete` | `configuration` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `configurationId` | path | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1251,7 +1374,9 @@ Delete an exact unreferenced Namespace-owned Configuration
 | `500` | Internal Server Error |
 | `503` | Service Unavailable |
 
-### `GET /namespaces/{namespaceId}/configurations/{configurationId}`
+#### `GET /namespaces/{namespaceId}/configurations/{configurationId}`
+
+<span id="get-namespacesnamespaceidconfigurationsconfigurationid"></span>
 
 Get an exact Namespace-owned Configuration
 
@@ -1263,14 +1388,14 @@ Get an exact Namespace-owned Configuration
 | --- | --- | --- |
 | `read` | `configuration` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `configurationId` | path | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1297,7 +1422,9 @@ Get an exact Namespace-owned Configuration
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `PATCH /namespaces/{namespaceId}/configurations/{configurationId}`
+#### `PATCH /namespaces/{namespaceId}/configurations/{configurationId}`
+
+<span id="patch-namespacesnamespaceidconfigurationsconfigurationid"></span>
 
 Replace values and increment an exact Namespace-owned Configuration generation
 
@@ -1310,14 +1437,14 @@ Replace values and increment an exact Namespace-owned Configuration generation
 | `update` | `configuration` | `requested` |
 | `operate` | `secret` | `requested` (when bound) |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `configurationId` | path | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -1328,7 +1455,7 @@ Replace values and increment an exact Namespace-owned Configuration generation
 | `secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination. |
 | `values` | `object<string, SafeJsonValue>` | Yes | A native OpenClaw configuration document. |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1358,9 +1485,20 @@ Replace values and increment an exact Namespace-owned Configuration generation
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-## Secrets
+<span id="secrets"></span>
 
-### `POST /namespaces/{namespaceId}/secrets`
+### Secrets
+
+| Operation | Summary |
+| --- | --- |
+| [`POST /namespaces/{namespaceId}/secrets`](#post-namespacesnamespaceidsecrets) | Create exact Namespace-owned Secret material and return metadata only |
+| [`DELETE /namespaces/{namespaceId}/secrets/{secretId}`](#delete-namespacesnamespaceidsecretssecretid) | Delete exact unbound Namespace-owned Secret material |
+| [`GET /namespaces/{namespaceId}/secrets/{secretId}`](#get-namespacesnamespaceidsecretssecretid) | Get exact Namespace-owned Secret metadata without revealing material |
+| [`PATCH /namespaces/{namespaceId}/secrets/{secretId}`](#patch-namespacesnamespaceidsecretssecretid) | Replace exact Namespace-owned Secret material and return stable metadata |
+
+#### `POST /namespaces/{namespaceId}/secrets`
+
+<span id="post-namespacesnamespaceidsecrets"></span>
 
 Create exact Namespace-owned Secret material and return metadata only
 
@@ -1372,13 +1510,13 @@ Create exact Namespace-owned Secret material and return metadata only
 | --- | --- | --- |
 | `create` | `secret` | `namespace` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -1389,7 +1527,7 @@ Create exact Namespace-owned Secret material and return metadata only
 | `name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `value` | `string` | Yes | min length: 1; max length: 65536; pattern: `^[^\u0000]*$`; Protected Secret value. It must be nonempty UTF-8 without NUL; OCC accepts at most 65,536 UTF-8 bytes and still enforces the route request body limit. |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1419,7 +1557,9 @@ Create exact Namespace-owned Secret material and return metadata only
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `DELETE /namespaces/{namespaceId}/secrets/{secretId}`
+#### `DELETE /namespaces/{namespaceId}/secrets/{secretId}`
+
+<span id="delete-namespacesnamespaceidsecretssecretid"></span>
 
 Delete exact unbound Namespace-owned Secret material
 
@@ -1431,14 +1571,14 @@ Delete exact unbound Namespace-owned Secret material
 | --- | --- | --- |
 | `delete` | `secret` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `secretId` | path | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1451,7 +1591,9 @@ Delete exact unbound Namespace-owned Secret material
 | `500` | Internal Server Error |
 | `503` | Service Unavailable |
 
-### `GET /namespaces/{namespaceId}/secrets/{secretId}`
+#### `GET /namespaces/{namespaceId}/secrets/{secretId}`
+
+<span id="get-namespacesnamespaceidsecretssecretid"></span>
 
 Get exact Namespace-owned Secret metadata without revealing material
 
@@ -1463,14 +1605,14 @@ Get exact Namespace-owned Secret metadata without revealing material
 | --- | --- | --- |
 | `read` | `secret` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `secretId` | path | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1497,7 +1639,9 @@ Get exact Namespace-owned Secret metadata without revealing material
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `PATCH /namespaces/{namespaceId}/secrets/{secretId}`
+#### `PATCH /namespaces/{namespaceId}/secrets/{secretId}`
+
+<span id="patch-namespacesnamespaceidsecretssecretid"></span>
 
 Replace exact Namespace-owned Secret material and return stable metadata
 
@@ -1509,14 +1653,14 @@ Replace exact Namespace-owned Secret material and return stable metadata
 | --- | --- | --- |
 | `update` | `secret` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `secretId` | path | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -1526,7 +1670,7 @@ Replace exact Namespace-owned Secret material and return stable metadata
 | --- | --- | --- | --- |
 | `value` | `string` | Yes | min length: 1; max length: 65536; pattern: `^[^\u0000]*$`; Protected Secret value. It must be nonempty UTF-8 without NUL; OCC accepts at most 65,536 UTF-8 bytes and still enforces the route request body limit. |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1556,9 +1700,22 @@ Replace exact Namespace-owned Secret material and return stable metadata
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-## Service accounts
+<span id="service-accounts"></span>
 
-### `GET /namespaces/{namespaceId}/service-accounts`
+### Service accounts
+
+| Operation | Summary |
+| --- | --- |
+| [`GET /namespaces/{namespaceId}/service-accounts`](#get-namespacesnamespaceidserviceaccounts) | List authorized Namespace-owned ServiceAccounts in one exact Namespace |
+| [`POST /namespaces/{namespaceId}/service-accounts`](#post-namespacesnamespaceidserviceaccounts) | Create a native Namespace-owned ServiceAccount |
+| [`DELETE /namespaces/{namespaceId}/service-accounts/{serviceAccountId}`](#delete-namespacesnamespaceidserviceaccountsserviceaccountid) | Delete an exact unreferenced Namespace-owned ServiceAccount |
+| [`GET /namespaces/{namespaceId}/service-accounts/{serviceAccountId}`](#get-namespacesnamespaceidserviceaccountsserviceaccountid) | Get an exact Namespace-owned ServiceAccount |
+| [`PATCH /namespaces/{namespaceId}/service-accounts/{serviceAccountId}/credential`](#patch-namespacesnamespaceidserviceaccountsserviceaccountidcredential) | Associate an exact Namespace-local credential reference with a ServiceAccount |
+| [`POST /namespaces/{namespaceId}/service-accounts/{serviceAccountId}/credentials`](#post-namespacesnamespaceidserviceaccountsserviceaccountidcredentials) | Issue a managed credential for an exact Namespace-owned ServiceAccount |
+
+#### `GET /namespaces/{namespaceId}/service-accounts`
+
+<span id="get-namespacesnamespaceidserviceaccounts"></span>
 
 List authorized Namespace-owned ServiceAccounts in one exact Namespace
 
@@ -1571,13 +1728,13 @@ List authorized Namespace-owned ServiceAccounts in one exact Namespace
 | `read` | `namespace` | `requested` |
 | `read` | `service_account` | `each_returned` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1605,7 +1762,9 @@ List authorized Namespace-owned ServiceAccounts in one exact Namespace
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `POST /namespaces/{namespaceId}/service-accounts`
+#### `POST /namespaces/{namespaceId}/service-accounts`
+
+<span id="post-namespacesnamespaceidserviceaccounts"></span>
 
 Create a native Namespace-owned ServiceAccount
 
@@ -1617,13 +1776,13 @@ Create a native Namespace-owned ServiceAccount
 | --- | --- | --- |
 | `create` | `service_account` | `namespace` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -1633,7 +1792,7 @@ Create a native Namespace-owned ServiceAccount
 | --- | --- | --- | --- |
 | `name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1664,7 +1823,9 @@ Create a native Namespace-owned ServiceAccount
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `DELETE /namespaces/{namespaceId}/service-accounts/{serviceAccountId}`
+#### `DELETE /namespaces/{namespaceId}/service-accounts/{serviceAccountId}`
+
+<span id="delete-namespacesnamespaceidserviceaccountsserviceaccountid"></span>
 
 Delete an exact unreferenced Namespace-owned ServiceAccount
 
@@ -1676,14 +1837,14 @@ Delete an exact unreferenced Namespace-owned ServiceAccount
 | --- | --- | --- |
 | `delete` | `service_account` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `serviceAccountId` | path | `string` | Yes | pattern: `^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1696,7 +1857,9 @@ Delete an exact unreferenced Namespace-owned ServiceAccount
 | `500` | Internal Server Error |
 | `503` | Service Unavailable |
 
-### `GET /namespaces/{namespaceId}/service-accounts/{serviceAccountId}`
+#### `GET /namespaces/{namespaceId}/service-accounts/{serviceAccountId}`
+
+<span id="get-namespacesnamespaceidserviceaccountsserviceaccountid"></span>
 
 Get an exact Namespace-owned ServiceAccount
 
@@ -1708,14 +1871,14 @@ Get an exact Namespace-owned ServiceAccount
 | --- | --- | --- |
 | `read` | `service_account` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `serviceAccountId` | path | `string` | Yes | pattern: `^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1743,7 +1906,9 @@ Get an exact Namespace-owned ServiceAccount
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `PATCH /namespaces/{namespaceId}/service-accounts/{serviceAccountId}/credential`
+#### `PATCH /namespaces/{namespaceId}/service-accounts/{serviceAccountId}/credential`
+
+<span id="patch-namespacesnamespaceidserviceaccountsserviceaccountidcredential"></span>
 
 Associate an exact Namespace-local credential reference with a ServiceAccount
 
@@ -1755,14 +1920,14 @@ Associate an exact Namespace-local credential reference with a ServiceAccount
 | --- | --- | --- |
 | `update` | `service_account` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `serviceAccountId` | path | `string` | Yes | pattern: `^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -1775,7 +1940,7 @@ Associate an exact Namespace-local credential reference with a ServiceAccount
 | `secretRef.key` | `string` | Yes | max length: 253; pattern: `^(?![.]{1,2}$)[-._a-zA-Z0-9]+$` |
 | `secretRef.name` | `string` | Yes | max length: 253; pattern: `^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1806,7 +1971,9 @@ Associate an exact Namespace-local credential reference with a ServiceAccount
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-### `POST /namespaces/{namespaceId}/service-accounts/{serviceAccountId}/credentials`
+#### `POST /namespaces/{namespaceId}/service-accounts/{serviceAccountId}/credentials`
+
+<span id="post-namespacesnamespaceidserviceaccountsserviceaccountidcredentials"></span>
 
 Issue a managed credential for an exact Namespace-owned ServiceAccount
 
@@ -1818,14 +1985,14 @@ Issue a managed credential for an exact Namespace-owned ServiceAccount
 | --- | --- | --- |
 | `update` | `service_account` | `requested` |
 
-#### Parameters
+##### Parameters
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `serviceAccountId` | path | `string` | Yes | pattern: `^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-#### Request body
+##### Request body
 
 **Required:** Yes
 
@@ -1833,7 +2000,7 @@ Issue a managed credential for an exact Namespace-owned ServiceAccount
 
 Schema: `object`.
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1864,9 +2031,17 @@ Schema: `object`.
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
-## Providers
+<span id="providers"></span>
 
-### `GET /providers`
+### Providers
+
+| Operation | Summary |
+| --- | --- |
+| [`GET /providers`](#get-providers) | List configured Providers |
+
+#### `GET /providers`
+
+<span id="get-providers"></span>
 
 List configured Providers
 
@@ -1878,7 +2053,7 @@ List configured Providers
 | --- | --- | --- |
 | `administer` | `installation` | `requested` |
 
-#### Responses
+##### Responses
 
 | Status | Meaning |
 | --- | --- |
@@ -1902,18 +2077,11 @@ List configured Providers
 
 ## Shared schemas
 
-### `SafeJsonValue`
+Reusable schema names are referenced by operation request and response tables.
 
-Type: `string or boolean or number or null or array<SafeJsonValue> or object<string, SafeJsonValue>`.
-
-### `ErrorResponse`
-
-Type: `object`.
-
-### `AgentRuntimeCredentialResponse`
-
-Type: `object`.
-
-### `SecretResponse`
-
-Type: `object`.
+| Schema | Type |
+| --- | --- |
+| `SafeJsonValue` | `string or boolean or number or null or array<SafeJsonValue> or object<string, SafeJsonValue>` |
+| `ErrorResponse` | `object` |
+| `AgentRuntimeCredentialResponse` | `object` |
+| `SecretResponse` | `object` |

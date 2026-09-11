@@ -88,7 +88,7 @@ it does not establish readiness, perform user authorization, or persist a URL in
 Agent Configuration. Native connection failures remain dependency failures.
 
 Bundled Kubernetes Compute uses this capability for
-[private Agent routes](kubernetes-compute.md#private-agent-gateway-routes).
+[private Agent routes](kubernetes-compute/networking-and-isolation.md#private-agent-gateway-routes).
 Docker and SSH do not implement it. Optional resolution does not change the required
 revision lifecycle operations or grant the API Kubernetes route permissions.
 
@@ -157,4 +157,4 @@ conflicting supplied values, preserves complete matching groups on retry, and
 never rotates or deletes credentials. Partial external writes survive database
 or audit failure; callers must refresh stored status before retrying. Credential
 values must not appear in response metadata, Configuration, audit, or errors.
-See the [console workflow](../console.md#initial-runtime-credentials).
+See the [console workflow](../console/create-and-deploy.md#initial-runtime-credentials).

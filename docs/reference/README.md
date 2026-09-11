@@ -12,9 +12,10 @@ target scope can exceed the current implementation; the
 Use the [quickstart](../guides/quickstart.md) or [deployment guide](../guides/deploy.md)
 for deployment procedures, the [observability guide](../guides/observability.md)
 for logging and Collector setup, and [flow docs](../README.md#understand-the-code)
-for source execution.
-Use [`deploy/runtime`](../../deploy/runtime/README.md) when a local or test
-procedure needs a public Docker-only OpenClaw/Codex runtime image.
+for source execution. Contributor test setup, fixtures, hooks, and coverage
+belong in the [testing guides](../testing/README.md).
+Use [`deploy/runtime`](../../deploy/runtime/README.md) to build an OpenClaw/Codex
+runtime image for local deployment.
 
 ## Features
 
@@ -38,8 +39,8 @@ procedure needs a public Docker-only OpenClaw/Codex runtime image.
 
 Generated schemas describe wire shape. The feature pages additionally own
 behavioral rules such as cross-resource ownership, lifecycle ordering, and failure
-effects. Do not hand-edit the generated API page; use `pnpm openapi:generate` and
-`pnpm openapi:check` after route or schema changes.
+effects. Contributors updating routes or schemas should follow the
+[API generation checks](../testing/local.md#repository-and-tooling-configuration).
 
 ## Drivers
 

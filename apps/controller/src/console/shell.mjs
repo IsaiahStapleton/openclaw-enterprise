@@ -208,7 +208,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
     const sidebar = element(
       "aside",
       { className: "sidebar", id: "navigation-drawer" },
-      element("p", { className: "brand" }, "Control Center"),
+      element("p", { className: "brand" }, "Control Plane"),
       nav,
       session ? accountMenu() : null,
     );

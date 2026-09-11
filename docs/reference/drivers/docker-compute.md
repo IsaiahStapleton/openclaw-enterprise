@@ -111,16 +111,9 @@ inside the container. The Docker driver does not mount host workspaces,
 personal OpenClaw/Codex homes, SSH-agent sockets, cloud credentials, or
 controller credentials into workload containers.
 
-## Verification evidence
+## Inspect owned resources
 
-Use the Compose integration when changing this driver or development startup.
-It must exercise the authenticated API, durable PostgreSQL state, worker queue,
-Docker network/container provisioning, both Harness topologies, cleanup, and a
-real provider response containing a fresh nonce. The E2E call may reach the
-gateway through its Namespace network address or the driver-published loopback
-host port.
-
-Owned resources can be observed through Docker labels:
+Inspect the driver's resources through Docker labels:
 
 ```bash
 docker compose ps

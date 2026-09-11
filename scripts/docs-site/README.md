@@ -34,6 +34,18 @@ validates links and anchors, emits Enterprise HTML and local assets, and leaves
 Pagefind indexing to the root `docs:build` command. `--check` validates without
 writing output. Paths resolve against Markdown source files; README pages map to
 folder indexes and links outside `docs/` point to the Enterprise GitHub source.
+Markdown links in full-line comments under `deploy/examples/` (`.yaml` and
+`.yml`) use the same validation.
+
+`word-count.mjs` checks every tracked or nonignored Markdown file returned by
+Git, including root documentation, specs, generated reference, and new author
+drafts. It reports pages above the 1,500-word review threshold and fails pages
+above the 2,500-word hard limit. The approved single-page API reference exception
+covers only `docs/reference/api.md`; its word count and exception are still
+reported. Passing `--max <words>` changes the hard limit for other pages. It counts visible prose, headings, lists, tables, and fenced
+examples, while excluding frontmatter, HTML comments, Markdown syntax, and link
+destinations. Symlinks resolve to one real file so aliases cannot duplicate
+counts or bypass the limit.
 
 `serve.mjs` serves only `dist/docs/` on `127.0.0.1`. It accepts an optional
 `--port` for parallel local previews and tests. These two small internal CLIs use
@@ -43,9 +55,10 @@ built-in Node argument handling because each has one option and no subcommands.
 copying, heading links, and Mermaid rendering. No assistant, community widget,
 translation pipeline, deployment command, or hosted API is included.
 
-Run `npm run docs:check` for the real build plus page/navigation checks and negative
-link, anchor, and static-server cases. Run `pnpm openapi:check` with the controller
-workspace installed to verify that the generated API source is current.
+Run `npm run docs:check` for word-count enforcement, the real build plus
+page/navigation checks, and negative link, anchor, and static-server cases. Run
+`pnpm openapi:check` with the controller workspace installed to verify that the
+generated API source is current.
 
 The docs package is intentionally outside the active application workspace. Its
 independent lockfile lets docs-only contributors install the renderer without

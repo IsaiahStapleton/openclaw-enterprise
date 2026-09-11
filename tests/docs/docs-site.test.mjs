@@ -44,12 +44,17 @@ test("docs build renders every authored page and preserves repository ownership"
   assert.match(index, /href="\/guides\/quickstart\//);
   assert.match(index, /github\.com\/openclaw\/openclaw-enterprise\/blob\/main\/specs\/README\.md/);
   const api = await readFile(join(root, "dist/docs/reference/api/index.html"), "utf8");
-  assert.match(api, /POST/);
+  assert.match(api, /Development OCC API reference/);
   assert.match(api, /id="get-namespacesnamespaceidagentsagentidworkspacefilesname"/);
+  assert.doesNotMatch(api, /\/reference\/api\/agents-workspace\//);
   assert.ok((await readFile(join(root, "dist/docs/pagefind/pagefind.js"))).length > 0);
   assert.ok((await readFile(join(root, "dist/docs/pagefind/pagefind-ui.js"))).length > 0);
   assert.match(api, /<table\b/);
   assert.match(api, /\/reference\/authentication\//);
+  assert.match(
+    api,
+    /GET \/namespaces\/\{namespaceId\}\/agents\/\{agentId\}\/workspace\/files\/\{name\}/,
+  );
   const architecture = await readFile(join(root, "dist/docs/ARCHITECTURE/index.html"), "utf8");
   assert.match(architecture, /mermaid/);
   const asset = await readFile(join(root, "dist/docs/assets/lobster-mech-transparent.png"));
@@ -108,4 +113,61 @@ test("docs validation rejects broken links, anchors and navigation through the C
   result = validate();
   assert.notEqual(result.status, 0, "Build accepted a missing navigation page");
   assert.match(result.stderr + result.stdout, /absent/);
+});
+
+test("docs validation checks Markdown links in deploy example YAML comments", async (t) => {
+  const fixture = await mkdtemp(join(tmpdir(), "enterprise-docs-yaml-links-"));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  await mkdir(join(fixture, "deploy/examples/production"), { recursive: true });
+  await mkdir(join(fixture, "docs"), { recursive: true });
+  const config = {
+    name: "OpenClaw Enterprise",
+    navigation: {
+      languages: [
+        {
+          language: "en",
+          tabs: [{ tab: "Documentation", groups: [{ group: "Start", pages: ["README"] }] }],
+        },
+      ],
+    },
+  };
+  await writeFile(join(fixture, "docs/docs.json"), JSON.stringify(config));
+  await writeFile(join(fixture, "docs/README.md"), "# Home\n\n## Installation setup\n");
+  const installation = join(fixture, "deploy/examples/production/installation.yaml");
+  const validate = () =>
+    spawnSync(process.execPath, [join(root, "scripts/docs-site/build.mjs"), "--check"], {
+      cwd: fixture,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+
+  await writeFile(
+    installation,
+    [
+      "# See [Installation setup](../../../docs/README.md#installation-setup).",
+      'description: "[Ignored missing file](../../../docs/missing.md)"',
+      "field: value # [Ignored missing heading](../../../docs/README.md#missing-heading)",
+      "# [Unresolved reference][target]",
+      "another: value",
+      "# [target]: ../../../docs/missing.md",
+      "",
+    ].join("\n"),
+  );
+  let result = validate();
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  await writeFile(installation, "# See [Missing](../../../docs/missing.md).\n");
+  result = validate();
+  assert.notEqual(result.status, 0, "Build accepted a missing YAML-comment link file");
+  assert.match(result.stderr + result.stdout, /deploy\/examples\/production\/installation\.yaml/);
+  assert.match(result.stderr + result.stdout, /missing link target/);
+
+  await writeFile(
+    installation,
+    "# See [Missing heading](../../../docs/README.md#missing-heading).\n",
+  );
+  result = validate();
+  assert.notEqual(result.status, 0, "Build accepted a missing YAML-comment link heading");
+  assert.match(result.stderr + result.stdout, /deploy\/examples\/production\/installation\.yaml/);
+  assert.match(result.stderr + result.stdout, /missing heading/);
 });

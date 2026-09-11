@@ -29,15 +29,33 @@ const route = (source) =>
     .replace(/\/$/, "") +
   (source === "README.md" ? "" : "/");
 
-function walk(directory) {
+function walk(directory, acceptsFile = (entry) => entry.name.endsWith(".md")) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const file = path.join(directory, entry.name);
     return entry.isDirectory()
-      ? walk(file)
-      : entry.isFile() && entry.name.endsWith(".md")
+      ? walk(file, acceptsFile)
+      : entry.isFile() && acceptsFile(entry)
         ? [file]
         : [];
   });
+}
+
+function yamlCommentMarkdownBlocks(file) {
+  const blocks = [];
+  let block = [];
+  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+    const match = line.match(/^\s*# ?(.*)$/);
+    if (match) {
+      block.push(match[1]);
+      continue;
+    }
+    if (block.length) {
+      blocks.push(block.join("\n"));
+      block = [];
+    }
+  }
+  if (block.length) blocks.push(block.join("\n"));
+  return blocks;
 }
 
 for (const file of walk(docs)) {
@@ -152,6 +170,22 @@ for (const page of pages.values()) {
           name + "=" + quote + escape(resolveLink(page, md.utils.unescapeAll(href))) + quote,
       ),
   );
+}
+const deploymentExamples = path.join(root, "deploy/examples");
+if (fs.existsSync(deploymentExamples)) {
+  for (const file of walk(deploymentExamples, (entry) => /\.(?:ya?ml)$/i.test(entry.name))) {
+    const source = path.relative(root, file).split(path.sep).join("/");
+    for (const block of yamlCommentMarkdownBlocks(file)) {
+      const commentLinks = parseDocsDocument(block, md, {
+        sourceFile: file,
+        root: path.dirname(file),
+      }).links;
+      for (const href of commentLinks) {
+        resolveLink({ source, file }, href);
+        linkCount++;
+      }
+    }
+  }
 }
 for (const page of pages.values()) {
   page.html = page.html.replace(/<h[1-6]\b[^>]*>/g, (tag) => {

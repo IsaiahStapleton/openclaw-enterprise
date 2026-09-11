@@ -24,13 +24,25 @@
                   "guides/concepts",
                   "guides/quickstart",
                   "guides/deploy",
-                  "guides/observability",
-                  "testing"
+                  "guides/deploy/production-installation",
+                  "guides/deploy/production-agents",
+                  "guides/deploy/workspace-routing",
+                  "guides/deploy/local-operations",
+                  "guides/deploy/service-keys",
+                  "guides/observability"
                 ]
               },
               {
                 "group": "Architecture",
-                "pages": ["design", "ARCHITECTURE"]
+                "pages": [
+                  "design",
+                  "design/resources",
+                  "design/access",
+                  "design/workloads",
+                  "design/drivers",
+                  "design/safeguards",
+                  "ARCHITECTURE"
+                ]
               },
               {
                 "group": "Contributing",
@@ -46,19 +58,30 @@
                 "pages": [
                   "reference/README",
                   "reference/agents",
+                  "reference/agents/deployment",
                   "reference/api",
                   "reference/authentication",
+                  "reference/authentication/service-api-keys",
                   "reference/authorization",
                   "reference/configuration",
+                  "reference/configuration/kubernetes",
+                  "reference/configuration/secrets",
                   "reference/console",
+                  "reference/console/create-and-deploy",
                   "reference/controller",
+                  "reference/controller/reconciliation",
                   "reference/gateway-routing",
                   "reference/harness-execution",
                   "reference/namespaces",
                   "reference/providers",
                   "reference/security",
+                  "reference/security/runtime-isolation",
                   "reference/service-accounts",
-                  "reference/settings"
+                  "reference/settings",
+                  "reference/settings/development",
+                  "reference/settings/production",
+                  "reference/settings/operations",
+                  "reference/settings/programmatic"
                 ]
               },
               {
@@ -69,6 +92,8 @@
                   "reference/drivers/docker-compute",
                   "reference/drivers/iam",
                   "reference/drivers/kubernetes-compute",
+                  "reference/drivers/kubernetes-compute/networking-and-isolation",
+                  "reference/drivers/kubernetes-compute/storage-and-credentials",
                   "reference/drivers/kubernetes-secret",
                   "reference/drivers/openshell-sandbox",
                   "reference/drivers/sandbox",
@@ -88,24 +113,56 @@
                   "flows/common-logging",
                   "flows/compute-driver-lifecycle-hooks",
                   "flows/configuration-driver",
+                  "flows/configuration-driver/persistence-and-revisions",
                   "flows/controller-worker",
                   "flows/docker-compose-development",
+                  "flows/docker-compose-development/startup",
+                  "flows/docker-compose-development/agent-execution",
                   "flows/driver-plugin-loading",
                   "flows/github-actions-testing",
+                  "flows/github-actions-testing/preparation",
                   "flows/harness-execution-topology",
                   "flows/kubernetes-existing-namespace-placement",
                   "flows/local-password-authentication",
                   "flows/native-service-account-credential-delivery",
                   "flows/platform-console",
+                  "flows/platform-console/agent-editing",
                   "flows/platform-startup",
+                  "flows/platform-startup/history",
                   "flows/production-startup",
                   "flows/production-tui",
+                  "flows/production-tui/native-client",
                   "flows/secret-storage-and-delivery",
                   "flows/service-account-driver-credential-delivery",
                   "flows/service-api-keys",
                   "flows/workspace-files",
                   "flows/pr-24-ssh-compute"
                 ]
+              }
+            ]
+          },
+          {
+            "tab": "Testing",
+            "groups": [
+              {
+                "group": "Start testing",
+                "pages": ["testing/README", "testing/local", "testing/ci"]
+              },
+              {
+                "group": "Infrastructure",
+                "pages": [
+                  "testing/postgresql",
+                  "testing/images",
+                  "testing/docker",
+                  "testing/ssh",
+                  "testing/kubernetes",
+                  "testing/gateway-routing",
+                  "testing/production-tui"
+                ]
+              },
+              {
+                "group": "External services",
+                "pages": ["testing/slack", "testing/service-accounts", "testing/openshell"]
               }
             ]
           }
