@@ -122,10 +122,10 @@ if (command === "k3d") {
   }
   if (equals(args, ["kubeconfig", "get", state.cluster])) finish("apiVersion: v1\n");
   if (equals(args, ["cluster", "delete", state.cluster])) finish();
-  if (equals(args.slice(0, 2), ["image", "import"]) &&
-      equals(args.slice(3), ["-c", state.cluster])) {
-    assert.ok(args[2] === state.archive || args[2] === state.tag);
-    if (args[2] === state.archive) assert.ok(existsSync(state.archive));
+  if (equals(args.slice(0, 4), ["image", "import", "--mode", "direct"]) &&
+      equals(args.slice(5), ["-c", state.cluster])) {
+    assert.equal(args[4], state.archive);
+    assert.ok(existsSync(state.archive));
     if (scenario === "nonzero-import") {
       process.stderr.write("synthetic import command failure\n");
       process.exit(17);
@@ -583,7 +583,7 @@ test("prepareLane preserves an explicit logging Collector Node image over its de
   const statePath = join(root, "logging-state.json");
   const githubEnv = join(root, "github.env");
   const customNodeImage =
-    "node:24-bookworm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    "docker.io/library/node:24-bookworm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
   const result = runPrepare(
     ["--lane", "logging-collector", "--state", statePath, "--github-env", githubEnv],
@@ -603,7 +603,7 @@ test("prepareFile applies the images packaging Node base default without hiding 
   const statePath = join(root, "missing-state.json");
   const file = "tests/integration/runtime-image-startup.test.mjs";
   const customNodeBaseImage =
-    "node:24-bookworm@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    "docker.io/library/node:24-bookworm@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
   const defaulted = runPrepare(
     ["--lane", "images-packaging", "--file", file, "--state", statePath],
@@ -624,10 +624,41 @@ test("prepareFile applies the images packaging Node base default without hiding 
   assert.match(explicit.stderr, /requires a prior prepareLane/);
 
   const invalid = runPrepare(["--lane", "images-packaging", "--file", file, "--state", statePath], {
-    NODE_BASE_IMAGE: "node:24-bookworm",
+    NODE_BASE_IMAGE: "docker.io/library/node:24-bookworm",
   });
   assert.equal(invalid.status, 1);
   assert.match(invalid.stderr, /NODE_BASE_IMAGE must be an immutable/);
+});
+
+test("provider-account preparation accepts absent image inputs before prepared state exists", async (t) => {
+  const root = await fixture(t);
+  const adminKeyPath = join(root, "chatgpt-admin.key");
+  const statePath = join(root, "missing-state.json");
+  await writeFile(adminKeyPath, "admin key\n", { mode: 0o600 });
+  await chmod(adminKeyPath, 0o600);
+
+  const result = runPrepare(
+    [
+      "--lane",
+      "provider-account",
+      "--file",
+      "tests/integration/service-account-driver-real.test.mjs",
+      "--state",
+      statePath,
+    ],
+    {
+      OCC_TEST_OPENAI_MODEL: "gpt-test",
+      OCC_TEST_CHATGPT_WORKSPACE_ID: "workspace-test",
+      OCC_TEST_CHATGPT_ADMIN_KEY_PATH: adminKeyPath,
+      OCC_TEST_KUBERNETES_GATEWAY_IMAGE: "",
+      OCC_TEST_KUBERNETES_AGENT_IMAGE: "",
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /requires a prior prepareLane/);
+  assert.doesNotMatch(result.stderr, /OCC_TEST_KUBERNETES_.*IMAGE/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
 });
 
 test("prepareLane rejects mutable Kubernetes image inputs before creating state", async (t) => {

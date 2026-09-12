@@ -17,7 +17,10 @@ const integerPattern = /^[1-9][0-9]*$/;
 export function validateContext(env, repo, workflow = publishWorkflow) {
   assert.equal(env.GITHUB_REPOSITORY, repository, "Only the Enterprise repository may publish.");
   assert.equal(repo.full_name, repository);
-  assert.equal(repo.private, true, "Publication requires the private Enterprise repository.");
+  assert.equal(typeof repo.private, "boolean", "Repository privacy must be a boolean.");
+  if (workflow !== publishWorkflow || env.PUBLISH !== "false") {
+    assert.equal(repo.private, true, "Publication requires the private Enterprise repository.");
+  }
   assert.equal(repo.default_branch, "main");
   assert.equal(env.GITHUB_EVENT_NAME, "workflow_dispatch", "Only manual dispatch is supported.");
   assert.equal(env.GITHUB_REF, "refs/heads/main", "Select the trusted main workflow.");
@@ -171,7 +174,10 @@ async function validate(env) {
   );
   const suites = JSON.parse(await readFile("scripts/ci/test-suites.json", "utf8"));
   const testedBase = suites.lanes["images-packaging"].prepare.defaultEnv.NODE_BASE_IMAGE;
-  assert.match(env.NODE_BASE_IMAGE ?? "", /^node:24[.-][a-z0-9.-]+@sha256:[a-f0-9]{64}$/);
+  assert.match(
+    env.NODE_BASE_IMAGE ?? "",
+    /^docker\.io\/library\/node:24[.-][a-z0-9.-]+@sha256:[a-f0-9]{64}$/,
+  );
   assert.equal(env.NODE_BASE_IMAGE, testedBase, "Approve the same Node 24 digest used by CI.");
   const runtimeRecipe = await readFile("deploy/runtime/Dockerfile", "utf8");
   assert.equal(runtimeRecipe.match(/^ARG NODE_BASE_IMAGE=(.+)$/m)?.[1], testedBase);
