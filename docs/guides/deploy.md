@@ -62,6 +62,9 @@ Follow these pages in order in the same operator shell:
 3. [Verify the production workload](deploy/production-agents.md#verify-production-workloads).
    Confirm the active revision, gateway access, and TUI model-turn proof for
    token-authenticated gateways.
+4. [Prepare a production handoff](deploy/production-handoff.md).
+   Assign operating owners, verify the business workflow, and record alert,
+   credential, cost, and recovery decisions before relying on the installation.
 
 For private workspace-file administration, configure
 [Agent workspace routing](deploy/workspace-routing.md). For operational logs,
@@ -109,5 +112,6 @@ so use Kubernetes Compute for plugin-enabled runtime proof. See
 ## Related
 
 - [Service API keys, rotation, and bootstrap recovery](deploy/service-keys.md)
+- [Credential renewal and revocation](deploy/credential-lifecycle.md)
 - [Local Kubernetes, development TUI, and cleanup](deploy/local-operations.md)
 - [Configuration and settings](../reference/settings.md)
