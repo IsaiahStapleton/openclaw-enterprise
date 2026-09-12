@@ -16,7 +16,7 @@
     "typecheck": "tsc --build tsconfig.json --pretty false"
   },
   "dependencies": {
-    "@better-auth/api-key": "1.6.11",
+    "@better-auth/api-key": "1.6.22",
     "@fastify/swagger": "9.8.0",
     "@fastify/type-provider-typebox": "6.1.0",
     "@grpc/grpc-js": "1.14.4",
