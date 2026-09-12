@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "rule": "cross-package-source",
+      "from": "apps/controller/src/auth/index.ts",
+      "to": "packages/occ/package.json",
+      "specifier": "file:packages/occ/package.json",
+      "kind": "dependency-anchor",
+      "typeOnly": false,
+      "bindings": ["*"],
+      "owner": "Authentication persistence",
+      "reason": "Current authentication setup loads the shared authored auth schema and its database dependency through the OCC package location.",
+      "removeWhen": "Replace the private schema and dependency anchor with the supported auth-persistence factory export."
+    },
+    {
+      "rule": "cross-package-source",
+      "from": "apps/controller/src/auth/index.ts",
+      "to": "packages/occ/src/state/postgres-schema.ts",
+      "specifier": "file:packages/occ/src/state/postgres-schema.ts",
+      "kind": "dynamic-import",
+      "typeOnly": false,
+      "bindings": ["*"],
+      "owner": "Authentication persistence",
+      "reason": "Current authentication setup loads the shared authored auth schema and its database dependency through the OCC package location.",
+      "removeWhen": "Replace the private schema and dependency anchor with the supported auth-persistence factory export."
+    },
+    {
+      "rule": "cross-package-source",
+      "from": "apps/controller/src/auth/index.ts",
+      "to": "packages/occ/src/state/postgres-schema.ts",
+      "specifier": "file:packages/occ/src/state/postgres-schema.ts",
+      "kind": "path",
+      "typeOnly": false,
+      "bindings": ["*"],
+      "owner": "Authentication persistence",
+      "reason": "Current authentication setup loads the shared authored auth schema and its database dependency through the OCC package location.",
+      "removeWhen": "Replace the private schema and dependency anchor with the supported auth-persistence factory export."
+    },
+    {
+      "rule": "unresolved-dynamic-import",
+      "from": "apps/controller/src/composition/installation-config.ts",
+      "to": "",
+      "specifier": "pathToFileURL(entryPath).href",
+      "kind": "dynamic-import",
+      "typeOnly": false,
+      "bindings": ["*"],
+      "owner": "Driver package composition",
+      "reason": "The installed Driver loader validates configured package identity, trusted root and entrypoint at runtime; its target is deliberately not a statically enumerable workspace import.",
+      "removeWhen": "Remove this exception if the supported installed Driver loader is removed or replaced by static registration."
+    },
+    {
+      "rule": "cross-provider-implementation",
+      "from": "apps/controller/src/drivers/compute/docker/index.ts",
+      "to": "apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts",
+      "specifier": "../kubernetes/runtime-entrypoints.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "bindings": [
+        "value:AGENT_READINESS_ENTRYPOINT",
+        "value:AGENT_RUNTIME_ENTRYPOINT",
+        "value:PLUGIN_RUNTIME_HELPERS"
+      ],
+      "owner": "Compute runtime helpers",
+      "reason": "Docker currently consumes shared runtime scripts located under the Kubernetes provider.",
+      "removeWhen": "Move shared runtime-entrypoint scripts into the provider-neutral compute runtime module and update both providers."
+    },
+    {
+      "rule": "http-to-provider",
+      "from": "apps/controller/src/index.ts",
+      "to": "apps/controller/src/drivers/configuration/kubernetes/index.ts",
+      "specifier": "./drivers/configuration/kubernetes/index.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "bindings": ["value:ConfigurationOwnershipError", "value:ConfigurationValidationError"],
+      "owner": "HTTP configuration boundary",
+      "reason": "HTTP currently imports semantic Configuration errors from the selected Kubernetes implementation.",
+      "removeWhen": "Move semantic Configuration errors into the neutral contract and update the HTTP importer."
+    },
+    {
+      "rule": "domain-to-implementation",
+      "from": "packages/occ/src/index.ts",
+      "to": "packages/occ/src/state/platform-state.ts",
+      "specifier": "./state/platform-state.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "bindings": [
+        "type:PlatformOperation",
+        "type:PlatformReadView",
+        "type:PlatformStateStore",
+        "type:PlatformUnitOfWork",
+        "value:InMemoryPlatformState"
+      ],
+      "owner": "Repository ports and mutation composition",
+      "reason": "The OCC service imports repository contracts and its default in-memory store from the same persistence module.",
+      "removeWhen": "Move repository and transaction contracts into neutral ports, narrow this entry to any remaining store import, and remove it when default store selection moves to composition."
+    },
+    {
+      "rule": "domain-to-implementation",
+      "from": "packages/occ/src/index.ts",
+      "to": "packages/occ/src/state/postgres-state.ts",
+      "specifier": "./state/postgres-state.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "bindings": ["value:PostgresCommitOutcomeUnknownError"],
+      "owner": "Transaction outcomes",
+      "reason": "The OCC resource service imports the shared commit-outcome-unknown error from the PostgreSQL adapter.",
+      "removeWhen": "Move the single commit-outcome-unknown constructor to neutral transaction errors and update all consumers."
+    }
+  ]
+}

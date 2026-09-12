@@ -18,7 +18,8 @@ the [deployment guide](../guides/deploy.md) and [settings reference](../referenc
 before claiming coverage. Run prepared infrastructure suites by exact filename,
 one suite at a time. Keep suite variables scoped to one shell or process so
 database, Kubernetes, image, or provider selectors do not accidentally select
-another suite. The test scripts above run `scripts/verify-workspace-boundary.mjs`
+another suite. `pnpm test`, `pnpm test:conformance`, and `pnpm test:integration` run
+workspace verification and the [repository dependency check](repository-boundaries.md)
 before the Node.js test runner.
 
 For test audits, proof selection, diff cleanup, and independent review, see

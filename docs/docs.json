@@ -677,6 +677,10 @@
                         "label": "Module Boundaries"
                       },
                       {
+                        "page": "testing/repository-boundaries",
+                        "label": "Repository Boundaries"
+                      },
+                      {
                         "page": "testing/fixtures-and-scenarios",
                         "label": "Fixtures and Scenarios"
                       },

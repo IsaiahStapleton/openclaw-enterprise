@@ -333,6 +333,13 @@
     },
     {
       "path": "tests/conformance/module-boundaries.test.mjs"
+    },
+    {
+      "path": "tests/conformance/module-policy.test.mjs",
+      "expectedTests": [
+        "repository source obeys its dependency policy with exact current exceptions",
+        "repository policy allows a public root and rejects a new HTTP Driver import"
+      ]
     }
   ]
 }

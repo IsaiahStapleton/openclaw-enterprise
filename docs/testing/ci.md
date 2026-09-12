@@ -36,7 +36,10 @@ Image transport records `image-archive-save` for Docker archive creation and
 `image-archive-import` for loading that archive into k3d. When an enclosing image
 preparation phase is timed, its duration already includes these operations.
 
-The `checks-baseline` lane runs `pnpm docs:check`: pages above 1,500 visible words
+The `checks-baseline` lane checks the actual repository against its
+[dependency policy](repository-boundaries.md) with its checked-in exceptions.
+The policy test also verifies allowed public-root and forbidden HTTP-to-Driver imports.
+The lane also runs `pnpm docs:check`: pages above 1,500 visible words
 are flagged for review and pages above 2,500 fail, except the approved single-page
 [API reference](../reference/api.md) and `AGENTS.md` instruction files (see the
 [length policy](../../AGENTS.md#documentation-length-budget)). The generated API, site build, navigation,
