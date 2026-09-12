@@ -1,0 +1,200 @@
+import { statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import ts from "typescript-compiler-api";
+import { selectPackageExport } from "./package-exports.mjs";
+import { slash, sourceExtension } from "./workspace.mjs";
+
+const declaration = /\.d\.[cm]?ts$/;
+const emittedExtension = /\.[cm]?js$/;
+
+/** Resolve graph references without importing or executing application modules. */
+export function resolveImports(snapshot, references, policy = {}) {
+  const { root, packages } = snapshot;
+  const files = new Map(snapshot.files.map((file) => [resolve(file.absolutePath), file]));
+  const manifests = new Map(
+    packages.map((pkg) => [resolve(root, pkg.path, "package.json"), JSON.stringify(pkg.manifest)]),
+  );
+  const host = {
+    ...ts.sys,
+    fileExists: (path) =>
+      files.has(resolve(path)) || manifests.has(resolve(path)) || ts.sys.fileExists(path),
+    readFile: (path) =>
+      files.get(resolve(path))?.text ?? manifests.get(resolve(path)) ?? ts.sys.readFile(path),
+  };
+  const options = {
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    allowJs: true,
+    resolveJsonModule: true,
+  };
+  function compilerTarget(specifier, anchor, mode, runtime = false) {
+    // The public compiler API owns extension substitution. Hide declarations only
+    // for the runtime-source lookup so a declaration cannot impersonate code.
+    const resolutionHost = runtime
+      ? {
+          ...host,
+          fileExists: (path) => !declaration.test(path) && host.fileExists(path),
+        }
+      : host;
+    return ts.resolveModuleName(
+      specifier,
+      anchor.endsWith("/") ? `${anchor}package.json` : anchor,
+      options,
+      resolutionHost,
+      undefined,
+      undefined,
+      mode === "require" ? ts.ModuleKind.CommonJS : ts.ModuleKind.ESNext,
+    ).resolvedModule?.resolvedFileName;
+  }
+  const graphPath = (path) =>
+    path && files.has(resolve(path)) ? files.get(resolve(path)).path : null;
+  return Object.freeze(
+    references.map((reference) => {
+      let named = false;
+      const result = (status, extra = {}) =>
+        Object.freeze({ reference, status, to: "", named, ...extra });
+      const unresolved = (code, reason, extra = {}) =>
+        result("unresolved", { code, reason, ...extra });
+      if (reference.value?.status !== "known" || typeof reference.value.value !== "string")
+        return unresolved(
+          "unresolved-dynamic-import",
+          reference.value?.reason ?? "Module path is not statically known.",
+        );
+      const specifier = reference.value.value;
+      const mode = reference.mode ?? (reference.kind === "require" ? "require" : "import");
+      const importer = resolve(root, reference.from);
+      const anchor = reference.anchor ?? importer;
+      if (reference.anchor === null && specifier.startsWith("."))
+        return unresolved(
+          "unresolved-dynamic-import",
+          "Relative module path has no statically known loader anchor.",
+        );
+      const pkg = packages.find(
+        (item) => specifier === item.name || specifier.startsWith(`${item.name}/`),
+      );
+      named = Boolean(pkg);
+      let target;
+      let typeCandidate;
+      let nativeTarget;
+      try {
+        if (pkg) {
+          const packageAnchor = resolve(root, pkg.path, "package.json");
+          typeCandidate = compilerTarget(specifier, packageAnchor, mode);
+          const subpath = specifier === pkg.name ? "." : `.${specifier.slice(pkg.name.length)}`;
+          if (pkg.manifest.exports === undefined)
+            return unresolved(
+              "unsupported-package-export",
+              `Package ${pkg.name} has no explicit export for ${subpath}.`,
+            );
+          const selected = selectPackageExport(
+            pkg.manifest.exports,
+            subpath,
+            new Set(["node", "module-sync", mode]),
+          );
+          if (typeof selected === "string")
+            target = fileURLToPath(new URL(selected, pathToFileURL(`${resolve(root, pkg.path)}/`)));
+          if (!target && !reference.typeOnly)
+            return unresolved(
+              "unsupported-package-export",
+              `Package ${pkg.name} does not expose ${subpath} for this import.`,
+            );
+          if (reference.typeOnly && !typeCandidate) {
+            const types = selectPackageExport(
+              pkg.manifest.exports,
+              subpath,
+              new Set(["types", "node", mode]),
+            );
+            if (typeof types === "string")
+              typeCandidate = compilerTarget(
+                fileURLToPath(new URL(types, pathToFileURL(`${resolve(root, pkg.path)}/`))),
+                packageAnchor,
+                mode,
+              );
+          }
+          if (mode === "require" && target) {
+            try {
+              nativeTarget = createRequire(packageAnchor).resolve(specifier);
+            } catch (error) {
+              if (error.code !== "MODULE_NOT_FOUND")
+                throw new Error(
+                  `Node could not resolve package export (${error.code ?? error.name}).`,
+                );
+            }
+          }
+        } else if (specifier.startsWith("file:")) target = fileURLToPath(specifier);
+        else if (specifier.startsWith(".") || isAbsolute(specifier))
+          target = resolve(anchor.endsWith("/") ? anchor : dirname(anchor), specifier);
+        else if (specifier.startsWith("#"))
+          return unresolved(
+            "unresolved-local-import",
+            "Package import aliases are not supported; use an explicit export or local path.",
+          );
+        else if ((policy.workspaceNamespaces ?? []).some((prefix) => specifier.startsWith(prefix)))
+          return unresolved(
+            "unknown-workspace-package",
+            "Workspace package is not registered in the boundary policy.",
+          );
+        else return result("external");
+      } catch (error) {
+        if (!reference.typeOnly || !graphPath(typeCandidate))
+          return unresolved(
+            pkg ? "unsupported-package-export" : "unresolved-local-import",
+            error.message,
+          );
+        // Erased references can select a valid types branch even when the runtime
+        // branch is unavailable. Keep that failure out of the runtime graph.
+        target = undefined;
+        nativeTarget = undefined;
+      }
+
+      if (target && reference.kind === "dependency-anchor") {
+        const directory =
+          specifier.endsWith("/") && statSync(target, { throwIfNoEntry: false })?.isDirectory();
+        if (directory || manifests.has(target))
+          return result("local", {
+            to: slash(relative(root, target)),
+            runtimeTarget: null,
+            typeTarget: null,
+          });
+      }
+      if (target && reference.kind === "path" && !sourceExtension.test(target))
+        return result("external", { reason: "Non-source asset URL." });
+
+      if (target && !pkg && mode === "require" && reference.kind !== "dependency-anchor") {
+        try {
+          nativeTarget = createRequire(anchor).resolve(
+            specifier.startsWith("file:") ? target : specifier,
+          );
+        } catch (error) {
+          if (error.code !== "MODULE_NOT_FOUND")
+            return unresolved(
+              "unresolved-local-import",
+              `Node could not resolve the local module (${error.code ?? error.name}).`,
+            );
+        }
+      }
+      if (target && !typeCandidate) typeCandidate = compilerTarget(target, anchor, mode);
+      let runtime = nativeTarget ?? target;
+      // An existing JavaScript file is authoritative even if a .d.ts or .ts sibling
+      // is visible to the compiler. Only absent emitted files map back to source.
+      if (runtime && !host.fileExists(runtime) && emittedExtension.test(runtime))
+        runtime = compilerTarget(runtime, anchor, mode, true);
+      const runtimeTarget = runtime && !declaration.test(runtime) ? graphPath(runtime) : null;
+      const typeTarget = graphPath(typeCandidate);
+      const to = reference.typeOnly ? (typeTarget ?? graphPath(target)) : runtimeTarget;
+      if (!to)
+        return unresolved(
+          "unresolved-local-import",
+          "Local module is missing or outside the active source graph.",
+          {
+            to: target ? slash(relative(root, target)) : "",
+            runtimeTarget,
+            typeTarget,
+          },
+        );
+      return result("local", { to, runtimeTarget, typeTarget });
+    }),
+  );
+}

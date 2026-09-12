@@ -673,6 +673,10 @@
                         "label": "Local Tests"
                       },
                       {
+                        "page": "testing/module-boundaries",
+                        "label": "Module Boundaries"
+                      },
+                      {
                         "page": "testing/fixtures-and-scenarios",
                         "label": "Fixtures and Scenarios"
                       },
