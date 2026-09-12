@@ -132,6 +132,8 @@ async function constructionAndRefusal() {
       await controller.signInEmail(
         {
           id: "auth-binding-request",
+          method: "POST",
+          url: "/api/auth/sign-in/email",
           headers: { origin: selected.baseURL },
           raw: { socket: { remoteAddress: "127.0.0.1" } },
           body: { email: "person@example.test", password: "test-password-long-enough" },
