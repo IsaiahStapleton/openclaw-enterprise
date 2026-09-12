@@ -1,7 +1,7 @@
 ---
 created: 2026-08-19
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
+updated: 2026-09-01
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Configuration Driver and Agent Revision Flow
@@ -17,9 +17,10 @@ Configuration Driver. The bundled Kubernetes implementation persists each
 document in a tenant-owned ConfigMap.
 Each Configuration requires immutable `kind: "agent"` and a server-managed
 generation; documents preserve unresolved inline SecretRefs without interpreting
-them. Agent deployment deeply freezes the selected native document into an
-immutable AgentRevision and records its Configuration identity, kind, and
-generation as separate revision fields. This flow stops when OCC persists that
+them. Agent deployment authorizes the separate Secret bindings, applies any
+selected Sandbox Driver transformation, and freezes the admitted values into an
+immutable AgentRevision. Configuration identity, kind, generation, and Secret
+references are recorded separately. This flow stops when OCC persists that
 revision and hands off workload reconciliation; the selected Compute Driver
 then owns the Agent gateway, while worker execution and secret resolution remain
 outside this flow's scope.
@@ -58,7 +59,9 @@ graph TD
   J --> K{"Agent deployment references Configuration?"}
   K -->|no| L["Return authorized Configuration response"]
   K -->|yes| M["Authorize and lock exact Configuration"]
-  M --> N["Freeze native document and separate Configuration identity, kind, and generation"]
+  M --> P["Authorize Secret bindings and verify backend references"]
+  P --> Q["Apply optional Sandbox transform; validate configuration and Harness"]
+  Q --> N["Freeze admitted values, Configuration metadata, and Secret references"]
   N --> O["Hand off admitted revision to reconciliation"]
 ```
 
@@ -83,12 +86,12 @@ validation, trust boundaries, and IAM construction.
 [Production composition](../../apps/controller/src/composition/production.ts)
 loads the sole persisted Installation from
 [PostgreSQL platform state](../../packages/occ/src/state/postgres-state.ts).
-The API and worker construct their selected bundled or installed IAM,
-Configuration, and Compute Drivers using the same trusted startup document and
-fresh persisted authorization policy. Existing AgentRevisions retain their
-selected Compute identity and immutable native configuration documents;
-stability across changes to runtime Compute settings remains a tracked design
-gap in [TODO.md](../../TODO.md).
+The API and worker load the same trusted startup document and persisted
+Installation identity. The [Driver loading flow](driver-plugin-loading.md)
+traces process-local construction and the selected Secret, Sandbox, and
+ServiceAccount branches. Existing AgentRevisions retain their selected Compute
+identity and immutable admitted configuration; subsequent Configuration edits
+apply only to later deployments.
 
 ### 3. Authorize the exact Namespace Configuration operation
 
@@ -105,100 +108,25 @@ creation targets the exact Namespace-owned Configuration resource; reads,
 updates, and deletes target the exact Configuration identifier in that
 Namespace. Creation requires `kind: "agent"` and a native root-object JSON
 document; omitted or unknown kinds and malformed request shapes fail with
-`400`. Updates accept only the complete replacement document; `kind`,
+`400`. Updates require the complete replacement `values` document and accept
+optional `secretBindings`; `kind`,
 `generation`, and ownership are server-owned and cannot be supplied or changed.
 OCC preserves nested values and SecretRefs unchanged. Malformed,
 generation-mismatched, or ownership-invalid persisted ConfigMaps fail with
 `503`.
 Authorization denial fails with `403`, a missing exact resource with `404`, an
 Agent dependency conflict with `409`, and unavailable IAM or storage with
-`503`. OpenClaw validates its own configuration. A Secret Broker and credential
-resolution are future capabilities; this implementation preserves SecretRefs
-without resolving them.
+`503`. OpenClaw resolves inline SecretRefs at runtime; Configuration CRUD
+preserves them in `values`. OCC separately authorizes `operate` on each Secret
+selected by `secretBindings`, including retained bindings when PATCH omits the
+field. Omission preserves bindings; `{}` clears them. The
+[Configuration reference](../reference/configuration/secrets.md#secret-bindings) owns
+the binding contract, and the [Secret flow](secret-storage-and-delivery.md)
+traces storage and delivery. Secret Broker substitution remains unimplemented.
 
-### 4. Lock metadata and invoke the selected Configuration Driver
+### 4–5. Persist Configuration and freeze its revision
 
-`apps/controller/src/drivers/configuration/kubernetes/index.ts:KubernetesConfigurationDriver.create`
-
-Configuration ownership, immutable `kind: "agent"`, generation, creation time,
-and server-generated `cfg_` identity are persisted by
-[PostgreSQL platform state](../../packages/occ/src/state/postgres-state.ts);
-the live configuration document is not duplicated into Configuration metadata.
-OCC owns API-level native Configuration validation before it calls the selected
-bundled or installed Configuration Driver. The Driver owns backing document
-storage and checks storage-specific identity and ownership. When the bundled
-Kubernetes implementation is selected, `KubernetesConfigurationDriver` in
-[the Kubernetes Configuration implementation](../../apps/controller/src/drivers/configuration/kubernetes/index.ts)
-validates its storage envelope, discovers its exact tenant-labeled Kubernetes
-namespace using the existing cluster-scoped namespace-observer `get`/`list`
-grant, and derives its deterministic ConfigMap name. For an externally owned
-namespace explicitly selected by `existingNamespace`, the Compute worker first
-binds its tenant identity during provisioning; Configuration creation returns
-`409` until that explicitly external platform Namespace is `ready`. It then
-checks object
-ownership labels, kind/generation annotations, and creation time. Each ConfigMap
-has exactly one data entry: `openclaw.json`, containing the serialized native
-configuration document and its unresolved inline SecretRefs. Kubernetes driver
-reads reject malformed stored objects, extra entries, and oversized documents.
-Create calls
-`createNamespacedConfigMap`, read calls `readNamespacedConfigMap`, replace calls
-`replaceNamespacedConfigMap` with the observed `resourceVersion`, and delete
-calls `deleteNamespacedConfigMap` with the observed object identity when
-available. Creation starts at generation `1`; each successful PATCH replaces
-the entire native document and advances the generation exactly once. Metadata
-and ConfigMap updates share OCC's existing transactional/compensating boundary.
-A referenced Configuration cannot be deleted. Tenant child-data access remains
-limited to namespaced ConfigMap `create`, `get`, `update`, and `delete`;
-Kubernetes cannot restrict `create` by `resourceNames`, so that verb must use
-its own namespaced Role rule. ConfigMap `list`/`watch`, Secrets, Pods, and
-cluster-wide tenant-resource access remain unavailable.
-
-Startup validates the bundled Kubernetes Configuration Driver's authentication
-configuration but does not probe tenant ConfigMaps or ConfigMap RBAC. Its first
-exact CRUD call checks actual tenant namespace existence and authorization; a
-driver-managed provisioning Namespace can return `503` until its Kubernetes
-namespace and API RoleBinding are ready. Explicitly selected external Namespaces
-instead reject Configuration creation with `409` before readiness; after
-readiness, a missing API RoleBinding returns `503`. The development filesystem
-Driver persists OCC-validated
-documents under the configured root and checks only server-generated file
-ownership. Installed implementations validate and use their own backing-storage
-prerequisites.
-
-### 5. Resolve the Agent reference and freeze an immutable revision
-
-`packages/occ/src/index.ts:OpenClawController.deployAgent`
-
-`createAgent` and `updateAgent` in
-[OCC](../../packages/occ/src/index.ts) separately authorize and verify the
-Agent's exact same-Namespace `configurationId` and ensure its Configuration kind
-is `"agent"`. `deployAgent` then locks the Agent, authorizes a read of the
-referenced Configuration, locks its ownership metadata, and reads and validates
-the selected Configuration Driver's exact stored document. For the bundled
-Kubernetes Driver, that document is the `openclaw.json` ConfigMap entry. OCC
-deeply freezes the complete native document, preserving each inline unresolved
-SecretRef, into
-`AgentRevision.configuration`; separate `configurationId`, `configurationKind`,
-and `configurationGeneration` fields pin the selected Configuration metadata.
-The revision also pins the built-in OpenClaw Harness descriptor, selected
-Compute Driver identity, and Agent service principal. Subsequent nested
-Configuration edits increment its generation but affect only later explicit
-deployments; historical revisions and their admitted snapshots remain unchanged.
-PostgreSQL enforces the supported kind, positive generation, exact admitted
-snapshot shape, ownership, and revision immutability. OCC records an
-attributable sanitized admission event and hands the immutable revision to
-Compute-owned reconciliation without resolving a credential or starting a
-gateway during HTTP admission. A development worker can subsequently create or
-reuse exactly one gateway for the owning Agent during revision preparation.
-When Kubernetes Compute owns that gateway, it creates a distinct immutable,
-Agent-owned ConfigMap from the exact admitted native document and mounts it
-read-only at `OPENCLAW_CONFIG_PATH=/etc/openclaw/openclaw.json`. It never mounts
-the mutable Configuration Driver ConfigMap; each changed admitted generation
-selects a new immutable snapshot and rolls the stable Agent gateway. Previous
-snapshots remain until Namespace deletion because earlier Pods may still mount
-them; safe earlier cleanup is deferred. Production workers also reconcile
-embedded OpenClaw and dedicated Codex Agent revisions, connecting each
-Agent-owned gateway only to its own active workload.
+[Configuration persistence and revision snapshots](configuration-driver/persistence-and-revisions.md) traces metadata locking, Driver effects, Agent reference resolution, and snapshot validation after request authorization.
 
 ## Debugging and Verification
 
@@ -207,6 +135,7 @@ Run focused Configuration conformance and integration checks:
 ```bash
 node --test tests/conformance/configuration-occ.test.mjs tests/conformance/kubernetes-configuration.test.mjs
 node --test tests/integration/configuration-controller.test.mjs tests/integration/postgres-platform-state.test.mjs
+node --test tests/integration/postgres-platform-state-kubernetes.test.mjs
 ```
 
 PostgreSQL integration requires configured database URLs; skipped cases do not
@@ -246,6 +175,7 @@ its optional integration is skipped.
 
 ## Changelog
 
+- 2026-09-01 19:09: Trace Secret-binding admission and optional Sandbox transformation before immutable revision creation; remove the obsolete TODO link. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-28 17:58: Updated moved feature-reference links for the documentation organization. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-27 00:05: Removed stale contract-suite commands and kept production-behavior conformance and integration verification. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - ab560806dbd945436835ab092ebd10bf3e50d942)
 - 2026-08-25 08:46: Clarified API-level Configuration validation and development filesystem Driver persistence boundaries. (01a03630-cd9f-7352-9e64-1d30de98c7dd - 949e57ba008486c7ad60978df79dc53cce31bee9)

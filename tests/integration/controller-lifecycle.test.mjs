@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import {
   AuthorizationDeniedError,
@@ -337,7 +338,10 @@ test("authorized resources retain exact Namespace ownership without metadata-onl
   assert.equal(Object.hasOwn(firstRevision, "workloadIdentityId"), false);
   assert.equal(Object.isFrozen(firstRevision), true);
   assert.equal(Object.isFrozen(firstRevision.configuration), true);
-  assert.deepEqual(firstRevision.configuration, { model: "gpt-test", tool: "lookup" });
+  assert.deepEqual(
+    firstRevision.configuration,
+    admitLoggingConfiguration({ model: "gpt-test", tool: "lookup" }, "info"),
+  );
 
   const nextConfiguration = await createConfiguration(controller, namespace.id, {
     model: "gpt-next",
@@ -499,7 +503,7 @@ test("Agent configuration references stay mutable while deployment admits deeply
   assert.equal(first.configurationKind, "agent");
   assert.equal(first.configurationGeneration, 1);
   assert.equal(first.servicePrincipalId, agent.servicePrincipalId);
-  assert.deepEqual(first.configuration, savedValues);
+  assert.deepEqual(first.configuration, admitLoggingConfiguration(savedValues, "info"));
   assert.deepEqual(first.harness, { ...harness, mode: "embedded" });
   assert.deepEqual(first.compute, {
     id: "compute-driver-a",
@@ -525,7 +529,10 @@ test("Agent configuration references stay mutable while deployment admits deeply
       entries: { knowledge: { enabled: true, config: { labels: ["lookup", "search"] } } },
     },
   };
-  assert.deepEqual(first.configuration, expectedFirstConfiguration);
+  assert.deepEqual(
+    first.configuration,
+    admitLoggingConfiguration(expectedFirstConfiguration, "info"),
+  );
 
   const replacementValues = {
     models: {
@@ -559,8 +566,11 @@ test("Agent configuration references stay mutable while deployment admits deeply
   assert.equal(second.configurationGeneration, 1);
   assert.notEqual(second.id, first.id);
   assert.equal(second.servicePrincipalId, first.servicePrincipalId);
-  assert.deepEqual(second.configuration, replacementValues);
-  assert.deepEqual(first.configuration, expectedFirstConfiguration);
+  assert.deepEqual(second.configuration, admitLoggingConfiguration(replacementValues, "info"));
+  assert.deepEqual(
+    first.configuration,
+    admitLoggingConfiguration(expectedFirstConfiguration, "info"),
+  );
   assert.deepEqual(
     controller.pendingOperations().map(({ kind }) => kind),
     ["namespace", "agent_revision", "agent_revision"],
@@ -678,7 +688,7 @@ test("Sandbox Drivers without an Agent configuration hook preserve the admitted 
     resolveApprovedDevelopmentHarness,
   );
 
-  assert.deepEqual(revision.configuration, values);
+  assert.deepEqual(revision.configuration, admitLoggingConfiguration(values, "info"));
   assert.equal(revision.configuration.plugins.entries.codex.config.appServer.sandbox, "read-only");
 });
 

@@ -5,7 +5,11 @@ import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../
 import { createControllerApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
-import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
+import {
+  BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  InMemoryPlatformState,
+  OpenClawController,
+} from "../../packages/occ/src/index.ts";
 import {
   authenticatedHeaders,
   createTestAuthPrincipal,
@@ -16,7 +20,8 @@ import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute
 
 const installationId = "ins_3033697e-6397-4cc6-9b04-8ec17af78cf1";
 const missingRevisionId = "rev_3dd29693-ce8b-4b4c-97c4-14b4c68c6e9c";
-const tenantANamespaceId = "ns_00000000-0000-4000-8000-000000000001";
+const bootstrapDefaultNamespaceId = "ns_00000000-0000-4000-8000-000000000001";
+const tenantANamespaceId = "ns_00000000-0000-4000-8000-000000000002";
 
 const permissions = [
   { action: "administer", resourceKind: "installation" },
@@ -33,6 +38,7 @@ const permissions = [
   { action: "update", resourceKind: "agent" },
   { action: "deploy", resourceKind: "agent" },
   { action: "read", resourceKind: "agent_revision" },
+  { action: "administer", resourceKind: "agent" },
 ];
 
 async function createFixture(options = {}) {
@@ -125,8 +131,8 @@ async function createFixture(options = {}) {
   let sequence = 0;
   let configurationSequence = 0;
 
-  function createApp(principal = administrator, overrides = {}) {
-    const app = createControllerApp({
+  function createApp(principal = administrator, overrides = {}, factory = createControllerApp) {
+    const app = factory({
       ...(controller
         ? { controller }
         : {
@@ -163,6 +169,10 @@ async function createFixture(options = {}) {
       },
       auth: adminAuth.auth,
       ...(overrides.maxBodyBytes === undefined ? {} : { maxBodyBytes: overrides.maxBodyBytes }),
+      ...(overrides.gatewayRequestTimeoutMs === undefined
+        ? {}
+        : { gatewayRequestTimeoutMs: overrides.gatewayRequestTimeoutMs }),
+      ...(overrides.publicOrigin === undefined ? {} : { publicOrigin: overrides.publicOrigin }),
     });
     app.defaultSession = sessions.get(principal.id);
     return app;
@@ -182,6 +192,7 @@ async function createFixture(options = {}) {
     tenantAReader,
     auditSink,
     createApp,
+    auth: adminAuth.auth,
     iamDriver,
     state,
     get controller() {
@@ -238,6 +249,18 @@ async function bootstrap(fixture) {
   assert.equal(result.response.status, 201);
   assert.equal(result.payload.data.id, installationId);
   return result.payload.data;
+}
+
+async function bootstrappedDefaultNamespace(fixture) {
+  const namespaces = await request(fixture.app, "/namespaces");
+  assert.equal(namespaces.response.status, 200);
+  const found = namespaces.payload.data.find(
+    (namespace) => namespace.name === BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  );
+  assert.ok(found, "fresh bootstrap must create the default Namespace");
+  assert.equal(found.id, bootstrapDefaultNamespaceId);
+  assert.equal(found.status, "provisioning");
+  return found;
 }
 
 async function createNamespace(fixture, name) {
@@ -393,7 +416,7 @@ test("Agent configuration replacement requires exact Agent update authorization 
 });
 
 test("an exact Agent update Restriction denies only its target without changing its configuration", async () => {
-  const deniedAgentId = "agt_00000000-0000-4000-8000-000000000002";
+  const deniedAgentId = "agt_00000000-0000-4000-8000-000000000003";
   const fixture = await createFixture({
     restrictions: [
       {
@@ -550,17 +573,14 @@ test("an unknown caller cannot enumerate an empty or populated Namespace collect
 });
 
 test("Restriction denials retain sanitized native IAM evidence in audit", async () => {
-  const fixture = await createFixture({
-    restrictions: [
-      {
-        id: "restriction-no-namespace-create",
-        action: "create",
-        resourceKind: "namespace",
-        effect: "deny",
-      },
-    ],
-  });
+  const fixture = await createFixture();
   await bootstrap(fixture);
+  fixture.state.restrictions.push({
+    id: "restriction-no-namespace-create",
+    action: "create",
+    resourceKind: "namespace",
+    effect: "deny",
+  });
   const denied = await request(fixture.app, "/namespaces", {
     body: { name: "blocked-by-restriction" },
   });
@@ -576,6 +596,7 @@ test("bootstrap owns one Installation without a plural installation collection",
   const fixture = await createFixture();
   const installation = await bootstrap(fixture);
   assert.equal(installation.name, "Security test installation");
+  const defaultNamespace = await bootstrappedDefaultNamespace(fixture);
 
   const read = await request(fixture.app, "/installation");
   assert.equal(read.response.status, 200);
@@ -600,6 +621,59 @@ test("bootstrap owns one Installation without a plural installation collection",
   assert.equal(bootstrapEvents.length, 1);
   assert.equal(bootstrapEvents[0].actorId, fixture.administrator.id);
   assert.equal(bootstrapEvents[0].resource.id, installationId);
+
+  await fixture.controller.handleNamespaceLifecycle(
+    fixture.administrator.id,
+    defaultNamespace.id,
+    "ready",
+  );
+  const readyDefault = await request(fixture.app, `/namespaces/${defaultNamespace.id}`);
+  assert.equal(readyDefault.response.status, 200);
+  assert.equal(readyDefault.payload.data.status, "ready");
+  const defaultAgent = await createAgent(fixture, readyDefault.payload.data, "Default Agent");
+  assert.equal(defaultAgent.namespaceId, defaultNamespace.id);
+});
+
+test("bootstrap fails closed when default Namespace creation is denied and later retries cleanly", async () => {
+  const restrictions = [
+    {
+      id: "restriction-no-bootstrap-namespace",
+      action: "create",
+      resourceKind: "namespace",
+      effect: "deny",
+    },
+  ];
+  const fixture = await createFixture({ restrictions });
+
+  const denied = await request(fixture.app, "/installation/bootstrap", {
+    body: { name: "Blocked default Namespace" },
+  });
+  assert.equal(denied.response.status, 403);
+  assert.equal(denied.payload.error.code, "FORBIDDEN");
+
+  const deniedEvent = fixture.auditSink.events.at(-1);
+  assert.equal(deniedEvent.kind, "authorization_denial");
+  assert.equal(deniedEvent.authorization.action, "create");
+  assert.deepEqual(deniedEvent.authorization.resource, {
+    kind: "namespace",
+    id: installationId,
+  });
+  assert.deepEqual(deniedEvent.details.iamEvidence.restrictionIds, [
+    "restriction-no-bootstrap-namespace",
+  ]);
+
+  const absentInstallation = await request(fixture.app, "/installation");
+  assert.equal(absentInstallation.response.status, 404);
+  const absentNamespaces = await request(fixture.app, "/namespaces");
+  assert.equal(absentNamespaces.response.status, 404);
+
+  restrictions.length = 0;
+  const recovered = await request(fixture.app, "/installation/bootstrap", {
+    body: { name: "Recovered default Namespace" },
+  });
+  assert.equal(recovered.response.status, 201);
+  assert.equal(recovered.payload.data.name, "Recovered default Namespace");
+  await bootstrappedDefaultNamespace(fixture);
 });
 
 test("concurrent streaming bootstrap creates one audited Installation", async () => {
@@ -650,6 +724,7 @@ test("concurrent streaming bootstrap creates one audited Installation", async ()
   assert.ok(accepted);
   const installation = (await accepted.json()).data;
   assert.deepEqual(fixture.controller.installation, installation);
+  await bootstrappedDefaultNamespace(fixture);
 
   const confirmed = await request(fixture.app, "/installation");
   assert.equal(confirmed.response.status, 200);

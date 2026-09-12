@@ -10,31 +10,38 @@ The [platform design](../design.md) remains the architectural authority. Its
 target scope can exceed the current implementation; the
 [architecture overview](../ARCHITECTURE.md) identifies implemented components.
 Use the [quickstart](../guides/quickstart.md) or [deployment guide](../guides/deploy.md)
-for procedures and [flow docs](../README.md#understand-the-code) for source execution.
-Use [`deploy/runtime`](../../deploy/runtime/README.md) when a local or test
-procedure needs a public Docker-only OpenClaw/Codex runtime image.
+for deployment procedures, the [observability guide](../guides/observability.md)
+for logging and Collector setup, and [flow docs](../README.md#understand-the-code)
+for source execution. Contributor test setup, fixtures, hooks, and coverage
+belong in the [testing guides](../testing/README.md).
+Use [`deploy/runtime`](../../deploy/runtime/README.md) to build an OpenClaw/Codex
+runtime image for local deployment.
 
 ## Features
 
-| Reference                                  | Owns                                                                                 |
-| ------------------------------------------ | ------------------------------------------------------------------------------------ |
-| [Namespaces](namespaces.md)                | Tenant identity, placement, readiness, and deletion.                                 |
-| [Agents](agents.md)                        | Agent identity, mutable selection, and immutable revisions.                          |
-| [Configuration](configuration.md)          | Native documents, generations, references, and snapshots.                            |
-| [Secrets](drivers/kubernetes-secret.md)    | Namespace-owned Secret storage, metadata-only responses, env bindings, and redeploy. |
-| [Authentication](authentication.md)        | Supported caller credentials, sessions, bootstrap, and account provisioning.         |
-| [Authorization](authorization.md)          | Principals, Groups, Roles, Bindings, Restrictions, and exact-resource decisions.     |
-| [Service accounts](service-accounts.md)    | Account associations, credential references, issuance, and revocation boundaries.    |
-| [Harness execution](harness-execution.md)  | Runtime selection, topology, and admitted execution constraints.                     |
-| [Controller reconciliation](controller.md) | Durable lifecycle work, authorization refresh, claims, retries, and recovery.        |
-| [Security](security.md)                    | Kubernetes workload and credential boundaries and enforcement limitations.           |
-| [Settings](settings.md)                    | Supported environment variables and programmatic configuration.                      |
-| [HTTP API](api.md)                         | Generated routes, wire schemas, and declared permissions.                            |
+| Reference                                        | Owns                                                                                 |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| [Platform console](console.md)                   | Login, Agent creation, draft channels, revision inspection, and Namespace selection. |
+| [Namespaces](namespaces.md)                      | Tenant identity, placement, readiness, and deletion.                                 |
+| [Agents](agents.md)                              | Agent identity, mutable selection, immutable revisions, and workspace file routes.   |
+| [Gateway routing with Envoy](gateway-routing.md) | Private Agent endpoints, service keys, TLS, and network enforcement.                 |
+| [Configuration](configuration.md)                | Native documents, generations, references, and snapshots.                            |
+| [Secrets](drivers/kubernetes-secret.md)          | Namespace-owned Secret storage, metadata-only responses, env bindings, and redeploy. |
+| [Authentication](authentication.md)              | Supported caller credentials, sessions, bootstrap, and account provisioning.         |
+| [Authorization](authorization.md)                | Principals, Groups, Roles, Bindings, Restrictions, and exact-resource decisions.     |
+| [Providers](providers.md)                        | Provider configuration, related Drivers, client ownership, and Agent references.     |
+| [Service accounts](service-accounts.md)          | Account associations, credential references, issuance, and revocation boundaries.    |
+| [Agent plugins](agent-plugins.md)                | Agent-owned curated selections, startup validation, and native runtime policy.       |
+| [Harness execution](harness-execution.md)        | Runtime selection, topology, and admitted execution constraints.                     |
+| [Controller reconciliation](controller.md)       | Durable lifecycle work, authorization refresh, claims, retries, and recovery.        |
+| [Security](security.md)                          | Kubernetes workload and credential boundaries and enforcement limitations.           |
+| [Settings](settings.md)                          | Supported environment variables and programmatic configuration.                      |
+| [HTTP API](api.md)                               | Generated routes, wire schemas, and declared permissions.                            |
 
 Generated schemas describe wire shape. The feature pages additionally own
 behavioral rules such as cross-resource ownership, lifecycle ordering, and failure
-effects. Do not hand-edit the generated API page; use `pnpm openapi:generate` and
-`pnpm openapi:check` after route or schema changes.
+effects. Contributors updating routes or schemas should follow the
+[API generation checks](../testing/local.md#repository-and-tooling-configuration).
 
 ## Drivers
 
@@ -46,9 +53,11 @@ must satisfy. It is part of the reference, not another document lifecycle.
 - [ComputeDriver](drivers/compute.md), [SandboxDriver](drivers/sandbox.md),
   [ConfigurationDriver](drivers/configuration.md), [IAMDriver](drivers/iam.md),
   [SecretDriver](drivers/kubernetes-secret.md), and
-  [ServiceAccountDriver](drivers/service-account.md): capability contracts.
+  [ServiceAccountDriver](drivers/service-account.md), and
+  [PluginDriver](drivers/plugin.md): capability contracts.
 - [Docker Compute](drivers/docker-compute.md),
-  [Kubernetes Compute](drivers/kubernetes-compute.md), and
+  [Kubernetes Compute](drivers/kubernetes-compute.md),
+  [SSH Compute](drivers/ssh-compute.md), and
   [OpenShell Sandbox](drivers/openshell-sandbox.md): implementation settings,
   supported behavior, and limitations.
 

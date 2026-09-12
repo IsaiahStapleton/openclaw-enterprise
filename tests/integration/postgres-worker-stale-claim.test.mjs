@@ -69,19 +69,19 @@ test(
     const [
       { Pool },
       { createControllerWorker },
-      { createDevelopmentIAMState },
       { createDevelopmentComputeDriver },
       { createAuthPrincipalSeed },
       { PostgresPlatformState },
       { PostgresWorkQueue },
+      { createDevelopmentIAMState },
     ] = await Promise.all([
       import("pg"),
       import("../../apps/controller/src/worker.ts"),
-      import("../../apps/controller/src/composition/development-postgres.ts"),
       import("../helpers/development.mjs"),
       import("../../packages/iam/src/index.ts"),
       import("../../packages/occ/src/state/postgres-state.ts"),
       import("../../packages/occ/src/state/postgres-work-queue.ts"),
+      import("../helpers/development-iam-state.mjs"),
     ]);
 
     const observerPool = new Pool({ connectionString: databaseUrl, max: 8 });

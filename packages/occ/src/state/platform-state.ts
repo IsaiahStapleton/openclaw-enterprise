@@ -6,12 +6,17 @@ import type {
   Installation,
   Namespace,
   NamespaceStatus,
+  PluginDesiredState,
   Secret,
   SecretBindings,
   ServiceAccount,
   ServiceAccountCredential,
 } from "@openclaw-enterprise/contracts";
-import { normalizeSecretBindings } from "@openclaw-enterprise/contracts";
+import {
+  normalizePluginDesiredState,
+  normalizeSecretBindings,
+  validPluginRevisionState,
+} from "@openclaw-enterprise/contracts";
 import { immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
   DependencyUnavailableError,
@@ -72,6 +77,8 @@ export interface AgentRepository extends AgentReadRepository {
     configurationId: string,
     executionMode?: HarnessExecutionMode,
     serviceAccountId?: string | null,
+    providerId?: string | null,
+    plugins?: PluginDesiredState,
   ): Promise<Readonly<Agent> | undefined>;
   compareAndSetActiveRevision(
     namespaceId: string,
@@ -143,6 +150,19 @@ export interface ServiceAccountReadRepository {
     namespaceId: string,
     serviceAccountId: string,
   ): Promise<Readonly<ServiceAccount> | undefined>;
+  listServiceAccounts(namespaceId: string): Promise<readonly Readonly<ServiceAccount>[]>;
+  findServiceAccountProviderBinding(
+    namespaceId: string,
+    serviceAccountId: string,
+  ): Promise<
+    | Readonly<{
+        readonly providerId: string;
+        readonly driverId: string;
+        readonly workspaceId: string;
+        readonly credentialIssued: boolean;
+      }>
+    | undefined
+  >;
 }
 
 export interface ServiceAccountRepository extends ServiceAccountReadRepository {
@@ -163,6 +183,7 @@ const serviceAccountIdentifier =
   /^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const secretName = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/;
 const secretKey = /^[-._a-zA-Z0-9]+$/;
+const providerIdentifier = /^(?!\s)(?!.*\s$)(?!.*[\x00-\x1f\x7f]).{1,200}$/;
 
 function validCredential(credential: unknown): credential is ServiceAccountCredential {
   if (
@@ -196,9 +217,18 @@ function validCredential(credential: unknown): credential is ServiceAccountCrede
     key !== ".."
   );
 }
+function invalidPluginState(message: string): never {
+  throw new ScopeViolationError(message);
+}
+
+function normalizedPlugins(plugins?: PluginDesiredState): PluginDesiredState | undefined {
+  return normalizePluginDesiredState(plugins, invalidPluginState);
+}
 
 function assertAdmittedAgentRevision(revision: AgentRevision): void {
   if (
+    (revision.providerId !== null &&
+      (typeof revision.providerId !== "string" || !providerIdentifier.test(revision.providerId))) ||
     !/^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
       revision.configurationId,
     ) ||
@@ -236,7 +266,8 @@ function assertAdmittedAgentRevision(revision: AgentRevision): void {
         !serviceAccountIdentifier.test(revision.serviceAccount.id) ||
         !validCredential(revision.serviceAccount.credential) ||
         (revision.serviceAccount.credential.kind !== "api_key" &&
-          revision.serviceAccount.credential.kind !== "access_token")))
+          revision.serviceAccount.credential.kind !== "access_token"))) ||
+    !validPluginRevisionState(revision.plugins)
   ) {
     throw new ScopeViolationError(
       "An AgentRevision requires valid Configuration metadata, a native document, and pinned Harness and Compute descriptors.",
@@ -266,9 +297,12 @@ export type PlatformOperation =
       readonly target?: never;
     });
 
-export interface PlatformOperationRepository {
-  append(operation: PlatformOperation): Promise<void>;
+export interface PlatformOperationReadRepository {
   list(): Promise<readonly Readonly<PlatformOperation>[]>;
+}
+
+export interface PlatformOperationRepository extends PlatformOperationReadRepository {
+  append(operation: PlatformOperation): Promise<void>;
 }
 
 export interface PlatformReadView {
@@ -279,6 +313,7 @@ export interface PlatformReadView {
   readonly serviceAccounts: ServiceAccountReadRepository;
   readonly agents: AgentReadRepository;
   readonly revisions: AgentRevisionReadRepository;
+  readonly operations: PlatformOperationReadRepository;
 }
 
 export interface PlatformUnitOfWork extends PlatformReadView {
@@ -770,6 +805,18 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       const account = snapshot.serviceAccounts.get(agentKey(namespaceId, serviceAccountId));
       return account === undefined ? undefined : immutableCopy(account);
     },
+    listServiceAccounts: async (namespaceId) => {
+      if (snapshot.namespaces.get(namespaceId)?.deletedAt !== undefined) return Object.freeze([]);
+      return Object.freeze(
+        Array.from(snapshot.serviceAccounts.values())
+          .filter((account) => account.namespaceId === namespaceId)
+          .sort(
+            (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+          )
+          .map((account) => immutableCopy(account)),
+      );
+    },
+    findServiceAccountProviderBinding: async () => undefined,
     createServiceAccount: async (account) => {
       assertInitialized(snapshot);
       if (
@@ -849,6 +896,12 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       assertInitialized(snapshot);
       if (agent.executionMode !== "embedded" && agent.executionMode !== "dedicated")
         throw new ScopeViolationError("The Agent execution mode is invalid.");
+      if (
+        agent.providerId !== null &&
+        (typeof agent.providerId !== "string" || !providerIdentifier.test(agent.providerId))
+      )
+        throw new ScopeViolationError("The Agent Provider identity is invalid.");
+      const plugins = normalizedPlugins(agent.plugins);
       const namespace = await namespaces.lockNamespace(agent.namespaceId);
       if (
         namespace === undefined ||
@@ -884,7 +937,11 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         throw new ResourceConflictError(
           "An Agent service principal already belongs to another Agent.",
         );
-      const saved = immutableCopy(agent);
+      const { plugins: _providedPlugins, ...withoutPlugins } = agent;
+      const saved = immutableCopy({
+        ...withoutPlugins,
+        ...(plugins === undefined ? {} : { plugins }),
+      });
       snapshot.agents.set(key, saved);
       return immutableCopy(saved);
     },
@@ -895,9 +952,13 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       configurationId,
       executionMode,
       serviceAccountId,
+      providerId,
+      nextPlugins,
     ) => {
       const current = await agents.findAgent(namespaceId, agentId);
       if (!current) return undefined;
+      if (providerId !== undefined && providerId !== null && !providerIdentifier.test(providerId))
+        throw new ScopeViolationError("The Agent Provider identity is invalid.");
       if (
         executionMode !== undefined &&
         executionMode !== "embedded" &&
@@ -916,11 +977,16 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       const { serviceAccountId: previousAssociation, ...withoutAssociation } = current;
       const association =
         serviceAccountId === null ? undefined : (serviceAccountId ?? previousAssociation);
+      const nextProviderId = providerId === undefined ? current.providerId : providerId;
+      const plugins = nextPlugins === undefined ? current.plugins : normalizedPlugins(nextPlugins);
+      const { plugins: _currentPlugins, ...withoutPlugins } = withoutAssociation;
       const updated = immutableCopy({
-        ...withoutAssociation,
+        ...withoutPlugins,
         configurationId,
+        providerId: nextProviderId,
         executionMode: executionMode ?? current.executionMode,
         ...(association === undefined ? {} : { serviceAccountId: association }),
+        ...(plugins === undefined ? {} : { plugins }),
       });
       snapshot.agents.set(agentKey(namespaceId, agentId), updated);
       return immutableCopy(updated);
@@ -969,19 +1035,26 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       if (
         owner === undefined ||
         owner.servicePrincipalId !== revision.servicePrincipalId ||
+        owner.providerId !== revision.providerId ||
         revision.serviceAccount?.id !== owner.serviceAccountId
       )
         throw new ScopeViolationError("The AgentRevision belongs to an unavailable Agent.");
       const secretBindings = normalizedSecretBindings(revision.secretBindings);
+      const plugins = revision.plugins === undefined ? undefined : immutableCopy(revision.plugins);
       await assertSecretBindingsAvailable(secrets, revision.namespaceId, secretBindings);
       const key = agentKey(revision.namespaceId, revision.agentId);
       const previous = snapshot.revisions.get(key) ?? [];
       if (previous.some((existing) => existing.id === revision.id))
         throw new ResourceConflictError("The server generated an existing AgentRevision identity.");
-      const { secretBindings: _providedSecretBindings, ...withoutSecretBindings } = revision;
+      const {
+        secretBindings: _providedSecretBindings,
+        plugins: _providedPlugins,
+        ...withoutSecretBindings
+      } = revision;
       const saved = immutableCopy({
         ...withoutSecretBindings,
         ...(secretBindings === undefined ? {} : { secretBindings }),
+        ...(plugins === undefined ? {} : { plugins }),
       });
       snapshot.revisions.set(key, Object.freeze([...previous, saved]));
       return immutableCopy(saved);

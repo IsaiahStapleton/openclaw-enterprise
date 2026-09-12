@@ -492,6 +492,70 @@ test("Secret material, metadata, and binding permissions stay separate", async (
   );
 });
 
+test("deployment admission stamps immutable native logging after sandbox policy", async () => {
+  const { agent, configurationDriver, controller, makeReady, namespace } = await fixture();
+  await makeReady();
+  const originalValues = {
+    logging: {
+      level: "debug",
+      consoleLevel: "debug",
+      consoleStyle: "pretty",
+      redactSensitive: "off",
+      tenant: "kept",
+    },
+    diagnostics: { otel: { logs: true, traces: true } },
+    app: { mode: "support" },
+    agents: { defaults: { model: "codex/gpt-test" } },
+    models: { providers: { codex: { agentRuntime: { id: "codex" } } } },
+  };
+  const configuration = await controller.createConfiguration(administrator, {
+    namespaceId: namespace.id,
+    kind: "agent",
+    values: originalValues,
+  });
+  await controller.updateAgent(administrator, {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: configuration.id,
+    executionMode: "dedicated",
+  });
+  const sandbox = {
+    id: "secret-occ-sandbox",
+    capability: "sandbox",
+    implementation: "test-sandbox",
+    facets: ["filesystem"],
+    configureAgent(values) {
+      return { ...values, sandboxed: true, logging: { ...values.logging, level: "error" } };
+    },
+    async cleanup() {},
+  };
+  controller.registerDriver(sandbox);
+  controller.selectDriver("sandbox", sandbox.id);
+
+  const revision = await controller.deployAgent(
+    administrator,
+    { namespaceId: namespace.id, agentId: agent.id },
+    resolveApprovedDevelopmentHarness,
+  );
+  const stored = await configurationDriver.read({
+    namespaceId: namespace.id,
+    id: configuration.id,
+  });
+
+  assert.deepEqual(stored.values, originalValues);
+  assert.deepEqual(revision.configuration, {
+    ...originalValues,
+    sandboxed: true,
+    logging: {
+      level: "info",
+      consoleLevel: "info",
+      consoleStyle: "json",
+      tenant: "kept",
+    },
+    diagnostics: { otel: { logs: false, traces: true } },
+  });
+});
+
 test("deploying a bound Secret requires both the caller and Agent service principal to operate it", async () => {
   const { agent, controller, grantAgentSecretOperate, makeReady, namespace } = await fixture();
   await makeReady();

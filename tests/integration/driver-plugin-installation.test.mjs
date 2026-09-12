@@ -52,7 +52,9 @@ async function installedPackages(t) {
 
   const owner = join(directory, "owner");
   await writeFile(join(directory, "empty.npmrc"), "", "utf8");
+  const xdgConfigHome = join(directory, "xdg-config");
   await mkdir(owner);
+  await mkdir(xdgConfigHome);
   await writeFile(
     join(owner, "package.json"),
     `${JSON.stringify({ name: "isolated-controller-owner", version: "1.0.0", private: true })}\n`,
@@ -80,6 +82,7 @@ async function installedPackages(t) {
     env: {
       ...process.env,
       COREPACK_ENABLE_AUTO_PIN: "0",
+      XDG_CONFIG_HOME: xdgConfigHome,
       npm_config_userconfig: join(directory, "empty.npmrc"),
       npm_config_globalconfig: join(directory, "empty.npmrc"),
     },

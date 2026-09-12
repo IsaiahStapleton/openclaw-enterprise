@@ -3,6 +3,9 @@ import test from "node:test";
 import {
   CONFIGURATION_KINDS,
   DRIVER_CAPABILITIES,
+  LOGGING_LEVELS,
+  admitLoggingConfiguration,
+  admittedLoggingLevel,
   HARNESS_EXECUTION_MODES,
   RESOURCE_KINDS,
   SANDBOX_FACETS,
@@ -10,9 +13,10 @@ import {
   isDriverCapability,
   isResourceKind,
   isSandboxFacet,
+  normalizeLoggingLevel,
 } from "../../packages/contracts/src/index.ts";
 
-test("the Driver contract exposes IAM, Compute, Configuration, ServiceAccount, Secret, and Sandbox capabilities", () => {
+test("the Driver contract exposes IAM, Compute, Configuration, ServiceAccount, Secret, Sandbox, and Plugin capabilities", () => {
   assert.deepEqual(DRIVER_CAPABILITIES, [
     "iam",
     "compute",
@@ -20,6 +24,7 @@ test("the Driver contract exposes IAM, Compute, Configuration, ServiceAccount, S
     "service_account",
     "secret",
     "sandbox",
+    "plugin",
   ]);
   assert.equal(Object.isFrozen(DRIVER_CAPABILITIES), true);
 
@@ -49,6 +54,94 @@ test("Sandbox facets expose only the initial containment surfaces", () => {
   }
 });
 
+test("logging helpers admit one platform-owned native JSON policy", () => {
+  assert.deepEqual(LOGGING_LEVELS, ["debug", "info", "warn", "error"]);
+  assert.equal(normalizeLoggingLevel(undefined), "info");
+  assert.equal(normalizeLoggingLevel("debug"), "debug");
+  for (const value of ["trace", "INFO", "", null]) {
+    assert.throws(() => normalizeLoggingLevel(value), /debug, info, warn, or error/);
+  }
+
+  const draft = {
+    logging: {
+      level: "debug",
+      consoleLevel: "error",
+      consoleStyle: "pretty",
+      redactSensitive: "off",
+      keep: true,
+    },
+    diagnostics: { otel: { logs: true, traces: true }, retain: "diagnostics" },
+    feature: "preserved",
+  };
+  const admitted = admitLoggingConfiguration(draft, "warn");
+  assert.deepEqual(admitted, {
+    logging: {
+      level: "warn",
+      consoleLevel: "warn",
+      consoleStyle: "json",
+      keep: true,
+    },
+    diagnostics: { otel: { logs: false, traces: true }, retain: "diagnostics" },
+    feature: "preserved",
+  });
+  assert.deepEqual(draft.logging, {
+    level: "debug",
+    consoleLevel: "error",
+    consoleStyle: "pretty",
+    redactSensitive: "off",
+    keep: true,
+  });
+  assert.equal(admittedLoggingLevel(admitted), "warn");
+
+  for (const configuration of [
+    {},
+    {
+      logging: {
+        level: "info",
+        consoleLevel: "debug",
+        consoleStyle: "json",
+      },
+      diagnostics: { otel: { logs: false } },
+    },
+    {
+      logging: {
+        level: "info",
+        consoleLevel: "info",
+        consoleStyle: "pretty",
+      },
+      diagnostics: { otel: { logs: false } },
+    },
+    {
+      logging: {
+        level: "info",
+        consoleLevel: "info",
+        consoleStyle: "json",
+      },
+      diagnostics: { otel: { logs: true } },
+    },
+    {
+      logging: {
+        level: "info",
+        consoleLevel: "info",
+        consoleStyle: "json",
+        redactSensitive: "off",
+      },
+      diagnostics: { otel: { logs: false } },
+    },
+    {
+      logging: {
+        level: "info",
+        consoleLevel: "info",
+        consoleStyle: "json",
+        redactSensitive: "tools",
+      },
+      diagnostics: { otel: { logs: false } },
+    },
+  ]) {
+    assert.throws(() => admittedLoggingLevel(configuration), /admitted|Admitted/);
+  }
+});
+
 test("the singleton platform resource model keeps Namespace ownership explicit", () => {
   assert.deepEqual(RESOURCE_KINDS, [
     "installation",
@@ -62,7 +155,7 @@ test("the singleton platform resource model keeps Namespace ownership explicit",
   assert.equal(Object.isFrozen(RESOURCE_KINDS), true);
 
   for (const kind of RESOURCE_KINDS) assert.equal(isResourceKind(kind), true);
-  for (const unsupported of ["provider", "driver", "gateway", "claw", "", undefined]) {
+  for (const unsupported of ["provider", "driver", "plugin", "gateway", "claw", "", undefined]) {
     assert.equal(isResourceKind(unsupported), false);
   }
 });

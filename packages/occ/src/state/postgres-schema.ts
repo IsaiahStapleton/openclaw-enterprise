@@ -1,5 +1,6 @@
 import type {
   HarnessExecutionMode,
+  PluginDesiredState,
   SecretBindings,
   ServiceAccountCredential,
 } from "@openclaw-enterprise/contracts";
@@ -171,6 +172,7 @@ export const serviceAccountDriverBindings = occSchema.table(
   {
     serviceAccountId: text("service_account_id").primaryKey(),
     namespaceId: text("namespace_id").notNull(),
+    providerId: text("provider_id").notNull(),
     driverId: text("driver_id").notNull(),
     externalAccountId: text("external_account_id").notNull(),
     externalCredentialId: text("external_credential_id"),
@@ -188,6 +190,10 @@ export const serviceAccountDriverBindings = occSchema.table(
       table.driverId,
       table.workspaceId,
       table.externalAccountId,
+    ),
+    check(
+      "service_account_driver_bindings_provider_id_valid",
+      sql`char_length(${table.providerId}) BETWEEN 1 AND 200 AND ${table.providerId} = btrim(${table.providerId})`,
     ),
     check(
       "service_account_driver_bindings_driver_id_valid",
@@ -217,7 +223,9 @@ export const agents = occSchema.table(
       .references(() => namespaces.id, { onDelete: "restrict", onUpdate: "restrict" }),
     name: collatedText("name").notNull(),
     configurationId: text("configuration_id").notNull(),
+    providerId: text("provider_id"),
     executionMode: text("execution_mode").$type<HarnessExecutionMode>().notNull(),
+    plugins: jsonb("plugins").$type<PluginDesiredState>(),
     servicePrincipalId: text("service_principal_id").notNull(),
     serviceAccountId: text("service_account_id"),
     activeRevisionId: text("active_revision_id"),
@@ -234,6 +242,14 @@ export const agents = occSchema.table(
     check("agents_id_format", sql`${table.id} ~ ${identifierPatterns.agent}`),
     check("agents_name_length", sql`char_length(${table.name}) BETWEEN 1 AND 200`),
     check("agents_execution_mode_valid", sql`${table.executionMode} IN ('embedded', 'dedicated')`),
+    check(
+      "agents_provider_id_valid",
+      sql`${table.providerId} IS NULL OR (char_length(${table.providerId}) BETWEEN 1 AND 200 AND ${table.providerId} = btrim(${table.providerId}) AND ${table.providerId} !~ '[[:cntrl:]]')`,
+    ),
+    check(
+      "agents_plugins_object",
+      sql`${table.plugins} IS NULL OR jsonb_typeof(${table.plugins}) = 'object'`,
+    ),
     check(
       "agents_name_normalized",
       sql`${table.name} = btrim(${table.name}) AND ${table.name} !~ '[[:cntrl:]]'`,
@@ -329,6 +345,7 @@ export const agentRevisions = occSchema.table(
     namespaceId: text("namespace_id").notNull(),
     agentId: text("agent_id").notNull(),
     revisionNumber: bigint("revision_number", { mode: "number" }).notNull(),
+    providerId: text("provider_id"),
     admittedSpec: jsonb("admitted_spec").$type<Record<string, unknown>>().notNull(),
     admittedAt: timestamp("admitted_at", { withTimezone: true }).notNull(),
   },
@@ -352,6 +369,10 @@ export const agentRevisions = occSchema.table(
       .onDelete("restrict"),
     check("agent_revisions_id_format", sql`${table.id} ~ ${identifierPatterns.revision}`),
     check("agent_revisions_revision_positive", sql`${table.revisionNumber} > 0`),
+    check(
+      "agent_revisions_provider_id_valid",
+      sql`${table.providerId} IS NULL OR (char_length(${table.providerId}) BETWEEN 1 AND 200 AND ${table.providerId} = btrim(${table.providerId}) AND ${table.providerId} !~ '[[:cntrl:]]')`,
+    ),
     check("agent_revisions_spec_object", sql`jsonb_typeof(${table.admittedSpec}) = 'object'`),
     check(
       "agent_revisions_admitted_snapshot",
@@ -362,7 +383,7 @@ export const agentRevisions = occSchema.table(
         AND (${table.admittedSpec}
           - 'configuration_id' - 'configuration_kind' - 'configuration_generation'
           - 'draft_spec' - 'harness' - 'compute' - 'sandbox_driver_id'
-          - 'secret_driver_id' - 'secret_bindings' - 'service_account') = '{}'::jsonb
+          - 'secret_driver_id' - 'secret_bindings' - 'service_account' - 'plugins') = '{}'::jsonb
         AND jsonb_typeof(${table.admittedSpec}->'configuration_id') = 'string'
         AND (${table.admittedSpec}->>'configuration_id') ~ ${identifierPatterns.configuration}
         AND jsonb_typeof(${table.admittedSpec}->'configuration_kind') = 'string'
@@ -431,6 +452,10 @@ export const agentRevisions = occSchema.table(
             AND (${table.admittedSpec} #>> '{service_account,credential,secretRef,key}') ~ '^[-._a-zA-Z0-9]+$'
             AND (${table.admittedSpec} #>> '{service_account,credential,secretRef,key}') NOT IN ('.', '..')
           )
+        )
+        AND (
+          NOT (${table.admittedSpec} ? 'plugins')
+          OR jsonb_typeof(${table.admittedSpec}->'plugins') = 'object'
         )`,
     ),
   ],

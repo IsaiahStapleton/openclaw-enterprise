@@ -1,6 +1,28 @@
 images:
   controller: ""
 
+logging:
+  collector:
+    # Keep disabled when an existing cluster Collector already owns CRI log files.
+    enabled: false
+    image: docker.io/otel/opentelemetry-collector-contrib:0.159.0@sha256:1f2c54a30e713fac6b3ae77a1ec84010c2007e29ced8ec666214fc2f6739c1cc
+    configSecretName: occ-otel-collector-config
+    envSecretName: occ-otel-collector-exporter
+    exporter:
+      cidr: ""
+      port: 443
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 384Mi
+    state:
+      sizeLimit: 128Mi
+    tmp:
+      sizeLimit: 64Mi
+
 installation:
   name: openclaw-enterprise
   secretName: occ-installation-startup
@@ -17,13 +39,40 @@ bootstrap:
     claimName: ""
     mountPath: /var/lib/openclaw/bootstrap
     fileName: initial-admin-password
+  serviceKey:
+    fileName: initial-admin-service-key.json
 
-integrations:
+provider:
   chatgpt:
     enabled: false
     secretName: occ-chatgpt-admin
     key: admin-key
     providerCidr: ""
+
+gatewayRouting:
+  enabled: false
+  # Empty derives the private Envoy Service DNS name:
+  # occ-gateway-<route-hash>.<envoyNamespace>.svc.
+  hostname: ""
+  gatewayClassName: ""
+  gatewayName: ""
+  envoyNamespace: envoy-gateway-system
+  apiKeySecretName: ""
+  # Set caSecretName/caSecretKey only with an external issuerRef.name to mount
+  # public CA trust into the API. Empty issuerRef.name generates a private CA.
+  caSecretName: ""
+  caSecretKey: ""
+  tlsSecretName: ""
+  tenantGatewayPort: 8080
+  envoyHttpsTargetPort: 10443
+  issuerRef:
+    # Empty bootstraps a namespaced SelfSigned root and CA Issuer for the leaf.
+    name: ""
+    kind: ClusterIssuer
+    group: cert-manager.io
+  envoyGatewayPodLabels:
+    control-plane: envoy-gateway
+    app.kubernetes.io/name: gateway-helm
 
 database:
   secretName: occ-database

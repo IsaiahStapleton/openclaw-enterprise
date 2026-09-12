@@ -20,6 +20,11 @@ export const AgentId = Type.String({ pattern: `^agt_${UUID_V4}$` });
 export const RevisionId = Type.String({ pattern: `^rev_${UUID_V4}$` });
 export const AuditId = Type.String({ pattern: `^aud_${UUID_V4}$` });
 export const RequestId = Type.String({ pattern: `^req_${UUID_V4}$` });
+export const ProviderId = Type.String({
+  minLength: 1,
+  maxLength: 200,
+  pattern: /^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$/.source,
+});
 
 export const Timestamp = Type.String({
   format: "date-time",
@@ -76,6 +81,20 @@ export const SecretParams = Type.Object(
 
 export const RevisionParams = Type.Object(
   { namespaceId: NamespaceId, agentId: AgentId, revisionId: RevisionId },
+  { additionalProperties: false },
+);
+
+export const WORKSPACE_FILE_NAMES = Object.freeze([
+  "AGENTS.md",
+  "SOUL.md",
+  "IDENTITY.md",
+  "USER.md",
+] as const);
+
+export const WorkspaceFileName = Type.Enum([...WORKSPACE_FILE_NAMES]);
+
+export const WorkspaceFileParams = Type.Object(
+  { namespaceId: NamespaceId, agentId: AgentId, name: WorkspaceFileName },
   { additionalProperties: false },
 );
 
@@ -157,6 +176,30 @@ export const UpdateSecretBody = Type.Object(
   { additionalProperties: false },
 );
 
+export const RuntimeCredentialValue = Type.String({
+  minLength: 1,
+  maxLength: 65536,
+  pattern: "^[^\\u0000]*$",
+  description:
+    "Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value.",
+});
+
+export const AgentRuntimeCredentialsBody = Type.Object(
+  {
+    modelApiKey: Type.Optional(RuntimeCredentialValue),
+    slack: Type.Optional(
+      Type.Object(
+        {
+          appToken: RuntimeCredentialValue,
+          botToken: RuntimeCredentialValue,
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const CreateConfigurationBody = Type.Object(
   {
     kind: ConfigurationKindSchema,
@@ -211,8 +254,10 @@ export const CreateAgentBody = Type.Object(
   {
     name: Name,
     configurationId: ConfigurationId,
+    providerId: Type.Optional(Type.Union([ProviderId, Type.Null()])),
     serviceAccountId: Type.Optional(ServiceAccountId),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
+    plugins: Type.Optional(Type.Ref("PluginDesiredState")),
   },
   { additionalProperties: false },
 );
@@ -220,11 +265,37 @@ export const CreateAgentBody = Type.Object(
 export const UpdateAgentBody = Type.Object(
   {
     configurationId: ConfigurationId,
+    providerId: Type.Optional(Type.Union([ProviderId, Type.Null()])),
     serviceAccountId: Type.Optional(Type.Union([ServiceAccountId, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
+    plugins: Type.Optional(Type.Ref("PluginDesiredState")),
   },
   { additionalProperties: false },
 );
+
+export const UpdateWorkspaceFileBody = Type.Object(
+  {
+    content: Type.String({
+      maxLength: 16 * 1024,
+      pattern: "^[^\\u0000]*$",
+      description:
+        "Workspace file content. The controller also enforces a 16 KiB UTF-8 byte limit and rejects unpaired UTF-16 surrogates.",
+    }),
+  },
+  { additionalProperties: false },
+);
+
+export const PluginApprovalModeSchema = Type.Union([
+  Type.Literal("always"),
+  Type.Literal("never"),
+  Type.Literal("prompt"),
+  Type.Literal("auto"),
+]);
+
+export const PluginApprovalsReviewerSchema = Type.Union([
+  Type.Literal("user"),
+  Type.Literal("auto_review"),
+]);
 
 export const ERROR_DETAIL_CODES = Object.freeze([
   "REQUIRED",
@@ -248,6 +319,8 @@ export const ERROR_CODES = Object.freeze([
   "NAMESPACE_NOT_EMPTY",
   "PAYLOAD_TOO_LARGE",
   "UNSUPPORTED_MEDIA_TYPE",
+  "UNKNOWN_OUTCOME",
+  "NOT_IMPLEMENTED",
   "INTERNAL_ERROR",
   "DEPENDENCY_UNAVAILABLE",
 ] as const);
@@ -287,6 +360,8 @@ export const ErrorResponse = Type.Object(
           Type.Literal("NAMESPACE_NOT_EMPTY"),
           Type.Literal("PAYLOAD_TOO_LARGE"),
           Type.Literal("UNSUPPORTED_MEDIA_TYPE"),
+          Type.Literal("UNKNOWN_OUTCOME"),
+          Type.Literal("NOT_IMPLEMENTED"),
           Type.Literal("INTERNAL_ERROR"),
           Type.Literal("DEPENDENCY_UNAVAILABLE"),
         ]),
@@ -310,6 +385,7 @@ export type AgentId = Type.Static<typeof AgentId>;
 export type RevisionId = Type.Static<typeof RevisionId>;
 export type AuditId = Type.Static<typeof AuditId>;
 export type RequestId = Type.Static<typeof RequestId>;
+export type ProviderId = Type.Static<typeof ProviderId>;
 export type Timestamp = Type.Static<typeof Timestamp>;
 export type Name = Type.Static<typeof Name>;
 export type Meta = Type.Static<typeof Meta>;
@@ -321,6 +397,9 @@ export type ServiceAccountParams = Type.Static<typeof ServiceAccountParams>;
 export type SecretParams = Type.Static<typeof SecretParams>;
 export type AgentParams = Type.Static<typeof AgentParams>;
 export type RevisionParams = Type.Static<typeof RevisionParams>;
+export type WorkspaceFileName = Type.Static<typeof WorkspaceFileName>;
+export type AgentRuntimeCredentialsBody = Type.Static<typeof AgentRuntimeCredentialsBody>;
+export type WorkspaceFileParams = Type.Static<typeof WorkspaceFileParams>;
 export type ConfigurationValues = Type.Static<typeof ConfigurationValues>;
 export type CreateSecretBody = Type.Static<typeof CreateSecretBody>;
 export type UpdateSecretBody = Type.Static<typeof UpdateSecretBody>;
@@ -335,6 +414,7 @@ export type UpdateServiceAccountCredentialBody = Type.Static<
 >;
 export type CreateAgentBody = Type.Static<typeof CreateAgentBody>;
 export type UpdateAgentBody = Type.Static<typeof UpdateAgentBody>;
+export type UpdateWorkspaceFileBody = Type.Static<typeof UpdateWorkspaceFileBody>;
 export type ErrorDetail = Type.Static<typeof ErrorDetail>;
 export type ErrorResponse = Type.Static<typeof ErrorResponse>;
 export type ErrorCode = (typeof ERROR_CODES)[number];

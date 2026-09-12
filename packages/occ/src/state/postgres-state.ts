@@ -8,6 +8,7 @@ import type {
   Identity,
   Installation,
   Namespace,
+  PluginDesiredState,
   Permission,
   Principal,
   Restriction,
@@ -18,8 +19,10 @@ import type {
   ServiceAccountCredential,
 } from "@openclaw-enterprise/contracts";
 import {
+  normalizePluginDesiredState,
   normalizeSecretBindings,
   RESOURCE_KINDS as PLATFORM_RESOURCE_KINDS,
+  validPluginRevisionState,
 } from "@openclaw-enterprise/contracts";
 import { immutableCopy } from "@openclaw-enterprise/utils";
 import {
@@ -144,6 +147,24 @@ function jsonObject(value: unknown): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+function invalidPersistedPluginState(message: string): never {
+  throw new DependencyUnavailableError(message);
+}
+
+function invalidPluginState(message: string): never {
+  throw new ScopeViolationError(message);
+}
+
+function normalizedPlugins(plugins?: PluginDesiredState): PluginDesiredState | undefined {
+  return normalizePluginDesiredState(plugins, invalidPluginState);
+}
+
+function pluginStateFromJson(value: unknown): PluginDesiredState | undefined {
+  if (value === null || value === undefined) return undefined;
+  const parsed = jsonObject(value);
+  return normalizePluginDesiredState(parsed, invalidPersistedPluginState);
+}
+
 function installationFromRow(row: PostgresRow): Readonly<Installation> {
   return immutableCopy({
     id: text(row, "id"),
@@ -174,12 +195,17 @@ function namespaceFromRow(row: PostgresRow): Readonly<PersistedNamespace> {
 function agentFromRow(row: PostgresRow): Readonly<Agent> {
   const activeRevisionId = optionalText(row, "active_revision_id");
   const serviceAccountId = optionalText(row, "service_account_id");
+  const providerId = row.provider_id === null ? null : text(row, "provider_id");
   return immutableCopy({
     id: text(row, "id"),
     namespaceId: text(row, "namespace_id"),
     name: text(row, "name"),
     configurationId: text(row, "configuration_id"),
+    providerId,
     executionMode: text(row, "execution_mode") as Agent["executionMode"],
+    ...(row.plugins === null || row.plugins === undefined
+      ? {}
+      : { plugins: pluginStateFromJson(row.plugins)! }),
     servicePrincipalId: text(row, "service_principal_id"),
     ...(serviceAccountId === undefined ? {} : { serviceAccountId }),
     ...(activeRevisionId === undefined ? {} : { activeRevisionId }),
@@ -244,16 +270,20 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
     service_account?: AgentRevision["serviceAccount"];
     secret_driver_id?: AgentRevision["secretDriverId"];
     secret_bindings?: AgentRevision["secretBindings"];
+    plugins?: AgentRevision["plugins"];
   };
   const secretBindings =
     admitted.secret_bindings === undefined
       ? undefined
       : secretBindingsFromJson(admitted.secret_bindings, text(row, "namespace_id"));
+  if (!validPluginRevisionState(admitted.plugins))
+    throw new DependencyUnavailableError("Persisted AgentRevision plugin state is invalid.");
   return immutableCopy({
     id: text(row, "id"),
     namespaceId: text(row, "namespace_id"),
     agentId: text(row, "agent_id"),
     revision,
+    providerId: row.provider_id === null ? null : text(row, "provider_id"),
     configurationId: admitted.configuration_id,
     configurationKind: admitted.configuration_kind,
     configurationGeneration: admitted.configuration_generation,
@@ -267,6 +297,7 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
       ? {}
       : { secretDriverId: admitted.secret_driver_id }),
     ...(secretBindings === undefined ? {} : { secretBindings }),
+    ...(admitted.plugins === undefined ? {} : { plugins: admitted.plugins }),
     ...(admitted.service_account === undefined ? {} : { serviceAccount: admitted.service_account }),
     servicePrincipalId: text(row, "service_principal_id"),
     createdAt: timestamp(row, "admitted_at"),
@@ -1265,6 +1296,43 @@ export class PostgresPlatformState implements PlatformStateStore {
 
     const serviceAccounts: ServiceAccountRepository = {
       findServiceAccount,
+      listServiceAccounts: async (namespaceId) =>
+        Object.freeze(
+          rows(
+            (
+              await client.query(
+                `SELECT s.id, s.namespace_id, s.name, s.credential
+                 FROM occ.service_accounts AS s
+                 JOIN occ.namespaces AS n ON n.id = s.namespace_id AND n.deleted_at IS NULL
+                 WHERE s.namespace_id = $1
+                 ORDER BY s.name, s.id`,
+                [namespaceId],
+              )
+            ).rows,
+          ).map(serviceAccountFromRow),
+        ),
+      findServiceAccountProviderBinding: async (namespaceId, serviceAccountId) => {
+        const found = rows(
+          (
+            await client.query(
+              `SELECT b.provider_id, b.driver_id, b.workspace_id,
+                      b.external_credential_id IS NOT NULL AS credential_issued
+               FROM occ.service_account_driver_bindings AS b
+               JOIN occ.namespaces AS n ON n.id = b.namespace_id AND n.deleted_at IS NULL
+               WHERE b.namespace_id = $1 AND b.service_account_id = $2`,
+              [namespaceId, serviceAccountId],
+            )
+          ).rows,
+        )[0];
+        return found === undefined
+          ? undefined
+          : immutableCopy({
+              providerId: text(found, "provider_id"),
+              driverId: text(found, "driver_id"),
+              workspaceId: text(found, "workspace_id"),
+              credentialIssued: found.credential_issued === true,
+            });
+      },
       lockServiceAccount: async (namespaceId, serviceAccountId) =>
         findServiceAccount(namespaceId, serviceAccountId, true),
       createServiceAccount: async (account) => {
@@ -1324,7 +1392,8 @@ export class PostgresPlatformState implements PlatformStateStore {
         (
           await client.query(
             `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                    a.service_principal_id, a.service_account_id, a.active_revision_id, a.created_at
+                    a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                    a.active_revision_id, a.created_at
              FROM occ.agents AS a
              JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
              WHERE a.namespace_id = $1 AND a.id = $2${lock ? " FOR UPDATE OF a" : ""}`,
@@ -1343,7 +1412,8 @@ export class PostgresPlatformState implements PlatformStateStore {
           (
             await client.query(
               `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                      a.service_principal_id, a.service_account_id, a.active_revision_id, a.created_at
+                      a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                      a.active_revision_id, a.created_at
                FROM occ.agents AS a
                JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
                WHERE a.namespace_id = $1 ORDER BY a.created_at, a.id`,
@@ -1368,29 +1438,37 @@ export class PostgresPlatformState implements PlatformStateStore {
         if (configuration === undefined)
           throw new ScopeViolationError("The Agent references an unavailable Configuration.");
         await validateSecretBindingsAvailable(agent.namespaceId, configuration.secretBindings);
+        const plugins = normalizedPlugins(agent.plugins);
+        const { plugins: _providedPlugins, ...withoutPlugins } = agent;
+        const saved = immutableCopy({
+          ...withoutPlugins,
+          ...(plugins === undefined ? {} : { plugins }),
+        });
         await client.query(
           `INSERT INTO occ.agents
-           (id, namespace_id, name, configuration_id, execution_mode, service_principal_id,
-             service_account_id, active_revision_id, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           (id, namespace_id, name, configuration_id, provider_id, execution_mode,
+             service_principal_id, service_account_id, active_revision_id, created_at, plugins)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`,
           [
-            agent.id,
-            agent.namespaceId,
-            agent.name,
-            agent.configurationId,
-            agent.executionMode,
-            agent.servicePrincipalId,
-            agent.serviceAccountId ?? null,
-            agent.activeRevisionId ?? null,
-            agent.createdAt,
+            saved.id,
+            saved.namespaceId,
+            saved.name,
+            saved.configurationId,
+            saved.providerId,
+            saved.executionMode,
+            saved.servicePrincipalId,
+            saved.serviceAccountId ?? null,
+            saved.activeRevisionId ?? null,
+            saved.createdAt,
+            plugins === undefined ? null : JSON.stringify(plugins),
           ],
         );
         await client.query(
           `INSERT INTO occ.iam_identities (id, namespace_id, agent_id, kind, issuer, subject)
            VALUES ($1, $2, $3, 'service_principal', NULL, NULL)`,
-          [agent.servicePrincipalId, agent.namespaceId, agent.id],
+          [saved.servicePrincipalId, saved.namespaceId, saved.id],
         );
-        return immutableCopy(agent);
+        return saved;
       },
       updateConfiguration: async (
         namespaceId,
@@ -1398,23 +1476,28 @@ export class PostgresPlatformState implements PlatformStateStore {
         configurationId,
         executionMode,
         serviceAccountId,
+        providerId,
+        plugins,
       ) => {
         const configuration = await configurations.findConfiguration(namespaceId, configurationId);
         if (configuration === undefined)
           throw new ScopeViolationError("The Agent references an unavailable Configuration.");
         await validateSecretBindingsAvailable(namespaceId, configuration.secretBindings);
+        const nextPlugins = plugins === undefined ? undefined : normalizedPlugins(plugins);
         const updated = rows(
           (
             await client.query(
               `UPDATE occ.agents AS a
                SET configuration_id = $3, execution_mode = COALESCE($4::text, a.execution_mode),
-                   service_account_id = CASE WHEN $5::boolean THEN $6::text ELSE a.service_account_id END
+                   service_account_id = CASE WHEN $5::boolean THEN $6::text ELSE a.service_account_id END,
+                   provider_id = CASE WHEN $7::boolean THEN $8::text ELSE a.provider_id END,
+                   plugins = CASE WHEN $9::boolean THEN $10::jsonb ELSE a.plugins END
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                          a.service_principal_id, a.service_account_id, a.active_revision_id,
-                          a.created_at`,
+                          a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                          a.active_revision_id, a.created_at`,
               [
                 namespaceId,
                 agentId,
@@ -1422,6 +1505,10 @@ export class PostgresPlatformState implements PlatformStateStore {
                 executionMode ?? null,
                 serviceAccountId !== undefined,
                 serviceAccountId ?? null,
+                providerId !== undefined,
+                providerId ?? null,
+                plugins !== undefined,
+                nextPlugins === undefined ? null : JSON.stringify(nextPlugins),
               ],
             )
           ).rows,
@@ -1440,11 +1527,11 @@ export class PostgresPlatformState implements PlatformStateStore {
               `UPDATE occ.agents AS a SET active_revision_id = $4
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2
-                 AND a.active_revision_id IS NOT DISTINCT FROM $3::text
-                 AND n.id = a.namespace_id AND n.deleted_at IS NULL
+                AND a.active_revision_id IS NOT DISTINCT FROM $3::text
+                AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                          a.service_principal_id, a.service_account_id, a.active_revision_id,
-                          a.created_at`,
+                          a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                          a.active_revision_id, a.created_at`,
               [namespaceId, agentId, expectedRevisionId ?? null, candidateRevisionId],
             )
           ).rows,
@@ -1458,7 +1545,8 @@ export class PostgresPlatformState implements PlatformStateStore {
         const found = rows(
           (
             await client.query(
-              `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.admitted_spec,
+              `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.provider_id,
+                      r.admitted_spec,
                       r.admitted_at, a.service_principal_id
                FROM occ.agent_revisions AS r
                JOIN occ.agents AS a ON a.namespace_id = r.namespace_id AND a.id = r.agent_id
@@ -1474,7 +1562,8 @@ export class PostgresPlatformState implements PlatformStateStore {
         const found = rows(
           (
             await client.query(
-              `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.admitted_spec,
+              `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.provider_id,
+                      r.admitted_spec,
                       r.admitted_at, a.service_principal_id
                FROM occ.agent_revisions AS r
                JOIN occ.agents AS a ON a.namespace_id = r.namespace_id AND a.id = r.agent_id
@@ -1492,6 +1581,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         if (
           owner === undefined ||
           owner.servicePrincipalId !== revision.servicePrincipalId ||
+          owner.providerId !== revision.providerId ||
           revision.serviceAccount?.id !== owner.serviceAccountId
         )
           throw new ScopeViolationError("The AgentRevision belongs to an unavailable Agent.");
@@ -1500,15 +1590,18 @@ export class PostgresPlatformState implements PlatformStateStore {
             ? undefined
             : secretBindingsFromState(revision.secretBindings, revision.namespaceId);
         await validateSecretBindingsAvailable(revision.namespaceId, secretBindings);
+        if (!validPluginRevisionState(revision.plugins))
+          throw new ScopeViolationError("The AgentRevision plugin state is invalid.");
         await client.query(
           `INSERT INTO occ.agent_revisions
-           (id, namespace_id, agent_id, revision_number, admitted_spec, admitted_at)
-           VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+           (id, namespace_id, agent_id, revision_number, provider_id, admitted_spec, admitted_at)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
           [
             revision.id,
             revision.namespaceId,
             revision.agentId,
             revision.revision,
+            revision.providerId,
             JSON.stringify({
               configuration_id: revision.configurationId,
               configuration_kind: revision.configurationKind,
@@ -1523,6 +1616,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                 ? {}
                 : { secret_driver_id: revision.secretDriverId }),
               ...(secretBindings === undefined ? {} : { secret_bindings: secretBindings }),
+              ...(revision.plugins === undefined ? {} : { plugins: revision.plugins }),
               ...(revision.serviceAccount === undefined
                 ? {}
                 : { service_account: revision.serviceAccount }),

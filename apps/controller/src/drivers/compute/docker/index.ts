@@ -8,20 +8,31 @@ import type {
   Namespace,
   NamespaceDeleteResult,
   NamespaceEnsureResult,
+  LoggingLevel,
 } from "@openclaw-enterprise/contracts";
-import { immutableCopy, isNonEmptyString, sha256Hex } from "@openclaw-enterprise/utils";
+import { admittedLoggingLevel } from "@openclaw-enterprise/contracts";
+import { asRecord, immutableCopy, isNonEmptyString, sha256Hex } from "@openclaw-enterprise/utils";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import {
   AGENT_READINESS_ENTRYPOINT,
   AGENT_RUNTIME_ENTRYPOINT,
+  PLUGIN_RUNTIME_HELPERS,
 } from "../kubernetes/runtime-entrypoints.ts";
+import {
+  PLUGIN_RUNTIME_READY_MARKER,
+  PLUGIN_RUNTIME_READY_MARKER_ENVIRONMENT,
+  type PluginRuntimeSpec,
+  pluginRuntimeEnvironment,
+  pluginRuntimeSpecForRevision,
+} from "../plugin-runtime.ts";
 
 export interface DockerComputeDriverOptions {
   readonly images: {
     readonly gateway: string;
     readonly agent: string;
   };
+  readonly loggingAddress?: string;
 }
 
 interface DockerContainerInspect {
@@ -38,6 +49,11 @@ interface DockerContainerInspect {
 
 interface DockerNetworkInspect {
   readonly Labels?: Readonly<Record<string, string>>;
+}
+
+interface DockerVersion {
+  readonly Platform?: { readonly Name?: string };
+  readonly Components?: readonly { readonly Name?: string }[];
 }
 
 interface Ownership {
@@ -85,6 +101,8 @@ const REVISION_LABEL = "org.openclaw.enterprise.revision-id";
 const REVISION_NUMBER_LABEL = "org.openclaw.enterprise.revision-number";
 const ROLE_LABEL = "org.openclaw.enterprise.role";
 const CONFIGURATION_HASH_LABEL = "org.openclaw.enterprise.configuration-hash";
+const HARNESS_VERSION_LABEL = "org.openclaw.enterprise.harness-version";
+const VERSION_LABEL = "org.openclaw.enterprise.version";
 const SOCKET_PATH = "/var/run/docker.sock";
 const REQUEST_TIMEOUT_MS = 10_000;
 const STARTUP_TIMEOUT_MS = 120_000;
@@ -93,20 +111,40 @@ const AGENT_TRANSPORT_PORT = 18_790;
 const MODEL_API_KEY = "OPENAI_API_KEY";
 const CONFIGURATION_DOCUMENT = "/home/node/.openclaw/openclaw.json";
 
-const GATEWAY_RUNTIME_ENTRYPOINT = String.raw`
-const { mkdirSync, writeFileSync } = require("node:fs");
+export const GATEWAY_RUNTIME_ENTRYPOINT = String.raw`
+const { chmodSync, mkdirSync, writeFileSync } = require("node:fs");
 const { spawn } = require("node:child_process");
 
-mkdirSync("/home/node/.openclaw", { recursive: true });
-mkdirSync("/home/node/workspace", { recursive: true });
+${PLUGIN_RUNTIME_HELPERS}
+
+function forwardTermination(child) {
+  let terminating = false;
+  const forward = (signal) => {
+    if (terminating) return;
+    terminating = true;
+    child.kill(signal);
+    setTimeout(() => child.kill("SIGKILL"), 8_000).unref();
+  };
+  process.on("SIGTERM", () => forward("SIGTERM"));
+  process.on("SIGINT", () => forward("SIGINT"));
+}
+
+mkdirSync("/home/node/.openclaw", { recursive: true, mode: 0o700 });
+mkdirSync("/home/node/workspace", { recursive: true, mode: 0o700 });
+chmodSync("/home/node/.openclaw", 0o700);
+chmodSync("/home/node/workspace", 0o700);
 writeFileSync(process.env.OPENCLAW_CONFIG_PATH, process.env.OPENCLAW_CONFIG_JSON, { mode: 0o600 });
 delete process.env.OPENCLAW_CONFIG_JSON;
+delete process.env.OPENCLAW_LOG_LEVEL;
+const pluginRuntime = readGatewayPluginRuntime();
+if (pluginRuntime !== undefined) installOpenClawPlugins(pluginRuntime);
 const child = spawn(
   "node",
   ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
   { stdio: "inherit" },
 );
-child.on("exit", (code) => process.exit(code ?? 1));
+forwardTermination(child);
+child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
 `;
 
 function required(value: unknown, description: string): string {
@@ -154,6 +192,42 @@ function optionalEnvironment(value: string | undefined): string | undefined {
   return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
 }
 
+function healthcheckCommand(script: string): string {
+  const encoded = Buffer.from(script).toString("base64");
+  return `eval(Buffer.from("${encoded}","base64").toString())`;
+}
+
+function loopbackHost(host: string): boolean {
+  if (host === "localhost" || host === "::1") return true;
+  const parts = host.split(".");
+  return (
+    parts.length === 4 &&
+    parts[0] === "127" &&
+    parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255)
+  );
+}
+
+function dockerLoggingAddress(value: string | undefined): string | undefined {
+  const trimmed = optionalEnvironment(value);
+  if (trimmed === undefined) return undefined;
+  const bracketed = /^\[([^\]]+)\]:(\d+)$/.exec(trimmed);
+  const plain = bracketed === null ? /^([^:]+):(\d+)$/.exec(trimmed) : null;
+  const host = bracketed?.[1] ?? plain?.[1];
+  const portText = bracketed?.[2] ?? plain?.[2];
+  const port = Number(portText);
+  if (
+    host === undefined ||
+    portText === undefined ||
+    !loopbackHost(host) ||
+    !Number.isSafeInteger(port) ||
+    port < 1 ||
+    port > 65_535
+  ) {
+    throw new ConfigurationFailure("Docker logging address must be a loopback host:port.");
+  }
+  return host === "::1" ? `[::1]:${port}` : `${host}:${port}`;
+}
+
 export class DockerComputeDriver implements ComputeDriver {
   readonly id = DRIVER_ID;
   readonly capability = "compute" as const;
@@ -161,11 +235,16 @@ export class DockerComputeDriver implements ComputeDriver {
   private readonly options: DockerComputeDriverOptions;
   private lifecycle = new ComputeLifecycleDispatcher([]);
   private lifecycleStarted = false;
+  private podmanApi = false;
 
   constructor(options: DockerComputeDriverOptions) {
     required(options.images.gateway, "Docker gateway image");
     required(options.images.agent, "Docker Codex Agent image");
-    this.options = immutableCopy(options);
+    const loggingAddress = dockerLoggingAddress(options.loggingAddress);
+    this.options = immutableCopy({
+      ...options,
+      ...(loggingAddress === undefined ? {} : { loggingAddress }),
+    });
   }
 
   setLifecycleDrivers(drivers: readonly Driver[]): void {
@@ -180,6 +259,10 @@ export class DockerComputeDriver implements ComputeDriver {
     if (String(ping ?? "").trim() !== "OK") {
       throw new Error("Docker Engine ping returned an invalid response.");
     }
+    const version = (await this.request("GET", "/version", undefined, [200])) as DockerVersion;
+    this.podmanApi =
+      version.Components?.some((component) => component.Name === "Podman Engine") === true ||
+      /podman/i.test(version.Platform?.Name ?? "");
     await this.image(this.options.images.gateway);
     await this.image(this.options.images.agent);
   }
@@ -273,7 +356,9 @@ export class DockerComputeDriver implements ComputeDriver {
       `network ${network}`,
     );
 
+    const loggingLevel = admittedLoggingLevel(revision.configuration);
     const prepared = immutableCopy(revision);
+    const pluginRuntime = this.pluginRuntimeForRevision(revision);
     let launchPrepared = false;
     let agentCreated: string | undefined;
     let gatewayCreated: string | undefined;
@@ -285,21 +370,24 @@ export class DockerComputeDriver implements ComputeDriver {
         const gateway = await this.reconcileGateway(prepared, network, {
           ...provider,
           ...launch.environment,
+          ...this.pluginRuntimeEnvironmentForWorkload(pluginRuntime, "gateway", true),
         });
         gatewayCreated = gateway.created ? gateway.containerName : undefined;
         return { ...result, ready: gateway.ready };
       }
 
       const appServerToken = randomBytes(32).toString("hex");
-      const agent = await this.reconcileAgent(prepared, network, appServerToken, {
+      const agent = await this.reconcileAgent(prepared, network, appServerToken, loggingLevel, {
         ...provider,
         ...launch.environment,
+        ...this.pluginRuntimeEnvironmentForWorkload(pluginRuntime, "agent", false),
       });
       agentCreated = agent.created ? agent.containerName : undefined;
       if (!agent.ready) return result;
       const gateway = await this.reconcileGateway(prepared, network, {
         APP_SERVER_URL: `ws://${agent.containerName}:${AGENT_TRANSPORT_PORT}`,
         APP_SERVER_TOKEN: appServerToken,
+        ...this.pluginRuntimeEnvironmentForWorkload(pluginRuntime, "gateway", false),
       });
       gatewayCreated = gateway.created ? gateway.containerName : undefined;
       return { ...result, ready: gateway.ready };
@@ -409,7 +497,10 @@ export class DockerComputeDriver implements ComputeDriver {
         OPENCLAW_CONFIG_JSON: configuration,
         OPENCLAW_CONFIG_PATH: CONFIGURATION_DOCUMENT,
         OPENCLAW_GATEWAY_PORT: String(GATEWAY_PORT),
-        OPENCLAW_GATEWAY_TOKEN: randomBytes(32).toString("hex"),
+        // Native trusted-proxy authentication rejects a simultaneously configured shared token.
+        ...(asRecord(asRecord(revision.configuration.gateway)?.auth)?.mode === "trusted-proxy"
+          ? {}
+          : { OPENCLAW_GATEWAY_TOKEN: randomBytes(32).toString("hex") }),
         OPENCLAW_STATE_DIR: "/home/node/.openclaw",
         HOME: "/home/node",
       },
@@ -420,6 +511,7 @@ export class DockerComputeDriver implements ComputeDriver {
         [REVISION_LABEL]: revision.id,
         [REVISION_NUMBER_LABEL]: String(revision.revision),
         [CONFIGURATION_HASH_LABEL]: configurationHash,
+        [HARNESS_VERSION_LABEL]: revision.harness.version,
       },
       portBindings: {
         [`${GATEWAY_PORT}/tcp`]: [{ HostIp: "127.0.0.1", HostPort: "" }],
@@ -433,6 +525,7 @@ export class DockerComputeDriver implements ComputeDriver {
     revision: Readonly<AgentRevision>,
     network: string,
     appServerToken: string,
+    loggingLevel: LoggingLevel,
     environment: Readonly<Record<string, string>>,
   ): Promise<{
     readonly containerName: string;
@@ -462,6 +555,8 @@ export class DockerComputeDriver implements ComputeDriver {
         APP_SERVER_PORT: String(AGENT_TRANSPORT_PORT),
         APP_SERVER_TOKEN: appServerToken,
         CODEX_HOME: "/home/node/.codex",
+        LOG_FORMAT: "json",
+        RUST_LOG: `${loggingLevel},codex_otel=off`,
         HOME: "/home/node",
         PATH: "/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
       },
@@ -471,6 +566,7 @@ export class DockerComputeDriver implements ComputeDriver {
       labels: {
         [REVISION_LABEL]: revision.id,
         [REVISION_NUMBER_LABEL]: String(revision.revision),
+        [HARNESS_VERSION_LABEL]: revision.harness.version,
       },
     });
     return { containerName, created: true, ready: true };
@@ -479,6 +575,12 @@ export class DockerComputeDriver implements ComputeDriver {
   private async createRuntimeContainer(
     input: RuntimeContainerInput,
   ): Promise<DockerContainerInspect> {
+    const labels = {
+      ...this.ownershipMetadata(input.ownership),
+      [ROLE_LABEL]: input.role,
+      ...input.labels,
+      [VERSION_LABEL]: input.image,
+    };
     await this.request(
       "POST",
       `/containers/create?name=${encodeURIComponent(input.name)}`,
@@ -488,14 +590,12 @@ export class DockerComputeDriver implements ComputeDriver {
         Env: Object.entries(input.environment).map(([name, value]) => `${name}=${value}`),
         Entrypoint: ["node"],
         Cmd: ["-e", input.command],
-        Labels: {
-          ...this.ownershipMetadata(input.ownership),
-          [ROLE_LABEL]: input.role,
-          ...input.labels,
-        },
+        Labels: labels,
         ExposedPorts: { [`${input.exposedPort}/tcp`]: {} },
         Healthcheck: {
-          Test: ["CMD", "node", "-e", input.healthcheckScript],
+          // Podman's Docker-compatible API splits CMD healthcheck arguments on
+          // whitespace, so keep the script argument opaque and whitespace-free.
+          Test: ["CMD", "node", "-e", healthcheckCommand(input.healthcheckScript)],
           Interval: 2_000_000_000,
           Timeout: 2_000_000_000,
           Retries: 15,
@@ -505,11 +605,19 @@ export class DockerComputeDriver implements ComputeDriver {
           ReadonlyRootfs: true,
           CapDrop: ["ALL"],
           SecurityOpt: ["no-new-privileges"],
-          Tmpfs: {
-            "/home/node": "size=1024m,uid=1000,gid=1000,mode=700",
-            "/tmp": "size=64m,uid=1000,gid=1000,mode=1777",
-          },
+          Tmpfs: this.podmanApi
+            ? {
+                "/home/node": "size=1024m,mode=1777",
+                "/tmp": "size=64m,mode=1777",
+              }
+            : {
+                "/home/node": "size=1024m,uid=1000,gid=1000,mode=700",
+                "/tmp": "size=64m,uid=1000,gid=1000,mode=1777",
+              },
           ...(input.portBindings === undefined ? {} : { PortBindings: input.portBindings }),
+          ...(this.options.loggingAddress === undefined
+            ? {}
+            : { LogConfig: this.logConfig(labels) }),
         },
         NetworkingConfig: {
           EndpointsConfig: {
@@ -533,6 +641,32 @@ export class DockerComputeDriver implements ComputeDriver {
     }
   }
 
+  private logConfig(labels: Readonly<Record<string, string>>): {
+    readonly Type: "fluentd";
+    readonly Config: Readonly<Record<string, string>>;
+  } {
+    const exportedLabels = Object.keys(labels)
+      .filter((name) => name.startsWith("org.openclaw.enterprise."))
+      .sort()
+      .join(",");
+    return {
+      Type: "fluentd",
+      Config: {
+        "fluentd-address": required(this.options.loggingAddress, "Docker logging address"),
+        "fluentd-async": "true",
+        "fluentd-buffer-limit": "1024",
+        "fluentd-write-timeout": "1s",
+        mode: "non-blocking",
+        "max-buffer-size": "1m",
+        "cache-disabled": "false",
+        "cache-max-size": "10m",
+        "cache-max-file": "2",
+        "cache-compress": "true",
+        labels: exportedLabels,
+      },
+    };
+  }
+
   private providerEnvironment(): Readonly<Record<string, string>> {
     const credential = process.env.OPENAI_API_KEY;
     if (credential === undefined || credential.trim().length === 0) {
@@ -541,6 +675,50 @@ export class DockerComputeDriver implements ComputeDriver {
       );
     }
     return { [MODEL_API_KEY]: credential };
+  }
+
+  private pluginRuntimeForRevision(
+    revision: Readonly<AgentRevision>,
+  ): PluginRuntimeSpec | undefined {
+    try {
+      return pluginRuntimeSpecForRevision(revision);
+    } catch (error) {
+      throw new ConfigurationFailure(
+        error instanceof Error
+          ? error.message
+          : "AgentRevision plugin runtime artifacts are invalid.",
+      );
+    }
+  }
+
+  private pluginRuntimeEnvironmentForWorkload(
+    runtime: PluginRuntimeSpec | undefined,
+    role: "agent" | "gateway",
+    embedded: boolean,
+  ): Readonly<Record<string, string>> {
+    if (runtime === undefined) return {};
+    const applies =
+      (runtime.kind === "openclaw" && role === "gateway" && embedded) ||
+      (runtime.kind === "codex" && role === "agent" && !embedded) ||
+      (runtime.kind === "codex" &&
+        role === "gateway" &&
+        !embedded &&
+        Object.keys(runtime.selections).length > 0);
+    if (!applies) return {};
+    try {
+      return {
+        ...pluginRuntimeEnvironment(runtime),
+        ...(runtime.kind === "codex" && role === "agent"
+          ? { [PLUGIN_RUNTIME_READY_MARKER_ENVIRONMENT]: PLUGIN_RUNTIME_READY_MARKER }
+          : {}),
+      };
+    } catch (error) {
+      throw new ConfigurationFailure(
+        error instanceof Error
+          ? error.message
+          : "AgentRevision plugin runtime artifacts are invalid.",
+      );
+    }
   }
 
   private ownershipMetadata(ownership: Ownership): Record<string, string> {
@@ -751,10 +929,12 @@ export function createDockerDevelopmentComputeDriverFromEnv(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): DockerComputeDriver {
   const shared = optionalEnvironment(environment.OCC_DOCKER_RUNTIME_IMAGE);
+  const loggingAddress = dockerLoggingAddress(environment.OCC_DOCKER_LOGGING_ADDRESS);
   return new DockerComputeDriver({
     images: {
       gateway: optionalEnvironment(environment.OCC_DOCKER_GATEWAY_IMAGE) ?? shared ?? "",
       agent: optionalEnvironment(environment.OCC_DOCKER_AGENT_IMAGE) ?? shared ?? "",
     },
+    ...(loggingAddress === undefined ? {} : { loggingAddress }),
   });
 }

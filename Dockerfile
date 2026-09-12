@@ -23,7 +23,10 @@ COPY --chown=node:node packages packages
 COPY --chown=node:node apps/controller apps/controller
 COPY --chown=node:node migrations migrations
 COPY --chown=node:node scripts scripts
-RUN mkdir -p /app/.development/configurations && chown -R node:node /app/.development
+RUN mkdir -p /app/.development/configurations /var/lib/openclaw/bootstrap \
+    && chown -R node:node /app/.development \
+    && chown 1000:1000 /var/lib/openclaw/bootstrap \
+    && chmod 0700 /var/lib/openclaw/bootstrap
 
 USER node
 ENTRYPOINT ["node"]
@@ -45,12 +48,11 @@ COPY --chown=node:node packages/occ/package.json packages/occ/package.json
 COPY --chown=node:node packages/occ/src packages/occ/src
 COPY --chown=node:node packages/utils/package.json packages/utils/package.json
 COPY --chown=node:node packages/utils/src packages/utils/src
-COPY --chown=node:node apps/controller/package.json apps/controller/package.json
 COPY --chown=node:node apps/controller/src apps/controller/src
 COPY --chown=node:node migrations/[0-9]*.sql migrations/
 COPY --chown=node:node migrations/meta/_journal.json migrations/meta/_journal.json
 COPY --chown=node:node scripts/migrate-production.mjs scripts/migrate-production.mjs
-COPY --chown=node:node scripts/bootstrap-production.mjs scripts/bootstrap-production.mjs
+COPY --chown=node:node scripts/bootstrap-installation.mjs scripts/bootstrap-installation.mjs
 COPY --chown=node:node scripts/production-healthcheck.mjs scripts/production-healthcheck.mjs
 
 USER node

@@ -2,94 +2,40 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  authorizedPrincipal,
+  cleanupProviderFixtures,
+  createAccessTokenServiceAccount,
+  createProviderWorkerDrivers,
+  databaseUrl,
+  ensureInstallation,
+  poolWithOneProviderBindingReadFault,
+  providerDefinition,
+  requiresPostgres,
+  seedProviderBinding,
+  waitFor,
+} from "../helpers/postgres-provider-state.mjs";
 
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
-const requiresPostgres = {
-  skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests.",
-};
-
-async function waitFor(description, read, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const value = await read();
-    if (value !== undefined) return value;
-    await delay(20);
-  }
-  assert.fail(`Timed out waiting for ${description}.`);
-}
-
-async function ensureInstallation(state, createDevelopmentIAMState, createAuthPrincipalSeed) {
-  const existing = await state.loadInstallation();
-  if (existing !== undefined) return existing;
-
-  const installation = {
-    id: `ins_${randomUUID()}`,
-    name: "Controller revision worker integration",
-    createdAt: new Date().toISOString(),
-  };
-  state.setBootstrapNativeIAM(
-    createDevelopmentIAMState(
-      createAuthPrincipalSeed(installation.id, "revision-worker-integration", {
-        id: `account-revision-worker-${randomUUID()}`,
-      }),
-    ),
-  );
-  await state.transact((unit) => unit.installations.createInstallation(installation));
-  return installation;
-}
-
-function authorizedPrincipal(iam) {
-  const grants = new Set(
-    iam.roles
-      .filter(({ permissions }) =>
-        permissions.some(
-          ({ action, resourceKind }) => action === "deploy" && resourceKind === "agent",
-        ),
-      )
-      .map(({ id }) => id),
-  );
-  return iam.identities.find(
-    ({ id, kind }) =>
-      kind === "principal" &&
-      iam.bindings.some(
-        (binding) =>
-          binding.subjectKind === "identity" &&
-          binding.subjectId === id &&
-          binding.namespaceId === undefined &&
-          binding.resourceKind === undefined &&
-          grants.has(binding.roleId),
-      ),
-  );
-}
-
-async function setup(context) {
+async function setup(context, { leaseDurationMs = 30_000 } = {}) {
   const [
     { Pool },
     { createControllerWorker },
-    { createDevelopmentIAMState },
     { createDevelopmentComputeDriver },
-    { createAuthPrincipalSeed },
     { DEVELOPMENT_HARNESS_DESCRIPTOR, PRODUCTION_HARNESS_DESCRIPTOR },
     { PostgresPlatformState },
     { PostgresWorkQueue },
   ] = await Promise.all([
     import("pg"),
     import("../../apps/controller/src/worker.ts"),
-    import("../../apps/controller/src/composition/development-postgres.ts"),
     import("../helpers/development.mjs"),
-    import("../../packages/iam/src/index.ts"),
     import("../../apps/controller/src/composition/production-harness.ts"),
     import("../../packages/occ/src/state/postgres-state.ts"),
     import("../../packages/occ/src/state/postgres-work-queue.ts"),
   ]);
   const observerPool = new Pool({ connectionString: databaseUrl, max: 8 });
-  const workerPool = new Pool({ connectionString: databaseUrl, max: 8 });
+  const workerPool = new Pool({ connectionString: databaseUrl, max: 1 });
   const state = new PostgresPlatformState(observerPool);
-  const installation = await ensureInstallation(
-    state,
-    createDevelopmentIAMState,
-    createAuthPrincipalSeed,
-  );
+  const installation = await ensureInstallation(state, "revision-worker");
   const actor = authorizedPrincipal(await state.loadNativeIAMState());
   assert.ok(actor, "persisted IAM must contain an unrestricted Agent-deploy Principal");
 
@@ -109,7 +55,7 @@ async function setup(context) {
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = createDevelopmentComputeDriver();
 
-  async function agent(label, executionMode = "embedded", serviceAccountId) {
+  async function agent(label, executionMode = "embedded", serviceAccountId, providerId = null) {
     const id = `agt_${randomUUID()}`;
     const configurationId = `cfg_${randomUUID()}`;
     return state.transact(async (unit) => {
@@ -125,6 +71,7 @@ async function setup(context) {
         namespaceId: namespace.id,
         name: `${label}-${randomUUID()}`,
         configurationId,
+        providerId,
         ...(serviceAccountId === undefined ? {} : { serviceAccountId }),
         executionMode,
         servicePrincipalId: `service-agent-${id}`,
@@ -160,6 +107,7 @@ async function setup(context) {
       namespaceId: namespace.id,
       agentId: owner.id,
       revision: number,
+      providerId: owner.providerId,
       configuration: { revision: String(number) },
       configurationId: owner.configurationId,
       configurationKind: "agent",
@@ -202,17 +150,29 @@ async function setup(context) {
     });
   }
 
-  function start(computeDriver, emit = () => {}, convergenceTimeoutMs) {
+  function start(
+    computeDriver,
+    emit = () => {},
+    convergenceTimeoutMs,
+    providers,
+    pool = workerPool,
+  ) {
+    const drivers =
+      providers === undefined ? undefined : createProviderWorkerDrivers(computeDriver, providers);
     worker = createControllerWorker({
-      pool: workerPool,
+      pool,
       pollIntervalMs: 15,
-      leaseDurationMs: 30_000,
+      leaseDurationMs,
       maxAttempts: 5,
-      computeDriver,
+      ...(drivers === undefined ? { computeDriver } : { drivers }),
       ...(convergenceTimeoutMs === undefined ? {} : { convergenceTimeoutMs }),
       emit,
     });
     return worker.start();
+  }
+
+  async function stop() {
+    if (worker !== undefined) await worker.stop();
   }
 
   return {
@@ -228,8 +188,127 @@ async function setup(context) {
     revision,
     work,
     start,
+    stop,
+    workerPool,
   };
 }
+
+test(
+  "maintenance retains its real lease across consecutive short predecessor retirements",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context, { leaseDurationMs: 1_200 });
+    const owner = await fixture.agent("short-retirement-lease");
+    const first = await fixture.revision(owner, 1);
+    const events = [];
+    let completedRetirements = 0;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        maintenanceIntervalMs: 200,
+        async retireRevision(previous) {
+          // Exercise the real worker and PostgreSQL lease with short external
+          // effects: each finishes before the heartbeat timer, but the whole
+          // cleanup sequence exceeds the lease. No claim timestamps are edited.
+          await delay(120);
+          const result = await fixture.compute.retireRevision(previous);
+          completedRetirements += 1;
+          return result;
+        },
+      },
+      (event) => events.push(event),
+    );
+    await fixture.work(first, "succeeded");
+    // Admitted intermediate revisions can be superseded before execution. They
+    // remain valid predecessors that active-revision maintenance must retire.
+    await fixture.state.transact(async (unit) => {
+      for (let number = 2; number <= 24; number += 1) {
+        const skipped = { ...first, id: `rev_${randomUUID()}`, revision: number };
+        delete skipped.idempotencyKey;
+        await unit.revisions.createRevision(skipped);
+      }
+    });
+    const current = await fixture.revision(owner, 25);
+    await fixture.work(current, "succeeded");
+    const maintenance = await waitFor("one successful short-effect maintenance claim", async () => {
+      assert.equal(
+        events.some(({ event, code }) => event === "worker.error" && code === "CLAIM_LOST"),
+        false,
+        "consecutive short effects must not starve lease renewal",
+      );
+      const result = await fixture.observerPool.query(
+        `SELECT state, attempt_count FROM occ.controller_work
+         WHERE revision_id = $1 AND idempotency_key LIKE '%:maintenance:%'
+           AND state = 'succeeded'`,
+        [current.id],
+      );
+      return result.rows[0];
+    });
+    assert.equal(maintenance.attempt_count, 1);
+    assert.ok(completedRetirements >= 25, "activation and all predecessors were retired");
+    const active = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(active.activeRevisionId, current.id);
+  },
+);
+
+test(
+  "development workers run supplied after-commit activation hooks and retry incomplete finalization",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("development-after-commit", "dedicated");
+    const candidate = await fixture.revision(owner, 1);
+    const activations = [];
+    let failed = false;
+
+    async function activeRevision() {
+      const current = await fixture.observerPool.query(
+        "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+        [fixture.namespace.id, owner.id],
+      );
+      assert.equal(current.rowCount, 1);
+      return current.rows[0].active_revision_id;
+    }
+
+    await fixture.start({
+      ...fixture.compute,
+      async activateRevision(revision, activationContext) {
+        activations.push({
+          revisionId: revision.id,
+          activeRevisionId: await activeRevision(),
+          secretEnvironment: activationContext?.secretEnvironment ?? null,
+        });
+        if (!failed) {
+          failed = true;
+          throw new Error("route publication failed");
+        }
+      },
+    });
+
+    const completed = await fixture.work(candidate, "succeeded");
+    // Incomplete finalization requeues the same claim without spending an
+    // attempt, but the second activation call proves the recovery pass ran.
+    assert.equal(completed.attempt_count, 1);
+    assert.equal(await activeRevision(), candidate.id);
+    assert.deepEqual(
+      activations.filter(({ revisionId }) => revisionId === candidate.id),
+      [
+        { revisionId: candidate.id, activeRevisionId: candidate.id, secretEnvironment: [] },
+        { revisionId: candidate.id, activeRevisionId: candidate.id, secretEnvironment: [] },
+      ],
+    );
+
+    const activation = await fixture.observerPool.query(
+      `SELECT resource_id
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.activate'`,
+      [fixture.namespace.id],
+    );
+    assert.deepEqual(activation.rows, [{ resource_id: candidate.id }]);
+  },
+);
 
 test(
   "the revision worker activates admitted candidates, retires predecessors, and rejects revoked, malformed, and wrong-owner effects",
@@ -257,6 +336,7 @@ test(
           namespaceId: fixture.namespace.id,
           agentId: malformedAdmission.id,
           revision: 1,
+          providerId: null,
           configuration: {},
           servicePrincipalId: malformedAdmission.servicePrincipalId,
           createdAt: new Date().toISOString(),
@@ -424,7 +504,11 @@ test(
 
     const failed = await fixture.work(candidate, "failed_permanent");
     assert.equal(failed.attempt_count, 1);
-    assert.deepEqual(effects, [], "revoked account access must prevent every Compute side effect");
+    assert.deepEqual(
+      effects.filter(({ revisionId }) => revisionId === candidate.id),
+      [],
+      "revoked account access must prevent Compute effects for its admitted revision",
+    );
 
     const active = await fixture.observerPool.query(
       "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
@@ -459,6 +543,227 @@ test(
         reason_code: "AUTHORIZATION_DENIED",
       },
     ]);
+  },
+);
+
+test(
+  "the revision worker rejects managed ServiceAccount provider mismatches before Compute",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const provider = providerDefinition();
+    const cleanup = {
+      serviceAccountIds: [],
+      agentIds: [],
+      revisionIds: [],
+    };
+
+    async function account(label) {
+      const created = await createAccessTokenServiceAccount(
+        fixture.state,
+        fixture.namespace.id,
+        label,
+      );
+      cleanup.serviceAccountIds.push(created.id);
+      return created;
+    }
+
+    const [validAccount, missingAgentProviderAccount, missingIssuedCredentialAccount] =
+      await Promise.all([account("valid"), account("missing-agent-provider"), account("unissued")]);
+    await Promise.all([
+      seedProviderBinding(fixture.observerPool, validAccount),
+      seedProviderBinding(fixture.observerPool, missingAgentProviderAccount),
+      seedProviderBinding(fixture.observerPool, missingIssuedCredentialAccount, {
+        credentialIssued: false,
+      }),
+    ]);
+
+    const [validOwner, missingAgentProviderOwner, missingIssuedCredentialOwner] = await Promise.all(
+      [
+        fixture.agent("valid-managed-provider", "dedicated", validAccount.id, provider.id),
+        fixture.agent("missing-agent-provider", "dedicated", missingAgentProviderAccount.id, null),
+        fixture.agent(
+          "missing-issued-provider-credential",
+          "dedicated",
+          missingIssuedCredentialAccount.id,
+          provider.id,
+        ),
+      ],
+    );
+    cleanup.agentIds.push(
+      validOwner.id,
+      missingAgentProviderOwner.id,
+      missingIssuedCredentialOwner.id,
+    );
+    const [validRevision, missingAgentProviderRevision, missingIssuedCredentialRevision] =
+      await Promise.all([
+        fixture.revision(validOwner, 1),
+        fixture.revision(missingAgentProviderOwner, 1),
+        fixture.revision(missingIssuedCredentialOwner, 1),
+      ]);
+    cleanup.revisionIds.push(
+      validRevision.id,
+      missingAgentProviderRevision.id,
+      missingIssuedCredentialRevision.id,
+    );
+
+    const effects = [];
+    try {
+      await fixture.start(
+        {
+          ...fixture.compute,
+          async bindAgent({ agent }) {
+            effects.push({ action: "bind", agentId: agent.id });
+          },
+          async prepareRevision(revision) {
+            effects.push({ action: "prepare", revisionId: revision.id });
+            return fixture.compute.prepareRevision(revision);
+          },
+        },
+        () => {},
+        undefined,
+        [provider],
+      );
+
+      // These rows represent post-admission drift: the worker must defend the
+      // effect boundary even if earlier API or Driver operations admitted stale
+      // managed provider state.
+      await Promise.all([
+        fixture.work(validRevision, "succeeded"),
+        fixture.work(missingAgentProviderRevision, "failed_permanent"),
+        fixture.work(missingIssuedCredentialRevision, "failed_permanent"),
+      ]);
+
+      assert.deepEqual(effects, [
+        { action: "bind", agentId: validOwner.id },
+        { action: "prepare", revisionId: validRevision.id },
+      ]);
+
+      const active = await fixture.observerPool.query(
+        "SELECT id, active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = ANY($2::text[])",
+        [
+          fixture.namespace.id,
+          [validOwner.id, missingAgentProviderOwner.id, missingIssuedCredentialOwner.id],
+        ],
+      );
+      const activeByAgent = new Map(
+        active.rows.map(({ id, active_revision_id }) => [id, active_revision_id]),
+      );
+      assert.equal(activeByAgent.get(validOwner.id), validRevision.id);
+      assert.equal(activeByAgent.get(missingAgentProviderOwner.id), null);
+      assert.equal(activeByAgent.get(missingIssuedCredentialOwner.id), null);
+
+      const failures = await fixture.observerPool.query(
+        `SELECT resource_id, details->>'reasonCode' AS reason_code
+         FROM occ.audit_events
+         WHERE resource_id = ANY($1::text[])
+           AND action = 'reconcile'
+           AND outcome = 'failure'
+         ORDER BY resource_id`,
+        [[missingAgentProviderRevision.id, missingIssuedCredentialRevision.id]],
+      );
+      assert.deepEqual(
+        failures.rows.map(({ reason_code }) => reason_code),
+        ["SERVICE_ACCOUNT_PROVIDER_MISMATCH", "SERVICE_ACCOUNT_PROVIDER_MISMATCH"],
+      );
+    } finally {
+      await fixture.stop();
+      await cleanupProviderFixtures(fixture.observerPool, fixture.namespace.id, cleanup);
+    }
+  },
+);
+
+test(
+  "the revision worker retries transient Provider binding read failures without activating",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const fixture = await setup(context);
+    const provider = providerDefinition();
+    const cleanup = { serviceAccountIds: [], agentIds: [], revisionIds: [] };
+
+    const account = await createAccessTokenServiceAccount(
+      fixture.state,
+      fixture.namespace.id,
+      "transient-provider-read",
+    );
+    cleanup.serviceAccountIds.push(account.id);
+    await seedProviderBinding(fixture.observerPool, account);
+    const owner = await fixture.agent(
+      "transient-provider-read",
+      "dedicated",
+      account.id,
+      provider.id,
+    );
+    cleanup.agentIds.push(owner.id);
+
+    const effects = [];
+    const events = [];
+    try {
+      await fixture.start(
+        {
+          ...fixture.compute,
+          async prepareRevision(revision) {
+            effects.push({ action: "prepare", revisionId: revision.id });
+            return fixture.compute.prepareRevision(revision);
+          },
+        },
+        (event) => events.push(event),
+        undefined,
+        [provider],
+        poolWithOneProviderBindingReadFault(fixture.workerPool),
+      );
+
+      const candidate = await fixture.revision(owner, 1);
+      cleanup.revisionIds.push(candidate.id);
+
+      const retried = await waitFor(
+        "transient Provider binding read failure retry evidence",
+        async () => {
+          const result = await fixture.observerPool.query(
+            `SELECT work.state, work.attempt_count,
+                    count(audit.id)::integer AS dependency_failures
+             FROM occ.controller_work AS work
+             LEFT JOIN occ.audit_events AS audit
+               ON audit.namespace_id = work.namespace_id
+              AND audit.resource_id = work.revision_id
+              AND audit.action = 'reconcile'
+              AND audit.details->>'reasonCode' = 'DEPENDENCY_UNAVAILABLE'
+             WHERE work.idempotency_key = $1
+             GROUP BY work.state, work.attempt_count`,
+            [candidate.idempotencyKey],
+          );
+          const row = result.rows[0];
+          if (row?.dependency_failures >= 1 && row.state !== "failed_permanent") return row;
+          return undefined;
+        },
+      );
+      assert.ok(retried.attempt_count >= 1);
+      assert.deepEqual(effects, [], "transient binding read failures must not invoke Compute");
+      assert.ok(
+        events.some(
+          ({ event, code, revisionId }) =>
+            event === "worker.completed" &&
+            code === "DEPENDENCY_UNAVAILABLE" &&
+            revisionId === candidate.id,
+        ),
+      );
+      const inactive = await fixture.observerPool.query(
+        "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+        [fixture.namespace.id, owner.id],
+      );
+      assert.equal(inactive.rows[0].active_revision_id, null);
+
+      await fixture.work(candidate, "succeeded");
+      assert.deepEqual(effects, [{ action: "prepare", revisionId: candidate.id }]);
+      const active = await fixture.observerPool.query(
+        "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+        [fixture.namespace.id, owner.id],
+      );
+      assert.equal(active.rows[0].active_revision_id, candidate.id);
+    } finally {
+      await fixture.stop();
+      await cleanupProviderFixtures(fixture.observerPool, fixture.namespace.id, cleanup);
+    }
   },
 );
 

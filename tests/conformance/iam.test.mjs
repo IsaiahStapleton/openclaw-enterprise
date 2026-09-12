@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateAuthorization, NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import {
+  createBootstrapAdministratorSeed,
+  evaluateAuthorization,
+  NativeIAMDriver,
+} from "../../packages/iam/src/index.ts";
 
 const identities = [
   {
@@ -123,6 +127,66 @@ const bindings = [
 ];
 
 const state = { identities, groups, memberships, roles, bindings, restrictions: [] };
+
+test("fresh bootstrap seed creates human and service administrators on one shared Role", async () => {
+  const seed = createBootstrapAdministratorSeed("ins_bootstrap", "issuer", { id: "user-admin" });
+  assert.match(seed.principal.id, /^prn_/);
+  assert.equal(seed.principal.kind, "principal");
+  assert.equal(seed.principal.issuer, "issuer");
+  assert.equal(seed.principal.subject, "user-admin");
+  assert.match(seed.servicePrincipal.id, /^spn_/);
+  assert.deepEqual(seed.servicePrincipal, {
+    kind: "service_principal",
+    id: seed.servicePrincipal.id,
+  });
+  assert.equal(seed.roles.length, 1);
+  assert.equal(seed.bindings.length, 2);
+  assert.ok(
+    seed.bindings.every(
+      (binding) =>
+        binding.roleId === seed.roles[0].id &&
+        binding.subjectKind === "identity" &&
+        binding.namespaceId === undefined &&
+        binding.resourceKind === undefined &&
+        binding.resourceId === undefined,
+    ),
+  );
+  assert.ok(seed.bindings.some((binding) => binding.subjectId === seed.principal.id));
+  assert.ok(seed.bindings.some((binding) => binding.subjectId === seed.servicePrincipal.id));
+
+  const driver = new NativeIAMDriver({
+    loadNativeIAMState: async () => ({
+      identities: [seed.principal, seed.servicePrincipal],
+      groups: [],
+      memberships: [],
+      roles: seed.roles,
+      bindings: seed.bindings,
+      restrictions: [],
+    }),
+  });
+  for (const principalId of [seed.principal.id, seed.servicePrincipal.id]) {
+    assert.equal(
+      (
+        await driver.authorize({
+          principalId,
+          action: "administer",
+          resource: { kind: "installation", id: "ins_bootstrap" },
+        })
+      ).allowed,
+      true,
+    );
+    assert.equal(
+      (
+        await driver.authorize({
+          principalId,
+          action: "create",
+          resource: { kind: "namespace", id: "ns_candidate" },
+        })
+      ).allowed,
+      true,
+    );
+  }
+});
 
 test("service identity lookup uses exact IAM scope and cannot resolve a human identity", async () => {
   const driver = createDriver();

@@ -30,13 +30,20 @@ function workloadPeer(namespace, labels) {
 function productionInstallation(adminKeyPath) {
   return {
     occ: { cluster: "production-image-smoke" },
-    integrations: {
-      chatgpt: {
-        workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
-        adminKeyPath,
-        credentialTtlSeconds: 3600,
+    provider: [
+      {
+        id: "openai",
+        type: "chatgpt",
+        configuration: {
+          workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
+          apiKeyPath: adminKeyPath,
+          credentialTtlSeconds: 3600,
+        },
+        drivers: {
+          service_account: "chatgpt-service-accounts",
+        },
       },
-    },
+    ],
     drivers: {
       configuration: {
         id: "config-kubernetes",
@@ -123,7 +130,6 @@ function productionInstallation(adminKeyPath) {
     },
   };
 }
-
 async function runDocker(args, options = {}) {
   return execute(docker, args, {
     timeout: 20_000,
@@ -145,12 +151,21 @@ function assertNoPackagingFailure(output) {
 }
 
 function assertPersistenceBoundary(output, event) {
-  assert.match(
-    output,
-    new RegExp(
-      `"event":"${event}","error":"The platform persistence repository is unavailable\\."`,
-    ),
-  );
+  const diagnostic = output
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return undefined;
+      }
+    })
+    .find((line) => line?.event === event);
+  assert.ok(diagnostic, output);
+  assert.equal(diagnostic.code, "PERSISTENCE_UNAVAILABLE");
+  assert.doesNotMatch(output, /The platform persistence repository is unavailable/);
 }
 
 async function productionFixture(t) {
@@ -245,7 +260,7 @@ test(
     assert.ok(failure, "the worker smoke intentionally stops at the database boundary");
     assert.equal(failure.code, 1);
     const output = imageFailureOutput(failure);
-    assertPersistenceBoundary(output, "worker\\.startup-error");
+    assertPersistenceBoundary(output, "worker.startup-error");
     assertNoPackagingFailure(output);
   },
 );
@@ -282,5 +297,45 @@ test("production image includes the OpenShell gRPC proto asset", imageTestOption
     probe,
   ]);
   assert.match(stdout, /"event":"openshell-proto-loaded"/);
+  assertNoPackagingFailure(`${stdout}\n${stderr}`);
+});
+
+test("production image includes console shell and public assets", imageTestOptions, async () => {
+  const probe = String.raw`
+    import assert from "node:assert/strict";
+    import { readConsoleAsset } from "./apps/controller/src/console-assets.ts";
+
+    const shell = await readConsoleAsset("/console/");
+    assert.equal(shell.statusCode, 200);
+    assert.match(shell.contentType, /text\/html/);
+    assert.match(shell.body.toString("utf8"), /\/console\/console\.mjs/);
+
+    const css = await readConsoleAsset("/console/console.css");
+    assert.equal(css.statusCode, 200);
+    assert.match(css.contentType, /text\/css/);
+    assert.ok(css.body.length > 0);
+
+    const script = await readConsoleAsset("/console/console.mjs");
+    assert.equal(script.statusCode, 200);
+    assert.match(script.contentType, /javascript/);
+    assert.match(script.body.toString("utf8"), /api\/auth\/session/);
+
+    const unknown = await readConsoleAsset("/console/index.ts");
+    assert.equal(unknown.statusCode, 404);
+    assert.match(unknown.contentType, /text\/html/);
+    assert.doesNotMatch(unknown.body.toString("utf8"), /createFastifyApp|OCC_AUTH_SECRET|apiKeyPath/);
+    console.log(JSON.stringify({ event: "console-assets-loaded" }));
+  `;
+  const { stdout, stderr } = await runDocker([
+    "run",
+    "--rm",
+    "--network",
+    "none",
+    image,
+    "--input-type=module",
+    "--eval",
+    probe,
+  ]);
+  assert.match(stdout, /"event":"console-assets-loaded"/);
   assertNoPackagingFailure(`${stdout}\n${stderr}`);
 });

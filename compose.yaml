@@ -4,7 +4,7 @@ x-development-build: &development-build
   context: .
   target: development
   args:
-    NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:24-bookworm}
+    NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-docker.io/library/node:24-bookworm}
 
 services:
   postgres:
@@ -36,9 +36,6 @@ services:
       OCC_AUTH_BASE_URL: http://127.0.0.1:${OPENCLAW_DEV_PORT:-3000}
       OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR: ${OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR:-172.30.41.0/24}
       OCC_DEVELOPMENT_CONFIGURATION_ROOT: /app/.development/configurations
-      OPENCLAW_DEV_EMAIL: ${OPENCLAW_DEV_EMAIL:-admin@openclaw.local}
-      OPENCLAW_DEV_PASSWORD: ${OPENCLAW_DEV_PASSWORD:-openclaw-development-password}
-      OPENCLAW_DEV_INSTALLATION_NAME: ${OPENCLAW_DEV_INSTALLATION_NAME:-OpenClaw Local Development}
       OCC_DOCKER_RUNTIME_IMAGE: ${OCC_DOCKER_RUNTIME_IMAGE:-}
       OCC_DOCKER_GATEWAY_IMAGE: ${OCC_DOCKER_GATEWAY_IMAGE:-}
       OCC_DOCKER_AGENT_IMAGE: ${OCC_DOCKER_AGENT_IMAGE:-}
@@ -48,7 +45,7 @@ services:
     volumes:
       - occ_configuration_data:/app/.development/configurations
     depends_on:
-      migrate:
+      bootstrap:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -59,6 +56,26 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+    networks:
+      development:
+
+  bootstrap:
+    build: *development-build
+    environment:
+      NODE_ENV: development
+      OCC_DATABASE_URL: postgresql://occ_app:occ-app-local@postgres:5432/openclaw_enterprise
+      OCC_AUTH_SECRET: ${OCC_AUTH_SECRET:-openclaw-development-auth-secret-minimum-32-bytes}
+      OCC_AUTH_BASE_URL: http://127.0.0.1:${OPENCLAW_DEV_PORT:-3000}
+      OPENCLAW_DEV_EMAIL: ${OPENCLAW_DEV_EMAIL:-admin@openclaw.local}
+      OPENCLAW_DEV_PASSWORD: ${OPENCLAW_DEV_PASSWORD:-openclaw-development-password}
+      OPENCLAW_DEV_INSTALLATION_NAME: ${OPENCLAW_DEV_INSTALLATION_NAME:-OpenClaw Local Development}
+      OCC_BOOTSTRAP_SERVICE_KEY_FILE: /var/lib/openclaw/bootstrap/initial-admin-service-key.json
+    command: ["scripts/bootstrap-installation.mjs"]
+    volumes:
+      - occ_bootstrap_data:/var/lib/openclaw/bootstrap
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     networks:
       development:
 
@@ -85,6 +102,7 @@ services:
 volumes:
   occ_postgres_data:
   occ_configuration_data:
+  occ_bootstrap_data:
 
 networks:
   development:

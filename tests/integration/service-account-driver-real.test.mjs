@@ -4,13 +4,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import {
-  bootstrapControllerInstallation,
-  createAuthenticatedControllerRequest,
-} from "../helpers/auth-session.mjs";
+import { createAuthenticatedControllerRequest } from "../helpers/auth-session.mjs";
+import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import {
   assertGatewayModelTurn,
+  configureExistingK3dLocalPathSharedFileSystem,
   createKubernetesInstallationConfiguration,
   createRealKubernetesFixture,
   kubernetesHash as hash,
@@ -26,7 +25,7 @@ const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 let adminKey = process.env.OCC_TEST_CHATGPT_ADMIN_KEY;
 const adminKeySourcePath = process.env.OCC_TEST_CHATGPT_ADMIN_KEY_PATH;
 const workspaceId = process.env.OCC_TEST_CHATGPT_WORKSPACE_ID;
-const providerModel = (process.env.OCC_TEST_OPENAI_MODEL ?? "gpt-4.1").replace(
+const providerModel = (process.env.OCC_TEST_OPENAI_MODEL ?? "gpt-5.6-sol").replace(
   /^(?:openai|codex)\//,
   "",
 );
@@ -80,11 +79,84 @@ function installationConfiguration(authentication, platformNamespace, adminKeyPa
     codexImage,
     cluster: "k3d-chatgpt-service-account-driver",
   });
-  configuration.integrations = {
-    chatgpt: { workspaceId, adminKeyPath, credentialTtlSeconds: 3_600 },
-  };
+  configuration.provider = [
+    {
+      id: "openai",
+      type: "chatgpt",
+      configuration: { workspaceId, apiKeyPath: adminKeyPath, credentialTtlSeconds: 3_600 },
+      drivers: { service_account: "chatgpt-service-accounts" },
+    },
+  ];
   configuration.drivers.service_account = { id: "chatgpt-service-accounts", configuration: {} };
   return configuration;
+}
+
+function chatGptHttpDiagnostic(operation, error) {
+  const status = error?.message?.match(
+    /^ChatGPT Admin API (?:POST|DELETE) request failed with HTTP ([1-5][0-9]{2})\.$/,
+  )?.[1];
+  return status === undefined
+    ? undefined
+    : { kind: "chatgpt-admin-http", operation, status: Number(status) };
+}
+
+function observeChatGptClient(client, record) {
+  return {
+    get workspaceId() {
+      return client.workspaceId;
+    },
+    async createServiceAccount(input) {
+      try {
+        return await client.createServiceAccount(input);
+      } catch (error) {
+        record(chatGptHttpDiagnostic("create-service-account", error));
+        throw error;
+      }
+    },
+    async deleteServiceAccount(accountId) {
+      try {
+        return await client.deleteServiceAccount(accountId);
+      } catch (error) {
+        record(chatGptHttpDiagnostic("delete-service-account", error));
+        throw error;
+      }
+    },
+    async createCredential(input) {
+      try {
+        return await client.createCredential(input);
+      } catch (error) {
+        record(chatGptHttpDiagnostic("create-credential", error));
+        throw error;
+      }
+    },
+    async deleteCredential(input) {
+      try {
+        return await client.deleteCredential(input);
+      } catch (error) {
+        record(chatGptHttpDiagnostic("delete-credential", error));
+        throw error;
+      }
+    },
+  };
+}
+
+function controllerHttpDiagnostic(response, expectedStatus, upstream) {
+  return {
+    kind: "controller-http",
+    status: response?.status,
+    expectedStatus,
+    occErrorCode: response?.error?.code,
+    upstream,
+  };
+}
+
+function assertControllerStatus(response, expectedStatus, upstream) {
+  try {
+    assert.equal(response.status, expectedStatus);
+  } catch (error) {
+    error.openclawCiDiagnostic = controllerHttpDiagnostic(response, expectedStatus, upstream);
+    throw error;
+  }
 }
 
 test(
@@ -97,6 +169,7 @@ test(
   },
   async (context) => {
     const kubeconfig = await prerequisites();
+    await configureExistingK3dLocalPathSharedFileSystem({ kubeconfigPath, kubernetesContext });
     const suffix = hash(randomUUID());
     const platformNamespace = `oce-service-account-driver-${suffix}`;
     const directory = await mkdtemp(join(tmpdir(), "oce-service-account-driver-real-"));
@@ -108,6 +181,7 @@ test(
     let worker;
     let productionApp;
     let forwarding;
+    let lastChatGptDiagnostic;
 
     context.after(async () => {
       const failures = [];
@@ -183,6 +257,30 @@ test(
       "--verb=create,get,list,patch,update,delete",
       "--resource=deployments.apps,services,serviceaccounts,configmaps,endpointslices.discovery.k8s.io,networkpolicies.networking.k8s.io,resourcequotas,limitranges",
     );
+    // Match the production worker: persistent state precedes Pods, whose readiness is observed.
+    await kubectl(
+      "patch",
+      "clusterrole",
+      `oce-sa-driver-tenant-${suffix}`,
+      "--type=json",
+      "-p",
+      JSON.stringify([
+        {
+          op: "add",
+          path: "/rules/-",
+          value: {
+            apiGroups: [""],
+            resources: ["persistentvolumeclaims"],
+            verbs: ["get", "create", "patch", "delete"],
+          },
+        },
+        {
+          op: "add",
+          path: "/rules/-",
+          value: { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "watch"] },
+        },
+      ]),
+    );
     await kubectl(
       "create",
       "clusterrole",
@@ -230,7 +328,6 @@ test(
       { default: pg },
       { PostgresPlatformState },
       { loadInstallationConfiguration },
-      { composePostgresDevelopment },
       { composeProduction },
       { createControllerWorker },
       { kubernetesNamespaceName },
@@ -240,11 +337,10 @@ test(
       import("pg"),
       import("../../packages/occ/src/state/postgres-state.ts"),
       import("../../apps/controller/src/composition/installation-config.ts"),
-      import("../../apps/controller/src/composition/development-postgres.ts"),
       import("../../apps/controller/src/composition/production.ts"),
       import("../../apps/controller/src/worker.ts"),
       import("../../apps/controller/src/drivers/compute/kubernetes/index.ts"),
-      import("../../apps/controller/src/integrations/chatgpt.ts"),
+      import("../../apps/controller/src/providers/chatgpt.ts"),
       import("../../apps/controller/src/drivers/service-account/chatgpt.ts"),
     ]);
 
@@ -263,12 +359,18 @@ test(
     client = new ChatGPTClient({
       workspaceId,
       adminKey: (await readFile(adminKeyPath, "utf8")).trim(),
-      credentialTtlSeconds: apiDrivers.installation.integrations.chatgpt.credentialTtlSeconds,
+      credentialTtlSeconds: apiDrivers.installation.provider[0].configuration.credentialTtlSeconds,
+    });
+    const observedClient = observeChatGptClient(client, (diagnostic) => {
+      lastChatGptDiagnostic = diagnostic;
     });
     const serviceAccountDriverFactory = createChatGPTServiceAccountDriverFactory(
-      client,
+      {
+        id: apiDrivers.installation.provider[0].id,
+        drivers: apiDrivers.installation.provider[0].drivers,
+        client: observedClient,
+      },
       apiDrivers.computeDriver,
-      "chatgpt-service-accounts",
     );
     observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
 
@@ -280,24 +382,14 @@ test(
         "refusing to modify a database Installation not owned by this disposable proof",
       );
     } else {
-      const bootstrap = await composePostgresDevelopment(
-        {
-          mode: "development",
-          host: "127.0.0.1",
-          databaseUrl,
-          adminEmail: adminCredentials.email,
-          adminPassword: adminCredentials.password,
-          authSecret,
-          authBaseURL,
-        },
-        apiDrivers,
-        serviceAccountDriverFactory,
-      );
-      try {
-        await bootstrapControllerInstallation(bootstrap, adminCredentials, installationName);
-      } finally {
-        await bootstrap.close();
-      }
+      await ensureDevelopmentBootstrap(context, {
+        databaseUrl,
+        email: adminCredentials.email,
+        password: adminCredentials.password,
+        authSecret,
+        authBaseURL,
+        installationName,
+      });
     }
 
     productionApp = await composeProduction({
@@ -325,7 +417,7 @@ test(
     const createdNamespace = await request("POST", "/namespaces", {
       name: `chatgpt-service-account-${suffix}`,
     });
-    assert.equal(createdNamespace.status, 201);
+    assertControllerStatus(createdNamespace, 201);
     const namespaceId = createdNamespace.data.id;
     tenantNamespace = kubernetesNamespaceName(namespaceId);
     await waitFor(`the worker to create ${tenantNamespace}`, async () => {
@@ -376,26 +468,28 @@ test(
 
     await waitFor(`the worker to provision ${tenantNamespace}`, async () => {
       const response = await request("GET", `/namespaces/${namespaceId}`);
-      assert.equal(response.status, 200);
+      assertControllerStatus(response, 200);
       return response.data.status === "ready" ? response.data : undefined;
     });
 
     // The real OCC operation creates its own upstream identity; no provider account is preseeded.
+    lastChatGptDiagnostic = undefined;
     const account = await request("POST", `/namespaces/${namespaceId}/service-accounts`, {
       name: `occ-codex-${suffix}`,
     });
-    assert.equal(account.status, 201, JSON.stringify(account.error));
+    assertControllerStatus(account, 201, lastChatGptDiagnostic);
     assert.equal(account.data.namespaceId, namespaceId);
     assert.equal(account.data.credential, undefined);
     createdServiceAccountId = account.data.id;
     const bindingQuery =
-      "SELECT external_account_id, external_credential_id, workspace_id, driver_id FROM occ.service_account_driver_bindings WHERE service_account_id = $1 AND namespace_id = $2";
+      "SELECT external_account_id, external_credential_id, workspace_id, provider_id, driver_id FROM occ.service_account_driver_bindings WHERE service_account_id = $1 AND namespace_id = $2";
     const createdBinding = await observerPool.query(bindingQuery, [account.data.id, namespaceId]);
     assert.equal(createdBinding.rowCount, 1, "the provider account binding must commit with OCC");
     externalAccountId = createdBinding.rows[0].external_account_id;
     assert.ok(externalAccountId);
     assert.equal(createdBinding.rows[0].external_credential_id, null);
     assert.equal(createdBinding.rows[0].workspace_id, workspaceId);
+    assert.equal(createdBinding.rows[0].provider_id, "openai");
     assert.equal(createdBinding.rows[0].driver_id, "chatgpt-service-accounts");
     assert.equal(JSON.stringify(account.data).includes(externalAccountId), false);
     assert.equal(JSON.stringify(account.data).includes(workspaceId), false);
@@ -406,7 +500,7 @@ test(
       `/namespaces/${namespaceId}/service-accounts/${account.data.id}/credentials`,
       {},
     );
-    assert.equal(issued.status, 201, JSON.stringify(issued.error));
+    assertControllerStatus(issued, 201, lastChatGptDiagnostic);
     assert.equal(issued.data.credential.kind, "access_token");
     const { secretRef } = issued.data.credential;
     const credentialBinding = await observerPool.query(bindingQuery, [
@@ -441,14 +535,16 @@ test(
       kind: "agent",
       values: createHarnessConfiguration("codex", providerModel),
     });
-    assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
+    assertControllerStatus(configuration, 201);
     const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {
       name: `chatgpt-codex-${suffix}`,
       configurationId: configuration.data.id,
+      providerId: "openai",
       executionMode: "dedicated",
       serviceAccountId: account.data.id,
     });
-    assert.equal(agent.status, 201, JSON.stringify(agent.error));
+    assertControllerStatus(agent, 201);
+    assert.equal(agent.data.providerId, "openai");
     assert.equal(agent.data.serviceAccountId, account.data.id);
 
     // Gateway transport remains operator-owned and separate from the account's model credential.
@@ -461,11 +557,12 @@ test(
       "POST",
       `/namespaces/${namespaceId}/agents/${agent.data.id}/deploy`,
     );
-    assert.equal(revision.status, 202, JSON.stringify(revision.error));
+    assertControllerStatus(revision, 202);
     assert.deepEqual(revision.data.serviceAccount, {
       id: account.data.id,
       credential: issued.data.credential,
     });
+    assert.equal(revision.data.providerId, "openai");
     assert.equal(JSON.stringify(revision.data).includes(externalAccountId), false);
     assert.equal(JSON.stringify(revision.data).includes(workspaceId), false);
     assert.equal(JSON.stringify(revision.data).includes(accessToken), false);
@@ -503,7 +600,7 @@ test(
         "GET",
         `/namespaces/${namespaceId}/agents/${agent.data.id}`,
       );
-      assert.equal(observation.status, 200);
+      assertControllerStatus(observation, 200);
       return observation.data.activeRevisionId === revision.data.id ? observation.data : undefined;
     });
     const pods = await waitFor("separate real ready OpenClaw and Codex Pods", async () => {

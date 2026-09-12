@@ -1,0 +1,86 @@
+name: Run CI lane
+description: Set up tools, run one CI lane, clean up owned resources, and upload results.
+inputs:
+  lane:
+    description: Lane name passed to the CI runner.
+    required: true
+  profile:
+    description: Tool setup profile passed to scripts/ci/setup-tools.sh.
+    required: true
+  node-version:
+    description: Node.js version used by the workspace.
+    required: true
+  artifact-prefix:
+    description: Prefix for the uploaded result artifact.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: ${{ inputs.node-version }}
+    - id: pnpm-store
+      uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@0f22cb304de7760de58ecc4d277de6a19d4c3fac
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache-mode: read-write
+    - uses: ./.github/actions/setup-test-docker
+      if: inputs.lane == 'docker-model' || inputs.lane == 'logging-collector'
+    - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      if: >-
+        (inputs.profile == 'full' || inputs.profile == 'images' || inputs.profile == 'k3d') &&
+        inputs.lane != 'docker-model' && inputs.lane != 'logging-collector'
+    - name: Set up CI tools
+      shell: bash
+      run: bash scripts/ci/setup-tools.sh "${{ inputs.profile }}"
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      if: success() && steps.pnpm-store.outputs.store-cache-hit != 'true'
+      with:
+        path: ${{ steps.pnpm-store.outputs.store-path }}
+        key: ${{ steps.pnpm-store.outputs.store-cache-primary-key }}
+    - name: Install browser dependencies
+      if: inputs.lane == 'checks-baseline'
+      shell: bash
+      run: bash scripts/ci/setup-tools.sh browser
+    - name: Run workspace boundary check
+      if: inputs.lane == 'checks-baseline'
+      shell: bash
+      run: pnpm check:workspace
+    - name: Run format check
+      if: inputs.lane == 'checks-baseline'
+      shell: bash
+      run: pnpm format:check
+    - name: Run OpenAPI check
+      if: inputs.lane == 'checks-baseline'
+      shell: bash
+      run: pnpm openapi:check
+    - name: Run docs check
+      if: inputs.lane == 'checks-baseline'
+      shell: bash
+      run: pnpm docs:install && pnpm docs:check
+    - name: Run typecheck
+      if: inputs.lane == 'checks-baseline'
+      shell: bash
+      run: pnpm typecheck
+    - name: Prepare lane
+      shell: bash
+      run: node scripts/ci/prepare.mjs --lane "${{ inputs.lane }}" --state "$RUNNER_TEMP/state/${{ inputs.lane }}.json" --github-env "$GITHUB_ENV"
+    - name: Run lane
+      shell: bash
+      env:
+        CI_RUNNER_TEST_TIMEOUT_MS: ${{ inputs.lane == 'checks-baseline' && '300000' || '' }}
+      run: node scripts/ci/run-tests.mjs run "${{ inputs.lane }}" --state "$RUNNER_TEMP/state/${{ inputs.lane }}.json" --results "$RUNNER_TEMP/results/${{ inputs.lane }}.json"
+    - name: Cleanup lane
+      if: always()
+      shell: bash
+      run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/${{ inputs.lane }}.json"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      if: always()
+      with:
+        name: ${{ inputs.artifact-prefix }}-${{ inputs.lane }}
+        path: ${{ runner.temp }}/results/${{ inputs.lane }}.json
+        if-no-files-found: error
+        retention-days: 7

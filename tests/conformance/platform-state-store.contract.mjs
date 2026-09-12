@@ -47,6 +47,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     namespaceId: namespace.id,
     name: `Agent ${randomUUID()}`,
     configurationId: configuration.id,
+    providerId: null,
     executionMode: "embedded",
     servicePrincipalId: identifier("service-agent"),
     createdAt: new Date().toISOString(),
@@ -56,6 +57,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     namespaceId: namespace.id,
     agentId: agent.id,
     revision: 1,
+    providerId: null,
     configurationId: configuration.id,
     configurationKind: configuration.kind,
     configurationGeneration: configuration.generation,
@@ -113,6 +115,55 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     ),
     "Agent metadata must not enqueue reconciliation work.",
   );
+
+  const providerConfiguration = {
+    id: identifier("cfg"),
+    namespaceId: namespace.id,
+    kind: "agent",
+    generation: 1,
+    createdAt: new Date().toISOString(),
+  };
+  const providerAgent = {
+    ...agent,
+    id: identifier("agt"),
+    name: `Provider owner ${randomUUID()}`,
+    configurationId: providerConfiguration.id,
+    providerId: "provider-a",
+    servicePrincipalId: identifier("service-agent"),
+  };
+  await store.transact(async (transaction) => {
+    await transaction.configurations.createConfiguration(providerConfiguration);
+    await transaction.agents.createAgent(providerAgent);
+  });
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.revisions.createRevision({
+        ...revision,
+        id: identifier("rev"),
+        agentId: providerAgent.id,
+        configurationId: providerConfiguration.id,
+        providerId: "provider-b",
+        servicePrincipalId: providerAgent.servicePrincipalId,
+      }),
+    ),
+    "AgentRevision Provider snapshots must match the owning Agent.",
+  );
+  await store.read(async (state) => {
+    assert.deepEqual(await state.revisions.listRevisions(namespace.id, providerAgent.id), []);
+  });
+  await store.transact(async (transaction) => {
+    assert.deepEqual(
+      await transaction.agents.updateConfiguration(
+        namespace.id,
+        providerAgent.id,
+        providerConfiguration.id,
+        providerAgent.executionMode,
+        undefined,
+        null,
+      ),
+      { ...providerAgent, providerId: null },
+    );
+  });
 
   await assert.rejects(
     store.transact((transaction) =>
@@ -603,6 +654,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     namespaceId: accountNamespace.id,
     name: "Account agent " + randomUUID(),
     configurationId: accountConfiguration.id,
+    providerId: null,
     executionMode: "embedded",
     servicePrincipalId: identifier("service-agent"),
     serviceAccountId: account.id,

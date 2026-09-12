@@ -21,16 +21,31 @@ AccessBinding ──► Role ──► Permission
             no ──► allow
 ```
 
-An authenticated principal is not automatically authorized. A Better Auth
+An authenticated principal is not automatically authorized. A user
 session or service API key establishes the caller identity; the selected IAM Driver separately
 checks whether that principal can perform the requested operation.
 
 ## Supported policy surface
 
-Installation bootstrap provisions the first administrator account and binds it
-to the administrator Role. This Role permits creating Namespaces and Agents,
-reading authorized resources, deleting empty Namespaces, and requesting Agent
-deployment.
+Fresh native-IAM bootstrap provisions the human administrator and one
+Installation-scoped, non-Agent ServicePrincipal. Each receives its own binding
+to the same administrator Role, with no Namespace or resource filter:
+
+| Resource kind                      | Actions                                         |
+| ---------------------------------- | ----------------------------------------------- |
+| `installation`                     | `administer`, `read`                            |
+| `namespace`                        | `create`, `read`, `delete`                      |
+| `configuration`, `service_account` | `create`, `read`, `update`, `delete`            |
+| `secret`                           | `create`, `read`, `update`, `delete`, `operate` |
+| `agent`                            | `create`, `read`, `update`, `deploy`, `operate` |
+| `agent_revision`                   | `read`                                          |
+
+These grants cover existing and future Namespaces in this Installation, subject
+to exact authorization and matching Restrictions. They confer no Kubernetes or
+provider authority and no Agent-delete permission. Removing the original human
+account does not remove the service identity. See
+[bootstrap authentication](authentication.md#installation-and-account-ownership)
+for credential delivery and lifecycle.
 
 Administrators can provision additional local authentication accounts with a
 binding to an existing Role, as defined in
@@ -55,8 +70,8 @@ principal types:
   Namespace-scoped ServicePrincipal; ordinary service principals can represent
   non-Agent automation.
 
-The controller authenticates a Better Auth session for the human Principal or a
-[service API key](authentication.md#service-api-keys) for an explicitly provisioned,
+The controller authenticates a user session for the human Principal or a
+[service API key](authentication/service-api-keys.md#service-api-keys) for an explicitly provisioned,
 non-Agent ServicePrincipal. Service-key lookup supplies the verified
 `servicePrincipalId` and its stored Namespace to the selected IAM Driver; it does
 not reinterpret a human issuer/subject as an automation identity.
@@ -165,7 +180,7 @@ authorization provider.
 
 For each protected operation, the controller:
 
-1. Verifies the Better Auth session or service key and resolves its existing
+1. Verifies the user session or service key and resolves its existing
    Principal or non-Agent ServicePrincipal through the selected IAM Driver.
 2. Uses the server-configured IAM Driver for the requested resource.
 3. Loads current policy, including principal bindings and direct Group memberships.
@@ -200,16 +215,13 @@ ambiguous identity fails closed.
 
 ## Evidence and related references
 
-[Native IAM conformance tests](../../tests/conformance/iam.test.mjs) cover
-explicit identities, exact scopes, Group membership, Restrictions, current
-policy loading, and failures. [API integration tests](../../tests/integration/occ-api.test.mjs)
-cover resource filtering, Namespace isolation, attributable audit events, and
-failures without orphaned state. The current policy implementation is
+The current policy implementation is
 [the IAM package](../../packages/iam/src/index.ts).
 
 For a working authenticated request, see the
-[quickstart](../guides/quickstart.md#sign-in-and-read-the-installation).
+[quickstart](../guides/quickstart.md#read-the-installation-with-the-bootstrap-service-key).
 
+- [Authorization tests](../testing/local.md#authentication-and-authorization-coverage)
 - [API reference](api.md)
 - [Namespaces](namespaces.md)
 - [Agents](agents.md)
@@ -223,5 +235,7 @@ For a working authenticated request, see the
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 
 - [2026-08-28 17:54]: Reorganize as a current feature reference; move procedural setup to the shared guides. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)

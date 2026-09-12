@@ -1,217 +1,19 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { createServer } from "node:net";
 import test from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
-import { verifyPlatformStateStoreContract } from "../conformance/platform-state-store.contract.mjs";
-import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
-
-const repository = fileURLToPath(new URL("../..", import.meta.url));
-const entrypoint = fileURLToPath(new URL("../../apps/controller/src/server.mjs", import.meta.url));
-const workerEntrypoint = fileURLToPath(
-  new URL("../../apps/controller/src/worker.mjs", import.meta.url),
-);
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
-const adminEmail = "postgres-admin@openclaw.local";
-const adminPassword = "postgres-development-password";
-const authSecret = "openclaw-postgres-development-auth-secret-minimum-32-bytes";
-const requiresPostgres = {
-  skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests.",
-};
-const requiresPostgresAndKubernetesConfiguration = {
-  skip: !databaseUrl
-    ? "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests."
-    : process.env.OCC_TEST_KUBERNETES_CONFIGURATION === "1"
-      ? false
-      : "Requires a live Kubernetes ConfigurationDriver; development has no fallback backend.",
-};
-
-async function availablePort() {
-  const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const { port } = server.address();
-  await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return port;
-}
-
-async function stopController(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = once(child, "exit");
-  child.kill("SIGTERM");
-  const force = setTimeout(() => child.kill("SIGKILL"), 2_000);
-  force.unref();
-  try {
-    await exited;
-  } finally {
-    clearTimeout(force);
-  }
-}
-
-async function startController(context) {
-  const port = await availablePort();
-  const child = spawn(process.execPath, [entrypoint], {
-    cwd: repository,
-    env: {
-      ...process.env,
-      NODE_ENV: "development",
-      OCC_HOST: "127.0.0.1",
-      OCC_PORT: String(port),
-      OCC_DATABASE_URL: databaseUrl,
-      OCC_AUTH_BASE_URL: `http://127.0.0.1:${port}`,
-      OCC_AUTH_SECRET: authSecret,
-      OPENCLAW_DEV_EMAIL: adminEmail,
-      OPENCLAW_DEV_PASSWORD: adminPassword,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  context.after(() => stopController(child));
-
-  let output = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => (output += chunk));
-  child.stderr.on("data", (chunk) => (output += chunk));
-
-  const origin = `http://127.0.0.1:${port}`;
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    assert.equal(child.exitCode, null, `The durable OCC subprocess exited early:\n${output}`);
-    try {
-      const session = await signInWithEmailPassword({
-        fetch,
-        origin,
-        email: adminEmail,
-        password: adminPassword,
-      });
-      return { child, origin, session };
-    } catch {
-      await delay(40);
-    }
-  }
-  assert.fail(`The durable OCC subprocess never became ready:\n${output}`);
-}
-
-function spawnWorker(context) {
-  const child = spawn(process.execPath, [workerEntrypoint], {
-    cwd: repository,
-    env: {
-      ...process.env,
-      NODE_ENV: "development",
-      DATABASE_URL: databaseUrl,
-      OCC_DATABASE_URL: databaseUrl,
-      OCC_TEST_DATABASE_URL: databaseUrl,
-      OCC_WORKER_POLL_INTERVAL_MS: "20",
-      OCC_WORKER_LEASE_DURATION_MS: "5000",
-      OCC_AUTH_BASE_URL: "http://127.0.0.1",
-      OCC_AUTH_SECRET: authSecret,
-      OPENCLAW_DEV_EMAIL: adminEmail,
-      OPENCLAW_DEV_PASSWORD: adminPassword,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  context.after(() => stopController(child));
-
-  let output = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => (output += chunk));
-  child.stderr.on("data", (chunk) => (output += chunk));
-
-  return { child, output: () => output };
-}
-
-async function startWorker(context) {
-  const worker = spawnWorker(context);
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    assert.equal(
-      worker.child.exitCode,
-      null,
-      `The separate OCC worker subprocess exited early:\n${worker.output()}`,
-    );
-    if (/"event"\s*:\s*"worker\.started"/.test(worker.output())) return worker;
-    await delay(25);
-  }
-  assert.fail(`The separate OCC worker subprocess never became ready:\n${worker.output()}`);
-}
-
-async function pollUntil(description, operation, { worker, timeoutMs = 15_000 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (worker !== undefined) {
-      assert.equal(
-        worker.child.exitCode,
-        null,
-        `The OCC worker exited while waiting for ${description}:\n${worker.output()}`,
-      );
-    }
-    const result = await operation();
-    if (result !== undefined) return result;
-    await delay(35);
-  }
-  assert.fail(
-    `Timed out waiting for ${description}.${worker === undefined ? "" : `\n${worker.output()}`}`,
-  );
-}
-
-async function request(controller, method, path, body, options = {}) {
-  const response = await fetch(`${controller.origin}${path}`, {
-    method,
-    headers: {
-      ...(options.authenticated === false
-        ? {}
-        : authenticatedHeaders(options.session ?? controller.session)),
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    signal: AbortSignal.timeout(5_000),
-  });
-  const payload = await response.json();
-  return { status: response.status, data: payload.data, error: payload.error };
-}
-
-async function createDurableController(pool) {
-  const [
-    { NativeIAMDriver },
-    { OpenClawController },
-    { PostgresPlatformState },
-    { createDevelopmentComputeDriver },
-    { DEVELOPMENT_HARNESS_DESCRIPTOR, resolveApprovedHarness: resolveApprovedDevelopmentHarness },
-  ] = await Promise.all([
-    import("../../packages/iam/src/index.ts"),
-    import("../../packages/occ/src/index.ts"),
-    import("../../packages/occ/src/state/postgres-state.ts"),
-    import("../helpers/development.mjs"),
-    import("../../apps/controller/src/composition/production-harness.ts"),
-  ]);
-  const state = new PostgresPlatformState(pool);
-  const installation = await state.loadInstallation();
-  assert.ok(installation, "the real OCC subprocess must bootstrap the singleton Installation");
-
-  const iam = new NativeIAMDriver(state, {
-    id: "native-iam",
-    implementation: "native",
-  });
-  const compute = createDevelopmentComputeDriver();
-  const controller = new OpenClawController(installation, { state, recordOperations: true });
-  for (const driver of [iam, compute]) {
-    controller.registerDriver(driver);
-    controller.selectDriver(driver.capability, driver.id);
-  }
-
-  return {
-    controller,
-    state,
-    harness: DEVELOPMENT_HARNESS_DESCRIPTOR,
-    resolveHarness: resolveApprovedDevelopmentHarness,
-  };
-}
+import {
+  adminEmail,
+  createDurableController,
+  databaseUrl,
+  parseJsonLines,
+  pollUntil,
+  request,
+  requiresPostgres,
+  spawnWorker,
+  startController,
+  verifyPlatformStateStoreContract,
+} from "../helpers/postgres-platform-state.mjs";
 
 test(
   "PostgreSQL rejects platform writes until the singleton Installation is bootstrapped",
@@ -229,12 +31,29 @@ test(
       return;
     }
 
-    const prematureWorker = spawnWorker(context);
+    const prematureWorker = await spawnWorker(context);
     const [prematureExit] = await once(prematureWorker.child, "exit", {
       signal: AbortSignal.timeout(10_000),
     });
     assert.notEqual(prematureExit, 0);
-    assert.match(prematureWorker.output(), /installation|initializ|bootstrap/i);
+    const startupFailure = parseJsonLines(prematureWorker.output()).find(
+      (line) => line.event === "worker.startup-error",
+    );
+    assert.ok(startupFailure, prematureWorker.output());
+    assert.deepEqual(
+      {
+        severity: startupFailure.severity,
+        service: startupFailure.service,
+        event: startupFailure.event,
+        code: startupFailure.code,
+      },
+      {
+        severity: "ERROR",
+        service: "occ-worker",
+        event: "worker.startup-error",
+        code: "WORKER_STARTUP_FAILED",
+      },
+    );
 
     const namespaceId = `ns_${randomUUID()}`;
     const agentId = `agt_${randomUUID()}`;
@@ -244,6 +63,8 @@ test(
       id: agentId,
       namespaceId,
       name: "Uninitialized agent",
+      configurationId: `cfg_${randomUUID()}`,
+      providerId: null,
       draft_spec: {},
       executionMode: "embedded",
       servicePrincipalId: `service-agent-${randomUUID()}`,
@@ -254,6 +75,7 @@ test(
       namespaceId,
       agentId,
       revision: 1,
+      providerId: null,
       configurationId: `cfg_${randomUUID()}`,
       configurationKind: "agent",
       configurationGeneration: 1,
@@ -295,102 +117,6 @@ test(
 
     const persisted = await pool.query(stateCounts);
     assert.deepEqual(persisted.rows[0], baseline.rows[0]);
-  },
-);
-
-test(
-  "real OCC subprocesses retain Installation, Namespace, Agent, IAM, audit, and work after restart",
-  requiresPostgresAndKubernetesConfiguration,
-  async (context) => {
-    const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: databaseUrl });
-    context.after(() => pool.end());
-
-    const first = await startController(context);
-    const existing = await request(first, "GET", "/installation");
-    let installation;
-    if (existing.status === 200) {
-      installation = existing.data;
-    } else {
-      assert.equal(existing.status, 404);
-      const created = await request(first, "POST", "/installation/bootstrap", {
-        name: "PostgreSQL restart integration",
-      });
-      assert.equal(created.status, 201);
-      installation = created.data;
-    }
-
-    const namespace = await request(first, "POST", "/namespaces", {
-      name: `restart-${randomUUID()}`,
-    });
-    assert.equal(namespace.status, 201);
-    assert.equal(Object.hasOwn(namespace.data, "installationId"), false);
-
-    const agent = await request(first, "POST", `/namespaces/${namespace.data.id}/agents`, {
-      name: `agent-${randomUUID()}`,
-    });
-    assert.equal(agent.status, 201);
-    assert.equal(Object.hasOwn(agent.data, "installationId"), false);
-    assert.equal(agent.data.namespaceId, namespace.data.id);
-
-    const persisted = await pool.query(
-      `SELECT
-       (SELECT count(*)::integer FROM occ.audit_events
-         WHERE resource_id = $1 OR resource_id = $2) AS audit_events,
-       (SELECT count(*)::integer FROM occ.controller_work
-         WHERE namespace_id = $1) AS queued_operations,
-       (SELECT count(*)::integer FROM occ.iam_identities
-         WHERE namespace_id = $1 AND agent_id = $2
-           AND kind = 'service_principal') AS agent_service_principals`,
-      [namespace.data.id, agent.data.id],
-    );
-    assert.ok(persisted.rows[0].audit_events >= 2);
-    assert.equal(persisted.rows[0].queued_operations, 1);
-    assert.equal(persisted.rows[0].agent_service_principals, 1);
-
-    const auditBeforeUnauthenticatedRequest = await pool.query(
-      "SELECT count(*)::integer AS count FROM occ.audit_events",
-    );
-    const unauthenticated = await request(first, "GET", "/namespaces", undefined, {
-      authenticated: false,
-    });
-    assert.equal(unauthenticated.status, 401);
-    const auditAfterUnauthenticatedRequest = await pool.query(
-      "SELECT count(*)::integer AS count FROM occ.audit_events",
-    );
-    assert.equal(
-      auditAfterUnauthenticatedRequest.rows[0].count,
-      auditBeforeUnauthenticatedRequest.rows[0].count,
-      "unauthenticated requests have no attributable actor and cannot write audit rows",
-    );
-
-    await stopController(first.child);
-    const restarted = await startController(context);
-
-    const reloadedInstallation = await request(restarted, "GET", "/installation");
-    assert.equal(reloadedInstallation.status, 200);
-    assert.deepEqual(reloadedInstallation.data, installation);
-
-    const reloadedNamespace = await request(restarted, "GET", `/namespaces/${namespace.data.id}`);
-    assert.equal(reloadedNamespace.status, 200);
-    assert.deepEqual(reloadedNamespace.data, namespace.data);
-
-    const reloadedAgent = await request(
-      restarted,
-      "GET",
-      `/namespaces/${namespace.data.id}/agents/${agent.data.id}`,
-    );
-    assert.equal(reloadedAgent.status, 200);
-    assert.deepEqual(reloadedAgent.data, agent.data);
-
-    const duplicateBootstrap = await request(restarted, "POST", "/installation/bootstrap", {
-      name: "Forbidden second Installation",
-    });
-    assert.equal(duplicateBootstrap.status, 409);
-    const installations = await pool.query(
-      "SELECT count(*)::integer AS count FROM occ.installation",
-    );
-    assert.equal(installations.rows[0].count, 1);
   },
 );
 
@@ -514,152 +240,6 @@ test(
       ].sort(),
     );
     assert.ok(audits.rows.every(({ outcome }) => outcome === "success"));
-  },
-);
-
-test(
-  "real OCC creates concurrent Namespace Agents and durably associates revisions with their owner",
-  requiresPostgresAndKubernetesConfiguration,
-  async (context) => {
-    const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: databaseUrl });
-    context.after(() => pool.end());
-    const process = await startController(context);
-
-    const namespace = await request(process, "POST", "/namespaces", {
-      name: `concurrent-agents-${randomUUID()}`,
-    });
-    assert.equal(namespace.status, 201);
-    assert.equal(namespace.data.status, "provisioning");
-
-    const configuration = { model: { id: "gpt-integration" }, tools: ["lookup"] };
-    const [first, second] = await Promise.all([
-      request(process, "POST", `/namespaces/${namespace.data.id}/agents`, {
-        name: `first-${randomUUID()}`,
-        draft_spec: configuration,
-      }),
-      request(process, "POST", `/namespaces/${namespace.data.id}/agents`, {
-        name: `second-${randomUUID()}`,
-      }),
-    ]);
-    assert.equal(first.status, 201);
-    assert.equal(second.status, 201);
-    assert.notEqual(first.data.id, second.data.id);
-    assert.equal(first.data.namespaceId, namespace.data.id);
-    assert.equal(second.data.namespaceId, namespace.data.id);
-
-    const stillProvisioning = await request(process, "GET", `/namespaces/${namespace.data.id}`);
-    assert.equal(stillProvisioning.status, 200);
-    assert.equal(stillProvisioning.data.status, "provisioning");
-    const listed = await request(process, "GET", `/namespaces/${namespace.data.id}/agents`);
-    assert.equal(listed.status, 200);
-    assert.deepEqual(
-      listed.data.map(({ id }) => id).sort(),
-      [first.data.id, second.data.id].sort(),
-    );
-
-    const persistedAgents = await pool.query(
-      `SELECT agent.id, agent.namespace_id, agent.execution_mode, agent.service_principal_id,
-              identity.kind, identity.agent_id
-       FROM occ.agents AS agent
-       JOIN occ.iam_identities AS identity
-         ON identity.id = agent.service_principal_id
-        AND identity.namespace_id = agent.namespace_id
-        AND identity.agent_id = agent.id
-       WHERE agent.namespace_id = $1 ORDER BY agent.id`,
-      [namespace.data.id],
-    );
-    assert.equal(persistedAgents.rowCount, 2);
-    assert.deepEqual(
-      persistedAgents.rows.map(({ id }) => id),
-      [first.data.id, second.data.id].sort(),
-    );
-    assert.notEqual(
-      persistedAgents.rows[0].service_principal_id,
-      persistedAgents.rows[1].service_principal_id,
-    );
-    assert.ok(persistedAgents.rows.every(({ execution_mode }) => execution_mode === "embedded"));
-    assert.ok(persistedAgents.rows.every(({ kind }) => kind === "service_principal"));
-
-    const { controller, state, harness, resolveHarness } = await createDurableController(pool);
-    const historyBefore = await state.read((view) =>
-      view.revisions.listRevisions(namespace.data.id, first.data.id),
-    );
-    assert.deepEqual(historyBefore, []);
-
-    await controller.handleNamespaceLifecycle(principalId, namespace.data.id, "ready");
-    const revision = await controller.deployAgent(
-      principalId,
-      { namespaceId: namespace.data.id, agentId: first.data.id },
-      resolveHarness,
-    );
-    assert.equal(revision.namespaceId, namespace.data.id);
-    assert.equal(revision.agentId, first.data.id);
-    assert.equal(revision.revision, 1);
-    assert.equal(revision.configurationId, first.data.configurationId);
-    assert.equal(revision.configurationKind, "agent");
-    assert.equal(revision.configurationGeneration, 1);
-    assert.deepEqual(revision.configuration, configuration);
-
-    const [reloadedAgent, firstHistory, secondHistory] = await state.read(async (view) => {
-      const originalAgent = await view.agents.findAgent(namespace.data.id, first.data.id);
-      const originalAgentHistory = await view.revisions.listRevisions(
-        namespace.data.id,
-        first.data.id,
-      );
-      const otherAgentHistory = await view.revisions.listRevisions(
-        namespace.data.id,
-        second.data.id,
-      );
-      return [originalAgent, originalAgentHistory, otherAgentHistory];
-    });
-    assert.equal(reloadedAgent.id, first.data.id);
-    assert.equal(revision.servicePrincipalId, reloadedAgent.servicePrincipalId);
-    assert.deepEqual(firstHistory, [revision]);
-    assert.deepEqual(secondHistory, []);
-
-    const persistedRevision = await pool.query(
-      `SELECT agent.id AS agent_id, agent.namespace_id, agent.active_revision_id,
-              revision.id AS revision_id, revision.revision_number, revision.admitted_spec
-       FROM occ.agents AS agent
-       JOIN occ.agent_revisions AS revision
-         ON revision.namespace_id = agent.namespace_id AND revision.agent_id = agent.id
-       WHERE agent.namespace_id = $1 AND agent.id = $2`,
-      [namespace.data.id, first.data.id],
-    );
-    assert.equal(persistedRevision.rowCount, 1);
-    assert.equal(persistedRevision.rows[0].agent_id, first.data.id);
-    assert.equal(persistedRevision.rows[0].namespace_id, namespace.data.id);
-    assert.equal(persistedRevision.rows[0].revision_id, revision.id);
-    assert.equal(Number(persistedRevision.rows[0].revision_number), 1);
-    assert.deepEqual(persistedRevision.rows[0].admitted_spec, {
-      configuration_id: revision.configurationId,
-      configuration_kind: revision.configurationKind,
-      configuration_generation: revision.configurationGeneration,
-      draft_spec: configuration,
-      harness: { ...harness, mode: first.data.executionMode },
-      compute: {
-        id: "compute-local-development",
-        implementation: "deterministic-local-development",
-      },
-    });
-    // Activation is a later, deployment-gated transition; admission only updates revision history.
-    assert.equal(persistedRevision.rows[0].active_revision_id, null);
-    assert.equal(reloadedAgent.activeRevisionId, undefined);
-
-    const revisionWork = await pool.query(
-      `SELECT namespace_id, agent_id, revision_id, actor_id
-       FROM occ.controller_work WHERE revision_id = $1`,
-      [revision.id],
-    );
-    assert.deepEqual(revisionWork.rows, [
-      {
-        namespace_id: namespace.data.id,
-        agent_id: first.data.id,
-        revision_id: revision.id,
-        actor_id: principalId,
-      },
-    ]);
   },
 );
 
@@ -835,6 +415,7 @@ test(
         namespaceId: fixture.namespace.id,
         name: `Sibling ${randomUUID()}`,
         configurationId: fixture.configuration.id,
+        providerId: null,
         executionMode: "embedded",
         servicePrincipalId: `service-agent-${siblingId}`,
         createdAt: new Date().toISOString(),
@@ -1103,166 +684,272 @@ test(
 );
 
 test(
-  "independent PostgreSQL API and worker provision isolated Namespaces, activate admitted revisions, and tombstone deletion",
-  requiresPostgresAndKubernetesConfiguration,
+  "PostgreSQL persists Agent plugin desired state and immutable revision snapshots atomically",
+  requiresPostgres,
   async (context) => {
-    const { Pool } = await import("pg");
+    const [
+      { Pool },
+      { OCCPluginDriver },
+      { PostgresPlatformState },
+      { createTestConfigurationDriver },
+    ] = await Promise.all([
+      import("pg"),
+      import("../../apps/controller/src/drivers/plugin/index.ts"),
+      import("../../packages/occ/src/state/postgres-state.ts"),
+      import("../helpers/configuration-driver.mjs"),
+    ]);
     const pool = new Pool({ connectionString: databaseUrl });
     context.after(() => pool.end());
-    const api = await startController(context);
+    await startController(context);
 
-    const installation = await request(api, "GET", "/installation");
-    if (installation.status === 404) {
-      const created = await request(api, "POST", "/installation/bootstrap", {
-        name: "Independent PostgreSQL worker integration",
-      });
-      assert.equal(created.status, 201);
-    } else {
-      assert.equal(installation.status, 200);
-    }
+    const bootstrapState = new PostgresPlatformState(pool);
+    const installation = await bootstrapState.loadInstallation();
+    assert.ok(installation, "the real OCC subprocess must bootstrap the singleton Installation");
+    const actor = await pool.query(
+      `SELECT identity.id
+       FROM occ.iam_identities AS identity
+       JOIN occ."user" AS auth_user ON auth_user.id = identity.subject
+       WHERE auth_user.email = $1`,
+      [adminEmail],
+    );
+    assert.equal(actor.rowCount, 1);
+    const principalId = actor.rows[0].id;
 
-    const [removed, retained] = await Promise.all([
-      request(api, "POST", "/namespaces", { name: `worker-remove-${randomUUID()}` }),
-      request(api, "POST", "/namespaces", { name: `worker-retain-${randomUUID()}` }),
+    const { controller, state, resolveHarness } = await createDurableController(pool);
+    const configurationDriver = createTestConfigurationDriver({
+      id: `configuration-plugin-${randomUUID()}`,
+    });
+    const pluginDriver = new OCCPluginDriver();
+    controller.registerDriver(configurationDriver);
+    controller.selectDriver("configuration", configurationDriver.id);
+    controller.registerDriver(pluginDriver);
+    controller.selectDriver("plugin", pluginDriver.id);
+
+    const namespace = await controller.createNamespace(principalId, {
+      name: `postgres-plugin-${randomUUID()}`,
+    });
+    const configuration = await controller.createConfiguration(principalId, {
+      namespaceId: namespace.id,
+      kind: "agent",
+      values: {},
+    });
+    const replacementConfiguration = await controller.createConfiguration(principalId, {
+      namespaceId: namespace.id,
+      kind: "agent",
+      values: { runtime: { revision: "replacement" } },
+    });
+    const initialPlugins = {
+      "occ-plugin:diffs": { enabled: true, approvalMode: "always" },
+    };
+    const malformedCreateAgentId = `agt_${randomUUID()}`;
+    await assert.rejects(
+      state.transact((unit) =>
+        unit.agents.createAgent({
+          id: malformedCreateAgentId,
+          namespaceId: namespace.id,
+          name: `postgres-plugin-malformed-agent-${randomUUID()}`,
+          configurationId: configuration.id,
+          providerId: null,
+          executionMode: "embedded",
+          servicePrincipalId: `service-agent-${malformedCreateAgentId}`,
+          plugins: {
+            "occ-plugin:diffs": { enabled: true, approvalMode: "sometimes" },
+          },
+          createdAt: new Date().toISOString(),
+        }),
+      ),
+      { name: "ScopeViolationError" },
+    );
+    const malformedCreateRow = await pool.query("SELECT plugins FROM occ.agents WHERE id = $1", [
+      malformedCreateAgentId,
     ]);
-    for (const namespace of [removed, retained]) {
-      assert.equal(namespace.status, 201);
-      assert.equal(namespace.data.status, "provisioning");
-      assert.equal(Object.hasOwn(namespace.data, "installationId"), false);
-    }
-    assert.notEqual(removed.data.id, retained.data.id);
+    assert.equal(malformedCreateRow.rowCount, 0);
 
-    const agent = await request(api, "POST", `/namespaces/${retained.data.id}/agents`, {
-      name: `worker-agent-${randomUUID()}`,
-    });
-    assert.equal(agent.status, 201);
-    const preDeploymentWork = await pool.query(
-      `SELECT idempotency_key FROM occ.controller_work
-       WHERE namespace_id = $1 AND agent_id = $2`,
-      [retained.data.id, agent.data.id],
-    );
-    assert.equal(preDeploymentWork.rowCount, 0, "Agent creation must not enqueue deployment work");
-
-    const worker = await startWorker(context);
-    for (const namespace of [removed, retained]) {
-      const ready = await pollUntil(
-        `Namespace ${namespace.data.id} to become ready through the independent worker`,
-        async () => {
-          const current = await request(api, "GET", `/namespaces/${namespace.data.id}`);
-          assert.equal(current.status, 200);
-          return current.data.status === "ready" ? current.data : undefined;
-        },
-        { worker },
-      );
-      assert.equal(ready.id, namespace.data.id);
-      assert.equal(ready.status, "ready");
-    }
-
-    const deployment = await request(
-      api,
-      "POST",
-      `/namespaces/${retained.data.id}/agents/${agent.data.id}/deploy`,
-    );
-    assert.equal(deployment.status, 202);
-    const revision = deployment.data;
-    assert.deepEqual(revision.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
-    assert.deepEqual(revision.compute, {
-      id: "compute-local-development",
-      implementation: "deterministic-local-development",
+    const agent = await controller.createAgent(principalId, {
+      namespaceId: namespace.id,
+      name: `postgres-plugin-agent-${randomUUID()}`,
+      configurationId: configuration.id,
+      plugins: initialPlugins,
     });
 
-    await pollUntil(
-      `independent worker to activate admitted revision ${revision.id}`,
-      async () => {
-        const current = await request(
-          api,
-          "GET",
-          `/namespaces/${retained.data.id}/agents/${agent.data.id}`,
+    const storedSelection = await pool.query("SELECT plugins FROM occ.agents WHERE id = $1", [
+      agent.id,
+    ]);
+    assert.deepEqual(storedSelection.rows[0].plugins, initialPlugins);
+    const stateBeforeFailure = await state.read((view) =>
+      view.agents.findAgent(namespace.id, agent.id),
+    );
+    const auditBeforeFailure = await pool.query(
+      "SELECT count(*)::integer AS count FROM occ.audit_events",
+    );
+    const stagedAuditId = `aud_${randomUUID()}`;
+
+    await assert.rejects(
+      controller.transact(async (unit) => {
+        await unit.audit.append({
+          schemaVersion: 1,
+          id: stagedAuditId,
+          installationId: installation.id,
+          namespaceId: namespace.id,
+          occurredAt: new Date().toISOString(),
+          source: "occ",
+          kind: "mutation",
+          actorId: principalId,
+          actor: { principalId },
+          action: "openclaw.agents.update",
+          resource: { kind: "agent", id: agent.id, namespaceId: namespace.id },
+          outcome: "success",
+        });
+        await unit.agents.updateConfiguration(
+          namespace.id,
+          agent.id,
+          configuration.id,
+          undefined,
+          undefined,
+          undefined,
+          { "occ-plugin:diffs": { enabled: true, approvalMode: "sometimes" } },
         );
-        assert.equal(current.status, 200);
-        return current.data.activeRevisionId === revision.id ? current.data : undefined;
-      },
-      { worker },
-    );
-
-    const deletion = await request(api, "DELETE", `/namespaces/${removed.data.id}`);
-    assert.equal(deletion.status, 202);
-    assert.equal(deletion.data.status, "deleting");
-
-    const tombstone = await pollUntil(
-      `Namespace ${removed.data.id} to receive its exact durable deletion tombstone`,
-      async () => {
-        const rows = await pool.query(
-          "SELECT id, status, deleted_at FROM occ.namespaces WHERE id = $1",
-          [removed.data.id],
-        );
-        assert.equal(rows.rowCount, 1);
-        return rows.rows[0].deleted_at === null ? undefined : rows.rows[0];
-      },
-      { worker },
-    );
-    assert.equal(tombstone.id, removed.data.id);
-    assert.equal(tombstone.status, "deleting");
-    assert.ok(tombstone.deleted_at instanceof Date);
-    assert.equal((await request(api, "GET", `/namespaces/${removed.data.id}`)).status, 404);
-
-    const unaffected = await request(api, "GET", `/namespaces/${retained.data.id}`);
-    assert.equal(unaffected.status, 200);
-    assert.equal(unaffected.data.id, retained.data.id);
-    assert.equal(unaffected.data.status, "ready");
-
-    const work = await pool.query(
-      `SELECT namespace_id, namespace_target, state
-       FROM occ.controller_work
-       WHERE namespace_id = ANY($1::text[]) AND agent_id IS NULL
-       ORDER BY namespace_id, namespace_target`,
-      [[removed.data.id, retained.data.id]],
-    );
-    assert.deepEqual(
-      work.rows.map(({ namespace_id, namespace_target, state }) => ({
-        namespaceId: namespace_id,
-        target: namespace_target,
-        state,
-      })),
-      [
-        { namespaceId: removed.data.id, target: "deleted", state: "succeeded" },
-        { namespaceId: removed.data.id, target: "ready", state: "succeeded" },
-        { namespaceId: retained.data.id, target: "ready", state: "succeeded" },
-      ].sort((left, right) => {
-        const owners = left.namespaceId.localeCompare(right.namespaceId);
-        return owners === 0 ? left.target.localeCompare(right.target) : owners;
       }),
+      { name: "ScopeViolationError" },
     );
 
-    const admittedWork = await pool.query(
-      `SELECT idempotency_key, state, attempt_count, claim_token,
-              lease_expires_at, completed_at
-       FROM occ.controller_work WHERE revision_id = $1`,
+    const [stateAfterFailure, auditAfterFailure, stagedAudit] = await Promise.all([
+      state.read((view) => view.agents.findAgent(namespace.id, agent.id)),
+      pool.query("SELECT count(*)::integer AS count FROM occ.audit_events"),
+      pool.query("SELECT count(*)::integer AS count FROM occ.audit_events WHERE id = $1", [
+        stagedAuditId,
+      ]),
+    ]);
+    assert.deepEqual(stateAfterFailure.plugins, stateBeforeFailure.plugins);
+    assert.equal(auditAfterFailure.rows[0].count, auditBeforeFailure.rows[0].count);
+    assert.equal(stagedAudit.rows[0].count, 0);
+
+    await controller.handleNamespaceLifecycle(principalId, namespace.id, "ready");
+    const revision = await controller.deployAgent(
+      principalId,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveHarness,
+    );
+    assert.deepEqual(revision.plugins, {
+      driver: { id: "occ-plugin", implementation: "occ/openclaw-plugin" },
+      plugins: initialPlugins,
+    });
+    assert.equal(Object.hasOwn(revision.plugins, "artifacts"), false);
+    const omittedPlugins = await controller.updateAgent(principalId, {
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: replacementConfiguration.id,
+    });
+    assert.deepEqual(omittedPlugins.plugins, initialPlugins);
+    const replacementPlugins = {
+      "codex-plugin:third-plugin@openai-curated-remote": {
+        enabled: true,
+        approvalMode: "auto",
+        approvalsReviewer: "auto_review",
+      },
+    };
+    const replacedPlugins = await controller.updateAgent(principalId, {
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: replacementConfiguration.id,
+      plugins: replacementPlugins,
+    });
+    assert.deepEqual(replacedPlugins.plugins, replacementPlugins);
+    const clearedPlugins = await controller.updateAgent(principalId, {
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: replacementConfiguration.id,
+      plugins: {},
+    });
+    assert.deepEqual(clearedPlugins.plugins, {});
+
+    const [reloadedAgent, reloadedRevision] = await state.read(async (view) => [
+      await view.agents.findAgent(namespace.id, agent.id),
+      await view.revisions.findRevision(namespace.id, agent.id, revision.id),
+    ]);
+    assert.deepEqual(reloadedAgent.plugins, {});
+    assert.equal(reloadedRevision.plugins.plugins["occ-plugin:diffs"].enabled, true);
+
+    const durableRevision = await pool.query(
+      "SELECT admitted_spec FROM occ.agent_revisions WHERE id = $1",
       [revision.id],
     );
-    assert.equal(admittedWork.rowCount, 1);
-    assert.equal(admittedWork.rows[0].idempotency_key, `agent_revision:${revision.id}:reconcile`);
-    assert.equal(admittedWork.rows[0].state, "succeeded");
-    assert.equal(admittedWork.rows[0].attempt_count, 1);
-    assert.equal(admittedWork.rows[0].claim_token, null);
-    assert.equal(admittedWork.rows[0].lease_expires_at, null);
-    assert.ok(admittedWork.rows[0].completed_at instanceof Date);
-    const retainedAgent = await pool.query(
-      "SELECT active_revision_id FROM occ.agents WHERE id = $1",
-      [agent.data.id],
-    );
-    assert.equal(retainedAgent.rows[0].active_revision_id, revision.id);
+    assert.deepEqual(durableRevision.rows[0].admitted_spec.plugins, revision.plugins);
 
-    const lifecycle = await pool.query(
-      `SELECT action, outcome FROM occ.audit_events
-       WHERE resource_id = $1 AND action LIKE 'openclaw.namespaces.lifecycle.%'
-       ORDER BY action`,
-      [removed.data.id],
+    const malformedPlugins = {
+      ...revision.plugins,
+      artifacts: {
+        kind: "openclaw",
+        configuration: {},
+        installs: [
+          {
+            pluginId: "occ-plugin:diffs",
+            nativeId: "diffs",
+            version: "2026.8.2",
+          },
+        ],
+      },
+    };
+    const malformedRevisionId = `rev_${randomUUID()}`;
+    const revisionCountBeforeMalformed = await pool.query(
+      "SELECT count(*)::integer AS count FROM occ.agent_revisions WHERE agent_id = $1",
+      [agent.id],
     );
-    assert.deepEqual(lifecycle.rows, [
-      { action: "openclaw.namespaces.lifecycle.delete", outcome: "success" },
-      { action: "openclaw.namespaces.lifecycle.ensure", outcome: "success" },
-    ]);
+    await assert.rejects(
+      state.transact((unit) =>
+        unit.revisions.createRevision({
+          ...revision,
+          id: malformedRevisionId,
+          revision: revision.revision + 1,
+          plugins: malformedPlugins,
+        }),
+      ),
+      { name: "ScopeViolationError" },
+    );
+    const revisionCountAfterMalformed = await pool.query(
+      "SELECT count(*)::integer AS count FROM occ.agent_revisions WHERE agent_id = $1",
+      [agent.id],
+    );
+    assert.equal(
+      revisionCountAfterMalformed.rows[0].count,
+      revisionCountBeforeMalformed.rows[0].count,
+    );
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO occ.agent_revisions
+           (id, namespace_id, agent_id, revision_number, provider_id, admitted_spec, admitted_at)
+         SELECT $1, namespace_id, agent_id, revision_number + 1000, provider_id,
+                jsonb_set(admitted_spec, '{plugins}', $2::jsonb, false), admitted_at
+         FROM occ.agent_revisions WHERE id = $3`,
+        [malformedRevisionId, JSON.stringify(malformedPlugins), revision.id],
+      );
+      const transactionState = new PostgresPlatformState({
+        async connect() {
+          return {
+            async query(statement, parameters) {
+              if (/^(BEGIN|COMMIT|ROLLBACK)\b/.test(statement)) {
+                return { rows: [], rowCount: null };
+              }
+              return client.query(statement, parameters);
+            },
+            release() {},
+          };
+        },
+        async end() {},
+      });
+      await assert.rejects(
+        transactionState.read((view) =>
+          view.revisions.findRevision(namespace.id, agent.id, malformedRevisionId),
+        ),
+        { name: "DependencyUnavailableError" },
+      );
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
   },
 );
 
@@ -1386,386 +1073,5 @@ test(
       [namespace.data.id, principalId],
     );
     assert.ok(denial.rowCount > 0, "revocation must produce attributable durable failure evidence");
-  },
-);
-
-test(
-  "PostgreSQL API and worker preserve immutable deployments, stable identities, and tenant isolation",
-  requiresPostgresAndKubernetesConfiguration,
-  async (context) => {
-    const [{ Pool }, { createControllerWorker }, { createDevelopmentComputeDriver }] =
-      await Promise.all([
-        import("pg"),
-        import("../../apps/controller/src/worker.ts"),
-        import("../helpers/development.mjs"),
-      ]);
-    const pool = new Pool({ connectionString: databaseUrl });
-    context.after(() => pool.end());
-    let api = await startController(context);
-
-    const existingInstallation = await request(api, "GET", "/installation");
-    if (existingInstallation.status === 404) {
-      const bootstrapped = await request(api, "POST", "/installation/bootstrap", {
-        name: "Immutable revision integration",
-      });
-      assert.equal(bootstrapped.status, 201);
-    } else {
-      assert.equal(existingInstallation.status, 200);
-    }
-
-    const [firstNamespace, secondNamespace] = await Promise.all([
-      request(api, "POST", "/namespaces", { name: `revision-tenant-a-${randomUUID()}` }),
-      request(api, "POST", "/namespaces", { name: `revision-tenant-b-${randomUUID()}` }),
-    ]);
-    assert.equal(firstNamespace.status, 201);
-    assert.equal(secondNamespace.status, 201);
-    const namespaceA = firstNamespace.data.id;
-    const namespaceB = secondNamespace.data.id;
-
-    const originalDraft = { model: { id: "draft-original" }, tools: ["lookup"] };
-    const [primary, sibling, foreign, restricted] = await Promise.all([
-      request(api, "POST", `/namespaces/${namespaceA}/agents`, {
-        name: `revision-primary-${randomUUID()}`,
-        draft_spec: originalDraft,
-      }),
-      request(api, "POST", `/namespaces/${namespaceA}/agents`, {
-        name: `revision-sibling-${randomUUID()}`,
-        draft_spec: { model: "tenant-a-sibling" },
-      }),
-      request(api, "POST", `/namespaces/${namespaceB}/agents`, {
-        name: `revision-foreign-${randomUUID()}`,
-        draft_spec: { model: "tenant-b" },
-      }),
-      request(api, "POST", `/namespaces/${namespaceA}/agents`, {
-        name: `revision-restricted-${randomUUID()}`,
-      }),
-    ]);
-    for (const created of [primary, sibling, foreign, restricted]) {
-      assert.equal(created.status, 201);
-      assert.equal(Object.hasOwn(created.data, "servicePrincipalId"), false);
-    }
-    assert.deepEqual(primary.data.draft_spec, originalDraft);
-    assert.deepEqual(restricted.data.draft_spec, {});
-
-    const persistedDraft = { model: { id: "draft-persisted" }, tools: ["lookup", "search"] };
-    const updated = await request(
-      api,
-      "PATCH",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}`,
-      { draft_spec: persistedDraft },
-    );
-    assert.equal(updated.status, 200);
-    assert.deepEqual(updated.data.draft_spec, persistedDraft);
-
-    const noMetadataEffects = await pool.query(
-      `SELECT count(*)::integer AS count FROM occ.controller_work
-       WHERE namespace_id = ANY($1::text[]) AND agent_id IS NOT NULL`,
-      [[namespaceA, namespaceB]],
-    );
-    assert.equal(noMetadataEffects.rows[0].count, 0);
-
-    await pool.query(
-      `INSERT INTO occ.iam_restrictions
-       (id, namespace_id, action, resource_kind, resource_id, effect)
-       VALUES ($1, $3, 'update', 'agent', $4, 'deny'),
-              ($2, $3, 'deploy', 'agent', $4, 'deny')`,
-      [
-        `restriction-update-${randomUUID()}`,
-        `restriction-deploy-${randomUUID()}`,
-        namespaceA,
-        restricted.data.id,
-      ],
-    );
-
-    await stopController(api.child);
-    api = await startController(context);
-    const afterRestart = await request(
-      api,
-      "GET",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}`,
-    );
-    assert.equal(afterRestart.status, 200);
-    assert.deepEqual(afterRestart.data.draft_spec, persistedDraft);
-
-    const deniedUpdate = await request(
-      api,
-      "PATCH",
-      `/namespaces/${namespaceA}/agents/${restricted.data.id}`,
-      { draft_spec: { model: "unauthorized-update" } },
-    );
-    assert.equal(deniedUpdate.status, 403);
-    const deniedDeployment = await request(
-      api,
-      "POST",
-      `/namespaces/${namespaceA}/agents/${restricted.data.id}/deploy`,
-    );
-    assert.equal(deniedDeployment.status, 403);
-    const deniedMutation = await pool.query(
-      `SELECT agent.draft_spec,
-              (SELECT count(*)::integer FROM occ.agent_revisions WHERE agent_id = agent.id)
-                AS revisions,
-              (SELECT count(*)::integer FROM occ.controller_work WHERE agent_id = agent.id)
-                AS work
-       FROM occ.agents AS agent WHERE agent.id = $1`,
-      [restricted.data.id],
-    );
-    assert.deepEqual(deniedMutation.rows, [{ draft_spec: {}, revisions: 0, work: 0 }]);
-
-    const premature = await request(
-      api,
-      "POST",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}/deploy`,
-    );
-    assert.equal(premature.status, 409);
-    const beforeReady = await pool.query(
-      "SELECT count(*)::integer AS count FROM occ.agent_revisions WHERE agent_id = $1",
-      [primary.data.id],
-    );
-    assert.equal(beforeReady.rows[0].count, 0);
-
-    const effects = { ensured: [], prepared: [], retired: [] };
-    const developmentCompute = createDevelopmentComputeDriver();
-    const worker = createControllerWorker({
-      pool: new Pool({ connectionString: databaseUrl }),
-      pollIntervalMs: 20,
-      computeDriver: {
-        ...developmentCompute,
-        async ensureNamespace(namespace) {
-          effects.ensured.push(namespace.id);
-          return developmentCompute.ensureNamespace(namespace);
-        },
-        async prepareRevision(revision) {
-          effects.prepared.push({
-            namespaceId: revision.namespaceId,
-            agentId: revision.agentId,
-            revisionId: revision.id,
-            servicePrincipalId: revision.servicePrincipalId,
-          });
-          return developmentCompute.prepareRevision(revision);
-        },
-        async retireRevision(revision) {
-          effects.retired.push({
-            namespaceId: revision.namespaceId,
-            agentId: revision.agentId,
-            revisionId: revision.id,
-            servicePrincipalId: revision.servicePrincipalId,
-          });
-          return developmentCompute.retireRevision(revision);
-        },
-      },
-      emit() {},
-    });
-    context.after(() => worker.stop());
-    await worker.start();
-
-    for (const namespaceId of [namespaceA, namespaceB]) {
-      await pollUntil(`Namespace ${namespaceId} to become ready`, async () => {
-        const current = await request(api, "GET", `/namespaces/${namespaceId}`);
-        assert.equal(current.status, 200);
-        return current.data.status === "ready" ? current.data : undefined;
-      });
-      assert.equal(effects.ensured.filter((id) => id === namespaceId).length, 1);
-    }
-
-    const firstDeployment = await request(
-      api,
-      "POST",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}/deploy`,
-    );
-    assert.equal(firstDeployment.status, 202);
-    const firstRevision = firstDeployment.data;
-    assert.deepEqual(Object.keys(firstRevision).sort(), [
-      "agentId",
-      "compute",
-      "createdAt",
-      "draft_spec",
-      "harness",
-      "id",
-      "namespaceId",
-      "revision",
-    ]);
-    assert.equal(firstRevision.namespaceId, namespaceA);
-    assert.equal(firstRevision.agentId, primary.data.id);
-    assert.equal(firstRevision.revision, 1);
-    assert.deepEqual(firstRevision.draft_spec, persistedDraft);
-    assert.deepEqual(firstRevision.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
-    assert.deepEqual(firstRevision.compute, {
-      id: "compute-local-development",
-      implementation: "deterministic-local-development",
-    });
-    assert.equal(Object.hasOwn(firstRevision, "servicePrincipalId"), false);
-
-    await pollUntil(`first revision ${firstRevision.id} to become active`, async () => {
-      const current = await request(
-        api,
-        "GET",
-        `/namespaces/${namespaceA}/agents/${primary.data.id}`,
-      );
-      assert.equal(current.status, 200);
-      return current.data.activeRevisionId === firstRevision.id ? current.data : undefined;
-    });
-
-    const replacementDraft = { model: { id: "draft-replacement" }, tools: ["replace"] };
-    const replacement = await request(
-      api,
-      "PATCH",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}`,
-      { draft_spec: replacementDraft },
-    );
-    assert.equal(replacement.status, 200);
-    assert.equal(replacement.data.activeRevisionId, firstRevision.id);
-
-    const [secondDeployment, siblingDeployment, foreignDeployment] = await Promise.all([
-      request(api, "POST", `/namespaces/${namespaceA}/agents/${primary.data.id}/deploy`),
-      request(api, "POST", `/namespaces/${namespaceA}/agents/${sibling.data.id}/deploy`),
-      request(api, "POST", `/namespaces/${namespaceB}/agents/${foreign.data.id}/deploy`),
-    ]);
-    for (const deployment of [secondDeployment, siblingDeployment, foreignDeployment]) {
-      assert.equal(deployment.status, 202);
-    }
-    const secondRevision = secondDeployment.data;
-    assert.equal(secondRevision.revision, 2);
-    assert.notEqual(secondRevision.id, firstRevision.id);
-    assert.deepEqual(secondRevision.draft_spec, replacementDraft);
-
-    for (const [namespaceId, agent, revision] of [
-      [namespaceA, primary.data, secondRevision],
-      [namespaceA, sibling.data, siblingDeployment.data],
-      [namespaceB, foreign.data, foreignDeployment.data],
-    ]) {
-      await pollUntil(`Agent ${agent.id} to activate revision ${revision.id}`, async () => {
-        const current = await request(api, "GET", `/namespaces/${namespaceId}/agents/${agent.id}`);
-        assert.equal(current.status, 200);
-        return current.data.activeRevisionId === revision.id ? current.data : undefined;
-      });
-    }
-
-    const history = await request(
-      api,
-      "GET",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}/revisions`,
-    );
-    assert.equal(history.status, 200);
-    assert.deepEqual(history.data, [firstRevision, secondRevision]);
-    const firstRevisionRead = await request(
-      api,
-      "GET",
-      `/namespaces/${namespaceA}/agents/${primary.data.id}/revisions/${firstRevision.id}`,
-    );
-    assert.equal(firstRevisionRead.status, 200);
-    assert.deepEqual(firstRevisionRead.data, firstRevision);
-    const foreignRead = await request(
-      api,
-      "GET",
-      `/namespaces/${namespaceB}/agents/${foreign.data.id}/revisions/${firstRevision.id}`,
-    );
-    assert.equal(foreignRead.status, 404);
-
-    const persistedRevisions = await pool.query(
-      `SELECT revision.id, revision.namespace_id, revision.agent_id,
-              revision.revision_number, revision.admitted_spec,
-              agent.service_principal_id
-       FROM occ.agent_revisions AS revision
-       JOIN occ.agents AS agent
-         ON agent.namespace_id = revision.namespace_id AND agent.id = revision.agent_id
-       WHERE revision.agent_id = $1 ORDER BY revision.revision_number`,
-      [primary.data.id],
-    );
-    assert.equal(persistedRevisions.rowCount, 2);
-    assert.deepEqual(persistedRevisions.rows[0].admitted_spec, {
-      configuration_id: firstRevision.configurationId,
-      configuration_kind: firstRevision.configurationKind,
-      configuration_generation: firstRevision.configurationGeneration,
-      draft_spec: persistedDraft,
-      harness: firstRevision.harness,
-      compute: firstRevision.compute,
-    });
-    assert.deepEqual(persistedRevisions.rows[1].admitted_spec, {
-      configuration_id: secondRevision.configurationId,
-      configuration_kind: secondRevision.configurationKind,
-      configuration_generation: secondRevision.configurationGeneration,
-      draft_spec: replacementDraft,
-      harness: secondRevision.harness,
-      compute: secondRevision.compute,
-    });
-    assert.equal(
-      persistedRevisions.rows[0].service_principal_id,
-      persistedRevisions.rows[1].service_principal_id,
-    );
-
-    const identities = await pool.query(
-      `SELECT namespace_id, agent_id, id FROM occ.iam_identities
-       WHERE kind = 'service_principal' AND agent_id = ANY($1::text[])
-       ORDER BY agent_id`,
-      [[primary.data.id, sibling.data.id, foreign.data.id]],
-    );
-    assert.equal(identities.rowCount, 3);
-    assert.equal(new Set(identities.rows.map(({ id }) => id)).size, 3);
-    const primaryIdentity = identities.rows.find(({ agent_id }) => agent_id === primary.data.id);
-    assert.equal(primaryIdentity.namespace_id, namespaceA);
-    assert.equal(primaryIdentity.id, persistedRevisions.rows[0].service_principal_id);
-    for (const effect of effects.prepared.filter(({ agentId }) => agentId === primary.data.id)) {
-      assert.equal(effect.namespaceId, namespaceA);
-      assert.equal(effect.servicePrincipalId, primaryIdentity.id);
-    }
-    assert.deepEqual(
-      effects.prepared
-        .filter(({ agentId }) => agentId === primary.data.id)
-        .map(({ revisionId }) => revisionId),
-      [firstRevision.id, secondRevision.id],
-    );
-    assert.deepEqual(
-      effects.retired.filter(({ agentId }) => agentId === primary.data.id),
-      [
-        {
-          namespaceId: namespaceA,
-          agentId: primary.data.id,
-          revisionId: firstRevision.id,
-          servicePrincipalId: primaryIdentity.id,
-        },
-      ],
-    );
-
-    const work = await pool.query(
-      `SELECT namespace_id, agent_id, revision_id, idempotency_key, state
-       FROM occ.controller_work WHERE agent_id = ANY($1::text[])
-       ORDER BY agent_id, idempotency_key`,
-      [[primary.data.id, sibling.data.id, foreign.data.id]],
-    );
-    assert.equal(work.rowCount, 4);
-    for (const item of work.rows) {
-      assert.equal(item.state, "succeeded");
-      assert.equal(item.idempotency_key, `agent_revision:${item.revision_id}:reconcile`);
-    }
-    assert.equal(effects.ensured.filter((id) => id === namespaceA).length, 1);
-    assert.equal(effects.ensured.filter((id) => id === namespaceB).length, 1);
-
-    const namespaceWork = await pool.query(
-      `SELECT namespace_id, namespace_target, state FROM occ.controller_work
-       WHERE namespace_id = ANY($1::text[]) AND agent_id IS NULL`,
-      [[namespaceA, namespaceB]],
-    );
-    assert.equal(namespaceWork.rowCount, 2);
-    assert.ok(
-      namespaceWork.rows.every(
-        ({ namespace_target, state }) => namespace_target === "ready" && state === "succeeded",
-      ),
-    );
-
-    const lifecycle = await pool.query(
-      `SELECT resource_id, action, outcome, details
-       FROM occ.audit_events
-       WHERE resource_id = ANY($1::text[])
-         AND action IN ('openclaw.agents.deploy', 'openclaw.agents.lifecycle.activate')
-       ORDER BY occurred_at`,
-      [[firstRevision.id, secondRevision.id]],
-    );
-    assert.equal(lifecycle.rowCount, 4);
-    assert.ok(lifecycle.rows.every(({ outcome }) => outcome === "success"));
-    const secondActivation = lifecycle.rows.find(
-      ({ resource_id, action }) =>
-        resource_id === secondRevision.id && action === "openclaw.agents.lifecycle.activate",
-    );
-    assert.equal(secondActivation.details.previousRevisionId, firstRevision.id);
   },
 );

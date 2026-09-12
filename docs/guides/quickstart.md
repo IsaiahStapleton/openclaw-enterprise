@@ -1,111 +1,105 @@
 # Quickstart
 
-Start OpenClaw Control Center (OCC) locally and read its Installation through
-an authenticated API request. This proves the controller is usable; it does
-not deploy an Agent or make a model call.
+Start [OpenClaw Control Plane (OCC)](concepts.md#control-plane)
+locally, sign in to the console, and read the Installation through an
+authenticated API request. This proves controller access; it does not deploy an
+[Agent](concepts.md#agents-and-revisions) or make a model call.
 
-You need Docker Engine with Docker Compose and `curl`. The quickstart builds a
-public local runtime image from Docker and npm; no host Node installation is
-needed. The [deployment guide](deploy.md#development-prerequisites) defines the
-runtime image contract and Docker socket access risk. Run commands from the
-repository root.
-
-## Build the runtime image
-
-Build the combined runtime image used by the worker for embedded OpenClaw and
-dedicated Codex Agent execution:
-
-```bash
-docker build -f deploy/runtime/Dockerfile \
-  --tag openclaw-enterprise-runtime:quickstart \
-  deploy/runtime
-```
-
-This recipe installs public `openclaw`, `@openclaw/codex`, and `@openai/codex`
-packages. It checks that `node /app/openclaw.mjs --version` and
-`codex --version` work before the image is complete. See
-[`deploy/runtime`](../../deploy/runtime/README.md) for pinned package inputs
-and production digest guidance.
+You need either Docker Engine with Docker Compose, or Podman with
+`podman-compose` and `yq` v4. Bash, `curl`, and Python 3 are also required.
+Podman needs no `docker` alias. Run commands from the repository root.
 
 ## Start the local stack
 
-Preserve an existing `.env`, or create one from the example:
+```bash
+./scripts/dev-up
+```
+
+The helper selects a usable Docker Engine or falls back to Podman, validates the
+resolved Compose configuration without logging expanded credentials, starts
+PostgreSQL, migration, bootstrap, API, and worker services, then copies the
+bootstrap service-key response into a private local file. Fresh bootstrap also
+creates the initial platform
+[Namespace](concepts.md#tenancy) named `default`.
+
+The helper reuses the local quickstart runtime image tag. After changing the
+runtime recipe or package versions, [rebuild and verify the image](../../deploy/runtime/README.md#rebuild-an-existing-image)
+before rerunning it.
+
+Expected output includes:
+
+- `OpenClaw Enterprise development stack is ready.`
+- the selected container engine
+- the API URL, usually `http://127.0.0.1:3000`
+- the Installation ID
+- the owner-readable service-key file path
+- a copy-paste API check
+
+## Open the platform console
+
+Open `/console/` on the API URL printed by `dev-up`, normally
+`http://127.0.0.1:3000/console/`. For a fresh database with default settings, use
+`admin@openclaw.local` as **Username** and `openclaw-development-password` as the
+password. If you set `OPENCLAW_DEV_EMAIL` or `OPENCLAW_DEV_PASSWORD` in `.env` or
+the environment, use those values; see [development settings](../reference/settings/development.md#required-development-controller-environment).
+An existing database keeps its original password. Browser login uses the human
+session path, not service keys.
+
+A fresh Installation has a `default` Namespace and no Agents. Use the
+[console reference](../reference/console.md) for supported pages, Agent creation,
+credential provisioning, deployment, workspace files, and limits.
+
+## Read the Installation with the bootstrap service key
+
+`dev-up` already checks API access. To repeat the check and run the remaining
+commands, export the URL and service-key path printed by the helper:
 
 ```bash
-umask 077
-test -f .env || cp .env.example .env
+export OCC_URL='http://127.0.0.1:3000'
+export OCC_SERVICE_KEY_FILE='/private/path/initial-admin-service-key.json'
+scripts/occ-api GET /installation
 ```
 
-Edit `.env` to select the local runtime image:
+Expect HTTP `200` and JSON containing the Installation `id` and name. The
+Installation ID must match `meta.installationId` in the service-key response.
+The helper sends the [service key](concepts.md#identity-and-access) as
+`x-api-key` without exposing it in process arguments or terminal output.
 
-```dotenv
-OCC_DOCKER_RUNTIME_IMAGE=openclaw-enterprise-runtime:quickstart
-```
+Keep these variables for the
+[development TUI procedure](deploy/local-operations.md#development-end-to-end-tui). The OCC key
+stays with the operator. It is separate from the Agent
+[gateway](concepts.md#gateways-and-harnesses) token and model credential and
+must never enter a workload or TUI.
 
-The default administrator is `admin@openclaw.local` with password
-`openclaw-development-password`. These defaults are for loopback development
-only. You can set `OPENCLAW_DEV_EMAIL` and `OPENCLAW_DEV_PASSWORD` before the
-first startup; reusing a database retains its existing account and password.
-A model credential is not needed for this quickstart.
+## Find the initial Namespace
 
 ```bash
-docker compose up --build -d
-docker compose ps -a
+scripts/occ-api GET /namespaces
 ```
 
-Wait for PostgreSQL and the controller to be healthy and the worker to remain
-running. The `migrate` service should exit with code `0`. On a new database,
-OCC automatically creates the first administrator and singleton Installation.
-Do not call the bootstrap endpoint again.
+On a fresh Installation, expect one Namespace named `default` with a server-assigned `id`. Use that ID
+for Namespace-scoped API paths and wait for `status: "ready"` before deploying
+an Agent.
 
-## Sign in and read the Installation
+## Clean up and stop
 
-Run this in the same terminal after the controller is healthy. It uses the
-running controller's configured development credentials, JSON-encodes them,
-and sends them through standard input. The session cookie stays in a unique,
-private temporary directory.
+If you are stopping after this API check, remove only the temporary local key
+copy printed by `dev-up`, then run the exact command under `Cleanup` in its
+output. That command includes the Podman socket and override when Podman was
+selected:
 
 ```bash
-set -o pipefail
-umask 077
-export OCC_URL="http://$(docker compose port controller 3000)"
-OCC_SESSION_DIRECTORY="$(mktemp -d)"
-export OCC_SESSION_COOKIE_JAR="$OCC_SESSION_DIRECTORY/cookies"
-
-docker compose exec -T controller node --input-type=module -e '
-  process.stdout.write(JSON.stringify({
-    email: process.env.OPENCLAW_DEV_EMAIL,
-    password: process.env.OPENCLAW_DEV_PASSWORD,
-  }));
-' | curl --fail-with-body --silent --show-error \
-  --cookie-jar "$OCC_SESSION_COOKIE_JAR" \
-  "$OCC_URL/api/auth/sign-in/email" \
-  -H 'Content-Type: application/json' --data-binary @- --output /dev/null
-
-curl --fail-with-body --silent --show-error \
-  --cookie "$OCC_SESSION_COOKIE_JAR" "$OCC_URL/installation"
+rm -- "$OCC_SERVICE_KEY_FILE"
+test -z "${OCC_SERVICE_KEY_DIRECTORY:-}" || rmdir -- "$OCC_SERVICE_KEY_DIRECTORY"
+unset OCC_SERVICE_KEY_FILE OCC_SERVICE_KEY_DIRECTORY
+# Run the Cleanup command printed by dev-up.
 ```
 
-Expect HTTP `200` and JSON containing the Installation's server-assigned `id`
-and name. Use `--cookie "$OCC_SESSION_COOKIE_JAR"` for subsequent protected
-requests. If sign-in fails after changing the configured password, the existing
-database still expects its original account password; startup does not reset it.
-See [development verification](deploy.md#verify-development) for startup errors.
+Local cleanup does not revoke the service key. Compose `down` preserves the
+database, [Configuration](concepts.md#configuration-and-secrets), and
+bootstrap-key volumes. Add `--volumes` to the printed cleanup command only when
+intentionally deleting the local Installation.
 
-## Sign out and stop
-
-Sign out to revoke this session, then remove its local cookie file:
-
-```bash
-curl --fail-with-body --silent --show-error \
-  --cookie "$OCC_SESSION_COOKIE_JAR" --cookie-jar "$OCC_SESSION_COOKIE_JAR" \
-  --request POST "$OCC_URL/api/auth/sign-out" --output /dev/null
-rm -- "$OCC_SESSION_COOKIE_JAR"
-rmdir -- "$OCC_SESSION_DIRECTORY"
-docker compose down
-```
-
-Stopping Compose preserves the database and Configuration volumes. Do not add
-`--volumes` unless you intend to erase them. For environment configuration and
-production installation, continue to [Deploy OpenClaw Enterprise](deploy.md).
-For supported resource operations, see the [feature reference](../reference/README.md).
+Next, use [Deploy OpenClaw Enterprise](deploy.md) for production installation,
+customization, Agent/TUI proof, and startup-error diagnosis. For supported
+resource operations, see the [feature reference](../reference/README.md).

@@ -6,6 +6,7 @@ import {
   resolveApprovedProductionHarness,
 } from "../../apps/controller/src/composition/production-harness.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import {
   AuthorizationDeniedError,
   DependencyUnavailableError,
@@ -238,7 +239,7 @@ test("Agent deployment snapshots its selected Configuration and Compute identity
   assert.equal(revision.configurationId, configuration.id);
   assert.equal(revision.configurationKind, "agent");
   assert.equal(revision.configurationGeneration, configuration.generation);
-  assert.deepEqual(revision.configuration, configuration.values);
+  assert.deepEqual(revision.configuration, admitLoggingConfiguration(configuration.values, "info"));
   assert.equal(Object.isFrozen(configuration.values.models.providers.openai.apiKey), true);
   assert.equal(Object.isFrozen(revision.configuration.plugins.entries.example.regions), true);
   assert.equal(agent.executionMode, "embedded");
@@ -442,55 +443,139 @@ test("one installation admits embedded and dedicated revisions without rewriting
   assert.equal(embedded.harness.mode, "embedded");
 });
 
-test("actual OCC admission accepts an official OpenAI Codex model selection", async () => {
-  const { controller, namespace } = await fixture();
-  const values = {
-    agents: {
-      defaults: {
-        model: "openai/gpt-4.1",
-        models: {
-          "openai/gpt-4.1": { agentRuntime: { id: "codex" } },
-          "openai/gpt-4.1-mini": { agentRuntime: { id: "codex" } },
-          "openai/gpt-4.1": { agentRuntime: { id: "codex" } },
+for (const scope of ["primary", "default-fallback", "entry-fallback", "provider-policy-fallback"]) {
+  test(`actual OCC admission accepts a same-Harness OpenAI Codex ${scope} selection`, async () => {
+    const { controller, namespace } = await fixture();
+    const selection = {
+      primary: "openai/gpt-4.1",
+      fallbacks: ["openai/gpt-4.1-mini", "openai/gpt-4.1-nano"],
+    };
+    const values = {
+      agents: {
+        defaults: {
+          model:
+            scope === "default-fallback" || scope === "provider-policy-fallback"
+              ? selection
+              : selection.primary,
+          models: {
+            "openai/gpt-4.1": { agentRuntime: { id: "codex" } },
+            "openai/gpt-4.1-mini": { agentRuntime: { id: "codex" } },
+            "openai/gpt-4.1-nano": { agentRuntime: { id: "codex" } },
+          },
+        },
+        entries: {
+          main: {
+            default: true,
+            ...(scope === "entry-fallback" ? { model: selection } : {}),
+          },
         },
       },
-      entries: { main: { default: true } },
-    },
-    channels: { slack: { enabled: true, allowBots: false } },
-    plugins: {
-      entries: {
-        codex: {
-          enabled: true,
-          config: { appServer: { transport: "websocket" } },
+      channels: { slack: { enabled: true, allowBots: false } },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: { appServer: { transport: "websocket" } },
+          },
         },
       },
-    },
-  };
-  const configuration = await controller.createConfiguration(administrator, {
-    namespaceId: namespace.id,
-    kind: "agent",
-    values,
-  });
-  const dedicated = await controller.createAgent(administrator, {
-    namespaceId: namespace.id,
-    name: "OpenAI Codex Runtime",
-    configurationId: configuration.id,
-    executionMode: "dedicated",
-  });
+    };
+    if (scope === "provider-policy-fallback") {
+      // Native provider catalogs may describe every selected fallback. Resolve
+      // their policies without relying on duplicate Agent-default policies.
+      delete values.agents.defaults.models;
+      values.models = {
+        providers: {
+          openai: {
+            models: [selection.primary, ...selection.fallbacks].map((model) => ({
+              id: model.slice("openai/".length),
+              agentRuntime: { id: "codex" },
+            })),
+          },
+        },
+      };
+    }
+    const configuration = await controller.createConfiguration(administrator, {
+      namespaceId: namespace.id,
+      kind: "agent",
+      values,
+    });
+    const dedicated = await controller.createAgent(administrator, {
+      namespaceId: namespace.id,
+      name: "OpenAI Codex Runtime",
+      configurationId: configuration.id,
+      executionMode: "dedicated",
+    });
 
-  const admitted = await controller.deployAgent(
-    administrator,
-    { namespaceId: namespace.id, agentId: dedicated.id },
-    resolveApprovedProductionHarness,
-  );
+    const admitted = await controller.deployAgent(
+      administrator,
+      { namespaceId: namespace.id, agentId: dedicated.id },
+      resolveApprovedProductionHarness,
+    );
 
-  assert.deepEqual(admitted.configuration, values);
-  assert.deepEqual(admitted.harness, { id: "codex", version: "1.0.0", mode: "dedicated" });
-  assert.equal(admitted.compute.id, "configuration-occ-compute");
-});
+    assert.deepEqual(configuration.values, values);
+    // Admission freezes the original fallback order for the runtime to execute.
+    assert.deepEqual(admitted.configuration, admitLoggingConfiguration(values, "info"));
+    assert.deepEqual(admitted.harness, { id: "codex", version: "1.0.0", mode: "dedicated" });
+    assert.equal(admitted.compute.id, "configuration-occ-compute");
+  });
+}
 
 test("OCC rejects alternate selectable runtimes and unsupported Codex providers before admitting work", async () => {
   const scenarios = [
+    ...[null, "openai/gpt-4.1-mini", [42], ["/missing-provider"]].map((fallbacks) => ({
+      name: `malformed fallback selection ${JSON.stringify(fallbacks)} cannot be admitted`,
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-4.1", fallbacks },
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+      },
+    })),
+    {
+      name: "fallback cannot change provider even when both models select the same Harness",
+      executionMode: "dedicated",
+      values: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-4.1", fallbacks: ["codex/gpt-4.1"] },
+            models: { "openai/gpt-4.1": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: { providers: { codex: { agentRuntime: { id: "codex" } } } },
+        plugins: {
+          entries: { codex: { enabled: true, config: { appServer: { transport: "websocket" } } } },
+        },
+      },
+    },
+    ...[
+      ["same-provider fallback cannot select a different Harness", { id: "openclaw" }],
+      ["same-provider fallback cannot omit its required runtime policy", undefined],
+    ].map(([name, fallbackRuntime]) => ({
+      name,
+      executionMode: "dedicated",
+      values: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-4.1", fallbacks: ["openai/gpt-4.1-mini"] },
+            models: {
+              "openai/gpt-4.1": { agentRuntime: { id: "codex" } },
+              ...(fallbackRuntime === undefined
+                ? {}
+                : {
+                    "openai/gpt-4.1-mini": { agentRuntime: fallbackRuntime },
+                  }),
+            },
+          },
+        },
+        plugins: {
+          entries: { codex: { enabled: true, config: { appServer: { transport: "websocket" } } } },
+        },
+      },
+    })),
     {
       name: "embedded OpenClaw cannot fall back to dedicated Codex",
       executionMode: "embedded",

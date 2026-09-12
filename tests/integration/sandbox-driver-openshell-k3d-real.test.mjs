@@ -6,10 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  bootstrapControllerInstallation,
-  createAuthenticatedControllerRequest,
-} from "../helpers/auth-session.mjs";
+import { createAuthenticatedControllerRequest } from "../helpers/auth-session.mjs";
+import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import {
   createOpenShellInstallationConfiguration,
@@ -70,6 +68,8 @@ const adminCredentials = Object.freeze({
   password: "openshell-sandboxdriver-admin-password",
 });
 const credentialMountPath = "/run/enterprise-credentials";
+const diagnosticQueryTimeoutMs = 3_000;
+const observerPoolConnectionTimeoutMs = 5_000;
 const controllerRequire = createRequire(
   new URL("../../apps/controller/package.json", import.meta.url),
 );
@@ -205,6 +205,108 @@ function nativeCodexConfiguration() {
     fs: { workspaceOnly: true },
   };
   return configuration;
+}
+
+function summarizeWorkerEvent(event) {
+  return Object.fromEntries(
+    ["event", "operation", "revisionId", "outcome", "code", "attempt"]
+      .map((key) => [key, event[key]])
+      .filter(([, value]) => typeof value === "string" || typeof value === "number"),
+  );
+}
+
+function summarizeWorkerEvents(events, revisionId) {
+  return events
+    .map(summarizeWorkerEvent)
+    .filter(
+      (event) =>
+        event.revisionId === revisionId ||
+        event.event === "worker.completed" ||
+        event.event === "worker.error",
+    )
+    .slice(-40);
+}
+
+async function diagnosticQuery(pool, text, values) {
+  return pool.query({ text, values, query_timeout: diagnosticQueryTimeoutMs });
+}
+
+async function readWorkerRevisionState(pool, { namespaceId, agentId, revisionId }) {
+  const [agent, revision, work] = await Promise.all([
+    diagnosticQuery(
+      pool,
+      "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+      [namespaceId, agentId],
+    ),
+    diagnosticQuery(
+      pool,
+      `SELECT revision_number
+       FROM occ.agent_revisions
+       WHERE namespace_id = $1 AND agent_id = $2 AND id = $3`,
+      [namespaceId, agentId, revisionId],
+    ),
+    diagnosticQuery(
+      pool,
+      `SELECT revision_id, namespace_target, state, attempt_count, completed_at IS NOT NULL AS completed
+       FROM occ.controller_work
+       WHERE namespace_id = $1 AND (revision_id = $2 OR agent_id = $3)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 8`,
+      [namespaceId, revisionId, agentId],
+    ),
+  ]);
+
+  return {
+    activeRevisionId: agent.rows[0]?.active_revision_id,
+    revision: revision.rows[0]
+      ? { revisionId, revisionNumber: revision.rows[0].revision_number }
+      : undefined,
+    queue: work.rows.map((row) => ({
+      operation:
+        row.revision_id === null
+          ? row.namespace_target === null
+            ? "work.reconcile"
+            : `namespace.${row.namespace_target}`
+          : "agent_revision.reconcile",
+      revisionId: row.revision_id ?? undefined,
+      state: row.state,
+      attempt: row.attempt_count,
+      completed: row.completed,
+    })),
+  };
+}
+
+async function writeWorkerCompletionDiagnostics(options) {
+  let persisted;
+  try {
+    persisted = await readWorkerRevisionState(options.pool, options);
+  } catch (error) {
+    persisted = { readError: error?.name ?? "Error" };
+  }
+  process.stderr.write(
+    `OpenShell worker completion diagnostic: ${JSON.stringify({
+      operation: "agent_revision.reconcile",
+      revisionId: options.revisionId,
+      events: summarizeWorkerEvents(options.events, options.revisionId),
+      persisted,
+    })}\n`,
+  );
+}
+
+async function assertWorkerCompleted(options) {
+  try {
+    await waitFor(options.description, () =>
+      options.events.find(
+        (event) =>
+          event.event === "worker.completed" &&
+          event.revisionId === options.revisionId &&
+          event.outcome === "success",
+      ),
+    );
+  } catch (error) {
+    await writeWorkerCompletionDiagnostics(options);
+    throw error;
+  }
 }
 
 // TODO(OpenShell secretKeyRef support): remove credential Jobs, PVC-backed secret files, the
@@ -532,6 +634,11 @@ function projectedTokenGatewayClient(
   };
 }
 
+function throwOpenShellAbortReason(signal) {
+  if (!signal.aborted) return;
+  throw signal.reason ?? new Error("OpenShell management port-forward operation was aborted.");
+}
+
 function createIntegrationSandboxDriverFactory(
   OpenShellSandboxDriver,
   GrpcOpenShellGatewayClient,
@@ -540,30 +647,61 @@ function createIntegrationSandboxDriverFactory(
   const gatewayState = new Map();
   const credentialBridges = new Map();
 
-  function stopGatewayForward(namespaceName) {
+  async function stopGatewayForward(namespaceName, expectedState) {
     const state = gatewayState.get(namespaceName);
-    state?.forward?.stop();
+    if (state === undefined || (expectedState !== undefined && state !== expectedState)) return;
     gatewayState.delete(namespaceName);
+    await state.forward.stop();
+  }
+
+  async function disposeGatewayForwards() {
+    const cleanup = await Promise.allSettled(
+      [...gatewayState.entries()].map(([namespaceName, state]) =>
+        stopGatewayForward(namespaceName, state),
+      ),
+    );
+    const failures = cleanup.filter((result) => result.status === "rejected");
+    if (failures.length > 0) throw new AggregateError(failures.map(({ reason }) => reason));
   }
 
   // TODO(OpenShell per-Sandbox ServiceAccount support): stop reconfiguring the namespace gateway
   // once the upstream gateway can bind each Sandbox to Compute's exact Agent ServiceAccount.
   async function endpointForNamespace(context, { sandboxServiceAccountName } = {}) {
     const namespaceName = context.namespace.name;
+    throwOpenShellAbortReason(context.signal);
     const prior = gatewayState.get(namespaceName);
     if (prior !== undefined && prior.sandboxServiceAccountName === sandboxServiceAccountName) {
       return prior.endpoint;
     }
 
-    prior?.forward?.stop();
-    await installOpenShellGateway(namespaceName, { sandboxServiceAccountName });
-    const forward = await startOpenShellGatewayPortForward(namespaceName);
-    const state = { endpoint: forward.url, forward, sandboxServiceAccountName };
-    gatewayState.set(namespaceName, state);
-    context.signal.addEventListener("abort", () => stopGatewayForward(namespaceName), {
-      once: true,
-    });
-    return state.endpoint;
+    await stopGatewayForward(namespaceName, prior);
+    let ownedState;
+    const stopOwnedForward = () => {
+      if (ownedState === undefined) return;
+      void stopGatewayForward(namespaceName, ownedState).catch((error) => {
+        process.stderr.write(
+          `OpenShell management port-forward abort cleanup failed for ${namespaceName}: ${error.message}\n`,
+        );
+      });
+    };
+    context.signal.addEventListener("abort", stopOwnedForward, { once: true });
+    try {
+      throwOpenShellAbortReason(context.signal);
+      await installOpenShellGateway(namespaceName, { sandboxServiceAccountName });
+      throwOpenShellAbortReason(context.signal);
+      const forward = await startOpenShellGatewayPortForward(namespaceName);
+      ownedState = { endpoint: forward.url, forward, sandboxServiceAccountName };
+      gatewayState.set(namespaceName, ownedState);
+      if (context.signal.aborted) {
+        await stopGatewayForward(namespaceName, ownedState);
+        throwOpenShellAbortReason(context.signal);
+      }
+      return ownedState.endpoint;
+    } catch (error) {
+      if (ownedState !== undefined) await stopGatewayForward(namespaceName, ownedState);
+      context.signal.removeEventListener("abort", stopOwnedForward);
+      throw error;
+    }
   }
 
   function existingEndpointForNamespace(context) {
@@ -576,7 +714,7 @@ function createIntegrationSandboxDriverFactory(
     return state.endpoint;
   }
 
-  return (selection) => {
+  const createDriver = (selection) => {
     function optionsFor(requirements, namespaceName, endpoint) {
       const options = structuredClone(selection.configuration);
       options.gateway.endpoint = endpoint;
@@ -681,6 +819,9 @@ function createIntegrationSandboxDriverFactory(
             await delegate(undefined, context.namespace.name, endpoint).cleanup(context);
           }
         } finally {
+          if (context.revision === undefined) {
+            await stopGatewayForward(context.namespace.name);
+          }
           if (context.revision !== undefined) {
             const bridge = credentialBridges.get(context.revision.id);
             if (bridge !== undefined) {
@@ -720,6 +861,8 @@ function createIntegrationSandboxDriverFactory(
       },
     };
   };
+  createDriver.disposeGatewayForwards = disposeGatewayForwards;
+  return createDriver;
 }
 
 async function prepareProductionInstallation(context) {
@@ -748,7 +891,6 @@ async function prepareProductionInstallation(context) {
     { default: pg },
     { PostgresPlatformState },
     { loadInstallationConfiguration },
-    { composePostgresDevelopment },
     { composeProduction },
     { createControllerWorker },
     { kubernetesNamespaceName },
@@ -759,7 +901,6 @@ async function prepareProductionInstallation(context) {
     import("pg"),
     import("../../packages/occ/src/state/postgres-state.ts"),
     import("../../apps/controller/src/composition/installation-config.ts"),
-    import("../../apps/controller/src/composition/development-postgres.ts"),
     import("../../apps/controller/src/composition/production.ts"),
     import("../../apps/controller/src/worker.ts"),
     import("../../apps/controller/src/drivers/compute/kubernetes/index.ts"),
@@ -787,64 +928,91 @@ async function prepareProductionInstallation(context) {
     cluster: "k3d-openshell-sandboxdriver",
   });
   await writeFile(startupPath, JSON.stringify(configuration), { mode: 0o600 });
+  const createSandboxDriver = createIntegrationSandboxDriverFactory(
+    OpenShellSandboxDriver,
+    GrpcOpenShellGatewayClient,
+    operatorKubernetes,
+  );
   const drivers = await loadInstallationConfiguration({
     mode: "production",
     environment: { OCC_CONFIG_PATH: startupPath },
-    createSandboxDriver: createIntegrationSandboxDriverFactory(
-      OpenShellSandboxDriver,
-      GrpcOpenShellGatewayClient,
-      operatorKubernetes,
-    ),
+    createSandboxDriver,
   });
   assert.equal(drivers.sandboxDriver?.capability, "sandbox");
   assert.equal(drivers.sandboxDriver?.id, configuration.drivers.sandbox.id);
 
-  const observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+  const observerPool = new pg.Pool({
+    connectionString: databaseUrl,
+    max: 4,
+    connectionTimeoutMillis: observerPoolConnectionTimeoutMs,
+    statement_timeout: diagnosticQueryTimeoutMs,
+  });
   let workerPool;
   let worker;
-  let developmentApp;
   let productionApp;
   let placement;
   let gatewayForward;
   context.after(async () => {
-    gatewayForward?.stop();
-    if (worker !== undefined) await worker.stop();
-    else if (workerPool !== undefined) await workerPool.end();
-    if (productionApp !== undefined) await productionApp.close();
-    if (developmentApp !== undefined) await developmentApp.close();
-    await observerPool.end();
-    if (placement !== undefined) {
-      await kubectl(
-        "delete",
-        "namespace",
-        placement,
-        "--ignore-not-found=true",
-        "--wait=true",
-        "--timeout=120s",
+    const cleanupFailures = [];
+    const cleanupStep = async (description, operation) => {
+      try {
+        await operation();
+      } catch (error) {
+        cleanupFailures.push(new Error(`${description}: ${error.message}`, { cause: error }));
+      }
+    };
+
+    await cleanupStep("controller worker", async () => {
+      if (worker !== undefined) await worker.stop();
+      else if (workerPool !== undefined) await workerPool.end();
+    });
+    await cleanupStep("OpenShell management port-forwards", async () => {
+      await createSandboxDriver.disposeGatewayForwards();
+    });
+    await cleanupStep("OpenShell gateway port-forward", async () => {
+      await gatewayForward?.stop();
+    });
+    await cleanupStep("production app", async () => {
+      if (productionApp !== undefined) await productionApp.close();
+    });
+    await cleanupStep("observer pool", async () => {
+      await observerPool.end();
+    });
+    await cleanupStep("Kubernetes namespace", async () => {
+      if (placement !== undefined) {
+        await kubectl(
+          "delete",
+          "namespace",
+          placement,
+          "--ignore-not-found=true",
+          "--wait=true",
+          "--timeout=120s",
+        );
+      }
+    });
+    await cleanupStep("temporary directory", async () => {
+      await rm(directory, { recursive: true, force: true });
+    });
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError(
+        cleanupFailures,
+        `OpenShell integration cleanup reported ${cleanupFailures.length} failure(s).`,
       );
     }
-    await rm(directory, { recursive: true, force: true });
   });
 
   const existing = await new PostgresPlatformState(observerPool).loadInstallation();
   if (existing !== undefined) {
     assert.equal(existing.name, installationName);
   } else {
-    developmentApp = await composePostgresDevelopment(
-      {
-        mode: "development",
-        host: "127.0.0.1",
-        databaseUrl,
-        adminEmail: adminCredentials.email,
-        adminPassword: adminCredentials.password,
-        authSecret,
-        authBaseURL,
-      },
-      drivers,
-    );
-    await bootstrapControllerInstallation(developmentApp, adminCredentials, installationName);
-    await developmentApp.close();
-    developmentApp = undefined;
+    await ensureDevelopmentBootstrap(context, {
+      databaseUrl,
+      email: adminCredentials.email,
+      password: adminCredentials.password,
+      authSecret,
+      authBaseURL,
+      installationName,
+    });
   }
 
   productionApp = await composeProduction({
@@ -978,14 +1146,14 @@ async function prepareProductionInstallation(context) {
     assert.equal(observed.status, 200, JSON.stringify(observed.error));
     return observed.data.activeRevisionId === deployed.data.id ? observed.data : undefined;
   });
-  await waitFor(`worker completion for ${deployed.data.id}`, () =>
-    events.find(
-      (event) =>
-        event.event === "worker.completed" &&
-        event.revisionId === deployed.data.id &&
-        event.outcome === "success",
-    ),
-  );
+  await assertWorkerCompleted({
+    description: `worker completion for ${deployed.data.id}`,
+    events,
+    pool: observerPool,
+    namespaceId,
+    agentId: agent.data.id,
+    revisionId: deployed.data.id,
+  });
 
   const sandbox = await waitForSandbox(placement, deployed.data);
   const harnessPod = await waitForProviderHarnessPod(placement, deployed.data);
@@ -1038,6 +1206,7 @@ async function prepareProductionInstallation(context) {
     gatewayToken: transport.gatewayToken,
     gatewayUrl: gatewayForward.url,
     firstGatewayPodUid: firstGatewayPods[0]?.metadata.uid,
+    observerPool,
   };
 }
 
@@ -1159,14 +1328,14 @@ async function assertDuplicateReconciliationDoesNotDuplicateOpenShell(topology) 
   });
   const activeSandboxName = `os-${hash(redeployed.data.id, 16)}`;
   const retiredSandboxName = `os-${hash(topology.revision.id, 16)}`;
-  await waitFor(`replacement revision ${redeployed.data.id} finalization`, () =>
-    topology.events.find(
-      (event) =>
-        event.event === "worker.completed" &&
-        event.revisionId === redeployed.data.id &&
-        event.outcome === "success",
-    ),
-  );
+  await assertWorkerCompleted({
+    description: `replacement revision ${redeployed.data.id} finalization`,
+    events: topology.events,
+    pool: topology.observerPool,
+    namespaceId: topology.namespaceId,
+    agentId: topology.agent.id,
+    revisionId: redeployed.data.id,
+  });
   // Retirement of the previous revision must leave the provider's replacement routable.
   const activeService = await resource(
     "service",

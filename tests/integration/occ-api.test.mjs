@@ -6,11 +6,17 @@ import { createServer } from "node:net";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { AuthAccountRoleNotFoundError } from "../../apps/controller/src/auth/index.ts";
+import { OCCPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { createControllerApp, createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
-import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
+import {
+  BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  InMemoryPlatformState,
+  OpenClawController,
+} from "../../packages/occ/src/index.ts";
 import {
   authenticatedHeaders,
   createTestAuthPrincipal,
@@ -192,6 +198,25 @@ async function bootstrap(controller, name = "Enterprise development") {
   return result.data;
 }
 
+async function defaultNamespace(controller) {
+  const result = await controller.request("GET", "/namespaces");
+  assert.equal(result.status, 200);
+  const found = result.data.find(
+    (namespace) => namespace.name === BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  );
+  assert.ok(found, "fresh bootstrap must create the default Namespace");
+  assert.equal(found.status, "provisioning");
+  return found;
+}
+
+function assertOnlyDefaultNamespace(response) {
+  assert.equal(response.status, 200);
+  assert.deepEqual(
+    response.data.map((namespace) => namespace.name),
+    [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
+  );
+}
+
 async function createNamespace(controller, name) {
   const result = await controller.request("POST", "/namespaces", {
     body: { name },
@@ -242,6 +267,23 @@ async function createAgent(controller, namespaceId, name, values = {}) {
   assert.equal(Object.hasOwn(result.data, "installationId"), false);
   assert.equal(Object.hasOwn(result.data, "servicePrincipalId"), false);
   return result.data;
+}
+
+const diffsPluginId = "occ-plugin:diffs";
+const linearPluginId = "codex-plugin:linear@openai-curated-remote";
+
+function pluginPolicy(overrides = {}) {
+  return { enabled: true, approvalMode: "always", ...overrides };
+}
+
+function assertPolicyOnlyPlugin(selection) {
+  for (const key of ["id", "nativeId", "name", "driver", "release", "artifacts"]) {
+    assert.equal(
+      Object.hasOwn(selection, key),
+      false,
+      `Agent plugin policy must not expose ${key}`,
+    );
+  }
 }
 
 async function createInjectedFixture(options = {}) {
@@ -307,6 +349,7 @@ async function createInjectedFixture(options = {}) {
   const configurationDriver = createTestConfigurationDriver({ id: "configuration-integration" });
   const sessionsByPrincipalId = new Map();
   let controller;
+  let platformState;
   let app;
 
   async function installAuthSeed(seed, { auditEvent } = {}) {
@@ -326,10 +369,29 @@ async function createInjectedFixture(options = {}) {
         ? { controller }
         : {
             createController(installation) {
+              platformState = new InMemoryPlatformState({ auditSink });
               controller = new OpenClawController(installation, {
-                state: new InMemoryPlatformState({ auditSink }),
+                state: platformState,
                 recordOperations: false,
+                ...(options.providers === undefined ? {} : { providers: options.providers }),
               });
+              if (options.providers?.length) {
+                // Association alone must never provision an upstream account or credential.
+                const unexpectedProviderCall = async () => assert.fail("Unexpected Provider call");
+                controller.registerDriver({
+                  id: options.providers[0].drivers.service_account,
+                  implementation: "chatgpt",
+                  capability: "service_account",
+                  providerId: options.providers[0].id,
+                  create: unexpectedProviderCall,
+                  createCredential: unexpectedProviderCall,
+                  delete: unexpectedProviderCall,
+                });
+                controller.selectDriver(
+                  "service_account",
+                  options.providers[0].drivers.service_account,
+                );
+              }
               return controller;
             },
           }),
@@ -390,9 +452,18 @@ async function createInjectedFixture(options = {}) {
     get iamDriver() {
       return iamDriver;
     },
+    get computeDriver() {
+      return computeDriver;
+    },
+    get configurationDriver() {
+      return configurationDriver;
+    },
     installationId,
     principal,
     state,
+    get platformState() {
+      return platformState;
+    },
     installAuthSeed,
     get controller() {
       return controller;
@@ -428,6 +499,7 @@ async function injectedRequest(app, method, pathname, options = {}) {
       ...(payload === undefined ? {} : { body: payload }),
     }),
   );
+  if (response.status === 204) return { status: response.status, headers: response.headers };
   const body = await response.json();
   assert.match(body.meta?.requestId ?? "", identifier("req"));
   return { status: response.status, headers: response.headers, body, data: body.data };
@@ -451,13 +523,14 @@ test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource
   const singleton = await controller.request("GET", "/installation");
   assert.equal(singleton.status, 200);
   assert.deepEqual(singleton.data, installation);
+  const bootstrappedDefault = await defaultNamespace(controller);
 
   const namespace = await createNamespace(controller, "research");
   assert.equal(Object.hasOwn(namespace, "installationId"), false);
 
   const namespaces = await controller.request("GET", "/namespaces");
   assert.equal(namespaces.status, 200);
-  assert.deepEqual(namespaces.data, [namespace]);
+  assert.deepEqual(namespaces.data, [bootstrappedDefault, namespace]);
 
   const namespaceDetail = await controller.request("GET", `/namespaces/${namespace.id}`);
   assert.equal(namespaceDetail.status, 200);
@@ -465,6 +538,14 @@ test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource
 
   const agent = await createAgent(controller, namespace.id, "research-agent");
   assert.equal(Object.hasOwn(agent, "installationId"), false);
+
+  const account = await createServiceAccount(controller, namespace.id, "research-account");
+  const serviceAccounts = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/service-accounts`,
+  );
+  assert.equal(serviceAccounts.status, 200);
+  assert.deepEqual(serviceAccounts.data, [account]);
 
   const agents = await controller.request("GET", `/namespaces/${namespace.id}/agents`);
   assert.equal(agents.status, 200);
@@ -521,6 +602,330 @@ test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource
 
   const unchanged = await controller.request("GET", "/installation");
   assert.deepEqual(unchanged.data, installation);
+});
+
+test("Agent Provider API preserves nullable drafts and immutable revision associations", async () => {
+  const fixture = await createInjectedFixture({
+    providers: [
+      {
+        id: "openai",
+        type: "chatgpt",
+        configuration: {
+          workspaceId: "11111111-1111-4111-8111-111111111111",
+          apiKeyPath: "/unused-in-api-contract-test",
+        },
+        drivers: { service_account: "chatgpt-service-accounts" },
+      },
+    ],
+  });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "provider-api");
+  const configuration = await createConfiguration(controller, namespace.id);
+  const collection = `/namespaces/${namespace.id}/agents`;
+
+  // Exercise wire defaults and persistence through the real authenticated Fastify routes.
+  for (const [name, association] of [
+    ["omitted", {}],
+    ["null", { providerId: null }],
+    ["selected", { providerId: "openai" }],
+  ]) {
+    const result = await controller.request("POST", collection, {
+      body: { name, configurationId: configuration.id, ...association },
+    });
+    assert.equal(result.status, 201, JSON.stringify(result.body));
+    assert.equal(result.data.providerId, association.providerId ?? null);
+    const read = await controller.request("GET", `${collection}/${result.data.id}`);
+    assert.equal(read.data.providerId, association.providerId ?? null);
+  }
+
+  const agents = await controller.request("GET", collection);
+  const selected = agents.data.find((agent) => agent.name === "selected");
+  const target = `${collection}/${selected.id}`;
+  const preserved = await controller.request("PATCH", target, {
+    body: { configurationId: configuration.id },
+  });
+  assert.equal(preserved.status, 200);
+  assert.equal(preserved.data.providerId, "openai");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const revision = await controller.request("POST", `${target}/deploy`);
+  assert.equal(revision.status, 202, JSON.stringify(revision.body));
+  assert.equal(revision.data.providerId, "openai");
+
+  const cleared = await controller.request("PATCH", target, {
+    body: { configurationId: configuration.id, providerId: null },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.data.providerId, null);
+  const prior = await controller.request("GET", `${target}/revisions/${revision.data.id}`);
+  assert.equal(prior.data.providerId, "openai", "draft changes cannot rewrite admitted revisions");
+  const independent = await controller.request("POST", `${target}/deploy`);
+  assert.equal(independent.status, 202);
+  assert.equal(independent.data.providerId, null);
+
+  for (const providerId of ["", " ", "unknown", 42, [], {}]) {
+    const expectedStatus = providerId === "unknown" ? 404 : 400;
+    const invalid = await controller.request("POST", collection, {
+      body: { name: "invalid-provider", configurationId: configuration.id, providerId },
+    });
+    assert.equal(invalid.status, expectedStatus, JSON.stringify(invalid.body));
+    const invalidPatch = await controller.request("PATCH", target, {
+      body: { configurationId: configuration.id, providerId },
+    });
+    assert.equal(invalidPatch.status, expectedStatus, JSON.stringify(invalidPatch.body));
+  }
+  const unchanged = await controller.request("GET", target);
+  assert.equal(unchanged.data.providerId, null);
+  const replaced = await controller.request("PATCH", target, {
+    body: { configurationId: configuration.id, providerId: "openai" },
+  });
+  assert.equal(replaced.status, 200);
+  assert.equal(replaced.data.providerId, "openai");
+});
+
+test("Agent create and update replace policy-only plugin maps and revisions freeze the requested snapshot", async () => {
+  const controller = await configuredController();
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "plugin-api");
+  const configuration = await createConfiguration(controller, namespace.id);
+  const replacementConfiguration = await createConfiguration(controller, namespace.id, {
+    runtime: { revision: "replacement" },
+  });
+  const pluginDriver = new OCCPluginDriver();
+  controller.fixture.controller.registerDriver(pluginDriver);
+  controller.fixture.controller.selectDriver("plugin", pluginDriver.id);
+  const initialPlugins = { [diffsPluginId]: pluginPolicy() };
+
+  const created = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "plugin-agent",
+      configurationId: configuration.id,
+      plugins: initialPlugins,
+    },
+  });
+  assert.equal(created.status, 201);
+  assert.deepEqual(created.data.plugins, initialPlugins);
+  assertPolicyOnlyPlugin(created.data.plugins[diffsPluginId]);
+
+  const saved = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${created.data.id}`,
+  );
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.data.plugins, initialPlugins);
+
+  await controller.fixture.controller.handleNamespaceLifecycle(
+    controller.fixture.principal.id,
+    namespace.id,
+    "ready",
+  );
+  const deployment = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${created.data.id}/deploy`,
+  );
+  assert.equal(deployment.status, 202);
+  assert.deepEqual(deployment.data.plugins, {
+    driver: { id: "occ-plugin", implementation: "occ/openclaw-plugin" },
+    plugins: initialPlugins,
+  });
+  assert.equal(Object.hasOwn(deployment.data.plugins, "artifacts"), false);
+
+  const omittedPlugins = await controller.request(
+    "PATCH",
+    `/namespaces/${namespace.id}/agents/${created.data.id}`,
+    { body: { configurationId: replacementConfiguration.id } },
+  );
+  assert.equal(omittedPlugins.status, 200);
+  assert.equal(omittedPlugins.data.configurationId, replacementConfiguration.id);
+  assert.deepEqual(omittedPlugins.data.plugins, initialPlugins);
+
+  const replacementPlugins = {
+    [linearPluginId]: pluginPolicy({ approvalMode: "auto", approvalsReviewer: "auto_review" }),
+  };
+  const replacedPlugins = await controller.request(
+    "PATCH",
+    `/namespaces/${namespace.id}/agents/${created.data.id}`,
+    { body: { configurationId: replacementConfiguration.id, plugins: replacementPlugins } },
+  );
+  assert.equal(replacedPlugins.status, 200);
+  assert.deepEqual(replacedPlugins.data.plugins, replacementPlugins);
+  assert.equal(Object.hasOwn(replacedPlugins.data.plugins, diffsPluginId), false);
+  assertPolicyOnlyPlugin(replacedPlugins.data.plugins[linearPluginId]);
+
+  const clearedPlugins = await controller.request(
+    "PATCH",
+    `/namespaces/${namespace.id}/agents/${created.data.id}`,
+    { body: { configurationId: replacementConfiguration.id, plugins: {} } },
+  );
+  assert.equal(clearedPlugins.status, 200);
+  assert.deepEqual(clearedPlugins.data.plugins, {});
+
+  const historical = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${created.data.id}/revisions/${deployment.data.id}`,
+  );
+  assert.equal(historical.status, 200);
+  assert.deepEqual(historical.data.plugins, deployment.data.plugins);
+
+  const pluginFreeRevision = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${created.data.id}/deploy`,
+  );
+  assert.equal(pluginFreeRevision.status, 202);
+  assert.equal(Object.hasOwn(pluginFreeRevision.data, "plugins"), false);
+});
+
+test("Agent plugin maps reject structural errors and preserve exact authorization and audit boundaries", async () => {
+  const controller = await configuredController();
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "plugin-api-auth");
+  const configuration = await createConfiguration(controller, namespace.id);
+  const pluginDriver = new OCCPluginDriver();
+  controller.fixture.controller.registerDriver(pluginDriver);
+  controller.fixture.controller.selectDriver("plugin", pluginDriver.id);
+  const auditCount = controller.fixture.auditSink.events.length;
+
+  const metadataInCreate = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "metadata-plugin-agent",
+      configurationId: configuration.id,
+      plugins: { [diffsPluginId]: { ...pluginPolicy(), nativeId: "diffs" } },
+    },
+  });
+  assert.equal(metadataInCreate.status, 400);
+  assert.equal(metadataInCreate.body.error.code, "INVALID_REQUEST");
+  assert.equal(controller.fixture.auditSink.events.length, auditCount);
+
+  const agent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: { name: "plugin-auth-agent", configurationId: configuration.id },
+  });
+  assert.equal(agent.status, 201);
+  const secondAgent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: { name: "plugin-auth-sibling", configurationId: configuration.id },
+  });
+  assert.equal(secondAgent.status, 201);
+  const agentPath = `/namespaces/${namespace.id}/agents/${agent.data.id}`;
+  const siblingPath = `/namespaces/${namespace.id}/agents/${secondAgent.data.id}`;
+
+  const auditBeforeInvalidUpdate = controller.fixture.auditSink.events.length;
+  const snakeCaseReviewer = await controller.request("PATCH", agentPath, {
+    body: {
+      configurationId: configuration.id,
+      plugins: {
+        [linearPluginId]: {
+          enabled: true,
+          approvalMode: "auto",
+          approvals_reviewer: "auto_review",
+        },
+      },
+    },
+  });
+  assert.equal(snakeCaseReviewer.status, 400);
+  assert.equal(snakeCaseReviewer.body.error.code, "INVALID_REQUEST");
+  assert.equal(controller.fixture.auditSink.events.length, auditBeforeInvalidUpdate);
+
+  for (const plugins of [
+    { "codex-plugin:bad/plugin@openai-curated-remote": pluginPolicy({ approvalMode: "auto" }) },
+    { [linearPluginId]: pluginPolicy({ tools: { "bad/tool": { enabled: true } } }) },
+    { [linearPluginId]: pluginPolicy({ tools: { search: {} } }) },
+  ]) {
+    const invalid = await controller.request("PATCH", agentPath, {
+      body: { configurationId: configuration.id, plugins },
+    });
+    assert.equal(invalid.status, 400);
+    assert.equal(invalid.body.error.code, "INVALID_REQUEST");
+    assert.equal(controller.fixture.auditSink.events.length, auditBeforeInvalidUpdate);
+  }
+
+  const afterInvalidUpdate = await controller.request("GET", agentPath);
+  assert.equal(Object.hasOwn(afterInvalidUpdate.data, "plugins"), false);
+
+  const { principal: noGrantPrincipal } =
+    await controller.fixture.createAuthPrincipal("plugin-no-grant");
+  controller.fixture.state.identities.push(noGrantPrincipal);
+  const noGrantApp = controller.fixture.createApp(noGrantPrincipal);
+  const noGrantRead = await injectedRequest(noGrantApp, "GET", agentPath);
+  assert.equal(noGrantRead.status, 403);
+  assert.equal(noGrantRead.body.error.code, "FORBIDDEN");
+  const noGrantUpdate = await injectedRequest(noGrantApp, "PATCH", agentPath, {
+    body: { configurationId: configuration.id, plugins: { [diffsPluginId]: pluginPolicy() } },
+  });
+  assert.equal(noGrantUpdate.status, 403);
+  assert.equal(noGrantUpdate.body.error.code, "FORBIDDEN");
+  const afterNoGrant = await controller.request("GET", agentPath);
+  assert.equal(Object.hasOwn(afterNoGrant.data, "plugins"), false);
+
+  const { principal: exactAgentPrincipal } =
+    await controller.fixture.createAuthPrincipal("plugin-exact-agent");
+  controller.fixture.state.identities.push(exactAgentPrincipal);
+  controller.fixture.state.roles.push({
+    id: "role-plugin-exact-agent",
+    namespaceId: namespace.id,
+    permissions: [
+      { action: "read", resourceKind: "agent" },
+      { action: "update", resourceKind: "agent" },
+      { action: "read", resourceKind: "configuration" },
+    ],
+  });
+  controller.fixture.state.bindings.push(
+    {
+      id: "binding-plugin-exact-agent",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: exactAgentPrincipal.id,
+      roleId: "role-plugin-exact-agent",
+      resourceKind: "agent",
+      resourceId: agent.data.id,
+    },
+    {
+      id: "binding-plugin-exact-configuration",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: exactAgentPrincipal.id,
+      roleId: "role-plugin-exact-agent",
+      resourceKind: "configuration",
+      resourceId: configuration.id,
+    },
+  );
+  const exactAgentApp = controller.fixture.createApp(exactAgentPrincipal);
+  const exactRead = await injectedRequest(exactAgentApp, "GET", agentPath);
+  assert.equal(exactRead.status, 200);
+  const foreignRead = await injectedRequest(exactAgentApp, "GET", siblingPath);
+  assert.equal(foreignRead.status, 403);
+  assert.equal(foreignRead.body.error.code, "FORBIDDEN");
+  const foreignUpdate = await injectedRequest(exactAgentApp, "PATCH", siblingPath, {
+    body: { configurationId: configuration.id, plugins: { [diffsPluginId]: pluginPolicy() } },
+  });
+  assert.equal(foreignUpdate.status, 403);
+  assert.equal(foreignUpdate.body.error.code, "FORBIDDEN");
+
+  const updated = await injectedRequest(exactAgentApp, "PATCH", agentPath, {
+    body: { configurationId: configuration.id, plugins: { [diffsPluginId]: pluginPolicy() } },
+  });
+  assert.equal(updated.status, 200);
+  assert.deepEqual(updated.data.plugins, { [diffsPluginId]: pluginPolicy() });
+
+  const secondDetail = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${secondAgent.data.id}`,
+  );
+  assert.equal(Object.hasOwn(secondDetail.data, "plugins"), false);
+
+  const beforeAuditFailure = await controller.request("GET", agentPath);
+  const originalAppend = controller.fixture.auditSink.append;
+  controller.fixture.auditSink.append = async () => {
+    throw new Error("plugin audit sink unavailable");
+  };
+  const failedAudit = await controller.request("PATCH", agentPath, {
+    body: { configurationId: configuration.id, plugins: { [linearPluginId]: pluginPolicy() } },
+  });
+  controller.fixture.auditSink.append = originalAppend;
+  assert.equal(failedAudit.status, 503);
+  assert.equal(failedAudit.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  const afterAuditFailure = await controller.request("GET", agentPath);
+  assert.deepEqual(afterAuditFailure.data, beforeAuditFailure.data);
 });
 
 test("native ServiceAccounts bind exact credential references and freeze Agent revision snapshots", async () => {
@@ -778,6 +1183,16 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
 
   const authorizedAccount = await injectedRequest(readerApp, "GET", exactAccountPath);
   assert.equal(authorizedAccount.status, 200);
+
+  const accountList = await injectedRequest(
+    readerApp,
+    "GET",
+    `/namespaces/${namespaceA.id}/service-accounts`,
+  );
+  assert.equal(accountList.status, 200);
+  assert.deepEqual(accountList.data, [assigned.data]);
+  assert.equal(JSON.stringify(accountList.data).includes(accountB.id), false);
+  assert.equal(Object.hasOwn(accountList.data[0], "providerId"), false);
 
   const denied = await injectedRequest(
     readerApp,
@@ -1201,7 +1616,7 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   }
 
   const untouched = await injectedRequest(fixture.app, "GET", "/namespaces");
-  assert.deepEqual(untouched.data, []);
+  assertOnlyDefaultNamespace(untouched);
 });
 
 test("bootstrap fails closed when IAM omits structured authorization evidence", async () => {
@@ -1266,6 +1681,7 @@ test("bodyless OCC routes reject request payloads before IAM or domain side effe
       ["GET", "/installation"],
       ["GET", "/namespaces"],
       ["GET", `/namespaces/${namespace.data.id}`],
+      ["GET", `/namespaces/${namespace.data.id}/service-accounts`],
       ["GET", `/namespaces/${namespace.data.id}/agents`],
       ["GET", `/namespaces/${namespace.data.id}/agents/${agent.data.id}`],
       ["GET", `/namespaces/${namespace.data.id}/agents/${agent.data.id}/revisions`],
@@ -1548,12 +1964,16 @@ test("two Namespaces become independently ready and deletion tombstones only its
     "harness",
     "id",
     "namespaceId",
+    "providerId",
     "revision",
   ]);
   assert.equal(readyDeployment.data.configurationId, firstConfiguration.id);
   assert.equal(readyDeployment.data.configurationKind, "agent");
   assert.equal(readyDeployment.data.configurationGeneration, 1);
-  assert.deepEqual(readyDeployment.data.configuration, { model: "first", temperature: "0" });
+  assert.deepEqual(
+    readyDeployment.data.configuration,
+    admitLoggingConfiguration({ model: "first", temperature: "0" }, "info"),
+  );
   assert.deepEqual(readyDeployment.data.harness, {
     id: "openclaw",
     version: "1.0.0",
@@ -1592,7 +2012,10 @@ test("two Namespaces become independently ready and deletion tombstones only its
   );
   assert.equal(nextDeployment.status, 202);
   assert.equal(nextDeployment.data.revision, 2);
-  assert.deepEqual(nextDeployment.data.configuration, { model: "second", temperature: "1" });
+  assert.deepEqual(
+    nextDeployment.data.configuration,
+    admitLoggingConfiguration({ model: "second", temperature: "1" }, "info"),
+  );
   const admittedRevisions = await injectedRequest(
     fixture.app,
     "GET",
@@ -1626,8 +2049,8 @@ test("two Namespaces become independently ready and deletion tombstones only its
   assert.equal(absent.status, 404);
   const listed = await injectedRequest(fixture.app, "GET", "/namespaces");
   assert.deepEqual(
-    listed.data.map(({ id }) => id),
-    [namespaceA.data.id],
+    listed.data.map(({ name }) => name),
+    [BOOTSTRAP_DEFAULT_NAMESPACE_NAME, "lifecycle-a"],
   );
   const stillReady = await injectedRequest(fixture.app, "GET", `/namespaces/${namespaceA.data.id}`);
   assert.equal(stillReady.data.status, "ready");
@@ -1807,8 +2230,7 @@ test("IAM and audit dependency failures fail closed without orphaned state", asy
   assert.equal(JSON.stringify(failedMutation.body).includes("sk-audit-provider"), false);
 
   const unchanged = await injectedRequest(fixture.app, "GET", "/namespaces");
-  assert.equal(unchanged.status, 200);
-  assert.deepEqual(unchanged.data, []);
+  assertOnlyDefaultNamespace(unchanged);
   assert.equal(fixture.auditSink.events.length, 1);
 
   const originalAuthorize = fixture.iamDriver.authorize;
@@ -1828,5 +2250,5 @@ test("IAM and audit dependency failures fail closed without orphaned state", asy
   assert.equal(JSON.stringify(unavailable.body).includes("sk-iam-provider"), false);
 
   const stillUnchanged = await injectedRequest(fixture.app, "GET", "/namespaces");
-  assert.deepEqual(stillUnchanged.data, []);
+  assertOnlyDefaultNamespace(stillUnchanged);
 });

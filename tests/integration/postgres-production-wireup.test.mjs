@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -10,10 +10,12 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { composeProduction } from "../../apps/controller/src/composition/production.ts";
+import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { createInstallationDriverConfiguration } from "../helpers/installation-driver-configuration.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
+import { BOOTSTRAP_DEFAULT_NAMESPACE_NAME } from "../../packages/occ/src/index.ts";
 
 const databaseUrl = process.env.OCC_PRODUCTION_WIREUP_DATABASE_URL;
 const repository = fileURLToPath(new URL("../../", import.meta.url));
@@ -25,6 +27,22 @@ const adminEmail = "admin@example.test";
 const authSecret = "production-wireup-auth-secret-at-least-32-bytes";
 const authBaseURL = "http://127.0.0.1:0";
 
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+async function defaultNamespaceRows(pool) {
+  return (
+    await pool.query(
+      `SELECT namespace.id, namespace.name, namespace.status, work.idempotency_key
+       FROM occ.namespaces AS namespace
+       JOIN occ.controller_work AS work ON work.namespace_id = namespace.id
+       WHERE namespace.name = $1`,
+      [BOOTSTRAP_DEFAULT_NAMESPACE_NAME],
+    )
+  ).rows;
+}
+
 function createPassiveComputeDriver() {
   return {
     id: "compute-production-wireup",
@@ -32,21 +50,45 @@ function createPassiveComputeDriver() {
     implementation: "production-wireup-memory-compute",
     async preflight() {},
     async ensureNamespace(namespace) {
-      return { namespaceId: namespace.id, status: "ready" };
+      return { namespaceId: namespace.id, namespaceReady: true };
     },
     async deleteNamespace(namespace) {
-      return { namespaceId: namespace.id, status: "deleted" };
+      return { namespaceId: namespace.id, namespaceDeleted: true };
     },
     async prepareRevision(revision) {
-      return { revisionId: revision.id, ready: true };
+      return {
+        namespaceId: revision.namespaceId,
+        agentId: revision.agentId,
+        revisionId: revision.id,
+        ready: true,
+      };
     },
     async retireRevision() {},
   };
 }
 
-function productionDrivers() {
-  const installation = createInstallationDriverConfiguration();
-  installation.drivers.iam.id = "native-iam";
+function parseLogEvents(stderr) {
+  return stderr
+    .trim()
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+async function productionDrivers() {
+  const configuration = createInstallationDriverConfiguration();
+  configuration.drivers.compute.id = "compute-production-wireup";
+  configuration.drivers.iam.id = "native-iam";
+  const runtime = await loadInstallationConfiguration({
+    mode: "production",
+    environment: {},
+    startupConfiguration: {
+      configuration,
+      logging: { level: "info" },
+    },
+  });
+  assert.ok(runtime);
+  const { installation } = runtime;
   return {
     installation,
     computeDriver: createPassiveComputeDriver(),
@@ -57,7 +99,10 @@ function productionDrivers() {
       id: installation.drivers.secret.id,
     }),
     createIAMDriver(state) {
-      return new NativeIAMDriver(state, { id: "native-iam", implementation: "native" });
+      return new NativeIAMDriver(state, {
+        id: installation.drivers.iam.id,
+        implementation: installation.drivers.iam.implementation,
+      });
     },
   };
 }
@@ -72,6 +117,7 @@ test(
   async () => {
     const environment = {
       ...process.env,
+      NODE_ENV: "production",
       OCC_DATABASE_URL: databaseUrl,
       OCC_AUTH_SECRET: authSecret,
       OCC_AUTH_BASE_URL: authBaseURL,
@@ -80,22 +126,25 @@ test(
         await mkdtemp(join(tmpdir(), "openclaw-enterprise-bootstrap-password-")),
         "admin-password",
       ),
+      OCC_BOOTSTRAP_SERVICE_KEY_FILE: "",
       OCC_BOOTSTRAP_INSTALLATION_NAME: "openclaw-enterprise",
     };
     const passwordDirectory = dirname(environment.OCC_BOOTSTRAP_PASSWORD_FILE);
+    environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE = join(
+      passwordDirectory,
+      "initial-admin-service-key.json",
+    );
     let app;
     let endpoint;
     let pool;
     try {
       // Run the actual production Job; the generated credential is handed off only via the
       // protected operator-selected file.
-      const bootstrapped = await run(process.execPath, ["scripts/bootstrap-production.mjs"], {
+      const bootstrapped = await run(process.execPath, ["scripts/bootstrap-installation.mjs"], {
         cwd: repository,
         env: environment,
       });
       assert.match(bootstrapped.stdout, /installation\.bootstrapped/);
-      assert.doesNotMatch(bootstrapped.stdout, /password|secret|credential/i);
-      assert.doesNotMatch(bootstrapped.stderr, /password|secret|credential/i);
 
       const pg = requireControllerDependency("pg");
       pool = new pg.Pool({ connectionString: databaseUrl });
@@ -104,33 +153,128 @@ test(
         "SELECT count(*)::integer AS count FROM occ.session",
       );
       assert.equal(bootstrapSessions.rows[0].count, 0);
+      const defaultNamespace = await defaultNamespaceRows(pool);
+      assert.equal(defaultNamespace.length, 1);
+      assert.match(defaultNamespace[0].id, /^ns_/);
+      assert.equal(defaultNamespace[0].name, BOOTSTRAP_DEFAULT_NAMESPACE_NAME);
+      assert.equal(defaultNamespace[0].status, "provisioning");
+      assert.equal(
+        defaultNamespace[0].idempotency_key,
+        `namespace:${defaultNamespace[0].id}:reconcile:ready`,
+      );
 
       const passwordStat = await stat(environment.OCC_BOOTSTRAP_PASSWORD_FILE);
       assert.equal(passwordStat.mode & 0o777, 0o600);
       const password = (await readFile(environment.OCC_BOOTSTRAP_PASSWORD_FILE, "utf8")).trim();
+      const passwordDigest = sha256(password);
       assert.match(password, /^[A-Za-z0-9_-]{43}$/);
       assert.notEqual(password, adminEmail);
       assert.notEqual(password, authSecret);
+      const serviceKeyStat = await stat(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE);
+      assert.equal(serviceKeyStat.mode & 0o777, 0o600);
+      const serviceKeyBytes = await readFile(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8");
+      const serviceKeyDigest = sha256(serviceKeyBytes);
+      const serviceKeyOutput = JSON.parse(serviceKeyBytes);
+      assert.equal(serviceKeyOutput.data.name, "bootstrap-admin");
+      assert.match(serviceKeyOutput.data.servicePrincipalId, /^spn_/);
+      assert.match(serviceKeyOutput.data.key, /^occ_/);
+      assert.equal(serviceKeyOutput.meta.installationId.startsWith("ins_"), true);
+      assert.equal(
+        bootstrapped.stdout.includes(password),
+        false,
+        "stdout must not contain password",
+      );
+      assert.equal(
+        bootstrapped.stdout.includes(serviceKeyOutput.data.key),
+        false,
+        "stdout must not contain service key",
+      );
+      assert.equal(
+        bootstrapped.stderr.includes(password),
+        false,
+        "stderr must not contain password",
+      );
+      assert.equal(
+        bootstrapped.stderr.includes(serviceKeyOutput.data.key),
+        false,
+        "stderr must not contain service key",
+      );
 
       // Helm upgrades and Job retries must not rotate the bootstrap credential.
-      const repeated = await run(process.execPath, ["scripts/bootstrap-production.mjs"], {
+      const repeated = await run(process.execPath, ["scripts/bootstrap-installation.mjs"], {
         cwd: repository,
         env: environment,
       });
       assert.match(repeated.stdout, /installation\.already-bootstrapped/);
+      assert.deepEqual(await defaultNamespaceRows(pool), defaultNamespace);
       assert.equal(
-        (await readFile(environment.OCC_BOOTSTRAP_PASSWORD_FILE, "utf8")).trim(),
-        password,
+        sha256((await readFile(environment.OCC_BOOTSTRAP_PASSWORD_FILE, "utf8")).trim()),
+        passwordDigest,
+      );
+      assert.equal(
+        sha256(await readFile(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8")),
+        serviceKeyDigest,
+      );
+      const {
+        OCC_BOOTSTRAP_INSTALLATION_NAME,
+        OCC_BOOTSTRAP_PASSWORD_FILE,
+        OCC_BOOTSTRAP_SERVICE_KEY_FILE,
+        ...existingOnlyEnvironment
+      } = environment;
+      assert.equal(OCC_BOOTSTRAP_INSTALLATION_NAME.length > 0, true);
+      assert.equal(OCC_BOOTSTRAP_PASSWORD_FILE.length > 0, true);
+      assert.equal(OCC_BOOTSTRAP_SERVICE_KEY_FILE.length > 0, true);
+      const existingOnly = await run(process.execPath, ["scripts/bootstrap-installation.mjs"], {
+        cwd: repository,
+        env: existingOnlyEnvironment,
+      });
+      assert.match(existingOnly.stdout, /installation\.already-bootstrapped/);
+      assert.deepEqual(await defaultNamespaceRows(pool), defaultNamespace);
+      assert.equal(
+        sha256((await readFile(environment.OCC_BOOTSTRAP_PASSWORD_FILE, "utf8")).trim()),
+        passwordDigest,
+      );
+      assert.equal(
+        sha256(await readFile(environment.OCC_BOOTSTRAP_SERVICE_KEY_FILE, "utf8")),
+        serviceKeyDigest,
       );
 
       // A different configured administrator must not silently adopt the existing Installation.
-      await assert.rejects(
-        run(process.execPath, ["scripts/bootstrap-production.mjs"], {
+      const administratorMismatch = await run(
+        process.execPath,
+        ["scripts/bootstrap-installation.mjs"],
+        {
           cwd: repository,
           env: { ...environment, OCC_BOOTSTRAP_ADMIN_EMAIL: "different-admin@example.test" },
-        }),
-        ({ stderr }) => /configured administrator account/.test(stderr),
+        },
+      ).then(
+        () => undefined,
+        (error) => error,
       );
+      assert.ok(administratorMismatch);
+      const bootstrapFailure = parseLogEvents(administratorMismatch.stderr).find(
+        (line) => line.event === "installation.bootstrap-failed",
+      );
+      assert.ok(bootstrapFailure, administratorMismatch.stderr);
+      assert.deepEqual(
+        {
+          severity: bootstrapFailure.severity,
+          service: bootstrapFailure.service,
+          event: bootstrapFailure.event,
+          code: bootstrapFailure.code,
+        },
+        {
+          severity: "ERROR",
+          service: "occ-bootstrap",
+          event: "installation.bootstrap-failed",
+          code: "BOOTSTRAP_FAILED",
+        },
+      );
+
+      const rejectedAdministrator = await pool.query('SELECT id FROM occ."user" WHERE email = $1', [
+        "different-admin@example.test",
+      ]);
+      assert.equal(rejectedAdministrator.rowCount, 0);
 
       // Verify persisted Better Auth ownership, the real IAM Principal, and bootstrap audit evidence.
       const installation = await pool.query(
@@ -138,6 +282,7 @@ test(
       );
       assert.equal(installation.rows.length, 1);
       assert.equal(installation.rows[0].count, 1);
+      assert.equal(serviceKeyOutput.meta.installationId, installation.rows[0].id);
       const user = await pool.query(
         `SELECT id, email, email_verified
          FROM occ."user" WHERE email = $1`,
@@ -167,11 +312,39 @@ test(
         [identity.rows[0].id],
       );
       assert.deepEqual(audit.rows, [{ kind: "bootstrap", actor_id: identity.rows[0].id }]);
+      const bootstrapServicePrincipal = await pool.query(
+        `SELECT identity.id, binding.role_id
+         FROM occ.iam_identities identity
+         JOIN occ.iam_access_bindings binding ON binding.identity_subject_id = identity.id
+         WHERE identity.id = $1
+           AND identity.kind = 'service_principal'
+           AND identity.namespace_id IS NULL
+           AND identity.agent_id IS NULL`,
+        [serviceKeyOutput.data.servicePrincipalId],
+      );
+      assert.equal(bootstrapServicePrincipal.rowCount, 1);
+      const humanBinding = await pool.query(
+        `SELECT role_id FROM occ.iam_access_bindings WHERE identity_subject_id = $1`,
+        [identity.rows[0].id],
+      );
+      assert.equal(bootstrapServicePrincipal.rows[0].role_id, humanBinding.rows[0].role_id);
+      const storedServiceKey = await pool.query(
+        `SELECT key, reference_id, name, metadata
+         FROM occ.apikey WHERE id = $1`,
+        [serviceKeyOutput.data.id],
+      );
+      assert.equal(storedServiceKey.rowCount, 1);
+      assert.notEqual(storedServiceKey.rows[0].key, serviceKeyOutput.data.key);
+      assert.equal(storedServiceKey.rows[0].reference_id, serviceKeyOutput.data.servicePrincipalId);
+      assert.equal(storedServiceKey.rows[0].name, "bootstrap-admin");
+      assert.deepEqual(JSON.parse(storedServiceKey.rows[0].metadata), {
+        installationId: installation.rows[0].id,
+      });
       const leakedAudit = await pool.query(
         `SELECT count(*)::integer AS count
          FROM occ.audit_events
-         WHERE details::text LIKE $1 OR details::text LIKE $2`,
-        [`%${password}%`, `%${account.rows[0].password}%`],
+         WHERE details::text LIKE $1 OR details::text LIKE $2 OR details::text LIKE $3`,
+        [`%${password}%`, `%${account.rows[0].password}%`, `%${serviceKeyOutput.data.key}%`],
       );
       assert.equal(leakedAudit.rows[0].count, 0);
 
@@ -187,7 +360,7 @@ test(
         databaseUrl,
         authSecret,
         authBaseURL,
-        drivers: productionDrivers(),
+        drivers: await productionDrivers(),
       });
       endpoint = await app.listen({ port: 0, host: "127.0.0.1" });
 
@@ -231,6 +404,11 @@ test(
       });
       assert.equal(authorized.status, 200);
       assert.equal((await authorized.json()).data.id, installation.rows[0].id);
+      const serviceAuthorized = await fetch(`${endpoint}/installation`, {
+        headers: { "x-api-key": serviceKeyOutput.data.key },
+      });
+      assert.equal(serviceAuthorized.status, 200);
+      assert.equal((await serviceAuthorized.json()).data.id, installation.rows[0].id);
 
       // Prove all production ServiceAccount grants through the real cookie-authenticated HTTP boundary.
       async function request(method, path, payload) {
@@ -247,6 +425,69 @@ test(
           ...(response.status === 204 ? {} : { data: (await response.json()).data }),
         };
       }
+
+      const defaultConfiguration = await request(
+        "POST",
+        `/namespaces/${defaultNamespace[0].id}/configurations`,
+        {
+          kind: "agent",
+          values: { model: "preserved-default" },
+        },
+      );
+      assert.equal(defaultConfiguration.status, 201);
+      const defaultAgent = await request("POST", `/namespaces/${defaultNamespace[0].id}/agents`, {
+        name: `default-agent-${randomUUID()}`,
+        configurationId: defaultConfiguration.data.id,
+      });
+      assert.equal(defaultAgent.status, 201);
+      const persistedDefaultNamespace = await request(
+        "GET",
+        `/namespaces/${defaultNamespace[0].id}`,
+      );
+      assert.equal(persistedDefaultNamespace.status, 200);
+      const persistedDefaultConfiguration = await request(
+        "GET",
+        `/namespaces/${defaultNamespace[0].id}/configurations/${defaultConfiguration.data.id}`,
+      );
+      assert.equal(persistedDefaultConfiguration.status, 200);
+      assert.deepEqual(persistedDefaultConfiguration.data.values, {
+        model: "preserved-default",
+      });
+      const persistedDefaultAgent = await request(
+        "GET",
+        `/namespaces/${defaultNamespace[0].id}/agents/${defaultAgent.data.id}`,
+      );
+      assert.equal(persistedDefaultAgent.status, 200);
+      assert.equal(persistedDefaultAgent.data.configurationId, defaultConfiguration.data.id);
+      const repeatAfterUserState = await run(
+        process.execPath,
+        ["scripts/bootstrap-installation.mjs"],
+        {
+          cwd: repository,
+          env: existingOnlyEnvironment,
+        },
+      );
+      assert.match(repeatAfterUserState.stdout, /installation\.already-bootstrapped/);
+      assert.deepEqual(await defaultNamespaceRows(pool), defaultNamespace);
+      assert.deepEqual(
+        await request("GET", `/namespaces/${defaultNamespace[0].id}`),
+        persistedDefaultNamespace,
+      );
+      assert.deepEqual(
+        await request(
+          "GET",
+          `/namespaces/${defaultNamespace[0].id}/configurations/${defaultConfiguration.data.id}`,
+        ),
+        persistedDefaultConfiguration,
+      );
+      assert.deepEqual(
+        await request(
+          "GET",
+          `/namespaces/${defaultNamespace[0].id}/agents/${defaultAgent.data.id}`,
+        ),
+        persistedDefaultAgent,
+      );
+
       const namespace = await request("POST", "/namespaces", {
         name: `production-service-account-${randomUUID()}`,
       });
@@ -267,6 +508,15 @@ test(
       assert.deepEqual(updatedAccount.data.credential, credential);
       assert.equal((await request("DELETE", accountPath)).status, 204);
       assert.equal((await request("GET", accountPath)).status, 404);
+      const serviceNamespace = await fetch(`${endpoint}/namespaces`, {
+        method: "POST",
+        headers: {
+          "x-api-key": serviceKeyOutput.data.key,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ name: `bootstrap-admin-key-${randomUUID()}` }),
+      });
+      assert.equal(serviceNamespace.status, 201);
 
       const bearer = await fetch(`${endpoint}/installation`, {
         headers: { authorization: "Bearer no-longer-supported" },

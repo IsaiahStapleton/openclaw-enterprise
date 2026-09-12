@@ -1,8 +1,10 @@
 import type { SecretBindings } from "./index.ts";
 
 const reserved =
-  /^(?:OPENCLAW_|CODEX_|OCC_|KUBERNETES_|KUBECONFIG$|APP_SERVER_|NODE_|LD_|DYLD_|PYTHON|SSL_|TLS_|NPM_|PNPM_)/i;
+  /^(?:OPENCLAW_|CODEX_|OCC_|KUBERNETES_|KUBECONFIG$|APP_SERVER_|NODE_|LD_|DYLD_|PYTHON|SSL_|TLS_|NPM_|PNPM_|OTEL_)/i;
 const controlNames = new Set([
+  "LOG_FORMAT",
+  "RUST_LOG",
   "PATH",
   "HOME",
   "USER",

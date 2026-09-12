@@ -1,11 +1,10 @@
 ---
 created: 2026-08-25
-updated: 2026-08-28
-last_updated_session: codex/01a036f4-cf1d-7cc1-bbc1-000879038ac8
-pr: 36
+updated: 2026-09-01
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
-# PR 36: Existing Kubernetes Namespace Placement Flow
+# Existing Kubernetes Namespace Placement Flow
 
 ## Overview
 
@@ -82,9 +81,11 @@ Configuration discovers the bound backing namespace by tenant label for each
 ConfigMap operation. Explicitly external Namespace provisioning rejects
 Configuration creation with `409` until the worker marks the Namespace `ready`.
 Compute uses the same namespace for workloads, dedicated Agent-owned shared
-PersistentVolumeClaims, and credentials. Existing exact Namespace, Agent,
-revision, service-account, and child-resource ownership checks remain
-unchanged; revision retirement removes its Agent-owned shared claim.
+PersistentVolumeClaims, private gateway state claims, and credentials. Existing
+exact Namespace, Agent, revision, service-account, and child-resource ownership
+checks remain unchanged. Revision retirement preserves the current gateway and
+its owned claims; final gateway teardown removes the exact-owned private and
+shared claims by UID.
 
 ### 4. Preserve externally owned namespaces during deletion
 
@@ -129,6 +130,7 @@ complete-deletion lifecycle.
 
 ## Changelog
 
+- 2026-09-01 19:09: Corrected existing-namespace storage cleanup to final gateway teardown and removed the PR-number prefix from the title. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-28 21:20: Removed the retired local-test Compute Driver from current selection boundaries. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 3ec166eb5fae39ed0f51ffb5ebd93338c4a2db94)
 - 2026-08-28 17:58: Updated moved feature-reference links for the documentation organization. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-26 00:44: Traced explicit administrator-selected placement, persisted ownership, running-worker adoption, and fail-closed tenant cleanup. (01a03a24-5bf5-73f0-bc5c-21830985a7c2 - bcf21fb1bc6b)

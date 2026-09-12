@@ -23,6 +23,7 @@ export async function createKubernetesClientConfiguration(
 ): Promise<{
   readonly sdk: KubernetesSdk;
   readonly clientConfiguration: KubernetesClientConfiguration;
+  readonly kubeConfig: import("@kubernetes/client-node").KubeConfig;
 }> {
   let sdk: KubernetesSdk;
   try {
@@ -99,5 +100,5 @@ export async function createKubernetesClientConfiguration(
     authMethods: { default: configuration },
     middleware: [cancellationMiddleware],
   });
-  return { sdk, clientConfiguration };
+  return { sdk, clientConfiguration, kubeConfig: configuration };
 }

@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-08-28
-last_updated_session: codex/01a04927-11d8-7083-a4b7-9f3124559d82
+updated: 2026-08-31
+last_updated_session: codex/01a05a69-3fbe-7441-9e6d-20394758cf94
 ---
 
 # Service API Keys Flow
@@ -15,7 +15,10 @@ administrator can later revoke it. This flow follows a
 Namespace reader from issuance through `GET /namespaces/:namespaceId` to
 revocation. It stops at the OCC resource response or the credential's deletion
 and audit result; provisioning IAM identities and Agent workload credentials
-remain separate lifecycles.
+remain separate lifecycles. Fresh native-IAM bootstrap provisions the initial
+service administrator and calls the same key helper, delivering its response to
+protected storage rather than an HTTP issuance response. That separate entry and
+commit boundary is traced in the [bootstrap flow](local-password-authentication.md).
 
 Better Auth owns key material and persistence. The selected IAM Driver owns
 identity lookup and authorization. A key fixes the identity's Installation and
@@ -38,7 +41,7 @@ optional Namespace at issuance, but it does not snapshot or grant permissions.
 The controller already has configured Better Auth storage and its selected IAM
 Driver. Native IAM requires an explicitly provisioned ServicePrincipal, Role,
 and AccessBinding; issuance creates none of them. Request fields and lifetime
-limits are defined in the [authentication reference](../reference/authentication.md#issuance)
+limits are defined in the [authentication reference](../reference/authentication/service-api-keys.md#issuance)
 and [API reference](../reference/api.md).
 
 ## Flow
@@ -187,7 +190,7 @@ schedule rotation.
   run `node --test tests/integration/postgres-service-api-keys.test.mjs`.
   This separately checks stored hashing, foreign-Installation rejection,
   cross-instance revocation, and deletion during concurrent verification.
-  Use the existing [test environment instructions](../reference/settings.md#postgresql-test-environment).
+  Use the existing [test environment instructions](../testing/postgresql.md#postgresql-test-environment).
 - [IAM conformance](../../tests/conformance/iam.test.mjs) verifies identity lookup.
   Run `pnpm openapi:check` to check that the generated API contract and Markdown
   reference remain current with the controller routes.
@@ -202,11 +205,11 @@ These commands describe the proof hooks, not a new runtime execution record.
 
 ## Related docs
 
-- [Authentication reference](../reference/authentication.md#service-api-keys)
-- [Deployment procedure](../guides/deploy.md#service-api-keys-for-automation)
+- [Authentication reference](../reference/authentication/service-api-keys.md#service-api-keys)
+- [Deployment procedure](../guides/deploy/service-keys.md#service-api-keys-for-automation)
 - [Human password/session flow](local-password-authentication.md)
 - [Authorization reference](../reference/authorization.md)
-- [Platform identity and authority](../design.md#iam-and-authority)
+- [Platform identity and authority](../design/access.md#iam-and-authority)
 - [Service API key implementation spec](../../specs/.archive/13-service-api-keys.md)
 
 ## Manual Notes
@@ -214,6 +217,8 @@ These commands describe the proof hooks, not a new runtime execution record.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 
 - 2026-08-28 20:17: Allow human or service administrators with current Installation authority to issue and revoke keys. (codex/01a04927-11d8-7083-a4b7-9f3124559d82 - d4b5b01d02cf68a89965f7c00a0fc7d0dcec18d8)
 

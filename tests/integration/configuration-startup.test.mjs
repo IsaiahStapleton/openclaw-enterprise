@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +13,22 @@ import {
 } from "../../apps/controller/src/composition/production-harness.ts";
 import { kubernetesNamespaceName } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { createInstallationDriverConfiguration as installation } from "../helpers/installation-driver-configuration.mjs";
+
+function jsonLines(text) {
+  return text
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function startupDiagnostic(stderr, event) {
+  const diagnostic = jsonLines(stderr).find((line) => line.event === event);
+  assert.ok(diagnostic, stderr);
+  return diagnostic;
+}
 
 async function fixture(t, configuration = installation()) {
   const directory = await mkdtemp(join(tmpdir(), "occ-installation-startup-"));
@@ -25,6 +40,29 @@ async function fixture(t, configuration = installation()) {
 }
 
 function chatgptInstallation() {
+  const configuration = installation();
+  configuration.provider = [
+    {
+      id: "openai",
+      type: "chatgpt",
+      configuration: {
+        workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
+        apiKeyPath: "/tmp/nonexistent-occ-chatgpt-admin-key",
+        credentialTtlSeconds: 3600,
+      },
+      drivers: {
+        service_account: "chatgpt-service-accounts",
+      },
+    },
+  ];
+  configuration.drivers.service_account = {
+    id: "chatgpt-service-accounts",
+    configuration: {},
+  };
+  return configuration;
+}
+
+function retiredChatgptInstallation() {
   const configuration = installation();
   configuration.integrations = {
     chatgpt: {
@@ -76,13 +114,24 @@ test("shared startup loads provider metadata without reading the API-only ChatGP
     environment: { OCC_CONFIG_PATH: await fixture(t, chatgptInstallation()) },
   });
 
-  assert.deepEqual(drivers.installation.integrations, {
-    chatgpt: {
-      workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
-      adminKeyPath: "/tmp/nonexistent-occ-chatgpt-admin-key",
-      credentialTtlSeconds: 3600,
+  assert.deepEqual(drivers.installation.provider, [
+    {
+      id: "openai",
+      type: "chatgpt",
+      configuration: {
+        workspaceId: "f7f33107-5fb9-4ee1-8922-3eae76b5b5a0",
+        apiKeyPath: "/tmp/nonexistent-occ-chatgpt-admin-key",
+        credentialTtlSeconds: 3600,
+      },
+      drivers: {
+        service_account: "chatgpt-service-accounts",
+      },
     },
-  });
+  ]);
+  assert.equal(
+    Object.hasOwn(drivers.installation.provider[0].configuration, "adminKeyPath"),
+    false,
+  );
   assert.deepEqual(drivers.installation.drivers.service_account, {
     id: "chatgpt-service-accounts",
   });
@@ -90,25 +139,62 @@ test("shared startup loads provider metadata without reading the API-only ChatGP
   assert.equal(Object.hasOwn(drivers, "chatgptClient"), false);
 });
 
-test("ChatGPT startup rejects unpaired integrations and unsafe provider configuration", async (t) => {
+test("ChatGPT startup rejects retired integrations and unsafe provider configuration", async (t) => {
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, retiredChatgptInstallation()) },
+    }),
+    /integrations is retired.*provider.*apiKeyPath/,
+  );
+
   for (const [mutate, expected] of [
-    [(value) => delete value.integrations, /must be configured together/],
-    [(value) => delete value.drivers.service_account, /must be configured together/],
-    [(value) => (value.integrations.chatgpt.workspaceId = "untrusted"), /workspace UUID/],
+    [(value) => delete value.provider, /requires an owning provider/],
+    [(value) => delete value.drivers.service_account, /requires drivers\.service_account/],
     [
-      (value) => (value.integrations.chatgpt.adminKeyPath = "relative-admin-key"),
-      /absolute mounted Secret path/,
+      (value) => delete value.provider[0].drivers.service_account,
+      /drivers\.service_account.*required/,
     ],
     [
-      (value) => (value.integrations.chatgpt.credentialTtlSeconds = 2_592_001),
+      (value) => (value.provider[0].configuration.workspaceId = "untrusted"),
+      /workspaceId.*invalid/,
+    ],
+    [
+      (value) => (value.provider[0].configuration.apiKeyPath = "relative-admin-key"),
+      /absolute mounted file path/,
+    ],
+    [
+      (value) => (value.provider[0].configuration.credentialTtlSeconds = 2_592_001),
       /between 1 and 2592000/,
     ],
     [
-      (value) => (value.integrations.chatgpt.apiKey = "plaintext-admin-key"),
-      /plaintext credential/,
+      (value) => (value.provider[0].configuration.apiKey = "plaintext-admin-key"),
+      /plaintext credential|unsupported option/,
     ],
     [
-      (value) => (value.drivers.service_account.configuration.untrusted = true),
+      (value) => (value.provider[0].configuration.adminKeyPath = "/tmp/old-admin-key"),
+      /adminKeyPath.*unsupported/,
+    ],
+    [(value) => (value.provider[0].type = "installed"), /must be chatgpt/],
+    [(value) => (value.provider[0].package = "@example/provider"), /unsupported option package/],
+    [
+      (value) => (value.provider[0].drivers.service_account = "other-service-accounts"),
+      /must match the selected drivers\.service_account\.id/,
+    ],
+    [
+      (value) => value.provider.push(structuredClone(value.provider[0])),
+      /Provider IDs must be unique/,
+    ],
+    [
+      (value) => {
+        const duplicate = structuredClone(value.provider[0]);
+        duplicate.id = "other-openai";
+        value.provider.push(duplicate);
+      },
+      /ServiceAccount Driver cannot belong to multiple Providers/,
+    ],
+    [
+      (value) => (value.drivers.service_account.configuration.providerId = "openai"),
       /unsupported option/,
     ],
   ]) {
@@ -161,7 +247,7 @@ test("production embedded and dedicated replacements preserve their active Servi
       configurationId: `cfg_production-${harness.mode}-cutover`,
       configurationKind: "agent",
       configurationGeneration: 1,
-      configuration: {},
+      configuration: admitLoggingConfiguration({}, "info"),
       harness,
       compute: { id: computeDriver.id, implementation: computeDriver.implementation },
       servicePrincipalId,
@@ -208,14 +294,27 @@ test("production embedded and dedicated replacements preserve their active Servi
       revisionId: revision.id,
       ready: true,
     });
+    const now = new Date();
     const claim = {
+      idempotencyKey: `revision:${candidate.id}:reconcile`,
       namespaceId,
       agentId,
       revisionId: candidate.id,
       actorId: "principal-production",
+      state: "claimed",
+      claimToken: randomUUID(),
+      leaseExpiresAt: new Date(now.getTime() + 30_000),
+      availableAt: now,
       attemptCount: 1,
-      createdAt: new Date(),
+      createdAt: now,
+      updatedAt: now,
     };
+    // This selector unit assumes a live claim at the queue boundary; actual
+    // renewal/loss is exercised by the PostgreSQL worker and stale-claim suites.
+    const heartbeat = t.mock.method(worker.queue, "heartbeat", async (received) => {
+      assert.equal(received, claim);
+      return claim;
+    });
 
     // Preparation must leave each mode's currently serving selector untouched before CAS.
     const observation = await worker.observeRevision(claim, candidate, predecessor, predecessor.id);
@@ -265,6 +364,7 @@ test("production embedded and dedicated replacements preserve their active Servi
         `agent-${shortHash(agentId, 12)}`,
         "gateway",
         {},
+        "info",
         computeDriver.gatewayConfiguration(candidate),
         true,
         servicePrincipalId,
@@ -299,6 +399,7 @@ test("production embedded and dedicated replacements preserve their active Servi
     assert.equal(Object.hasOwn(initial, "expectedActiveRevisionId"), false);
     assert.deepEqual(serviceWrites, embedded ? [] : [inactiveSelector]);
     assert.deepEqual(service.spec.selector, inactiveSelector);
+    heartbeat.mock.restore();
   }
 });
 
@@ -346,8 +447,8 @@ test("production server and worker resolve singleton startup without an Installa
     timeout: 10_000,
   });
   assert.equal(server.status, 1);
-  assert.match(server.stderr, /OCC_AUTH_BASE_URL|OCC_AUTH_SECRET/);
-  assert.doesNotMatch(server.stderr, /OCC_INSTALLATION_ID/);
+  assert.equal(startupDiagnostic(server.stderr, "startup-error").code, "AUTH_BASE_URL_INVALID");
+  assert.doesNotMatch(server.stderr, /OCC_AUTH_BASE_URL|OCC_AUTH_SECRET|OCC_INSTALLATION_ID/);
 
   // The real worker likewise reaches PostgreSQL; no test-owned database or driver is substituted.
   const worker = spawnSync(process.execPath, ["apps/controller/src/worker.mjs"], {
@@ -357,7 +458,10 @@ test("production server and worker resolve singleton startup without an Installa
     timeout: 10_000,
   });
   assert.equal(worker.status, 1);
-  assert.match(worker.stderr, /worker\.startup-error/);
+  assert.equal(
+    startupDiagnostic(worker.stderr, "worker.startup-error").code,
+    "PERSISTENCE_UNAVAILABLE",
+  );
   assert.doesNotMatch(worker.stderr, /OCC_INSTALLATION_ID|explicit Installation/);
 });
 
@@ -384,7 +488,11 @@ test("only the actual API process reads ChatGPT admin credentials and provider a
     timeout: 10_000,
   });
   assert.equal(server.status, 1);
-  assert.match(server.stderr, /ChatGPT admin-key Secret is unavailable/);
+  assert.equal(
+    startupDiagnostic(server.stderr, "startup-error").code,
+    "CHATGPT_ADMIN_KEY_UNAVAILABLE",
+  );
+  assert.doesNotMatch(server.stderr, /ChatGPT admin-key Secret is unavailable/);
 
   // The same configured worker cannot read that mount and fails only when PostgreSQL is unavailable.
   const worker = spawnSync(process.execPath, ["apps/controller/src/worker.mjs"], {
@@ -394,7 +502,10 @@ test("only the actual API process reads ChatGPT admin credentials and provider a
     timeout: 10_000,
   });
   assert.equal(worker.status, 1);
-  assert.match(worker.stderr, /worker\.startup-error/);
+  assert.equal(
+    startupDiagnostic(worker.stderr, "worker.startup-error").code,
+    "PERSISTENCE_UNAVAILABLE",
+  );
   assert.doesNotMatch(worker.stderr, /ChatGPT|admin-key|ServiceAccount Driver/);
 
   // Driver-private provider bindings cannot silently fall back to ephemeral in-memory persistence.
@@ -406,15 +517,19 @@ test("only the actual API process reads ChatGPT admin credentials and provider a
       OCC_CONFIG_PATH: path,
       OCC_HOST: "127.0.0.1",
       OCC_PORT: "8080",
-      OPENCLAW_DEV_EMAIL: "admin@example.test",
-      OPENCLAW_DEV_PASSWORD: "development-password-with-at-least-32-characters",
     },
     encoding: "utf8",
     timeout: 10_000,
   });
   assert.equal(inMemory.status, 1);
-  assert.match(inMemory.stderr, /ServiceAccounts require PostgreSQL persistence/);
-  assert.doesNotMatch(inMemory.stderr, /ChatGPT admin-key Secret/);
+  assert.equal(
+    startupDiagnostic(inMemory.stderr, "startup-error").code,
+    "SERVICE_ACCOUNT_REQUIRES_POSTGRES",
+  );
+  assert.doesNotMatch(
+    inMemory.stderr,
+    /ServiceAccounts require PostgreSQL persistence|ChatGPT admin-key Secret/,
+  );
 });
 
 test("startup rejects caller-selected Installation IDs and obsolete Driver selectors", async (t) => {
@@ -472,11 +587,13 @@ test("startup rejects plaintext secrets, caller-authored identities, and unsuppo
       /schema|integer|port/,
     ],
     [
-      (value) => (value.drivers.compute.configuration.images.gateway = "gateway:latest"),
+      (value) =>
+        (value.drivers.compute.configuration.images.gateway = "registry.example/gateway:latest"),
       /immutable SHA-256 digest/,
     ],
     [
-      (value) => (value.drivers.compute.configuration.images.agent = "agent:latest"),
+      (value) =>
+        (value.drivers.compute.configuration.images.agent = "registry.example/agent:latest"),
       /immutable SHA-256 digest/,
     ],
     [

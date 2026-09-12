@@ -30,13 +30,29 @@ spec:
               - key: {{ $.Values.installation.key }}
                 path: installation.yaml
         {{- if eq $component "api" }}
-        {{- if $.Values.integrations.chatgpt.enabled }}
-        {{- $chatgpt := $.Values.integrations.chatgpt }}
+        {{- if $.Values.gatewayRouting.enabled }}
+        - name: gateway-api-key
+          secret:
+            secretName: {{ $.Values.gatewayRouting.apiKeySecretName | quote }}
+            items:
+              - key: occ
+                path: key
+        {{- if or (not $.Values.gatewayRouting.issuerRef.name) $.Values.gatewayRouting.caSecretName }}
+        - name: gateway-ca
+          secret:
+            secretName: {{ ternary (include "openclaw.gatewayRouting.rootSecretName" $) $.Values.gatewayRouting.caSecretName (not $.Values.gatewayRouting.issuerRef.name) | quote }}
+            items:
+              - key: {{ ternary "tls.crt" $.Values.gatewayRouting.caSecretKey (not $.Values.gatewayRouting.issuerRef.name) | quote }}
+                path: ca.crt
+        {{- end }}
+        {{- end }}
+        {{- if $.Values.provider.chatgpt.enabled }}
+        {{- $chatgpt := $.Values.provider.chatgpt }}
         {{- if or (not $chatgpt.secretName) (not $chatgpt.key) }}
-        {{- fail "integrations.chatgpt requires a dedicated admin Secret name and key" }}
+        {{- fail "provider.chatgpt requires a dedicated admin Secret name and key" }}
         {{- end }}
         {{- if or (eq $chatgpt.secretName $.Values.installation.secretName) (eq $chatgpt.secretName $.Values.database.secretName) (eq $chatgpt.secretName $.Values.auth.secretName) }}
-        {{- fail "integrations.chatgpt admin credentials must use a dedicated Secret" }}
+        {{- fail "provider.chatgpt admin credentials must use a dedicated Secret" }}
         {{- end }}
         - name: chatgpt-admin
           secret:
@@ -66,6 +82,14 @@ spec:
               value: /etc/openclaw/installation/installation.yaml
             {{- include "openclaw.secretEnv" (dict "name" "OCC_DATABASE_URL" "secretName" $.Values.database.secretName "key" $.Values.database.appUrlKey) | nindent 12 }}
             {{- if eq $component "api" }}
+            {{- if $.Values.gatewayRouting.enabled }}
+            - name: OCC_GATEWAY_API_KEY_PATH
+              value: /etc/openclaw/gateway-api-key/key
+            {{- if or (not $.Values.gatewayRouting.issuerRef.name) $.Values.gatewayRouting.caSecretName }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /etc/openclaw/gateway-ca/ca.crt
+            {{- end }}
+            {{- end }}
             - name: OCC_HOST
               valueFrom:
                 fieldRef:
@@ -92,7 +116,17 @@ spec:
               mountPath: /etc/openclaw/installation
               readOnly: true
             {{- if eq $component "api" }}
-            {{- if $.Values.integrations.chatgpt.enabled }}
+            {{- if $.Values.gatewayRouting.enabled }}
+            - name: gateway-api-key
+              mountPath: /etc/openclaw/gateway-api-key
+              readOnly: true
+            {{- if or (not $.Values.gatewayRouting.issuerRef.name) $.Values.gatewayRouting.caSecretName }}
+            - name: gateway-ca
+              mountPath: /etc/openclaw/gateway-ca
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- if $.Values.provider.chatgpt.enabled }}
             - name: chatgpt-admin
               mountPath: /etc/openclaw/chatgpt
               readOnly: true

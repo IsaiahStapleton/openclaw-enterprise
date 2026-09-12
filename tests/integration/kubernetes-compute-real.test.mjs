@@ -8,6 +8,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
+import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import {
   configureExistingK3dLocalPathSharedFileSystem,
   validateExplicitK3dLoopbackContext,
@@ -100,6 +102,7 @@ function revision(driver, owner, agentId, number) {
     configurationId = `cfg_${randomUUID()}`;
     configurationIds.set(identity, configurationId);
   }
+  const loggingLevel = number === 1 ? "info" : "debug";
   return {
     id: `rev_${randomUUID()}`,
     namespaceId: owner.id,
@@ -108,10 +111,13 @@ function revision(driver, owner, agentId, number) {
     configurationId,
     configurationKind: "agent",
     configurationGeneration: number,
-    configuration: {
-      gateway: { controlUi: { enabled: false } },
-      logging: { level: number === 1 ? "info" : "debug" },
-    },
+    configuration: admitLoggingConfiguration(
+      {
+        gateway: { controlUi: { enabled: false } },
+        logging: { level: loggingLevel },
+      },
+      loggingLevel,
+    ),
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
     compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: `service-agent-${agentId}`,
@@ -1509,15 +1515,26 @@ test(
       );
     });
 
+    const authSecret = "kubernetes-integration-auth-secret-32-bytes";
+    const authBaseURL = "http://127.0.0.1";
+    if (previous === undefined) {
+      await ensureDevelopmentBootstrap(context, {
+        databaseUrl,
+        email: adminCredentials.email,
+        password: adminCredentials.password,
+        authSecret,
+        authBaseURL,
+        installationName: "OpenClaw Kubernetes integration",
+      });
+    }
+
     app = await composePostgresDevelopment(
       {
         mode: "development",
         host: "127.0.0.1",
         databaseUrl,
-        adminEmail: adminCredentials.email,
-        adminPassword: adminCredentials.password,
-        authSecret: "kubernetes-integration-auth-secret-32-bytes",
-        authBaseURL: "http://127.0.0.1",
+        authSecret,
+        authBaseURL,
       },
       { computeDriver: driver, configurationDriver },
     );
@@ -1535,13 +1552,6 @@ test(
         ...(payload === undefined ? {} : { payload }),
       });
       return { status: response.statusCode, ...response.json() };
-    }
-
-    if (previous === undefined) {
-      const bootstrap = await request("POST", "/installation/bootstrap", {
-        name: "OpenClaw Kubernetes integration",
-      });
-      assert.equal(bootstrap.status, 201);
     }
 
     async function startWorker() {

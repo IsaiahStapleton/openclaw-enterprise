@@ -12,7 +12,11 @@ import type {
   InstallationRuntimeDrivers,
   ServiceAccountDriverFactory,
 } from "./installation-config.ts";
+import { providerSummariesFromDefinitions } from "./installation-config.ts";
+import type { OccLogger } from "../logging.ts";
 import { resolveApprovedProductionHarness } from "./production-harness.ts";
+import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
+import { createWorkspaceFilesAccess, validateWorkspaceFilesApiKeyPath } from "./workspace-files.ts";
 
 export interface ProductionConfig {
   readonly mode: "production";
@@ -22,7 +26,10 @@ export interface ProductionConfig {
   readonly authBaseURL: string;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
+  readonly logger?: OccLogger;
   readonly serviceAccountDriverFactory?: ServiceAccountDriverFactory;
+  readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
+  readonly gatewayApiKeyPath?: string;
 }
 
 export async function composeProduction(config: ProductionConfig) {
@@ -34,6 +41,7 @@ export async function composeProduction(config: ProductionConfig) {
     configurationDriver,
     secretDriver,
     sandboxDriver,
+    pluginDriver,
     createIAMDriver,
   } = config.drivers;
   if (
@@ -110,6 +118,8 @@ export async function composeProduction(config: ProductionConfig) {
     const controller = new OpenClawController(persistedInstallation, {
       state,
       recordOperations: true,
+      providers: installation.provider,
+      loggingLevel: config.drivers.installation.logging.level,
     });
     controller.registerDriver(iamDriver);
     if (controller.selectDriver("iam", driverId) !== iamDriver)
@@ -132,6 +142,20 @@ export async function composeProduction(config: ProductionConfig) {
       throw new Error("The configured Configuration Driver was not selected correctly.");
     }
     config.serviceAccountDriverFactory?.(controller, state);
+    if (pluginDriver !== undefined) {
+      controller.registerDriver(pluginDriver);
+      if (controller.selectDriver("plugin", pluginDriver.id) !== pluginDriver) {
+        throw new Error("The configured Plugin Driver was not selected correctly.");
+      }
+    }
+    await controller.validateProviderConfiguration();
+
+    let workspaceFilesAccess = config.workspaceFilesAccess;
+    if (workspaceFilesAccess === undefined && config.gatewayApiKeyPath !== undefined) {
+      const gatewayApiKeyPath = config.gatewayApiKeyPath;
+      await validateWorkspaceFilesApiKeyPath(gatewayApiKeyPath);
+      workspaceFilesAccess = createWorkspaceFilesAccess(computeDriver, gatewayApiKeyPath);
+    }
 
     const app = createFastifyApp({
       controller,
@@ -139,16 +163,20 @@ export async function composeProduction(config: ProductionConfig) {
       computeDriver,
       configurationDriver,
       secretDriver,
+      publicOrigin: config.authBaseURL,
       ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
       resolveHarness: resolveApprovedProductionHarness,
       auditSink: state.auditSink,
+      providerSummaries: providerSummariesFromDefinitions(installation.provider),
       auth,
+      ...(config.logger === undefined ? {} : { logger: config.logger }),
       provisionAuthAccount,
       development: {
         enabled: false,
         installationId: persistedInstallation.id,
       },
       maxBodyBytes: 64 * 1024,
+      ...(workspaceFilesAccess === undefined ? {} : { workspaceFilesAccess }),
     });
     app.get("/healthz", async () => ({ status: "ok" }));
     app.get("/readyz", async () => {

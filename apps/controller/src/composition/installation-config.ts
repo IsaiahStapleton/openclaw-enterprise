@@ -9,17 +9,25 @@ import type {
   ConfigurationDriver,
   DriverImplementation,
   IAMDriver,
+  ProviderDefinition,
+  ProviderSummary,
+  PluginDriver,
   SandboxDriver,
   SecretDriver,
 } from "@openclaw-enterprise/contracts";
 import { NativeIAMDriver, type NativeIAMStateStore } from "@openclaw-enterprise/iam";
-import type { OpenClawController, PostgresPlatformState } from "@openclaw-enterprise/occ";
+import {
+  validateProviderDefinitions,
+  type OpenClawController,
+  type PostgresPlatformState,
+} from "@openclaw-enterprise/occ";
 import { Check } from "typebox/value";
 import {
   KubernetesComputeDriver,
   type KubernetesComputeDriverOptions,
 } from "../drivers/compute/kubernetes/index.ts";
 import { currentComputeAbortSignal } from "../drivers/compute/operation-context.ts";
+import { SshComputeDriver, type SshComputeDriverOptions } from "../drivers/compute/ssh/index.ts";
 import {
   KubernetesConfigurationDriver,
   type KubernetesConfigurationDriverOptions,
@@ -28,8 +36,15 @@ import {
   KubernetesSecretDriver,
   type KubernetesSecretDriverOptions,
 } from "../drivers/secret/kubernetes/index.ts";
+import { type LoggingConfiguration, operationalLoggingConfiguration } from "../logging.ts";
+import { OCCPluginDriver, CodexPluginDriver } from "../drivers/plugin/index.ts";
 
 type ConfigurationRecord = Readonly<Record<string, unknown>>;
+
+export interface StartupConfigurationSnapshot {
+  readonly configuration?: ConfigurationRecord;
+  readonly logging: LoggingConfiguration;
+}
 
 export interface SelectedDriverConfiguration<T = ConfigurationRecord> {
   readonly id: string;
@@ -40,19 +55,15 @@ export interface SelectedDriverConfiguration<T = ConfigurationRecord> {
 
 export interface InstallationStartupConfiguration {
   readonly occ: { readonly cluster: string };
-  readonly integrations?: {
-    readonly chatgpt: {
-      readonly workspaceId: string;
-      readonly adminKeyPath: string;
-      readonly credentialTtlSeconds?: number;
-    };
-  };
+  readonly logging: LoggingConfiguration;
+  readonly provider: readonly ProviderDefinition[];
   readonly drivers: {
     readonly configuration: SelectedDriverConfiguration;
     readonly iam: SelectedDriverConfiguration<ConfigurationRecord>;
     readonly compute: SelectedDriverConfiguration;
     readonly secret: SelectedDriverConfiguration;
     readonly sandbox?: SelectedDriverConfiguration;
+    readonly plugin?: SelectedDriverConfiguration;
     readonly service_account?: { readonly id: string };
   };
 }
@@ -68,7 +79,68 @@ export interface InstallationRuntimeDrivers {
   readonly configurationDriver: ConfigurationDriver;
   readonly secretDriver: SecretDriver;
   readonly sandboxDriver?: SandboxDriver;
+  readonly pluginDriver?: PluginDriver;
   readonly createIAMDriver: (state: NativeIAMStateStore) => IAMDriver;
+}
+
+async function startupConfiguration(
+  options: {
+    readonly mode: "development" | "production";
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+  },
+  required: boolean,
+): Promise<ConfigurationRecord | undefined> {
+  const environment = options.environment ?? process.env;
+  const path = environment.OCC_CONFIG_PATH;
+  if (path === undefined) {
+    if (!required) return undefined;
+    throw new Error("OCC_CONFIG_PATH must identify the Installation startup YAML.");
+  }
+  if (typeof path !== "string" || path.trim().length === 0) {
+    throw new Error("OCC_CONFIG_PATH must identify the Installation startup YAML.");
+  }
+  if (!isAbsolute(path)) {
+    throw new Error("OCC_CONFIG_PATH must identify an absolute Installation startup YAML path.");
+  }
+
+  let contents: string;
+  try {
+    contents = await readFile(path, "utf8");
+  } catch {
+    throw new Error("The configured Installation startup YAML is unavailable.");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = loadYaml(contents);
+  } catch {
+    throw new Error("The configured Installation startup file must contain valid YAML.");
+  }
+  const configuration = object(parsed, "Installation startup configuration");
+  safe(configuration, "Installation startup configuration");
+  if (Object.hasOwn(configuration, "integrations")) {
+    throw new Error(
+      "integrations is retired; configure ChatGPT with provider[].configuration.apiKeyPath.",
+    );
+  }
+  closed(
+    configuration,
+    ["occ", "drivers", "provider", "logging"],
+    "Installation startup configuration",
+  );
+  return configuration;
+}
+
+export async function loadStartupConfigurationSnapshot(options: {
+  readonly mode: "development" | "production";
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+}): Promise<StartupConfigurationSnapshot> {
+  const configuration = await startupConfiguration(options, options.mode === "production");
+  const logging = operationalLoggingConfiguration(configuration?.logging);
+  return Object.freeze({
+    ...(configuration === undefined ? {} : { configuration }),
+    logging,
+  });
 }
 
 interface ExternalDriverModule extends DriverImplementation {
@@ -94,9 +166,6 @@ interface BundledOpenShellSandboxDriverModule extends DriverImplementation {
 }
 
 const PACKAGE_NAME = /^(?:@[a-zA-Z0-9][a-zA-Z0-9._~-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._~-]*$/;
-const WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const MAX_CHATGPT_CREDENTIAL_TTL_SECONDS = 30 * 24 * 60 * 60;
-
 const FORBIDDEN_SECRET_KEY =
   /(?:password|passwd|api[_-]?key|(?:access[_-]?)?token|private[_-]?key|(?:client[_-]?)?secret|credentials?)$/i;
 const FORBIDDEN_SECRET_VALUE =
@@ -153,6 +222,42 @@ function safe(value: unknown, path: string): void {
     }
     safe(entry, `${path}.${key}`);
   }
+}
+
+function providerConfiguration(
+  value: unknown,
+  serviceAccount: InstallationStartupConfiguration["drivers"]["service_account"],
+): readonly ProviderDefinition[] {
+  const providers = validateProviderDefinitions(value ?? []);
+  if (serviceAccount !== undefined && providers.length === 0) {
+    throw new Error("drivers.service_account requires an owning provider entry with type chatgpt.");
+  }
+  for (const provider of providers) {
+    if (serviceAccount === undefined) {
+      throw new Error(
+        `provider[${provider.id}].drivers.service_account requires drivers.service_account.`,
+      );
+    }
+    if (provider.drivers.service_account !== serviceAccount.id) {
+      throw new Error(
+        `provider[${provider.id}].drivers.service_account must match the selected drivers.service_account.id.`,
+      );
+    }
+  }
+  return providers;
+}
+
+export function providerSummariesFromDefinitions(
+  providers: readonly ProviderDefinition[],
+): readonly ProviderSummary[] {
+  return Object.freeze(
+    providers.map((provider) =>
+      Object.freeze({
+        id: provider.id,
+        type: provider.type,
+      }),
+    ),
+  );
 }
 
 function importEntrypoint(value: unknown): string | undefined {
@@ -276,7 +381,7 @@ async function loadDriverPackage(
 
 function selected(
   value: unknown,
-  capability: "configuration" | "iam" | "compute" | "secret" | "sandbox",
+  capability: "configuration" | "iam" | "compute" | "secret" | "sandbox" | "plugin",
   implementation: string,
   driver: DriverImplementation,
 ): SelectedDriverConfiguration {
@@ -312,6 +417,7 @@ export async function loadInstallationConfiguration(options: {
   readonly mode: "development" | "production";
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly packageRoot?: string;
+  readonly startupConfiguration?: StartupConfigurationSnapshot;
   readonly createSandboxDriver?: (selection: SelectedDriverConfiguration) => SandboxDriver;
 }): Promise<InstallationRuntimeDrivers | undefined> {
   const environment = options.environment ?? process.env;
@@ -327,80 +433,29 @@ export async function loadInstallationConfiguration(options: {
       throw new Error(`${name} is unsupported; select Drivers in the Installation startup YAML.`);
     }
   }
-  const path = environment.OCC_CONFIG_PATH;
-  if (path === undefined && options.mode === "development") return undefined;
-  if (typeof path !== "string" || path.trim().length === 0) {
+  const startup = options.startupConfiguration ?? (await loadStartupConfigurationSnapshot(options));
+  const { configuration, logging } = startup;
+  if (configuration === undefined && options.mode === "production") {
     throw new Error("OCC_CONFIG_PATH must identify the Installation startup YAML.");
   }
-  if (!isAbsolute(path)) {
-    throw new Error("OCC_CONFIG_PATH must identify an absolute Installation startup YAML path.");
+  if (configuration === undefined) return undefined;
+  if (
+    options.mode === "development" &&
+    configuration.occ === undefined &&
+    configuration.drivers === undefined &&
+    configuration.provider === undefined
+  ) {
+    return undefined;
   }
-
-  let contents: string;
-  try {
-    contents = await readFile(path, "utf8");
-  } catch {
-    throw new Error("The configured Installation startup YAML is unavailable.");
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = loadYaml(contents);
-  } catch {
-    throw new Error("The configured Installation startup file must contain valid YAML.");
-  }
-  const configuration = object(parsed, "Installation startup configuration");
-  safe(configuration, "Installation startup configuration");
-  closed(configuration, ["occ", "drivers", "integrations"], "Installation startup configuration");
   const occ = object(configuration.occ, "occ");
   closed(occ, ["cluster"], "occ");
   const cluster = nonempty(occ.cluster, "occ.cluster");
   const drivers = object(configuration.drivers, "drivers");
   closed(
     drivers,
-    ["configuration", "iam", "compute", "secret", "sandbox", "service_account"],
+    ["configuration", "iam", "compute", "secret", "sandbox", "plugin", "service_account"],
     "drivers",
   );
-
-  let integration: NonNullable<InstallationStartupConfiguration["integrations"]> | undefined;
-  if (configuration.integrations !== undefined) {
-    const integrations = object(configuration.integrations, "integrations");
-    closed(integrations, ["chatgpt"], "integrations");
-    const chatgpt = object(integrations.chatgpt, "integrations.chatgpt");
-    closed(
-      chatgpt,
-      ["workspaceId", "adminKeyPath", "credentialTtlSeconds"],
-      "integrations.chatgpt",
-    );
-    const workspaceId = nonempty(chatgpt.workspaceId, "integrations.chatgpt.workspaceId");
-    if (!WORKSPACE_ID.test(workspaceId)) {
-      throw new Error("integrations.chatgpt.workspaceId must be a valid workspace UUID.");
-    }
-    const adminKeyPath = nonempty(chatgpt.adminKeyPath, "integrations.chatgpt.adminKeyPath");
-    if (!isAbsolute(adminKeyPath)) {
-      throw new Error(
-        "integrations.chatgpt.adminKeyPath must identify an absolute mounted Secret path.",
-      );
-    }
-    const credentialTtlSeconds = chatgpt.credentialTtlSeconds;
-    if (
-      credentialTtlSeconds !== undefined &&
-      (!Number.isSafeInteger(credentialTtlSeconds) ||
-        (credentialTtlSeconds as number) < 1 ||
-        (credentialTtlSeconds as number) > MAX_CHATGPT_CREDENTIAL_TTL_SECONDS)
-    ) {
-      throw new Error("integrations.chatgpt.credentialTtlSeconds must be between 1 and 2592000.");
-    }
-    integration = Object.freeze({
-      chatgpt: Object.freeze({
-        workspaceId,
-        adminKeyPath,
-        ...(credentialTtlSeconds === undefined
-          ? {}
-          : { credentialTtlSeconds: credentialTtlSeconds as number }),
-      }),
-    });
-  }
 
   let serviceAccount: InstallationStartupConfiguration["drivers"]["service_account"];
   if (drivers.service_account !== undefined) {
@@ -413,11 +468,7 @@ export async function loadInstallationConfiguration(options: {
     closed(driverConfiguration, [], "drivers.service_account.configuration");
     serviceAccount = Object.freeze({ id: nonempty(selection.id, "drivers.service_account.id") });
   }
-  if ((integration === undefined) !== (serviceAccount === undefined)) {
-    throw new Error(
-      "drivers.service_account and integrations.chatgpt must be configured together.",
-    );
-  }
+  const providers = providerConfiguration(configuration.provider, serviceAccount);
 
   const configurationSelection = object(drivers.configuration, "drivers.configuration");
   const iamSelection = object(drivers.iam, "drivers.iam");
@@ -425,6 +476,32 @@ export async function loadInstallationConfiguration(options: {
   const secretSelection = object(drivers.secret, "drivers.secret");
   const sandboxSelection =
     drivers.sandbox === undefined ? undefined : object(drivers.sandbox, "drivers.sandbox");
+  const pluginSelection =
+    drivers.plugin === undefined ? undefined : object(drivers.plugin, "drivers.plugin");
+  if (pluginSelection !== undefined) {
+    closed(pluginSelection, ["id", "configuration"], "drivers.plugin");
+    if (pluginSelection.id !== "occ-plugin" && pluginSelection.id !== "codex-plugin") {
+      throw new Error("drivers.plugin.id must select occ-plugin or codex-plugin.");
+    }
+  }
+  const PluginImplementation =
+    pluginSelection?.id === "codex-plugin" ? CodexPluginDriver : OCCPluginDriver;
+  const plugin =
+    pluginSelection === undefined
+      ? undefined
+      : selected(
+          pluginSelection,
+          "plugin",
+          pluginSelection.id === "codex-plugin" ? "occ/codex-plugin" : "occ/openclaw-plugin",
+          PluginImplementation,
+        );
+  const pluginDriver =
+    plugin === undefined
+      ? undefined
+      : new PluginImplementation(plugin.configuration, {
+          id: plugin.id,
+          implementation: plugin.implementation,
+        });
   for (const [capability, selection] of [
     ["configuration", configurationSelection],
     ["iam", iamSelection],
@@ -460,6 +537,13 @@ export async function loadInstallationConfiguration(options: {
     packageRoot,
     options.packageRoot !== undefined,
   );
+  const sshCompute = computePackage === undefined && computeSelection.id === "compute-ssh";
+  const kubernetesCompute = computePackage === undefined && !sshCompute;
+  if (sshCompute && sandboxSelection !== undefined) {
+    throw new Error(
+      "drivers.sandbox is unsupported with compute-ssh; it requires the bundled Kubernetes Compute Driver.",
+    );
+  }
   const sandboxPackage =
     sandboxSelection === undefined
       ? undefined
@@ -489,8 +573,8 @@ export async function loadInstallationConfiguration(options: {
   const compute = selected(
     computeSelection,
     "compute",
-    computePackage?.implementation ?? "occ/kubernetes",
-    computePackage?.module ?? KubernetesComputeDriver,
+    computePackage?.implementation ?? (sshCompute ? "occ/ssh" : "occ/kubernetes"),
+    computePackage?.module ?? (sshCompute ? SshComputeDriver : KubernetesComputeDriver),
   );
   const secret = selected(
     secretSelection,
@@ -510,7 +594,7 @@ export async function loadInstallationConfiguration(options: {
   if (sandbox !== undefined && computePackage !== undefined) {
     throw new Error("drivers.sandbox requires the bundled Kubernetes Compute Driver.");
   }
-  if (options.mode === "production" && computePackage === undefined) {
+  if (options.mode === "production" && kubernetesCompute) {
     const kubernetes = compute.configuration as unknown as KubernetesComputeDriverOptions;
     if (kubernetes.images.requireImmutableDigest !== true) {
       throw new Error("Production Kubernetes workloads require immutable image digests.");
@@ -526,13 +610,15 @@ export async function loadInstallationConfiguration(options: {
   }
   const installation = Object.freeze({
     occ: Object.freeze({ cluster }),
-    ...(integration === undefined ? {} : { integrations: integration }),
+    logging,
+    provider: providers,
     drivers: Object.freeze({
       configuration: configured,
       iam,
       compute,
       secret,
       ...(sandbox === undefined ? {} : { sandbox }),
+      ...(plugin === undefined ? {} : { plugin }),
       ...(serviceAccount === undefined ? {} : { service_account: serviceAccount }),
     }),
   });
@@ -558,18 +644,33 @@ export async function loadInstallationConfiguration(options: {
               implementation: sandbox.implementation,
             })
           : (createExternalDriver(sandboxPackage.module, sandbox, "sandbox") as SandboxDriver);
-  const computeDriver =
-    computePackage === undefined
-      ? new KubernetesComputeDriver(
-          compute.configuration as unknown as KubernetesComputeDriverOptions,
-          {
-            id: compute.id,
-            implementation: compute.implementation,
-            lifecycleDrivers: [configurationDriver],
-            ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
-          },
-        )
-      : (createExternalDriver(computePackage.module, compute, "compute") as ComputeDriver);
+  let computeDriver: ComputeDriver;
+  if (computePackage !== undefined) {
+    computeDriver = createExternalDriver(
+      computePackage.module,
+      compute,
+      "compute",
+    ) as ComputeDriver;
+  } else if (sshCompute) {
+    computeDriver = new SshComputeDriver(
+      compute.configuration as unknown as SshComputeDriverOptions,
+      {
+        id: compute.id,
+        implementation: compute.implementation,
+        lifecycleDrivers: [configurationDriver],
+      },
+    );
+  } else {
+    computeDriver = new KubernetesComputeDriver(
+      compute.configuration as unknown as KubernetesComputeDriverOptions,
+      {
+        id: compute.id,
+        implementation: compute.implementation,
+        lifecycleDrivers: [configurationDriver],
+        ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
+      },
+    );
+  }
   const secretDriver = new KubernetesSecretDriver(
     secret.configuration as unknown as KubernetesSecretDriverOptions,
     { id: secret.id, implementation: secret.implementation },
@@ -595,7 +696,16 @@ export async function loadInstallationConfiguration(options: {
     secretDriver,
     ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
     createIAMDriver,
+    ...(pluginDriver === undefined ? {} : { pluginDriver }),
   });
+}
+
+export async function loadOperationalLoggingConfiguration(options: {
+  readonly mode: "development" | "production";
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+}): Promise<LoggingConfiguration> {
+  const configuration = await startupConfiguration(options, false);
+  return operationalLoggingConfiguration(configuration?.logging);
 }
 
 async function loadBundledOpenShellSandboxDriver(): Promise<BundledOpenShellSandboxDriverModule> {

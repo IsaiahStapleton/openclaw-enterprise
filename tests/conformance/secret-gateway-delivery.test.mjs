@@ -63,6 +63,12 @@ function revision(driver, overrides = {}) {
     configurationKind: "agent",
     configurationGeneration: 1,
     configuration: {
+      logging: {
+        level: "info",
+        consoleLevel: "info",
+        consoleStyle: "json",
+      },
+      diagnostics: { otel: { logs: false } },
       secrets: {
         providers: {
           model: { source: "env", allowlist: ["OPENAI_API_KEY"] },
@@ -131,6 +137,7 @@ test("secret-gateway-delivery renders exact bound Namespace Secret env only into
     `agent-${suffix}`,
     "gateway",
     {},
+    driver.gatewayConfiguration(candidate).loggingLevel,
     driver.gatewayConfiguration(candidate),
     true,
     candidate.servicePrincipalId,
@@ -163,6 +170,7 @@ test("secret-gateway-delivery renders exact bound Namespace Secret env only into
         `agent-${suffix}`,
         "agent",
         {},
+        "info",
         undefined,
         false,
         undefined,

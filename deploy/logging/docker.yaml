@@ -1,0 +1,37 @@
+receivers:
+  fluent_forward:
+    endpoint: 0.0.0.0:24224
+
+processors:
+  transform/docker:
+    error_mode: silent
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["log.iostream"], attributes["source"])
+          - set(attributes["container.id"], attributes["container_id"])
+          - set(attributes["service.instance.id"], attributes["com.docker.compose.project"])
+          - set(attributes["service.instance.id"], attributes["container_id"]) where attributes["service.instance.id"] == nil
+          - set(attributes["service.name"], "occ-api") where attributes["com.docker.compose.service"] == "controller" or attributes["com.docker.compose.service"] == "bootstrap" or attributes["com.docker.compose.service"] == "migrate"
+          - set(attributes["service.name"], "occ-worker") where attributes["com.docker.compose.service"] == "worker"
+          - set(attributes["service.name"], "openclaw-gateway") where attributes["org.openclaw.enterprise.managed"] == "true" and attributes["org.openclaw.enterprise.role"] == "gateway"
+          - set(attributes["service.name"], "codex-app-server") where attributes["org.openclaw.enterprise.managed"] == "true" and attributes["org.openclaw.enterprise.role"] == "agent"
+          - set(attributes["openclaw.namespace.id"], attributes["org.openclaw.enterprise.namespace-id"])
+          - set(attributes["openclaw.agent.id"], attributes["org.openclaw.enterprise.agent-id"])
+          - set(attributes["openclaw.revision.id"], attributes["org.openclaw.enterprise.revision-id"])
+          - set(attributes["service.version"], attributes["org.openclaw.enterprise.version"])
+
+service:
+  pipelines:
+    logs:
+      receivers: [fluent_forward]
+      processors:
+        [
+          memory_limiter,
+          transform/docker,
+          transform/operational,
+          filter/operational,
+          groupbyattrs/identity,
+          batch,
+        ]
+      exporters: [otlp_http]

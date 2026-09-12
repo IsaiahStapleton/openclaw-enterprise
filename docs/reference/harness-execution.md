@@ -39,10 +39,12 @@ when the Codex plugin is explicitly enabled and its app-server transport is
 
 Selectable model catalogs under Agent defaults or entries may include additional
 models only when they retain the selected provider and an explicit matching
-Harness runtime. A provider's native `models` array remains limited to the
-resolved primary model. Nonempty model fallbacks and nonempty native
-`agents.list` configurations are unsupported. This admits a bounded catalog; it
-does not admit changing topology or provider after deployment.
+Harness runtime. Model fallbacks under defaults or Agent entries must retain
+the primary provider and resolve through the same policy checks to the same
+Harness. A provider's native `models` array is limited to the resolved primary
+and fallback models. Nonempty native `agents.list` configurations remain
+unsupported. Admission preserves the fallback order in the immutable revision;
+it does not implement fallback execution or allow changing topology.
 
 ## Admission and immutable execution
 
@@ -53,12 +55,42 @@ is unchanged; the revision freezes the admitted document, source Configuration
 identity and generation, approved Harness identity/version, execution mode,
 Compute identity, and any selected sandbox or account binding.
 
+Admission also stamps the platform-owned native logging settings after any
+SandboxDriver transformation and before validation. The frozen AgentRevision
+contains `logging.level`, matching `logging.consoleLevel`, JSON console style,
+and disabled native OTLP log export. Runtime-owned console and tool redaction
+remain enabled by the gateway and Codex runtime; the admitted native
+Configuration does not carry the retired `logging.redactSensitive` key. Later
+edits to the source Configuration or to OCC startup `logging.level` cannot mutate
+that snapshot; deploy the Agent again to create a new revision with a changed
+runtime level.
+
 Later edits affect a future explicit deployment. The worker checks the admitted
 combination and exact ownership before runtime effects. Unsupported combinations,
 revoked authority, or a missing required Driver fail closed. See
 [Agents](agents.md), [Configuration](configuration.md), and
 [controller reconciliation](controller.md) for their respective ownership and
 queue guarantees.
+
+## Runtime logging
+
+For level changes, collection, and backend verification, use the
+[observability guide](../guides/observability.md).
+
+Compute renders logging from the admitted revision. Kubernetes mounts the
+admitted native Configuration read-only under `/etc/openclaw`, with
+`OPENCLAW_CONFIG_PATH` pointing at that document. Gateway containers receive
+native JSON console logging at the admitted level and keep their own OTLP log
+export disabled. Dedicated Codex app-servers receive `LOG_FORMAT=json`,
+`RUST_LOG=<level>,codex_otel=off`, and host-owned `codex` configuration that
+sets `otel.exporter="none"` and `otel.log_user_prompt=false`. Collector-based
+export reads Codex stderr only; stdout remains protocol output.
+
+Worker log attributes such as `work.id`, `work.operation`, `work.attempt`, and
+`work.outcome` describe controller reconciliation. They do not define runtime
+resource identity. The Collector derives `service.name`, version, container,
+Namespace, Agent, and revision identity from protected container labels or Pod
+metadata instead of trusting payload fields.
 
 ## Isolation and activation
 
@@ -81,6 +113,15 @@ activation audit when durable completion succeeds; recovery repeats safe effects
 under the current claim. Exact ordering and failure handling are explained in
 the [worker flow](../flows/controller-worker.md).
 
+The pinned OpenClaw Codex plugin permits fresh remote work when OCC owns the
+native process configuration, but it lacks a supported managed-remote resume path
+for an existing ordinary session after gateway restart. Retained gateway session
+state and persistent volume data prove storage continuity; they do not prove
+continued native execution. Current dedicated restart acceptance remains
+incomplete, and the existing ownership and persistence requirements remain. The
+upstream restriction is documented in
+[openclaw/openclaw@759e127](https://github.com/openclaw/openclaw/commit/759e127777b54426c922e8ab4c228523ddac04e9).
+
 ## Optional sandbox provisioning
 
 The current optional SandboxDriver contract declares supported `networking`,
@@ -102,5 +143,5 @@ for the complete capability and upstream compatibility boundaries.
 - [Deployment](../guides/deploy.md)
 - [ComputeDriver contract](drivers/compute.md)
 - [ServiceAccount credentials](service-accounts.md)
-- [Dedicated shared workspace flow](../flows/dedicated-harness-shared-workspace-drive.md)
+- [Harness execution and shared storage flow](../flows/harness-execution-topology.md)
 - [Implementation history](../../specs/README.md)

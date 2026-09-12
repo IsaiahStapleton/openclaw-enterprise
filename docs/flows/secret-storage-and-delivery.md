@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-08-28
-last_updated_session: codex/01a04995-4a11-7c61-ab52-0b43f49524dc
+updated: 2026-09-01
+last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
 # Secret Storage and Gateway Delivery Flow
@@ -175,35 +175,19 @@ credential at its issuer.
 - Source selection, exact Namespace ownership, consumption authorization, missing
   material, and concurrent backend mutations fail closed. Do not retry a denial
   against another driver or model-key source.
-- Current focused conformance passed 134 cases with 1 optional skip, including
-  Namespace ownership, reference-only revisions, retained-binding authorization,
-  stable updates, authorization, and deletion semantics.
 - [Real Agent acceptance](../../tests/integration/harness-topology-k3d-real.test.mjs)
   requires explicitly selected PostgreSQL/Kubernetes, digest-pinned real runtime
   images, and an authorized model key. It must prove the native-ref negative control,
   genuine turn, and env restart behavior; mocked rendering is not that proof.
-- Independent verification of the real Kubernetes Secret API scenario after
-  rebasing onto main `84e773f` passed: 1 passed, 0 failed, 0 skipped, exit 0, in 386.4s with
-  OpenClaw 2026.8.1. It covered pre-Agent Secret creation, caller and Agent
-  service-principal denials before explicit grants, two selected Agent
-  model-sharing turns, private env absence, shared sentinel update with no
-  automatic restart and independent redeploy per consumer, cross-Namespace
-  denial, missing-backend rejection, unbound deletion, private stable-ref
-  restart/redeploy, native-ref failure/restoration, and no-leak assertions.
-- Additional post-rebase focused suites passed for static, API, startup, and
-  Helm checks. The prior PostgreSQL Secret-state proof remains 2 passed with
-  0 skipped, and post-rebase real Compute passed 2 cases with 0 skipped. The
-  earlier exact-Agent-owned proof is superseded for ownership and retained only
-  as historical storage/delivery context.
-- This proof does not establish the broader host or dedicated file-edit suites:
-  the available host OpenClaw build had stale generated assets, and dedicated Codex
-  file editing was blocked by its unavailable native hook relay. No hook bypass or
-  upstream runtime repair is part of this change.
+- Run focused conformance, API, startup, Helm, PostgreSQL Secret-state, real
+  Compute, and real Agent suites when changing this flow's implementation. State
+  skipped credentials, infrastructure, or runtime hooks as verification gaps
+  rather than replacing them with mocked rendering.
 
 ## Related docs
 
 - [SecretDriver implementation specification](../../specs/.archive/14-secret-driver.md)
-- [Secret access architecture](../design.md#secret-access)
+- [Secret access architecture](../design/safeguards.md#secret-access)
 - [Kubernetes deployment](../guides/deploy.md)
 - [Configuration](../reference/configuration.md)
 - [Kubernetes Secret Driver](../reference/drivers/kubernetes-secret.md)
@@ -213,6 +197,9 @@ credential at its issuer.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-01 19:09: Moved historical pass counts, run timing, and stale environment blockers out of active Debugging while keeping current runnable checks and proof requirements. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
+- 2026-08-28: Historical verification retained from prior Debugging: focused conformance reported 134 cases with 1 optional skip; the real Kubernetes Secret API scenario after rebasing onto main `84e773f` reported 1 passed, 0 failed, 0 skipped, exit 0, in 386.4s with OpenClaw 2026.8.1; additional static, API, startup, Helm, PostgreSQL Secret-state, and real Compute checks were reported. Broader host and dedicated file-edit suites were not established because the host OpenClaw build had stale generated assets and the native hook relay was unavailable.
 
 - 2026-08-28 16:33: Updated verification to the passing post-rebase Agent and Compute proofs against main 84e773f and conformance 134. (01a043fa-27fd-7651-b75a-4d46538a2809 - f7c33d5)
 

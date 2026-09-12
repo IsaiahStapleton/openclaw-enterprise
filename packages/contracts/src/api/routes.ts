@@ -2,6 +2,7 @@ import { Type } from "typebox";
 
 import {
   AgentParams,
+  AgentRuntimeCredentialsBody,
   ConfigurationParams,
   CreateAgentBody,
   CreateConfigurationBody,
@@ -19,9 +20,12 @@ import {
   UpdateConfigurationBody,
   UpdateSecretBody,
   UpdateServiceAccountCredentialBody,
+  UpdateWorkspaceFileBody,
+  WorkspaceFileParams,
 } from "./common.ts";
 import {
   AgentListResponse,
+  AgentRuntimeCredentialResponse,
   AgentResponse,
   AgentRevisionListResponse,
   AgentRevisionResponse,
@@ -29,7 +33,11 @@ import {
   InstallationResponse,
   NamespaceListResponse,
   NamespaceResponse,
+  ProviderListResponse,
+  ServiceAccountListResponse,
   ServiceAccountResponse,
+  WorkspaceFileResponse,
+  WorkspaceFileUpdateResponse,
 } from "./resources.ts";
 
 const ErrorResponseRef = Type.Ref("ErrorResponse");
@@ -96,6 +104,21 @@ export const occApiRoutes = [
     schema: {
       querystring: EmptyQuery,
       response: { 200: InstallationResponse, ...readErrors },
+    },
+  },
+  {
+    operationId: "listProviders",
+    method: "GET",
+    path: "/providers",
+    action: "openclaw.providers.list",
+    iamAction: "administer",
+    resourceKind: "installation",
+    authorizationTarget: "installation",
+    summary: "List configured Providers",
+    tags: ["Providers"],
+    schema: {
+      querystring: EmptyQuery,
+      response: { 200: ProviderListResponse, ...readErrors },
     },
   },
   {
@@ -311,6 +334,22 @@ export const occApiRoutes = [
     },
   },
   {
+    operationId: "listServiceAccounts",
+    method: "GET",
+    path: "/namespaces/:namespaceId/service-accounts",
+    action: "openclaw.service_accounts.list",
+    iamAction: "read",
+    resourceKind: "service_account",
+    authorizationTarget: "namespace_and_service_account_candidates",
+    summary: "List authorized Namespace-owned ServiceAccounts in one exact Namespace",
+    tags: ["Service accounts"],
+    schema: {
+      querystring: EmptyQuery,
+      params: NamespaceParams,
+      response: { 200: ServiceAccountListResponse, ...readErrors },
+    },
+  },
+  {
     operationId: "getServiceAccount",
     method: "GET",
     path: "/namespaces/:namespaceId/service-accounts/:serviceAccountId",
@@ -443,6 +482,39 @@ export const occApiRoutes = [
     },
   },
   {
+    operationId: "getAgentRuntimeCredentials",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/runtime-credentials",
+    action: "openclaw.agents.runtime_credentials.read",
+    iamAction: "read",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Get metadata for one Agent's provisioned runtime credentials",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: AgentParams,
+      response: { 200: AgentRuntimeCredentialResponse, ...readErrors },
+    },
+  },
+  {
+    operationId: "provisionAgentRuntimeCredentials",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/:agentId/runtime-credentials",
+    action: "openclaw.agents.runtime_credentials.provision",
+    iamAction: "operate",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Provision initial runtime credentials for one undeployed Agent",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: AgentParams,
+      body: AgentRuntimeCredentialsBody,
+      response: { 200: AgentRuntimeCredentialResponse, ...createErrors },
+    },
+  },
+  {
     operationId: "deployAgent",
     method: "POST",
     path: "/namespaces/:namespaceId/agents/:agentId/deploy",
@@ -456,6 +528,39 @@ export const occApiRoutes = [
       querystring: EmptyQuery,
       params: AgentParams,
       response: { 202: AgentRevisionResponse, ...mutationErrors },
+    },
+  },
+  {
+    operationId: "getAgentWorkspaceFile",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/workspace/files/:name",
+    action: "openclaw.agents.workspace.files.read",
+    iamAction: "read",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Read an allowed workspace file from one active Agent",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: WorkspaceFileParams,
+      response: { 200: WorkspaceFileResponse, ...readErrors },
+    },
+  },
+  {
+    operationId: "putAgentWorkspaceFile",
+    method: "PUT",
+    path: "/namespaces/:namespaceId/agents/:agentId/workspace/files/:name",
+    action: "openclaw.agents.workspace.files.write",
+    iamAction: "operate",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Create or replace an allowed workspace file for one active Agent",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: WorkspaceFileParams,
+      body: UpdateWorkspaceFileBody,
+      response: { 200: WorkspaceFileUpdateResponse, ...createErrors },
     },
   },
   {

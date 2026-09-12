@@ -4,6 +4,7 @@ import {
   numericErrorStatus,
   sha256Hex,
 } from "@openclaw-enterprise/utils";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
 import type {
@@ -17,7 +18,9 @@ import type {
   V1EnvVar,
   V1NetworkPolicyPeer,
   V1ObjectMeta,
+  V1DeleteOptions,
   V1ResourceRequirements,
+  V1Secret,
   V1ServiceAccount,
   V1Volume,
   V1VolumeMount,
@@ -25,6 +28,7 @@ import type {
 import type {
   AgentRevision,
   ComputeDriver,
+  ComputeAgentBinding,
   ComputeReadiness,
   ComputeRevisionContext,
   Driver,
@@ -38,15 +42,30 @@ import type {
   SandboxResourceRef,
   SandboxWorkspaceMount,
   SecretEnvironmentProjection,
+  LoggingLevel,
 } from "@openclaw-enterprise/contracts";
-import { normalizeSecretBindings } from "@openclaw-enterprise/contracts";
+import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterprise/contracts";
+import { DependencyUnavailableError, ResourceConflictError } from "@openclaw-enterprise/occ";
 import { createKubernetesClientConfiguration } from "../../kubernetes/client.ts";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import {
+  PLUGIN_RUNTIME_DIRECTORY,
+  PLUGIN_RUNTIME_CODEX_CONFIG,
+  PLUGIN_RUNTIME_CODEX_CONFIG_ENVIRONMENT,
+  PLUGIN_RUNTIME_MANIFEST,
+  PLUGIN_RUNTIME_MANIFEST_ENVIRONMENT,
+  PLUGIN_RUNTIME_READY_MARKER,
+  PLUGIN_RUNTIME_READY_MARKER_ENVIRONMENT,
+  type PluginRuntimeSpec,
+  pluginRuntimeConfigMapData,
+  pluginRuntimeSpecForRevision,
+} from "../plugin-runtime.ts";
+import {
   AGENT_READINESS_ENTRYPOINT,
   AGENT_RUNTIME_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT,
+  GATEWAY_READINESS_ENTRYPOINT,
 } from "./runtime-entrypoints.ts";
 
 type KubernetesRecord = Record<string, unknown>;
@@ -59,8 +78,9 @@ type ManagedResourceKind =
   | "LimitRange"
   | "PersistentVolumeClaim"
   | "Deployment"
-  | "NetworkPolicy";
-type ReadableResourceKind = ManagedResourceKind | "Secret";
+  | "NetworkPolicy"
+  | "HTTPRoute";
+type ReadableResourceKind = ManagedResourceKind | "Pod" | "Secret";
 
 const CHANNEL_REQUIREMENTS = {
   slack: {
@@ -78,6 +98,27 @@ type ChannelRequirements = (typeof CHANNEL_REQUIREMENTS)[keyof typeof CHANNEL_RE
 export interface KubernetesWorkloadPeer {
   readonly namespace: string;
   readonly podLabels: Readonly<Record<string, string>>;
+}
+
+export interface KubernetesGatewayRoutingOptions {
+  readonly hostname?: string;
+  readonly gatewayName: string;
+  readonly gatewayNamespace: string;
+  readonly envoyNamespace: string;
+}
+
+export interface AgentRuntimeCredentialsInput {
+  readonly modelApiKey?: string;
+  readonly slack?: {
+    readonly appToken: string;
+    readonly botToken: string;
+  };
+}
+
+export interface AgentRuntimeCredentialStatus {
+  readonly transportConfigured: boolean;
+  readonly modelConfigured: boolean;
+  readonly slackConfigured: boolean;
 }
 
 interface KubernetesApiClients {
@@ -108,7 +149,7 @@ export interface KubernetesComputeDriverOptions {
   readonly network: {
     readonly dns: KubernetesWorkloadPeer;
     readonly gatewayPort: number;
-    readonly gatewayClients: readonly KubernetesWorkloadPeer[];
+    readonly gatewayClients?: readonly KubernetesWorkloadPeer[];
   };
   readonly servicePrincipalCredentials:
     | { readonly mode: "disabled" }
@@ -121,17 +162,20 @@ export interface KubernetesComputeDriverOptions {
     readonly transportSecretPrefix: string;
     readonly modelSecretPrefix: string;
     readonly gatewayStorageClassName: string;
+    readonly codexSeccompProfile?: string;
     readonly channels?: {
       readonly secretPrefix: string;
       readonly proxyUrl: string;
     };
   };
+  readonly gatewayRouting?: KubernetesGatewayRoutingOptions;
 }
 
 interface ManagedKubernetesObject<Kind extends ReadableResourceKind = ManagedResourceKind>
   extends
     KubernetesObject,
     Pick<V1ConfigMap, "binaryData" | "data" | "immutable">,
+    Pick<V1Secret, "type">,
     Pick<V1ServiceAccount, "automountServiceAccountToken"> {
   readonly apiVersion: string;
   readonly kind: Kind;
@@ -156,11 +200,40 @@ interface GatewayConfigurationSnapshot {
   readonly name: string;
   readonly revision: number;
   readonly revisionId: string;
+  readonly usesTrustedProxyAuth: boolean;
+  readonly usesGatewayPasswordEnv: boolean;
   readonly annotations: Readonly<Record<string, string>>;
+  readonly loggingLevel: LoggingLevel;
+}
+
+interface PluginRuntimeSnapshot {
+  readonly name: string;
+  readonly runtime: PluginRuntimeSpec;
 }
 
 class OwnershipFailure extends Error {}
 class ConfigurationFailure extends Error {}
+
+type RuntimeCredentialGroup = "transport" | "model" | "slack";
+
+interface RuntimeCredentialSecretSpec {
+  readonly group: RuntimeCredentialGroup;
+  readonly name: string;
+  readonly keys: readonly string[];
+}
+
+interface RuntimeCredentialContext {
+  readonly namespaceId: string;
+  readonly namespace: string;
+  readonly agentId: string;
+  readonly suffix: string;
+  readonly ownership: Ownership;
+  readonly specs: {
+    readonly transport: RuntimeCredentialSecretSpec;
+    readonly model: RuntimeCredentialSecretSpec;
+    readonly slack?: RuntimeCredentialSecretSpec;
+  };
+}
 
 const MANAGER = "openclaw-enterprise";
 const FIELD_MANAGER = "openclaw-enterprise-compute";
@@ -168,18 +241,25 @@ const TOKEN_PATH = "/var/run/secrets/openclaw/service-principal";
 const CONFIGURATION_DIRECTORY = "/etc/openclaw";
 const CONFIGURATION_DOCUMENT = "openclaw.json";
 const CONFIGURATION_VOLUME = "openclaw-configuration";
+const PLUGIN_RUNTIME_VOLUME = "openclaw-plugin-runtime";
 const AGENT_REVISION_ANNOTATION = "openclaw.dev/agent-revision";
 const AGENT_REVISION_ID_ANNOTATION = "openclaw.dev/agent-revision-id";
 const APPLY_CONTENT_TYPE = "application/apply-patch+yaml";
+const GATEWAY_API_VERSION = "gateway.networking.k8s.io/v1";
+const GATEWAY_LISTENER_SECTION = "https";
+const GATEWAY_MEMBERSHIP_LABEL = "openclaw-enterprise.io/gateway";
 const REQUEST_TIMEOUT_MS = 10_000;
 const AGENT_TRANSPORT_PORT = 18_790;
 const AGENT_TRANSPORT_TOKEN_KEY = "app-server-token";
 const GATEWAY_TOKEN_KEY = "gateway-token";
+const GATEWAY_PASSWORD_KEY = "gateway-password";
+const OPENCLAW_GATEWAY_PASSWORD = "OPENCLAW_GATEWAY_PASSWORD";
 const MODEL_API_KEY = "OPENAI_API_KEY";
 const SERVICE_ACCOUNT_TOKEN_KEY = "token";
 const SERVICE_ACCOUNT_WORKSPACE_KEY = "workspace-id";
 const CODEX_ACCESS_TOKEN = "CODEX_ACCESS_TOKEN";
 const CODEX_CHATGPT_WORKSPACE_ID = "CODEX_CHATGPT_WORKSPACE_ID";
+const MAX_RUNTIME_CREDENTIAL_BYTES = 65_536;
 const RUNTIME_STATE_VOLUME_SIZE = "1Gi";
 const GATEWAY_PRIVATE_STATE_VOLUME = "openclaw-gateway-state";
 const GATEWAY_PRIVATE_STATE_SIZE = "10Gi";
@@ -297,6 +377,40 @@ function validatePeer(value: KubernetesWorkloadPeer, description: string): void 
     if (typeof label !== "string")
       throw new ConfigurationFailure(`${description} labels must be strings.`);
   }
+}
+
+function validateDnsHostname(value: string, description: string): void {
+  if (
+    value.length > 253 ||
+    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/.test(value)
+  ) {
+    throw new ConfigurationFailure(`${description} must be a DNS hostname without a port or path.`);
+  }
+}
+
+function validateKubernetesResourceName(value: string, description: string): void {
+  if (
+    value.length > 253 ||
+    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/.test(value)
+  ) {
+    throw new ConfigurationFailure(`${description} must be a DNS-safe Kubernetes resource name.`);
+  }
+}
+
+function validateCodexSeccompProfile(value: unknown): string {
+  const profile = required(value, "Codex seccomp localhost profile");
+  const segments = profile.split("/");
+  if (
+    isAbsolute(profile) ||
+    profile.includes("\\") ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..") ||
+    segments.some((segment) => segment.toLowerCase() === "unconfined")
+  ) {
+    throw new ConfigurationFailure(
+      "Codex seccomp localhost profile must be a relative profile path without traversal or unconfined mode.",
+    );
+  }
+  return profile;
 }
 
 function labelsToSelector(labels: Readonly<Record<string, string>>): string {
@@ -458,7 +572,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       },
       network: {
         type: "object",
-        required: ["dns", "gatewayPort", "gatewayClients"],
+        required: ["dns", "gatewayPort"],
         additionalProperties: false,
         properties: {
           dns: WORKLOAD_PEER_SCHEMA,
@@ -484,6 +598,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           transportSecretPrefix: { type: "string" },
           modelSecretPrefix: { type: "string" },
           gatewayStorageClassName: { type: "string", minLength: 1 },
+          codexSeccompProfile: { type: "string", minLength: 1 },
           channels: {
             type: "object",
             required: ["secretPrefix", "proxyUrl"],
@@ -493,6 +608,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
               proxyUrl: { type: "string" },
             },
           },
+        },
+      },
+      gatewayRouting: {
+        type: "object",
+        required: ["gatewayName", "gatewayNamespace", "envoyNamespace"],
+        additionalProperties: false,
+        properties: {
+          hostname: { type: "string" },
+          gatewayName: { type: "string" },
+          gatewayNamespace: { type: "string" },
+          envoyNamespace: { type: "string" },
         },
       },
     },
@@ -585,15 +711,22 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("Network policy is required.");
     validatePeer(options.network.dns, "DNS peer");
     validatePort(options.network.gatewayPort, "Gateway port");
-    if (
-      !Array.isArray(options.network.gatewayClients) ||
-      options.network.gatewayClients.length === 0
-    ) {
-      throw new ConfigurationFailure("At least one exact gateway client peer is required.");
+    const hasDirectGatewayClients = Object.hasOwn(options.network, "gatewayClients");
+    if (options.gatewayRouting === undefined) {
+      if (
+        !Array.isArray(options.network.gatewayClients) ||
+        options.network.gatewayClients.length === 0
+      ) {
+        throw new ConfigurationFailure("At least one exact gateway client peer is required.");
+      }
+      options.network.gatewayClients.forEach((peer, index) =>
+        validatePeer(peer, `Gateway client ${index}`),
+      );
+    } else if (hasDirectGatewayClients) {
+      throw new ConfigurationFailure(
+        "Gateway routing derives the Envoy gateway client peer; do not configure network.gatewayClients.",
+      );
     }
-    options.network.gatewayClients.forEach((peer, index) =>
-      validatePeer(peer, `Gateway client ${index}`),
-    );
     const credentials = options.servicePrincipalCredentials;
     if (asRecord(credentials) === undefined) {
       throw new ConfigurationFailure(
@@ -615,9 +748,26 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     if (options.runtime !== undefined) {
       const { transportSecretPrefix, modelSecretPrefix, channels } = options.runtime;
+      const runtimeProperties = asRecord(
+        KubernetesComputeDriver.configurationSchema.properties.runtime.properties,
+      );
+      if (runtimeProperties === undefined) {
+        throw new ConfigurationFailure("Kubernetes runtime configuration schema is invalid.");
+      }
+      const runtimeKeys = new Set(Object.keys(runtimeProperties));
+      for (const key of Object.keys(options.runtime)) {
+        if (!runtimeKeys.has(key)) {
+          throw new ConfigurationFailure(
+            `The Kubernetes runtime configuration contains unsupported option ${key}.`,
+          );
+        }
+      }
       required(transportSecretPrefix, "Agent transport Secret name prefix");
       required(modelSecretPrefix, "Agent model Secret name prefix");
       required(options.runtime.gatewayStorageClassName, "SQLite-compatible gateway storage class");
+      if (options.runtime.codexSeccompProfile !== undefined) {
+        validateCodexSeccompProfile(options.runtime.codexSeccompProfile);
+      }
       if (transportSecretPrefix === modelSecretPrefix) {
         throw new ConfigurationFailure(
           "Gateway, Agent transport, and model credentials must remain separate.",
@@ -635,6 +785,34 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }
         channelProxy(channels.proxyUrl);
       }
+    }
+    if (options.gatewayRouting !== undefined) {
+      const routing = options.gatewayRouting;
+      if (asRecord(routing) === undefined) {
+        throw new ConfigurationFailure("Gateway routing must be explicitly configured.");
+      }
+      if (routing.hostname !== undefined) {
+        if (typeof routing.hostname !== "string") {
+          throw new ConfigurationFailure(
+            "Gateway routing hostname must be a DNS hostname without a port or path.",
+          );
+        }
+        if (routing.hostname.length > 0) {
+          validateDnsHostname(routing.hostname, "Gateway routing hostname");
+        }
+      }
+      validateKubernetesResourceName(
+        required(routing.gatewayName, "Gateway routing Gateway name"),
+        "Gateway routing Gateway name",
+      );
+      validateKubernetesResourceName(
+        required(routing.gatewayNamespace, "Gateway routing Gateway namespace"),
+        "Gateway routing Gateway namespace",
+      );
+      validateKubernetesResourceName(
+        required(routing.envoyNamespace, "Gateway routing Envoy namespace"),
+        "Gateway routing Envoy namespace",
+      );
     }
   }
 
@@ -676,6 +854,102 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (!Array.isArray(namespaces.items)) {
       throw new Error("The authenticated Kubernetes Namespace preflight returned invalid data.");
     }
+  }
+
+  getGatewayEndpoint(revision: AgentRevision): string | undefined {
+    const routing = this.options.gatewayRouting;
+    if (routing === undefined) return undefined;
+    return `wss://${this.gatewayRoutingHostname(routing)}${this.gatewayRoutePath(revision)}`;
+  }
+
+  async getAgentRuntimeCredentialStatus(
+    binding: ComputeAgentBinding,
+  ): Promise<AgentRuntimeCredentialStatus> {
+    return this.withRuntimeCredentialErrors(async () => {
+      const context = await this.runtimeCredentialContext(binding);
+      const observed = await this.readRuntimeCredentialSecrets(context);
+      return this.runtimeCredentialStatus(observed);
+    });
+  }
+
+  async provisionAgentRuntimeCredentials(
+    binding: ComputeAgentBinding,
+    input: AgentRuntimeCredentialsInput,
+  ): Promise<AgentRuntimeCredentialStatus> {
+    return this.withRuntimeCredentialErrors(async () => {
+      const credentials = this.validRuntimeCredentialInput(input);
+      const context = await this.runtimeCredentialContext(binding, credentials.slack !== undefined);
+      const observed = await this.readRuntimeCredentialSecrets(context);
+      const status = this.runtimeCredentialStatus(observed);
+      if (status.modelConfigured === false && credentials.modelApiKey === undefined) {
+        throw new DependencyUnavailableError("The Agent model credential is not configured.");
+      }
+      if (status.modelConfigured && credentials.modelApiKey !== undefined) {
+        this.requireExactRuntimeCredentialBytes(
+          observed.model,
+          MODEL_API_KEY,
+          credentials.modelApiKey,
+        );
+      }
+      if (context.specs.slack !== undefined && status.slackConfigured && credentials.slack) {
+        this.requireExactRuntimeCredentialBytes(
+          observed.slack,
+          "SLACK_APP_TOKEN",
+          credentials.slack.appToken,
+        );
+        this.requireExactRuntimeCredentialBytes(
+          observed.slack,
+          "SLACK_BOT_TOKEN",
+          credentials.slack.botToken,
+        );
+      }
+
+      await this.assertNoAgentRuntimeDeployments(context);
+
+      const writes: Array<{
+        readonly spec: RuntimeCredentialSecretSpec;
+        readonly values: Readonly<Record<string, string>>;
+      }> = [];
+      if (!status.transportConfigured) {
+        writes.push({
+          spec: context.specs.transport,
+          values: {
+            [AGENT_TRANSPORT_TOKEN_KEY]: this.generateRuntimeCredentialToken(),
+            [GATEWAY_TOKEN_KEY]: this.generateRuntimeCredentialToken(),
+            [GATEWAY_PASSWORD_KEY]: this.generateRuntimeCredentialToken(),
+          },
+        });
+      }
+      if (!status.modelConfigured && credentials.modelApiKey !== undefined) {
+        writes.push({
+          spec: context.specs.model,
+          values: { [MODEL_API_KEY]: credentials.modelApiKey },
+        });
+      }
+      if (
+        context.specs.slack !== undefined &&
+        !status.slackConfigured &&
+        credentials.slack !== undefined
+      ) {
+        writes.push({
+          spec: context.specs.slack,
+          values: {
+            SLACK_APP_TOKEN: credentials.slack.appToken,
+            SLACK_BOT_TOKEN: credentials.slack.botToken,
+          },
+        });
+      }
+
+      for (const write of writes) {
+        await this.createRuntimeCredentialSecret(context, write.spec, write.values);
+      }
+
+      return {
+        transportConfigured: true,
+        modelConfigured: true,
+        slackConfigured: status.slackConfigured || credentials.slack !== undefined,
+      };
+    });
   }
 
   async storeServiceAccountCredential(input: {
@@ -777,6 +1051,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         const desired = this.manifest("v1", "Namespace", name, ownership);
         desired.metadata.labels = {
           ...desired.metadata.labels,
+          ...this.gatewayMembershipLabels(),
           "pod-security.kubernetes.io/enforce": "restricted",
           "pod-security.kubernetes.io/audit": "restricted",
           "pod-security.kubernetes.io/warn": "restricted",
@@ -934,6 +1209,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new ConfigurationFailure("AgentRevision Configuration ownership is invalid.");
     }
+    this.verifyGatewayRoutingConfiguration(revision);
     const embedded = revision.harness.mode === "embedded";
     if (
       (embedded && revision.harness.id !== "openclaw") ||
@@ -985,6 +1261,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       agentId: revision.agentId,
       servicePrincipalId: revision.servicePrincipalId,
     };
+    const pluginRuntime = this.pluginRuntimeSnapshot(revision);
     const document = JSON.stringify(revision.configuration);
     const configuration = this.gatewayConfiguration(revision);
     const existingGateway = await this.getOwned(
@@ -1047,6 +1324,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
       gatewayOwnership,
       namespace,
     );
+    if (pluginRuntime !== undefined) {
+      const pluginOwnership = this.pluginRuntimeOwnership(revision);
+      await this.reconcile(
+        this.pluginRuntimeConfigMap(pluginRuntime, pluginOwnership, namespace),
+        pluginOwnership,
+        namespace,
+      );
+    }
     const gatewayAccountName = embedded ? agentName : gatewayName;
     const gatewayAccountOwnership = embedded ? agentOwnership : gatewayOwnership;
     await this.reconcile(
@@ -1063,6 +1348,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       gatewayAccountOwnership,
       namespace,
     );
+    if (embedded) {
+      for (const policy of this.agentNetworkPolicies(revision, namespace)) {
+        await this.reconcile(policy, gatewayOwnership, namespace);
+      }
+    }
     if (!embedded) {
       await this.reconcile(
         this.sharedWorkspaceClaim(revision.agentId, gatewayOwnership, namespace),
@@ -1103,12 +1393,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
             gatewayAccountName,
             "gateway",
             embeddedEnvironment,
+            configuration.loggingLevel,
             configuration,
             embedded,
             embedded ? revision.servicePrincipalId : undefined,
             undefined,
             channels,
             secretEnvironment,
+            pluginRuntime,
           ),
           gatewayOwnership,
           namespace,
@@ -1135,6 +1427,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         gatewayOwnership,
         namespace,
       );
+      await this.reconcileGatewayRoute(revision, gatewayOwnership, namespace);
       if (
         embedded &&
         this.options.runtime !== undefined &&
@@ -1189,10 +1482,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
         agentName,
         "agent",
         launch.environment,
+        configuration.loggingLevel,
         undefined,
         false,
         undefined,
         revision.serviceAccount,
+        [],
+        [],
+        pluginRuntime,
       );
       if (sandboxDriver?.provisionHarness !== undefined) {
         const requirements = this.harnessRequirementsFromDeployment(agentDeployment);
@@ -1240,7 +1537,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   async activateRevision(revision: AgentRevision, context?: ComputeRevisionContext): Promise<void> {
     if (this.options.runtime === undefined) return;
+    this.verifyGatewayRoutingConfiguration(revision);
     const channels = this.enabledChannels(revision);
+    const pluginRuntime = this.pluginRuntimeSnapshot(revision);
     const { name: namespace } = await this.resolveNamespace(revision.namespaceId);
     const secretEnvironment = this.secretEnvironmentForRevision(revision, context, namespace);
     const agentName = `agent-${sha256Hex(revision.agentId, 12)}`;
@@ -1292,12 +1591,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
               agentName,
               "gateway",
               launch.environment,
+              this.gatewayConfiguration(revision).loggingLevel,
               this.gatewayConfiguration(revision),
               true,
               revision.servicePrincipalId,
               undefined,
               channels,
               secretEnvironment,
+              pluginRuntime,
             ),
             gatewayOwnership,
             namespace,
@@ -1317,6 +1618,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         gatewayOwnership,
         namespace,
       );
+      await this.reconcileGatewayRoute(revision, gatewayOwnership, namespace);
       if (!(await this.gatewayReady(gatewayOwnership, gatewayName, namespace))) {
         throw new Error("The exact AgentRevision gateway is not ready.");
       }
@@ -1324,6 +1626,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
     const sandboxDriver = this.sandboxDriverForRevision(revision);
+    const configuration = this.gatewayConfiguration(revision);
     const agentDeployment = this.deployment(
       revisionName,
       { ...ownership, revisionId: revision.id },
@@ -1332,10 +1635,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
       agentName,
       "agent",
       {},
+      configuration.loggingLevel,
       undefined,
       false,
       undefined,
       revision.serviceAccount,
+      [],
+      [],
+      pluginRuntime,
     );
     if (sandboxDriver?.provisionHarness === undefined) {
       const deployment = await this.getOwned("Deployment", revisionName, namespace, {
@@ -1371,15 +1678,26 @@ export class KubernetesComputeDriver implements ComputeDriver {
         gatewayName,
         "gateway",
         {},
-        this.gatewayConfiguration(revision),
+        configuration.loggingLevel,
+        configuration,
         false,
         undefined,
         undefined,
         channels,
+        [],
+        pluginRuntime,
       ),
       gatewayOwnership,
       namespace,
     );
+    await this.reconcile(
+      this.service(gatewayName, gatewayOwnership, namespace, {
+        "app.kubernetes.io/name": gatewayName,
+      }),
+      gatewayOwnership,
+      namespace,
+    );
+    await this.reconcileGatewayRoute(revision, gatewayOwnership, namespace);
     if (!(await this.gatewayReady(gatewayOwnership, gatewayName, namespace))) {
       throw new Error("The exact AgentRevision gateway is not ready.");
     }
@@ -1515,7 +1833,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const name = `gateway-${sha256Hex(revision.agentId, 12)}`;
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
     const gateway = await this.getOwned("Deployment", name, namespace, ownership);
-    if (gateway === undefined) return;
+    if (gateway === undefined) {
+      const route = await this.gatewayRouteForRevision(name, ownership, namespace, revision.id);
+      if (route === undefined) return;
+      if (this.options.runtime !== undefined) {
+        await this.deleteGatewayPrivateStateClaim(ownership, namespace);
+      }
+      if (revision.harness.mode === "dedicated") {
+        await this.deleteSharedWorkspaceClaim(ownership, namespace);
+      }
+      await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
+      await this.deleteGateway(name, ownership, namespace);
+      return;
+    }
     const annotations = gateway.metadata.annotations ?? {};
     if (annotations[AGENT_REVISION_ID_ANNOTATION] === revision.id) {
       if (this.options.runtime !== undefined) {
@@ -1524,8 +1854,56 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (revision.harness.mode === "dedicated") {
         await this.deleteSharedWorkspaceClaim(ownership, namespace);
       }
+      await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
       await this.deleteGateway(name, ownership, namespace);
     }
+  }
+
+  private async deleteGatewayRoute(
+    name: string,
+    ownership: Ownership,
+    namespace: string,
+    revisionId: string,
+  ): Promise<void> {
+    const existing = await this.gatewayRouteForRevision(name, ownership, namespace, revisionId);
+    if (existing === undefined) return;
+    if (existing.metadata.uid === undefined) {
+      throw new OwnershipFailure(
+        `HTTPRoute ${name} UID must be explicitly observed before delete.`,
+      );
+    }
+    const clients = await this.clients();
+    await this.request(
+      () =>
+        clients.objects.delete(
+          {
+            apiVersion: GATEWAY_API_VERSION,
+            kind: "HTTPRoute",
+            metadata: { name, namespace },
+          },
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { preconditions: { uid: existing.metadata.uid } } as V1DeleteOptions,
+        ),
+      { mutating: true },
+    );
+  }
+
+  private async gatewayRouteForRevision(
+    name: string,
+    ownership: Ownership,
+    namespace: string,
+    revisionId: string,
+  ): Promise<ManagedKubernetesObject<"HTTPRoute"> | undefined> {
+    if (this.options.gatewayRouting === undefined) return undefined;
+    const existing = await this.getOwned("HTTPRoute", name, namespace, ownership);
+    if (existing === undefined) return undefined;
+    return existing.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revisionId
+      ? existing
+      : undefined;
   }
 
   private async deleteGateway(
@@ -1534,7 +1912,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     namespace: string,
   ): Promise<void> {
     const clients = await this.clients();
-    for (const kind of ["Deployment", "Service", "ServiceAccount"] as const) {
+    for (const kind of ["Service", "ServiceAccount", "Deployment"] as const) {
       const existing = await this.getOwned(kind, name, namespace, ownership);
       if (existing === undefined) continue;
       const request = {
@@ -1566,6 +1944,315 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return this.request(() => resolveKubernetesNamespace(clients.core, namespaceId));
   }
 
+  private validRuntimeCredentialInput(
+    input: AgentRuntimeCredentialsInput,
+  ): AgentRuntimeCredentialsInput {
+    const value = asRecord(input) ?? {};
+    const modelApiKey =
+      value.modelApiKey === undefined
+        ? undefined
+        : this.runtimeCredentialValue(value.modelApiKey, "Agent model credential");
+    const slackRecord = value.slack === undefined ? undefined : asRecord(value.slack);
+    if (value.slack !== undefined && slackRecord === undefined) {
+      throw new DependencyUnavailableError("The Agent Slack credentials are incomplete.");
+    }
+    const slack =
+      slackRecord === undefined
+        ? undefined
+        : {
+            appToken: this.runtimeCredentialValue(
+              slackRecord.appToken,
+              "Agent Slack app credential",
+            ),
+            botToken: this.runtimeCredentialValue(
+              slackRecord.botToken,
+              "Agent Slack bot credential",
+            ),
+          };
+    return { ...(modelApiKey === undefined ? {} : { modelApiKey }), ...(slack ? { slack } : {}) };
+  }
+
+  private runtimeCredentialValue(value: unknown, description: string): string {
+    const credential = required(value, description);
+    if (
+      credential.includes("\0") ||
+      Buffer.byteLength(credential, "utf8") > MAX_RUNTIME_CREDENTIAL_BYTES
+    ) {
+      throw new DependencyUnavailableError(`${description} is invalid.`);
+    }
+    return credential;
+  }
+
+  private async runtimeCredentialContext(
+    binding: ComputeAgentBinding,
+    requireSlack = false,
+  ): Promise<RuntimeCredentialContext> {
+    const runtime = this.options.runtime;
+    if (runtime === undefined) {
+      throw new DependencyUnavailableError("The Agent runtime credentials are not configured.");
+    }
+    if (requireSlack && runtime.channels === undefined) {
+      throw new DependencyUnavailableError("The Agent Slack credential storage is not configured.");
+    }
+    const namespaceId = required(binding.namespace?.id, "Runtime credential Namespace ID");
+    const agentId = required(binding.agent?.id, "Runtime credential Agent ID");
+    if (binding.agent.namespaceId !== namespaceId) {
+      throw new ResourceConflictError("The Agent runtime credential binding is invalid.");
+    }
+    const { name: namespace, external } = await this.resolveNamespace(namespaceId);
+    const observed = await this.get("Namespace", namespace);
+    if (observed === undefined || observed.status?.phase !== "Active") {
+      throw new DependencyUnavailableError(
+        "The Agent runtime credential Kubernetes namespace is unavailable.",
+      );
+    }
+    this.verifyNamespaceOwnership(observed, { namespaceId }, external);
+    const suffix = sha256Hex(agentId, 12);
+    const ownership = { namespaceId, agentId };
+    const secret = (
+      group: RuntimeCredentialGroup,
+      prefix: string,
+      keys: readonly string[],
+    ): RuntimeCredentialSecretSpec => {
+      const name = `${prefix}-${suffix}`;
+      validateKubernetesResourceName(name, "Agent runtime credential Secret name");
+      return { group, name, keys };
+    };
+    return {
+      namespaceId,
+      namespace,
+      agentId,
+      suffix,
+      ownership,
+      specs: {
+        transport: secret("transport", runtime.transportSecretPrefix, [
+          AGENT_TRANSPORT_TOKEN_KEY,
+          GATEWAY_TOKEN_KEY,
+          GATEWAY_PASSWORD_KEY,
+        ]),
+        model: secret("model", runtime.modelSecretPrefix, [MODEL_API_KEY]),
+        ...(runtime.channels === undefined
+          ? {}
+          : {
+              slack: secret("slack", runtime.channels.secretPrefix, [
+                "SLACK_APP_TOKEN",
+                "SLACK_BOT_TOKEN",
+              ]),
+            }),
+      },
+    };
+  }
+
+  private async readRuntimeCredentialSecrets(
+    context: RuntimeCredentialContext,
+  ): Promise<
+    Readonly<Partial<Record<RuntimeCredentialGroup, ManagedKubernetesObject<"Secret"> | undefined>>>
+  > {
+    const entries = [
+      context.specs.transport,
+      context.specs.model,
+      ...(context.specs.slack === undefined ? [] : [context.specs.slack]),
+    ] as const;
+    const observed: Partial<Record<RuntimeCredentialGroup, ManagedKubernetesObject<"Secret">>> = {};
+    for (const spec of entries) {
+      const secret = await this.getOwned("Secret", spec.name, context.namespace, context.ownership);
+      if (secret !== undefined) {
+        this.requireCompleteRuntimeCredentialSecret(secret, spec);
+        observed[spec.group] = secret;
+      }
+    }
+    return Object.freeze(observed);
+  }
+
+  private runtimeCredentialStatus(
+    observed: Readonly<
+      Partial<Record<RuntimeCredentialGroup, ManagedKubernetesObject<"Secret"> | undefined>>
+    >,
+  ): AgentRuntimeCredentialStatus {
+    return {
+      transportConfigured: observed.transport !== undefined,
+      modelConfigured: observed.model !== undefined,
+      slackConfigured: observed.slack !== undefined,
+    };
+  }
+
+  private requireCompleteRuntimeCredentialSecret(
+    secret: ManagedKubernetesObject<"Secret">,
+    spec: RuntimeCredentialSecretSpec,
+  ): void {
+    if (secret.type !== "Opaque" || secret.immutable === true) {
+      throw new ResourceConflictError("The Agent runtime credential Secret is invalid.");
+    }
+    const data = asRecord(secret.data);
+    if (data === undefined) {
+      throw new ResourceConflictError("The Agent runtime credential Secret is incomplete.");
+    }
+    const expected = [...spec.keys].sort();
+    const actual = Object.keys(data).sort();
+    if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+      throw new ResourceConflictError("The Agent runtime credential Secret is incomplete.");
+    }
+    for (const key of expected) {
+      const encoded = data[key];
+      if (typeof encoded !== "string") {
+        throw new ResourceConflictError("The Agent runtime credential Secret is incomplete.");
+      }
+      this.decodedRuntimeCredentialBytes(encoded);
+    }
+  }
+
+  private requireExactRuntimeCredentialBytes(
+    secret: ManagedKubernetesObject<"Secret"> | undefined,
+    key: string,
+    expected: string,
+  ): void {
+    const encoded = asRecord(secret?.data)?.[key];
+    if (typeof encoded !== "string") {
+      throw new ResourceConflictError("The Agent runtime credential Secret is incomplete.");
+    }
+    const observed = this.decodedRuntimeCredentialBytes(encoded);
+    const wanted = Buffer.from(expected, "utf8");
+    if (observed.length !== wanted.length || !timingSafeEqual(observed, wanted)) {
+      throw new ResourceConflictError("The Agent runtime credential Secret does not match.");
+    }
+  }
+
+  private decodedRuntimeCredentialBytes(encoded: string): Buffer {
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+      throw new ResourceConflictError("The Agent runtime credential Secret is invalid.");
+    }
+    const decoded = Buffer.from(encoded, "base64");
+    if (
+      decoded.length === 0 ||
+      decoded.length > MAX_RUNTIME_CREDENTIAL_BYTES ||
+      decoded.toString("base64") !== encoded
+    ) {
+      throw new ResourceConflictError("The Agent runtime credential Secret is invalid.");
+    }
+    return decoded;
+  }
+
+  private async assertNoAgentRuntimeDeployments(context: RuntimeCredentialContext): Promise<void> {
+    const clients = await this.clients();
+    const observed = await this.request(() =>
+      clients.apps.listNamespacedDeployment({
+        namespace: context.namespace,
+        labelSelector: labelsToSelector({
+          "openclaw.dev/namespace": context.namespaceId,
+          "openclaw.dev/agent": context.agentId,
+        }),
+        timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
+      }),
+    );
+    if (!Array.isArray(observed?.items)) {
+      throw new DependencyUnavailableError("The Agent runtime workload preflight failed.");
+    }
+    for (const item of observed.items) {
+      const deployment = this.listedRuntimeCredentialDeployment(item, context.namespace);
+      this.verifyOwnership(deployment, context.ownership);
+    }
+    if (observed.items.length > 0) {
+      throw new ResourceConflictError("The Agent runtime has already been deployed.");
+    }
+  }
+
+  private listedRuntimeCredentialDeployment(
+    item: unknown,
+    namespace: string,
+  ): ManagedKubernetesObject<"Deployment"> {
+    const record = asRecord(item);
+    const metadata = asRecord(record?.metadata);
+    const name = metadata?.name;
+    if (
+      record === undefined ||
+      metadata === undefined ||
+      record.apiVersion !== "apps/v1" ||
+      record.kind !== "Deployment" ||
+      typeof name !== "string" ||
+      name.length === 0 ||
+      metadata.namespace !== namespace
+    ) {
+      throw new ResourceConflictError("The Agent runtime workload preflight conflicted.");
+    }
+    const spec = asRecord(record.spec);
+    const status = asRecord(record.status);
+    const labels = this.runtimeCredentialStringMetadata(metadata.labels);
+    const annotations = this.runtimeCredentialStringMetadata(metadata.annotations);
+    return {
+      apiVersion: "apps/v1",
+      kind: "Deployment",
+      metadata: {
+        name,
+        namespace,
+        ...(labels === undefined ? {} : { labels }),
+        ...(annotations === undefined ? {} : { annotations }),
+      },
+      ...(spec === undefined ? {} : { spec }),
+      ...(status === undefined ? {} : { status }),
+    };
+  }
+
+  private runtimeCredentialStringMetadata(value: unknown): Record<string, string> | undefined {
+    const record = asRecord(value);
+    if (record === undefined) return undefined;
+    const result: Record<string, string> = {};
+    for (const [key, item] of Object.entries(record)) {
+      if (typeof item !== "string") {
+        throw new ResourceConflictError("The Agent runtime workload preflight conflicted.");
+      }
+      result[key] = item;
+    }
+    return result;
+  }
+
+  private async createRuntimeCredentialSecret(
+    context: RuntimeCredentialContext,
+    spec: RuntimeCredentialSecretSpec,
+    values: Readonly<Record<string, string>>,
+  ): Promise<void> {
+    const clients = await this.clients();
+    await this.request(
+      () =>
+        clients.core.createNamespacedSecret({
+          namespace: context.namespace,
+          body: {
+            ...this.manifest("v1", "Secret", spec.name, context.ownership, context.namespace),
+            type: "Opaque",
+            stringData: values,
+          },
+        }),
+      { mutating: true },
+    );
+  }
+
+  private generateRuntimeCredentialToken(): string {
+    return randomBytes(32).toString("base64url");
+  }
+
+  private async withRuntimeCredentialErrors<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof ResourceConflictError || error instanceof DependencyUnavailableError) {
+        throw error;
+      }
+      const status = numericErrorStatus(error);
+      if (status === 409 || error instanceof OwnershipFailure) {
+        throw new ResourceConflictError(
+          "The Agent runtime credentials conflict with existing Kubernetes resources.",
+        );
+      }
+      if (status === 401 || status === 403) {
+        throw new DependencyUnavailableError(
+          "The Kubernetes runtime credential backend is not authorized.",
+        );
+      }
+      throw new DependencyUnavailableError(
+        "The Kubernetes runtime credential backend operation failed or its outcome is unknown.",
+      );
+    }
+  }
+
   private verifyAdoptableNamespace(
     namespace: ManagedKubernetesObject<"Namespace">,
     ownership: Ownership,
@@ -1594,7 +2281,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
         `Existing Kubernetes namespace ${namespace.metadata.name} belongs to another tenant.`,
       );
     }
-    return existingLabel === ownership.namespaceId && existingId === ownership.namespaceId;
+    const requiredLabels = this.gatewayMembershipLabels();
+    const hasGatewayMembership = Object.entries(requiredLabels).every(
+      ([key, value]) => labels[key] === value,
+    );
+    return (
+      existingLabel === ownership.namespaceId &&
+      existingId === ownership.namespaceId &&
+      hasGatewayMembership
+    );
   }
 
   private async verifyUniqueExistingNamespace(name: string, ownership: Ownership): Promise<void> {
@@ -1640,7 +2335,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
                 metadata: {
                   name: namespace.metadata.name,
                   resourceVersion,
-                  labels: { "openclaw.dev/namespace": ownership.namespaceId },
+                  labels: {
+                    "openclaw.dev/namespace": ownership.namespaceId,
+                    ...this.gatewayMembershipLabels(),
+                  },
                   annotations: { "openclaw.dev/namespace-id": ownership.namespaceId },
                 },
               },
@@ -1879,33 +2577,102 @@ export class KubernetesComputeDriver implements ComputeDriver {
       await this.request(() =>
         clients.core.listNamespacedPod({
           namespace,
-          labelSelector: labelsToSelector(labels),
+          // Observe every Pod the active Agent Service could route to, even if an
+          // additional provider requirement label is missing or contradictory.
+          labelSelector: labelsToSelector({
+            "openclaw.dev/agent": revision.agentId,
+            "openclaw.dev/revision": revision.id,
+            "openclaw.dev/workload-role": "agent",
+          }),
           timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
         }),
       ),
     );
-    const items = Array.isArray(pods?.items) ? pods.items : [];
-    return items.some((item) => {
+    currentComputeAbortSignal()?.throwIfAborted();
+    const invalidObservation = () =>
+      new Error(
+        "The Kubernetes client returned an invalid or incomplete provider Harness Pod list.",
+      );
+    const listMetadata = asRecord(pods?.metadata);
+    if (
+      !Array.isArray(pods?.items) ||
+      (pods.apiVersion !== undefined && pods.apiVersion !== "v1") ||
+      (pods.kind !== undefined && pods.kind !== "PodList") ||
+      (pods.metadata !== undefined && listMetadata === undefined) ||
+      (listMetadata?.continue !== undefined && listMetadata.continue !== "") ||
+      (listMetadata?._continue !== undefined && listMetadata._continue !== "") ||
+      (listMetadata?.remainingItemCount !== undefined && listMetadata.remainingItemCount !== 0)
+    ) {
+      throw invalidObservation();
+    }
+    let candidates = 0;
+    let candidateReady = false;
+    // Validate the whole observation before trusting uniqueness, including entries after a Ready Pod.
+    for (const item of pods.items) {
       const pod = asRecord(item);
       const metadata = asRecord(pod?.metadata);
+      const podLabels = asRecord(metadata?.labels);
       const status = asRecord(pod?.status);
-      if (metadata?.namespace !== namespace || metadata.deletionTimestamp !== undefined) {
-        return false;
-      }
-      const podLabels = asRecord(metadata.labels);
       if (
+        pod === undefined ||
+        (pod.apiVersion !== undefined && pod.apiVersion !== "v1") ||
+        (pod.kind !== undefined && pod.kind !== "Pod") ||
+        metadata === undefined ||
+        !isNonEmptyString(metadata.name) ||
+        !isNonEmptyString(metadata.namespace) ||
+        (metadata.labels !== undefined && podLabels === undefined) ||
+        Object.values(podLabels ?? {}).some((value) => typeof value !== "string") ||
+        (pod.status !== undefined && status === undefined) ||
+        (status?.conditions !== undefined && !Array.isArray(status.conditions))
+      ) {
+        throw invalidObservation();
+      }
+      const deletedAt = metadata.deletionTimestamp;
+      if (
+        deletedAt !== undefined &&
+        !(
+          (deletedAt instanceof Date && Number.isFinite(deletedAt.getTime())) ||
+          (typeof deletedAt === "string" &&
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+              deletedAt,
+            ) &&
+            Number.isFinite(Date.parse(deletedAt)))
+        )
+      ) {
+        throw invalidObservation();
+      }
+      const conditionTypes = new Set<string>();
+      let ready = false;
+      for (const condition of (status?.conditions ?? []) as unknown[]) {
+        const observed = asRecord(condition);
+        if (
+          observed === undefined ||
+          !isNonEmptyString(observed.type) ||
+          typeof observed.status !== "string" ||
+          !["True", "False", "Unknown"].includes(observed.status) ||
+          conditionTypes.has(observed.type)
+        ) {
+          throw invalidObservation();
+        }
+        conditionTypes.add(observed.type);
+        if (observed.type === "Ready") ready = observed.status === "True";
+      }
+      if (
+        metadata.namespace !== namespace ||
+        deletedAt !== undefined ||
         podLabels?.["openclaw.dev/agent"] !== revision.agentId ||
         podLabels?.["openclaw.dev/revision"] !== revision.id ||
         podLabels?.["openclaw.dev/workload-role"] !== "agent"
       ) {
-        return false;
+        continue;
       }
-      const conditions = Array.isArray(status?.conditions) ? status.conditions : [];
-      return conditions.some((condition) => {
-        const observed = asRecord(condition);
-        return observed?.type === "Ready" && observed.status === "True";
-      });
-    });
+      if (Object.entries(labels).some(([key, value]) => podLabels?.[key] !== value)) {
+        throw invalidObservation();
+      }
+      candidates += 1;
+      candidateReady = ready;
+    }
+    return candidates === 1 && candidateReady;
   }
 
   private harnessRequirementsFromDeployment(
@@ -2240,6 +3007,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private networkPolicies(ownership: Ownership, namespace: string): ManagedKubernetesObject[] {
     const network = this.options.network;
+    const routing = this.options.gatewayRouting;
+    const gatewayIngressPeers =
+      routing === undefined
+        ? (network.gatewayClients ?? [])
+        : [
+            {
+              namespace: routing.envoyNamespace,
+              podLabels: {
+                "gateway.envoyproxy.io/owning-gateway-namespace": routing.gatewayNamespace,
+                "gateway.envoyproxy.io/owning-gateway-name": routing.gatewayName,
+              },
+            },
+          ];
     const policy = (name: string, spec: KubernetesRecord): ManagedKubernetesObject => ({
       ...this.manifest("networking.k8s.io/v1", "NetworkPolicy", name, ownership, namespace),
       spec,
@@ -2264,7 +3044,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         policyTypes: ["Ingress"],
         ingress: [
           {
-            from: network.gatewayClients.map((peer) => this.peer(peer)),
+            from: gatewayIngressPeers.map((peer) => this.peer(peer)),
             ports: [{ protocol: "TCP", port: network.gatewayPort }],
           },
         ],
@@ -2273,15 +3053,241 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   private gatewayConfiguration(revision: AgentRevision): GatewayConfigurationSnapshot {
+    const gateway = asRecord(revision.configuration.gateway);
+    const auth = asRecord(gateway?.auth);
+    const password = auth === undefined ? undefined : auth.password;
+    const passwordReference = password === undefined ? undefined : asRecord(password);
+    const usesGatewayPasswordEnv =
+      passwordReference?.source === "env" && passwordReference.id === OPENCLAW_GATEWAY_PASSWORD;
+    if (password !== undefined && !usesGatewayPasswordEnv) {
+      throw new ConfigurationFailure(
+        "Gateway password authentication must use OPENCLAW_GATEWAY_PASSWORD.",
+      );
+    }
     return {
       name: `gateway-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`,
       revision: revision.revision,
       revisionId: revision.id,
+      usesTrustedProxyAuth: auth?.mode === "trusted-proxy",
+      usesGatewayPasswordEnv,
       annotations: {
         "openclaw.dev/configuration-id": revision.configurationId,
         "openclaw.dev/configuration-kind": revision.configurationKind,
         "openclaw.dev/configuration-generation": String(revision.configurationGeneration),
       },
+      loggingLevel: admittedLoggingLevel(revision.configuration),
+    };
+  }
+
+  private gatewayMembershipLabels(): Record<string, string> {
+    const routing = this.options.gatewayRouting;
+    if (routing === undefined) return {};
+    return {
+      [GATEWAY_MEMBERSHIP_LABEL]: sha256Hex(
+        `${routing.gatewayNamespace}/${routing.gatewayName}`,
+        12,
+      ),
+    };
+  }
+
+  private gatewayRouteName(agentId: string): string {
+    return `gateway-${sha256Hex(agentId, 12)}`;
+  }
+
+  private gatewayRoutePath(revision: AgentRevision): string {
+    return `/namespaces/${required(revision.namespaceId, "AgentRevision Namespace ID")}/agents/${required(
+      revision.agentId,
+      "Agent ID",
+    )}`;
+  }
+
+  private gatewayRoutingHostname(routing: KubernetesGatewayRoutingOptions): string {
+    if (routing.hostname !== undefined && routing.hostname.length > 0) return routing.hostname;
+    return `occ-gateway-${sha256Hex(
+      `${routing.gatewayNamespace}/${routing.gatewayName}`,
+      12,
+    )}.${routing.envoyNamespace}.svc`;
+  }
+
+  private verifyGatewayRoutingConfiguration(revision: AgentRevision): void {
+    if (this.options.gatewayRouting === undefined) return;
+    const gateway = asRecord(revision.configuration.gateway);
+    const auth = asRecord(gateway?.auth);
+    const trustedProxy = asRecord(auth?.trustedProxy);
+    const trustedProxies = gateway?.trustedProxies;
+    if (auth?.mode !== "trusted-proxy") {
+      throw new ConfigurationFailure(
+        "Gateway routing requires native trusted-proxy authentication.",
+      );
+    }
+    if ("token" in (auth ?? {})) {
+      throw new ConfigurationFailure("Gateway routing native configuration must omit auth.token.");
+    }
+    if (trustedProxy?.userHeader !== "x-occ-identity") {
+      throw new ConfigurationFailure(
+        "Gateway routing requires native trustedProxy.userHeader x-occ-identity.",
+      );
+    }
+    if (
+      !Array.isArray(trustedProxy.allowUsers) ||
+      !trustedProxy.allowUsers.includes("occ-workspace-files")
+    ) {
+      throw new ConfigurationFailure(
+        "Gateway routing requires native trustedProxy.allowUsers to include occ-workspace-files.",
+      );
+    }
+    const identityScopes = asRecord(auth?.identityScopes);
+    const workspaceFileScopes = identityScopes?.["occ-workspace-files"];
+    if (!Array.isArray(workspaceFileScopes) || !workspaceFileScopes.includes("operator.admin")) {
+      throw new ConfigurationFailure(
+        "Gateway routing requires native identityScopes to grant operator.admin.",
+      );
+    }
+    if (gateway?.allowRealIpFallback !== true) {
+      throw new ConfigurationFailure(
+        "Gateway routing requires native allowRealIpFallback to be enabled.",
+      );
+    }
+    if (
+      !Array.isArray(trustedProxies) ||
+      !trustedProxies.some((proxy) => typeof proxy === "string" && proxy.trim().length > 0)
+    ) {
+      throw new ConfigurationFailure(
+        "Gateway routing requires explicitly configured native trustedProxies.",
+      );
+    }
+  }
+
+  private gatewayRoute(
+    revision: AgentRevision,
+    ownership: Ownership,
+    namespace: string,
+    service: ManagedKubernetesObject<"Service">,
+  ): ManagedKubernetesObject<"HTTPRoute"> | undefined {
+    const routing = this.options.gatewayRouting;
+    if (routing === undefined) return undefined;
+    const name = this.gatewayRouteName(revision.agentId);
+    const route = this.manifest(GATEWAY_API_VERSION, "HTTPRoute", name, ownership, namespace);
+    return {
+      ...route,
+      metadata: {
+        ...route.metadata,
+        annotations: {
+          ...route.metadata.annotations,
+          [AGENT_REVISION_ANNOTATION]: String(revision.revision),
+          [AGENT_REVISION_ID_ANNOTATION]: revision.id,
+        },
+        ...(service.metadata.uid === undefined
+          ? {}
+          : {
+              ownerReferences: [
+                {
+                  apiVersion: "v1",
+                  kind: "Service",
+                  name: service.metadata.name,
+                  uid: service.metadata.uid,
+                  controller: false,
+                  blockOwnerDeletion: false,
+                },
+              ],
+            }),
+      },
+      spec: {
+        hostnames: [this.gatewayRoutingHostname(routing)],
+        parentRefs: [
+          {
+            group: "gateway.networking.k8s.io",
+            kind: "Gateway",
+            namespace: routing.gatewayNamespace,
+            name: routing.gatewayName,
+            sectionName: GATEWAY_LISTENER_SECTION,
+          },
+        ],
+        rules: [
+          {
+            matches: [{ path: { type: "Exact", value: this.gatewayRoutePath(revision) } }],
+            filters: [
+              {
+                type: "URLRewrite",
+                urlRewrite: { path: { type: "ReplaceFullPath", replaceFullPath: "/" } },
+              },
+              {
+                type: "RequestHeaderModifier",
+                requestHeaderModifier: {
+                  set: [
+                    { name: "x-occ-identity", value: "occ-workspace-files" },
+                    {
+                      name: "x-real-ip",
+                      value: "%DOWNSTREAM_DIRECT_REMOTE_ADDRESS_WITHOUT_PORT%",
+                    },
+                  ],
+                  remove: ["x-forwarded-for", "forwarded", "x-openclaw-scopes"],
+                },
+              },
+            ],
+            backendRefs: [
+              {
+                group: "",
+                kind: "Service",
+                name: service.metadata.name,
+                port: this.options.network.gatewayPort,
+              },
+            ],
+          },
+        ],
+      },
+    };
+  }
+
+  private async reconcileGatewayRoute(
+    revision: AgentRevision,
+    ownership: Ownership,
+    namespace: string,
+  ): Promise<void> {
+    if (this.options.gatewayRouting === undefined) return;
+    const name = this.gatewayRouteName(revision.agentId);
+    const service = await this.getOwned("Service", name, namespace, ownership);
+    if (service === undefined) return;
+    const route = this.gatewayRoute(revision, ownership, namespace, service);
+    if (route !== undefined) await this.reconcile(route, ownership, namespace);
+  }
+
+  private pluginRuntimeSnapshot(revision: AgentRevision): PluginRuntimeSnapshot | undefined {
+    let runtime: PluginRuntimeSpec | undefined;
+    try {
+      runtime = pluginRuntimeSpecForRevision(revision);
+    } catch (error) {
+      throw new ConfigurationFailure(
+        error instanceof Error
+          ? error.message
+          : "AgentRevision plugin runtime artifacts are invalid.",
+      );
+    }
+    if (runtime === undefined) return undefined;
+    return {
+      name: `plugin-runtime-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`,
+      runtime,
+    };
+  }
+
+  private pluginRuntimeOwnership(revision: AgentRevision): Ownership {
+    return {
+      namespaceId: revision.namespaceId,
+      agentId: revision.agentId,
+      servicePrincipalId: revision.servicePrincipalId,
+      revisionId: revision.id,
+    };
+  }
+
+  private pluginRuntimeConfigMap(
+    snapshot: PluginRuntimeSnapshot,
+    ownership: Ownership,
+    namespace: string,
+  ): ManagedKubernetesObject<"ConfigMap"> {
+    return {
+      ...this.manifest("v1", "ConfigMap", snapshot.name, ownership, namespace),
+      immutable: true,
+      data: pluginRuntimeConfigMapData(snapshot.runtime),
     };
   }
 
@@ -2746,13 +3752,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
     image: string,
     serviceAccountName: string,
     role: "gateway" | "agent",
-    environment: Readonly<Record<string, string>> = {},
+    environment: Readonly<Record<string, string>>,
+    loggingLevel: LoggingLevel,
     configuration?: GatewayConfigurationSnapshot,
     embedded = false,
     workloadServicePrincipalId?: string,
     serviceAccount?: AgentRevision["serviceAccount"],
     enabledChannels: readonly ChannelRequirements[] = [],
     secretEnvironment: readonly SecretEnvironmentProjection[] = [],
+    pluginRuntime?: PluginRuntimeSnapshot,
   ): ManagedKubernetesObject {
     const metadata = this.ownershipMetadata(ownership);
     const workloadMetadata =
@@ -2760,7 +3768,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
         ? metadata
         : this.ownershipMetadata({ ...ownership, servicePrincipalId: workloadServicePrincipalId });
     const configurationAnnotations =
-      role === "gateway" && configuration !== undefined ? configuration.annotations : {};
+      role === "gateway" && configuration !== undefined
+        ? {
+            ...configuration.annotations,
+            [AGENT_REVISION_ANNOTATION]: String(configuration.revision),
+            [AGENT_REVISION_ID_ANNOTATION]: configuration.revisionId,
+          }
+        : {};
+    const revisionLabels =
+      role === "gateway" && configuration !== undefined
+        ? { "openclaw.dev/revision": configuration.revisionId }
+        : {};
     const deployment = this.manifest("apps/v1", "Deployment", name, ownership, namespace);
     const selector = { "app.kubernetes.io/name": name };
     const projected =
@@ -2796,6 +3814,50 @@ export class KubernetesComputeDriver implements ComputeDriver {
         value: `${CONFIGURATION_DIRECTORY}/${CONFIGURATION_DOCUMENT}`,
       });
     }
+    const needsPluginRuntime =
+      pluginRuntime !== undefined &&
+      ((pluginRuntime.runtime.kind === "openclaw" && role === "gateway" && embedded) ||
+        (pluginRuntime.runtime.kind === "codex" && role === "agent" && runtime !== undefined) ||
+        (pluginRuntime.runtime.kind === "codex" &&
+          role === "gateway" &&
+          !embedded &&
+          Object.keys(pluginRuntime.runtime.selections).length > 0));
+    if (needsPluginRuntime) {
+      volumes.push({
+        name: PLUGIN_RUNTIME_VOLUME,
+        configMap: {
+          name: pluginRuntime.name,
+          items: [
+            { key: PLUGIN_RUNTIME_MANIFEST, path: PLUGIN_RUNTIME_MANIFEST },
+            ...(pluginRuntime.runtime.kind === "codex" && role === "agent"
+              ? [{ key: PLUGIN_RUNTIME_CODEX_CONFIG, path: PLUGIN_RUNTIME_CODEX_CONFIG }]
+              : []),
+          ],
+          optional: false,
+        },
+      });
+      volumeMounts.push({
+        name: PLUGIN_RUNTIME_VOLUME,
+        mountPath: PLUGIN_RUNTIME_DIRECTORY,
+        readOnly: true,
+      });
+      variables.push({
+        name: PLUGIN_RUNTIME_MANIFEST_ENVIRONMENT,
+        value: `${PLUGIN_RUNTIME_DIRECTORY}/${PLUGIN_RUNTIME_MANIFEST}`,
+      });
+      if (pluginRuntime.runtime.kind === "codex" && role === "agent") {
+        variables.push(
+          {
+            name: PLUGIN_RUNTIME_CODEX_CONFIG_ENVIRONMENT,
+            value: `${PLUGIN_RUNTIME_DIRECTORY}/${PLUGIN_RUNTIME_CODEX_CONFIG}`,
+          },
+          {
+            name: PLUGIN_RUNTIME_READY_MARKER_ENVIRONMENT,
+            value: PLUGIN_RUNTIME_READY_MARKER,
+          },
+        );
+      }
+    }
     if (projected !== undefined) {
       volumes.push({
         name: "openclaw-service-principal",
@@ -2819,6 +3881,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     if (role === "agent" || embedded) {
       variables.push(...Object.entries(environment).map(([name, value]) => ({ name, value })));
+    }
+    if (role === "agent") {
+      variables.push(
+        { name: "LOG_FORMAT", value: "json" },
+        { name: "RUST_LOG", value: `${loggingLevel},codex_otel=off` },
+      );
     }
     if (secretEnvironment.length > 0) {
       if (role !== "gateway") {
@@ -2895,8 +3963,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
             value: `ws://agent-${suffix}:${AGENT_TRANSPORT_PORT}`,
           });
         }
+        // Native trusted-proxy authentication rejects a simultaneously configured shared token.
+        if (configuration?.usesTrustedProxyAuth !== true) {
+          variables.push(
+            secret("OPENCLAW_GATEWAY_TOKEN", runtime.transportSecretPrefix, GATEWAY_TOKEN_KEY),
+          );
+        }
+        if (configuration?.usesGatewayPasswordEnv === true) {
+          variables.push(
+            secret(OPENCLAW_GATEWAY_PASSWORD, runtime.transportSecretPrefix, GATEWAY_PASSWORD_KEY),
+          );
+        }
         variables.push(
-          secret("OPENCLAW_GATEWAY_TOKEN", runtime.transportSecretPrefix, GATEWAY_TOKEN_KEY),
           { name: "OPENCLAW_STATE_DIR", value: "/home/node/.openclaw" },
           { name: "OPENCLAW_GATEWAY_PORT", value: String(this.options.network.gatewayPort) },
         );
@@ -2957,6 +4035,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
       role === "agent" && runtime !== undefined
         ? AGENT_TRANSPORT_PORT
         : this.options.network.gatewayPort;
+    const codexSeccompProfile =
+      role === "agent" && runtime?.codexSeccompProfile !== undefined
+        ? {
+            seccompProfile: {
+              type: "Localhost",
+              localhostProfile: runtime.codexSeccompProfile,
+            },
+          }
+        : {};
     return {
       ...deployment,
       metadata: {
@@ -2964,12 +4051,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
         annotations: {
           ...metadata.annotations,
           ...configurationAnnotations,
-          ...(configuration === undefined
-            ? {}
-            : {
-                [AGENT_REVISION_ANNOTATION]: String(configuration.revision),
-                [AGENT_REVISION_ID_ANNOTATION]: configuration.revisionId,
-              }),
         },
       },
       spec: {
@@ -2980,7 +4061,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
           metadata: {
             ...workloadMetadata,
             annotations: { ...workloadMetadata.annotations, ...configurationAnnotations },
-            labels: { ...workloadMetadata.labels, ...selector, "openclaw.dev/workload-role": role },
+            labels: {
+              ...workloadMetadata.labels,
+              ...revisionLabels,
+              ...selector,
+              "openclaw.dev/workload-role": role,
+            },
           },
           spec: {
             serviceAccountName,
@@ -3004,8 +4090,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
                   { containerPort: port, name: role === "agent" && runtime ? "websocket" : "http" },
                 ],
                 readinessProbe: {
-                  ...(role === "agent" && runtime !== undefined
-                    ? { exec: { command: ["node", "-e", AGENT_READINESS_ENTRYPOINT] } }
+                  ...(runtime !== undefined
+                    ? {
+                        exec: {
+                          command: [
+                            "node",
+                            "-e",
+                            role === "gateway"
+                              ? GATEWAY_READINESS_ENTRYPOINT
+                              : AGENT_READINESS_ENTRYPOINT,
+                          ],
+                        },
+                      }
                     : { httpGet: { path: "/readyz", port } }),
                   periodSeconds: 2,
                 },
@@ -3017,6 +4113,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
                   allowPrivilegeEscalation: false,
                   readOnlyRootFilesystem: true,
                   capabilities: { drop: ["ALL"] },
+                  ...codexSeccompProfile,
                 },
                 ...(volumeMounts.length === 0 ? {} : { volumeMounts }),
                 ...(runtime === undefined
@@ -3093,13 +4190,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       if (desired.kind === "ConfigMap") {
         const annotations = desired.metadata.annotations ?? {};
+        const data = desired.data ?? {};
+        const existingData = existing.data ?? {};
         if (
           existing.immutable !== true ||
           Object.entries(annotations).some(
             ([name, value]) => existing.metadata.annotations?.[name] !== value,
           ) ||
-          existing.data?.[CONFIGURATION_DOCUMENT] !== desired.data?.[CONFIGURATION_DOCUMENT] ||
-          Object.keys(existing.data ?? {}).length !== 1 ||
+          Object.keys(existingData).length !== Object.keys(data).length ||
+          Object.entries(data).some(([name, value]) => existingData[name] !== value) ||
           Object.keys(existing.binaryData ?? {}).length !== 0
         ) {
           throw new OwnershipFailure(
@@ -3173,6 +4272,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
               this.patchOptions,
             );
             return;
+          case "HTTPRoute":
+            await clients.objects.patch(
+              desired,
+              undefined,
+              undefined,
+              FIELD_MANAGER,
+              false,
+              APPLY_CONTENT_TYPE,
+            );
+            return;
           default: {
             const unsupported: never = desired.kind;
             throw new ConfigurationFailure(
@@ -3208,6 +4317,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
           switch (kind) {
             case "Namespace":
               return clients.core.readNamespace({ name });
+            case "Pod":
+              return clients.core.readNamespacedPod({
+                name,
+                namespace: required(namespace, "Pod namespace"),
+              });
             case "ConfigMap":
               return clients.core.readNamespacedConfigMap({
                 name,
@@ -3252,6 +4366,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
               return clients.networking.readNamespacedNetworkPolicy({
                 name,
                 namespace: required(namespace, "NetworkPolicy namespace"),
+              });
+            case "HTTPRoute":
+              return clients.objects.read({
+                apiVersion: GATEWAY_API_VERSION,
+                kind,
+                metadata: { name, namespace: required(namespace, "HTTPRoute namespace") },
               });
             default: {
               const unsupported: never = kind;
