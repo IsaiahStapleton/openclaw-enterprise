@@ -137,12 +137,22 @@ anchor selection without executing targets. The compiler's public
 mapping. An existing runtime JS file takes precedence over its declaration or
 TypeScript sibling. Workspace ESM export selection is isolated in a bounded
 compatibility module; it supports ordered conditions, wildcard targets, arrays,
-and explicit blocking. Package import aliases (`#name`) are unsupported and
+and explicit blocking. Runtime selection uses the default Node conditions
+`node`, `node-addons`, `module-sync`, `default`, and either `import` or `require`.
+Type resolution follows the compiler's `types` condition selection.
+Custom `--conditions` and Node flags that change the default condition set are
+outside this analysis. Package import aliases (`#name`) are unsupported and
 produce diagnostics.
+
+Relative ESM specifiers follow URL semantics: percent escapes are decoded, and
+queries/fragments do not change the target's source-file ownership. CommonJS
+paths retain native literal filename semantics.
 
 Lexical analysis follows conventional loader imports, local aliases, object
 destructuring, literal paths, local `const` strings, concatenations, templates,
-and selected Node URL/path helpers. It follows initialized `let`/`var` loader
+and selected Node URL/path helpers. File-local bindings stay isolated across
+Node ESM and CommonJS sources even without static import/export syntax.
+It follows initialized `let`/`var` loader
 bindings only when they are not assigned elsewhere in the same source. Assigned
 loader bindings become unknown. Shadowed parameters and local functions do not
 inherit unrelated loader identities. Analysis is bounded to 64 nested nodes;

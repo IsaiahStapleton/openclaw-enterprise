@@ -52,10 +52,20 @@ function assignedSymbols(source, checker) {
 /** Parse/bind the snapshot only. Emit import references; make no resolution or policy decisions. */
 export function collectSourceImports(snapshot) {
   const texts = new Map(snapshot.files.map((file) => [file.absolutePath, file.text]));
-  const options = { allowJs: true, noResolve: true, noLib: true, target: ts.ScriptTarget.Latest };
+  const options = {
+    allowJs: true,
+    noResolve: true,
+    noLib: true,
+    target: ts.ScriptTarget.Latest,
+    // Both Node ESM and CommonJS isolate file-local bindings, including files
+    // that contain only dynamic imports and no static import/export syntax.
+    moduleDetection: ts.ModuleDetectionKind.Force,
+  };
   const host = ts.createCompilerHost(options);
-  host.getSourceFile = (path, version) =>
-    texts.has(path) ? ts.createSourceFile(path, texts.get(path), version, true) : undefined;
+  host.getSourceFile = (path, languageVersionOrOptions) =>
+    texts.has(path)
+      ? ts.createSourceFile(path, texts.get(path), languageVersionOrOptions, true)
+      : undefined;
   const program = ts.createProgram([...texts.keys()], options, host);
   const checker = program.getTypeChecker();
   const references = [],

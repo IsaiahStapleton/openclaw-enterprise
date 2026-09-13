@@ -91,7 +91,7 @@ export function resolveImports(snapshot, references, policy = {}) {
           const selected = selectPackageExport(
             pkg.manifest.exports,
             subpath,
-            new Set(["node", "module-sync", mode]),
+            new Set(["node", "node-addons", "module-sync", mode]),
           );
           if (typeof selected === "string")
             target = fileURLToPath(new URL(selected, pathToFileURL(`${resolve(root, pkg.path)}/`)));
@@ -124,6 +124,8 @@ export function resolveImports(snapshot, references, policy = {}) {
             }
           }
         } else if (specifier.startsWith("file:")) target = fileURLToPath(specifier);
+        else if (mode === "import" && specifier.startsWith("."))
+          target = fileURLToPath(new URL(specifier, pathToFileURL(importer)));
         else if (specifier.startsWith(".") || isAbsolute(specifier))
           target = resolve(anchor.endsWith("/") ? anchor : dirname(anchor), specifier);
         else if (specifier.startsWith("#"))
