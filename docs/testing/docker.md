@@ -48,6 +48,34 @@ with `--volumes`. It uses disposable project resources and no model credentials
 or Agent runtime image. Failure cleanup uses Compose directly without masking
 the CLI failure. This proves the cleanup lifecycle, not Agent execution.
 
+## Docker transport-token retry fixture
+
+With Docker Engine available at `/var/run/docker.sock` and workspace dependencies
+already installed, run from the repository root:
+
+```sh
+OCC_TEST_DOCKER_TOKEN_RETRY=1 NODE_BASE_IMAGE=node:24-bookworm \
+  node --test tests/integration/docker-compute-token-retry.test.mjs
+```
+
+The fixture calls the real Docker Driver directly and runs its runtime entrypoints
+in disposable containers. Minimal gateway and app-server binaries exercise
+WebSocket authentication, including invalid and missing bearer rejection. The
+case checks both peer-loss directions, retained token reuse, token rotation,
+replacement of a healthy gateway holding a stale token, and preservation of
+foreign-owned same-name containers and their siblings.
+
+This is Driver regression coverage without an Agent authentication binding. It
+does not pass through current OCC Agent admission or prove genuine OpenClaw,
+Codex, model calls, or the Compose control plane. The authentication support
+boundary at the top of this page still applies.
+
+The test builds an image from `NODE_BASE_IMAGE` (default `node:24-bookworm`)
+and the installed WebSocket dependency, without installing packages. It uses an
+inert fixture provider key and removes its own containers, network, and image.
+A selected run fails on missing prerequisites or cleanup failure. CI selects
+this case in the `images-packaging` lane.
+
 ## Docker Compose development test environment
 
 `tests/integration/docker-compute-real.test.mjs` retains the Docker and Podman

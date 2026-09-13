@@ -1,4 +1,7 @@
 {
+  "env": {
+    "OCC_TEST_DOCKER_TOKEN_RETRY": "1"
+  },
   "requiredEnv": ["OCC_TEST_RUNTIME_IMAGE", "OCC_TEST_PRODUCTION_IMAGE"],
   "prepare": {
     "defaultEnv": {
@@ -9,6 +12,12 @@
     "nodeBaseImage": true
   },
   "files": [
+    {
+      "path": "tests/integration/docker-compute-token-retry.test.mjs",
+      "expectedTests": [
+        "Docker driver keeps dedicated transport coherent and rejects foreign owners across retries"
+      ]
+    },
     {
       "path": "tests/integration/runtime-image-startup.test.mjs",
       "expectedTests": [
