@@ -580,6 +580,23 @@ export class ControllerWorker {
         await this.finalizeAgentStop(claim, { outcome: "permanent", code: "INVALID_TARGET" });
         return;
       }
+      const authorizedAgent = await this.state.read((view) =>
+        view.agents.findAgent(claim.namespaceId, claim.agentId!),
+      );
+      if (authorizedAgent === undefined) {
+        await this.finalizeAgentStop(claim, {
+          outcome: "permanent",
+          code: "INVALID_AGENT_OWNER",
+        });
+        return;
+      }
+      const denied = await this.authorizeAgentStop(claim, authorizedAgent);
+      if (denied !== undefined) {
+        await this.finalizeAgentStop(claim, { ...denied, agent: authorizedAgent });
+        return;
+      }
+      // Admission may change desired state while IAM is consulted. Reload the exact
+      // Agent immediately before any provider effect so a later deployment wins.
       const resources = await this.state.read(async (view) => {
         const agent = await view.agents.findAgent(claim.namespaceId, claim.agentId!);
         const revision =
@@ -593,16 +610,11 @@ export class ControllerWorker {
         return { agent, revision };
       });
       const { agent, revision } = resources;
-      if (agent === undefined) {
+      if (agent === undefined || agent.servicePrincipalId !== authorizedAgent.servicePrincipalId) {
         await this.finalizeAgentStop(claim, {
           outcome: "permanent",
           code: "INVALID_AGENT_OWNER",
         });
-        return;
-      }
-      const denied = await this.authorizeAgentStop(claim, agent);
-      if (denied !== undefined) {
-        await this.finalizeAgentStop(claim, { ...denied, agent });
         return;
       }
       if (agent.desiredRuntimeState !== "stopped") {

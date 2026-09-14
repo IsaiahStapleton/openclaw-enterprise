@@ -3023,7 +3023,7 @@ test("private gateway claim reuse and deletion verify exact ownership and storag
   assert.equal(mutations.length, 1);
 });
 
-test("stopping a Kubernetes gateway removes routing and execution but retains persistent claims", async () => {
+test("stopping a Kubernetes revision removes routing and execution but retains persistent claims", async () => {
   const driver = createKubernetesComputeDriver(
     routedOptions({
       runtime: {
@@ -3038,6 +3038,23 @@ test("stopping a Kubernetes gateway removes routing and execution but retains pe
   const ownership = { namespaceId: tenant.id, agentId };
   const namespace = kubernetesNamespaceName(tenant.id);
   const gatewayName = "gateway-" + createHash("sha256").update(agentId).digest("hex").slice(0, 12);
+  const revision = routedRevision(driver, {
+    id: revisionId,
+    agentId,
+    harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+  });
+  const namespaceResource = {
+    apiVersion: "v1",
+    kind: "Namespace",
+    metadata: {
+      name: namespace,
+      labels: {
+        "app.kubernetes.io/managed-by": "openclaw-enterprise",
+        "openclaw.dev/namespace": tenant.id,
+      },
+      annotations: { "openclaw.dev/namespace-id": tenant.id },
+    },
+  };
   const gateway = driver.manifest("apps/v1", "Deployment", gatewayName, ownership, namespace);
   gateway.metadata.uid = "gateway-uid";
   gateway.metadata.annotations["openclaw.dev/agent-revision-id"] = revisionId;
@@ -3065,6 +3082,12 @@ test("stopping a Kubernetes gateway removes routing and execution but retains pe
       },
     },
     core: {
+      async listNamespace() {
+        return { apiVersion: "v1", kind: "NamespaceList", items: [namespaceResource] };
+      },
+      async readNamespace() {
+        return structuredClone(namespaceResource);
+      },
       async readNamespacedService() {
         return structuredClone(service);
       },
@@ -3094,11 +3117,106 @@ test("stopping a Kubernetes gateway removes routing and execution but retains pe
     },
   });
 
-  await driver.removeStoppedGateway({ id: revisionId, agentId, namespaceId: tenant.id }, namespace);
+  await driver.stopRevision(revision);
   assert.deepEqual(
     deletions.map(([kind]) => kind),
     ["HTTPRoute", "Service", "ServiceAccount", "Deployment"],
   );
+});
+
+test("stopping a containment-only Kubernetes revision removes its workload before Sandbox cleanup", async () => {
+  const cleanupCalls = [];
+  const deletionCalls = [];
+  let deploymentPresent = true;
+  const sandboxDriver = {
+    id: "sandbox-containment-only-stop",
+    implementation: "test/containment-only",
+    capability: "sandbox",
+    facets: ["networking"],
+    async cleanup(context) {
+      assert.equal(deploymentPresent, false);
+      cleanupCalls.push(context);
+      if (cleanupCalls.length === 1) throw new Error("sandbox cleanup failed");
+    },
+  };
+  const driver = new KubernetesComputeDriver(options(), { sandboxDriver });
+  const revision = routedRevision(driver, {
+    id: "revision-containment-stop",
+    sandboxDriverId: sandboxDriver.id,
+  });
+  const namespace = kubernetesNamespaceName(revision.namespaceId);
+  const namespaceResource = {
+    apiVersion: "v1",
+    kind: "Namespace",
+    metadata: {
+      name: namespace,
+      labels: {
+        "app.kubernetes.io/managed-by": "openclaw-enterprise",
+        "openclaw.dev/namespace": revision.namespaceId,
+      },
+      annotations: { "openclaw.dev/namespace-id": revision.namespaceId },
+    },
+  };
+  const deploymentName = `agent-${digest(revision.agentId)}-rev-${digest(revision.id)}`;
+  const deployment = driver.deployment(
+    deploymentName,
+    {
+      namespaceId: revision.namespaceId,
+      agentId: revision.agentId,
+      servicePrincipalId: revision.servicePrincipalId,
+      revisionId: revision.id,
+    },
+    namespace,
+    "agent:local",
+    `agent-${digest(revision.agentId)}`,
+    "agent",
+    {},
+    "info",
+  );
+  deployment.metadata.uid = "containment-stop-workload-uid";
+  const notFound = () => Object.assign(new Error("Not found"), { code: 404 });
+  driver.apiClients = Promise.resolve({
+    core: {
+      async listNamespace() {
+        return { apiVersion: "v1", kind: "NamespaceList", items: [namespaceResource] };
+      },
+      async readNamespace() {
+        return structuredClone(namespaceResource);
+      },
+    },
+    apps: {
+      async readNamespacedDeployment({ name }) {
+        if (name === deploymentName && deploymentPresent) return structuredClone(deployment);
+        throw notFound();
+      },
+      async deleteNamespacedDeployment(request) {
+        deletionCalls.push(request);
+        deploymentPresent = false;
+      },
+    },
+    objects: {},
+  });
+
+  // A cleanup failure leaves stop retryable after the Compute-owned workload is gone.
+  await assert.rejects(driver.stopRevision(revision), /sandbox cleanup failed/);
+  assert.deepEqual(deletionCalls, [
+    {
+      name: deploymentName,
+      namespace,
+      body: { preconditions: { uid: deployment.metadata.uid } },
+    },
+  ]);
+  assert.equal(cleanupCalls.length, 1);
+
+  // Retrying an absent workload must still invoke the selected Sandbox cleanup.
+  await driver.stopRevision(revision);
+  assert.equal(deletionCalls.length, 1);
+  assert.equal(cleanupCalls.length, 2);
+  for (const context of cleanupCalls) {
+    assert.equal(context.namespace.id, revision.namespaceId);
+    assert.equal(context.namespace.name, namespace);
+    assert.deepEqual(context.revision, revision);
+  }
 });
 
 test("retiring a predecessor preserves both claims and final retirement deletes exact claim UIDs", async () => {

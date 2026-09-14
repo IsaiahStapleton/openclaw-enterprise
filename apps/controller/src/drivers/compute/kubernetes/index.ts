@@ -1769,7 +1769,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     required(revision.agentId, "Agent ID");
     required(revision.id, "AgentRevision ID");
     required(revision.servicePrincipalId, "Agent ServicePrincipal ID");
-    const clients = await this.clients();
     const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
     const existingNamespace = await this.get("Namespace", namespace);
     if (existingNamespace === undefined) {
@@ -1781,43 +1780,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
       { namespaceId: revision.namespaceId },
       external,
     );
-    await this.lifecycle.beforeWorkloadStop(revision);
-    if (revision.harness.mode === "dedicated") {
-      const sandboxDriver = this.sandboxDriverForRevision(revision);
-      if (sandboxDriver?.provisionHarness !== undefined) {
-        await sandboxDriver.cleanup({
-          ...(await this.sandboxNamespaceContext(
-            this.sandboxNamespaceForRevision(revision, namespace),
-            namespace,
-          )),
-          revision,
-        });
-      } else {
-        const name = `agent-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`;
-        const deployment = await this.getOwned("Deployment", name, namespace, {
-          namespaceId: revision.namespaceId,
-          agentId: revision.agentId,
-          servicePrincipalId: revision.servicePrincipalId,
-          revisionId: revision.id,
-        });
-        if (deployment !== undefined) {
-          await this.request(
-            () =>
-              clients.apps.deleteNamespacedDeployment({
-                name,
-                namespace,
-                ...(deployment.metadata.uid === undefined
-                  ? {}
-                  : { body: { preconditions: { uid: deployment.metadata.uid } } }),
-              }),
-            { mutating: true },
-          );
-        }
-      }
-    } else if (this.sandboxDriverForRevision(revision) !== undefined) {
+    if (
+      revision.harness.mode !== "dedicated" &&
+      this.sandboxDriverForRevision(revision) !== undefined
+    ) {
       throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
     }
+    await this.lifecycle.beforeWorkloadStop(revision);
+    // Stop removes the serving path first so no new traffic reaches a runtime while
+    // its exact Harness is being shut down.
     await this.removeStoppedGateway(revision, namespace);
+    await this.shutdownRevisionRuntime(revision, namespace);
   }
 
   async retireRevision(revision: AgentRevision): Promise<void> {
@@ -1831,7 +1804,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     required(revision.agentId, "Agent ID");
     required(revision.id, "AgentRevision ID");
     required(revision.servicePrincipalId, "Agent ServicePrincipal ID");
-    const clients = await this.clients();
     const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
     const existingNamespace = await this.get("Namespace", namespace);
     if (existingNamespace === undefined) {
@@ -1843,14 +1815,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
       { namespaceId: revision.namespaceId },
       external,
     );
-    if (revision.harness.mode === "embedded") {
-      if (this.sandboxDriverForRevision(revision) !== undefined) {
-        throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
-      }
-      await this.lifecycle.beforeWorkloadStop(revision);
-      await this.removeRetiredGateway(revision, namespace);
-      return;
+    if (
+      revision.harness.mode !== "dedicated" &&
+      this.sandboxDriverForRevision(revision) !== undefined
+    ) {
+      throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
     }
+    await this.lifecycle.beforeWorkloadStop(revision);
+    await this.shutdownRevisionRuntime(revision, namespace);
+    await this.removeRetiredGateway(revision, namespace);
+  }
+
+  private async shutdownRevisionRuntime(revision: AgentRevision, namespace: string): Promise<void> {
+    if (revision.harness.mode === "embedded") return;
     const sandboxDriver = this.sandboxDriverForRevision(revision);
     const name = `agent-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`;
     const deployment =
@@ -1862,8 +1839,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
             revisionId: revision.id,
           })
         : undefined;
-    await this.lifecycle.beforeWorkloadStop(revision);
     if (deployment !== undefined) {
+      const clients = await this.clients();
       await this.request(
         () =>
           clients.apps.deleteNamespacedDeployment({
@@ -1885,7 +1862,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
         revision,
       });
     }
-    await this.removeRetiredGateway(revision, namespace);
   }
 
   private async removeStoppedGateway(revision: AgentRevision, namespace: string): Promise<void> {

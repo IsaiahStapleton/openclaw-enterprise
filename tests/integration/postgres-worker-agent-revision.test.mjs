@@ -156,15 +156,42 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
     });
   }
 
+  async function requestStop(owner) {
+    const operationId = randomUUID();
+    const idempotencyKey = `agent:${owner.id}:reconcile:stopped:${operationId}`;
+    await state.transactWithQueue(async (unit, queue) => {
+      const current = await unit.agents.lockAgent(namespace.id, owner.id);
+      assert.ok(current);
+      await unit.agents.transitionAgentDesiredRuntimeState(
+        namespace.id,
+        owner.id,
+        current.desiredRuntimeState,
+        "stopped",
+      );
+      await queue.enqueue({
+        idempotencyKey,
+        namespaceId: namespace.id,
+        agentId: owner.id,
+        agentTarget: "stopped",
+        actorId: actor.id,
+        availableAt: new Date(0),
+      });
+    });
+    return { id: owner.id, idempotencyKey };
+  }
+
   function start(
     computeDriver,
     emit = () => {},
     convergenceTimeoutMs,
     providers,
     pool = workerPool,
+    transformDrivers = (drivers) => drivers,
   ) {
-    const drivers =
+    const configuredDrivers =
       providers === undefined ? undefined : createProviderWorkerDrivers(computeDriver, providers);
+    const drivers =
+      configuredDrivers === undefined ? undefined : transformDrivers(configuredDrivers);
     worker = createControllerWorker({
       pool,
       pollIntervalMs: 15,
@@ -192,6 +219,7 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
     PostgresWorkQueue,
     agent,
     revision,
+    requestStop,
     work,
     start,
     stop,
@@ -209,9 +237,14 @@ test(
     const targetRevision = await fixture.revision(owner, 1);
     const siblingRevision = await fixture.revision(sibling, 1);
     const stoppedRevisions = [];
+    let failStopOnce = true;
     await fixture.start({
       ...fixture.compute,
       async stopRevision(revision) {
+        if (failStopOnce) {
+          failStopOnce = false;
+          throw new Error("transient Compute stop failure");
+        }
         stoppedRevisions.push(revision.id);
       },
     });
@@ -220,32 +253,9 @@ test(
       fixture.work(siblingRevision, "succeeded"),
     ]);
 
-    async function requestStop() {
-      const operationId = randomUUID();
-      const idempotencyKey = `agent:${owner.id}:reconcile:stopped:${operationId}`;
-      await fixture.state.transactWithQueue(async (unit, queue) => {
-        const current = await unit.agents.lockAgent(fixture.namespace.id, owner.id);
-        assert.ok(current);
-        await unit.agents.transitionAgentDesiredRuntimeState(
-          fixture.namespace.id,
-          owner.id,
-          current.desiredRuntimeState,
-          "stopped",
-        );
-        await queue.enqueue({
-          idempotencyKey,
-          namespaceId: fixture.namespace.id,
-          agentId: owner.id,
-          agentTarget: "stopped",
-          actorId: fixture.actor.id,
-          availableAt: new Date(0),
-        });
-      });
-      return { id: owner.id, idempotencyKey };
-    }
-
-    const firstStop = await requestStop();
-    await fixture.work(firstStop, "succeeded");
+    const firstStop = await fixture.requestStop(owner);
+    const completedStop = await fixture.work(firstStop, "succeeded");
+    assert.equal(completedStop.attempt_count, 2);
     const [stopped, unaffected, retainedRevision] = await fixture.state.read(async (view) =>
       Promise.all([
         view.agents.findAgent(fixture.namespace.id, owner.id),
@@ -259,7 +269,7 @@ test(
     assert.equal(retainedRevision.id, targetRevision.id);
     assert.deepEqual(stoppedRevisions, [targetRevision.id]);
 
-    const repeatedStop = await requestStop();
+    const repeatedStop = await fixture.requestStop(owner);
     await fixture.work(repeatedStop, "succeeded");
     assert.deepEqual(stoppedRevisions, [targetRevision.id]);
     const audit = await fixture.observerPool.query(
@@ -279,6 +289,138 @@ test(
         action: "openclaw.agents.lifecycle.stop",
         resource_id: owner.id,
         reason_code: "AGENT_ALREADY_STOPPED",
+      },
+    ]);
+  },
+);
+
+test(
+  "a deployment admitted after stop supersedes stale stop work before Compute mutation",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("stop-then-deploy");
+    const first = await fixture.revision(owner, 1);
+    const stoppedRevisions = [];
+    let releaseStopAuthorization;
+    const stopAuthorizationReleased = new Promise((resolve) => {
+      releaseStopAuthorization = resolve;
+    });
+    let stopAuthorizationStarted;
+    const stopAuthorizationObserved = new Promise((resolve) => {
+      stopAuthorizationStarted = resolve;
+    });
+    const compute = {
+      ...fixture.compute,
+      async stopRevision(candidate) {
+        stoppedRevisions.push(candidate.id);
+      },
+    };
+    await fixture.start(
+      compute,
+      () => {},
+      undefined,
+      [],
+      fixture.workerPool,
+      (drivers) => {
+        const createIAMDriver = drivers.createIAMDriver;
+        return {
+          ...drivers,
+          createIAMDriver(state) {
+            const iam = createIAMDriver(state);
+            return {
+              id: iam.id,
+              implementation: iam.implementation,
+              capability: iam.capability,
+              lookupIdentity: iam.lookupIdentity.bind(iam),
+              async authorize(request) {
+                if (
+                  request.action === "operate" &&
+                  request.resource.kind === "agent" &&
+                  request.resource.id === owner.id
+                ) {
+                  stopAuthorizationStarted();
+                  await stopAuthorizationReleased;
+                }
+                return iam.authorize(request);
+              },
+            };
+          },
+        };
+      },
+    );
+    await fixture.work(first, "succeeded");
+
+    const stop = await fixture.requestStop(owner);
+    await stopAuthorizationObserved;
+    // This later admission changes intent while stop is inside its required IAM check.
+    const second = await fixture.revision(owner, 2);
+    releaseStopAuthorization();
+
+    await Promise.all([fixture.work(stop, "succeeded"), fixture.work(second, "succeeded")]);
+    const running = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(running.desiredRuntimeState, "running");
+    assert.equal(running.activeRevisionId, second.id);
+    assert.deepEqual(stoppedRevisions, []);
+    const audit = await fixture.observerPool.query(
+      `SELECT details->>'reasonCode' AS reason_code
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.stop'
+         AND resource_id = $2`,
+      [fixture.namespace.id, owner.id],
+    );
+    assert.deepEqual(audit.rows, [{ reason_code: "STOP_SUPERSEDED" }]);
+  },
+);
+
+test(
+  "Agent stop reauthorizes the recorded actor before Compute mutation",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("stop-reauthorization");
+    const revision = await fixture.revision(owner, 1);
+    const stoppedRevisions = [];
+    await fixture.start({
+      ...fixture.compute,
+      async stopRevision(candidate) {
+        stoppedRevisions.push(candidate.id);
+      },
+    });
+    await fixture.work(revision, "succeeded");
+
+    // Permission revoked after deployment must prevent asynchronous stop effects.
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_restrictions
+         (id, namespace_id, action, resource_kind, resource_id, effect)
+       VALUES ($1, $2, 'operate', 'agent', $3, 'deny')`,
+      [`restriction-${randomUUID()}`, fixture.namespace.id, owner.id],
+    );
+    const stop = await fixture.requestStop(owner);
+    await fixture.work(stop, "failed_permanent");
+
+    assert.deepEqual(stoppedRevisions, []);
+    const current = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(current.activeRevisionId, revision.id);
+    assert.equal(current.desiredRuntimeState, "stopped");
+    const audit = await fixture.observerPool.query(
+      `SELECT kind, action, outcome,
+              details->'__occAuditMetadata'->>'reasonCode' AS reason_code
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND resource_id = $2
+         AND kind = 'authorization_denial'`,
+      [fixture.namespace.id, owner.id],
+    );
+    assert.deepEqual(audit.rows, [
+      {
+        kind: "authorization_denial",
+        action: "openclaw.agents.stop",
+        outcome: "denied",
+        reason_code: "AUTHORIZATION_DENIED",
       },
     ]);
   },
