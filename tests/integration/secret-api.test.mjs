@@ -202,9 +202,20 @@ async function bootstrapAgent(fixture) {
 
 test("Secret API stores values through the selected driver and returns metadata only", async () => {
   const fixture = await createFixture();
-  const { namespace } = await bootstrapAgent(fixture);
+  const { namespace, agent } = await bootstrapAgent(fixture);
   const originalValue = `secret-value-${randomUUID()}`;
   const rotatedValue = `rotated-value-${randomUUID()}`;
+
+  const removedOwnerField = await request(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.id}/secrets`,
+    {
+      body: { agentId: agent.id, name: "Removed owner key", value: `secret-value-${randomUUID()}` },
+    },
+  );
+  assert.equal(removedOwnerField.status, 400);
+  assert.equal(removedOwnerField.body.error.code, "INVALID_REQUEST");
 
   const created = await request(fixture.app, "POST", `/namespaces/${namespace.id}/secrets`, {
     body: { name: "Provider API key", value: originalValue },
@@ -274,17 +285,6 @@ test("Secret API stores values through the selected driver and returns metadata 
       .map((event) => event.action),
     ["openclaw.secrets.create", "openclaw.secrets.update", "openclaw.secrets.delete"],
   );
-});
-
-test("Secret API rejects removed Agent owner fields", async () => {
-  const fixture = await createFixture();
-  const { namespace, agent } = await bootstrapAgent(fixture);
-
-  const rejected = await request(fixture.app, "POST", `/namespaces/${namespace.id}/secrets`, {
-    body: { agentId: agent.id, name: "Removed owner key", value: `secret-value-${randomUUID()}` },
-  });
-  assert.equal(rejected.status, 400);
-  assert.equal(rejected.body.error.code, "INVALID_REQUEST");
 });
 
 test("Secret API accepts the largest default JSON body and rejects one byte over", async () => {

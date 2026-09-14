@@ -93,6 +93,18 @@ test("startup loads singleton Installation YAML and validates Drivers before con
   assert.equal(drivers.computeDriver.implementation, "occ/kubernetes");
   assert.equal(drivers.configurationDriver.id, "config-kubernetes");
   assert.equal(drivers.configurationDriver.implementation, "occ/kubernetes-configmap");
+  assert.equal(configuration.drivers.compute.configuration.network.gatewayPort, 8080);
+
+  // Startup constructs the selected Compute Driver using the updated trusted YAML settings.
+  const changed = installation();
+  changed.drivers.compute.configuration.network.gatewayPort = 8081;
+  const updated = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: await fixture(t, changed) },
+  });
+  assert.equal(updated.computeDriver.id, drivers.computeDriver.id);
+  assert.equal(updated.computeDriver.implementation, drivers.computeDriver.implementation);
+  assert.equal(updated.installation.drivers.compute.configuration.network.gatewayPort, 8081);
 });
 
 test("shared startup loads provider metadata without reading the API-only ChatGPT admin Secret", async (t) => {
@@ -605,24 +617,4 @@ test("startup rejects plaintext secrets, caller-authored identities, and unsuppo
       expected,
     );
   }
-});
-
-test("startup loads updated Compute Driver settings from trusted YAML", async (t) => {
-  const initial = await loadInstallationConfiguration({
-    mode: "production",
-    environment: { OCC_CONFIG_PATH: await fixture(t) },
-  });
-  assert.equal(initial.computeDriver.id, "compute-kubernetes");
-  assert.equal(initial.installation.drivers.compute.configuration.network.gatewayPort, 8080);
-
-  // Startup constructs the selected Compute Driver using the updated trusted YAML settings.
-  const changed = installation();
-  changed.drivers.compute.configuration.network.gatewayPort = 8081;
-  const updated = await loadInstallationConfiguration({
-    mode: "production",
-    environment: { OCC_CONFIG_PATH: await fixture(t, changed) },
-  });
-  assert.equal(updated.computeDriver.id, initial.computeDriver.id);
-  assert.equal(updated.computeDriver.implementation, initial.computeDriver.implementation);
-  assert.equal(updated.installation.drivers.compute.configuration.network.gatewayPort, 8081);
 });

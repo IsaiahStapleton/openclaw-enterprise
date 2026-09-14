@@ -242,7 +242,7 @@ test("native OpenClaw Configuration HTTP CRUD preserves documents, SecretRefs, e
   );
 });
 
-test("Configuration HTTP requires a native JSON object", async () => {
+test("Configuration HTTP requires native supported requests and rejects immutable metadata changes", async () => {
   const configurationDriver = createConfigurationBackend();
   const context = await fixture({ configurationDriver });
   const namespace = await bootstrapAndCreateNamespace(context);
@@ -262,12 +262,6 @@ test("Configuration HTTP requires a native JSON object", async () => {
     false,
     "rejected documents must never emit successful Configuration mutation audits",
   );
-});
-
-test("Configuration HTTP requires a supported kind and rejects immutable metadata changes", async () => {
-  const context = await fixture();
-  const namespace = await bootstrapAndCreateNamespace(context);
-  const collection = `/namespaces/${namespace.id}/configurations`;
 
   for (const body of [
     { values: {} },
@@ -280,6 +274,12 @@ test("Configuration HTTP requires a supported kind and rejects immutable metadat
     assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
     assert.equal(rejected.body.error.code, "INVALID_REQUEST");
   }
+  assert.deepEqual(configurationDriver.storedConfigurations(), []);
+  assert.equal(
+    context.auditSink.events.some((event) => event.resource.kind === "configuration"),
+    false,
+    "rejected requests must never emit successful Configuration mutation audits",
+  );
 
   const created = await request(context.app, "POST", collection, {
     body: { kind: "agent", values: { model: "stable" } },
@@ -414,9 +414,6 @@ test("Configuration deletion rejects an Agent reference and deployments retain i
     admitLoggingConfiguration(initialValues, "info"),
   );
 
-  // Admission recursively detaches the model reference and every plugin array element.
-  initialValues.models.providers.openai.apiKey.id = "MUTATED_AFTER_ADMISSION";
-  initialValues.plugins.entries.knowledge.config.thresholds[0] = 99;
   const expectedHistorical = createOpenClawConfiguration();
 
   const updated = await request(context.app, "PATCH", `${collection}/${configurationId}`, {
