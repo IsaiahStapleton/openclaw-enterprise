@@ -67,8 +67,8 @@ Its [identity boundary](access.md#runtime-trust-across-targets) excludes dedicat
 Harness identity and model credentials as well as broad controller credentials.
 Model credentials remain confined to the tenant data-plane Harness.
 Workload-write authority must be bounded in each target, since it can indirectly
-expose Secrets there. Cross-target materialization remains an implementation
-prerequisite; the concrete delivery mechanism is deferred.
+expose Secrets there. Cross-target materialization remains a prerequisite for
+dedicated gateway relocation; the concrete delivery mechanism is deferred.
 
 ## Failure behavior
 
