@@ -5,15 +5,12 @@ With workspace dependencies prepared, run:
 ```sh
 pnpm check:modules
 pnpm check:modules --json
-node --test tests/conformance/module-policy.test.mjs
 ```
 
 A successful check reports no unexcepted violations and no stale exceptions.
-The standard conformance, integration, PostgreSQL and combined test commands run
-this check first. The `checks-baseline` CI lane also runs the policy test against
-the actual repository. Its second case adds a forbidden import to a temporary
-copy of that source, verifies an exact exception, then removes the import and
-requires the stale exception to fail.
+The conformance suite and `checks-baseline` CI lane run the policy test against
+the actual repository. Its second case verifies an allowed public-root import
+and a forbidden HTTP-to-Driver import in a temporary copy of that source.
 
 ## Ownership and allowed dependencies
 
@@ -73,11 +70,15 @@ review. Do not generate or accept a new baseline without reviewing every entry.
 
 ## Verify a policy change
 
-Run the policy test and the check above after changing rules, package ownership
-or exception bindings. The real-repository case must remain green; a new forbidden
-import must fail even when all current exceptions apply. Review the reported
-cycles and the intended scopes as architecture choices before making the change
-mandatory.
+After changing rules, package ownership or exception bindings, run:
+
+```sh
+node --test tests/conformance/module-policy.test.mjs
+```
+
+The real-repository case must remain green, the supported public-root import
+must remain allowed, and the new forbidden import must fail with the checked-in
+exceptions. Review reported cycles and intended scopes with the policy change.
 
 For analyzer syntax, resolution behavior, explicit configuration and diagnostic
 categories, see [the import analyzer](module-boundaries.md). The analyzer is a

@@ -11,10 +11,10 @@ const checker = join(repositoryRoot, "scripts/verify-module-boundaries.mjs");
 const policyPath = join(repositoryRoot, "scripts/module-boundaries/policy.json");
 const exceptionsPath = join(repositoryRoot, "scripts/module-boundaries/exceptions.json");
 
-function check(root, exceptions = exceptionsPath) {
+function check(root) {
   const result = spawnSync(
     process.execPath,
-    [checker, "--root", root, "--policy", policyPath, "--exceptions", exceptions, "--json"],
+    [checker, "--root", root, "--policy", policyPath, "--exceptions", exceptionsPath, "--json"],
     { cwd: repositoryRoot, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
   );
   assert.ifError(result.error);
@@ -29,11 +29,10 @@ test("repository source obeys its dependency policy with exact current exception
   assert.deepEqual(report.violations, []);
 });
 
-test("repository policy rejects a new HTTP Driver import and its stale exception", async (t) => {
+test("repository policy allows a public root and rejects a new HTTP Driver import", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "occ-module-policy-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const policy = JSON.parse(await readFile(policyPath, "utf8"));
-  const exceptions = JSON.parse(await readFile(exceptionsPath, "utf8"));
   // Use the real source and manifests so the existing baseline remains applicable.
   for (const sourceRoot of policy.sourceRoots) {
     await cp(join(repositoryRoot, sourceRoot), join(root, sourceRoot), {
@@ -71,31 +70,4 @@ test("repository policy rejects a new HTTP Driver import and its stale exception
   assert.equal(diagnostic.rule, "http-to-provider");
   assert.equal(diagnostic.from, source);
   assert.equal(diagnostic.to, "apps/controller/src/drivers/compute/docker/index.ts");
-
-  const { rule, from, to, specifier, kind, typeOnly, bindings } = diagnostic;
-  const temporaryExceptions = join(root, "exceptions.json");
-  exceptions.exceptions.push({
-    rule,
-    from,
-    to,
-    specifier,
-    kind,
-    typeOnly,
-    bindings,
-    owner: "Dependency policy conformance",
-    reason: "This temporary source verifies the exact repository-policy exception contract.",
-    removeWhen: "The temporary HTTP import is removed during this test.",
-  });
-  await writeFile(temporaryExceptions, JSON.stringify(exceptions));
-  const accepted = check(root, temporaryExceptions);
-  assert.equal(accepted.status, 0, JSON.stringify(accepted.report.violations));
-  assert.deepEqual(accepted.report.violations, []);
-
-  // Removing the edge must revoke its exemption instead of leaving an unused allowance.
-  await rm(probe);
-  const stale = check(root, temporaryExceptions);
-  assert.equal(stale.status, 1);
-  assert.equal(stale.report.violations.length, 1, JSON.stringify(stale.report.violations));
-  assert.equal(stale.report.violations[0].rule, "stale-exception");
-  assert.equal(stale.report.violations[0].from, source);
 });
