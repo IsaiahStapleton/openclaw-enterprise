@@ -21,6 +21,12 @@ The authoritative architecture is the repository's
 [platform design](docs/design.md).
 Do not create a competing architecture specification in this checkout.
 
+## Development style
+
+Before developing or changing code, read and follow
+[Development style](docs/development.md). It governs platform capability design,
+required integration tests, and public module exports.
+
 ## Developer skills
 
 Use [test-audit](.agents/skills/test-audit/SKILL.md) when authoring or reviewing
