@@ -38,6 +38,10 @@ platform lifecycle and composition. A standalone helper or a class named after
 a primitive does not establish that integration. Internal helpers may support
 the implementation, but must not substitute for the platform capability.
 
+In general, do not add a capability without a caller in the regular Agent
+workflow. Deliver the capability with that caller; defer speculative components
+until a real workflow needs them. A test-only caller does not satisfy this rule.
+
 For example, GitHub App token issuance should belong to an appropriate platform
 primitive. If implemented as a Provider, it must conform to the
 [Provider contract](docs/reference/providers.md) and participate in Provider
@@ -57,7 +61,11 @@ Missing infrastructure, passing unit tests, or an agent's judgment cannot grant
 that override.
 
 Integration tests must exercise the supported implementation path and relevant
-dependencies, including consequential failure behavior. Mocks that replace the
+dependencies, including consequential failure behavior. Extend an existing
+end-to-end integration test for the regular Agent workflow to exercise the new
+capability through its real caller. If no existing test covers that workflow,
+add one at the workflow boundary. Direct calls to an otherwise unused component
+do not prove workflow integration. Mocks that replace the
 behavior being proved do not satisfy this requirement. Follow the repository's
 [testing skills](#developer-skills) for test selection and proof.
 
