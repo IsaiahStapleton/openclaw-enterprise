@@ -895,6 +895,58 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     { ...account, credential: alternateCredential },
   );
 
+  await store.transact(async (transaction) => {
+    // The second consumer's draft still blocks deletion after the first consumer detaches.
+    assert.equal(
+      await transaction.serviceAccounts.hasReferences(accountNamespace.id, account.id),
+      true,
+    );
+    assert.equal(await transaction.serviceAccounts.hasReferences(namespace.id, account.id), false);
+    await transaction.agents.updateConfiguration(
+      accountNamespace.id,
+      sharedAccountAgent.id,
+      accountConfiguration.id,
+      undefined,
+      null,
+    );
+    assert.equal(
+      await transaction.serviceAccounts.hasReferences(accountNamespace.id, account.id),
+      false,
+    );
+    // Completed deployment state has an active pointer even after every draft detaches.
+    await transaction.agents.compareAndSetActiveRevision(
+      accountNamespace.id,
+      accountAgent.id,
+      undefined,
+      accountRevision.id,
+    );
+  });
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.serviceAccounts.deleteServiceAccount(accountNamespace.id, account.id),
+    ),
+    "An active revision must protect its account even without pending work or draft references.",
+  );
+  await store.transact(async (transaction) => {
+    const { serviceAccount: _accountSnapshot, ...withoutAccount } = accountRevision;
+    const replacement = await transaction.revisions.createRevision({
+      ...withoutAccount,
+      id: identifier("rev"),
+      revision: 2,
+    });
+    await transaction.agents.compareAndSetActiveRevision(
+      accountNamespace.id,
+      accountAgent.id,
+      accountRevision.id,
+      replacement.id,
+    );
+    // Retaining an inactive historical snapshot does not retain the upstream account forever.
+    assert.equal(
+      await transaction.serviceAccounts.hasReferences(accountNamespace.id, account.id),
+      false,
+    );
+  });
+
   const accountOnlyNamespace = {
     id: identifier("ns"),
     name: "Account-only " + randomUUID(),
