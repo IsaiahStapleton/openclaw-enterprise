@@ -1,8 +1,10 @@
-import { createPostgresAuthBinding } from "@openclaw-enterprise/occ/auth-persistence/postgres-auth-binding";
+import type { PoolClient } from "pg";
+import { createPostgresAuthBinding } from "@openclaw-enterprise/occ";
 import type {
   SchemaAuthAdapterOptionsV1,
   SchemaAuthBoundaryV1,
-} from "@openclaw-enterprise/occ/auth-persistence/schema-auth-boundary-v1";
+  SchemaAuthSchemaV1,
+} from "@openclaw-enterprise/occ";
 
 declare const pool: Parameters<typeof createPostgresAuthBinding>[0];
 declare const binding: SchemaAuthBoundaryV1;
@@ -42,3 +44,24 @@ createPostgresAuthBinding({
   end: pool.end.bind(pool),
   query: pool.query.bind(pool),
 });
+
+// @ts-expect-error The full schema must accompany the database.
+const withoutSchema: SchemaAuthBoundaryV1 = { database: binding.database };
+// @ts-expect-error The binding must expose a typed database.
+const withoutDatabase: SchemaAuthBoundaryV1 = { schema: binding.schema };
+// @ts-expect-error Authentication tables alone are not the complete schema.
+const authOnly: SchemaAuthSchemaV1 = { user: binding.schema.user, session: binding.schema.session };
+// @ts-expect-error Core resource tables alone are not the complete schema.
+const coreOnly: SchemaAuthSchemaV1 = { namespaces: binding.schema.namespaces };
+declare const unknownValue: unknown;
+// @ts-expect-error Unknown database values cannot cross this typed boundary.
+const unknownDatabase: SchemaAuthBoundaryV1["database"] = unknownValue;
+// @ts-expect-error Unknown schema values cannot cross this typed boundary.
+const unknownSchema: SchemaAuthSchemaV1 = unknownValue;
+// @ts-expect-error Only the existing PostgreSQL provider is supported.
+const wrongProvider: SchemaAuthAdapterOptionsV1["provider"] = "mysql";
+// @ts-expect-error Existing camelCase mapping remains enabled.
+const wrongCasing: SchemaAuthAdapterOptionsV1["camelCase"] = false;
+declare const client: PoolClient;
+// @ts-expect-error A checked-out transaction client is not the pool.
+createPostgresAuthBinding(client);

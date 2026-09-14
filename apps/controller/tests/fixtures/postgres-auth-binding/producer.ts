@@ -1,5 +1,5 @@
-import { createPostgresAuthBinding } from "@openclaw-enterprise/occ/auth-persistence/postgres-auth-binding";
-import type { SchemaAuthBindingFactoryV1 } from "@openclaw-enterprise/occ/auth-persistence/schema-auth-boundary-v1";
+import { createPostgresAuthBinding } from "@openclaw-enterprise/occ";
+import type { SchemaAuthBindingFactoryV1 } from "@openclaw-enterprise/occ";
 
 const factory: SchemaAuthBindingFactoryV1 = createPostgresAuthBinding;
 export async function produceBinding(pool: Parameters<SchemaAuthBindingFactoryV1>[0]) {

@@ -5,10 +5,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./auth-persistence/schema-auth-boundary-v1": "./src/auth-persistence/schema-auth-boundary-v1.ts",
-    "./auth-persistence/postgres-auth-binding": "./src/auth-persistence/postgres-auth-binding.ts",
-    "./schema/core-schema-boundary-v1": "./src/schema/core-schema-boundary-v1.ts"
+    ".": "./src/index.ts"
   },
   "types": "./src/index.ts",
   "files": [

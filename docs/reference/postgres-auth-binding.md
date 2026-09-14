@@ -1,9 +1,8 @@
 # PostgreSQL authentication binding
 
 The controller connects Better Auth to OCC's canonical PostgreSQL schema through
-`@openclaw-enterprise/occ/auth-persistence/postgres-auth-binding`. This supported
-package entry point replaces controller lookups into OCC's source tree and
-private dependency installation.
+`createPostgresAuthBinding` from `@openclaw-enterprise/occ`. This public API replaces
+controller lookups into OCC's source tree and private dependency installation.
 
 ## Composition
 
@@ -15,7 +14,7 @@ both values. The controller owns the Better Auth adapter and supplies the
 returned database and schema together:
 
 ```ts
-import { createPostgresAuthBinding } from "@openclaw-enterprise/occ/auth-persistence/postgres-auth-binding";
+import { createPostgresAuthBinding } from "@openclaw-enterprise/occ";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
 const binding = await createPostgresAuthBinding(pool);
@@ -48,14 +47,9 @@ and does not alter session, API key, or authorization rules. See
 
 ## Type contracts
 
-`@openclaw-enterprise/occ/auth-persistence/schema-auth-boundary-v1` exports the
-binding, factory, adapter-option, and complete-schema types. The schema type
+`@openclaw-enterprise/occ` exports the binding, factory, adapter-option, and
+complete-schema types. The schema type
 retains each canonical table's inferred columns and query results.
-
-`@openclaw-enterprise/occ/schema/core-schema-boundary-v1` exports readonly type
-views of the existing schema root, core resource tables, and authentication
-tables. These views do not construct tables or replace the complete schema
-passed to the adapter. An authentication-table projection alone is insufficient.
 
 For test setup, focused checks, and database failure diagnosis, see
 [PostgreSQL tests](../testing/postgresql.md#authentication-binding).

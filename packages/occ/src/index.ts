@@ -242,6 +242,15 @@ export type {
   AgentProvisioningStatus,
 } from "./state/agent-provisioning.ts";
 
+export { createPostgresAuthBinding } from "./auth-persistence/postgres-auth-binding.ts";
+export type {
+  SchemaAuthAdapterOptionsV1,
+  SchemaAuthBindingFactoryV1,
+  SchemaAuthBoundaryV1,
+  SchemaAuthPoolV1,
+  SchemaAuthSchemaV1,
+} from "./auth-persistence/schema-auth-boundary-v1.ts";
+
 export const BOOTSTRAP_DEFAULT_NAMESPACE_NAME = "default";
 
 export interface ControllerOptions {

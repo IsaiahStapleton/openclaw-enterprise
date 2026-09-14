@@ -10,11 +10,8 @@ import type { ApiKey } from "@better-auth/api-key/types";
 import { parse as parseDomain } from "tldts";
 import type { ServicePrincipal } from "@openclaw-enterprise/contracts";
 import { createAuthPrincipalSeed, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
-import type {
-  SchemaAuthAdapterOptionsV1,
-  SchemaAuthPoolV1,
-} from "@openclaw-enterprise/occ/auth-persistence/schema-auth-boundary-v1";
-import { createPostgresAuthBinding } from "@openclaw-enterprise/occ/auth-persistence/postgres-auth-binding";
+import { createPostgresAuthBinding } from "@openclaw-enterprise/occ";
+import type { SchemaAuthAdapterOptionsV1, SchemaAuthPoolV1 } from "@openclaw-enterprise/occ";
 import type {
   AdmissionHeaders,
   AdmissionRequest,
