@@ -215,6 +215,13 @@
           ]
         },
         {
+          "path": "tests/integration/postgres-migration-compatibility.test.mjs",
+          "expectedTests": [
+            "Drizzle generates repository schema migrations without redundant regeneration",
+            "Drizzle second migration preserves the applied journal and PostgreSQL schema"
+          ]
+        },
+        {
           "path": "tests/integration/postgres-platform-state.test.mjs",
           "expectedTests": [
             "PostgreSQL rejects platform writes until the singleton Installation is bootstrapped",
