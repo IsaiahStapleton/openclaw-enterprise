@@ -72,10 +72,9 @@ export function collectSourceImports(snapshot) {
     diagnostics = [];
   for (const file of snapshot.files) {
     const source = program.getSourceFile(file.absolutePath);
-    const owner = snapshot.packages.find((pkg) => file.path.startsWith(`${pkg.path}/`));
     const commonjs = /\.[cm][jt]s$/.test(file.path)
       ? /\.[c][jt]s$/.test(file.path)
-      : owner?.manifest.type !== "module";
+      : file.packageType !== "module";
     const analysis = createLoaderAnalysis({
       checker,
       path: file.absolutePath,

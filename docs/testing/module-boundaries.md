@@ -49,6 +49,9 @@ nonempty paths relative to the analyzed tree. Each package directory must have a
 named `package.json`. New source files under the selected roots are discovered
 automatically. The walker excludes `node_modules`, `dist`, `.git`, and symlinked
 directories. It includes JS/TS, JSX/TSX, CommonJS/ESM extensions, and declarations.
+The root and existing resolver targets use canonical filesystem identities, so a
+root symlink does not change graph membership. Sources excluded from discovery
+remain outside the graph even when an import resolves through a symlink.
 
 Boundary patterns support an exact path, a prefix ending in `/**`, or `**` for
 everything. They do not support arbitrary globs. A boundary matches its source
@@ -132,7 +135,11 @@ remove its exception in the same change.
 
 CommonJS resolution delegates to `createRequire(...).resolve(...)`, preserving
 native extensionless, directory-index, package-main, export-condition, and loader
-anchor selection without executing targets. The compiler's public
+anchor selection without executing targets. Registered CommonJS packages without
+`exports` resolve from their registered directory, including `main` and subpaths,
+without requiring a `node_modules` link. Workspace ESM packages still require
+explicit `exports`; legacy ESM package-main resolution is unsupported.
+The compiler's public
 `resolveModuleName` API handles declaration and absent emitted-file source
 mapping. An existing runtime JS file takes precedence over its declaration or
 TypeScript sibling. Workspace ESM export selection is isolated in a bounded
@@ -152,6 +159,8 @@ Lexical analysis follows conventional loader imports, local aliases, object
 destructuring, literal paths, local `const` strings, concatenations, templates,
 and selected Node URL/path helpers. File-local bindings stay isolated across
 Node ESM and CommonJS sources even without static import/export syntax.
+`module`, `__filename`, and `__dirname` follow the nearest `package.json`
+scope, including unnamed nested packages. `.cjs`/`.cts` and `.mjs`/`.mts` override the package type.
 It follows initialized `let`/`var` loader
 bindings only when they are not assigned elsewhere in the same source. Assigned
 loader bindings become unknown. Shadowed parameters and local functions do not

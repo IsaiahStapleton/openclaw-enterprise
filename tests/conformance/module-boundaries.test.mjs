@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire, stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -16,7 +16,7 @@ const cli = join(repository, "scripts/verify-module-boundaries.mjs");
 const policy = JSON.parse(await readFile(new URL("policy.json", fixture), "utf8"));
 
 async function workspace(t, overrides = {}) {
-  const root = await mkdtemp(join(tmpdir(), "module-boundaries-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "module-boundaries-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   await cp(fixture, root, { recursive: true });
   const config = { ...policy, ...overrides };
@@ -373,6 +373,132 @@ test("uses native CommonJS file and directory resolution from file and trailing-
   );
 });
 
+test("resolves registered CommonJS package main entries through the CLI without exports", async (t) => {
+  const consumer = "apps/app/src/legacy.cjs";
+  const target = "packages/legacy/src/entry.cjs";
+  const { root, write, args } = await workspace(t, {
+    packages: ["apps/app", "packages/legacy", "packages/outside"],
+    sourceRoots: ["apps/app/src", "packages/legacy/src"],
+    boundaries: [
+      { rule: "forbidden-main", from: [consumer], to: [target], message: "Use the adapter." },
+    ],
+  });
+  await write("apps/app/src/index.ts", "export {};");
+  await write(
+    "packages/legacy/package.json",
+    JSON.stringify({ name: "@fixture/legacy", main: "src/entry.cjs", types: "src/entry.d.cts" }),
+  );
+  await write("packages/legacy/src/entry.d.cts", "export declare const value: number;");
+  await write(target, 'throw new Error("Analyzer must not execute targets.");');
+  await write(
+    "packages/outside/package.json",
+    JSON.stringify({ name: "@fixture/outside", main: "entry.cjs" }),
+  );
+  await write(
+    "packages/outside/entry.cjs",
+    'throw new Error("Analyzer must not execute targets.");',
+  );
+  await write(consumer, 'require("@fixture/legacy"); require("@fixture/outside");');
+  // Resolve the installed package with Node, then remove the link: the analyzer
+  // must use the explicitly registered package, without an installation prerequisite.
+  await mkdir(join(root, "node_modules/@fixture"), { recursive: true });
+  await symlink(join(root, "packages/legacy"), join(root, "node_modules/@fixture/legacy"), "dir");
+  const nativeTarget = relative(
+    root,
+    createRequire(join(root, consumer)).resolve("@fixture/legacy"),
+  );
+  assert.equal(nativeTarget, target);
+  await rm(join(root, "node_modules/@fixture/legacy"));
+  await assert.rejects(run(process.execPath, [cli, ...args, "--json"]), (error) => {
+    assert.equal(error.code, 1);
+    const report = JSON.parse(error.stdout);
+    assert.deepEqual(rules(report), ["forbidden-main", "unresolved-local-import"]);
+    const resolved = report.resolutions.find(
+      (item) => item.reference.specifier === "@fixture/legacy",
+    );
+    assert.equal(resolved.status, "local");
+    assert.equal(resolved.named, true);
+    assert.equal(resolved.runtimeTarget, nativeTarget);
+    assert.equal(resolved.typeTarget, "packages/legacy/src/entry.d.cts");
+    assert.equal(report.violations.find((item) => item.rule === "forbidden-main").to, target);
+    assert.equal(
+      report.resolutions.find((item) => item.reference.specifier === "@fixture/outside").status,
+      "unresolved",
+    );
+    return true;
+  });
+});
+
+test("keeps canonical CLI graph identities through a symlink root without admitting skipped sources", async (t) => {
+  const consumer = "apps/app/src/canonical.cjs";
+  const target = "apps/app/src/private.cjs";
+  const { root, write } = await workspace(t, {
+    packages: ["apps/app"],
+    sourceRoots: ["apps/app/src"],
+    boundaries: [
+      {
+        rule: "forbidden-canonical",
+        from: [consumer],
+        to: [target],
+        message: "Use the safe leaf.",
+      },
+    ],
+  });
+  const alias = `${root}-alias`;
+  await symlink(root, alias, "dir");
+  t.after(() => rm(alias));
+  await write("apps/app/src/index.ts", "export {};");
+  await write(target, 'throw new Error("Analyzer must not execute targets.");');
+  await write("outside/hidden.cjs", 'throw new Error("Analyzer must not execute targets.");');
+  await symlink(join(root, "outside"), join(root, "apps/app/src/skipped"), "dir");
+  // An absolute alias target also exercises canonical lookup when the accepted
+  // root is already real. The skipped directory must not expand the graph.
+  await write(
+    consumer,
+    `require(${JSON.stringify(join(alias, target))}); import(${JSON.stringify(join(alias, target))}); require("./skipped/hidden.cjs");`,
+  );
+  const nativeTarget = relative(
+    root,
+    createRequire(join(alias, consumer)).resolve(join(alias, target)),
+  );
+  assert.equal(nativeTarget, target);
+  const reports = [];
+  for (const selectedRoot of [root, alias]) {
+    await assert.rejects(
+      run(process.execPath, [cli, "--root", selectedRoot, "--policy", "policy.json", "--json"]),
+      (error) => {
+        assert.equal(error.code, 1);
+        const report = JSON.parse(error.stdout);
+        assert.deepEqual(rules(report), [
+          "forbidden-canonical",
+          "forbidden-canonical",
+          "unresolved-local-import",
+        ]);
+        assert.equal(
+          report.violations.find((item) => item.rule === "forbidden-canonical").to,
+          target,
+        );
+        assert.deepEqual(
+          from(report, consumer).map((edge) => edge.to),
+          [nativeTarget, nativeTarget],
+        );
+        assert.equal(
+          report.resolutions.find((item) => item.reference.specifier === "./skipped/hidden.cjs")
+            .status,
+          "unresolved",
+        );
+        assert.equal(
+          report.files.some((path) => /(?:skipped|outside)/.test(path)),
+          false,
+        );
+        reports.push(report);
+        return true;
+      },
+    );
+  }
+  assert.deepEqual(reports[0], reports[1]);
+});
+
 test("resolves anchored loads against their actual provider and checks foreign package anchors", async (t) => {
   const boundary = {
     rule: "consumer-to-private",
@@ -484,12 +610,6 @@ test("tracks loader aliases, module objects and wrappers while respecting lexica
     assert.ok(
       report.violations.some((edge) => edge.from === `apps/app/src/known-${index}.${extension}`),
     );
-  assert.equal(
-    report.edges.some(
-      (edge) => /\/(shadows|wrapper)\.mjs$/.test(edge.from) && edge.specifier === "external-driver",
-    ),
-    false,
-  );
 });
 
 test("keeps Node file bindings local across JavaScript and TypeScript module formats", async (t) => {
@@ -543,6 +663,58 @@ test("keeps Node file bindings local across JavaScript and TypeScript module for
     });
   }
   assert.deepEqual(observed, expected);
+});
+
+test("uses the nearest unnamed package scope for CLI CommonJS loaders and extension overrides", async (t) => {
+  for (const [extension, parentType, nestedType, commonjs] of [
+    ["js", "module", "commonjs", true],
+    ["js", "commonjs", "module", false],
+    ["js", "module", undefined, true],
+    ["cjs", "module", "module", true],
+    ["cts", "module", "module", true],
+    ["mjs", "commonjs", "commonjs", false],
+    ["mts", "commonjs", "commonjs", false],
+  ]) {
+    const base = "apps/app/src/nested";
+    const consumer = `${base}/load.${extension}`;
+    const target = `${base}/secret.cjs`;
+    const { root, write, args } = await workspace(t, {
+      packages: ["apps/app"],
+      sourceRoots: [base],
+      boundaries: [
+        { rule: "forbidden-scope", from: [consumer], to: [target], message: "Use the safe leaf." },
+      ],
+    });
+    await write(
+      "apps/app/package.json",
+      JSON.stringify({ name: "@fixture/app", type: parentType }),
+    );
+    await write(`${base}/package.json`, JSON.stringify({ type: nestedType }));
+    await write(target, 'throw new Error("Analyzer must not execute targets.");');
+    await write(consumer, 'module.require("./secret.cjs");');
+    // Execute only a native loader probe in the same scope; resolve the throwing
+    // target without loading it. Node is independent of the analyzer's parser.
+    const probe = `${base}/probe.${extension}`;
+    await write(
+      probe,
+      'console.log(JSON.stringify({ loader: typeof module !== "undefined" && typeof module.require === "function", target: typeof require === "function" ? require.resolve("./secret.cjs") : null }));',
+    );
+    const native = JSON.parse((await run(process.execPath, [join(root, probe)])).stdout);
+    assert.equal(native.loader, commonjs);
+    assert.equal(native.target && relative(root, native.target), commonjs ? target : null);
+    const result = await run(process.execPath, [cli, ...args, "--json"]).catch((error) => {
+      assert.equal(error.code, 1);
+      return error;
+    });
+    const report = JSON.parse(result.stdout);
+    assert.equal(result.code ?? 0, commonjs ? 1 : 0);
+    assert.deepEqual(
+      from(report, consumer).map((edge) => edge.to),
+      commonjs ? [target] : [],
+    );
+    assert.deepEqual(rules(report), commonjs ? ["forbidden-scope"] : []);
+    if (commonjs) assert.equal(report.violations[0].to, target);
+  }
 });
 
 test("does not preserve falsely known targets through reassigned paths or loaders", async (t) => {

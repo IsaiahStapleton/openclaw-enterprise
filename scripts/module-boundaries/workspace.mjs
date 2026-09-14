@@ -1,5 +1,5 @@
-import { readFile, readdir } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { readFile, readdir, realpath } from "node:fs/promises";
+import { dirname, relative, resolve } from "node:path";
 
 export const sourceExtension = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 export const slash = (value) => value.replaceAll("\\", "/");
@@ -19,7 +19,25 @@ async function walk(directory) {
 
 /** Read a fresh, deterministic source snapshot. Symlinked directories are not traversed. */
 export async function readWorkspace(root, policy) {
-  root = resolve(root);
+  root = await realpath(root);
+  const packageTypes = new Map();
+  function packageType(directory) {
+    if (!packageTypes.has(directory))
+      packageTypes.set(
+        directory,
+        (async () => {
+          try {
+            const manifest = JSON.parse(await readFile(resolve(directory, "package.json"), "utf8"));
+            return manifest.type === "module" ? "module" : "commonjs";
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+            const parent = dirname(directory);
+            return parent === directory ? "commonjs" : packageType(parent);
+          }
+        })(),
+      );
+    return packageTypes.get(directory);
+  }
   const paths = [
     ...new Set(
       (await Promise.all(policy.sourceRoots.map((path) => walk(resolve(root, path))))).flat(),
@@ -31,6 +49,7 @@ export async function readWorkspace(root, policy) {
         path: slash(relative(root, absolutePath)),
         absolutePath,
         text: await readFile(absolutePath, "utf8"),
+        packageType: await packageType(dirname(absolutePath)),
       }),
     ),
   );

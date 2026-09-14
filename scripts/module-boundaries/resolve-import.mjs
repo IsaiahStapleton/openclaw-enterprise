@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -48,8 +48,15 @@ export function resolveImports(snapshot, references, policy = {}) {
       mode === "require" ? ts.ModuleKind.CommonJS : ts.ModuleKind.ESNext,
     ).resolvedModule?.resolvedFileName;
   }
-  const graphPath = (path) =>
-    path && files.has(resolve(path)) ? files.get(resolve(path)).path : null;
+  const graphPath = (path) => {
+    if (!path) return null;
+    try {
+      return files.get(realpathSync(path))?.path ?? null;
+    } catch (error) {
+      if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error;
+      return null;
+    }
+  };
   return Object.freeze(
     references.map((reference) => {
       let named = false;
@@ -83,44 +90,52 @@ export function resolveImports(snapshot, references, policy = {}) {
           const packageAnchor = resolve(root, pkg.path, "package.json");
           typeCandidate = compilerTarget(specifier, packageAnchor, mode);
           const subpath = specifier === pkg.name ? "." : `.${specifier.slice(pkg.name.length)}`;
-          if (pkg.manifest.exports === undefined)
-            return unresolved(
-              "unsupported-package-export",
-              `Package ${pkg.name} has no explicit export for ${subpath}.`,
-            );
-          const selected = selectPackageExport(
-            pkg.manifest.exports,
-            subpath,
-            new Set(["node", "node-addons", "module-sync", mode]),
-          );
-          if (typeof selected === "string")
-            target = fileURLToPath(new URL(selected, pathToFileURL(`${resolve(root, pkg.path)}/`)));
-          if (!target && !reference.typeOnly)
-            return unresolved(
-              "unsupported-package-export",
-              `Package ${pkg.name} does not expose ${subpath} for this import.`,
-            );
-          if (reference.typeOnly && !typeCandidate) {
-            const types = selectPackageExport(
+          if (pkg.manifest.exports === undefined) {
+            if (mode !== "require")
+              return unresolved(
+                "unsupported-package-export",
+                `Package ${pkg.name} requires explicit exports for ESM analysis.`,
+              );
+            target = resolve(root, pkg.path, subpath);
+            typeCandidate = compilerTarget(target, packageAnchor, mode);
+            nativeTarget = createRequire(packageAnchor).resolve(target);
+          } else {
+            const selected = selectPackageExport(
               pkg.manifest.exports,
               subpath,
-              new Set(["types", "node", mode]),
+              new Set(["node", "node-addons", "module-sync", mode]),
             );
-            if (typeof types === "string")
-              typeCandidate = compilerTarget(
-                fileURLToPath(new URL(types, pathToFileURL(`${resolve(root, pkg.path)}/`))),
-                packageAnchor,
-                mode,
+            if (typeof selected === "string")
+              target = fileURLToPath(
+                new URL(selected, pathToFileURL(`${resolve(root, pkg.path)}/`)),
               );
-          }
-          if (mode === "require" && target) {
-            try {
-              nativeTarget = createRequire(packageAnchor).resolve(specifier);
-            } catch (error) {
-              if (error.code !== "MODULE_NOT_FOUND")
-                throw new Error(
-                  `Node could not resolve package export (${error.code ?? error.name}).`,
+            if (!target && !reference.typeOnly)
+              return unresolved(
+                "unsupported-package-export",
+                `Package ${pkg.name} does not expose ${subpath} for this import.`,
+              );
+            if (reference.typeOnly && !typeCandidate) {
+              const types = selectPackageExport(
+                pkg.manifest.exports,
+                subpath,
+                new Set(["types", "node", mode]),
+              );
+              if (typeof types === "string")
+                typeCandidate = compilerTarget(
+                  fileURLToPath(new URL(types, pathToFileURL(`${resolve(root, pkg.path)}/`))),
+                  packageAnchor,
+                  mode,
                 );
+            }
+            if (mode === "require" && target) {
+              try {
+                nativeTarget = createRequire(packageAnchor).resolve(specifier);
+              } catch (error) {
+                if (error.code !== "MODULE_NOT_FOUND")
+                  throw new Error(
+                    `Node could not resolve package export (${error.code ?? error.name}).`,
+                  );
+              }
             }
           }
         } else if (specifier.startsWith("file:")) target = fileURLToPath(specifier);
