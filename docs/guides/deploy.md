@@ -62,9 +62,9 @@ Follow these pages in order in the same operator shell:
 3. [Verify the production workload](deploy/production-agents.md#verify-production-workloads).
    Confirm the active revision, gateway access, and TUI model-turn proof for
    token-authenticated gateways.
-4. [Prepare a production handoff](deploy/production-handoff.md).
-   Assign operating owners, verify the business workflow, and record alert,
-   credential, cost, and recovery decisions before relying on the installation.
+
+For ongoing business operation, use [production handoff](deploy/production-handoff.md)
+to record owners, credential renewal, alert response, and recovery decisions.
 
 For private workspace-file administration, configure
 [Agent workspace routing](deploy/workspace-routing.md). For operational logs,
