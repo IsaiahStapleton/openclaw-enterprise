@@ -1397,10 +1397,11 @@ test(
       [],
       "stop must not return while an exact revision Pod can still execute",
     );
-    await driver.retireRevision(candidate);
-    // Kubernetes PVC protection can keep an in-use claim terminating until its Pods are gone.
-    await waitFor(`shared workspace claim ${sharedClaim.metadata.name} to be deleted`, () =>
-      missing("persistentvolumeclaim", sharedClaim.metadata.name, existingName),
+    assert.equal(
+      (await resource("persistentvolumeclaim", sharedClaim.metadata.name, existingName)).metadata
+        .uid,
+      sharedClaim.metadata.uid,
+      "stop must preserve the Agent-owned shared workspace claim",
     );
 
     // Namespace deletion is legal only for an owner with no Agents or Configurations.
