@@ -458,6 +458,15 @@ async function createScopedController(context, installationId, platformNamespace
         path: "/rules/-",
         value: {
           apiGroups: [""],
+          resources: ["pods"],
+          verbs: ["get", "list", "watch"],
+        },
+      },
+      {
+        op: "add",
+        path: "/rules/-",
+        value: {
+          apiGroups: [""],
           resources: ["persistentvolumeclaims"],
           verbs: ["get", "create", "patch", "delete"],
         },
