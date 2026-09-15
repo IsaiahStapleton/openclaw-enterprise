@@ -869,6 +869,14 @@ export class ControllerWorker {
         return;
       }
       if (agent.desiredRuntimeState === "stopped") {
+        if (agent.activeRevisionId === revision.id) {
+          await this.completeStoppedRevisionWork(
+            claim,
+            revision,
+            "REVISION_MAINTENANCE_SUPERSEDED",
+          );
+          return;
+        }
         await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
         await this.completeStoppedRevisionWork(claim, revision, "REVISION_STOPPED");
         return;

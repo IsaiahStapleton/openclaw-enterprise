@@ -1376,9 +1376,19 @@ test(
         },
       );
     }
-    await driver.retireRevision(candidate);
+    await driver.stopRevision(candidate);
     assert.equal(await missing("deployment", revisionName(candidate), existingName), true);
     assert.equal(await missing("deployment", gatewayName(agentId), existingName), true);
+    assert.deepEqual(
+      (await resources("pods", existingName)).filter(
+        ({ metadata }) =>
+          metadata.labels?.["openclaw.dev/agent"] === agentId &&
+          metadata.labels?.["openclaw.dev/revision"] === candidate.id,
+      ),
+      [],
+      "stop must not return while an exact revision Pod can still execute",
+    );
+    await driver.retireRevision(candidate);
     // Kubernetes PVC protection can keep an in-use claim terminating until its Pods are gone.
     await waitFor(`shared workspace claim ${sharedClaim.metadata.name} to be deleted`, () =>
       missing("persistentvolumeclaim", sharedClaim.metadata.name, existingName),

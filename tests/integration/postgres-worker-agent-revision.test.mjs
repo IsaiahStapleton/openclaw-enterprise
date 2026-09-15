@@ -427,6 +427,72 @@ test(
 );
 
 test(
+  "active revision maintenance defers shutdown to the separately authorized Agent stop work",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("stop-maintenance-authorization");
+    const revision = await fixture.revision(owner, 1);
+    await fixture.start(fixture.compute);
+    await fixture.work(revision, "succeeded");
+    await fixture.stop();
+
+    const maintenance = {
+      id: revision.id,
+      idempotencyKey: `agent_revision:${revision.id}:maintenance:${randomUUID()}`,
+    };
+    await fixture.state.transactWithQueue((_unit, queue) =>
+      queue.enqueue({
+        idempotencyKey: maintenance.idempotencyKey,
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        revisionId: revision.id,
+        actorId: fixture.actor.id,
+        availableAt: new Date(0),
+      }),
+    );
+    const stop = await fixture.requestStop(owner);
+
+    // Maintenance may observe stopped intent first, but only the Agent-stop claim
+    // may perform shutdown after reauthorizing its recorded actor.
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_restrictions
+         (id, namespace_id, action, resource_kind, resource_id, effect)
+       VALUES ($1, $2, 'operate', 'agent', $3, 'deny')`,
+      [`restriction-${randomUUID()}`, fixture.namespace.id, owner.id],
+    );
+    const stoppedRevisions = [];
+    const events = [];
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async stopRevision(candidate) {
+          stoppedRevisions.push(candidate.id);
+        },
+      },
+      (event) => events.push(event),
+    );
+
+    await fixture.work(maintenance, "succeeded");
+    await fixture.work(stop, "failed_permanent");
+    assert.deepEqual(stoppedRevisions, []);
+    const current = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(current.activeRevisionId, revision.id);
+    assert.equal(current.desiredRuntimeState, "stopped");
+    assert.ok(
+      events.some(
+        ({ event, code, revisionId }) =>
+          event === "worker.completed" &&
+          code === "REVISION_MAINTENANCE_SUPERSEDED" &&
+          revisionId === revision.id,
+      ),
+    );
+  },
+);
+
+test(
   "a stop accepted during revision preparation prevents the candidate from becoming active",
   requiresPostgres,
   async (context) => {
