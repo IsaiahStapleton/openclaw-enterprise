@@ -279,6 +279,12 @@
           ]
         },
         {
+          "path": "tests/integration/postgres-service-account-deletion.test.mjs",
+          "expectedTests": [
+            "ServiceAccount deletion protects queued, claimed, and active revisions before Driver effects"
+          ]
+        },
+        {
           "path": "tests/integration/postgres-service-api-keys.test.mjs",
           "expectedTests": [
             "PostgreSQL Better Auth keys remain hashed, scoped, and revocable across instances"
