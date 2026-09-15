@@ -33,7 +33,8 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
     import("../../packages/occ/src/state/postgres-work-queue.ts"),
   ]);
   const observerPool = new Pool({ connectionString: databaseUrl, max: 8 });
-  const workerPool = new Pool({ connectionString: databaseUrl, max: 1 });
+  const createWorkerPool = () => new Pool({ connectionString: databaseUrl, max: 1 });
+  const workerPool = createWorkerPool();
   const state = new PostgresPlatformState(observerPool);
   const installation = await ensureInstallation(state, "revision-worker");
   const actor = authorizedPrincipal(await state.loadNativeIAMState());
@@ -223,6 +224,7 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
     work,
     start,
     stop,
+    createWorkerPool,
     workerPool,
   };
 }
@@ -471,6 +473,9 @@ test(
         },
       },
       (event) => events.push(event),
+      undefined,
+      undefined,
+      fixture.createWorkerPool(),
     );
 
     await fixture.work(maintenance, "succeeded");
