@@ -180,6 +180,7 @@ export interface ServiceAccountRepository extends ServiceAccountReadRepository {
     credential: ServiceAccountCredential,
   ): Promise<Readonly<ServiceAccount> | undefined>;
   deleteServiceAccount(namespaceId: string, serviceAccountId: string): Promise<boolean>;
+  hasReferences(namespaceId: string, serviceAccountId: string): Promise<boolean>;
 }
 
 const serviceAccountIdentifier =
@@ -865,16 +866,39 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       snapshot.serviceAccounts.set(agentKey(namespaceId, serviceAccountId), updated);
       return immutableCopy(updated);
     },
+    hasReferences: async (namespaceId, serviceAccountId) => {
+      if ((await serviceAccounts.findServiceAccount(namespaceId, serviceAccountId)) === undefined)
+        return false;
+      return (
+        Array.from(snapshot.agents.values()).some((agent) => {
+          if (agent.namespaceId !== namespaceId) return false;
+          const activeRevision = (
+            snapshot.revisions.get(agentKey(namespaceId, agent.id)) ?? []
+          ).find((revision) => revision.id === agent.activeRevisionId);
+          return (
+            agent.serviceAccountId === serviceAccountId ||
+            activeRevision?.serviceAccount?.id === serviceAccountId
+          );
+        }) ||
+        snapshot.operations.some((operation) => {
+          if (operation.kind !== "agent_revision" || operation.namespaceId !== namespaceId)
+            return false;
+          return Array.from(snapshot.revisions.values()).some((revisions) =>
+            revisions.some(
+              (revision) =>
+                revision.namespaceId === namespaceId &&
+                revision.id === operation.resourceId &&
+                revision.serviceAccount?.id === serviceAccountId,
+            ),
+          );
+        })
+      );
+    },
     deleteServiceAccount: async (namespaceId, serviceAccountId) => {
       if ((await serviceAccounts.findServiceAccount(namespaceId, serviceAccountId)) === undefined)
         return false;
-      if (
-        Array.from(snapshot.agents.values()).some(
-          (agent) =>
-            agent.namespaceId === namespaceId && agent.serviceAccountId === serviceAccountId,
-        )
-      )
-        throw new ScopeViolationError("The ServiceAccount is referenced by an Agent.");
+      if (await serviceAccounts.hasReferences(namespaceId, serviceAccountId))
+        throw new ScopeViolationError("The ServiceAccount is referenced by active platform state.");
       snapshot.serviceAccounts.delete(agentKey(namespaceId, serviceAccountId));
       return true;
     },
