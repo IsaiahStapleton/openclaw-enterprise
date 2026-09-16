@@ -65,7 +65,9 @@ A trusted dedicated gateway may receive its existing Agent-scoped gateway and
 Channel credentials and Secrets explicitly bound by its approved Configuration.
 Its [identity boundary](access.md#runtime-trust-across-targets) excludes dedicated
 Harness identity and model credentials as well as broad controller credentials.
-Model credentials remain confined to the tenant data-plane Harness.
+Direct model-credential delivery to the tenant data-plane Harness is a temporary
+implementation exception. Target model-credential mediation keeps real upstream
+credentials outside Harness execution; the Harness receives only scoped substitutes.
 Workload-write authority must be bounded in each target, since it can indirectly
 expose Secrets there. Cross-target materialization remains a prerequisite for
 dedicated gateway relocation; the concrete delivery mechanism is deferred.

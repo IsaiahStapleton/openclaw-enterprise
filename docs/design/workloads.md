@@ -47,15 +47,20 @@ Each Agent explicitly selects one Harness execution topology:
   Harness in the selected tenant data-plane runtime target. The combined
   workload remains untrusted tenant execution and cannot be relocated
   independently. It necessarily shares the exact
-  Agent's ServiceAccount, projected `WorkloadIdentity`, and Agent-specific model
-  credential; there is no separate Harness process.
+  Agent's ServiceAccount and projected `WorkloadIdentity`; there is no separate
+  Harness process. The current direct-credential exception also delivers the
+  Agent-specific model credential to that combined workload.
 - `dedicated`: the Agent-owned gateway belongs to the OCC control-plane runtime
   target and connects to its revision-scoped Harness in the selected tenant
   data-plane runtime target. Dedicated Codex uses a separate workload. Gateway
   and Harness use separate Kubernetes ServiceAccounts and network access;
-  only Codex receives the exact Agent's projected identity and either its
-  operator-owned model API key or its associated account-owned access token.
+  only Codex receives the exact Agent's projected identity. The current
+  direct-credential exception also delivers either its operator-owned model API
+  key or its associated account-owned access token to Codex.
   The gateway never assumes that identity or receives the model credential.
+
+The [model-credential boundary](safeguards.md#secret-access) distinguishes these
+current delivery exceptions from target mediation outside Harness execution.
 
 Runtime targets initially use one Kubernetes cluster, with distinct namespace
 placements for dedicated gateway and Harness. They may later use separate
