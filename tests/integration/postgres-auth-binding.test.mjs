@@ -33,34 +33,27 @@ test(
       updatedAt: now,
       expiresAt: new Date(now.getTime() + 60_000),
     };
+    const insertVerification = (transaction) =>
+      transaction.insert(schema.verification).values(verification);
+    const rowsVisibleOutside = async () =>
+      (await pool.query("SELECT id FROM occ.verification WHERE id = $1", [id])).rowCount;
     const failure = new Error("abort this transaction");
     await assert.rejects(
       database.transaction(async (transaction) => {
-        await transaction.insert(schema.verification).values(verification);
+        await insertVerification(transaction);
         const ownRows = await transaction.select().from(schema.verification);
         assert.ok(ownRows.some((row) => row.id === id));
         // The pool's other connection cannot observe the pending insert. This
         // distinguishes a pinned transaction from BEGIN/writes via pool.query.
-        const externalRows = await pool.query("SELECT id FROM occ.verification WHERE id = $1", [
-          id,
-        ]);
-        assert.equal(externalRows.rowCount, 0);
+        assert.equal(await rowsVisibleOutside(), 0);
         throw failure;
       }),
       (error) => error === failure,
     );
-    assert.equal(
-      (await pool.query("SELECT id FROM occ.verification WHERE id = $1", [id])).rowCount,
-      0,
-    );
+    assert.equal(await rowsVisibleOutside(), 0);
     // The caller still owns a usable pool after rollback; a subsequent auth
     // transaction commits and becomes visible outside its checked-out client.
-    await database.transaction(async (transaction) => {
-      await transaction.insert(schema.verification).values(verification);
-    });
-    assert.equal(
-      (await pool.query("SELECT id FROM occ.verification WHERE id = $1", [id])).rowCount,
-      1,
-    );
+    await database.transaction(insertVerification);
+    assert.equal(await rowsVisibleOutside(), 1);
   },
 );

@@ -5,10 +5,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 
-const root = fileURLToPath(new URL("../../", import.meta.url));
-const self = fileURLToPath(import.meta.url);
 const controllerURL = new URL("../../apps/controller/src/auth/index.ts", import.meta.url);
-const mode = process.argv[2];
 
 function options(pool) {
   return {
@@ -38,6 +35,36 @@ function refusingPool() {
   return { pool, calls };
 }
 
+async function signIn(controller, baseURL) {
+  // Observe the real controller's public envelope; this is not Fastify route proof.
+  const response = { headers: {} };
+  await controller.signInEmail(
+    {
+      id: "auth-binding-request",
+      method: "POST",
+      url: "/api/auth/sign-in/email",
+      headers: { origin: baseURL },
+      raw: { socket: { remoteAddress: "127.0.0.1" } },
+      body: { email: "person@example.test", password: "test-password-long-enough" },
+    },
+    {
+      header(name, value) {
+        response.headers[name] = value;
+        return this;
+      },
+      status(value) {
+        response.status = value;
+        return this;
+      },
+      send(value) {
+        response.body = value;
+        return this;
+      },
+    },
+  );
+  return response;
+}
+
 async function constructionAndRefusal() {
   const { createPostgresControllerAuth } = await import(controllerURL);
   const { pool, calls } = refusingPool();
@@ -47,34 +74,7 @@ async function constructionAndRefusal() {
   await controller.auth.$context;
   assert.deepEqual(calls, []);
 
-  // Invoke the real controller method directly. This reply observer records its
-  // public envelope; successful persistence and Fastify routes have separate tests.
-  const response = { headers: {} };
-  const reply = {
-    header(name, value) {
-      response.headers[name] = value;
-      return this;
-    },
-    status(value) {
-      response.status = value;
-      return this;
-    },
-    send(value) {
-      response.body = value;
-      return this;
-    },
-  };
-  await controller.signInEmail(
-    {
-      id: "auth-binding-request",
-      method: "POST",
-      url: "/api/auth/sign-in/email",
-      headers: { origin: selected.baseURL },
-      raw: { socket: { remoteAddress: "127.0.0.1" } },
-      body: { email: "person@example.test", password: "test-password-long-enough" },
-    },
-    reply,
-  );
+  const response = await signIn(controller, selected.baseURL);
   // The real adapter reaches the supplied pool and sanitizes its refusal.
   assert.deepEqual(calls, [{ method: "query", receiver: pool }]);
   assert.deepEqual(response, {
@@ -99,8 +99,7 @@ async function dependencyFailure(dependency) {
       // unchanged binding and controller must preserve this exact error.
       if (
         context.parentURL?.endsWith("/auth-persistence/postgres-auth-binding.ts") &&
-        specifier ===
-          (dependency === "drizzle" ? "drizzle-orm/node-postgres" : "../state/postgres-schema.ts")
+        specifier === dependency
       ) {
         refusals++;
         throw expected;
@@ -122,40 +121,35 @@ async function dependencyFailure(dependency) {
   }
 }
 
-if (mode === "construction") {
-  await constructionAndRefusal();
-} else if (mode === "drizzle" || mode === "schema") {
-  await dependencyFailure(mode);
+function runIsolated(name) {
+  // Fresh processes keep module hooks and cached dependencies out of other cases.
+  const result = spawnSync(
+    process.execPath,
+    ["--max-old-space-size=512", fileURLToPath(import.meta.url), name],
+    {
+      cwd: fileURLToPath(new URL("../../", import.meta.url)),
+      encoding: "utf8",
+      timeout: 30_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 256 * 1024,
+    },
+  );
+  assert.ifError(result.error);
+  assert.equal(result.signal, null, `Child terminated: ${result.signal}`);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+}
+
+const scenarios = {
+  "controller constructs without pool I/O and sanitizes database refusal": constructionAndRefusal,
+  "controller propagates Drizzle import failure without fallback or pool teardown": () =>
+    dependencyFailure("drizzle-orm/node-postgres"),
+  "controller propagates schema import failure without fallback or pool teardown": () =>
+    dependencyFailure("../state/postgres-schema.ts"),
+};
+const scenario = process.argv[2];
+if (scenario === undefined) {
+  for (const name of Object.keys(scenarios)) test(name, () => runIsolated(name));
 } else {
-  assert.equal(mode, undefined, "Unsupported child mode");
-  for (const [childMode, name] of [
-    [
-      "construction",
-      "controller delegates real binding/adapter construction and preserves database refusal",
-    ],
-    [
-      "drizzle",
-      "controller preserves actual Drizzle dependency rejection without fallback or teardown",
-    ],
-    [
-      "schema",
-      "controller preserves actual schema dependency rejection without fallback or teardown",
-    ],
-  ]) {
-    test(name, () => {
-      // Each child isolates module hooks/caches. These modes spawn no processes;
-      // synchronous collection waits for exit, with finite capture and SIGKILL
-      // on timeout so a failed child cannot retain an unbounded wait.
-      const result = spawnSync(process.execPath, ["--max-old-space-size=512", self, childMode], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 30_000,
-        killSignal: "SIGKILL",
-        maxBuffer: 256 * 1024,
-      });
-      assert.ifError(result.error);
-      assert.equal(result.signal, null, `Child terminated: ${result.signal}`);
-      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    });
-  }
+  assert.ok(Object.hasOwn(scenarios, scenario), "Unsupported child scenario");
+  await scenarios[scenario]();
 }

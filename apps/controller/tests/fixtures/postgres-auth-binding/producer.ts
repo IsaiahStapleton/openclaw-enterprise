@@ -11,13 +11,3 @@ export async function produceBinding(pool: Parameters<SchemaAuthBindingFactoryV1
   const selected: { id: string; verified: boolean }[] = rows;
   return selected;
 }
-
-export function produceStructuralBinding(pool: Parameters<SchemaAuthBindingFactoryV1>[0]) {
-  const structuralPool = {
-    connect: () => pool.connect(),
-    end: () => pool.end(),
-    schema: {},
-  };
-  // @ts-expect-error A structural wrapper cannot guarantee pinned pool transactions.
-  return factory(structuralPool);
-}

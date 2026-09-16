@@ -6,28 +6,8 @@ import pg from "pg";
 import { createPostgresAuthBinding } from "../../packages/occ/src/auth-persistence/postgres-auth-binding.ts";
 import * as canonicalSchema from "../../packages/occ/src/state/postgres-schema.ts";
 
-const root = fileURLToPath(new URL("../../", import.meta.url));
-const compiler = fileURLToPath(new URL("../../node_modules/typescript/bin/tsc", import.meta.url));
-const fixtures = "apps/controller/tests/fixtures/postgres-auth-binding/";
-
-function run(args) {
-  const result = spawnSync(process.execPath, ["--max-old-space-size=1536", ...args], {
-    cwd: root,
-    encoding: "utf8",
-    timeout: 90_000,
-    maxBuffer: 1024 * 1024,
-  });
-  assert.ifError(result.error);
-  assert.equal(result.signal, null, `Child terminated: ${result.signal}`);
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-}
-
-test("the real factory retains the caller pool and complete canonical schema without I/O", async () => {
-  const pool = new pg.Pool({ max: 1 });
-  Object.assign(pool, { schema: {}, logger: false, connection: {}, client: {} });
+function forbidPoolIO(pool) {
   const calls = [];
-  // These observations belong to the caller's real resource. The factory and
-  // Drizzle are unchanged; construction must not borrow, query or close it.
   for (const method of ["connect", "query", "end"]) {
     Object.defineProperty(pool, method, {
       configurable: true,
@@ -37,6 +17,14 @@ test("the real factory retains the caller pool and complete canonical schema wit
       },
     });
   }
+  return calls;
+}
+
+test("the real factory retains the caller pool and complete canonical schema without I/O", async () => {
+  const pool = new pg.Pool({ max: 1 });
+  // Caller-added properties must not make Drizzle interpret the pool as config.
+  Object.assign(pool, { schema: {}, logger: false, connection: {}, client: {} });
+  const calls = forbidPoolIO(pool);
   let pending;
   assert.doesNotThrow(() => {
     pending = createPostgresAuthBinding(pool);
@@ -53,35 +41,46 @@ test("the real factory retains the caller pool and complete canonical schema wit
 });
 
 test("structural wrappers and checked-out clients cannot replace a real pool", async () => {
-  const calls = [];
-  const connect = async () => {
-    calls.push("connect");
-    throw new Error("Unexpected I/O");
+  const methods = {};
+  const calls = forbidPoolIO(methods);
+  const { connect, query, end } = methods;
+  // Pool-like queries can dispatch BEGIN and writes on different clients.
+  const callers = {
+    "connect/end wrapper": { connect, end },
+    "querying wrapper": { connect, end, query },
+    "checked-out client": { query, release() {} },
+    "config-shaped wrapper": {
+      connect,
+      end,
+      query,
+      schema: {},
+      logger: false,
+      connection: {},
+      client: {},
+    },
+    null: null,
+    "connection URL": "postgresql://localhost/example",
   };
-  const end = async () => {
-    calls.push("end");
-  };
-  const query = async () => {
-    calls.push("query");
-    throw new Error("Unexpected I/O");
-  };
-  // A pool-like query method can dispatch BEGIN and later writes on different
-  // clients. Reject these wrappers rather than silently losing atomicity.
-  for (const caller of [
-    { connect, end },
-    { connect, end, query },
-    { query, release() {} },
-    { connect, end, query, schema: {}, logger: false, connection: {}, client: {} },
-    null,
-    "postgresql://localhost/example",
-  ]) {
-    await assert.rejects(createPostgresAuthBinding(caller), /requires a node-postgres Pool/);
+  for (const [name, caller] of Object.entries(callers)) {
+    await assert.rejects(createPostgresAuthBinding(caller), /requires a node-postgres Pool/, name);
   }
   assert.deepEqual(calls, []);
 });
 
-for (const project of ["producer", "negatives"]) {
-  test(`supported auth binding compiles the independent ${project} project`, () => {
-    run([compiler, "--project", `${fixtures}${project}.tsconfig.json`, "--pretty", "false"]);
-  });
-}
+test("the public auth binding factory preserves inferred types and rejects unsupported contracts", () => {
+  const compiler = fileURLToPath(new URL("../../node_modules/typescript/bin/tsc", import.meta.url));
+  const project = "apps/controller/tests/fixtures/postgres-auth-binding/tsconfig.json";
+  const result = spawnSync(
+    process.execPath,
+    ["--max-old-space-size=1536", compiler, "--project", project, "--pretty", "false"],
+    {
+      cwd: fileURLToPath(new URL("../../", import.meta.url)),
+      encoding: "utf8",
+      timeout: 90_000,
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  assert.ifError(result.error);
+  assert.equal(result.signal, null, `Child terminated: ${result.signal}`);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
