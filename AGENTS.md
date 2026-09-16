@@ -88,6 +88,11 @@ accessing an internal module.
 
 ## Developer skills
 
+Use [local-dev](.agents/skills/local-dev/SKILL.md) for repository development
+changes. It requires creating or updating a source-backed flow doc for non-trivial
+runtime changes and defines when trivial maintenance needs no new flow doc.
+Update the existing behavior owner under `docs/flows/` whenever possible.
+
 Use [test-audit](.agents/skills/test-audit/SKILL.md) when authoring or reviewing
 tests, and [enterprise-testing](.agents/skills/enterprise-testing/SKILL.md) to
 select proof or diagnose CI. For requested diff cleanup, use
@@ -165,6 +170,10 @@ reports its word count without requiring a split. This exception covers no other
 page.
 
 ## Documentation editing
+
+Use [technical-writing](.agents/skills/technical-writing/SKILL.md) when creating,
+editing, or reviewing documentation and specifications. It bundles the relevant
+writing guidance locally; no personal skill installation is required.
 
 - Give each fact one owning page: concepts define terms, references define
   behavior, guides give procedures, and flows explain implementation. Other pages
