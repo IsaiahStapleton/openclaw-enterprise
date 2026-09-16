@@ -237,6 +237,7 @@
           "path": "tests/integration/postgres-migration-compatibility.test.mjs",
           "expectedTests": [
             "Drizzle generates repository schema migrations without redundant regeneration",
+            "Agent stop migration rejects pre-existing active runtime state",
             "Drizzle second migration preserves the applied journal and PostgreSQL schema"
           ]
         },

@@ -869,7 +869,7 @@ export class ControllerWorker {
         return;
       }
       if (agent.desiredRuntimeState === "stopped") {
-        if (agent.activeRevisionId === revision.id) {
+        if (claim.idempotencyKey.startsWith(`agent_revision:${revision.id}:maintenance:`)) {
           await this.completeStoppedRevisionWork(
             claim,
             revision,
@@ -878,6 +878,13 @@ export class ControllerWorker {
           return;
         }
         await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
+        // Once this reconciliation has published its candidate, it owns retiring
+        // every predecessor even if stop admission clears the active pointer before
+        // a recovery attempt. A different active revision means this candidate was
+        // never published, so its authorized stop work remains solely responsible.
+        if (agent.activeRevisionId === revision.id || agent.activeRevisionId === undefined) {
+          await this.retireEarlierRevisions(claim, revision);
+        }
         await this.completeStoppedRevisionWork(claim, revision, "REVISION_STOPPED");
         return;
       }
@@ -1267,6 +1274,7 @@ export class ControllerWorker {
         );
         if (current?.desiredRuntimeState !== "running") {
           await this.withClaimHeartbeat(claim, () => compute.stopRevision(activated!));
+          await this.retireEarlierRevisions(claim, activated);
           await this.completeStoppedRevisionWork(claim, activated, "REVISION_STOPPED");
           return;
         }
@@ -1275,9 +1283,7 @@ export class ControllerWorker {
             this.stagedRevision("activateRevision", activated!, resolved.context),
           );
         }
-        if (resolved.previous !== undefined) {
-          await this.withClaimHeartbeat(claim, () => compute.retireRevision(resolved.previous!));
-        }
+        await this.retireEarlierRevisions(claim, activated);
       } catch (error) {
         if (error instanceof WorkClaimLostError) throw error;
         await this.finalizeRevision(claim, {
@@ -1320,6 +1326,20 @@ export class ControllerWorker {
       outcome: "success",
       code,
     });
+  }
+
+  private async retireEarlierRevisions(
+    claim: ClaimedWork,
+    revision: Readonly<AgentRevision>,
+  ): Promise<void> {
+    const earlier = await this.state.read(async (view) =>
+      (await view.revisions.listRevisions(revision.namespaceId, revision.agentId)).filter(
+        (candidate) => candidate.revision < revision.revision,
+      ),
+    );
+    for (const previous of earlier) {
+      await this.withClaimHeartbeat(claim, () => this.compute.retireRevision(previous));
+    }
   }
 
   private async completeActivatedRevision(

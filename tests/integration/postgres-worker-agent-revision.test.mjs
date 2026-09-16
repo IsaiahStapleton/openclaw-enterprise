@@ -564,6 +564,76 @@ test(
 );
 
 test(
+  "a stop admitted immediately after publication retires the predecessor before completion",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("stop-publication-race");
+    const predecessor = await fixture.revision(owner, 1);
+    await fixture.start(fixture.compute);
+    await fixture.work(predecessor, "succeeded");
+    await fixture.stop();
+
+    const replacement = await fixture.revision(owner, 2);
+    await fixture.compute.prepareRevision(replacement);
+    // Recreate the committed publication boundary before route finalization. Stop
+    // admission can observe this exact durable state while revision work remains.
+    const published = await fixture.state.transact((unit) =>
+      unit.agents.compareAndSetActiveRevision(
+        fixture.namespace.id,
+        owner.id,
+        predecessor.id,
+        replacement.id,
+      ),
+    );
+    assert.equal(published.activeRevisionId, replacement.id);
+    const stop = await fixture.requestStop(owner);
+
+    const stoppedRevisions = [];
+    const retiredRevisions = [];
+    let failRetirement = true;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async stopRevision(candidate) {
+          stoppedRevisions.push(candidate.id);
+          return fixture.compute.stopRevision(candidate);
+        },
+        async retireRevision(candidate) {
+          retiredRevisions.push(candidate.id);
+          if (failRetirement) {
+            failRetirement = false;
+            throw new Error("transient predecessor retirement failure");
+          }
+          return fixture.compute.retireRevision(candidate);
+        },
+      },
+      () => {},
+      undefined,
+      undefined,
+      fixture.createWorkerPool(),
+    );
+
+    await fixture.work(replacement, "succeeded");
+    await fixture.work(stop, "succeeded");
+    const [stopped, retainedPredecessor, retainedReplacement] = await fixture.state.read(
+      async (view) =>
+        Promise.all([
+          view.agents.findAgent(fixture.namespace.id, owner.id),
+          view.revisions.findRevision(fixture.namespace.id, owner.id, predecessor.id),
+          view.revisions.findRevision(fixture.namespace.id, owner.id, replacement.id),
+        ]),
+    );
+    assert.equal(stopped.desiredRuntimeState, "stopped");
+    assert.equal(stopped.activeRevisionId, undefined);
+    assert.equal(retainedPredecessor.id, predecessor.id);
+    assert.equal(retainedReplacement.id, replacement.id);
+    assert.deepEqual(retiredRevisions, [predecessor.id, predecessor.id]);
+    assert.deepEqual(stoppedRevisions, [replacement.id, replacement.id, replacement.id]);
+  },
+);
+
+test(
   "maintenance retains its real lease across consecutive short predecessor retirements",
   requiresPostgres,
   async (context) => {
@@ -1164,9 +1234,12 @@ test(
     );
 
     await Promise.all([fixture.work(newer, "succeeded"), fixture.work(older, "succeeded")]);
+    // Newer publication retires every older candidate. The later superseded retry
+    // must contribute no preparation or retirement against the active revision.
     assert.deepEqual(effects, [
       { action: "prepare", revisionId: older.id },
       { action: "prepare", revisionId: newer.id },
+      { action: "retire", revisionId: older.id },
     ]);
     const active = await fixture.observerPool.query(
       "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",

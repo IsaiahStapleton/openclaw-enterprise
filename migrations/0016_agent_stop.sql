@@ -1,3 +1,25 @@
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM occ.agents AS agent
+    WHERE agent.active_revision_id IS NOT NULL
+      OR EXISTS (
+        SELECT 1
+        FROM occ.controller_work AS work
+        WHERE work.namespace_id = agent.namespace_id
+          AND work.agent_id = agent.id
+          AND work.revision_id IS NOT NULL
+          AND work.state IN ('queued', 'claimed')
+      )
+  ) THEN
+    RAISE EXCEPTION
+      'Agent stop migration requires active revisions and pending revision work to be removed before cutover'
+      USING ERRCODE = '55000';
+  END IF;
+END;
+$$;
+--> statement-breakpoint
 ALTER TABLE occ.agents
   ADD COLUMN desired_runtime_state text NOT NULL DEFAULT 'stopped',
   ADD CONSTRAINT agents_desired_runtime_state_valid
