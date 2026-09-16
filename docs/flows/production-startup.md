@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: "2026-09-21"
-last_updated_session: "authoring-run/fba2d7fa-6603-465e-a7c8-df0375ad202d"
+updated: "2026-09-24"
+last_updated_session: "PR-187"
 ---
 
 # Production Startup Flow
@@ -167,8 +167,12 @@ API and worker also mount the CA Secret read-only at `database.caMountPath`.
 Tenant gateway and Agent placement remain in the selected Compute Driver
 configuration.
 
-NetworkPolicies allow database egress to every `database.cidrs` host and
-Kubernetes API egress to every `cluster.cidrs` host. Each entry must be an
+The [shared egress policy](../../deploy/helm/openclaw-enterprise/templates/networkpolicies.yaml)
+selects only `api`, `worker`, and `initialization` Pods with the release identity.
+It allows DNS, database egress to every `database.cidrs` host, and
+Kubernetes API egress to every `cluster.cidrs` host. Collectors use their separate
+DNS, API, and exporter policy; unknown or missing component labels retain
+default-deny. Pre-install initialization has only its hook DNS/database grants. Each entry must be an
 explicit IPv4 `/32`; operators must refresh the values when a managed database
 or API endpoint resolves to a different address set.
 
@@ -272,6 +276,8 @@ tenant deployment and TUI procedures run.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 10:00: Describe release-scoped shared egress and dedicated collector/bootstrap policies. (PR-187 - 5ebd7305b0876db33276a249934bc82073b63424)
 
 - 2026-09-21 05:32: Reconcile accompanying platform credential documentation with current source history and native Git boundaries. (authoring-run/fba2d7fa-6603-465e-a7c8-df0375ad202d - a051a2406eec7cafde2e0dd5e2ec63dba6ce1581)
 

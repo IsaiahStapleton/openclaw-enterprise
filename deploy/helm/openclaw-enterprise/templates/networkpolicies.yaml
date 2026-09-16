@@ -43,6 +43,10 @@ spec:
     matchLabels:
       app.kubernetes.io/name: openclaw-enterprise
       app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, worker, initialization]
   policyTypes: [Egress]
   egress:
     - to:

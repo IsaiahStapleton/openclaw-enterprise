@@ -9,6 +9,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { renderProductionChart, parseProductionChart as resources } from "../helpers/production-chart.mjs";
+
 const execute = promisify(execFile);
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const controllerRequire = createRequire(
@@ -17,20 +19,6 @@ const controllerRequire = createRequire(
 const { loadYaml } = controllerRequire("@kubernetes/client-node");
 const productionExamples = new URL("../../deploy/examples/production/", import.meta.url);
 const helm = process.env.OCC_HELM_BIN ?? "helm";
-const values = {
-  "images.controller": `registry.example.invalid/controller@sha256:${"a".repeat(64)}`,
-  "auth.baseUrl": "https://occ.example.invalid",
-  "auth.secretName": "occ-auth",
-  "auth.secretKey": "secret",
-  "bootstrap.adminEmail": "admin@example.invalid",
-  "bootstrap.password.claimName": "occ-bootstrap-admin-password",
-  "api.clients[0].namespace": "operator-tools",
-  "api.clients[0].podLabels.app": "operator",
-  "database.cidrs[0]": "10.45.0.12/32",
-  "database.cidrs[1]": "10.45.0.13/32",
-  "cluster.cidrs[0]": "10.43.0.1/32",
-  "cluster.cidrs[1]": "10.43.0.2/32",
-};
 const chatgptValues = {
   "provider.chatgpt.enabled": "true",
   "provider.chatgpt.providerCidr": "198.51.100.25/32",
@@ -71,19 +59,11 @@ const controlPlaneSelectorValues = {
   "controlPlane.nodeSelector.oce-role": "control",
 };
 
-async function render(overrides = {}, options = {}) {
-  const args = [
-    "template",
-    "oce",
-    "deploy/helm/openclaw-enterprise",
-    "--namespace",
-    options.namespace ?? "openclaw-system",
-  ];
-  for (const [key, value] of Object.entries({ ...values, ...overrides })) {
-    args.push("--set", `${key}=${value}`);
-  }
-  return execute(helm, args, { cwd: repository, maxBuffer: 2_000_000 });
-}
+const render = (overrides = {}, options = {}) => renderProductionChart({
+  "database.cidrs[1]": "10.45.0.13/32",
+  "cluster.cidrs[1]": "10.43.0.2/32",
+  ...overrides,
+}, options);
 
 let tooling;
 try {
@@ -94,19 +74,6 @@ try {
   tooling = {
     skip: "Install Helm and yq, or set OCC_HELM_BIN, to verify the real rendered production chart.",
   };
-}
-
-async function resources(manifests) {
-  const parsed = await new Promise((resolve, reject) => {
-    const child = execFile(
-      "yq",
-      ["eval-all", "-o=json", "-I=0", ".", "-"],
-      { cwd: repository, maxBuffer: 2_000_000 },
-      (error, stdout) => (error ? reject(error) : resolve(stdout)),
-    );
-    child.stdin.end(manifests);
-  });
-  return parsed.trim().split("\n").map(JSON.parse);
 }
 
 // Evaluate the selector-only, numeric-port ingress rules rendered by this chart.
@@ -927,6 +894,18 @@ test(
       ({ kind, metadata }) =>
         kind === "NetworkPolicy" && metadata.name === "openclaw-enterprise-dependency-egress",
     );
+    // Shared grants belong only to control-plane workloads in this release.
+    assert.deepEqual(dependencyEgress.spec.podSelector, {
+      matchLabels: {
+        "app.kubernetes.io/name": "openclaw-enterprise",
+        "app.kubernetes.io/instance": "oce",
+      },
+      matchExpressions: [{
+        key: "app.kubernetes.io/component",
+        operator: "In",
+        values: ["api", "worker", "initialization"],
+      }],
+    });
     assert.deepEqual(
       dependencyEgress.spec.egress.find(({ ports }) => ports.some(({ port }) => port === 5432)).to,
       [{ ipBlock: { cidr: "10.45.0.12/32" } }, { ipBlock: { cidr: "10.45.0.13/32" } }],
