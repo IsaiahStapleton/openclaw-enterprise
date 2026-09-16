@@ -6,12 +6,9 @@ controller lookups into OCC's source tree and private dependency installation.
 
 ## Composition
 
-The application supplies its existing node-postgres `Pool` instance. Structural
-pool wrappers and checked-out clients are rejected: Drizzle must recognize the
-pool so each transaction uses one dedicated connection. OCC constructs a Drizzle
-database with that exact pool and the complete canonical schema, then returns
-both values. The controller owns the Better Auth adapter and supplies the
-returned database and schema together:
+Supply the application's node-postgres `Pool`. OCC returns a Drizzle database
+bound to that pool and the complete canonical schema. The controller passes both
+to its Better Auth adapter:
 
 ```ts
 import { createPostgresAuthBinding } from "@openclaw-enterprise/occ";
@@ -34,16 +31,15 @@ flowchart LR
   Adapter --> Authentication[Accounts, sessions, service keys]
 ```
 
-Construction does not acquire a connection, run migrations, or create another
-pool. The application retains responsibility for closing the supplied pool.
-Import or construction failures reject the promise; PostgreSQL setup does not
-fall back to memory authentication.
+Structural pool wrappers and checked-out clients are rejected: Drizzle must
+recognize the pool to use one dedicated connection per transaction. Construction
+performs no database I/O and creates no pool. The application owns migrations
+and pool shutdown. Construction failures reject without a memory fallback.
 
 Sharing a pool does not join Better Auth transactions to OCC transactions.
-Existing account provisioning retains its separate IAM transaction and account
-cleanup on failure. This binding adds no account features, changes no tables,
-and does not alter session, API key, or authorization rules. See
-[authentication](authentication.md) for those supported behaviors.
+Account provisioning retains its separate IAM transaction and cleanup on failure.
+See [authentication](authentication.md) for account, session, API key, and
+authorization behavior.
 
 ## Type contracts
 
