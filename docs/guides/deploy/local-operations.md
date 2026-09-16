@@ -158,11 +158,11 @@ To stop the Agent without deleting its revision or workspace, submit the
 bodyless operation and poll until the active pointer is absent:
 
 ```bash
-scripts/occ-api POST "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID/stop"
-scripts/occ-api GET "/namespaces/$NAMESPACE_ID/agents/$AGENT_ID"
+occ agent stop "$AGENT_ID"
+occ agent get "$AGENT_ID"
 ```
 
-The first response is `202` with `desiredRuntimeState: "stopped"`. The later
-read must retain the Agent and report no `activeRevisionId`; the worker also
+The stop result reports `DESIRED STATE` as `stopped`. The later read must retain
+the Agent and report no `ACTIVE REVISION`; the worker also
 removes its Docker runtime containers. Repeating the stop is safe. Run the
 deployment command again to resume with a new immutable revision.

@@ -430,8 +430,28 @@ func (app *application) agentCommand() *cobra.Command {
 			})
 		},
 	}
+	stop := &cobra.Command{
+		Use:   "stop ID",
+		Short: "Stop an Agent while retaining its revision history and persistent state",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			agent, err := client.StopAgent(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printAgent(agent, false)
+		},
+	}
 
-	command.AddCommand(create, list, get, update, deploy)
+	command.AddCommand(create, list, get, update, deploy, stop)
 	return command
 }
 
@@ -506,6 +526,7 @@ func (app *application) printAgent(value any, collection bool) error {
 		{title: "NAME", key: "name"},
 		{title: "CONFIGURATION", key: "configurationId"},
 		{title: "MODE", key: "executionMode"},
+		{title: "DESIRED STATE", key: "desiredRuntimeState"},
 		{title: "ACTIVE REVISION", key: "activeRevisionId"},
 	})
 }
