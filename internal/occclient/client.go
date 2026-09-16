@@ -173,6 +173,15 @@ func (client *Client) DeployAgent(namespaceID, agentID string) (any, error) {
 	)
 }
 
+// StopAgent stops an Agent while retaining its revision history and persistent state.
+func (client *Client) StopAgent(namespaceID, agentID string) (any, error) {
+	return client.send(
+		http.MethodPost,
+		[]string{"namespaces", namespaceID, "agents", agentID, "stop"},
+		nil,
+	)
+}
+
 func (client *Client) get(segments ...string) (any, error) {
 	return client.send(http.MethodGet, segments, nil)
 }

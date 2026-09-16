@@ -477,7 +477,7 @@ test("SSH Namespace preparation creates exact ownership, rejects adoption, and c
   assert.equal((await transport.ensureNamespace(tenant)).failure, "retryable");
 });
 
-test("SSH embedded preparation stages snapshots and activation serves them as the Agent account", async (t) => {
+test("SSH embedded revisions stop without deleting snapshots or persistent Agent state", async (t) => {
   const f = await fixture(t);
   const rev = await stage(f);
   const dir = f.agentDir(rev);
@@ -562,6 +562,15 @@ WantedBy=multi-user.target
       .filter((line) => line.startsWith("restart ")).length,
     1,
   );
+  await writeFile(join(dir, "state", "retained-after-stop"), "persistent");
+  await f.driver.stopRevision(rev);
+  await f.driver.stopRevision(rev);
+  await missing(join(dir, "current"));
+  await missing(join(dir, "served.json"));
+  assert.equal((await stat(f.revisionDir(rev))).isDirectory(), true);
+  assert.equal(await readFile(join(dir, "state", "retained-after-stop"), "utf8"), "persistent");
+  await f.driver.activateRevision(rev);
+  assert.equal(await readlink(join(dir, "current")), `revisions/${digest(rev.id).slice(0, 12)}`);
 });
 
 test("SSH trusted-proxy omits gateway.env, and allocation spans Agents and Namespaces on a host", async (t) => {
@@ -723,6 +732,7 @@ test("SSH rejects foreign Agent, revision and unit ownership without mutating th
     await writeFile(path, foreign);
     await assert.rejects(f.driver.prepareRevision(rev), /ownership|snapshot/);
     await assert.rejects(f.driver.retireRevision(rev), /ownership|snapshot/);
+    await assert.rejects(f.driver.stopRevision(rev), /ownership|snapshot/);
     assert.equal((await f.driver.deleteNamespace(tenant)).failure, "permanent");
     assert.equal(await readFile(path, "utf8"), foreign);
     await writeFile(path, original);

@@ -16,7 +16,7 @@ Namespace: support
 ```
 
 Creating an Agent records its platform resource, exact Namespace-owned
-Configuration reference, and identity. It does not start a workload, deploy a
+Configuration reference, identity, and a `stopped` desired runtime state. It does not start a workload, deploy a
 model, or create a revision until an authorized caller explicitly requests
 deployment.
 
@@ -24,7 +24,9 @@ deployment.
 
 Agent operations are scoped beneath `/namespaces/:namespaceId/agents`. Creation
 returns `201`, reads and updates return `200`, and deployment returns `202`
-with the newly admitted AgentRevision. Collection reads include only Agents
+with the newly admitted AgentRevision. Stop also returns `202`, with the Agent's
+`desiredRuntimeState` set to `stopped`; Compute shutdown remains asynchronous.
+Collection reads include only Agents
 for which the caller has an exact `read` grant. The [API reference](api.md)
 owns route schemas, response envelopes, and permission annotations.
 
@@ -138,6 +140,12 @@ or deleting Namespace rejects new Agents.
 
 Each Agent has one stable service principal and explicitly selects embedded OpenClaw or dedicated Codex execution. A bodyless deployment request admits an immutable revision; the separate worker activates it asynchronously. See [Agent identity and deployment](agents/deployment.md) for credential boundaries, admission permissions, snapshot fields, and activation guarantees.
 
+An authorized bodyless `POST /namespaces/:namespaceId/agents/:agentId/stop`
+sets desired state to `stopped`. The worker removes execution and routing before
+clearing `activeRevisionId`; revision history, credentials, and persistent state
+remain. Repeating stop is safe. A later deployment admits a new revision and sets
+desired state back to `running`; stop does not restart an old revision directly.
+
 ## Editable configuration
 
 An Agent's `configurationId` selects exactly one native OpenClaw Configuration
@@ -169,7 +177,8 @@ each deployed Agent still owns its own gateway and stable service principal.
 The public API has no Agent deletion operation, revision mutation/deletion,
 or explicit rollback endpoint. An Agent therefore prevents deletion of its
 Namespace. Editing a Configuration or Agent does not update a running workload;
-a new deployment is required. Brokered model credentials and controller API
+a new deployment is required. Stop retains Agent-owned persistent data and does
+not destroy credentials. Brokered model credentials and controller API
 authentication for Agent service principals remain unavailable. The optional
 [OpenShell SandboxDriver](drivers/openshell-sandbox.md) is supported with the
 bundled Kubernetes Compute Driver and dedicated Codex; other sandbox execution

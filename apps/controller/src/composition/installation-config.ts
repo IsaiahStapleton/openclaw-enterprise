@@ -683,10 +683,11 @@ export async function loadInstallationConfiguration(options: {
   if (
     options.mode === "production" &&
     (typeof computeDriver.activateRevision !== "function" ||
-      typeof computeDriver.deactivateRevision !== "function")
+      typeof computeDriver.deactivateRevision !== "function" ||
+      typeof computeDriver.stopRevision !== "function")
   ) {
     throw new Error(
-      "Production Compute Drivers must implement activateRevision and deactivateRevision.",
+      "Production Compute Drivers must implement activateRevision, deactivateRevision, and stopRevision.",
     );
   }
   return Object.freeze({
@@ -780,7 +781,13 @@ function createExternalDriver(
       : capability === "iam"
         ? ["lookupIdentity", "authorize"]
         : capability === "compute"
-          ? ["ensureNamespace", "deleteNamespace", "prepareRevision", "retireRevision"]
+          ? [
+              "ensureNamespace",
+              "deleteNamespace",
+              "prepareRevision",
+              "stopRevision",
+              "retireRevision",
+            ]
           : ["cleanup"];
   if (methods.some((method) => typeof created[method] !== "function")) {
     throw new Error(`drivers.${capability} factory returned an invalid Driver contract.`);

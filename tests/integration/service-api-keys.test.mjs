@@ -7,12 +7,14 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
+import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
 import { signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 
 const run = promisify(execFile);
 const occCli = join(process.cwd(), "bin", "occ");
@@ -52,10 +54,9 @@ test("service API keys authenticate scoped automation without replacing sessions
     iamDriver,
     auditSink,
     development: { enabled: true, installationId },
+    computeDriver: createDevelopmentComputeDriver(),
     configurationDriver: createTestConfigurationDriver(),
-    resolveHarness: async () => {
-      throw new Error("No runtime is needed for authentication tests.");
-    },
+    resolveHarness: resolveApprovedDevelopmentHarness,
     createController(installation) {
       controller = new OpenClawController(installation, {
         state: new InMemoryPlatformState({ auditSink }),
@@ -100,6 +101,8 @@ test("service API keys authenticate scoped automation without replacing sessions
       { action: "read", resourceKind: "namespace" },
       { action: "create", resourceKind: "configuration" },
       { action: "delete", resourceKind: "configuration" },
+      { action: "read", resourceKind: "agent" },
+      { action: "operate", resourceKind: "agent" },
     ],
   });
   policy.bindings.push({
@@ -130,7 +133,7 @@ test("service API keys authenticate scoped automation without replacing sessions
     },
   );
 
-  await t.test("occ CLI creates and deletes a real Configuration", async (t) => {
+  await t.test("occ CLI creates and deletes a real Configuration and stops an Agent", async (t) => {
     const directory = await mkdtemp(join(tmpdir(), "openclaw-occ-cli-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const keyFile = join(directory, "service-key.json");
@@ -185,6 +188,48 @@ test("service API keys authenticate scoped automation without replacing sessions
       kind: "configuration",
     });
     assert.equal((await request("GET", configurationPath)).status, 404);
+
+    // Seed the server-owned resource through the administrator session so the
+    // scoped CLI credential exercises only its granted Agent operations.
+    const readyNamespace = await controller.handleNamespaceLifecycle(
+      seed.principal.id,
+      namespaceId,
+      "ready",
+    );
+    assert.equal(readyNamespace.status, "ready");
+    const agentConfiguration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
+      body: { kind: "agent", values: {} },
+    });
+    assert.equal(agentConfiguration.status, 201);
+    const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {
+      body: { name: "cli-stop-agent", configurationId: agentConfiguration.data.id },
+    });
+    assert.equal(agent.status, 201);
+    const deployed = await request(
+      "POST",
+      `/namespaces/${namespaceId}/agents/${agent.data.id}/deploy`,
+    );
+    assert.equal(deployed.status, 202);
+    assert.equal(
+      (await request("GET", `/namespaces/${namespaceId}/agents/${agent.data.id}`)).data
+        .desiredRuntimeState,
+      "running",
+    );
+
+    const stopped = await run(occCli, ["agent", "stop", agent.data.id], { env });
+    assert.match(stopped.stdout, /DESIRED STATE/);
+    assert.match(stopped.stdout, new RegExp(`${agent.data.id}.*stopped`));
+    const current = await run(occCli, ["agent", "get", agent.data.id, "--output", "json"], {
+      env,
+    });
+    const currentAgent = JSON.parse(current.stdout);
+    assert.deepEqual(
+      {
+        id: currentAgent.id,
+        desiredRuntimeState: currentAgent.desiredRuntimeState,
+      },
+      { id: agent.data.id, desiredRuntimeState: "stopped" },
+    );
 
     await assert.rejects(
       run(occCli, ["installation", "get", "--output", "json"], { env }),
