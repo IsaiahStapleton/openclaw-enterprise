@@ -720,6 +720,7 @@ export const controllerWork = occSchema.table(
           AND ${table.agentTarget} IS NULL)
         OR (${table.agentId} IS NOT NULL AND ${table.revisionId} IS NULL
           AND ${table.namespaceTarget} IS NULL
+          AND ${table.agentTarget} IS NOT NULL
           AND ${table.agentTarget} = 'stopped')
         OR (${table.agentId} IS NOT NULL AND ${table.revisionId} IS NOT NULL
           AND ${table.namespaceTarget} IS NULL AND ${table.agentTarget} IS NULL)

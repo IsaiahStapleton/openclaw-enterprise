@@ -31,9 +31,11 @@ ALTER TABLE occ.controller_work
   DROP CONSTRAINT controller_work_namespace_target_valid,
   ADD CONSTRAINT controller_work_namespace_target_valid CHECK (
     (agent_id IS NULL AND revision_id IS NULL
+      AND namespace_target IS NOT NULL
       AND namespace_target IN ('ready', 'deleted') AND agent_target IS NULL)
     OR (agent_id IS NOT NULL AND revision_id IS NULL
-      AND namespace_target IS NULL AND agent_target = 'stopped')
+      AND namespace_target IS NULL AND agent_target IS NOT NULL
+      AND agent_target = 'stopped')
     OR (agent_id IS NOT NULL AND revision_id IS NOT NULL
       AND namespace_target IS NULL AND agent_target IS NULL)
   );
