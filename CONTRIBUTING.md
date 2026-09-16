@@ -41,6 +41,15 @@ use dependency-independent checks rather than installing as an agent side effect
 For a running local stack, follow the [quickstart](docs/guides/quickstart.md).
 It uses Docker Compose and has different prerequisites from source-only checks.
 
+### Dependency release waiting period
+
+The root and independent docs package require registry releases to be at least
+seven days old (`minimumReleaseAge: 10080` minutes). The pinned pnpm checks direct,
+transitive, and frozen-lockfile dependencies and rejects missing publication dates.
+If installation rejects a release, wait until it matures or select a compatible
+older version. This policy applies to pnpm registry installs; Git/local dependencies
+and separate npm-based image builds are outside its scope.
+
 ## Validate the change
 
 With matching dependencies installed and infrastructure selectors unset:
