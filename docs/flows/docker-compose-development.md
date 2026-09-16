@@ -45,7 +45,8 @@ the first authenticated development API checks.
   `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`.
 - Assumptions: Docker Engine with Docker Compose, or Podman with
   `podman-compose` and `yq` v4, is available; Bash, `curl`, and Python 3 are
-  available; PostgreSQL can write `occ_postgres_data`; the controller can write
+  available; `pnpm cli:build` has created executable `bin/occ`; PostgreSQL can
+  write `occ_postgres_data`; the controller can write
   `occ_configuration_data` at `/app/.development/configurations`; runtime
   images are supplied through `OCC_DOCKER_GATEWAY_IMAGE` and
   `OCC_DOCKER_AGENT_IMAGE`, shared `OCC_DOCKER_RUNTIME_IMAGE`, or the helper's
@@ -62,7 +63,7 @@ graph TD
   B --> C["Select quickstart runtime image or validate custom images"]
   C --> D["Selected Compose starts PostgreSQL, migrate, bootstrap, API, and worker"]
   D --> E["Copy bootstrap service-key response to private local file"]
-  E --> F["occ installation get proves authenticated access"]
+  E --> F["bin/occ installation get proves authenticated access"]
   F --> G["Operator sends authenticated API provisioning and deploy calls"]
   G --> H["Worker claims durable Namespace and AgentRevision work"]
   H --> I["Docker driver ensures one network per Namespace"]

@@ -9,11 +9,12 @@ for deploying and managing [Agents](docs/guides/concepts.md#agents-and-revisions
 
 Requires either Docker Engine with Docker Compose, or Podman with
 `podman-compose` and `yq` v4. Bash, Python 3, and the Go version selected by
-[`go.mod`](go.mod) are also required. Install the OCC CLI and start the local
-stack with:
+[`go.mod`](go.mod) are also required, along with Node.js 24 or newer and the pnpm
+version pinned in [`package.json`](package.json). Build the checkout-local OCC
+CLI and start the local stack with:
 
 ```bash
-go install ./cmd/occ
+pnpm cli:build
 ./scripts/dev-up
 ```
 

@@ -32,6 +32,7 @@ test("dev-up builds the default runtime only when real Compose leaves runtime im
   assert.ok(result.stdout.includes(`Installation ID: ${matchingInstallationId}`));
   assert.ok(result.stdout.includes(`Service key file: ${keyOutput}`));
   assert.ok(result.stdout.includes(`OCC_SERVICE_KEY_FILE=${keyOutput.replaceAll(" ", "\\ ")}`));
+  assert.ok(result.stdout.includes(`${fixture.occCli} installation get`));
   assert.doesNotMatch(result.stdout + result.stderr, new RegExp(serviceKey));
 
   const outputMode = (await stat(keyOutput)).mode & 0o777;
