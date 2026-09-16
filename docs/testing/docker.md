@@ -45,9 +45,6 @@ duplicated Podman test implementation. The test requires `podman-compose`, a
 running Podman machine or service, the runtime image in Podman's image store,
 and an exported `OPENAI_API_KEY`. The `dev-up` helper additionally requires
 `yq` v4 to inspect the resolved Compose configuration.
-Use an 8 GB VM for this suite's concurrent control-plane and runtime containers;
-a 2 GB VM exhausted memory during recovery testing. Resizing requires a VM
-restart and interrupts other containers on that VM.
 The test pins the installed provider and reads the API socket from `podman info`;
 no `docker` alias or manual socket variable is required.
 
