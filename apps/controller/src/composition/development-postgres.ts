@@ -30,6 +30,7 @@ import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import { createWorkspaceFilesAccess, validateWorkspaceFilesApiKeyPath } from "./workspace-files.ts";
 
 export interface PostgresDevelopmentConfig {
+  readonly metrics?: import("../metrics/index.ts").OccMetrics;
   readonly mode: "development";
   readonly host: "127.0.0.1" | "::1" | "0.0.0.0";
   readonly databaseUrl: string;
@@ -178,6 +179,7 @@ export async function composePostgresDevelopment(
     }
 
     const app = createFastifyApp({
+      ...(config.metrics === undefined ? {} : { metrics: config.metrics }),
       controller,
       iamDriver,
       computeDriver,

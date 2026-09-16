@@ -19,6 +19,8 @@ runtime image for local deployment.
 
 ## Features
 
+See [OCC metrics](metrics.md) for application and process metric contracts.
+
 | Reference                                         | Owns                                                                                 |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | [Platform console](console.md)                    | Login, Agent creation, draft channels, revision inspection, and Namespace selection. |

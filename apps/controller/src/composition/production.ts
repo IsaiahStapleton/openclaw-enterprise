@@ -22,6 +22,7 @@ import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import { createWorkspaceFilesAccess, validateWorkspaceFilesApiKeyPath } from "./workspace-files.ts";
 
 export interface ProductionConfig {
+  readonly metrics?: import("../metrics/index.ts").OccMetrics;
   readonly mode: "production";
   readonly host: string;
   readonly databaseUrl: string;
@@ -171,6 +172,7 @@ export async function composeProduction(config: ProductionConfig) {
     }
 
     const app = createFastifyApp({
+      ...(config.metrics === undefined ? {} : { metrics: config.metrics }),
       controller,
       iamDriver,
       computeDriver,

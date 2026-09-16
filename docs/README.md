@@ -13,6 +13,8 @@ Start locally, install a production control plane, or look up supported behavior
 - [OCC CLI](guides/cli.md): manage OCC resources through domain commands.
 - [Concepts](guides/concepts.md): understand Namespaces, Agents, revisions, and credentials.
 - [Observability](guides/observability.md): export logs and check Collector health.
+- [OCC metrics](reference/metrics.md): metric contracts and private listeners;
+  [development dashboard](testing/metrics.md) for Prometheus and Grafana.
 
 ## Reference
 

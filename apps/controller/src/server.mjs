@@ -8,6 +8,8 @@ import {
 import { composeProduction } from "./composition/production.ts";
 import { validateWorkspaceFilesApiKeyPath } from "./composition/workspace-files.ts";
 import { createOccLogger, emitOccLogEvent } from "./logging.ts";
+import { createOccMetrics } from "./metrics/index.ts";
+import { metricsConfiguration, startMetricsListener } from "./metrics/listener.ts";
 
 const loopbackHosts = new Set(["127.0.0.1", "::1", "[::1]"]);
 const developmentBindHosts = new Set(["127.0.0.1", "::1", "0.0.0.0"]);
@@ -192,13 +194,15 @@ function configuration() {
 
 async function start() {
   const settings = configuration();
+  const metricsSettings = metricsConfiguration(process.env, settings.mode, settings.port);
+  const metrics = metricsSettings === undefined ? undefined : createOccMetrics("api");
   const startupConfiguration = await loadStartupConfigurationSnapshot({ mode: settings.mode });
   const logging = startupConfiguration.logging;
   const logger = createOccLogger({ component: "occ-api", level: logging.level });
   if (settings.gatewayApiKeyPath !== undefined) {
     await validateWorkspaceFilesApiKeyPath(settings.gatewayApiKeyPath);
   }
-  const compositionSettings = { ...settings, logger, logging };
+  const compositionSettings = { ...settings, logger, logging, metrics };
   const drivers = await loadInstallationConfiguration({
     mode: settings.mode,
     startupConfiguration,
@@ -274,6 +278,10 @@ async function start() {
   }
 
   let closing = false;
+  let metricsListener;
+  app.addHook("onClose", async () => {
+    await metricsListener?.close();
+  });
   async function shutdown() {
     if (closing) {
       return;
@@ -291,6 +299,8 @@ async function start() {
   process.once("SIGINT", shutdown);
 
   try {
+    if (metrics !== undefined)
+      metricsListener = await startMetricsListener(metrics, metricsSettings);
     await app.listen({ host: settings.host, port: settings.port });
   } catch (error) {
     await app.close();

@@ -1,5 +1,8 @@
 # Settings reference
 
+For `OCC_METRICS_ENABLED`, `OCC_METRICS_HOST`, `OCC_METRICS_PORT`, and their
+private-listener boundary, see [OCC metrics](metrics.md).
+
 Configure the OpenClaw Enterprise Compose development stack on Docker or Podman,
 internal-only production controller, PostgreSQL database, database migrations,
 and runtime configuration. Development retains local admission and uses PostgreSQL

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
+import { PostgresMetricsSnapshot } from "../../packages/occ/src/index.ts";
 import {
   authorizedPrincipal,
   cleanupProviderFixtures,
@@ -17,7 +19,7 @@ import {
   waitFor,
 } from "../helpers/postgres-provider-state.mjs";
 
-async function setup(context, { leaseDurationMs = 30_000, onHealthy } = {}) {
+async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics } = {}) {
   const [
     { Pool },
     { createControllerWorker },
@@ -235,6 +237,7 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy } = {}) {
     const configuredDrivers = createProviderWorkerDrivers(computeDriver, providers ?? []);
     const drivers = transformDrivers({ ...configuredDrivers, secretDriver });
     worker = createControllerWorker({
+      metrics,
       pool,
       pollIntervalMs: 15,
       leaseDurationMs,
@@ -423,7 +426,10 @@ test(
   "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context);
+    const metrics = createOccMetrics("worker", () =>
+      new PostgresMetricsSnapshot(fixture.observerPool).collect(),
+    );
+    const fixture = await setup(context, { metrics });
     const owner = await fixture.agent("stop-target");
     const sibling = await fixture.agent("stop-sibling");
     const targetRevision = await fixture.revision(owner, 1);
@@ -471,6 +477,17 @@ test(
     const firstStop = await fixture.requestStop(owner);
     const completedStop = await fixture.work(firstStop, "succeeded");
     assert.equal(completedStop.attempt_count, 2);
+    // Stop work must retain its own bounded kind and committed retry/success
+    // outcomes after integrating stop support with metrics instrumentation.
+    const exposition = await metrics.exposition();
+    for (const outcome of ["retry", "success"]) {
+      assert.match(
+        exposition,
+        new RegExp(
+          `occ_reconciliation_attempts_total\\{[^\\n]*work_kind="agent_stop"[^\\n]*outcome="${outcome}"[^\\n]*\\} 1`,
+        ),
+      );
+    }
     const [stopped, unaffected, retainedRevision] = await fixture.state.read(async (view) =>
       Promise.all([
         view.agents.findAgent(fixture.namespace.id, owner.id),

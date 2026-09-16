@@ -75,8 +75,13 @@ support `setLifecycleDrivers`; invalid or unavailable selected capabilities stop
 startup. Production then runs Compute preflight before emitting `worker.started`
 and starting `run()`.
 
-The worker has no HTTP listener, session service, or provider-admin client;
-Compose and Helm run it separately from the API.
+The worker has no resource HTTP API, session service, or provider-admin client.
+When metrics are enabled, startup binds a separate private scrape listener and
+opens a one-connection read-only metrics pool. Each scrape obtains the persisted
+Agent/queue snapshot; concurrent scrapes share that work. Processing records
+pass outcomes after finalization and durations independently of log emission.
+See the [metrics contract](../reference/metrics.md). Compose and Helm run the
+worker separately from the API.
 
 ### 2. Commit API admission and the durable work record
 

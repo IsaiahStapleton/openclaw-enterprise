@@ -1,6 +1,12 @@
 images:
   controller: ""
 
+metrics:
+  enabled: false
+  port: 9464
+  scraperNamespaceLabels: {}
+  scraperPodLabels: {}
+
 logging:
   collector:
     # Keep disabled when an existing cluster Collector already owns CRI log files.

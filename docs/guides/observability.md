@@ -3,12 +3,13 @@
 Configure and verify operational log export for OpenClaw Control Plane (OCC),
 managed gateways, and Codex workloads. Run commands from the repository root.
 
-| Signal                                     | Available path                                                                                      |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| Operational logs                           | Local container output; optional OpenTelemetry Collector export over OTLP/HTTP to your log backend. |
-| Collector metrics                          | Prometheus endpoint on port `8888` for the collection pipeline itself.                              |
-| Audit records                              | Separate PostgreSQL-backed audit persistence; this Collector does not export audit records.         |
-| Application metrics and distributed traces | This configuration does not install an application metrics or trace pipeline.                       |
+| Signal              | Available path                                                                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Operational logs    | Local container output; optional OpenTelemetry Collector export over OTLP/HTTP to your log backend.                                                    |
+| Collector metrics   | Prometheus endpoint on port `8888` for the collection pipeline itself.                                                                                 |
+| Audit records       | Separate PostgreSQL-backed audit persistence; this Collector does not export audit records.                                                            |
+| Application metrics | Optional private OCC Prometheus endpoints; see [production scraping](observability/metrics.md) and the [development dashboard](../testing/metrics.md). |
+| Distributed traces  | No application tracing pipeline is installed.                                                                                                          |
 
 Export includes only fixed operational events and reviewed scalar fields; it
 excludes arbitrary messages, prompts, responses, and Codex protocol stdout, even

@@ -113,6 +113,7 @@ export async function createConsoleAppFixture(t, options = {}) {
     : createTestSecretDriver({ id: "console-secret" });
   let controller;
   const appOptions = {
+    metrics: options.metrics,
     auth,
     iamDriver,
     auditSink,

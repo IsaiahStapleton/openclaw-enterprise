@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { requiresPostgres, setup, waitFor } from "../helpers/compute-singleton-worker.mjs";
+import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
+import { PostgresMetricsSnapshot } from "../../packages/occ/src/index.ts";
 
 test(
   "production worker emits Compute preflight warnings before worker.started and continues startup",
@@ -202,29 +204,38 @@ test(
     const activations = [];
     const retirements = [];
     let failed = false;
+    const snapshot = new PostgresMetricsSnapshot(fixture.observerPool);
+    const metrics = createOccMetrics("worker", () => snapshot.collect());
 
-    await fixture.start({
-      ...fixture.compute,
-      activationOrder: "beforeCommit",
-      async preflight() {},
-      async activateRevision(candidate) {
-        activations.push({
-          revisionId: candidate.id,
-          activeRevisionId: await fixture.activeRevision(owner),
-        });
-        if (candidate.revision === 2 && !failed) {
-          failed = true;
-          throw new Error("provider readiness verification failed");
-        }
+    await fixture.start(
+      {
+        ...fixture.compute,
+        activationOrder: "beforeCommit",
+        async preflight() {},
+        async activateRevision(candidate) {
+          activations.push({
+            revisionId: candidate.id,
+            activeRevisionId: await fixture.activeRevision(owner),
+          });
+          if (candidate.revision === 2 && !failed) {
+            failed = true;
+            throw new Error("provider readiness verification failed");
+          }
+        },
+        async retireRevision(candidate) {
+          retirements.push({
+            revisionId: candidate.id,
+            activeRevisionId: await fixture.activeRevision(owner),
+          });
+          return fixture.compute.retireRevision(candidate);
+        },
       },
-      async retireRevision(candidate) {
-        retirements.push({
-          revisionId: candidate.id,
-          activeRevisionId: await fixture.activeRevision(owner),
-        });
-        return fixture.compute.retireRevision(candidate);
-      },
-    });
+      30_000,
+      900_000,
+      "production",
+      undefined,
+      metrics,
+    );
     await fixture.work(first);
 
     const second = await fixture.revision(owner, 2);
@@ -244,6 +255,11 @@ test(
       [second.id],
     );
     assert.deepEqual(failure.rows, [{ reason: "DEPENDENCY_UNAVAILABLE" }]);
+    // One failed provider pass is counted as a retry, not another deployment.
+    assert.match(
+      await metrics.exposition(),
+      /occ_reconciliation_attempts_total\{[^\n]*outcome="retry"[^\n]*\} 1/,
+    );
   },
 );
 

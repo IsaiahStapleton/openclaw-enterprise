@@ -91,6 +91,7 @@ export interface DevelopmentAdmission {
 }
 
 export interface ControllerAppOptions {
+  readonly metrics?: import("./metrics/index.ts").OccMetrics;
   readonly controller?: OpenClawController;
   readonly createController?: (installation: Installation) => OpenClawController;
   readonly iamDriver: IAMDriver;
@@ -1159,6 +1160,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     const startedAt = requestStartedAt.get(request);
     const durationMs =
       startedAt === undefined ? undefined : Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    if (durationMs !== undefined)
+      options.metrics?.observeHttp(
+        request.routeOptions.url ?? "unmatched",
+        request.method,
+        reply.statusCode,
+        durationMs / 1000,
+      );
     app.log.info({
       event: "http.completed",
       requestId: request.id,

@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 5s
+  scrape_timeout: 3s
+scrape_configs:
+  - job_name: occ-worker
+    static_configs:
+      - targets: [127.0.0.1:9464]
+        labels:
+          cluster: development
+          installation: local
+remote_write:
+  - url: http://prometheus:9090/api/v1/write

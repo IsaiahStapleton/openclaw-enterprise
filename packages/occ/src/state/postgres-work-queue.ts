@@ -107,6 +107,7 @@ interface WorkRow {
 }
 
 const MAX_BACKOFF_MS = 300_000;
+export const PENDING_WORK_PREDICATE = "state IN ('queued', 'claimed')";
 const INITIAL_BACKOFF_MS = 1_000;
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_LEASE_DURATION_MS = 60_000;
@@ -437,7 +438,7 @@ export class PostgresWorkQueue {
     const pending = await this.client.query(
       `SELECT count(*)::integer AS count
        FROM occ.controller_work
-       WHERE state IN ('queued', 'claimed')
+       WHERE ${PENDING_WORK_PREDICATE}
          ${this.namespaceFilter()}`,
     );
     const count = (pending.rows[0] as { count?: unknown } | undefined)?.count;

@@ -46,6 +46,10 @@ one Agent auth binding for supplied OpenAI keys and issued ChatGPT account crede
 [Gateway–Harness storage split](28-gateway-harness-storage-split.md) — Proposed;
 #76/#89 draft covering storage ownership, live edits and first-start files.
 
+- [Initial OCC Prometheus metrics](28-occ-prometheus-metrics.md) — Implementing;
+  API/worker instrumentation, Agent inventory, private scraping, and replica
+  aggregation. Local proof recorded; runtime/cluster acceptance outstanding.
+
 See the [OpenClaw testing infrastructure report](reports/openclaw-testing-infrastructure.md) for the source audit behind the proposed CI coverage.
 
 | Implementation record                                                            | Recorded status                                                                                                                                                                            | Current reference                                                                                                                                         |

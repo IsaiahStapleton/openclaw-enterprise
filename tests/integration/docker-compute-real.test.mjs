@@ -165,6 +165,7 @@ async function waitFor(description, operation, timeoutMs = 180_000) {
 function composeArguments(project, commandName, args = [], { withLogging = false } = {}) {
   const files = [
     COMPOSE_FILE,
+    "deploy/metrics/listeners.compose.yaml",
     ...(withLogging ? [LOGGING_COMPOSE_FILE] : []),
     ...(podmanSelected
       ? [PODMAN_COMPOSE_FILE, "tests/fixtures/docker-compute/compose.podman.yaml"]
@@ -1318,6 +1319,29 @@ test(
       );
       throw new Error(`${error.message}\n${logs}`, { cause: error });
     });
+
+    // Scrape the real API/worker processes after the regular Agent deployment
+    // workflow. Loopback metrics remain private inside each container.
+    const scrape = async (service) => {
+      const container = await composeServiceContainer(project, service);
+      const { stdout } = await docker([
+        "exec",
+        container,
+        "node",
+        "-e",
+        "fetch('http://127.0.0.1:9464/metrics').then(async r=>{if(!r.ok)process.exit(1);process.stdout.write(await r.text())}).catch(()=>process.exit(1))",
+      ]);
+      return stdout;
+    };
+    const workerMetrics = await scrape("worker");
+    assert.match(
+      workerMetrics,
+      new RegExp(
+        `occ_agents\\{[^\\n]*deployment_state="active"[^\\n]*\\} ${executionModes.length}(?:\\n|$)`,
+      ),
+    );
+    assert.match(workerMetrics, /occ_reconciliation_attempts_total\{[^\n]*outcome="success"/);
+    assert.match(await scrape("controller"), /occ_http_request_duration_seconds_bucket/);
 
     await assertRuntimeDatabaseEvidence({
       project,

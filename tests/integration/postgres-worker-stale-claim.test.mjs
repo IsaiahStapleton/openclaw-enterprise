@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
+import { PostgresMetricsSnapshot } from "../../packages/occ/src/index.ts";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const requiresPostgres = {
@@ -121,7 +123,10 @@ test(
     const calls = [];
     const events = [];
     const developmentCompute = createDevelopmentComputeDriver();
+    const snapshot = new PostgresMetricsSnapshot(observerPool);
+    const metrics = createOccMetrics("worker", () => snapshot.collect());
     const worker = createControllerWorker({
+      metrics,
       pool: workerPool,
       installationId: installation.id,
       pollIntervalMs: 20,
@@ -185,6 +190,10 @@ test(
     releaseStaleEffect.resolve();
     await waitFor("the stale worker's claim-loss error", async () =>
       events.find(({ event, code }) => event === "worker.error" && code === "CLAIM_LOST"),
+    );
+    assert.match(
+      await metrics.exposition(),
+      /occ_reconciliation_attempts_total\{[^\n]*outcome="claim_lost"[^\n]*\} 1/,
     );
 
     const unchangedNamespace = await observerPool.query(

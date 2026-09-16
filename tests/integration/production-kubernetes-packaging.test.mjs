@@ -81,6 +81,50 @@ async function resources(manifests) {
   return parsed.trim().split("\n").map(JSON.parse);
 }
 
+test(
+  "metrics chart requires exact scraper selectors and isolates the extra Pod ports",
+  tooling,
+  async () => {
+    await assert.rejects(render({ "metrics.enabled": "true" }), /scraperNamespaceLabels/);
+    const selected = {
+      "metrics.enabled": "true",
+      "metrics.scraperNamespaceLabels.kubernetes\\.io/metadata\\.name": "monitoring",
+      "metrics.scraperPodLabels.app": "prometheus",
+    };
+    await assert.rejects(render({ ...selected, "metrics.port": "8080" }), /distinct/);
+    const objects = await resources((await render(selected)).stdout);
+    for (const component of ["api", "worker"]) {
+      const deployment = objects.find(
+        (item) =>
+          item.kind === "Deployment" && item.metadata.name === `openclaw-enterprise-${component}`,
+      );
+      const container = deployment.spec.template.spec.containers[0];
+      assert.ok(
+        container.ports.some((port) => port.name === "metrics" && port.containerPort === 9464),
+      );
+      assert.deepEqual(container.env.find((item) => item.name === "OCC_METRICS_HOST").valueFrom, {
+        fieldRef: { fieldPath: "status.podIP" },
+      });
+      const policy = objects.find(
+        (item) =>
+          item.kind === "NetworkPolicy" &&
+          item.metadata.name === `openclaw-enterprise-${component}-metrics`,
+      );
+      assert.deepEqual(policy.spec.ingress, [
+        {
+          from: [
+            {
+              namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "monitoring" } },
+              podSelector: { matchLabels: { app: "prometheus" } },
+            },
+          ],
+          ports: [{ protocol: "TCP", port: 9464 }],
+        },
+      ]);
+    }
+  },
+);
+
 function routeNamespaceLabel(namespace, gatewayName) {
   return createHash("sha256").update(`${namespace}/${gatewayName}`).digest("hex").slice(0, 12);
 }
