@@ -58,6 +58,52 @@ Assets under `docs/assets/` are served at `/assets/`.
 For the generated [HTTP API reference](reference/api.md), edit the owning routes,
 schemas, or generator and run `pnpm openapi:generate`; never edit its output by hand.
 
+## Interactive ComputeDriver matrix
+
+The [ComputeDriver feature matrix](reference/drivers/compute-matrix.md) renders
+inside the existing docs page, with search, category filters, and expandable
+source/test evidence. A generated Markdown table keeps the same support statuses
+readable on GitHub. Both views use `docs/assets/compute-driver-matrix.json`.
+
+After updating reviewed data and its baseline commit, regenerate the fallback:
+
+```sh
+node scripts/generate-compute-matrix.mjs
+node scripts/generate-compute-matrix.mjs --check
+npm run docs:build
+```
+
+The build rejects stale table content. Check the refreshed page at
+`/reference/drivers/compute-matrix/`; open a cell to inspect pinned source and
+unrun test evidence. A successful docs build proves presentation and links,
+not Driver behavior or live deployment.
+
+The custom renderer accepts raw HTML, but GitHub
+[sanitizes rendered Markdown](https://github.com/github/markup#github-markup),
+including scripts. Copying standalone HTML into Markdown therefore does not
+provide portable interaction. The matrix uses generated markup and an external
+same-origin script instead of an iframe. The current local preview sets no CSP;
+any future hosting policy must allow its own required assets and scripts.
+
+## Publish privately with GitHub Pages
+
+In repository **Settings → Pages**, select **GitHub Actions** as the source and
+confirm visibility is **Private** before publishing. A private repository alone
+does not make a Pages site private. GitHub restricts the private site to readers
+of this repository and enforces HTTPS on its assigned domain.
+
+The [publishing workflow](../.github/workflows/docs-pages.yml) builds the docs and
+Pagefind index with the frozen docs lockfile, then publishes only `dist/docs/`.
+It runs on pushes to `main` or a manual dispatch from `main`. The `github-pages`
+environment also restricts deployments to `main`; pull requests must pass normal
+review and merge requirements before their content is published.
+
+After a successful **Publish private documentation** run, open the deployment URL
+in the Actions summary or **Settings → Pages**. Verify a deep page, search, and
+the interactive matrix while signed in with repository access. For a failed
+publication, inspect the failed Actions step, fix the source, and rerun from
+`main`. No controller services, model credentials, or custom domain are needed.
+
 ## Troubleshoot
 
 - A missing page or anchor fails the build with its source location. Correct the
@@ -65,5 +111,4 @@ schemas, or generator and run `pnpm openapi:generate`; never edit its output by 
 - If the port is occupied, stop the prior docs preview before starting another.
 - If dependencies are missing, run the frozen docs install above in this worktree.
 
-Publishing and hosting are outside this local setup. The site has no assistant
-backend or community integrations.
+The site has no assistant backend or community integrations.
