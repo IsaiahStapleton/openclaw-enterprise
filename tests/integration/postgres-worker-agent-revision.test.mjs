@@ -430,6 +430,7 @@ test(
       new PostgresMetricsSnapshot(fixture.observerPool).collect(),
     );
     const fixture = await setup(context, { metrics });
+    const before = await new PostgresMetricsSnapshot(fixture.observerPool).collect();
     const owner = await fixture.agent("stop-target");
     const sibling = await fixture.agent("stop-sibling");
     const targetRevision = await fixture.revision(owner, 1);
@@ -445,6 +446,12 @@ test(
           return revision.revision === 2 ? { ...observation, ready: false } : observation;
         },
         async stopRevision(revision) {
+          const during = await new PostgresMetricsSnapshot(fixture.observerPool).collect();
+          assert.equal(
+            during.agents.stopping,
+            before.agents.stopping + 1,
+            "stop stays in progress until Compute shutdown commits",
+          );
           const current = await fixture.state.read((view) =>
             view.agents.findAgent(fixture.namespace.id, owner.id),
           );
@@ -480,6 +487,13 @@ test(
     // Stop work must retain its own bounded kind and committed retry/success
     // outcomes after integrating stop support with metrics instrumentation.
     const exposition = await metrics.exposition();
+    assert.match(
+      exposition,
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="stop"[^\n]*\} 1(?:\n|$)/,
+    );
+    const after = await new PostgresMetricsSnapshot(fixture.observerPool).collect();
+    assert.equal(after.agents.stopped, before.agents.stopped + 1);
+    assert.equal(after.agents.running, before.agents.running + 1);
     for (const outcome of ["retry", "success"]) {
       assert.match(
         exposition,
@@ -623,7 +637,10 @@ test(
   "a deployment admitted after stop supersedes stale stop work before Compute mutation",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context);
+    const metrics = createOccMetrics("worker", () =>
+      new PostgresMetricsSnapshot(fixture.observerPool).collect(),
+    );
+    const fixture = await setup(context, { metrics });
     const owner = await fixture.agent("stop-then-deploy");
     const first = await fixture.revision(owner, 1);
     const stoppedRevisions = [];
@@ -689,6 +706,10 @@ test(
     assert.equal(running.desiredRuntimeState, "running");
     assert.equal(running.activeRevisionId, second.id);
     assert.deepEqual(stoppedRevisions, []);
+    assert.match(
+      await metrics.exposition(),
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="stop"[^\n]*\} 0(?:\n|$)/,
+    );
     const audit = await fixture.observerPool.query(
       `SELECT details->>'reasonCode' AS reason_code
        FROM occ.audit_events
@@ -811,7 +832,11 @@ test(
   "Agent stop reauthorizes the recorded actor before Compute mutation",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context);
+    const metrics = createOccMetrics("worker", () =>
+      new PostgresMetricsSnapshot(fixture.observerPool).collect(),
+    );
+    const fixture = await setup(context, { metrics });
+    const before = await new PostgresMetricsSnapshot(fixture.observerPool).collect();
     const owner = await fixture.agent("stop-reauthorization");
     const revision = await fixture.revision(owner, 1);
     const stoppedRevisions = [];
@@ -836,6 +861,14 @@ test(
     );
     await fixture.start(compute, () => {}, undefined, undefined, fixture.createWorkerPool());
     await fixture.work(stop, "failed_permanent");
+    assert.equal(
+      (await new PostgresMetricsSnapshot(fixture.observerPool).collect()).agents.failed,
+      before.agents.failed + 1,
+    );
+    assert.match(
+      await metrics.exposition(),
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="stop"[^\n]*\} 0(?:\n|$)/,
+    );
 
     assert.deepEqual(stoppedRevisions, []);
     const current = await fixture.state.read((view) =>
@@ -1063,7 +1096,10 @@ test(
   "maintenance retains its real lease across consecutive short predecessor retirements",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context, { leaseDurationMs: 1_200 });
+    const metrics = createOccMetrics("worker", () =>
+      new PostgresMetricsSnapshot(fixture.observerPool).collect(),
+    );
+    const fixture = await setup(context, { metrics, leaseDurationMs: 1_200 });
     const owner = await fixture.agent("short-retirement-lease");
     const first = await fixture.revision(owner, 1);
     const events = [];
@@ -1111,6 +1147,11 @@ test(
       return result.rows[0];
     });
     assert.equal(maintenance.attempt_count, 1);
+    // Periodic reconciliation must not inflate successful deployment counts.
+    assert.match(
+      await metrics.exposition(),
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="deploy"[^\n]*\} 2(?:\n|$)/,
+    );
     assert.ok(completedRetirements >= 25, "activation and all predecessors were retired");
     const active = await fixture.state.read((view) =>
       view.agents.findAgent(fixture.namespace.id, owner.id),
@@ -1575,7 +1616,10 @@ test(
   "an older revision retry is superseded without preparing or retiring a newer active revision",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context);
+    const metrics = createOccMetrics("worker", () =>
+      new PostgresMetricsSnapshot(fixture.observerPool).collect(),
+    );
+    const fixture = await setup(context, { metrics });
     const owner = await fixture.agent("superseded-retry");
     const older = await fixture.revision(owner, 1);
     const newer = await fixture.revision(owner, 2);
@@ -1598,6 +1642,10 @@ test(
     );
 
     await Promise.all([fixture.work(newer, "succeeded"), fixture.work(older, "succeeded")]);
+    assert.match(
+      await metrics.exposition(),
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="deploy"[^\n]*\} 1(?:\n|$)/,
+    );
     // Newer publication retires every older candidate. The later superseded retry
     // must contribute no preparation or retirement against the active revision.
     assert.deepEqual(effects, [

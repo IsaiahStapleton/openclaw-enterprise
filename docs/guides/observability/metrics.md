@@ -75,14 +75,21 @@ histogram_quantile(0.95,
   sum by (cluster, installation, le)
     (rate(occ_http_request_duration_seconds_bucket[5m])))
 
-max by (cluster, installation, deployment_state)
+max by (cluster, installation, lifecycle_state)
   (occ_agents and on (job, instance, cluster, installation) (up == 1))
 
 max by (cluster, installation)
   (occ_work_pending and on (job, instance, cluster, installation) (up == 1))
+
+max by (cluster, installation)
+  (occ_work_oldest_pending_age_seconds and on (job, instance, cluster, installation) (up == 1))
+
+histogram_quantile(0.95,
+  sum by (cluster, installation, operation, le)
+    (rate(occ_agent_operation_duration_seconds_bucket[5m])))
 ```
 
-Never sum Agent inventory or queue depth across workers: each reports shared
+Never sum Agent inventory, queue depth, or oldest work age across workers: each reports shared
 database state. Monitor `up` alongside inventory so no data is not mistaken for
 zero Agents. HA Prometheus installations need their backend's own replica
 deduplication before combining samples from multiple scrapers.

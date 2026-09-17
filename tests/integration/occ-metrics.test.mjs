@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
 import {
@@ -93,15 +94,34 @@ test(
     const snapshot = new PostgresMetricsSnapshot(pool);
     const a = createOccMetrics("worker", () => snapshot.collect());
     const before = await snapshot.collect();
+    assert.match(
+      await a.exposition(),
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="deploy"[^\n]*\} 0(?:\n|$)/,
+    );
     const agent = await fixture.agent();
-    assert.deepEqual(await snapshot.collect(), { ...before, draft: before.draft + 1 });
+    assert.deepEqual((await snapshot.collect()).agents, {
+      ...before.agents,
+      draft: before.agents.draft + 1,
+    });
     const first = await fixture.revision(agent, 1);
+    // Queue age includes time before any worker is running, not just claim time.
+    await delay(80);
+    const queued = await snapshot.collect();
+    assert.equal(queued.agents.deploying, before.agents.deploying + 1);
+    assert.ok(queued.oldestPendingAgeSeconds >= 0.05);
+    let preparations = 0;
     // This existing deterministic Driver proves persistence/worker metrics, not
     // live runtime readiness. Production dedicated execution requires activation.
     await fixture.start(
       {
         ...fixture.compute,
         activationOrder: "beforeCommit",
+        async prepareRevision(revision, context) {
+          // A transient dependency failure forces a real queue retry. Completion
+          // time must include the retry delay without counting the failed pass.
+          if (++preparations === 1) throw new Error("Temporary compute outage");
+          return fixture.compute.prepareRevision(revision, context);
+        },
         async preflight() {},
         async activateRevision() {},
       },
@@ -112,10 +132,26 @@ test(
       a,
     );
     await fixture.work(first);
-    assert.equal((await snapshot.collect()).active, before.active + 1);
+    assert.equal((await snapshot.collect()).agents.running, before.agents.running + 1);
+    const firstMetrics = await a.exposition();
+    assert.match(
+      firstMetrics,
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="deploy"[^\n]*\} 1(?:\n|$)/,
+    );
+    const duration = Number(
+      firstMetrics.match(
+        /occ_agent_operation_duration_seconds_sum\{[^\n]*operation="deploy"[^\n]*\} ([^\n]+)/,
+      )?.[1],
+    );
+    assert.ok(duration >= 0.05, "completion duration must include pre-claim queue time");
     const second = await fixture.revision(agent, 2);
     await fixture.work(second);
-    assert.equal((await snapshot.collect()).active, before.active + 1);
+    assert.equal((await snapshot.collect()).agents.running, before.agents.running + 1);
+
+    assert.match(
+      await a.exposition(),
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="deploy"[^\n]*\} 2(?:\n|$)/,
+    );
 
     // Both workers see the same shared state; it must never be summed across replicas.
     const b = createOccMetrics("worker", () => snapshot.collect());

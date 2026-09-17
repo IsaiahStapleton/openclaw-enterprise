@@ -172,6 +172,7 @@
                   "testing/postgresql",
                   "testing/images",
                   "testing/docker",
+                  "testing/metrics",
                   "testing/ssh",
                   "testing/kubernetes",
                   "testing/gateway-routing",

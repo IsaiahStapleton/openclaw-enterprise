@@ -1326,7 +1326,7 @@ test(
       const container = await composeServiceContainer(project, service);
       const { stdout } = await docker([
         "exec",
-        container,
+        container.Id,
         "node",
         "-e",
         "fetch('http://127.0.0.1:9464/metrics').then(async r=>{if(!r.ok)process.exit(1);process.stdout.write(await r.text())}).catch(()=>process.exit(1))",
@@ -1337,9 +1337,14 @@ test(
     assert.match(
       workerMetrics,
       new RegExp(
-        `occ_agents\\{[^\\n]*deployment_state="active"[^\\n]*\\} ${executionModes.length}(?:\\n|$)`,
+        `occ_agents\\{[^\\n]*lifecycle_state="running"[^\\n]*\\} ${executionModes.length}(?:\\n|$)`,
       ),
     );
+    assert.match(
+      workerMetrics,
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="deploy"/,
+    );
+    assert.match(workerMetrics, /occ_work_oldest_pending_age_seconds/);
     assert.match(workerMetrics, /occ_reconciliation_attempts_total\{[^\n]*outcome="success"/);
     assert.match(await scrape("controller"), /occ_http_request_duration_seconds_bucket/);
 
@@ -1464,6 +1469,30 @@ test(
           [LABEL_ROLE, "gateway"],
         ]),
         1,
+      );
+      const stopped = await request(
+        "POST",
+        `/namespaces/${embeddedNamespace.id}/agents/${embedded.agent.id}/stop`,
+      );
+      assert.equal(stopped.status, 202, JSON.stringify(stopped.error));
+      await waitFor("stopped Agent and completed stop metrics", async () => {
+        const current = await request(
+          "GET",
+          `/namespaces/${embeddedNamespace.id}/agents/${embedded.agent.id}`,
+        );
+        if (current.data.activeRevisionId !== undefined) return false;
+        const body = await scrape("worker");
+        return (
+          /occ_agents\{[^\n]*lifecycle_state="stopped"[^\n]*\} 1(?:\n|$)/.test(body) &&
+          /occ_agent_operation_duration_seconds_count\{[^\n]*operation="stop"[^\n]*\} 1(?:\n|$)/.test(
+            body,
+          )
+        );
+      });
+      assert.equal(
+        await containerCount([[LABEL_AGENT, embedded.agent.id]]),
+        0,
+        "supported stop must remove the Agent workload before reporting completion",
       );
       await assertComposeLogsDoNotLeakBootstrapServiceKey({ project, env, serviceKey });
       return;

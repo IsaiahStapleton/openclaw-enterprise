@@ -35,8 +35,13 @@ network; its UI and Grafana are published only on host loopback. Use this on a
 trusted development machine, never as production packaging. Collector/WAL and
 dashboard state is disposable; server retention is 24 hours / 256 MB. The overlay
 uses pinned image digests and introduces no model credentials into monitoring.
-Podman Compose support for this new namespace-sharing overlay must be verified
-separately; do not infer it from the base stack's Podman support.
+For Podman, include `compose.podman.yaml` with the socket reported by
+`podman info`; the [quickstart helper](../guides/quickstart.md) prepares that
+configuration. Namespace sharing and remote write were also verified on Podman.
+The pinned Grafana image is amd64. On an ARM Mac, prefer a local Compose
+override selecting a verified ARM64 image digest of the same version; emulation
+can exceed the container memory limit. Back up `/var/lib/grafana` before
+recreating an instance whose local dashboard or account changes you need to keep.
 
 ## Generate traffic and check results
 
@@ -44,11 +49,20 @@ Wait about 15 seconds, then evaluate `up{job=~"occ-api|occ-worker"}` in
 Prometheus: expect two series equal to 1. The receiving server's Targets page
 does not list remote-write targets; query `up` instead.
 
-Use the console to create an Agent draft and refresh its list. The inventory
-panel should gain one draft, and request traffic should increase. Deploy it
-using the regular Agent workflow. Once `activeRevisionId` is selected, expect
-one fewer draft and one more active Agent. Redeploying that Agent must not
-increase the active count. This measures selected revisions, not live health.
+Use the console to create an Agent draft and refresh its list. The lifecycle
+panel should gain one draft. Deploy it through the regular Agent workflow:
+expect `deploying`, then `running` after finalization. Redeploying counts that
+Agent once, with `deploying` replacing `running` until completion. Stop it:
+expect `stopping`, then `stopped`, with no return to `draft`. These are persisted
+lifecycle states, not continuous runtime-health measurements.
+
+The Agent operation p95 panel includes queue wait and retry delays for completed
+deploy/stop requests. It needs completed operations in its five-minute window;
+failed or unfinished operations do not produce duration samples. Compare it with
+reconciliation-pass p95 and oldest pending work age to distinguish slow passes
+from accumulated waiting. Oldest age is zero when the queue is empty and includes
+delayed retries and scheduled maintenance. Retry/failure rates and API 5xx
+percentage use the existing counters.
 
 For an easy error-rate check, request an unknown API path several times:
 
@@ -101,8 +115,9 @@ Compose files. Keep PostgreSQL volumes, `.env`, and Agent workloads. Do not use
 
 `tests/integration/occ-metrics.test.mjs` covers real Fastify/auth HTTP requests,
 separate registries/listeners, and PostgreSQL inventory/redeployment with the
-existing deterministic Compute fixture. Its database case also exercises real
-lock contention, concurrent scrape failure, recovery, and closed-pool failure.
+existing deterministic Compute fixture. Its database case also exercises queue age before claim, retry-inclusive
+completion timing, real lock contention, concurrent scrape failure, recovery,
+and closed-pool failure.
 It proves persistence and instrumentation, not live workload readiness.
 
 Run with an exclusively used disposable database from the
@@ -120,7 +135,8 @@ scenario. Omitting it skips that subtest; application reads still use the
 limited application role.
 
 The existing `docker-compute-real.test.mjs` journey now scrapes both processes
-after actual Agent deployment; follow its [runtime prerequisites](docker.md).
+after actual Agent deployment; the Podman path also stops the Agent and
+checks its lifecycle and completion metric. Follow its [runtime prerequisites](docker.md).
 Helm rendering proves selectors/ports but does not prove live NetworkPolicy
 enforcement. Record any unrun runtime or cluster proof explicitly.
 

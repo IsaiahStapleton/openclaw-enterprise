@@ -78,7 +78,11 @@ and starting `run()`.
 The worker has no resource HTTP API, session service, or provider-admin client.
 When metrics are enabled, startup binds a separate private scrape listener and
 opens a one-connection read-only metrics pool. Each scrape obtains the persisted
-Agent/queue snapshot; concurrent scrapes share that work. Processing records
+Agent/queue snapshot; concurrent scrapes share that work.
+`packages/occ/src/state/postgres-metrics.ts:PostgresMetricsSnapshot.collect`
+derives lifecycle counts from desired state, latest revision and work records,
+plus backlog depth and oldest admission age. Stopped and never-deployed Agents
+are distinct; the projection does not probe runtime health. Processing records
 pass outcomes after finalization and durations independently of log emission.
 See the [metrics contract](../reference/metrics.md). Compose and Helm run the
 worker separately from the API.
@@ -233,6 +237,13 @@ stop even if it retains that active pointer while preparing. It appends lifecycl
 evidence and completes the same work item. Revision rows and persistent runtime
 state are not deleted.
 
+After successful finalization, `completeActivatedRevision()` and
+`finalizeAgentStop()` observe admission-to-completion time through
+`apps/controller/src/metrics/index.ts:createOccMetrics`. Original work creation
+time survives retries and queue waits. Only the original revision reconcile item
+counts as a deployment; maintenance and superseded operations do not. An
+observation occurs after commit, so process death in that gap may lose a sample.
+
 ### 7. Defer, retry, or stop and hand off the next iteration
 
 `apps/controller/src/worker.ts:ControllerWorker.finalizeActiveRevision`,
@@ -300,6 +311,9 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 ## Changelog
 
 - 2026-09-17 12:09: Separate health reporting from claim renewal, preserve lease-loss fencing, and restore admitted Agent bindings before stop effects. (01a03526-12b3-7f50-b599-e8414052909d - 683d0e253ad827af7c6098650097fa6a8ad61f57)
+
+- 2026-09-17 07:34: Add lifecycle snapshots, oldest pending age, and post-commit operation timing alongside the accompanying implementation. (authoring-run/7f165131-ca19-465b-a7a6-7138c2065f72 - d4dc39fc8c7f86917387a738fc1d3892c98a46bd)
+
 - 2026-09-17 01:22: Include failed candidates and interrupted retirement in exact Agent-stop cleanup, preserving later deployments and retained state. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 73c2ef49)
 
 - 2026-09-08 07:53: Include optional development activation and retry in the post-commit handoff. (01a07d92-d866-7731-afe5-abab67d8966c - 4d83087229961f3665b923d2581c0b71b988cc9c)

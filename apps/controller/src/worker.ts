@@ -870,6 +870,12 @@ export class ControllerWorker {
       result.outcome === "retry" && claim.attemptCount >= this.maxAttempts
         ? "permanent"
         : result.outcome;
+    if (result.outcome === "success" && result.code !== "STOP_SUPERSEDED") {
+      this.metrics?.observeAgentOperation(
+        "stop",
+        Math.max(0, Date.now() - claim.createdAt.getTime()) / 1000,
+      );
+    }
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),
@@ -1695,6 +1701,14 @@ export class ControllerWorker {
     if (!completed) {
       this.passOutcome = claim.attemptCount >= this.maxAttempts ? "permanent" : "retry";
       return;
+    }
+    // Original admission time survives queue waits and retries. Maintenance and
+    // superseded work must not count as additional successful deployments.
+    if (claim.idempotencyKey === `agent_revision:${revision.id}:reconcile`) {
+      this.metrics?.observeAgentOperation(
+        "deploy",
+        Math.max(0, Date.now() - claim.createdAt.getTime()) / 1000,
+      );
     }
     this.emit({
       event: "worker.completed",

@@ -78,8 +78,8 @@ export function createOccMetrics(
     service === "worker"
       ? new Gauge({
           name: "occ_agents",
-          help: "Persisted Agents by active revision selection, not workload health.",
-          labelNames: ["deployment_state"],
+          help: "Persisted Agents by reconciliation lifecycle, not live workload health.",
+          labelNames: ["lifecycle_state"],
           registers: [registry],
         })
       : undefined;
@@ -91,6 +91,27 @@ export function createOccMetrics(
           registers: [registry],
         })
       : undefined;
+  const oldestPendingAge =
+    service === "worker"
+      ? new Gauge({
+          name: "occ_work_oldest_pending_age_seconds",
+          help: "Seconds since the oldest queued or claimed work was admitted, including delayed work.",
+          registers: [registry],
+        })
+      : undefined;
+  const operationDuration =
+    service === "worker"
+      ? new Histogram({
+          name: "occ_agent_operation_duration_seconds",
+          help: "Seconds from work admission to successful Agent deployment or stop completion.",
+          labelNames: ["operation"],
+          registers: [registry],
+          buckets: [0.1, 0.5, 1, 5, 15, 30, 60, 120, 300, 900, 1800],
+        })
+      : undefined;
+  // These two bounded label sets provide a baseline before the first operation.
+  operationDuration?.zero({ operation: "deploy" });
+  operationDuration?.zero({ operation: "stop" });
   let inFlight: Promise<string> | undefined;
   return {
     contentType: registry.contentType,
@@ -107,6 +128,9 @@ export function createOccMetrics(
       attempts?.inc({ work_kind, outcome });
       workDuration?.observe({ work_kind }, seconds);
     },
+    observeAgentOperation(operation: "deploy" | "stop", seconds: number) {
+      operationDuration?.observe({ operation }, seconds);
+    },
     exposition(): Promise<string> {
       if (inFlight !== undefined) return inFlight;
       inFlight = (async () => {
@@ -114,9 +138,11 @@ export function createOccMetrics(
           if (snapshot === undefined)
             throw new Error("Worker metrics require a database snapshot.");
           const values = await snapshot();
-          agents!.set({ deployment_state: "draft" }, values.draft);
-          agents!.set({ deployment_state: "active" }, values.active);
+          for (const [lifecycle_state, count] of Object.entries(values.agents)) {
+            agents!.set({ lifecycle_state }, count);
+          }
           pending!.set(values.pending);
+          oldestPendingAge!.set(values.oldestPendingAgeSeconds);
         }
         return registry.metrics();
       })().finally(() => {

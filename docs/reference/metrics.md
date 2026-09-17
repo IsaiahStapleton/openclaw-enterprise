@@ -28,14 +28,16 @@ to 16, with five-second socket/request handling limits. No public ingress.
 All families have `service="api|worker"`. No tenant, Agent, request, revision,
 actor, credential, Driver-instance, payload, raw URL, or user-defined labels.
 
-| Family                                        | Type      | Additional labels                 | Meaning                                                                                |
-| --------------------------------------------- | --------- | --------------------------------- | -------------------------------------------------------------------------------------- |
-| `occ_http_requests_total`                     | Counter   | `route`, `method`, `status_class` | Completed API-process responses, including auth, console, denied and failing requests. |
-| `occ_http_request_duration_seconds`           | Histogram | `route`, `method`                 | Request-hook to response-completion seconds.                                           |
-| `occ_reconciliation_attempts_total`           | Counter   | `work_kind`, `outcome`            | Finished passes processing claimed work.                                               |
-| `occ_reconciliation_attempt_duration_seconds` | Histogram | `work_kind`                       | Processing seconds, including Driver calls and finalization.                           |
-| `occ_work_pending`                            | Gauge     | None                              | Shared PostgreSQL count of queued/claimed work, including delayed retries.             |
-| `occ_agents`                                  | Gauge     | `deployment_state`                | Persisted Agent inventory: `draft` without `activeRevisionId`, `active` with it.       |
+| Family                                        | Type      | Additional labels                 | Meaning                                                                                  |
+| --------------------------------------------- | --------- | --------------------------------- | ---------------------------------------------------------------------------------------- |
+| `occ_http_requests_total`                     | Counter   | `route`, `method`, `status_class` | Completed API-process responses, including auth, console, denied and failing requests.   |
+| `occ_http_request_duration_seconds`           | Histogram | `route`, `method`                 | Request-hook to response-completion seconds.                                             |
+| `occ_reconciliation_attempts_total`           | Counter   | `work_kind`, `outcome`            | Finished passes processing claimed work.                                                 |
+| `occ_reconciliation_attempt_duration_seconds` | Histogram | `work_kind`                       | Processing seconds, including Driver calls and finalization.                             |
+| `occ_work_pending`                            | Gauge     | None                              | Shared PostgreSQL count of queued/claimed work, including delayed retries.               |
+| `occ_agents`                                  | Gauge     | `lifecycle_state`                 | Persisted Agent reconciliation lifecycle; see below.                                     |
+| `occ_agent_operation_duration_seconds`        | Histogram | `operation`                       | Admission to successful deployment or stop completion, including queue wait and retries. |
+| `occ_work_oldest_pending_age_seconds`         | Gauge     | None                              | Age since admission of the oldest queued/claimed item; zero when no work is pending.     |
 
 HTTP excludes health probes, metrics scrapes, and disconnected requests without
 a completed response. `route` is the registered template or `unmatched`; wildcard
@@ -56,12 +58,36 @@ HTTP histogram boundaries in seconds: `0.005, 0.01, 0.025, 0.05, 0.1, 0.25,
 
 ## Shared snapshots and outages
 
-Each worker scrape collects both gauges in one read-only PostgreSQL statement
-against the singleton Installation. Both Agent categories exist even at zero;
-redeploying an active Agent counts it once. Selection does not prove runtime
-health. Stopping an Agent clears its active pointer, so it returns to the
-`draft` category; this label includes stopped Agents, not only never-deployed
-ones. Collection never polls Compute or updates resource state.
+Each worker scrape collects all gauges in one read-only PostgreSQL statement
+against the singleton Installation. Every lifecycle category exists even at zero;
+each Agent counts once. The projection uses desired runtime state, the latest
+admitted revision, and deployment/stop work:
+
+| State       | Meaning                                                                                                                                |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `draft`     | No revision or stop request has been admitted.                                                                                         |
+| `deploying` | Running is desired and the latest deployment is pending or not selected. Includes redeployment while an older revision remains active. |
+| `running`   | The selected latest deployment has completed. This does not prove continuous runtime health.                                           |
+| `stopping`  | Stopped is desired, but an active pointer or unfinished deployment/stop work remains.                                                  |
+| `stopped`   | Stop has converged; revision history and Agent records remain.                                                                         |
+| `failed`    | The latest operation for the desired state failed permanently. A failed redeployment or stop can leave an older workload running.      |
+
+Maintenance work does not change these lifecycle categories. Collection never
+polls Compute or updates resource state. Queue depth and oldest age include
+delayed retries and scheduled maintenance, even before their next eligible time.
+Age uses the original work admission timestamp, not the latest attempt, and is
+clamped at zero for clock skew.
+
+Operation durations have `operation="deploy|stop"`. The completing worker records
+one observation after successful queue finalization, including final activation
+and predecessor retirement for deployments. Retry and convergence delays count;
+maintenance, superseded operations, and permanent failures do not. Repeated stops
+that find the Agent already stopped still count as completed stop requests.
+Both bounded operation label sets start at zero so the first completion can
+contribute to rates. Buckets in seconds are `0.1, 0.5, 1, 5, 15, 30, 60, 120, 300, 900, 1800` plus
+`+Inf`, count, and sum. The timer uses wall-clock admission time and clamps
+negative elapsed time to zero. Process death between commit and observation can
+lose a sample; observations are operational metrics, not durable audit evidence.
 
 Worker startup supplies a separate read-only application-role pool with maximum
 one connection, a 500 ms connection deadline, and 1500 ms query/statement
@@ -92,8 +118,8 @@ upgrades must explicitly review this list; new defaults are filtered out.
 
 For `R` observed registered route/method pairs, HTTP has at most `20R` series
 (six statuses plus fourteen histogram series). Unmatched methods add at most
-eight pairs. Worker application metrics have at most 83 series (24 outcomes,
-56 histogram series, three gauges). Process collectors add at most 53 series
+eight pairs. Worker application metrics have at most 116 series (24 outcomes,
+56 pass-duration series, 28 operation-duration series, and eight gauges). Process collectors add at most 53 series
 per process. Do not preallocate the route/status Cartesian product.
 
 ## Replica aggregation

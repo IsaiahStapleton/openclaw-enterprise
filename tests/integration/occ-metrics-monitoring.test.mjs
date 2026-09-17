@@ -209,7 +209,7 @@ test(
       `http://127.0.0.1:${grafanaPort}/api/dashboards/uid/occ-development`,
     ).then((response) => response.json());
     assert.equal(provisioned.dashboard.uid, "occ-development");
-    assert.equal(provisioned.dashboard.panels.length, 9);
+    assert.deepEqual(provisioned.dashboard.panels, dashboard.panels);
     const datasource = await fetch(
       `http://127.0.0.1:${grafanaPort}/api/datasources/uid/occ-prometheus/health`,
     ).then((response) => response.json());
