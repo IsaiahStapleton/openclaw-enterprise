@@ -485,6 +485,7 @@
         {
           "path": "tests/integration/docker-compute-real.test.mjs",
           "expectedTests": [
+            "Docker Compose cleanup preserves the selected engine and removes volumes only when requested",
             "Docker Compose development drives Docker Compute networks, containers, auth, cleanup, and real model turns"
           ]
         }

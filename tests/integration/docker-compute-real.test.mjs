@@ -925,6 +925,63 @@ async function createAgentJourney({ request, namespaceId, mode, label, afterAdmi
 }
 
 test(
+  `${engineName} Compose cleanup preserves the selected engine and removes volumes only when requested`,
+  {
+    skip: selected
+      ? false
+      : "Set OCC_TEST_DOCKER_COMPUTE_REAL=1 or OCC_TEST_PODMAN_COMPUTE_REAL=1 for real Compose cleanup.",
+    timeout: 300_000,
+  },
+  async (context) => {
+    await command("go", ["build", "-trimpath", "-o", OCC_CLI, "./cmd/occ"]);
+    const project = `oce-cleanup-${randomUUID().replaceAll("-", "").slice(0, 18)}`;
+    const env = {
+      ...process.env,
+      COMPOSE_PROJECT_NAME: project,
+      OCC_POSTGRES_PORT: String(await reserveLoopbackPort()),
+      OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR: randomComposeSubnet(),
+      OCC_DEVELOPMENT_COMPUTE_DRIVER: "docker",
+      OCC_DEVELOPMENT_CONTAINER_ENGINE: engineBinary,
+      OPENAI_API_KEY: "",
+      ...(podmanSelected ? { PODMAN_COMPOSE_PROVIDER: "podman-compose" } : {}),
+    };
+    if (podmanSelected) {
+      const { stdout } = await docker(["info", "--format", "{{.Host.RemoteSocket.Path}}"], {
+        env,
+      });
+      env.OCC_CONTAINER_ENGINE_SOCKET = stdout.trim().replace(/^unix:\/\//, "");
+    }
+    context.after(() => cleanupProject(project, env, [], { verify: true }));
+
+    // Cleanup must work even when startup stopped after PostgreSQL, before an
+    // Installation or Agent exists. Use the shipped Compose files and real engine.
+    await docker(composeArguments(project, "up", ["--no-deps", "--detach", "postgres"]), {
+      env,
+    });
+    await waitFor("development PostgreSQL readiness", async () => {
+      const postgres = await composeServiceContainer(project, "postgres");
+      return postgres.State.Health?.Status === "healthy";
+    });
+    const composeOptions = composeArguments(project, "down").slice(1, -1);
+    const cliEnv = { ...env, OCC_CONTAINER_ENGINE_SOCKET: "" };
+    await command(OCC_CLI, ["dev", "down", "--", ...composeOptions], { env: cliEnv });
+
+    const projectLabels = labelFilters([[LABEL_COMPOSE_PROJECT, project]]);
+    assert.deepEqual(await dockerLines(["ps", "-aq", ...projectLabels]), []);
+    assert.deepEqual(await dockerLines(["network", "ls", "-q", ...projectLabels]), []);
+    const databaseVolume = `${project}_occ_postgres_data`;
+    assert.equal((await dockerJson(["volume", "inspect", databaseVolume])).length, 1);
+
+    // A second cleanup must still find the retained database through the same
+    // connection and delete it only with the operator's explicit --volumes flag.
+    await command(OCC_CLI, ["dev", "down", "--volumes", "--", ...composeOptions], {
+      env: cliEnv,
+    });
+    assert.deepEqual(await dockerLines(["volume", "ls", "-q", ...projectLabels]), []);
+  },
+);
+
+test(
   `${engineName} Compose development drives Docker Compute networks, containers, auth, cleanup, and real model turns`,
   { ...requiresDockerCompute, timeout: 1_200_000 },
   async (context) => {
