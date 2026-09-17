@@ -112,8 +112,12 @@ Extend existing runtime-credentials, Secret, service-account, and real harness-t
 The implementation now connects binding schemas, immutable persistence, source
 authorization, Kubernetes delivery, and console source selection. Local contract,
 API/browser, PostgreSQL, type, generated-reference, and documentation checks have
-passed; implementation-review fixes and final independent verification/CI remain
-pending. The original proposal status above is retained as provenance.
+passed. Native primary-model probes now gate startup, with a separate embedded
+replacement probe before cutover. Both pinned native runtimes rejected a synthetic
+invalid key at the official provider endpoint, and their actual startup probes
+stayed unready without exposing native output. Final verification and CI results
+are tracked with the implementation change. The original proposal status above
+is retained as provenance.
 
 Real provider-backed key/account turns, embedded execution, genuine selected
 Sandbox delivery, replacement-key rejection, and live authentication-failure

@@ -1504,6 +1504,192 @@ async function assertActualModelTurn(topology) {
   }
 }
 
+// Exercise the regular Secret -> Agent draft -> deployment -> worker -> native startup path.
+// The failure log distinguishes rejected native authentication from ordinary startup latency.
+async function assertInvalidHarnessAuthCannotActivate(context, topology) {
+  const namespaceId = topology.agent.namespaceId;
+  const agentPath = `/namespaces/${namespaceId}/agents/${topology.agent.id}`;
+  const validBinding = structuredClone(topology.agent.harnessAuth);
+  const predecessor = structuredClone(topology.revision);
+  const invalidKey = `sk-invalid-harness-auth-${randomUUID()}`;
+  const invalidSecret = await createApiSecret(
+    topology.request,
+    namespaceId,
+    "invalid-model-key",
+    invalidKey,
+  );
+  await Promise.all(
+    [topology.secretApi.assignmentPrincipalId, topology.persistedAgent.servicePrincipalId].map(
+      (principalId) =>
+        grantSecretOperate(topology.observerPool, namespaceId, principalId, invalidSecret.id),
+    ),
+  );
+  const rebound = await topology.request("PATCH", agentPath, {
+    harnessAuth: { method: "api_key", source: invalidSecret.ref },
+  });
+  assertNoSecretMaterial(rebound, [invalidKey], "invalid-key binding response");
+  assert.equal(rebound.status, 200, JSON.stringify(rebound.error));
+  const serviceName =
+    topology.mode === "dedicated" ? topology.agentServiceName : topology.gatewayServiceName;
+  const servingService = await resource("service", serviceName, topology.placement);
+  const candidate = await topology.request("POST", `${agentPath}/deploy`);
+  assertNoSecretMaterial(candidate, [invalidKey], "invalid-key deployment response");
+  assert.equal(candidate.status, 202, JSON.stringify(candidate.error));
+  assert.deepEqual(candidate.data.harnessAuth, rebound.data.harnessAuth);
+  const storage = await storedSecret(topology.observerPool, namespaceId, invalidSecret.id);
+  const rejectedPod = await waitFor(
+    `native authentication rejection for ${candidate.data.id}`,
+    async () => {
+      const pod = (await resources("pods", topology.placement)).find(
+        ({ metadata }) =>
+          metadata.deletionTimestamp === undefined &&
+          metadata.labels?.["openclaw.dev/agent"] === topology.agent.id &&
+          metadata.labels?.["openclaw.dev/revision"] === candidate.data.id &&
+          (topology.mode === "dedicated"
+            ? metadata.labels?.["openclaw.dev/workload-role"] === "agent"
+            : metadata.labels?.["openclaw.dev/auth-probe"] === "true"),
+      );
+      if (!pod?.status.containerStatuses?.some(({ state }) => state?.running)) return undefined;
+      let logs;
+      try {
+        logs = await kubectl(
+          "logs",
+          pod.metadata.name,
+          "--namespace",
+          topology.placement,
+          "--tail=100",
+        );
+      } catch (error) {
+        // A Pod can be replaced between observation and log retrieval; wait for its successor.
+        if (/NotFound|not found|PodInitializing|ContainerCreating/.test(error.stderr ?? ""))
+          return undefined;
+        throw error;
+      }
+      assertNoSecretMaterial(
+        logs,
+        [invalidKey, process.env.OPENAI_API_KEY],
+        "failed native authentication logs",
+      );
+      if (!logs.includes("Harness model authentication probe failed.")) return undefined;
+      assert.equal(
+        pod.status.conditions?.some(({ type, status }) => type === "Ready" && status === "True"),
+        false,
+      );
+      const projection = pod.spec.containers
+        .flatMap(({ env = [] }) => env)
+        .find(({ name }) => name === "OPENAI_API_KEY");
+      assert.deepEqual(
+        projection?.valueFrom?.secretKeyRef,
+        {
+          name: storage.backendRef.name,
+          key: storage.backendRef.key,
+          optional: false,
+        },
+        "the rejected runtime must consume the deliberately invalid candidate source",
+      );
+      return pod;
+    },
+    120_000,
+  );
+  await waitFor(
+    `unready candidate ${candidate.data.id} worker observation`,
+    () =>
+      topology.events.find(
+        (event) =>
+          event.event === "worker.completed" &&
+          event.revisionId === candidate.data.id &&
+          event.outcome === "pending" &&
+          event.code === "REVISION_INCOMPLETE",
+      ),
+    60_000,
+  );
+  assertNoSecretMaterial(topology.events, [invalidKey], "failed candidate worker events");
+  const active = await topology.request("GET", agentPath);
+  assert.equal(active.status, 200);
+  assert.equal(
+    active.data.activeRevisionId,
+    predecessor.id,
+    "invalid credentials cannot activate the candidate",
+  );
+  assert.equal(
+    (await resource("pod", topology.gatewayPod.metadata.name, topology.placement)).metadata.uid,
+    topology.gatewayPod.metadata.uid,
+    "invalid auth must preserve the serving gateway Pod",
+  );
+  if (topology.harnessPod !== undefined) {
+    assert.equal(
+      (await resource("pod", topology.harnessPod.metadata.name, topology.placement)).metadata.uid,
+      topology.harnessPod.metadata.uid,
+      "invalid auth must preserve the serving Codex Pod",
+    );
+  }
+  const stillServing = await resource("service", serviceName, topology.placement);
+  assert.deepEqual(
+    stillServing.spec.selector,
+    servingService.spec.selector,
+    "candidate rejection must preserve the active route",
+  );
+  const slices = await resources("endpointslices", topology.placement);
+  assert.equal(
+    slices
+      .filter(({ metadata }) => metadata.labels?.["kubernetes.io/service-name"] === serviceName)
+      .flatMap(({ endpoints = [] }) => endpoints)
+      .some(
+        (endpoint) =>
+          endpoint.targetRef?.uid === rejectedPod.metadata.uid &&
+          endpoint.conditions?.ready !== false,
+      ),
+    false,
+    "the rejected candidate must never become a serving endpoint",
+  );
+  const retained = await topology.request(
+    "DELETE",
+    `/namespaces/${namespaceId}/secrets/${invalidSecret.id}`,
+  );
+  assertNoSecretMaterial(retained, [invalidKey], "referenced invalid source deletion response");
+  assert.equal(retained.status, 409, "draft and pending deployment retain their exact auth source");
+  const historical = await topology.request("GET", `${agentPath}/revisions/${predecessor.id}`);
+  assert.equal(historical.status, 200);
+  assert.deepEqual(historical.data.harnessAuth, predecessor.harnessAuth);
+  await assertActualModelTurn(topology);
+  const afterTurn = await topology.request("GET", agentPath);
+  assert.equal(afterTurn.status, 200);
+  assert.equal(afterTurn.data.activeRevisionId, predecessor.id);
+
+  const restored = await topology.request("PATCH", agentPath, { harnessAuth: validBinding });
+  assert.equal(restored.status, 200, JSON.stringify(restored.error));
+  const recovery = await topology.request("POST", `${agentPath}/deploy`);
+  assert.equal(recovery.status, 202, JSON.stringify(recovery.error));
+  await waitFor(`valid authentication recovery ${recovery.data.id}`, async () => {
+    const observed = await topology.request("GET", agentPath);
+    assert.equal(observed.status, 200);
+    return observed.data.activeRevisionId === recovery.data.id ? observed.data : undefined;
+  });
+  await waitFor(`valid recovery ${recovery.data.id} worker completion`, () =>
+    topology.events.find(
+      (event) =>
+        event.event === "worker.completed" &&
+        event.revisionId === recovery.data.id &&
+        event.outcome === "success",
+    ),
+  );
+  topology.gatewayPod = await waitForReadyGatewayPod(topology, recovery.data.id);
+  if (topology.mode === "dedicated") {
+    topology.harnessPod = await waitForReadyAgentPod(
+      topology,
+      recovery.data.id,
+      topology.harnessPod.metadata.uid,
+    );
+  }
+  topology.agent = restored.data;
+  topology.revision = recovery.data;
+  assert.deepEqual(recovery.data.harnessAuth, validBinding);
+  await assertActualModelTurn(topology);
+  context.diagnostic(
+    `${topology.mode}: native invalid-key candidate remained unready and unrouted; predecessor served and valid binding recovered`,
+  );
+}
+
 async function assertKubernetesOtelLogs(topology) {
   const observation = createOtelLogObservation(undefined, {
     description: `k3d ${topology.mode} runtime OTel logs`,
@@ -3495,6 +3681,7 @@ export {
   assertGatewayPodContinuity,
   assertGatewayPrivateResources,
   assertKubernetesOtelLogs,
+  assertInvalidHarnessAuthCannotActivate,
   assertNativeReferenceNegativeControl,
   assertPrivateStateInitContainer,
   assertRoutedWorkspaceFileReads,

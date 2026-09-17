@@ -541,12 +541,80 @@ async function installCodexPlugins(runtime) {
 }
 `;
 
+const AUTH_PROBE_FAILURE_HELPER = String.raw`
+function holdFailedAuthentication() {
+  console.error("Harness model authentication probe failed.");
+  // Hold unready until an explicit restart; readiness polls never submit model calls.
+  setInterval(() => {}, 3600000);
+}
+`;
+
+// The native probe disables tools and fallback and performs a bounded model turn.
+// Its JSON status, not its process exit status alone, establishes provider acceptance.
+const OPENCLAW_AUTH_PROBE_HELPERS = String.raw`
+${AUTH_PROBE_FAILURE_HELPER}
+function probeOpenClawAuthentication() {
+  const fs = require("node:fs");
+  const { spawnSync } = require("node:child_process");
+  const directory = fs.mkdtempSync("/tmp/openclaw-auth-probe-");
+  try {
+    const model = process.env.OPENCLAW_HARNESS_MODEL;
+    if (typeof model !== "string" || !model.startsWith("openai/") || !process.env.OPENAI_API_KEY?.trim()) return false;
+    const configuration = JSON.parse(process.env.OPENCLAW_HARNESS_PROBE_CONFIG);
+    if (configuration.agents?.defaults?.model !== model) return false;
+    configuration.agents.defaults.workspace = directory + "/workspace";
+    fs.mkdirSync(directory + "/workspace", { mode: 0o700 });
+    const configPath = directory + "/openclaw.json";
+    fs.writeFileSync(configPath, JSON.stringify(configuration), { mode: 0o600 });
+    const result = spawnSync("node", [
+      "/app/openclaw.mjs", "models", "status", "--json", "--probe",
+      "--probe-provider", "openai", "--probe-concurrency", "1",
+      "--probe-timeout", "15000", "--probe-max-tokens", "8",
+    ], {
+      cwd: directory,
+      env: {
+        PATH: process.env.PATH,
+        HOME: directory,
+        OPENCLAW_STATE_DIR: directory + "/state",
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      },
+      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
+    });
+    if (result.status !== 0 || result.error) return false;
+    const results = JSON.parse(result.stdout).auth?.probes?.results;
+    return Array.isArray(results) && results.length === 1 &&
+      results[0].provider === "openai" && results[0].model === model &&
+      results[0].source === "env" && results[0].status === "ok";
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+`;
+
+export const EMBEDDED_AUTH_PROBE_ENTRYPOINT = String.raw`
+${OPENCLAW_AUTH_PROBE_HELPERS}
+const fs = require("node:fs");
+const marker = "/tmp/harness-auth-ready";
+fs.rmSync(marker, { force: true });
+if (probeOpenClawAuthentication()) {
+  fs.writeFileSync(marker, "ready\n", { mode: 0o600 });
+  setInterval(() => {}, 3600000);
+} else {
+  holdFailedAuthentication();
+}
+`;
+
 export const GATEWAY_RUNTIME_ENTRYPOINT = String.raw`
 const { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
 const { spawn } = require("node:child_process");
 
 ${PLUGIN_RUNTIME_HELPERS}
+${OPENCLAW_AUTH_PROBE_HELPERS}
 
 const runtimeAssetsDirectory = "/home/node/openclaw-runtime-assets";
 
@@ -593,6 +661,9 @@ function forwardTermination(child) {
   process.on("SIGINT", () => forward("SIGINT"));
 }
 
+if (process.env.OPENCLAW_HARNESS_PROBE_CONFIG !== undefined && !probeOpenClawAuthentication()) {
+  holdFailedAuthentication();
+} else {
 mkdirSync("/home/node/.openclaw", { recursive: true });
 mkdirSync("/home/node/workspace", { recursive: true });
 if (process.env.OPENCLAW_WORKSPACE_DIR !== undefined) {
@@ -609,14 +680,16 @@ const child = spawn(
 );
 forwardTermination(child);
 child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
+}
 `;
 
 export const AGENT_RUNTIME_ENTRYPOINT = String.raw`
 const { createHash } = require("node:crypto");
-const { mkdirSync, rmSync } = require("node:fs");
+const { mkdirSync, mkdtempSync, rmSync } = require("node:fs");
 const { spawn, spawnSync } = require("node:child_process");
 
 ${PLUGIN_RUNTIME_HELPERS}
+${AUTH_PROBE_FAILURE_HELPER}
 
 const loginMode = process.env.CODEX_LOGIN_MODE;
 const apiKey = process.env.OPENAI_API_KEY;
@@ -646,7 +719,7 @@ if (pluginRuntime !== undefined) {
   writeCodexConfigToml(pluginRuntime);
 }
 const loginArguments = loginMode === "api_key"
-  ? ["login", "--with-api-key"]
+  ? ["-c", "cli_auth_credentials_store=file", "login", "--with-api-key"]
   : [
       "-c",
       "cli_auth_credentials_store=file",
@@ -659,11 +732,73 @@ const login = spawnSync("codex", loginArguments, {
   input: loginMode === "api_key" ? apiKey : accessToken,
   encoding: "utf8",
   stdio: ["pipe", "ignore", "pipe"],
+  timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
 });
-if (login.status !== 0) throw new Error("Codex model authentication initialization failed.");
+if (login.status !== 0 || login.error) {
+  holdFailedAuthentication();
+} else {
 delete process.env.CODEX_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
 delete process.env.CODEX_CHATGPT_WORKSPACE_ID;
+
+function probeCodexAuthentication() {
+  const directory = mkdtempSync("/tmp/codex-auth-probe-");
+  try {
+    const selectedModel = process.env.OPENCLAW_HARNESS_MODEL;
+    if (typeof selectedModel !== "string" || !/^(openai|codex)\/.+/.test(selectedModel)) return false;
+    // Pinned native features suppress executable and external tools. Metadata may
+    // still advertise apply_patch: read-only + never denies its writes. Any tool
+    // event makes this probe unsuccessful, including harmless request_user_input.
+    const disabled = [
+      "shell_tool", "unified_exec", "code_mode", "code_mode_host", "hooks",
+      "apps", "plugins", "remote_plugin", "browser_use", "browser_use_external",
+      "browser_use_full_cdp_access", "computer_use", "in_app_browser",
+      "image_generation", "view_image", "multi_agent", "multi_agent_v2",
+      "sleep_tool", "goals", "workspace_dependencies", "skill_search",
+      "skill_mcp_dependency_install", "tool_suggest", "recommended_plugins", "request_permissions_tool",
+    ];
+    const result = spawnSync("codex", [
+      ...disabled.flatMap((feature) => ["--disable", feature]),
+      "-a", "never", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+      "--skip-git-repo-check", "--json", "--sandbox", "read-only", "--cd", directory,
+      "--model", selectedModel.slice(selectedModel.indexOf("/") + 1),
+      "-c", "cli_auth_credentials_store=file",
+      "-c", 'web_search="disabled"',
+      "-c", "project_doc_max_bytes=0",
+      "-c", "check_for_update_on_startup=false",
+      ...(loginMode === "chatgpt_service_account" ? [
+        "-c", "forced_chatgpt_workspace_id=" + JSON.stringify(workspaceId),
+      ] : []),
+      "Reply only READY. Do not use tools.",
+    ], {
+      cwd: directory,
+      env: { PATH: process.env.PATH, HOME: directory, CODEX_HOME: process.env.CODEX_HOME, RUST_LOG: "error" },
+      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
+    });
+    if (result.status !== 0 || result.error) return false;
+    const events = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
+    const allowed = new Set(["thread.started", "turn.started", "turn.completed", "item.started", "item.updated", "item.completed"]);
+    // Native item.error is an advisory (for example missing catalog metadata),
+    // distinct from fatal top-level error/turn.failed. A completed model turn is
+    // still required; no tool item can satisfy this authentication check.
+    if (events.some((event) => !allowed.has(event.type) ||
+      (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type)))) return false;
+    return events.filter((event) => event.type === "turn.completed").length === 1 &&
+      events.filter((event) => event.type === "turn.started").length === 1 &&
+      events.at(-1)?.type === "turn.completed" &&
+      events.some((event) => event.type === "item.completed" && event.item?.type === "agent_message" &&
+        typeof event.item.text === "string" && event.item.text.trim().length > 0);
+  } catch {
+    return false;
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+if (!probeCodexAuthentication()) {
+  holdFailedAuthentication();
+} else {
 
 function forwardTermination(child) {
   let terminating = false;
@@ -707,6 +842,8 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 
     process.exit(1);
   }
 })();
+}
+}
 `;
 
 // Check native readiness over Pod loopback: kubelet's node source can also be

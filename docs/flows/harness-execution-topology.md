@@ -107,7 +107,14 @@ for candidate rules and the limits of this observation.
 `apps/controller/src/worker.ts:ControllerWorker`
 
 The predecessor's Kubernetes Service selector remains intact while
-`prepareRevision` stages the replacement. The worker then commits the database
+`prepareRevision` stages the replacement. Dedicated Codex must complete its
+bounded native authentication/model probe before its app-server becomes ready.
+For an embedded replacement, an isolated temporary Deployment first verifies the
+candidate's primary model access without mounting the serving gateway's workspace
+or receiving gateway credentials. Authentication failure leaves the predecessor
+serving; readiness polling does not repeat the model request. See the
+[authentication flow](native-service-account-credential-delivery.md#5-authenticate-before-readiness-and-activation).
+The worker then commits the database
 `activeRevisionId` with an exact compare-and-set before Kubernetes default
 after-commit activation. During that cutover, `KubernetesComputeDriver.activateRevision`
 can mutate the `Recreate` gateway Deployment and Service before the replacement
@@ -180,6 +187,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 01:10: Document native authentication gates before dedicated readiness and embedded replacement cutover. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 177a24e4)
 
 - 2026-09-17 00:31: Align credential selection and delivery with Agent harnessAuth and the shared Kubernetes rendering path. (01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04 - d2bcbd1c53acb2582a774b5158f254d726abd33f)
 

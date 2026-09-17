@@ -72,6 +72,7 @@ import {
   AGENT_READINESS_ENTRYPOINT,
   AGENT_RUNTIME_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT,
+  EMBEDDED_AUTH_PROBE_ENTRYPOINT,
   GATEWAY_READINESS_ENTRYPOINT,
 } from "./runtime-entrypoints.ts";
 
@@ -565,6 +566,56 @@ export async function resolveKubernetesNamespace(
   return placement;
 }
 
+// OCC admission requires every configured Agent entry to share this primary model.
+// The isolated probe sets it explicitly instead of invoking native roster selection.
+function harnessPrimaryModel(configuration: OpenClawConfigurationDocument): string {
+  const agents = asRecord(configuration.agents);
+  const defaults = asRecord(agents?.defaults);
+  const selection =
+    defaults?.model ??
+    Object.values(asRecord(agents?.entries) ?? {})
+      .map((entry) => asRecord(entry)?.model)
+      .find((model) => model !== undefined);
+  const model = typeof selection === "string" ? selection : asRecord(selection)?.primary;
+  if (typeof model !== "string" || model.trim().length === 0) {
+    throw new ConfigurationFailure("Harness authentication requires an explicit primary model.");
+  }
+  return model;
+}
+
+function harnessProbeConfiguration(configuration: OpenClawConfigurationDocument): object {
+  const model = harnessPrimaryModel(configuration);
+  const provider = asRecord(asRecord(asRecord(configuration.models)?.providers)?.openai);
+  const fragment = provider === undefined ? undefined : { ...provider };
+  if (fragment !== undefined) delete fragment.apiKey;
+  const containsReference = (value: unknown): boolean => {
+    if (typeof value === "string") return value.includes("${");
+    if (Array.isArray(value)) return value.some(containsReference);
+    const record = asRecord(value);
+    return (
+      record !== undefined &&
+      ((typeof record.source === "string" && typeof record.id === "string") ||
+        Object.values(record).some(containsReference))
+    );
+  };
+  const defaults = asRecord(asRecord(configuration.agents)?.defaults);
+  const modelEntry = asRecord(asRecord(defaults?.models)?.[model]);
+  if (containsReference(fragment) || containsReference(modelEntry)) {
+    throw new ConfigurationFailure(
+      "Selected model provider transport configuration cannot require additional Secret or environment references.",
+    );
+  }
+  return {
+    agents: {
+      defaults: {
+        model,
+        models: { [model]: { ...modelEntry, agentRuntime: { id: "openclaw" } } },
+      },
+    },
+    ...(fragment === undefined ? {} : { models: { providers: { openai: fragment } } }),
+  };
+}
+
 export class KubernetesComputeDriver implements ComputeDriver {
   static readonly configurationSchema = Object.freeze({
     type: "object",
@@ -939,6 +990,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new ConfigurationFailure("Harness authentication requires a compatible OpenAI model.");
     }
+    if (embedded) harnessProbeConfiguration(configuration);
     const conflictingAuth = () =>
       new ConfigurationFailure("Model credentials must use the Harness authentication binding.");
     if (Object.keys(asRecord(configuration.auth) ?? {}).length > 0) throw conflictingAuth();
@@ -1445,9 +1497,31 @@ export class KubernetesComputeDriver implements ComputeDriver {
       namespace,
     );
     if (embedded) {
+      if (this.options.runtime !== undefined)
+        await this.removeSupersededAuthProbes(revision, namespace);
       for (const policy of this.agentNetworkPolicies(revision, namespace)) {
         await this.reconcile(policy, gatewayOwnership, namespace);
       }
+    }
+    if (
+      embedded &&
+      this.options.runtime !== undefined &&
+      existingGatewayRevision !== undefined &&
+      existingGatewayRevision < revision.revision
+    ) {
+      const probe = this.embeddedAuthProbe(revision, namespace, harnessAuth, gatewayAccountName);
+      const ownership = this.embeddedAuthProbeOwnership(revision);
+      await this.reconcile(probe, ownership, namespace);
+      const observedProbe = await this.getOwned(
+        "Deployment",
+        probe.metadata.name,
+        namespace,
+        ownership,
+      );
+      return {
+        ...result,
+        ready: observedProbe !== undefined && this.deploymentReady(observedProbe),
+      };
     }
     if (!embedded) {
       await this.reconcile(
@@ -1524,16 +1598,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
         namespace,
       );
       await this.reconcileGatewayRoute(revision, gatewayOwnership, namespace);
-      if (
-        embedded &&
-        this.options.runtime !== undefined &&
-        existingGatewayRevision !== undefined &&
-        existingGatewayRevision < revision.revision
-      ) {
-        // A broken old gateway must not block recovery. This only stages the replacement;
-        // post-commit activation replaces the Deployment and verifies its readiness.
-        return { ...result, ready: true };
-      }
       if (inactiveEmbeddedGateway) {
         const gateway = await this.getOwned("Deployment", gatewayName, namespace, gatewayOwnership);
         if (gateway === undefined || !this.deploymentReady(gateway)) return result;
@@ -1561,13 +1625,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
       const revisionOwnership = { ...agentOwnership, revisionId: revision.id };
-      if (revision.harnessAuth.method === "chatgpt_service_account") {
-        await this.reconcile(
-          this.agentAuthenticationNetworkPolicy(revision, namespace),
-          agentOwnership,
-          namespace,
-        );
-      }
+      await this.reconcile(
+        this.agentAuthenticationNetworkPolicy(revision, namespace),
+        agentOwnership,
+        namespace,
+      );
       const launch = await this.lifecycle.beforeWorkloadStart(revision);
       launchPrepared = true;
       const agentDeployment = this.deployment(
@@ -1675,6 +1737,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
         throw new ConfigurationFailure("Refusing stale AgentRevision gateway activation.");
       }
       if (currentRevisionId !== revision.id) {
+        const probe = await this.getOwned(
+          "Deployment",
+          this.embeddedAuthProbeName(revision),
+          namespace,
+          this.embeddedAuthProbeOwnership(revision),
+        );
+        if (probe === undefined || !this.deploymentReady(probe)) {
+          throw new Error("The exact AgentRevision authentication probe is not ready.");
+        }
         const launch = await this.lifecycle.beforeWorkloadStart(revision);
         try {
           await this.reconcile(
@@ -1723,6 +1794,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (!(await this.gatewayReady(gatewayOwnership, gatewayName, namespace))) {
         throw new Error("The exact AgentRevision gateway is not ready.");
       }
+      await this.removeEmbeddedAuthProbe(revision, namespace);
       return;
     }
     const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
@@ -1893,6 +1965,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     await this.lifecycle.beforeWorkloadStop(revision);
     // Stop removes the serving path first so no new traffic reaches a runtime while
     // its exact Harness is being shut down.
+    await this.removeEmbeddedAuthProbe(revision, namespace);
     await this.removeStoppedGateway(revision, namespace);
     await this.shutdownRevisionRuntime(revision, namespace);
   }
@@ -1926,6 +1999,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
     }
     await this.lifecycle.beforeWorkloadStop(revision);
+    await this.removeEmbeddedAuthProbe(revision, namespace);
     await this.shutdownRevisionRuntime(revision, namespace);
     await this.removeRetiredGateway(revision, namespace);
   }
@@ -2411,6 +2485,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       metadata: {
         name,
         namespace,
+        ...(typeof metadata.uid === "string" ? { uid: metadata.uid } : {}),
         ...(labels === undefined ? {} : { labels }),
         ...(annotations === undefined ? {} : { annotations }),
       },
@@ -3913,6 +3988,184 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ];
   }
 
+  private embeddedAuthProbeName(revision: AgentRevision): string {
+    return `auth-probe-${sha256Hex(revision.agentId, 12)}-${sha256Hex(revision.id, 12)}`;
+  }
+
+  private embeddedAuthProbeOwnership(revision: AgentRevision): Ownership {
+    return {
+      namespaceId: revision.namespaceId,
+      agentId: revision.agentId,
+      servicePrincipalId: revision.servicePrincipalId,
+      revisionId: revision.id,
+    };
+  }
+
+  private embeddedAuthProbe(
+    revision: AgentRevision,
+    namespace: string,
+    auth: PreparedHarnessAuth,
+    serviceAccountName: string,
+  ): ManagedKubernetesObject<"Deployment"> {
+    const name = this.embeddedAuthProbeName(revision);
+    const ownership = this.embeddedAuthProbeOwnership(revision);
+    const metadata = this.ownershipMetadata(ownership);
+    const labels = {
+      ...metadata.labels,
+      "app.kubernetes.io/name": name,
+      "openclaw.dev/workload-role": "gateway",
+      "openclaw.dev/auth-probe": "true",
+    };
+    const manifest = this.manifest("apps/v1", "Deployment", name, ownership, namespace);
+    return {
+      ...manifest,
+      metadata: {
+        ...manifest.metadata,
+        labels,
+        annotations: {
+          ...metadata.annotations,
+          [AGENT_REVISION_ANNOTATION]: String(revision.revision),
+          [AGENT_REVISION_ID_ANNOTATION]: revision.id,
+        },
+      },
+      spec: {
+        replicas: 1,
+        selector: { matchLabels: { "app.kubernetes.io/name": name } },
+        template: {
+          metadata: {
+            labels,
+            annotations: {
+              ...metadata.annotations,
+              [AGENT_REVISION_ANNOTATION]: String(revision.revision),
+              [AGENT_REVISION_ID_ANNOTATION]: revision.id,
+            },
+          },
+          spec: {
+            serviceAccountName,
+            automountServiceAccountToken: false,
+            securityContext: {
+              runAsNonRoot: true,
+              runAsUser: 1000,
+              runAsGroup: 1000,
+              fsGroup: 1000,
+              seccompProfile: { type: "RuntimeDefault" },
+            },
+            volumes: [
+              { name: "home", emptyDir: { sizeLimit: "256Mi" } },
+              { name: "tmp", emptyDir: { sizeLimit: "256Mi" } },
+            ],
+            containers: [
+              {
+                name: "auth-probe",
+                image: this.options.images.gateway,
+                imagePullPolicy: "IfNotPresent",
+                command: ["node", "-e"],
+                args: [EMBEDDED_AUTH_PROBE_ENTRYPOINT],
+                env: [{ name: "HOME", value: "/home/node" }, ...auth.environment],
+                volumeMounts: [
+                  { name: "home", mountPath: "/home/node" },
+                  { name: "tmp", mountPath: "/tmp" },
+                ],
+                securityContext: {
+                  allowPrivilegeEscalation: false,
+                  readOnlyRootFilesystem: true,
+                  capabilities: { drop: ["ALL"] },
+                },
+                resources: this.options.resources.gateway,
+                readinessProbe: {
+                  exec: {
+                    command: [
+                      "node",
+                      "-e",
+                      "process.exit(require('node:fs').existsSync('/tmp/harness-auth-ready') ? 0 : 1)",
+                    ],
+                  },
+                  periodSeconds: 2,
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  private async removeSupersededAuthProbes(
+    revision: AgentRevision,
+    namespace: string,
+  ): Promise<void> {
+    const clients = await this.clients();
+    const observed = await this.request(() =>
+      clients.apps.listNamespacedDeployment({
+        namespace,
+        labelSelector: labelsToSelector({
+          "openclaw.dev/namespace": revision.namespaceId,
+          "openclaw.dev/agent": revision.agentId,
+          "openclaw.dev/auth-probe": "true",
+        }),
+        timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
+      }),
+    );
+    if (!Array.isArray(observed?.items))
+      throw new DependencyUnavailableError("The authentication probe workload list is invalid.");
+    for (const item of observed.items) {
+      const deployment = this.listedRuntimeCredentialDeployment(item, namespace);
+      const annotations = deployment.metadata.annotations ?? {};
+      const revisionId = required(
+        annotations[AGENT_REVISION_ID_ANNOTATION],
+        "Authentication probe revision ID",
+      );
+      const number = Number(annotations[AGENT_REVISION_ANNOTATION]);
+      this.verifyOwnership(deployment, {
+        ...this.embeddedAuthProbeOwnership(revision),
+        revisionId,
+      });
+      if (
+        deployment.metadata.labels?.["openclaw.dev/auth-probe"] !== "true" ||
+        deployment.metadata.name !==
+          `auth-probe-${sha256Hex(revision.agentId, 12)}-${sha256Hex(revisionId, 12)}` ||
+        !Number.isSafeInteger(number) ||
+        number < 1
+      ) {
+        throw new OwnershipFailure("Refusing an ambiguous authentication probe workload.");
+      }
+      if (number >= revision.revision) continue;
+      const uid = required(deployment.metadata.uid, "Authentication probe Deployment UID");
+      await this.request(
+        () =>
+          clients.apps.deleteNamespacedDeployment({
+            name: deployment.metadata.name,
+            namespace,
+            body: { preconditions: { uid } },
+          }),
+        { mutating: true },
+      );
+    }
+  }
+
+  private async removeEmbeddedAuthProbe(revision: AgentRevision, namespace: string): Promise<void> {
+    if (revision.harness.mode !== "embedded") return;
+    const name = this.embeddedAuthProbeName(revision);
+    const probe = await this.getOwned(
+      "Deployment",
+      name,
+      namespace,
+      this.embeddedAuthProbeOwnership(revision),
+    );
+    if (probe === undefined) return;
+    const uid = required(probe.metadata.uid, "Authentication probe Deployment UID");
+    const clients = await this.clients();
+    await this.request(
+      () =>
+        clients.apps.deleteNamespacedDeployment({
+          name,
+          namespace,
+          body: { preconditions: { uid } },
+        }),
+      { mutating: true },
+    );
+  }
+
   private harnessAuthForRevision(
     revision: AgentRevision,
     context: ComputeRevisionContext | undefined,
@@ -3945,7 +4198,22 @@ export class KubernetesComputeDriver implements ComputeDriver {
         );
       }
     }
-    return prepareHarnessAuth(revision.harness, auth);
+    const prepared = prepareHarnessAuth(revision.harness, auth);
+    return {
+      ...prepared,
+      environment: [
+        ...prepared.environment,
+        { name: "OPENCLAW_HARNESS_MODEL", value: harnessPrimaryModel(revision.configuration) },
+        ...(revision.harness.mode === "embedded"
+          ? [
+              {
+                name: "OPENCLAW_HARNESS_PROBE_CONFIG",
+                value: JSON.stringify(harnessProbeConfiguration(revision.configuration)),
+              },
+            ]
+          : []),
+      ],
+    };
   }
 
   private secretEnvironmentForRevision(

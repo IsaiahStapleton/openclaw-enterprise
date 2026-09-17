@@ -38,10 +38,12 @@ graph TD
   F --> G{"Admitted topology"}
   G -->|embedded API key| H["Combined OpenClaw workload receives key"]
   G -->|dedicated key or account| I["Only Codex receives model credential"]
-  I --> J{"Login succeeds?"}
+  I --> J{"Login and primary model turn succeed?"}
   J -->|no| K["Candidate remains unready"]
   J -->|yes| L["Runtime readiness and guarded activation"]
-  H --> L
+  H --> M{"Native primary model probe succeeds?"}
+  M -->|no| K
+  M -->|yes| L
 ```
 
 ## Execution Trace
@@ -118,12 +120,29 @@ and Kubernetes workload identity remain separate credentials.
 
 ### 5. Authenticate before readiness and activation
 
-`apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:AGENT_RUNTIME_ENTRYPOINT`
+`apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:AGENT_RUNTIME_ENTRYPOINT`,
+`GATEWAY_RUNTIME_ENTRYPOINT`, `EMBEDDED_AUTH_PROBE_ENTRYPOINT`
 
 Codex consumes explicit `CODEX_LOGIN_MODE`: API-key login receives the key through
 stdin; account login forces the admitted workspace. Missing or conflicting
-inputs and failed login prevent app-server startup. Login state remains in the
-bounded ephemeral home. Embedded OpenClaw consumes its native OpenAI key.
+inputs and failed login prevent app-server startup. A bounded native turn against
+the primary model must then complete successfully. The probe ignores user rules
+and configuration, disables execution and external tools, and applies read-only
+filesystem policy without approval grants. Tool events fail the probe. Login
+state remains in the bounded ephemeral home.
+
+Embedded OpenClaw consumes its native OpenAI key and runs a bounded native primary
+model probe with tools and fallback disabled before starting its gateway. A
+replacement first runs that probe in an isolated, unroutable Deployment without
+the serving gateway's credentials or persistent workspace. Failed authentication
+therefore prevents embedded cutover while preserving the predecessor. Successful
+cutover starts the actual gateway, which probes again. Exact revision ownership
+governs temporary probe cleanup.
+
+Both runtimes capture native output and hold failed probes unready with a fixed
+message. Readiness polling does not repeat provider calls; restart or deployment
+starts another attempt. These requests may incur usage charges and check only the
+primary model. See [probe limitations](../reference/harness-execution.md#harness-authentication).
 
 Readiness hands off to the [existing activation and recovery flow](harness-execution-topology.md#3-publish-safely-and-complete-activation-once).
 Auth selection and successful storage do not establish provider acceptance.
@@ -161,6 +180,8 @@ history cannot restore historical Secret values.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 01:10: Trace bounded native model probes and predecessor-preserving embedded authentication checks. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 177a24e4)
 
 - 2026-09-17 00:48: Correct current harness admission and metadata-only dispatch boundaries after implementation review. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 107900e9551b90c3e9ac24d30f8ea866f17e5dbb)
 

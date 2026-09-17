@@ -89,11 +89,35 @@ requirements. It does not resolve a second credential source. Other Compute
 implementations reject bindings they do not support.
 
 Codex rejects missing or conflicting runtime inputs before starting its app
-server; login failure leaves the candidate unready. Login state stays in its
+server. After login, a bounded native model turn must succeed before the server
+starts; local credential storage alone does not prove provider acceptance.
+Login state stays in its
 bounded ephemeral home. Gateway transport and workload identity credentials
 remain separate. A dedicated gateway receives no model credential. Model auth
 cannot be supplied through Configuration `secretBindings` or the initial runtime
 credential API; those own gateway credentials and transport/channel setup.
+
+Embedded OpenClaw performs a bounded native model probe before gateway startup.
+Replacing a serving embedded revision first probes the candidate in a separate,
+unroutable Deployment with temporary state and its exact model Secret projection.
+The serving gateway and its persistent workspace remain untouched until that
+probe succeeds. Probe failure leaves the candidate unready; readiness polls do
+not retry model calls. An explicit restart or new deployment starts a new attempt.
+
+Both probes check the configured primary model. OpenClaw disables tools and
+model fallback. Codex ignores user configuration and rules, disables execution
+and external tools, and uses read-only filesystem policy without approval grants;
+a tool event cannot satisfy its success check. Each probe has a process timeout
+and captures native output, emitting only a fixed failure message if unsuccessful.
+A failed Codex probe also holds the process unready until restart.
+
+Probes incur provider requests and may incur model usage charges. An embedded
+replacement probes both before cutover and during gateway startup. They do not
+verify access to every other configured model or guarantee continued validity
+after upstream revocation. Embedded probe transport configuration must use
+literal metadata rather than additional environment or Secret references. The
+canonical `OPENAI_API_KEY` authentication alias remains supported, and unrelated
+gateway/channel configuration bindings remain separate.
 
 The revision freezes the admitted source reference, not historical Secret bytes.
 A managed account snapshot also retains its exact credential and verified private
