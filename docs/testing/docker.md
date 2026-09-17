@@ -32,10 +32,21 @@ unselected skipped suite is not passing model evidence. The existing test inputs
 are listed here for contributors diagnosing that boundary, not as a runnable
 supported deployment procedure.
 
+The retained Docker and Podman journeys include interrupted dedicated
+preparation: kill the test-owned worker after Codex starts but before gateway
+creation, wait for the surviving container to become healthy, restart the
+worker, and require revision activation with the same Codex container and
+matching transport tokens. A provider response through the recovered gateway
+is the intended authentication proof. Current admission prevents reaching
+this scenario; its presence is not successful live recovery evidence. The
+Podman test uses an init process in its PostgreSQL container to reap child
+processes during interruption testing without changing deployed Compose
+configuration.
+
 | Variable                       | Requirement or default                                                                  |
 | ------------------------------ | --------------------------------------------------------------------------------------- |
 | `OCC_TEST_DOCKER_COMPUTE_REAL` | Set to `1` to explicitly opt into the real Docker Compute proof.                        |
-| `OCC_TEST_PODMAN_COMPUTE_REAL` | Set to `1` to select Podman and its embedded-only real-runtime proof.                   |
+| `OCC_TEST_PODMAN_COMPUTE_REAL` | Set to `1` to select Podman and its embedded and dedicated real-runtime proof.          |
 | `OCC_DOCKER_GATEWAY_IMAGE`     | Existing production-equivalent OpenClaw gateway image; defaults to the runtime image.   |
 | `OCC_DOCKER_AGENT_IMAGE`       | Existing production-equivalent Codex Agent image; defaults to the runtime image.        |
 | `OCC_DOCKER_RUNTIME_IMAGE`     | Optional shared image fallback for both gateway and Agent.                              |

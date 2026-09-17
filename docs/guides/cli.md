@@ -1,8 +1,15 @@
 # OCC CLI
 
-Install `occ` from a trusted OpenClaw Enterprise checkout, select the OCC
-endpoint and protected service-key response file, then work with platform
-resources through domain commands:
+Build the checkout-local `occ` used by `scripts/dev-up` from a trusted OpenClaw
+Enterprise checkout:
+
+```bash
+pnpm cli:build
+```
+
+Install `occ` on `PATH` when using it outside that development helper, select
+the OCC endpoint and protected service-key response file, then work with
+platform resources through domain commands:
 
 ```bash
 go install ./cmd/occ

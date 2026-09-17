@@ -3,8 +3,8 @@
 `DockerComputeDriver` is the default local development Compute Driver. Compose
 development runs PostgreSQL, migrations, and the shared initializer on Docker
 Engine or Podman before starting the OCC API and worker. The API uses filesystem
-Configuration. Docker verifies both runtime topologies; Podman verifies
-Namespace networks and the embedded OpenClaw runtime topology.
+Configuration. Both engines implement Namespace networks and embedded OpenClaw
+and dedicated Codex runtime topologies.
 
 This driver is a development runtime. Production can select bundled
 [Kubernetes](kubernetes-compute.md), [SSH](ssh-compute.md), or an installed
@@ -33,12 +33,13 @@ and prior runtime proof do not establish support for this authentication path.
 without a `docker` alias, pins the standalone `podman-compose` provider, mounts
 the reported API socket through `compose.podman.yaml`, and preserves the
 driver's existing `/var/run/docker.sock` contract inside the worker. The current
-baseline is Podman client 6.1.0, server 5.7.1, and podman-compose 1.6.0. Verified
-Podman coverage includes control-plane startup, worker API preflight,
-authenticated Installation access, isolated Namespace networks, one embedded
-gateway/Harness container, a provider-backed nonce response, and exact test
-cleanup. Dedicated Codex and interactive TUI execution remain unverified on
-Podman. `compose.logging.yaml` remains Docker-only because this Podman baseline
+baseline is Podman client 6.1.0, server 5.7.1, and podman-compose 1.6.0. Prior
+Podman runtime proof covered control-plane startup, worker API preflight,
+authenticated Installation access, isolated Namespace networks, embedded and
+dedicated model responses, recovery after worker interruption, and exact test
+cleanup. That proof predates required harness bindings; current Agent admission
+prevents reaching those model and recovery scenarios. Interactive TUI execution
+remains unverified on Podman. `compose.logging.yaml` remains Docker-only because this Podman baseline
 does not provide the required Fluentd log driver.
 
 ## Development configuration and persistence
@@ -94,6 +95,12 @@ starts containers.
   and one exact-revision Codex app-server container. The gateway connects to
   Codex through authenticated `APP_SERVER_URL` and `APP_SERVER_TOKEN`
   transport. Only the Codex container receives the model credential.
+
+When recovery reuses a healthy Codex container, the driver reads its existing
+transport token after verifying exact ownership and supplies that token to the
+gateway. A surviving Codex container without a token fails closed. If Codex is
+recreated, the driver replaces a gateway whose token no longer matches; a healthy
+matching pair is reused.
 
 The driver uses the same runtime entrypoint contract as production. It does
 not build, download, or publish runtime images. Missing image references,

@@ -11,7 +11,8 @@ last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 `scripts/dev-up` performs host preflight, selects Docker Engine or Podman,
 selects or verifies runtime images, starts Compose, waits for PostgreSQL
 migration, Installation bootstrap, API health and worker readiness, and proves
-authenticated Installation access with a protected local bootstrap service key.
+authenticated Installation access through `bin/occ installation get` with a
+protected local bootstrap service key.
 The worker can then reconcile Namespace infrastructure. Agent deployment stops
 at harness authentication admission because Docker Compute rejects bindings;
 this flow does not reach model execution or TUI attachment.
@@ -24,14 +25,15 @@ this flow does not reach model execution or TUI attachment.
   `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`.
 - Assumptions: Docker Engine with Compose, or Podman with `podman-compose` and
   `yq` v4; Bash, curl and Python 3; writable PostgreSQL and Configuration volumes;
-  loopback API publication. Startup needs no model credential.
+  loopback API publication; executable `bin/occ` built with `pnpm cli:build`.
+  Startup needs no model credential.
 
 ## Flow
 
 ```mermaid
 graph TD
   A["scripts/dev-up preflights host and images"] --> B["Compose starts PostgreSQL, bootstrap, API and worker"]
-  B --> C["Protected service key proves Installation access"]
+  B --> C["bin/occ installation get proves access with protected service key"]
   C --> D["Operator creates Namespace through authenticated API"]
   D --> E["Worker claims durable Namespace operation"]
   E --> F["Docker Driver ensures owned tenant network"]

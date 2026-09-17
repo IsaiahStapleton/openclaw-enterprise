@@ -38,6 +38,13 @@ supported authenticated Agent journey. Use the
 [Kubernetes Agent procedure](../../guides/deploy/production-agents.md) for model
 execution and TUI verification.
 
+The retained preparation code still handles interrupted dedicated startup:
+`reconcileAgent` verifies the surviving Codex container's ownership and recovers
+its existing transport token; `reconcileGateway` replaces a gateway whose
+transport token does not match. Missing tokens on reused Codex containers fail
+closed. These safeguards do not make the current binding-based Agent path
+supported on Docker or Podman.
+
 ### 9. Cleanup removes only owned development resources
 
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver.deleteNamespace`
