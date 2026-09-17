@@ -26,3 +26,12 @@ export const ConfigurationError = {
 };
 export const RevisionError = { ...story("revisionError"), name: "Revision history unavailable" };
 export const DeployDenied = { ...story("deployDenied"), name: "Deployment denied" };
+
+export const RevisionDeployDenied = {
+  ...story("revisionDeployDenied"),
+  name: "Revision deployment denied",
+};
+export const RevisionCredentialsMissing = {
+  ...story("revisionCredentialsMissing"),
+  name: "Revision deployment missing credentials",
+};

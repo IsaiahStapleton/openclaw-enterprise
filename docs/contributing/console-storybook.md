@@ -100,7 +100,8 @@ remain operator prerequisites; the fixture does not verify them.
 
 Use **Edit Configuration** on the new revision to change native JSON, or edit
 Slack through Channels. Save and compare the draft with the original revision.
-Deploy again to admit a new snapshot. The fixture retains both versions.
+While viewing the original revision, select **Deploy new revision** to admit the
+current saved draft as a new snapshot. The fixture retains both versions.
 Credential edits likewise need deployment to affect managed runtime configuration.
 Workspace-file writes apply immediately and do not create a revision.
 

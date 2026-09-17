@@ -1,6 +1,6 @@
 ---
 created: 2026-09-09
-updated: 2026-09-23
+updated: 2026-09-24
 last_updated_session: 01a0d150-104a-71a3-9e56-6c5e3ee510ea
 ---
 
@@ -59,7 +59,9 @@ newest revision and the viewed snapshot can both differ from that pointer.
 The revision view reads persisted deployment status and startup failures; it
 does not render a live serving-health indicator. Revision snapshots are read-only;
 **Edit current Configuration** navigates to the current draft without copying
-historical values. Snapshots do not expose rollback, deploy, or live-health controls.
+historical values. The snapshot view also offers **Deploy new revision**, which targets the Agent's
+current saved Configuration rather than the viewed snapshot. It does not offer
+rollback or live-health controls.
 Stopping and deletion apply to the Agent itself, regardless of the viewed revision or tab.
 
 In the draft Configuration tab, **Edit Configuration** opens the native JSON
@@ -76,6 +78,18 @@ editor text. An uncertain mutation outcome blocks another save until successful
 readback. Unsaved or unresolved edits block deployment of the old saved values and tab or revision
 navigation until save, cancel, or the required reload resolves them.
 Saving and deploying remain separate explicit actions.
+
+Deployment rereads the Agent, then its current Configuration and, for managed
+credentials, runtime credential metadata. It requires a current harness binding,
+generated transport credentials and any enabled Slack Secret bindings. The
+Configuration itself supplies those bindings; transport metadata alone is not
+enough. Teams-enabled drafts remain blocked. From the draft view, a changed
+Configuration association, generation or harness binding requires refresh. From
+a snapshot view, the latest saved draft is intentionally selected. The browser
+sends a bodyless POST to the exact Agent's deploy route and opens the returned
+revision's Workspace files. Failed reads send no deployment request. An uncertain
+POST outcome leaves deployment disabled until the view is reloaded; inspect
+revision history before trying again. These reads do not make admission atomic.
 
 `apps/controller/src/console/channels.mjs:renderChannels` renders supported
 Slack channel settings in **New revision** only. Slack uses fixed unresolved

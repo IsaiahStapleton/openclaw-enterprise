@@ -91,7 +91,9 @@ does not establish model access. **Selected revision** displays `activeRevisionI
 newest admitted revision nor the viewed snapshot must match it.
 
 Read-only AgentRevision snapshots cannot be edited, rolled back, redeployed, or
-used as a live-health check. **Edit current Configuration** opens the current
+used as a live-health check. **Deploy new revision** admits the current saved
+Configuration while leaving the viewed snapshot unchanged.
+**Edit current Configuration** opens the current
 draft; saving it leaves the viewed snapshot unchanged. Activation means the revision was admitted and
 selected by OCC. The console displays persisted deployment and startup evidence,
 not live gateway health. Follow the

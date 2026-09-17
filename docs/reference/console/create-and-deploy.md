@@ -258,9 +258,16 @@ prove provider acceptance, runtime readiness, or a channel connection.
 
 ## Deploy a new revision
 
-Open the Agent's new revision and select **Deploy new revision** after generated transport credentials are stored, required channel Secret bindings are saved, and a harness source is selected. The console rereads the Agent and Configuration
-and requests deployment through the existing exact-Agent endpoint. A changed draft
-requires a refresh. These checks are separate reads, not an atomic compare-and-set.
+Select **Deploy new revision** from a draft or admitted revision after storing
+generated credentials, saving required channel Secret bindings, and selecting
+harness authentication. The action deploys the current saved Configuration;
+it never copies the viewed snapshot or rolls back. Every accepted request
+creates an immutable revision, even at the same Configuration generation.
+
+Before admission, the console rereads the Agent, Configuration and managed
+credential metadata. Changed draft generations, associations or authentication
+bindings require refresh when viewing the draft. These reads are not atomic
+with admission.
 Teams-enabled drafts cannot deploy through this console path because Teams credential
 readiness is not exposed; use the operator deployment workflow for those Agents.
 

@@ -697,7 +697,7 @@ export const scenarios = {
     path: revision,
     deployed: true,
     description:
-      "Immutable Configuration snapshot, revision navigation, and persisted deployment status. This does not establish live serving health.",
+      "Immutable Configuration snapshot with Deploy new revision targeting the current saved draft. Persisted deployment status does not establish live serving health.",
   },
   repositoryDraft: {
     group: "Pages/Agent detail",
@@ -784,6 +784,32 @@ export const scenarios = {
     ],
     actions: [click("Deploy new revision")],
     description: "A rejected deployment reports failure and re-enables the action.",
+  },
+  revisionDeployDenied: {
+    group: "Pages/Agent detail",
+    name: "Revision deployment denied",
+    path: revision,
+    deployed: true,
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/agt_00000000-0000-4000-8000-000000000001/deploy",
+        method: "POST",
+        status: 403,
+      },
+    ],
+    actions: [click("Deploy new revision")],
+    description:
+      "A denied deployment from an admitted snapshot leaves the snapshot unchanged and permits an explicit retry.",
+  },
+  revisionCredentialsMissing: {
+    group: "Pages/Agent detail",
+    name: "Revision deployment missing credentials",
+    path: revision,
+    deployed: true,
+    transport: false,
+    actions: [click("Deploy new revision")],
+    description:
+      "Deployment checks the current draft and refuses missing generated credentials before admission.",
   },
   buildRevision: {
     group: "Components/Navigation",
@@ -1299,7 +1325,7 @@ export const scenarios = {
     steps: [
       "Open Edit Slack, add CNEW123 to Slack channel IDs, then Save configuration.",
       "Select v1 in AgentRevision and open Channels: it still has the original settings.",
-      "Return to New revision, then Deploy new revision.",
+      "While viewing v1, select Deploy new revision. It deploys the saved draft, not the viewed snapshot.",
       "Refresh deployment and inspect the new revision. The prior snapshot remains readable.",
       "Workspace file edits are separate: they save immediately without a new revision.",
     ],
