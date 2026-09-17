@@ -2,7 +2,7 @@
   "uid": "occ-development",
   "title": "OCC development",
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "refresh": "5s",
   "time": {
     "from": "now-15m",
@@ -168,7 +168,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (work_kind, outcome) (rate(occ_reconciliation_attempts_total{outcome=~\"retry|permanent|error|claim_lost\"}[5m]))",
+          "expr": "sum by (work_kind, outcome) (rate(occ_reconciliation_attempts_total{outcome=~\"retry|permanent|error|claim_lost\"}[5m])) or on () label_replace(0 * max(up{job=\"occ-worker\"} == 1), \"outcome\", \"none\", \"\", \"\")",
           "legendFormat": "{{work_kind}} {{outcome}}"
         }
       ],
@@ -177,7 +177,8 @@
           "unit": "ops"
         },
         "overrides": []
-      }
+      },
+      "description": "Shows zero when a worker is being scraped successfully and no retry or failure series exist. An unavailable worker does not produce a zero fallback."
     },
     {
       "id": 12,
