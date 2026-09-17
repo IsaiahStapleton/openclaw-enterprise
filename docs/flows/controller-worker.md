@@ -304,6 +304,10 @@ Lease loss is reported as `worker.error` with `CLAIM_LOST` rather than publishin
 stale lifecycle state. On `SIGTERM` or `SIGINT`, shutdown removes readiness,
 aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 `worker.stopped`. Expired unfinished claims are recoverable by a later worker.
+`PostgresWorkQueue.recoverStale()` updates exhausted work, its still-provisioning
+Namespace when the target is `ready`, and audit evidence through data-modifying
+CTEs in one SQL statement. Both expired claims and exhausted queued work use
+this path, so a crash on the final attempt cannot strand Namespace provisioning.
 
 ## Debugging and Verification
 
