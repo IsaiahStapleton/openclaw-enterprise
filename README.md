@@ -31,9 +31,9 @@ A model credential is required to run Agent model turns, but not to start the
 stack.
 
 The verified Podman boundary includes control-plane startup, authenticated API
-access, Namespace isolation, one embedded OpenClaw Agent deployment, a real
-provider-backed model turn, and exact test cleanup. Dedicated Codex, interactive
-TUI, and Fluentd/OTLP verification remain Docker-only.
+access, Namespace isolation, embedded OpenClaw and recovered dedicated Codex
+model turns, and exact test cleanup. Interactive TUI and Fluentd/OTLP
+verification remain Docker-only.
 
 The local worker has access to the selected engine's Docker-compatible API
 socket. Use the

@@ -16,8 +16,8 @@ API health, and worker readiness, then proves authenticated `/installation`
 access with a protected local copy of the bootstrap service key. That startup
 proof does not create an Agent, deploy an AgentRevision, or start a TUI. The
 Podman real-runtime proof continues through isolated Namespace creation, one
-embedded OpenClaw Agent, and a provider-backed nonce response. Dedicated Codex
-and interactive TUI execution remain Docker-verified.
+embedded OpenClaw Agent, dedicated Codex recovery, and provider-backed nonce
+responses. Interactive TUI execution remains Docker-verified.
 
 After startup, the operator uses authenticated API calls to select a Namespace,
 create a Configuration and Agent, then deploy it. The worker then claims durable
@@ -116,7 +116,7 @@ graph TD
   gateway through the Namespace network or through the Docker-published
   `127.0.0.1` gateway port.
 - With `OCC_TEST_PODMAN_COMPUTE_REAL=1`, that same test file runs the embedded
-  journey only and must receive a real nonce response before exact resource
+  and dedicated recovery journeys and must receive real nonce responses before exact resource
   teardown passes.
 - After Namespace deletion, the matching labeled containers and network should
   be absent while unrelated Namespaces remain.
