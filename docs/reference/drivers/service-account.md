@@ -24,9 +24,9 @@ lifecycle operations; callers cannot select external account IDs.
 A returned credential contains a `kind` and `secretRef: { name, key }`, never
 the credential value. The shared type includes `api_key`, `access_token`, and
 `oauth_access_token`; this does not mean every kind is supported for revision
-admission or by every provider. Current revisions accept `api_key` and
-`access_token`, with execution-mode restrictions described in the feature
-reference. OCC's provider credential-creation operation currently accepts only
+admission or by every provider. Current harness bindings accept only managed ChatGPT
+`access_token` credentials for dedicated Codex. API keys instead use
+Namespace-owned OCC Secrets through [Agent harness authentication](../agents.md#harness-authentication). OCC's provider credential-creation operation currently accepts only
 an `access_token` result; an otherwise well-formed result of another kind is
 rejected.
 

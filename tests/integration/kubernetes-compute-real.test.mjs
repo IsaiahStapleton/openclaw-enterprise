@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
+import { grantAgentSecretOperate } from "../helpers/postgres-harness-auth.mjs";
 import {
   configureExistingK3dLocalPathSharedFileSystem,
   createKubernetesFixtureHarnessAuth,
@@ -1761,6 +1762,7 @@ test(
       });
       assert.equal(created.status, 201, JSON.stringify(created.error));
       assert.equal(Object.hasOwn(created.data, "servicePrincipalId"), false);
+      await grantAgentSecretOperate(observerPool, created.data, secret.data.id);
       return created.data;
     }
 

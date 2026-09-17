@@ -1493,7 +1493,7 @@ test(
 );
 
 test(
-  "revision dispatch rechecks Configuration and both exact harness Secret grants before Compute",
+  "revision dispatch rechecks Configuration and exact harness Secret grants without backend Secret reads",
   requiresPostgres,
   async (context) => {
     const fixture = await setup(context);
@@ -1519,6 +1519,11 @@ test(
       ],
     );
     const prepared = [];
+    // Production workers have no Secret API permission. Dispatch must project
+    // authoritative OCC metadata without asking the backend owner to read values.
+    fixture.secretDriver.setResolveOverride(() => {
+      throw new Error("Worker cannot read backend Secrets.");
+    });
     await fixture.start({
       ...fixture.compute,
       async prepareRevision(revision, operationContext) {
@@ -1570,29 +1575,42 @@ test(
 );
 
 test(
-  "revision dispatch refuses a replaced API-key backend before binding or activating the Agent",
+  "revision dispatch refuses a different selected Secret Driver before binding or activating the Agent",
   requiresPostgres,
   async (context) => {
     const fixture = await setup(context);
-    const owner = await fixture.agent("replaced-key-backend");
+    const owner = await fixture.agent("changed-secret-owner");
     const candidate = await fixture.revision(owner, 1);
-    // The backend owner reports a recreated object at the same locator. Its
-    // new identity cannot inherit the authority of the admitted OCC Secret.
-    fixture.secretDriver.setResolveOverride((secret) => ({
-      ...secret.backendRef,
-      uid: randomUUID(),
-    }));
+    // Installation composition changed after admission. The revision remains
+    // pinned to its admitted Secret Driver and cannot use the replacement.
     const effects = [];
-    await fixture.start({
-      ...fixture.compute,
-      async bindAgent() {
-        effects.push("bind");
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async bindAgent() {
+          effects.push("bind");
+        },
+        async prepareRevision(revision) {
+          effects.push("prepare");
+          return fixture.compute.prepareRevision(revision);
+        },
       },
-      async prepareRevision(revision) {
-        effects.push("prepare");
-        return fixture.compute.prepareRevision(revision);
-      },
-    });
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (drivers) => ({
+        ...drivers,
+        installation: {
+          ...drivers.installation,
+          drivers: {
+            ...drivers.installation.drivers,
+            secret: { ...drivers.installation.drivers.secret, id: "secret-replacement" },
+          },
+        },
+        secretDriver: { ...drivers.secretDriver, id: "secret-replacement" },
+      }),
+    );
     await fixture.work(candidate, "failed_permanent");
     assert.deepEqual(effects, []);
     const current = await fixture.state.read((view) =>
@@ -1603,7 +1621,7 @@ test(
       "SELECT details->>'reasonCode' AS reason_code FROM occ.audit_events WHERE resource_id = $1 AND action = 'reconcile' AND outcome = 'failure'",
       [candidate.id],
     );
-    assert.equal(work.rows[0].reason_code, "HARNESS_AUTH_SOURCE_CHANGED");
+    assert.equal(work.rows[0].reason_code, "SECRET_DRIVER_MISMATCH");
   },
 );
 

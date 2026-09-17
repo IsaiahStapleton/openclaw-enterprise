@@ -610,18 +610,32 @@ test("Harness source admission rejects foreign references and superseded model s
     },
   });
   assert.equal(rejected.status, 404);
-  assert.equal(
-    (
-      await request(fixture.app, "PATCH", path, {
-        body: { configurationId: configuration.id, serviceAccountId: `sa_${randomUUID()}` },
-      })
-    ).status,
-    400,
-  );
+  for (const method of ["POST", "PATCH"]) {
+    const rejected = await request(
+      fixture.app,
+      method,
+      method === "POST" ? `/namespaces/${namespace.id}/agents` : path,
+      {
+        body: {
+          ...(method === "POST" ? { name: "Legacy selector" } : {}),
+          configurationId: configuration.id,
+          serviceAccountId: `sa_${randomUUID()}`,
+        },
+      },
+    );
+    assert.equal(rejected.status, 400);
+  }
   const localKey = await request(fixture.app, "POST", `/namespaces/${namespace.id}/secrets`, {
     body: { name: "Local model key", value: `synthetic-${randomUUID()}` },
   });
   assert.equal(localKey.status, 201);
+  const malformed = await request(fixture.app, "PATCH", path, {
+    body: {
+      configurationId: configuration.id,
+      harnessAuth: { method: "api_key", source: localKey.data.ref, credential: "plaintext" },
+    },
+  });
+  assert.equal(malformed.status, 400);
   assert.equal(
     (
       await request(fixture.app, "POST", `/namespaces/${namespace.id}/configurations`, {

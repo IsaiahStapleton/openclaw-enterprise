@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +6,7 @@ import { join } from "node:path";
 import pg from "pg";
 import { ensureDevelopmentBootstrap } from "./bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "./harness-configuration.mjs";
+import { grantAgentSecretOperate } from "./postgres-harness-auth.mjs";
 import {
   configureExistingK3dLocalPathSharedFileSystem,
   createKubernetesInstallationConfiguration,
@@ -1262,6 +1262,7 @@ export async function createPluginDriverRealFixture(
       },
     );
     assert.equal(bound.status, 200, JSON.stringify(bound.error));
+    await grantAgentSecretOperate(pool, bound.data, secret.data.id);
     assertNoSecretMaterial(
       [secret, bound],
       [key],

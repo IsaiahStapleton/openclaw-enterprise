@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { grantAgentSecretOperate } from "../helpers/postgres-harness-auth.mjs";
 import {
   adminEmail,
   admitted,
@@ -55,6 +56,7 @@ test(
     const readyNamespace = await waitForNamespaceReady(first, namespace.data.id, worker);
 
     const { agent } = await createConfiguredAgent(
+      pool,
       first,
       namespace.data.id,
       `agent-${randomUUID()}`,
@@ -179,6 +181,11 @@ test(
     assert.equal(second.data.namespaceId, namespace.data.id);
     assert.equal(Object.hasOwn(first.data, "servicePrincipalId"), false);
     assert.equal(Object.hasOwn(second.data, "servicePrincipalId"), false);
+    await Promise.all(
+      [first.data, second.data].map((agent) =>
+        grantAgentSecretOperate(pool, agent, agent.harnessAuth.source.id),
+      ),
+    );
 
     const stillReady = await request(process, "GET", `/namespaces/${namespace.data.id}`);
     assert.equal(stillReady.status, 200);
@@ -361,6 +368,7 @@ test(
     }
 
     const { agent } = await createConfiguredAgent(
+      pool,
       api,
       retained.data.id,
       `worker-agent-${randomUUID()}`,
@@ -514,20 +522,21 @@ test(
       { agent: restricted },
     ] = await Promise.all([
       createConfiguredAgent(
+        pool,
         api,
         namespaceA,
         `revision-primary-${randomUUID()}`,
         originalConfigValues,
       ),
-      createConfiguredAgent(api, namespaceA, `revision-sibling-${randomUUID()}`, {
+      createConfiguredAgent(pool, api, namespaceA, `revision-sibling-${randomUUID()}`, {
         ...defaultAgentConfigurationValues,
         model: { id: "tenant-a-sibling" },
       }),
-      createConfiguredAgent(api, namespaceB, `revision-foreign-${randomUUID()}`, {
+      createConfiguredAgent(pool, api, namespaceB, `revision-foreign-${randomUUID()}`, {
         ...defaultAgentConfigurationValues,
         model: { id: "tenant-b" },
       }),
-      createConfiguredAgent(api, namespaceA, `revision-restricted-${randomUUID()}`),
+      createConfiguredAgent(pool, api, namespaceA, `revision-restricted-${randomUUID()}`),
     ]);
     for (const created of [primary, sibling, foreign, restricted]) {
       assert.equal(Object.hasOwn(created, "servicePrincipalId"), false);

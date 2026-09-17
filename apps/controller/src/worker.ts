@@ -231,7 +231,6 @@ export class ControllerWorker {
   private readonly iamDriverId: string;
   private readonly iam: IAMDriver;
   private readonly secretDriverId: string | undefined;
-  private readonly secret: SecretDriver | undefined;
   private readonly sandbox: SandboxDriver | undefined;
   private readonly providers: readonly ProviderDefinition[];
   private readonly providerMap: ReadonlyMap<string, ProviderDefinition>;
@@ -294,7 +293,6 @@ export class ControllerWorker {
     }
     this.compute = computeDriver;
     const selectedSecretDriver = drivers?.secretDriver;
-    this.secret = selectedSecretDriver;
     const selectedSecretConfiguration = drivers?.installation.drivers.secret;
     this.secretDriverId = selectedSecretDriver?.id ?? selectedSecretConfiguration?.id;
     if (selectedSecretConfiguration !== undefined) {
@@ -1215,7 +1213,7 @@ export class ControllerWorker {
     let harnessAuth: ResolvedHarnessAuth;
     if (revision.harnessAuth.method === "api_key") {
       const auth = revision.harnessAuth;
-      if (this.secret === undefined || auth.secretDriverId !== this.secret.id)
+      if (typeof secretDriverId !== "string" || auth.secretDriverId !== secretDriverId)
         return { result: { outcome: "permanent", code: "SECRET_DRIVER_MISMATCH" } };
       const secret = await this.state.read((view) =>
         view.secrets.findSecret(auth.source.namespaceId, auth.source.id),
@@ -1223,23 +1221,18 @@ export class ControllerWorker {
       if (
         secret === undefined ||
         secret.namespaceId !== revision.namespaceId ||
-        secret.driverId !== this.secret.id
+        secret.namespaceId !== auth.source.namespaceId ||
+        secret.id !== auth.source.id ||
+        secret.driverId !== secretDriverId ||
+        secret.backendRef.namespaceName.trim().length === 0 ||
+        secret.backendRef.name.trim().length === 0 ||
+        secret.backendRef.key.trim().length === 0 ||
+        secret.backendRef.uid.trim().length === 0
       )
         return { result: { outcome: "permanent", code: "HARNESS_AUTH_SOURCE_UNAVAILABLE" } };
-      // Resolve through the selected owner; the revision never contains backend
-      // names, and a recreated or foreign backend must not acquire its authority.
-      const backendRef = await this.secret.resolve(secret);
-      if (
-        backendRef.namespaceName !== secret.backendRef.namespaceName ||
-        backendRef.name !== secret.backendRef.name ||
-        backendRef.key !== secret.backendRef.key ||
-        backendRef.uid !== secret.backendRef.uid ||
-        Object.values(backendRef).some(
-          (value) => typeof value !== "string" || value.trim().length === 0,
-        )
-      )
-        return { result: { outcome: "permanent", code: "HARNESS_AUTH_SOURCE_CHANGED" } };
-      harnessAuth = { ...auth, backendRef };
+      // Admission verifies the physical source. Workers project authoritative
+      // OCC metadata without requiring permission to read backend Secret values.
+      harnessAuth = { ...auth, backendRef: secret.backendRef };
     } else {
       harnessAuth = revision.harnessAuth;
     }

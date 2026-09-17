@@ -107,6 +107,20 @@ Updating a Secret does not update an existing process environment. Operators upd
 
 Extend existing runtime-credentials, Secret, service-account, and real harness-topology integrations. Fixture API tests prove authorization and persistence, not provider login or execution. Missing authorized credentials or infrastructure must be reported as missing proof.
 
+## Delivery evidence (2026-09-17)
+
+The implementation now connects binding schemas, immutable persistence, source
+authorization, Kubernetes delivery, and console source selection. Local contract,
+API/browser, PostgreSQL, type, generated-reference, and documentation checks have
+passed; implementation-review fixes and final independent verification/CI remain
+pending. The original proposal status above is retained as provenance.
+
+Real provider-backed key/account turns, embedded execution, genuine selected
+Sandbox delivery, replacement-key rejection, and live authentication-failure
+recovery remain unproved. The disposable Kubernetes attempt could not start
+because the host lacks required cgroup delegation; authorized managed-account
+inputs were unavailable. Fixture checks do not replace those acceptance rows.
+
 ## Manual Notes
 
 [keep this for the user to add notes. do not change between edits]

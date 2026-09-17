@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
 updated: 2026-09-17
-last_updated_session: codex/01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04
+last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 ---
 
 # Secret Storage and Gateway Delivery Flow
@@ -126,7 +126,8 @@ renders `env[].valueFrom.secretKeyRef` with `optional: false` only in each
 selected consuming gateway. Model-auth projections are prepared separately from
 Agent `harnessAuth`. ConfigMaps retain native references only. A missing
 Secret/key prevents startup; normal readiness and cutover rules still control
-activation.
+activation. Dispatch checks OCC metadata, not the physical Secret UID. Physical
+Secret replacement by a Kubernetes administrator is outside that check.
 
 For an embedded replacement, preparation stages its immutable ConfigMap without
 requiring the old gateway to be healthy. The worker commits the selected revision
@@ -198,6 +199,8 @@ credential at its issuer.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 00:48: Correct current harness admission and metadata-only dispatch boundaries after implementation review. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 107900e9551b90c3e9ac24d30f8ea866f17e5dbb)
 
 - 2026-09-17 00:31: Align credential selection and delivery with Agent harnessAuth and the shared Kubernetes rendering path. (01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04 - d2bcbd1c53acb2582a774b5158f254d726abd33f)
 

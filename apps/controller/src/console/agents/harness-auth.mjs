@@ -117,10 +117,10 @@ export function createHarnessAuthFields(context, binding = null) {
       }
       const id = secret.value.trim();
       if (!id) throw new Error("Enter an OCC Secret ID.");
-      const metadata = await context.request(
-        `${namespacePath(context.namespaceId)}/secrets/${encodeURIComponent(id)}`,
-      );
-      return { method: "api_key", source: metadata.ref };
+      return {
+        method: "api_key",
+        source: { kind: "secret", namespaceId: context.namespaceId, id },
+      };
     },
   };
 }

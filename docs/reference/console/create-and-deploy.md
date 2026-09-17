@@ -24,8 +24,8 @@ deploy the Agent, then open **Workspace files** to load or create the four suppo
 files. The creation form does not store unsaved file contents.
 
 Choose an optional Provider and a harness authentication method. For an API key,
-enter the exact same-Namespace OCC Secret ID; the console reads that Secret to
-check the reference because the API has no Secret collection-list route. Create
+enter the exact same-Namespace OCC Secret ID. The save request validates the
+reference and exact Secret `operate` permission; Secret `read` is not required. Create
 the Secret through its [storage API](../drivers/kubernetes-secret.md#create-a-namespace-owned-secret)
 first. For ChatGPT, select a readable account with an issued credential and the
 matching Provider. The console does not issue credentials when selecting them.

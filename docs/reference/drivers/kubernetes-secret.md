@@ -74,19 +74,29 @@ to exist yet. Keep the value in a protected file or secret manager output; do
 not put it in a shell command, URL, log line, or example JSON checked into
 source.
 
+Use `OCC_URL` and the protected `OCC_SERVICE_KEY_FILE` from
+[operator authentication](../../guides/deploy/production-installation.md#authenticate-to-the-production-api),
+plus `NAMESPACE_ID`. This Node.js example sends the key and value from protected
+files, follows no redirects, and prints only the metadata response. If the API
+uses a private CA, configure `NODE_EXTRA_CA_CERTS` with its CA bundle first.
+
 ```bash
 umask 077
 SECRET_VALUE_FILE=/secure/operator/agent-model-key
+export NAMESPACE_ID
 
-node - "$SECRET_VALUE_FILE" <<'JS' | \
-  curl -fsS "http://127.0.0.1:3000/namespaces/$NAMESPACE_ID/secrets" \
-    -b "$OCC_SESSION_COOKIE_JAR" \
-    -H 'Content-Type: application/json' \
-    --data-binary @-
-const { readFileSync } = require("node:fs");
-const [valuePath] = process.argv.slice(2);
-const value = readFileSync(valuePath, "utf8").replace(/\n$/, "");
-process.stdout.write(JSON.stringify({ name: "model-api-key", value }));
+node --input-type=module - "$SECRET_VALUE_FILE" <<'JS'
+import { readFileSync } from "node:fs";
+const value = readFileSync(process.argv[2], "utf8").replace(/\n$/, "");
+const { data: { key } } = JSON.parse(readFileSync(process.env.OCC_SERVICE_KEY_FILE, "utf8"));
+const url = new URL(`/namespaces/${encodeURIComponent(process.env.NAMESPACE_ID)}/secrets`, process.env.OCC_URL);
+const response = await fetch(url, {
+  method: "POST", redirect: "error",
+  headers: { "x-api-key": key, "content-type": "application/json" },
+  body: JSON.stringify({ name: "model-api-key", value }),
+});
+if (response.status !== 201) throw new Error(`Secret creation failed: HTTP ${response.status}`);
+console.log(JSON.stringify(await response.json()));
 JS
 ```
 
@@ -172,8 +182,9 @@ bindings. Embedded OpenClaw also selects its key through `harnessAuth`.
 
 Patch only the value with
 `PATCH /namespaces/:namespaceId/secrets/:secretId { "value": "..." }`. Keep the
-value in a protected file or secret manager output and pass the request body
-through stdin, as in the create example. The Secret reference stays stable.
+value in a protected file or secret manager output and send it with the protected
+request pattern above, changing the method, exact-Secret URL, and body to match
+the PATCH operation. The Secret reference stays stable.
 
 The response returns the same metadata and `ref`. Update success means the
 driver stored the new value; it does not restart a gateway, edit an existing
@@ -193,11 +204,13 @@ after its reference dependencies are cleared; see [Delete](#delete).
 
 ## Delete
 
-Delete only unreferenced Secrets:
+Delete only unreferenced Secrets. This example uses an authenticated human
+session from [service-key recovery](../../guides/deploy/service-keys.md#sign-in-as-a-human-administrator)
+at the configured `OCC_URL`:
 
 ```bash
 curl -fsS \
-  "http://127.0.0.1:3000/namespaces/$NAMESPACE_ID/secrets/$SECRET_ID" \
+  "$OCC_URL/namespaces/$NAMESPACE_ID/secrets/$SECRET_ID" \
   -X DELETE \
   -b "$OCC_SESSION_COOKIE_JAR"
 ```

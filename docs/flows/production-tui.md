@@ -1,7 +1,7 @@
 ---
 created: 2026-08-31
 updated: 2026-09-17
-last_updated_session: codex/01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04
+last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 ---
 
 # Production TUI Flow
@@ -95,9 +95,12 @@ fresh-workspace `BOOTSTRAP.md` onboarding replacing the requested nonce reply;
 existing workspaces with bootstrap files are unaffected. The bodyless deploy request to
 `POST /namespaces/:namespaceId/agents/:agentId/deploy` locks the exact Agent,
 requires the Namespace to be `ready`, reauthorizes `deploy` on the Agent,
-reauthorizes `read` on the selected Configuration, validates any Secret
-bindings, resolves the approved `openclaw` embedded Harness, and stores an
-immutable AgentRevision.
+reauthorizes `read` on the selected Configuration, validates the required API-key
+`harnessAuth` and any gateway Secret bindings, resolves the approved `openclaw`
+embedded Harness, and stores an immutable AgentRevision. Both the actor and Agent
+service principal need exact Secret `operate`; the API checks physical backend
+identity before admission. An administrator with controller-owned IAM-state access
+must establish the Agent grant before this request.
 
 The API response returns the frozen revision as `data`. The operator keeps both
 `data.id` and the Agent's later `data.activeRevisionId`; the deployment request
@@ -110,7 +113,8 @@ does not by itself prove that Kubernetes is serving the new revision.
 
 The worker claims the durable AgentRevision work, reloads the Namespace, Agent,
 revision, and previous active revision, reauthorizes the deployment actor, and
-resolves the Secret delivery context. The broader activation contract lives in
+resolves the Secret delivery context from authoritative OCC metadata without
+calling the Kubernetes Secret API. The broader activation contract lives in
 the [controller worker flow](controller-worker.md#6-persist-the-result-and-finish-revision-activation)
 and the
 [Harness execution topology flow](harness-execution-topology.md#3-publish-safely-and-complete-activation-once).
@@ -212,6 +216,8 @@ ConfigMap-mounted gateway is Running and Ready.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 00:48: Correct current harness admission and metadata-only dispatch boundaries after implementation review. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 107900e9551b90c3e9ac24d30f8ea866f17e5dbb)
 
 - 2026-09-17 00:31: Align credential selection and delivery with Agent harnessAuth and the shared Kubernetes rendering path. (01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04 - d2bcbd1c53acb2582a774b5158f254d726abd33f)
 

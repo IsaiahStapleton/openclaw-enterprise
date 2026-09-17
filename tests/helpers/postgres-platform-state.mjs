@@ -14,6 +14,7 @@ import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts
 import { verifyPlatformStateStoreContract } from "../conformance/platform-state-store.contract.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
+import { grantAgentSecretOperate } from "./postgres-harness-auth.mjs";
 import {
   createKubernetesInstallationConfiguration,
   kubernetesHash,
@@ -324,9 +325,14 @@ async function createKubernetesHarnessAuth(api, namespaceId) {
   return { method: "api_key", source: secret.data.ref };
 }
 
-async function createKubernetesConfiguredAgent(api, namespaceId, name, values, body = {}) {
+async function createKubernetesConfiguredAgent(pool, api, namespaceId, name, values, body = {}) {
   const harnessAuth = await createKubernetesHarnessAuth(api, namespaceId);
-  return createConfiguredAgent(api, namespaceId, name, values, { ...body, harnessAuth });
+  const created = await createConfiguredAgent(api, namespaceId, name, values, {
+    ...body,
+    harnessAuth,
+  });
+  await grantAgentSecretOperate(pool, created.agent, harnessAuth.source.id);
+  return created;
 }
 
 function admitted(values) {

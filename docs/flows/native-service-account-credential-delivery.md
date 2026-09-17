@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-09-17
-last_updated_session: codex/01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04
+last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 ---
 
 # Harness Authentication Binding Flow
@@ -90,8 +90,11 @@ matches managed-account credential and Provider metadata against the frozen
 snapshot. Revocation or a changed source rejects work before provisioning.
 
 For an API key it resolves authoritative backend ownership from OCC state and
-passes an ephemeral `ComputeRevisionContext`. It does not read Secret bytes or
-rewrite the revision. ChatGPT retains the exact account token/workspace source.
+passes an ephemeral `ComputeRevisionContext`. It does not call the Secret Driver,
+read the Kubernetes Secret, or rewrite the revision. Physical backend identity
+is checked at API admission. A missing physical Secret/key later prevents workload
+startup; replacement of a physical Secret by a Kubernetes administrator is outside
+the dispatch metadata check. ChatGPT retains the exact account token/workspace source.
 Inactive revision history keeps references without indefinitely retaining their
 sources; drafts, active revisions, and pending deployments block source deletion.
 
@@ -158,6 +161,8 @@ history cannot restore historical Secret values.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 00:48: Correct current harness admission and metadata-only dispatch boundaries after implementation review. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 107900e9551b90c3e9ac24d30f8ea866f17e5dbb)
 
 - 2026-09-17 00:30: Unify Secret-backed keys and issued account credentials through immutable Agent harness authentication and workload rendering. (01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04 - d2bcbd1c53acb2582a774b5158f254d726abd33f)
 

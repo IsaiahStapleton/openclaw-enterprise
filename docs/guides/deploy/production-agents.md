@@ -108,8 +108,8 @@ Create the Agent with the captured Configuration ID and the matching execution
 mode. Mismatched Harness and mode pairs fail before deployment. Create a
 [Namespace-owned OCC Secret](../../reference/drivers/kubernetes-secret.md#create-a-namespace-owned-secret)
 containing the protected OpenAI key first, then set `HARNESS_SECRET_ID` to its
-returned ID. The caller needs exact Secret `operate`; before deployment an IAM
-administrator must also grant the Agent service principal exact Secret `operate`.
+returned `data.id`. That example uses this shell's `OCC_URL` and protected
+`OCC_SERVICE_KEY_FILE`. The caller needs exact Secret `operate` to bind it.
 For the alternative ChatGPT method, select an already issued same-Namespace
 account and matching Provider as described in [Agent harness authentication](../../reference/agents.md#harness-authentication).
 
@@ -122,6 +122,14 @@ AGENT_RESPONSE="$(occ agent create --file agent.json --output json)"
 AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 export AGENT_ID
 ```
+
+Before deploying, hand `NAMESPACE_ID`, `AGENT_ID`, and `HARNESS_SECRET_ID` to an
+administrator or integration with access to controller-owned IAM state. They
+must locate this Agent's stable service principal and grant it `operate` on this
+exact Secret, then confirm the grant is persisted. Ordinary API-only operators
+cannot discover that private principal or create this grant through OCC endpoints.
+Kubernetes RoleBindings do not substitute for it. See the
+[exact-source IAM prerequisite](../../reference/drivers/kubernetes-secret.md#bind-a-secret-to-gateway-environment).
 
 For an Agent without any revisions, the console can provision initial transport
 and Slack credentials through the exact-Agent API. See

@@ -1,6 +1,6 @@
 # Local Kubernetes and development operations
 
-Build digest-pinned local Kubernetes images, verify development TUI access, or
+Build digest-pinned local Kubernetes images, verify Kubernetes TUI access, or
 stop the development stack. Run commands from the repository root. Use the
 [production deployment sequence](../deploy.md#production) for Namespace and Agent setup.
 
@@ -88,81 +88,13 @@ Docker Compute.
 
 ## Development end-to-end TUI
 
-Prerequisites: completed [development startup](../deploy.md#development) with
-Docker selected, exported `OCC_URL` and `OCC_SERVICE_KEY_FILE` from the `dev-up` output,
-`OPENAI_API_KEY` available to the worker, and the quickstart runtime image.
+Docker and Podman Compose currently support control-plane startup and Namespace
+operations, but their Compute Driver rejects Agent harness authentication
+bindings. Agent deployment requires a binding, so the Compose Agent/TUI journey
+is unavailable. Exporting `OPENAI_API_KEY` to the worker does not enable it.
 
-Recreate the worker when it was already running without the model credential:
-
-```bash
-docker compose up -d --force-recreate worker
-docker compose exec -T worker \
-  node -e 'process.exit((process.env.OPENAI_API_KEY || "").trim() ? 0 : 1)'
-```
-
-Select the initial `default` Namespace and save its server-generated ID:
-
-```bash
-NAMESPACE_ID="$(occ namespace list --output json | python3 -c 'import json,sys; matches=[n for n in json.load(sys.stdin) if n["name"] == "default"]; assert len(matches) == 1, "Expected one bootstrap-created default Namespace"; print(matches[0]["id"])')"
-export NAMESPACE_ID OCC_NAMESPACE="$NAMESPACE_ID"
-```
-
-Poll `occ namespace get "$NAMESPACE_ID"` until `STATUS` is
-`ready`. Create `configuration.json` from the embedded OpenClaw example in
-[Configure the Agent runtime](production-agents.md#configure-the-agent-runtime), then create and
-deploy the Agent:
-
-```bash
-CONFIGURATION_RESPONSE="$(occ configuration create --file configuration.json --output json)"
-CONFIGURATION_ID="$(printf '%s' "$CONFIGURATION_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
-printf '{"name":"tui-agent","configurationId":"%s","executionMode":"embedded"}\n' "$CONFIGURATION_ID" > agent.json
-AGENT_RESPONSE="$(occ agent create --file agent.json --output json)"
-AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
-REVISION_RESPONSE="$(occ agent deploy "$AGENT_ID" --output json)"
-REVISION_ID="$(printf '%s' "$REVISION_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
-export AGENT_ID REVISION_ID
-```
-
-After `occ namespace get "$NAMESPACE_ID"` reports `ready` and
-`occ agent get "$AGENT_ID"` reports the deployed
-`activeRevisionId`, discover the single owned Docker gateway container:
-
-```bash
-GATEWAY_CONTAINER="$(docker ps -q \
-  --filter label=org.openclaw.enterprise.managed=true \
-  --filter label=org.openclaw.enterprise.compute-driver=docker \
-  --filter label=org.openclaw.enterprise.namespace-id="$NAMESPACE_ID" \
-  --filter label=org.openclaw.enterprise.agent-id="$AGENT_ID" \
-  --filter label=org.openclaw.enterprise.revision-id="$REVISION_ID" \
-  --filter label=org.openclaw.enterprise.role=gateway)"
-test "$(printf '%s\n' "$GATEWAY_CONTAINER" | sed '/^$/d' | wc -l)" -eq 1
-export GATEWAY_CONTAINER
-```
-
-Attach the TUI inside that container. It already has the gateway URL and token:
-
-```bash
-E2E_SESSION="occ-tui-$(date +%Y%m%d%H%M%S)"
-NONCE="$(python3 -c 'import secrets; print("OCC_TUI_" + secrets.token_hex(8))')"
-docker exec -it -e OPENCLAW_STATE_DIR=/tmp/occ-tui-client \
-  "$GATEWAY_CONTAINER" node /app/openclaw.mjs tui \
-  --session "$E2E_SESSION" --message "Reply exactly: $NONCE"
-```
-
-Verify the assistant replies with the nonce, send a second nonce in the same
-TUI, then press Ctrl+D. Exiting the TUI does not stop the Agent gateway. Do not
-pass OCC service keys, gateway tokens, `--url`, or `--token` on the command
-line.
-
-To stop the Agent without deleting its revision or workspace, submit the
-bodyless operation and poll until the active pointer is absent:
-
-```bash
-occ agent stop "$AGENT_ID"
-occ agent get "$AGENT_ID"
-```
-
-The stop result reports `DESIRED STATE` as `stopped`. The later read must retain
-the Agent and report no `ACTIVE REVISION`; the worker also
-removes its Docker runtime containers. Repeating the stop is safe. Run the
-deployment command again to resume with a new immutable revision.
+For a local authenticated Agent and TUI trial, build the Kubernetes images above,
+then follow [production Agent deployment](production-agents.md) and
+[production TUI verification](production-agents.md#attach-with-the-openclaw-tui) against that disposable cluster.
+Complete the same Secret binding, exact IAM grants, and tenant RoleBindings as
+for a production installation.

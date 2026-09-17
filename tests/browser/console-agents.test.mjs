@@ -177,6 +177,19 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
     "Existing model credential",
     "never-visible-model-secret",
   );
+  // Selecting an exact Secret requires operate, not permission to read its metadata.
+  fixture.policy.restrictions.push({
+    id: "deny-harness-secret-read",
+    namespaceId: namespace.id,
+    resourceKind: "secret",
+    resourceId: secret.id,
+    action: "read",
+    effect: "deny",
+  });
+  assert.equal(
+    (await fixture.request("GET", `/namespaces/${namespace.id}/secrets/${secret.id}`)).status,
+    403,
+  );
   const values = nativeValues("create", { harnessId: "codex", providerModel: "gpt-5.1" });
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
@@ -250,6 +263,30 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
     kind: "agent",
     values,
   });
+
+  // The server still enforces the exact source grant when the form is saved.
+  fixture.policy.restrictions.push({
+    id: "deny-harness-secret-operate",
+    namespaceId: namespace.id,
+    resourceKind: "secret",
+    resourceId: secret.id,
+    action: "operate",
+    effect: "deny",
+  });
+  await page.getByRole("button", { name: "Credentials", exact: true }).click();
+  const deniedBinding = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/${created.data.id}` &&
+      response.request().method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "Save authentication source" }).click();
+  assert.equal((await deniedBinding).status(), 403);
+  await page.getByText(/Access denied|not authorized|permission/i).waitFor();
+  assert.deepEqual(
+    (await fixture.request("GET", `/namespaces/${namespace.id}/agents/${created.data.id}`)).data
+      .harnessAuth,
+    created.data.harnessAuth,
+  );
 
   fixture.policy.restrictions.push({
     id: "deny-agent-create",
