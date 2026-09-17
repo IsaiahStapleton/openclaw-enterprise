@@ -178,10 +178,12 @@ export interface SecretEnvironmentProjection {
 
 export type HarnessAuthBinding =
   | { readonly method: "api_key"; readonly source: SecretReference }
-  | { readonly method: "chatgpt_service_account"; readonly serviceAccountId: string };
+  | { readonly method: "chatgpt_service_account"; readonly serviceAccountId: string }
+  | { readonly method: "runtime" };
 
 /** Private admission metadata. Public APIs expose only HarnessAuthBinding. */
 export type HarnessAuthSnapshot =
+  | { readonly method: "runtime" }
   | {
       readonly method: "api_key";
       readonly source: SecretReference;
@@ -204,7 +206,7 @@ export type ResolvedHarnessAuth =
   | (Extract<HarnessAuthSnapshot, { method: "api_key" }> & {
       readonly backendRef: SecretBackendRef;
     })
-  | Extract<HarnessAuthSnapshot, { method: "chatgpt_service_account" }>;
+  | Extract<HarnessAuthSnapshot, { method: "chatgpt_service_account" | "runtime" }>;
 
 export interface ComputeRevisionContext {
   readonly harnessAuth: ResolvedHarnessAuth;
@@ -740,4 +742,4 @@ export * from "./api/common.ts";
 export * from "./api/resources.ts";
 export * from "./api/routes.ts";
 
-export { normalizeHarnessAuthBinding } from "./harness-auth.ts";
+export { normalizeHarnessAuthBinding, harnessAuthBindingFromSnapshot } from "./harness-auth.ts";

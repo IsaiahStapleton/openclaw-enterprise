@@ -3,6 +3,7 @@ import { message, namespacePath } from "./list.mjs";
 
 export function harnessAuthDescription(binding) {
   if (!binding) return "None selected";
+  if (binding.method === "runtime") return "Operator-managed credentials";
   return binding.method === "api_key"
     ? `OpenAI API key · ${binding.source.id}`
     : `ChatGPT service account · ${binding.serviceAccountId}`;
@@ -14,6 +15,7 @@ export function createHarnessAuthFields(context, binding = null) {
     { id: "harness-auth-method" },
     element("option", { value: "" }, "None"),
     element("option", { value: "api_key" }, "OpenAI API key"),
+    element("option", { value: "runtime" }, "Operator-managed credentials"),
     element("option", { value: "chatgpt_service_account" }, "ChatGPT service account"),
   );
   method.value = binding?.method ?? "";
@@ -54,6 +56,11 @@ export function createHarnessAuthFields(context, binding = null) {
     element("label", { for: account.id }, "Issued ChatGPT service account"),
     account,
   );
+  const runtimeHint = element(
+    "p",
+    { className: "hint" },
+    "Configured on the runtime host; not validated by OCC.",
+  );
   const section = element(
     "fieldset",
     { className: "harness-auth-fields" },
@@ -62,14 +69,16 @@ export function createHarnessAuthFields(context, binding = null) {
     method,
     secretField,
     accountField,
+    runtimeHint,
     feedback,
     element(
       "p",
       { className: "hint" },
-      "The selected source is checked during deployment. Selection does not establish provider login or model readiness.",
+      "Managed sources are checked during deployment. Operator-managed credentials are not validated by OCC. Selection does not establish provider login or model readiness.",
     ),
   );
   function update() {
+    runtimeHint.hidden = method.value !== "runtime";
     secretField.hidden = method.value !== "api_key";
     accountField.hidden = method.value !== "chatgpt_service_account";
     secret.required = method.value === "api_key";
@@ -111,6 +120,7 @@ export function createHarnessAuthFields(context, binding = null) {
     },
     async readBinding() {
       if (!method.value) return null;
+      if (method.value === "runtime") return { method: "runtime" };
       if (method.value === "chatgpt_service_account") {
         if (!account.value) throw new Error("Select an issued ChatGPT service account.");
         return { method: "chatgpt_service_account", serviceAccountId: account.value };

@@ -1,7 +1,8 @@
 // Opt-in real SSH, systemd and OpenClaw gateway proof on a disposable Linux host.
-// Exercises readiness and revision/state lifecycle only; no model turn is required or proved.
+// OCC_TEST_SSH_MODEL also verifies real provider calls and runtime-owned credential behavior.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
 import { SystemSshCommandExecutor } from "../../apps/controller/src/drivers/compute/ssh/executor.ts";
@@ -18,7 +19,8 @@ const requiredNames = [
   "OCC_TEST_SSH_OPENCLAW_PATH",
   "OCC_TEST_SSH_RUNTIME_USER",
 ];
-const selected = process.env.OCC_TEST_SSH_REAL === "1";
+const modelProof = process.env.OCC_TEST_SSH_MODEL === "1";
+const selected = process.env.OCC_TEST_SSH_REAL === "1" || modelProof;
 const skip = selected
   ? false
   : `Set OCC_TEST_SSH_REAL=1 plus ${requiredNames.join(", ")} to run real SSH host proof; OCC_TEST_SSH_ROOT and OCC_TEST_SSH_UNIT_DIRECTORY are optional.`;
@@ -74,7 +76,27 @@ function output(command, args) {
       foreignConfigReadable: foreignConfig.status === 0,
     };
   }
+  if (input.operation === "env-state") {
+    const contents = fs.readFileSync(input.agentDir + "/env");
+    const stat = fs.statSync(input.agentDir + "/env");
+    return { digest: require("node:crypto").createHash("sha256").update(contents).digest("hex"), mode: stat.mode & 511, ino: stat.ino, mtimeMs: stat.mtimeMs };
+  }
+  if (input.operation === "meter") return readJson(input.namespaceDir + "/provider-meter.json");
+  if (input.operation === "stop-meter") {
+    process.kill(readJson(input.namespaceDir + "/provider-meter.json").pid, "SIGTERM");
+    return { stopped: true };
+  }
   const agent = readJson(input.agentDir + "/agent.json");
+  if (input.operation === "model") {
+    const token = fs.readFileSync(input.agentDir + "/gateway.env", "utf8").trim().split("=")[1];
+    const response = await fetch("http://127.0.0.1:" + agent.port + "/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + token },
+      body: JSON.stringify({ model: "openclaw/default", messages: [{ role: "user", content: "Reply with READY. Do not use tools." }], stream: false, max_tokens: 32 }),
+      signal: AbortSignal.timeout(180000),
+    });
+    const body = await response.json();
+    return { status: response.status, modelReply: response.ok && typeof body.choices?.[0]?.message?.content === "string" && body.choices[0].message.content.trim().length > 0 };
+  }
   const active = spawnSync("systemctl", ["is-active", "--quiet", input.unit]);
   const response = await fetch("http://127.0.0.1:" + agent.port + "/readyz", { signal: AbortSignal.timeout(5000), redirect: "error" });
   await response.body?.cancel();
@@ -90,11 +112,36 @@ function output(command, args) {
 `;
 
 test(
-  "real SSH host prepares, cuts over, preserves state, retires and deletes an embedded OpenClaw Agent",
+  modelProof
+    ? "real SSH runtime credentials allow model turns, skip deployment probes, and preserve host env on failed-auth readiness, redeploy and stop"
+    : "real SSH host prepares, cuts over, preserves state, retires and deletes an embedded OpenClaw Agent",
   { skip, timeout: 600_000 },
   async () => {
     for (const name of requiredNames)
       assert.ok(process.env[name]?.trim(), `${name} is required when OCC_TEST_SSH_REAL=1.`);
+    const model = process.env.OCC_TEST_OPENAI_MODEL || "gpt-4.1";
+    let providerKey;
+    if (modelProof) {
+      assert.ok(
+        process.env.OCC_TEST_OPENAI_API_KEY_FILE,
+        "OCC_TEST_OPENAI_API_KEY_FILE is required for model proof.",
+      );
+      providerKey = (await readFile(process.env.OCC_TEST_OPENAI_API_KEY_FILE, "utf8")).trim();
+      assert.ok(/^[^\s\0]+$/.test(providerKey), "Expected one nonempty API key.");
+      // Establish credential availability separately from the deployment/no-probe assertion.
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${providerKey}` },
+        body: JSON.stringify({ model, input: "Reply READY", max_output_tokens: 16 }),
+        signal: AbortSignal.timeout(60000),
+      });
+      await response.body?.cancel();
+      assert.equal(
+        response.status,
+        200,
+        "Provider credential/model must work before SSH deployment proof.",
+      );
+    }
     const host = {
       address: process.env.OCC_TEST_SSH_ADDRESS,
       port: Number(process.env.OCC_TEST_SSH_PORT),
@@ -133,12 +180,13 @@ test(
           bind: "loopback",
           controlUi: { enabled: false },
           auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+          http: { endpoints: { chatCompletions: { enabled: true } } },
         },
         agents: {
           defaults: {
             skipBootstrap: true,
-            model: "openai/gpt-5.6-sol",
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } } },
+            model: `openai/${model}`,
+            models: { [`openai/${model}`]: { agentRuntime: { id: "openclaw" } } },
           },
         },
       },
@@ -150,6 +198,7 @@ test(
       agentId,
       revision: 1,
       providerId: null,
+      harnessAuth: { method: "runtime" },
       configurationId: `cfg-${randomUUID()}`,
       configurationKind: "agent",
       configurationGeneration: 1,
@@ -185,6 +234,24 @@ test(
     const unit = `openclaw-enterprise-gateway-${sha256Hex(agentId, 12)}.service`;
     const siblingUnit = `openclaw-enterprise-gateway-${sha256Hex(siblingAgentId, 12)}.service`;
     const executor = new SystemSshCommandExecutor();
+    const remote = async (helper, operation = "", timeoutMs = 30000) => {
+      const result = await executor.execute({
+        ...host,
+        ...ssh,
+        nodePath: runtime.nodePath,
+        helper,
+        operation,
+        timeoutMs,
+      });
+      assert.equal(result.code, 0, "Remote operator test action must succeed.");
+      return result.stdout;
+    };
+    const provision = async (value) => {
+      // The key travels in SSH stdin, never process argv, logs, or revision metadata.
+      await remote(
+        `require("node:fs").writeFileSync(${JSON.stringify(agentDir + "/env")}, ${JSON.stringify("OPENAI_API_KEY=" + value + "\n")}, {mode: 0o600});`,
+      );
+    };
     const inspect = async (operation, extra = {}) => {
       const result = await executor.execute({
         ...host,
@@ -203,14 +270,60 @@ test(
             ...extra,
           }),
         ).toString("base64"),
-        timeoutMs: 30_000,
+        timeoutMs: operation === "model" ? 190_000 : 30_000,
       });
       assert.equal(result.code, 0, "Real SSH host inspection must succeed.");
       return JSON.parse(result.stdout);
     };
     await driver.preflight();
+    let meterStarted = false;
     try {
       assert.equal((await driver.ensureNamespace(namespace)).namespaceReady, true);
+      if (modelProof) {
+        // Count real provider traffic without replacing the provider. Both successful
+        // and rejected credentials are forwarded to the actual OpenAI endpoint.
+        const meterPath = `${namespaceDir}/provider-meter.json`;
+        const meterScript = `const fs=require("node:fs"),http=require("node:http");
+          const state={pid:process.pid,count:0,port:0};
+          const save=()=>fs.writeFileSync(${JSON.stringify(meterPath)},JSON.stringify(state));
+          const server=http.createServer(async(req,res)=>{
+            state.count++;save();
+            try {
+              const chunks=[];for await(const chunk of req)chunks.push(chunk);
+              const upstream=await fetch("https://api.openai.com"+req.url,{method:req.method,headers:{"content-type":"application/json",authorization:req.headers.authorization},body:Buffer.concat(chunks),signal:AbortSignal.timeout(150000)});
+              res.writeHead(upstream.status,{"content-type":upstream.headers.get("content-type")||"application/json"});
+              for await(const chunk of upstream.body)res.write(chunk);res.end();
+            } catch {res.writeHead(502);res.end();}
+          });server.listen(0,"127.0.0.1",()=>{state.port=server.address().port;save();});`;
+        await remote(
+          `const child=require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(meterScript)}],{detached:true,stdio:"ignore"});child.unref();`,
+        );
+        meterStarted = true;
+        let meter;
+        for (let attempt = 0; attempt < 30; attempt++) {
+          try {
+            meter = await inspect("meter");
+            break;
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        }
+        assert.ok(meter?.port, "Provider traffic meter must be listening.");
+        const models = {
+          providers: {
+            openai: {
+              baseUrl: `http://127.0.0.1:${meter.port}/v1`,
+              api: "openai-responses",
+              models: [{ id: model, name: model }],
+            },
+          },
+        };
+        first.configuration = admitLoggingConfiguration({ ...first.configuration, models }, "info");
+        second.configuration = admitLoggingConfiguration(
+          { ...second.configuration, models },
+          "info",
+        );
+      }
       // The worker binds server-owned Agent identity after Namespace readiness on every operation.
       namespace.status = "ready";
       const binding = {
@@ -228,11 +341,29 @@ test(
       };
       driver.bindAgent(binding);
       assert.equal((await driver.prepareRevision(first, { secretEnvironment: [] })).ready, true);
+      let operatorEnv;
+      if (modelProof) {
+        await provision(providerKey);
+        operatorEnv = await inspect("env-state");
+        assert.equal(operatorEnv.mode, 0o600);
+      }
       await driver.activateRevision(first);
       const observedFirst = await inspect("inspect");
       assert.equal(observedFirst.current, `revisions/${sha256Hex(first.id, 12)}`);
       assert.equal(observedFirst.active, true);
       assert.equal(observedFirst.readyStatus, 200);
+      if (modelProof) {
+        assert.equal(
+          (await inspect("meter")).count,
+          0,
+          "Deployment/readiness must make no model request.",
+        );
+        const turn = await inspect("model");
+        assert.equal(turn.status, 200);
+        assert.equal(turn.modelReply, true);
+        assert.ok((await inspect("meter")).count > 0);
+        assert.deepEqual(await inspect("env-state"), operatorEnv);
+      }
       const marker = randomUUID();
       assert.deepEqual(await inspect("marker", { marker }), { written: true });
       driver.bindAgent({
@@ -274,7 +405,42 @@ test(
       assert.equal(retired.oldRevisionExists, false);
       assert.equal(retired.active, true);
       assert.equal(retired.marker, marker);
+      if (modelProof) {
+        assert.deepEqual(
+          await inspect("env-state"),
+          operatorEnv,
+          "Redeploy and retirement preserve operator bytes and metadata.",
+        );
+        const before = (await inspect("meter")).count;
+        // A different key affects this existing immutable revision after process restart.
+        await driver.stopRevision(second);
+        assert.deepEqual(
+          await inspect("env-state"),
+          operatorEnv,
+          "Stop preserves operator credentials.",
+        );
+        await provision("sk-invalid-runtime-proof");
+        const invalidEnv = await inspect("env-state");
+        await driver.activateRevision(second);
+        assert.equal((await inspect("inspect")).readyStatus, 200);
+        assert.equal(
+          (await inspect("meter")).count,
+          before,
+          "Invalid credentials must not trigger a deployment probe.",
+        );
+        const rejected = await inspect("model");
+        assert.equal(rejected.modelReply, false);
+        assert.ok(rejected.status >= 400);
+        assert.ok(
+          (await inspect("meter")).count > before,
+          "The actual model request must reach the provider and be rejected.",
+        );
+        assert.equal((await inspect("inspect")).readyStatus, 200);
+        await driver.stopRevision(second);
+        assert.deepEqual(await inspect("env-state"), invalidEnv);
+      }
     } finally {
+      if (meterStarted) await inspect("stop-meter");
       assert.equal((await driver.deleteNamespace(namespace)).namespaceDeleted, true);
     }
     assert.deepEqual(await inspect("deleted"), {

@@ -76,11 +76,14 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
     serviceAccountId,
     providerId = null,
     grantHarnessSecret = true,
+    runtimeAuth = false,
   ) {
     const id = `agt_${randomUUID()}`;
     const configurationId = `cfg_${randomUUID()}`;
     let harnessAuth;
-    if (serviceAccountId === undefined) {
+    if (runtimeAuth) {
+      harnessAuth = { method: "runtime" };
+    } else if (serviceAccountId === undefined) {
       const identity = {
         id: `sec_${randomUUID()}`,
         namespaceId: namespace.id,
@@ -141,7 +144,9 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
 
   async function revision(owner, number, harness) {
     let harnessAuth;
-    if (owner.harnessAuth.method === "chatgpt_service_account") {
+    if (owner.harnessAuth.method === "runtime") {
+      harnessAuth = owner.harnessAuth;
+    } else if (owner.harnessAuth.method === "chatgpt_service_account") {
       const account = await state.read((view) =>
         view.serviceAccounts.findServiceAccount(namespace.id, owner.harnessAuth.serviceAccountId),
       );
@@ -1806,5 +1811,76 @@ test(
       view.agents.findAgent(fixture.namespace.id, owner.id),
     );
     assert.equal(current.activeRevisionId, undefined);
+  },
+);
+
+test(
+  "runtime auth persists only its method and worker reauthorizes deployment without resolving credentials",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("runtime-owner", "embedded", undefined, null, false, true);
+    const denied = await fixture.agent("runtime-denied", "embedded", undefined, null, false, true);
+    const admitted = await fixture.revision(owner, 1);
+    const deniedRevision = await fixture.revision(denied, 1);
+    // Revoke deployment after admission: runtime does not bypass worker reauthorization.
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_restrictions (id, namespace_id, action, resource_kind, resource_id, effect)
+     VALUES ($1, $2, 'deploy', 'agent', $3, 'deny')`,
+      [`restriction-${randomUUID()}`, fixture.namespace.id, denied.id],
+    );
+    const prepared = [];
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision, dispatch) {
+          assert.deepEqual(dispatch.harnessAuth, { method: "runtime" });
+          assert.deepEqual(dispatch.secretEnvironment, []);
+          prepared.push(revision.id);
+          return fixture.compute.prepareRevision(revision, dispatch);
+        },
+      },
+      () => {},
+      undefined,
+      [],
+      fixture.workerPool,
+      (drivers) => ({
+        ...drivers,
+        secretDriver: {
+          ...drivers.secretDriver,
+          resolve() {
+            assert.fail("runtime must not resolve an OCC credential");
+          },
+        },
+      }),
+    );
+    await fixture.work(admitted, "succeeded");
+    await fixture.work(deniedRevision, "failed_permanent");
+    assert.ok(prepared.includes(admitted.id));
+    assert.ok(!prepared.includes(deniedRevision.id));
+    const persisted = await fixture.state.read((view) =>
+      view.revisions.findRevision(fixture.namespace.id, owner.id, admitted.id),
+    );
+    assert.deepEqual(persisted.harnessAuth, { method: "runtime" });
+    assert.ok(Object.isFrozen(persisted.harnessAuth));
+    const current = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(current.activeRevisionId, admitted.id);
+    // The database grammar rejects credential smuggling independently of the API grammar.
+    for (const extra of [
+      { source: {} },
+      { serviceAccountId: "account" },
+      { secretDriverId: "driver" },
+      { value: "key" },
+    ]) {
+      await assert.rejects(
+        fixture.observerPool.query(
+          "UPDATE occ.agents SET harness_auth = $1::jsonb WHERE namespace_id = $2 AND id = $3",
+          [JSON.stringify({ method: "runtime", ...extra }), fixture.namespace.id, owner.id],
+        ),
+        (error) => error.code === "23514",
+      );
+    }
   },
 );

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
-updated: 2026-09-08
-last_updated_session: codex/01a082e5-f8cf-7400-8080-b1bec07d2f2c
+updated: 2026-09-17
+last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 ---
 
 # Platform console request flow
@@ -170,7 +170,10 @@ this client never infers it from a network error.
 
 ## Deploy the saved draft
 
-The saved-draft detail view exposes **Deploy saved draft**. It rereads the Agent and
+The saved-draft detail view exposes **Deploy saved draft**. The **Operator-managed
+credentials** option persists `{ "method": "runtime" }` and explains that OCC does
+not validate host credentials. It bypasses only the managed runtime-credential
+metadata gate; the server retains driver compatibility and authorization checks. It rereads the Agent and
 Configuration, checks their loaded association and generation, then sends the existing
 bodyless `POST /namespaces/:namespaceId/agents/:agentId/deploy`. The server retains
 its existing authorization and admission checks. The returned admitted revision opens
@@ -206,6 +209,8 @@ refreshes and inspects the Agent and revision history.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 19:14: Expose operator-managed credentials without a managed-credential deployment gate. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - b8cabaf9a49e069a7668ccf88b9e71a7484227b7)
 
 - 2026-09-01 19:09: Trace static serving, session resolution, exact collection authorization, Namespace isolation, and logout. (01a05e1d-6dc8-7231-bf58-58c80ef580f3 - 97911d361ac02ddf561e46c8af0864ad66a6df45) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-09-01 17:47: Add Agent creation, detail revision selection, and saved channel draft editing flow boundaries. (01a05f94-886b-7122-8784-c4b5aa5c5d1d - b02a07f2e575b13260b8792f87975d51c5ef7a61)

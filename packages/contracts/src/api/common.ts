@@ -128,6 +128,7 @@ export const SecretReference = Type.Object(
 );
 
 export const HarnessAuthBindingSchema = Type.Union([
+  Type.Object({ method: Type.Literal("runtime") }, { additionalProperties: false }),
   Type.Object(
     { method: Type.Literal("api_key"), source: SecretReference },
     { additionalProperties: false },

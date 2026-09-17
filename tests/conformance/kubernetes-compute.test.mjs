@@ -2867,6 +2867,16 @@ test("revision lifecycle rejects another driver or missing identity before clust
     harnessAuth: serviceAccount,
   };
 
+  // Operator credentials do not weaken either managed Kubernetes topology.
+  for (const mode of ["embedded", "dedicated"])
+    await assert.rejects(
+      production.prepareRevision({
+        ...accessTokenRevision,
+        harness: { id: mode === "embedded" ? "openclaw" : "codex", version: "1.0.0", mode },
+        harnessAuth: { method: "runtime" },
+      }),
+      /incompatible.*topology/i,
+    );
   // Unsupported access-token execution and cross-account references fail before cluster access.
   await assert.rejects(
     production.prepareRevision({

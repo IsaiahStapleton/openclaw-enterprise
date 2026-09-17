@@ -2054,6 +2054,14 @@
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "method": { "const": "runtime", "type": "string" }
+                                    },
+                                    "required": ["method"],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
                                       "method": { "const": "api_key", "type": "string" },
                                       "source": {
                                         "additionalProperties": false,
@@ -2237,6 +2245,12 @@
                         "anyOf": [
                           {
                             "additionalProperties": false,
+                            "properties": { "method": { "const": "runtime", "type": "string" } },
+                            "required": ["method"],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
                             "properties": {
                               "method": { "const": "api_key", "type": "string" },
                               "source": {
@@ -2342,6 +2356,14 @@
                           "anyOf": [
                             {
                               "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "runtime", "type": "string" }
+                                  },
+                                  "required": ["method"],
+                                  "type": "object"
+                                },
                                 {
                                   "additionalProperties": false,
                                   "properties": {
@@ -2587,6 +2609,14 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
+                                    "method": { "const": "runtime", "type": "string" }
+                                  },
+                                  "required": ["method"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
                                     "method": { "const": "api_key", "type": "string" },
                                     "source": {
                                       "additionalProperties": false,
@@ -2776,6 +2806,12 @@
                         "anyOf": [
                           {
                             "additionalProperties": false,
+                            "properties": { "method": { "const": "runtime", "type": "string" } },
+                            "required": ["method"],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
                             "properties": {
                               "method": { "const": "api_key", "type": "string" },
                               "source": {
@@ -2875,6 +2911,14 @@
                           "anyOf": [
                             {
                               "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "runtime", "type": "string" }
+                                  },
+                                  "required": ["method"],
+                                  "type": "object"
+                                },
                                 {
                                   "additionalProperties": false,
                                   "properties": {
@@ -3139,6 +3183,12 @@
                         },
                         "harnessAuth": {
                           "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": { "method": { "const": "runtime", "type": "string" } },
+                              "required": ["method"],
+                              "type": "object"
+                            },
                             {
                               "additionalProperties": false,
                               "properties": {
@@ -3434,6 +3484,14 @@
                               {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "method": { "const": "runtime", "type": "string" }
+                                },
+                                "required": ["method"],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
                                   "method": { "const": "api_key", "type": "string" },
                                   "source": {
                                     "additionalProperties": false,
@@ -3718,6 +3776,12 @@
                         },
                         "harnessAuth": {
                           "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": { "method": { "const": "runtime", "type": "string" } },
+                              "required": ["method"],
+                              "type": "object"
+                            },
                             {
                               "additionalProperties": false,
                               "properties": {
@@ -4225,6 +4289,14 @@
                           "anyOf": [
                             {
                               "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "runtime", "type": "string" }
+                                  },
+                                  "required": ["method"],
+                                  "type": "object"
+                                },
                                 {
                                   "additionalProperties": false,
                                   "properties": {

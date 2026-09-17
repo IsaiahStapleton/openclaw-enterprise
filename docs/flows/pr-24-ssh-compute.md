@@ -1,7 +1,7 @@
 ---
 created: 2026-09-07
-updated: 2026-09-08
-last_updated_session: codex/01a07d92-d866-7731-afe5-abab67d8966c
+updated: 2026-09-17
+last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 pr: 24
 ---
 
@@ -72,7 +72,11 @@ Namespace preparation creates or verifies its ownership marker before running
 validation, the worker calls `bindAgent`; the driver copies the authoritative
 Namespace, Agent, and ServicePrincipal binding into its in-memory maps. Revision
 operations require matching bindings and the selected Compute identity.
-Preparation rejects dedicated Harnesses, OCC Secret delivery, and Sandbox use.
+Admission and dispatch require the explicit `runtime` binding. The snapshot
+contains only the method: neither source authorization nor credential resolution
+runs for it, while Agent/Configuration authorization and worker reauthorization
+remain required. `SshComputeDriver.validateHarnessAuth` rejects managed credentials
+and dedicated Harnesses; preparation also rejects OCC Secret delivery and Sandbox use.
 SSH dispatches selected `beforeWorkloadStart` hooks during activation, before
 starting the candidate workload.
 
@@ -133,7 +137,10 @@ seconds. It writes `served.json` only after readiness succeeds. A matching
 current pointer alone never establishes successful activation. The unit loads
 the driver-generated gateway token unless trusted-proxy authentication is
 selected, and optionally loads the operator-owned `env` file. The Driver never
-reads or writes that operator credential file.
+reads or writes that operator credential file and never submits a model probe.
+Readiness confirms gateway startup only; an invalid key can leave the gateway
+ready while model requests fail. Host credential changes may affect an existing
+revision after restart without a new immutable revision.
 
 Retirement runs `beforeWorkloadStop` hooks and removes the specified snapshot.
 If that snapshot is current, it first stops/disables the unit and removes
@@ -160,7 +167,9 @@ bindings only after the host operation succeeds.
   database reconciliation, or model execution.
 - Follow the [disposable real-host procedure](../testing/ssh.md#ssh-raw-hosts) for
   real SSH, systemd, readiness, cutover, persistence, retirement, and deletion.
-  The opt-in suite makes no model call; an unselected skip is not host proof.
+  Selecting `OCC_TEST_SSH_MODEL=1` adds real valid/invalid provider requests,
+  counts zero model calls during deployment/readiness, and checks operator-file
+  preservation after redeployment and stop. An unselected skip is not host proof.
 - Inspect the exact unit with `systemctl status` and `journalctl -u`, and compare
   `current` with `served.json`. A pointer alone does not establish readiness.
   Keep operator credentials and token files out of diagnostics.
@@ -181,6 +190,8 @@ bindings only after the host operation succeeds.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 19:14: Add explicit runtime credentials, unchanged readiness, and operator-file ownership semantics. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - b8cabaf9a49e069a7668ccf88b9e71a7484227b7)
 
 - 2026-09-08 07:49: Trace private Agent accounts, staging before OCC publication, activation hooks, and systemd cutover. (01a07d92-d866-7731-afe5-abab67d8966c - 4d83087229961f3665b923d2581c0b71b988cc9c)
 

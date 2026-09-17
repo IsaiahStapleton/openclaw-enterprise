@@ -13,7 +13,9 @@ ChatGPT account credential, then selects that source through Agent `harnessAuth`
 Deployment freezes the authorized binding; the worker rechecks it and Kubernetes
 renders the credential only into the model-executing workload. This flow ends
 at runtime authentication and the existing guarded activation handoff. Issuance
-and source storage retain their existing owners.
+and source storage retain their existing owners. With `{ "method": "runtime" }`,
+the operator supplies credentials directly on an SSH host instead; OCC freezes
+only the method and performs gateway readiness without model authentication.
 
 ## Entry Points
 
@@ -31,10 +33,13 @@ and source storage retain their existing owners.
 ```mermaid
 graph TD
   A["Store key or separately issue account credential"] --> B["Save Agent harnessAuth reference"]
+  R["Operator provisions protected host env"] --> B
+  D -->|runtime| S["SSH starts embedded gateway using host env"]
+  S --> T["Check gateway readiness; model auth remains unverified"]
   B --> C["Authorize and freeze binding in revision"]
   C --> D["Worker rechecks grants and source ownership"]
   D -->|denied or changed source| E["Reject candidate before projection"]
-  D -->|valid| F["Kubernetes prepares explicit login mode and projections"]
+  D -->|valid managed source| F["Kubernetes prepares explicit login mode and projections"]
   F --> G{"Admitted topology"}
   G -->|embedded API key| H["Create or replace shared gateway with projected key"]
   G -->|dedicated key or account| I["Only Codex receives model credential"]
@@ -74,7 +79,13 @@ Deployment requires a nonnull binding, exact Agent `deploy`, and Configuration
 resolves the backend through the selected Secret Driver, and freezes the stable
 reference and Driver identity. For a ChatGPT account, it verifies the issued
 access-token reference and private Provider, member Driver, and workspace
-ownership. The selected Compute validates the auth/Harness/model combination.
+ownership. `runtime` needs no source grant, lookup, or delivery metadata. The
+selected Compute validates the combination: SSH accepts only embedded OpenClaw
+with `runtime`; Kubernetes continues to require managed authentication.
+
+A runtime revision records only `{ "method": "runtime" }`. Host credential
+changes can affect that revision after restart without redeployment; see the
+[SSH lifecycle](pr-24-ssh-compute.md).
 
 The revision contains references and safe internal metadata, never credential
 bytes. Public revision serialization exposes the binding while omitting backend
@@ -90,6 +101,9 @@ The worker authorizes the original deploying actor and required Agent Secret
 grants against the admitted revision. It verifies current source ownership and
 matches managed-account credential and Provider metadata against the frozen
 snapshot. Revocation or a changed source rejects work before provisioning.
+For `runtime`, worker Agent/Configuration authorization still runs but credential
+source authorization and lookup do not. The dispatch context carries only the
+method; SSH does not read the operator credential file or issue a model probe.
 
 For an API key it resolves authoritative backend ownership from OCC state and
 passes an ephemeral `ComputeRevisionContext`. It does not call the Secret Driver,
@@ -183,6 +197,8 @@ history cannot restore historical Secret values.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 19:14: Add runtime binding admission and worker behavior without managed source delivery. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - b8cabaf9a49e069a7668ccf88b9e71a7484227b7)
 
 - 2026-09-17 02:58: Remove embedded preflight and document one actual-gateway startup check with accepted replacement downtime. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - cfb384f22ebcbadcfb421b3020b4bb72fd657160)
 

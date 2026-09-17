@@ -63,10 +63,10 @@ Creating an Agent does not create a provider account or issue credentials.
 
 ## Harness authentication
 
-`harnessAuth` selects the one model credential source for an Agent. Creation
+`harnessAuth` selects how an Agent obtains model credentials. Creation
 omission stores `null`; PATCH omission preserves the binding and explicit `null`
 clears it. Both supported topologies require a valid binding at deployment.
-The source must belong to the Agent's exact Namespace:
+A managed source must belong to the Agent's exact Namespace:
 
 ```json
 {
@@ -86,13 +86,22 @@ For an already issued ChatGPT account credential, use
 This requires dedicated Codex and the account's matching `providerId`. Binding
 an account does not issue its credential or change the model, Harness, or Provider.
 
+For SSH embedded OpenClaw, use `{ "method": "runtime" }`. The operator supplies
+credentials in the protected host environment file; OCC neither reads nor
+delivers credentials and performs no authentication/model probe. Agent and
+Configuration authorization, topology checks, and process readiness remain
+required. No credential-source permission is needed because OCC owns no source.
+Kubernetes and Docker reject this method. See [SSH credentials](drivers/ssh-compute.md#credentials-and-supported-boundaries).
+
 API-key binding requires the actor's exact Secret `operate`. Deployment also
 requires the Agent service principal's exact Secret `operate`. ChatGPT binding
 requires the actor's exact account `read`, including the current account when
 replacing or clearing a binding. There is no implied account grant for the Agent
 principal. Each consumer of a shared source is authorized independently.
 
-A deployment freezes the binding and resolved reference metadata. Dispatch
+A deployment freezes the binding and, for managed methods, resolved reference metadata.
+A `runtime` snapshot contains only its method. Operator changes to host credentials
+can affect an existing revision without redeployment; readiness does not prove model access. Dispatch
 reauthorizes the admitted actor and required Agent grants, and checks source
 ownership again. Public responses expose safe references only. Backend Secret
 names, provider workspace IDs, upstream identities, and credential values remain

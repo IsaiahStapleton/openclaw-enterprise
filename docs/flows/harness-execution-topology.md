@@ -20,7 +20,7 @@ publication, predecessor retirement, and exactly-once activation audit.
 - Source: `packages/occ/src/index.ts:OpenClawController.deployAgent` and
   `apps/controller/src/worker.ts:ControllerWorker`.
 - Assumptions: authorized actor; ready Namespace; same-Namespace native agent Configuration;
-  explicit Agent execution mode; and `harnessAuth` referencing an authorized OCC
+  explicit Agent execution mode; and a supported `harnessAuth` binding. Managed methods reference an authorized OCC
   Secret API key or a Driver-issued account-owned access-token credential.
 
 ## Flow
@@ -72,8 +72,10 @@ approved harness, and calls `ComputeDriver.prepareRevision`.
 
 Docker's existing topology implementation starts an embedded gateway or dedicated
 Codex container, but it does not support the new harness-auth binding contract;
-unsupported bindings fail before deployment. Kubernetes is the supported binding
-implementation.
+unsupported bindings fail before deployment. Kubernetes supports managed bindings.
+SSH supports `{ "method": "runtime" }` only for embedded OpenClaw: operator
+credentials remain on the host and OCC checks gateway readiness without model
+validation. See the [SSH flow](pr-24-ssh-compute.md).
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.prepareRevision`
 
@@ -193,6 +195,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 19:14: Distinguish SSH operator credentials from Kubernetes managed authentication. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - b8cabaf9a49e069a7668ccf88b9e71a7484227b7)
 
 - 2026-09-17 02:58: Remove embedded preflight and trace shared-gateway cutover before actual startup credential validation. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - cfb384f22ebcbadcfb421b3020b4bb72fd657160)
 

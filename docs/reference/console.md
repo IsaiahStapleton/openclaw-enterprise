@@ -61,7 +61,12 @@ unsupported catalog or policy choices.
 
 An Agent detail page has the saved draft and immutable AgentRevisions. The draft
 reads the current Configuration and is editable only through the supported
-channel editor and harness authentication controls. **Selected revision** displays `activeRevisionId`; neither the
+channel editor and harness authentication controls. Choose **Operator-managed
+credentials** for SSH embedded OpenClaw: “Configured on the runtime host; not
+validated by OCC.” This saves `{ "method": "runtime" }` without a Secret ID or
+account. Its deployment action does not wait for OCC-managed credential metadata;
+the API still enforces permissions and driver/topology support. Gateway readiness
+does not establish model access. **Selected revision** displays `activeRevisionId`; neither the
 newest admitted revision nor the viewed snapshot must match it.
 
 Read-only AgentRevision snapshots cannot be edited, rolled back, redeployed, or

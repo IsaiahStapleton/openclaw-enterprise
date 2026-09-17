@@ -117,7 +117,7 @@ export async function createConsoleAppFixture(t, options = {}) {
     iamDriver,
     auditSink,
     development: options.development ?? { enabled: true, installationId },
-    computeDriver: computeDriver(),
+    computeDriver: options.computeDriver ?? computeDriver(),
     configurationDriver: createTestConfigurationDriver({ id: "console-configuration" }),
     ...(secretDriver === undefined || secretDriver === null ? {} : { secretDriver }),
     resolveHarness: resolveApprovedHarness,

@@ -63,6 +63,7 @@ function revision(driver, number = 1, agentId = "agent-ssh-1", configuration = {
     agentId,
     revision: number,
     providerId: null,
+    harnessAuth: { method: "runtime" },
     configurationId: `configuration-${agentId}`,
     configurationKind: "agent",
     configurationGeneration: number,
@@ -512,6 +513,11 @@ test("SSH embedded revisions stop without deleting snapshots or persistent Agent
   await missing(join(dir, "served.json"));
   await missing(join(f.units, f.unit(rev)));
   await missing(join(f.state, "systemctl.log"));
+  // Runtime auth is operator-owned. Even an invalid key must not gate process readiness.
+  const operatorEnv = join(dir, "env");
+  const operatorContents = "OPENAI_API_KEY=invalid-operator-key\n";
+  await writeFile(operatorEnv, operatorContents, { mode: 0o600 });
+  const operatorBefore = await stat(operatorEnv);
   await f.driver.activateRevision(rev, { secretEnvironment: [] });
   assert.equal((await stat(join(dir, "served.json"))).mode & 0o777, 0o600);
   assert.deepEqual(await json(join(dir, "served.json")), { revisionId: rev.id });
@@ -520,7 +526,7 @@ test("SSH embedded revisions stop without deleting snapshots or persistent Agent
     await readFile(join(dir, "gateway.env"), "utf8"),
     /^OPENCLAW_GATEWAY_TOKEN=[a-f0-9]{64}\n$/,
   );
-  await missing(join(dir, "env"));
+  assert.equal(await readFile(operatorEnv, "utf8"), operatorContents);
   assert.equal(
     await readFile(join(f.units, f.unit(rev)), "utf8"),
     `[Unit]
@@ -570,7 +576,22 @@ WantedBy=multi-user.target
   assert.equal((await stat(f.revisionDir(rev))).isDirectory(), true);
   assert.equal(await readFile(join(dir, "state", "retained-after-stop"), "utf8"), "persistent");
   await f.driver.activateRevision(rev);
-  assert.equal(await readlink(join(dir, "current")), `revisions/${digest(rev.id).slice(0, 12)}`);
+  const replacement = revision(f.driver, 2);
+  assert.equal((await f.driver.prepareRevision(replacement)).ready, true);
+  await f.driver.activateRevision(replacement);
+  await f.driver.retireRevision(rev);
+  await f.driver.stopRevision(replacement);
+  const operatorAfter = await stat(operatorEnv);
+  assert.equal(await readFile(operatorEnv, "utf8"), operatorContents);
+  assert.equal(operatorAfter.ino, operatorBefore.ino);
+  assert.equal(operatorAfter.mode, operatorBefore.mode);
+  assert.equal(operatorAfter.mtimeMs, operatorBefore.mtimeMs);
+  assert.ok(
+    (await readFile(join(f.state, "readyz.log"), "utf8"))
+      .trim()
+      .split("\n")
+      .every((line) => line === "GET /readyz"),
+  );
 });
 
 test("SSH trusted-proxy omits gateway.env, and allocation spans Agents and Namespaces on a host", async (t) => {
@@ -673,6 +694,13 @@ test("SSH revisions fail closed on unbound identities, unsupported topology, san
   await assert.rejects(f.driver.prepareRevision(rev), /bound Namespace and Agent/);
   await f.driver.ensureNamespace(tenant);
   bind(f.driver, rev);
+  for (const harnessAuth of [
+    undefined,
+    { method: "api_key" },
+    { method: "chatgpt_service_account" },
+    { method: "runtime", source: {} },
+  ])
+    await assert.rejects(f.driver.prepareRevision({ ...rev, harnessAuth }), /operator-managed/);
   for (const harness of [
     { id: "codex", mode: "dedicated" },
     { id: "openclaw", mode: "dedicated" },

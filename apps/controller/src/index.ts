@@ -17,6 +17,7 @@ import ajvFormats from "ajv-formats";
 import { AuditEventFactory, type AuditSink } from "@openclaw-enterprise/audit";
 import { AuthAccountRoleNotFoundError, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
 import {
+  harnessAuthBindingFromSnapshot,
   ErrorResponse,
   AgentRuntimeCredentialResponse,
   JsonValue,
@@ -500,13 +501,7 @@ function clientRevision(revision: Readonly<AgentRevision>): Record<string, unkno
     ...(revision.secretDriverId === undefined ? {} : { secretDriverId: revision.secretDriverId }),
     ...(revision.secretBindings === undefined ? {} : { secretBindings: revision.secretBindings }),
     ...(revision.plugins === undefined ? {} : { plugins: revision.plugins }),
-    harnessAuth:
-      revision.harnessAuth.method === "api_key"
-        ? { method: "api_key", source: revision.harnessAuth.source }
-        : {
-            method: "chatgpt_service_account",
-            serviceAccountId: revision.harnessAuth.serviceAccountId,
-          },
+    harnessAuth: harnessAuthBindingFromSnapshot(revision.harnessAuth),
     createdAt: revision.createdAt,
   };
 }

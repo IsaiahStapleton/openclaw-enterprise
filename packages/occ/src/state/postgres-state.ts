@@ -23,6 +23,7 @@ import type {
   ServiceAccountCredential,
 } from "@openclaw-enterprise/contracts";
 import {
+  harnessAuthBindingFromSnapshot,
   normalizePluginDesiredState,
   normalizeHarnessAuthBinding,
   normalizeSecretBindings,
@@ -1791,12 +1792,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         await assertHarnessAuthAvailable(
           { secrets, serviceAccounts },
           revision.namespaceId,
-          revision.harnessAuth.method === "api_key"
-            ? { method: "api_key", source: revision.harnessAuth.source }
-            : {
-                method: "chatgpt_service_account",
-                serviceAccountId: revision.harnessAuth.serviceAccountId,
-              },
+          harnessAuthBindingFromSnapshot(revision.harnessAuth),
         );
         const owner = await agents.findAgent(revision.namespaceId, revision.agentId);
         if (

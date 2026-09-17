@@ -1,3 +1,5 @@
+import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
+import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
@@ -341,4 +343,79 @@ test("Slack credential fields appear only when Slack is enabled and unknown save
     { slack: { appToken: "xapp-console-secret-2", botToken: "xoxb-console-secret-2" } },
   ]);
   assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), false);
+});
+
+test("operator-managed console binding saves and deploys without a managed credential gate", async (t) => {
+  const computeDriver = new SshComputeDriver({
+    ssh: { identityFile: "/tmp/ssh-test-key", knownHostsFile: "/tmp/ssh-test-hosts" },
+    hosts: { runtime: { address: "127.0.0.1", user: "root" } },
+    runtime: {
+      nodePath: "/usr/bin/node",
+      openclawPath: "/opt/openclaw/index.js",
+      user: "openclaw",
+      root: "/tmp/ssh-runtime-test",
+    },
+    network: { gatewayPortRange: { start: 18800, end: 18899 } },
+  });
+  const state = new InMemoryPlatformState();
+  const fixture = await createConsoleAppFixture(t, { computeDriver, state });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("runtime");
+  await state.transact((unit) =>
+    unit.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
+  );
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Operator-managed Agent",
+    createHarnessConfiguration("openclaw", "gpt-5.1"),
+    { harnessAuth: null },
+  );
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
+  await page.getByLabel("Authentication source").selectOption("runtime");
+  await page
+    .getByText("Configured on the runtime host; not validated by OCC.", { exact: true })
+    .waitFor();
+  assert.equal(await page.getByLabel("OpenAI API key Secret ID").isVisible(), false);
+  const save = page.waitForResponse(
+    (r) => r.url().endsWith(`/agents/${agent.id}`) && r.request().method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "Save authentication source" }).click();
+  assert.deepEqual((await (await save).json()).data.harnessAuth, { method: "runtime" });
+  await page.getByRole("button", { name: "Deploy saved draft" }).waitFor();
+  await page.getByText(/Gateway readiness does not confirm model access/).waitFor();
+  // Runtime removes only the credential gate, not failed-history protection.
+  const revisionsPath = `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}/revisions`;
+  await page.route(revisionsPath, (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "DEPENDENCY_UNAVAILABLE" } }),
+    }),
+  );
+  await page.reload();
+  await page
+    .getByText("Revision history is required before deploying this saved draft.", { exact: true })
+    .waitFor();
+  assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), true);
+  await page.unroute(revisionsPath);
+  await page.reload();
+  await page.getByText(/Gateway readiness does not confirm model access/).waitFor();
+  const credentialRequests = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/runtime-credentials")) credentialRequests.push(request.method());
+  });
+  const deployed = page.waitForResponse(
+    (r) => r.url().endsWith(`/agents/${agent.id}/deploy`) && r.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Deploy saved draft" }).click();
+  const response = await deployed;
+  assert.equal(response.status(), 202);
+  assert.deepEqual((await response.json()).data.harnessAuth, { method: "runtime" });
+  assert.deepEqual(
+    credentialRequests,
+    [],
+    "operator auth must not wait on a managed-credential endpoint",
+  );
+  // This proves the real UI/API admission boundary; no worker or SSH runtime is substituted.
 });

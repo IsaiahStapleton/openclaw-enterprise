@@ -2089,7 +2089,7 @@ export class OpenClawController {
     namespaceId: string,
     binding: HarnessAuthBinding | null,
   ): Promise<void> {
-    if (binding === null) return;
+    if (binding === null || binding.method === "runtime") return;
     if (binding.method === "api_key") {
       if (binding.source.namespaceId !== namespaceId)
         throw new ScopeViolationError("Harness authentication sources cannot cross Namespaces.");
@@ -2119,6 +2119,7 @@ export class OpenClawController {
         "Deployment requires an explicit Harness authentication binding.",
       );
     await this.authorizeHarnessAuthSource(state, principalId, agent.namespaceId, binding);
+    if (binding.method === "runtime") return immutableCopy(binding);
     if (binding.method === "api_key") {
       await this.authorize(agent.servicePrincipalId, "operate", binding.source);
       const source = await state.secrets.lockSecret(agent.namespaceId, binding.source.id);

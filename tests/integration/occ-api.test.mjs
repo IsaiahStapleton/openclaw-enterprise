@@ -1,3 +1,5 @@
+import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -361,7 +363,7 @@ async function createInjectedFixture(options = {}) {
     options.iamDriver ??
     new NativeIAMDriver({ loadNativeIAMState: async () => state }, { id: "iam-integration" });
   const computeCalls = { ensureNamespace: [], deleteNamespace: [] };
-  const computeDriver = {
+  const computeDriver = options.computeDriver ?? {
     id: "compute-integration",
     capability: "compute",
     implementation: "deterministic-test",
@@ -2352,4 +2354,93 @@ test("IAM and audit dependency failures fail closed without orphaned state", asy
 
   const stillUnchanged = await injectedRequest(fixture.app, "GET", "/namespaces");
   assertOnlyDefaultNamespace(stillUnchanged);
+});
+
+test("runtime auth admits SSH revisions without source permissions but retains deployment authorization and exact grammar", async () => {
+  const computeDriver = new SshComputeDriver({
+    ssh: { identityFile: "/tmp/ssh-test-key", knownHostsFile: "/tmp/ssh-test-hosts" },
+    hosts: { runtime: { address: "127.0.0.1", user: "root" } },
+    runtime: {
+      nodePath: "/usr/bin/node",
+      openclawPath: "/opt/openclaw/index.js",
+      user: "openclaw",
+      root: "/tmp/ssh-runtime-test",
+    },
+    network: { gatewayPortRange: { start: 18800, end: 18899 } },
+  });
+  const controller = await configuredController({ computeDriver, recordOperations: true });
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "runtime");
+  // Namespace provisioning is a prerequisite; this test exercises admission, not SSH transport.
+  await controller.fixture.platformState.transact((unit) =>
+    unit.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
+  );
+  const configuration = await createConfiguration(
+    controller,
+    namespace.id,
+    createHarnessConfiguration("openclaw", "gpt-5.1"),
+  );
+  // Neither an actor source grant nor an Agent source grant is needed: OCC owns no source.
+  for (const resourceKind of ["secret", "service_account"])
+    for (const action of ["read", "operate"])
+      controller.fixture.state.restrictions.push({
+        id: `deny-runtime-${resourceKind}-${action}`,
+        namespaceId: namespace.id,
+        resourceKind,
+        action,
+        effect: "deny",
+      });
+  const collection = `/namespaces/${namespace.id}/agents`;
+  for (const extra of [
+    { source: { kind: "secret" } },
+    { serviceAccountId: "sa_not_allowed" },
+    { value: "never-a-credential" },
+    { environmentVariable: "OPENAI_API_KEY" },
+  ]) {
+    const invalid = await controller.request("POST", collection, {
+      body: {
+        name: "invalid-runtime",
+        configurationId: configuration.id,
+        harnessAuth: { method: "runtime", ...extra },
+      },
+    });
+    assert.equal(invalid.status, 400);
+  }
+  const created = await controller.request("POST", collection, {
+    body: {
+      name: "Runtime Agent",
+      configurationId: configuration.id,
+      harnessAuth: { method: "runtime" },
+    },
+  });
+  assert.equal(created.status, 201);
+  assert.deepEqual(created.data.harnessAuth, { method: "runtime" });
+  const path = `${collection}/${created.data.id}`;
+  const deployed = await controller.request("POST", `${path}/deploy`);
+  assert.equal(deployed.status, 202, JSON.stringify(deployed.body));
+  assert.deepEqual(deployed.data.harnessAuth, { method: "runtime" });
+  const admitted = await controller.fixture.platformState.read((view) =>
+    view.revisions.findRevision(namespace.id, created.data.id, deployed.data.id),
+  );
+  assert.deepEqual(admitted.harnessAuth, { method: "runtime" });
+  const detached = await controller.request("PATCH", path, {
+    body: { configurationId: configuration.id, harnessAuth: null },
+  });
+  assert.equal(detached.status, 200);
+  assert.deepEqual(
+    (await controller.request("GET", `${path}/revisions/${deployed.data.id}`)).data.harnessAuth,
+    { method: "runtime" },
+  );
+  await controller.request("PATCH", path, {
+    body: { configurationId: configuration.id, harnessAuth: { method: "runtime" } },
+  });
+  controller.fixture.state.restrictions.push({
+    id: "deny-runtime-deploy",
+    namespaceId: namespace.id,
+    resourceKind: "agent",
+    resourceId: created.data.id,
+    action: "deploy",
+    effect: "deny",
+  });
+  assert.equal((await controller.request("POST", `${path}/deploy`)).status, 403);
 });

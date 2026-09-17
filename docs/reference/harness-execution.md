@@ -49,7 +49,7 @@ it does not implement fallback execution or allow changing topology.
 ## Admission and immutable execution
 
 Deployment authorizes the exact Agent, its Configuration, and its selected
-harness credential source. A selected SandboxDriver may transform a copy of the native
+managed harness credential source, when present. A selected SandboxDriver may transform a copy of the native
 configuration before validation and admission. The stored source Configuration
 is unchanged; the revision freezes the admitted document, source Configuration
 identity and generation, approved Harness identity/version, execution mode,
@@ -86,7 +86,11 @@ model-auth selector. Kubernetes supports these combinations:
 Kubernetes workload rendering prepares one explicit login mode and exact Secret
 projections. The selected Sandbox consumes the same already-rendered workload
 requirements. It does not resolve a second credential source. Other Compute
-implementations reject bindings they do not support.
+implementations reject bindings they do not support. SSH embedded OpenClaw accepts
+only `{ "method": "runtime" }`: systemd loads operator-provided host credentials,
+and OCC checks gateway readiness without validating model authentication. Host
+credential changes are outside revision immutability; see [SSH Compute](drivers/ssh-compute.md).
+Kubernetes rejects `runtime`; its managed validation remains unchanged.
 
 Codex rejects missing or conflicting runtime inputs before starting its app
 server. After login, a bounded native model turn must succeed before the server
@@ -97,7 +101,7 @@ remain separate. A dedicated gateway receives no model credential. Model auth
 cannot be supplied through Configuration `secretBindings` or the initial runtime
 credential API; those own gateway credentials and transport/channel setup.
 
-Embedded OpenClaw performs one bounded native model probe in the actual gateway
+Kubernetes embedded OpenClaw performs one bounded native model probe in the actual gateway
 startup, for both initial and replacement deployments. Embedded activation uses
 the shared gateway's `Recreate` strategy: cutover can stop the working gateway
 before the replacement validates its credentials. Invalid credentials or a

@@ -21,6 +21,7 @@ import type {
 import {
   normalizePluginDesiredState,
   normalizeHarnessAuthBinding,
+  harnessAuthBindingFromSnapshot,
   normalizeSecretBindings,
   validPluginRevisionState,
 } from "@openclaw-enterprise/contracts";
@@ -247,6 +248,7 @@ function normalizedPlugins(plugins?: PluginDesiredState): PluginDesiredState | u
 export function validHarnessAuthSnapshot(value: HarnessAuthSnapshot, namespaceId: string): boolean {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   try {
+    if (value.method === "runtime") return normalizeHarnessAuthBinding(value) !== null;
     const binding =
       value.method === "api_key"
         ? normalizeHarnessAuthBinding({ method: value.method, source: value.source })
@@ -290,6 +292,7 @@ export function harnessAuthMatches(
   snapshot: HarnessAuthSnapshot,
 ): boolean {
   if (binding === null || binding.method !== snapshot.method) return false;
+  if (binding.method === "runtime") return true;
   return binding.method === "api_key" && snapshot.method === "api_key"
     ? binding.source.namespaceId === snapshot.source.namespaceId &&
         binding.source.id === snapshot.source.id
@@ -330,7 +333,7 @@ export async function assertHarnessAuthAvailable(
   } catch {
     throw new ScopeViolationError("The Agent harness authentication binding is invalid.");
   }
-  if (binding === null) return;
+  if (binding === null || binding.method === "runtime") return;
   if (binding.method === "api_key") {
     if (
       binding.source.namespaceId !== namespaceId ||
@@ -1208,12 +1211,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       await assertHarnessAuthAvailable(
         { secrets, serviceAccounts },
         revision.namespaceId,
-        revision.harnessAuth.method === "api_key"
-          ? { method: "api_key", source: revision.harnessAuth.source }
-          : {
-              method: "chatgpt_service_account",
-              serviceAccountId: revision.harnessAuth.serviceAccountId,
-            },
+        harnessAuthBindingFromSnapshot(revision.harnessAuth),
       );
       const secretBindings = normalizedSecretBindings(revision.secretBindings);
       const plugins = revision.plugins === undefined ? undefined : immutableCopy(revision.plugins);

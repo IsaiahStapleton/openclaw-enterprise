@@ -217,33 +217,37 @@ export async function renderAgentDetail(context) {
   let deploy;
   let deployPending = false;
   let deployStatus;
+  const runtimeAuth = agent.harnessAuth?.method === "runtime";
   const credentials =
-    draft && revisionResult.status === "fulfilled"
+    draft && !runtimeAuth
       ? createRuntimeCredentialsPanel({
           context,
           path,
           values,
-          revisionsLoaded: true,
+          revisionsLoaded: revisionResult.status === "fulfilled",
           revisionCount: revisions.length,
           onStatusChange: updateDeployControls,
         })
-      : draft
-        ? createRuntimeCredentialsPanel({
-            context,
-            path,
-            values,
-            revisionsLoaded: false,
-            revisionCount: 0,
-            onStatusChange: updateDeployControls,
-          })
-        : null;
+      : null;
   function updateDeployControls() {
-    if (!deploy || !deployStatus || !credentials) return;
-    deploy.disabled = deployPending || !agent.harnessAuth || !credentials.canDeploy();
-    if (!deployPending)
-      deployStatus.textContent = agent.harnessAuth
-        ? credentials.deployGateMessage()
-        : "Select a harness authentication source in Credentials before deployment.";
+    if (!deploy || !deployStatus) return;
+    deploy.disabled =
+      deployPending ||
+      !agent.harnessAuth ||
+      revisionResult.status !== "fulfilled" ||
+      (!runtimeAuth && !credentials?.canDeploy());
+    if (!deployPending) {
+      if (revisionResult.status !== "fulfilled")
+        deployStatus.textContent =
+          "Revision history is required before deploying this saved draft.";
+      else if (runtimeAuth)
+        deployStatus.textContent =
+          "Configured on the runtime host; not validated by OCC. Gateway readiness does not confirm model access.";
+      else
+        deployStatus.textContent = agent.harnessAuth
+          ? credentials.deployGateMessage()
+          : "Select a harness authentication source in Credentials before deployment.";
+    }
   }
   if (draft) {
     deployStatus = element("p", { className: "muted", role: "status" });
@@ -258,7 +262,7 @@ export async function renderAgentDetail(context) {
           request(
             `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(snapshot.id)}`,
           ),
-          request(`${path}/runtime-credentials`),
+          runtimeAuth ? Promise.resolve(null) : request(`${path}/runtime-credentials`),
         ]);
         if (!context.isCurrent()) return;
         if (
@@ -274,7 +278,7 @@ export async function renderAgentDetail(context) {
           deployStatus.textContent = credentialBlockReason;
           return;
         }
-        if (!hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values)) {
+        if (!runtimeAuth && !hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values)) {
           deployStatus.textContent =
             "Runtime credential metadata changed. Refresh status before deploying.";
           return;
@@ -380,7 +384,7 @@ export async function renderAgentDetail(context) {
       },
     });
     content.append(channels);
-  } else if (selectedTab === "credentials" && credentials) {
+  } else if (selectedTab === "credentials" && draft) {
     const auth = createHarnessAuthFields(context, agent.harnessAuth);
     const feedback = element("p", { role: "status", className: "hint" });
     const save = element(
@@ -427,7 +431,8 @@ export async function renderAgentDetail(context) {
         }
       }
     });
-    content.append(form, credentials.section);
+    content.append(form);
+    if (credentials) content.append(credentials.section);
   } else {
     const details = [
       ["Execution mode", executionMode === "dedicated" ? "Dedicated" : "Embedded"],
