@@ -1,13 +1,13 @@
 # OCC CLI
 
-Build the checkout-local `occ` used by `scripts/dev-up` from a trusted OpenClaw
+Build the checkout-local `occ` used by `scripts/dev-up` and `scripts/dev-down` from a trusted OpenClaw
 Enterprise checkout:
 
 ```bash
 pnpm cli:build
 ```
 
-Install `occ` on `PATH` when using it outside that development helper, select
+Install `occ` on `PATH` when using resource commands outside the checkout, select
 the OCC endpoint and protected service-key response file, then work with
 platform resources through domain commands:
 
@@ -19,8 +19,8 @@ occ installation get
 occ namespace list
 ```
 
-The command groups are `installation`, `namespace`, `configuration`, and
-`agent`. Walk their built-in help when discovering an operation:
+The resource command groups are `installation`, `namespace`, `configuration`,
+and `agent`. Walk their built-in help when discovering an operation:
 
 ```bash
 occ --help
@@ -43,6 +43,26 @@ occ agent stop '<agent-id>'
 Human-readable tables are the default. Use `--output json` or `--output yaml`
 for automation. Structured output contains the resource or resource collection
 directly; HTTP response envelopes are an internal client detail.
+
+## Manage local development
+
+From the checkout root, start the default Docker Compute profile and use the
+cleanup command printed after startup:
+
+```bash
+./bin/occ dev up
+./bin/occ dev down
+```
+
+`./bin/occ dev up` runs the [development quickstart](quickstart.md), including its
+container-engine, runtime-image, and readiness checks. The default cleanup
+preserves the Docker profile's database and configuration volumes; pass
+`--volumes` only to delete the local Installation.
+
+Set `OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes` for the
+[local Kubernetes profile](deploy/local-kubernetes-development.md). Its cleanup
+deletes the profile's k3d cluster, Compose volumes, and private state. Keep the
+printed cleanup command so it selects the same profile and state directory.
 
 ## Connection and credential boundaries
 

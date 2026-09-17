@@ -4,43 +4,72 @@ updated: 2026-09-17
 last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 ---
 
-# Docker or Podman Compose Development Flow
+# Compose development flow
 
 ## Overview
 
-`scripts/dev-up` performs host preflight, selects Docker Engine or Podman,
-selects or verifies runtime images, starts Compose, waits for PostgreSQL
-migration, Installation bootstrap, API health and worker readiness, and proves
-authenticated Installation access through `bin/occ installation get` with a
-protected local bootstrap service key.
-The worker can then reconcile Namespace infrastructure. Agent deployment stops
-at harness authentication admission because Docker Compute rejects bindings;
-this flow does not reach model execution or TUI attachment.
+`./bin/occ dev up` starts local OpenClaw Enterprise development from a checkout.
+The `scripts/dev-up` entry point selects the same profile. Docker Compute is
+selected by default. Setting `OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes` keeps
+OCC in Compose but dispatches Compute to the
+[local k3d profile](../guides/deploy/local-kubernetes-development.md).
+Both profiles perform host preflight, select Docker Engine or Podman, prepare
+runtime images, start Compose, and wait for PostgreSQL migration, Installation
+bootstrap, API health, and worker readiness. Startup proves authenticated
+Installation access with a protected local bootstrap service key; it does not
+create an Agent or prove model execution.
+
+For Docker Compute, the worker can reconcile Namespace infrastructure, but
+Agent deployment stops at harness authentication admission because Docker
+Compute rejects bindings. Kubernetes Agent execution continues through the
+selected Kubernetes Compute Driver and the
+[authenticated Agent deployment procedure](../guides/deploy/production-agents.md).
 
 ## Entry Points
 
-- Trigger: `./scripts/dev-up [--key-output PATH] [-- COMPOSE_GLOBAL_OPTIONS...]`
+- Trigger: `./bin/occ dev up [--key-output PATH] [-- COMPOSE_GLOBAL_OPTIONS...]`
   from the repository root, followed by authenticated Namespace operations.
-- Source: `scripts/dev-up`, `apps/controller/src/worker.ts:ControllerWorker`, and
-  `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver`.
-- Assumptions: Docker Engine with Compose, or Podman with `podman-compose` and
-  `yq` v4; Bash, curl and Python 3; writable PostgreSQL and Configuration volumes;
-  loopback API publication; executable `bin/occ` built with `pnpm cli:build`.
-  Startup needs no model credential.
+- Source: `scripts/dev-up:require_command`, `internal/occdev/up.go:Up`, and
+  `internal/occdev/down.go:Down`.
+- Assumptions: Docker Engine with Compose, or Podman with `podman-compose`;
+  Bash, curl, Python 3, and `yq` v4 for the Docker profile; writable PostgreSQL
+  and Configuration volumes; loopback API publication; executable `bin/occ`
+  built with `pnpm cli:build`. Startup needs no model credential.
+
+The Kubernetes profile additionally uses `compose.kubernetes.yaml`,
+`internal/occdev`, k3d, and kubectl. `./bin/occ dev down` owns profile cleanup;
+`scripts/dev-down` dispatches to it. The local Kubernetes development guide
+owns the operator procedure and destructive cleanup boundary.
 
 ## Flow
 
 ```mermaid
 graph TD
-  A["scripts/dev-up preflights host and images"] --> B["Compose starts PostgreSQL, bootstrap, API and worker"]
-  B --> C["bin/occ installation get proves access with protected service key"]
-  C --> D["Operator creates Namespace through authenticated API"]
-  D --> E["Worker claims durable Namespace operation"]
-  E --> F["Docker Driver ensures owned tenant network"]
-  F --> G["Namespace becomes ready"]
-  C --> H["Operator requests Agent deployment"]
-  H --> I["Admission rejects missing or unsupported harness binding"]
-  G --> J["Authorized deletion removes owned Namespace resources"]
+  A["./bin/occ dev up"] --> Profile{"Compute profile"}
+  Profile -->|Docker| B["Preflight host tools and resolved Compose config"]
+  Profile -->|Kubernetes| KPre["Pin local engine endpoint<br/>and reject existing resources"]
+  KPre --> KConfig["Validate Compose and claim<br/>private state with snapshot"]
+  KConfig --> KStart["Bootstrap OCC and create<br/>the owned k3d cluster"]
+  KStart --> KReady["Import runtime and start<br/>API and Kubernetes worker"]
+  KReady --> KProof["Prove authenticated<br/>Installation access"]
+  KProof --> KDown["./bin/occ dev down reuses<br/>recorded endpoint and project"]
+  KStart -->|failure| KRollback["Roll back owned resources<br/>retain state if cleanup fails"]
+  KReady -->|failure| KRollback
+  KProof -->|failure| KRollback
+  KDown --> KRemove["Stop reconcilers and delete<br/>owned cluster and volumes"]
+  KRemove -->|success| KDone["Remove private state"]
+  KRemove -->|failure| KRetain["Keep state for recovery"]
+  B --> C["Select quickstart runtime image or validate custom images"]
+  C --> D["Selected Compose starts PostgreSQL, migrate, bootstrap, API, and worker"]
+  D --> E["Copy bootstrap service-key response to private local file"]
+  E --> F["./bin/occ installation get proves authenticated access"]
+  F --> G["Operator creates Namespace through authenticated API"]
+  G --> H["Worker claims durable Namespace operation"]
+  H --> I["Docker Driver ensures owned tenant network"]
+  I --> J["Namespace becomes ready"]
+  F --> K["Operator requests Agent deployment on Docker Compute"]
+  K --> L["Admission rejects missing or unsupported harness binding"]
+  J --> M["Authorized deletion removes owned Namespace resources"]
 ```
 
 ## Execution Trace
@@ -60,13 +89,30 @@ engine selection, database initialization, local API admission and worker startu
 traces API authorization, durable work, tenant network ownership, unsupported
 Agent authentication and exact resource removal.
 
+### 3. Start and clean up Kubernetes development
+
+`internal/occdev/up.go:Up`, `internal/occdev/down.go:Down`.
+
+[The Kubernetes startup and cleanup trace](docker-compose-development/startup.md#12-select-kubernetes-development-and-preserve-cleanup-ownership)
+follows profile selection, the private Compose snapshot, k3d creation, runtime
+import, authenticated readiness, and cleanup through the recorded engine.
+
 ## Debugging and Verification
 
-- `dev-up` should show database readiness, completed initialization, a ready API
-  and worker, a private copied service-key path and authenticated Installation access.
+- `./scripts/dev-up` should show PostgreSQL readiness, migration completion,
+  API listening on `127.0.0.1:${OPENCLAW_DEV_PORT:-3000}`,
+  fresh-database initialization, `worker.started` with `computeDriverId` set to
+  `compute-docker-development`, a private copied service-key path, and a
+  successful authenticated `/installation` proof.
+- With `OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes`, startup should instead
+  report Kubernetes Compute, a private kubeconfig, and the disposable k3d
+  context; it does not mount the engine socket into the Kubernetes worker.
+- Docker Compute on Podman startup verification should show Podman as the selected engine, mount
+  only its reported API socket into the worker, and complete the same
+  authenticated Installation proof without a `docker` alias.
 - `<engine> network ls --filter label=org.openclaw.enterprise.compute-driver=docker`
   should show the owned network for a ready development Namespace.
-- Agent deployment must reject a missing or unsupported harness binding before
+- Docker Compute Agent deployment must reject a missing or unsupported harness binding before
   workload creation. A worker `OPENAI_API_KEY` cannot make it supported.
 - Retained Docker/Podman model suites currently cannot pass through this admission
   boundary. See [Docker test status](../testing/docker.md); old model-turn evidence
@@ -76,6 +122,7 @@ Agent authentication and exact resource removal.
 ## Related docs
 
 - [Development and production deployment](../guides/deploy.md)
+- [Local Kubernetes development](../guides/deploy/local-kubernetes-development.md)
 - [Quickstart](../guides/quickstart.md)
 - [Docker Compute Driver](../reference/drivers/docker-compute.md)
 - [Kubernetes Agent deployment and TUI](../guides/deploy/production-agents.md)
@@ -86,6 +133,10 @@ Agent authentication and exact resource removal.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 16:47: Merge current main's Podman dedicated recovery proof and checkout-local CLI requirement while preserving the Kubernetes lifecycle trace. (01a0ae15-3bad-7d92-92b7-f8be208cbb49 - b13b2f479f824891ab3c5bf71e6851d704dba458)
+
+- 2026-09-17 06:42: Trace the accompanying Go CLI development lifecycle, Kubernetes startup and cleanup ownership, and retained Docker startup path. (01a0ae15-3bad-7d92-92b7-f8be208cbb49 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
 - 2026-09-17 00:48: Correct current harness admission and metadata-only dispatch boundaries after implementation review. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 107900e9551b90c3e9ac24d30f8ea866f17e5dbb)
 
