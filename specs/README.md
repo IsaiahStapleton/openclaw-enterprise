@@ -40,6 +40,9 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Harness authentication bindings](30-harness-auth-binding.md) — Accepted for implementation;
+one Agent auth binding for supplied OpenAI keys and issued ChatGPT account credentials.
+
 [Gateway–Harness storage split](28-gateway-harness-storage-split.md) — Proposed;
 #76/#89 draft covering storage ownership, live edits and first-start files.
 
