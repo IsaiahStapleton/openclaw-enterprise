@@ -1,0 +1,39 @@
+services:
+  service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "${CREDENTIAL_SERVICE_UID:?Set the owner UID of protected input files}:${CREDENTIAL_SERVICE_GID:?Set the owner GID}"
+    command: ["--config", "/run/repository-credentials/config.json"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports: ["443:8443"]
+    volumes:
+      - type: bind
+        source: ${CREDENTIAL_SERVICE_INPUTS:?Set a protected service input directory}
+        target: /run/repository-credentials
+        read_only: true
+      - type: bind
+        source: ${CREDENTIAL_SERVICE_CONTROL:?Set a private control socket directory}
+        target: /run/repository-control
+    stop_grace_period: 65s
+  client:
+    profiles: [client]
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    user: "${CREDENTIAL_SERVICE_UID:?Set the session owner UID}:${CREDENTIAL_SERVICE_GID:?Set the session owner GID}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:mode=1777,size=16m"]
+    volumes:
+      - type: bind
+        source: ${CREDENTIAL_CLIENT_SESSION:?Set the selected private session directory}
+        target: /session
+        read_only: true
+      - type: bind
+        source: ${CREDENTIAL_CLIENT_WORKSPACE:?Set the client workspace directory}
+        target: /workspace
+    working_dir: /workspace

@@ -8,6 +8,7 @@ const ghVersion = "2.100.0";
 const imageIdPattern = /^sha256:[a-f0-9]{64}$/;
 
 export async function prepareRepositoryCredentials({
+  repositoryRoot,
   imagePrefix,
   receiptPath,
   execFile,
@@ -16,20 +17,17 @@ export async function prepareRepositoryCredentials({
 }) {
   const docker = process.env.OCC_DOCKER_BIN ?? "docker";
   await execFile(docker, ["version", "--format", "{{.Server.Version}}"]);
+  await execFile(docker, ["compose", "version"]);
   await execFile("pnpm", ["--filter", "@openclaw-enterprise/repository-credentials", "build"], {
     timeoutMs: 300_000,
   });
-  const context = await mkdtemp(
-    join(process.env.RUNNER_TEMP ?? tmpdir(), "credential-source-tools-"),
-  );
-  const tag = `${imagePrefix}/source-tools:local`;
-  const resource = await registerImage(tag);
-  try {
-    await writeFile(
-      join(context, "Dockerfile"),
-      'FROM docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 AS client-tools\nARG TARGETARCH\nRUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl && rm -rf /var/lib/apt/lists/*\nRUN --mount=type=secret,id=build-ca,required=false \\\n    set -eu; \\\n    if [ -f /run/secrets/build-ca ]; then export CURL_CA_BUNDLE=/run/secrets/build-ca; fi; \\\n    architecture="${TARGETARCH:-amd64}"; \\\n    case "$architecture" in amd64|arm64) ;; *) exit 1 ;; esac; \\\n    cd /tmp; \\\n    curl --fail --location --silent --show-error -O "https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_linux_${architecture}.tar.gz"; \\\n    curl --fail --location --silent --show-error -O "https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_checksums.txt"; \\\n    grep " gh_2.100.0_linux_${architecture}.tar.gz$" gh_2.100.0_checksums.txt | sha256sum --check --strict; \\\n    tar -xzf "gh_2.100.0_linux_${architecture}.tar.gz"; \\\n    install -m 0755 "gh_2.100.0_linux_${architecture}/bin/gh" /usr/local/bin/gh; \\\n    rm -rf /tmp/gh_2.100.0*; \\\n    gh --version | grep \'^gh version 2.100.0 \'\nWORKDIR /workspace\n',
-      { mode: 0o600 },
-    );
+
+  const appContext = join(repositoryRoot, "apps/repository-credentials");
+  async function buildImage(name, dockerfile, context, buildArgs = []) {
+    const tag = `${imagePrefix}/${name}:local`;
+    const resource = await registerImage(tag);
+    // All three builds use the engine's local store so the qualification build
+    // resolves its two delivered inputs without a registry publication.
     await execFile(
       docker,
       [
@@ -39,49 +37,64 @@ export async function prepareRepositoryCredentials({
         "--load",
         "--pull=false",
         "-f",
-        join(context, "Dockerfile"),
+        dockerfile,
         "-t",
         tag,
+        ...buildArgs,
         context,
       ],
       { timeoutMs: 900_000 },
     );
     const inspected = await execFile(docker, ["image", "inspect", "--format", "{{.Id}}", tag]);
     const id = inspected.stdout.trim();
-    assert.match(id, imageIdPattern, "Invalid source toolchain image ID");
+    assert.match(id, imageIdPattern, `Invalid ${name} image ID`);
     await markImageReady(resource, id);
-    const source = await execFile("git", ["rev-parse", "HEAD"]);
-    await writeFile(
-      receiptPath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          lane: "repository-credentials-container",
-          kind: "source-fixture",
-          sourceCommit: source.stdout.trim(),
-          ghVersion,
-          images: { source: { tag, id } },
-        },
-        null,
-        2,
-      )}\n`,
-      { mode: 0o600 },
-    );
-    return { REPOSITORY_CREDENTIALS_NODE_IMAGE: id };
-  } finally {
-    await rm(context, { recursive: true, force: true });
+    return { tag, id };
   }
+
+  const service = await buildImage("service", join(appContext, "Dockerfile"), appContext);
+  const client = await buildImage("client", join(appContext, "Dockerfile.client"), appContext);
+  const qualification = await buildImage(
+    "qualification",
+    join(repositoryRoot, "tests/fixtures/repository-credentials/Dockerfile.qualification"),
+    repositoryRoot,
+    ["--build-arg", `SERVICE_IMAGE=${service.tag}`, "--build-arg", `CLIENT_IMAGE=${client.tag}`],
+  );
+  const source = await execFile("git", ["rev-parse", "HEAD"]);
+  await writeFile(
+    receiptPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        lane: "repository-credentials-container",
+        sourceCommit: source.stdout.trim(),
+        ghVersion,
+        images: { service, client, qualification },
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+  return {
+    // The test composition runs as root for its isolated port-443 listener;
+    // the delivered service and client retain their unprivileged image users.
+    REPOSITORY_CREDENTIALS_NODE_IMAGE: qualification.id,
+    REPOSITORY_CREDENTIALS_TEST_IMAGE: qualification.id,
+    REPOSITORY_CREDENTIALS_SERVICE_IMAGE: service.id,
+    REPOSITORY_CREDENTIALS_CLIENT_IMAGE: client.id,
+  };
 }
 
 export async function prepareRepositoryCredentialsFile({ clientImage, execFile }) {
-  assert.match(clientImage ?? "", imageIdPattern, "A prepared source toolchain image is required");
+  assert.match(clientImage ?? "", imageIdPattern, "A prepared client image is required");
   const directory = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "openclaw-ci-gh-"));
   const binary = join(directory, "gh");
   const container = `openclaw-ci-gh-${randomUUID()}`;
   const docker = process.env.OCC_DOCKER_BIN ?? "docker";
   const cleanup = () => rm(directory, { recursive: true, force: true });
   try {
-    // Extract the checksum-verified source toolchain binary. Do not trust the runner's
+    // Extract the checksum-verified delivered binary. Do not trust the runner's
     // gh installation or expose its home directory to the extraction container.
     try {
       await execFile(

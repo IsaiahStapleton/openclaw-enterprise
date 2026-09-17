@@ -1,25 +1,129 @@
-# Repository credential tests
+# Repository credential service tests
 
-Run from the repository root with Node 24, Git, OpenSSL, and prepared workspace dependencies. Tests generate their own bounded local key/TLS fixtures.
+Run these tests from the repository root with Node.js 24, Git, OpenSSL, Docker,
+and the prepared workspace dependencies. The fixtures generate fresh RSA and
+TLS material, start bounded local upstreams, and remove their temporary files,
+listeners and containers when the tests finish. They do not load ambient
+GitHub credentials.
 
 ```sh
-pnpm credentials:build
-node --test tests/conformance/repository-credentials-backend-conformance.test.mjs \
-  tests/conformance/repository-credentials-contracts.test.mjs \
-  tests/conformance/repository-credentials-custody.test.mjs \
-  tests/conformance/repository-credentials-github.test.mjs \
-  tests/conformance/repository-credentials-lifecycle.test.mjs \
-  tests/conformance/repository-credentials-sessions.test.mjs \
-  tests/integration/repository-credentials-client-config.test.mjs \
-  tests/integration/repository-credentials-config.test.mjs \
-  tests/integration/repository-credentials-control.test.mjs \
-  tests/integration/repository-credentials-gh.test.mjs \
-  tests/integration/repository-credentials-git.test.mjs \
-  tests/integration/repository-credentials-http.test.mjs \
-  tests/integration/repository-credentials-package.test.mjs \
-  tests/integration/repository-credentials-shutdown.test.mjs
+node --test tests/conformance/repository-credentials-backend-conformance.test.mjs
+node --test tests/integration/repository-credentials-git.test.mjs
+node --test tests/integration/repository-credentials-gh.test.mjs
+node --test tests/integration/repository-credentials-long-session.test.mjs
 ```
 
-Common-owner tests cover custody, immutable admission, controlled-time replacement, closure, and uncertainty. GitHub and the alternate fixture use the same service owners.
+The client integration files create a disposable `node:24-bookworm` fixture container,
+mount the source read-only and mount `/usr/bin/gh` read-only after checking its
+version is exactly **2.100.0**. Override the prepared binary with
+`REPOSITORY_CREDENTIALS_GH_BINARY` and the prepared Node image with
+`REPOSITORY_CREDENTIALS_NODE_IMAGE`. These tests require the prerequisites and
+fail if they are unavailable. They never install dependencies.
 
-Real Git and pinned gh 2.100.0 use the production TLS listener and client launcher. Prepare Docker, a Node/Git fixture image in `REPOSITORY_CREDENTIALS_NODE_IMAGE`, and the exact binary in `REPOSITORY_CREDENTIALS_GH_BINARY`. Fixtures run with networking disabled, a valid gateway DNS SAN, and canonical GH_HOST. CI prepares a source toolchain image and extracts its checked binary. Source fixtures prove routing and remote fixture state; delivered-artifact, separate-container isolation, and live-provider qualification remain separate delivery gates.
+The container resolves `credentials.example.test` to its own loopback address.
+Its network is disabled; every controlled service shares that loopback namespace.
+The generated certificate includes that DNS SAN; clients verify it using the
+generated public CA. The gateway listens on HTTPS port 443 and `gh` retains
+`GH_HOST=github.com`. The generated production client configuration and launcher
+own authentication, clean environment setup and the Git helper. No insecure
+TLS switch or localhost `GH_HOST` substitute is used.
+
+## What the controlled tests prove
+
+The Git upstream runs the actual `git-http-backend` against a disposable bare
+repository. Assertions check remote refs after clone, fetch, switch and push.
+A fault case drops the response after receive-pack finishes and checks that the
+service sends the push once while the remote ref records the accepted commit.
+
+The API upstream verifies RSA signatures, App identity, current JWT time,
+repository selection and complete permission maps. It maintains independent
+PR, issue and comment state. The pinned CLI runs REST creation/read/update,
+paginated comments, individual comment operations and native GraphQL PR
+creation. It checks bodyless deletion and unchanged human text. Unknown routes
+and lost mutation responses exercise denial and no-replay behavior.
+
+The alternate adapter uses a nonnumeric repository ID, nested repository path,
+different native authentication and permissions, short access expiry, and a
+separately bounded private renewal secret. The production service supplies
+custody, original attempts, leases, settlement, expiry and finalization.
+The HTTP case uses the same production listener and sender as GitHub.
+Passing this test does not claim support for another production provider.
+
+The long-session test clones once, advances trusted wall and monotonic clocks
+past hour thirteen, then pushes and performs the API workflows through the same
+running service and unchanged client files. The upstream checks that expired
+token A receives no later authentication attempts, including rejected attempts
+at the Git and API boundaries, and token B has a fresh JWT with the same
+repository and profile. It then checks local closure and provider retirement
+separately. There is no long sleep and no Agent-facing clock control.
+
+## Qualify emitted artifacts
+
+Build the service and client images using the
+[operator guide](../guides/repository-credentials.md). Then combine the emitted
+service closure with the delivered client toolchain in an owned test-only image:
+
+```sh
+docker build \
+  --build-arg SERVICE_IMAGE=repository-credentials-service:test \
+  --build-arg CLIENT_IMAGE=repository-credentials-client:test \
+  -f tests/fixtures/repository-credentials/Dockerfile.qualification \
+  -t repository-credentials-qualification:test .
+REPOSITORY_CREDENTIALS_TEST_IMAGE=repository-credentials-qualification:test \
+  node --test tests/integration/repository-credentials-container.test.mjs
+```
+
+Record both input image identities and the qualification image ID with results.
+This case imports `/app/dist`, exercises the emitted production service and
+client entrypoints, and uses the same long-session acceptance sequence. The
+qualification image is a test driver; it is not a separate supported deployment.
+Without an explicit image selector, this case reports a skip. Source test
+success alone does not establish this artifact result.
+
+The service, upstream fixtures and clients run together inside that test driver.
+Passing it proves emitted-artifact composition and forwarding, not credential
+isolation of a separate Agent container. The second case checks the rendered
+Compose mount configuration only. Runtime isolation requires separate delivered
+service and client containers, with only the session files, public trust and
+workspace mounted into the client, plus inspection of the running client surfaces.
+Keep that result separate from the combined fixture and Compose configuration checks.
+
+## Run an authorized live smoke
+
+Prepare a running gateway on valid DNS/TLS port 443, its private operator socket,
+and a disposable repository explicitly authorized for temporary branch, PR,
+issue and comment writes. Use the exact pinned client. Select only this file:
+
+```sh
+REPOSITORY_CREDENTIALS_LIVE=1 \
+REPOSITORY_CREDENTIALS_LIVE_AUTHORIZED=1 \
+REPOSITORY_CREDENTIALS_LIVE_CONTROL_SOCKET=/run/credential-service/control.sock \
+REPOSITORY_CREDENTIALS_LIVE_CA=/run/credential-service/public-ca.pem \
+  node --test tests/integration/repository-credentials-live.test.mjs
+```
+
+The smoke admits a five-minute `read-write` session through the real control API.
+It clones and pushes unique temporary branches, exercises REST and native PR
+creation plus issue/comments. Before each create, it registers reconciliation
+using a unique run marker and, for PRs, the unique head branch. Cleanup inspects
+at most five pages of 100 resources through existing routes in the admitted
+repository; it closes or deletes only a single matching owned resource. A lost
+creation response never causes creation to be replayed. Missing, ambiguous or
+truncated identity inspection fails cleanup and reports the run marker for
+operator reconciliation.
+
+Work commands have a 90-second overall budget and terminate their owned process
+groups on timeout, output overflow or cancellation. Resource cleanup has a
+separate 60-second budget. Session cleanup always runs afterward, validates the
+close acknowledgement, and polls status for disposal under a 10-second polling
+budget; each control request also has its production five-second deadline.
+Local `CLOSED` status is distinct from `DISPOSED`: active uses, pending or
+uncertain credentials, and auxiliary obligations must all resolve. Cleanup
+failures fail the test and require operator review of the disposable repository. Keep provider keys and installation tokens on the
+service side; the test client receives only the gateway bearer.
+
+Without the live selector the case explicitly reports unavailable live-provider
+evidence. If selected, missing authorization, socket, CA, routing or credentials
+fails. Controlled upstream success proves service behavior against those
+protocol fixtures; it does not establish live GitHub compatibility or a real
+thirteen-hour provider soak.

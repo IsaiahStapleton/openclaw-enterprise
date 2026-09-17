@@ -97,7 +97,9 @@ and DNS overrides. It rejects HTTP(S) userinfo in remote fetch/push URLs and
 before Git can transmit URL credentials in place of the session helper. The same
 surfaces reject explicit remote-helper syntax. Clone options are validated before
 inspection; config/template/submodule options, inherited `init.templateDir` and conditional
-includes refuse because they introduce state or transports after preflight. The helper reads the gateway
+includes refuse because they introduce state or transports after preflight. Compose
+mounts only the selected session at `/session`, keeping sibling sessions outside
+the container. The helper reads the gateway
 bearer only after matching HTTPS host and repository path. API execution checks
 `gh` 2.100.0 and retains canonical GitHub identity while selecting the configured
 gateway API host. Absolute API destinations and unqualified commands refuse.
@@ -181,8 +183,7 @@ A helper failure reports a fixed category without credentials. Diagnose the
 configured HTTPS host/path and private file ownership first. API failures also
 require checking the pinned CLI, canonical host, gateway DNS/SAN and port 443.
 The [test guide](../testing/repository-credentials.md) owns controlled upstream,
-client and alternate-adapter checks. Container packaging and live-provider qualification
-follow in the packaging change.
+long-session, alternate-adapter, packaged and authorized live-provider checks.
 A structural flow check does not establish any of those runtime results.
 
 ## Related docs

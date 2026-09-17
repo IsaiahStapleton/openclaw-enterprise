@@ -110,6 +110,50 @@ Select a separate branch when trying both REST and native PR creation. Do not
 run `gh auth login` or inject a PAT when a command fails. The gateway routes and
 exact App permissions define supported access.
 
+## Container images
+
+Build after emitting the application:
+
+```sh
+pnpm credentials:image
+pnpm credentials:client-image
+```
+
+If build-time HTTPS downloads require an additional trusted CA, optionally pass
+a PEM CA bundle through a BuildKit secret:
+
+```sh
+docker build --secret id=build-ca,src=/absolute/path/build-ca-bundle.pem \
+  -f apps/repository-credentials/Dockerfile.client \
+  -t repository-credentials-client:local apps/repository-credentials
+```
+
+The secret supplies curl trust for that download step and is not stored in the
+image. Without it, curl uses the image's default CA trust. Runtime gateway trust
+still comes from the selected session configuration.
+
+Both Dockerfiles use the dedicated app context and copy only its manifest and
+emitted code. The client image installs Git and checksum-verifies pinned `gh`
+2.100.0. Neither image includes service configuration, private keys, session
+files or a control socket. The client entrypoint takes `SESSION_DIRECTORY
+ git|gh ARGS...`.
+
+The optional `apps/repository-credentials/compose.yaml` publishes service port
+8443 at host port 443 and keeps service/control mounts separate from client
+mounts. Supply its required `CREDENTIAL_SERVICE_UID`, `CREDENTIAL_SERVICE_GID`,
+`CREDENTIAL_SERVICE_INPUTS`, `CREDENTIAL_SERVICE_CONTROL`,
+`CREDENTIAL_CLIENT_SESSION`, and `CREDENTIAL_CLIENT_WORKSPACE` variables. Set
+`CREDENTIAL_CLIENT_SESSION` to the selected directory, such as
+`/absolute/path/sessions/task`; it appears as `/session` in the client. Match the
+UID/GID to the protected files. The example configuration's paths match these
+container mounts. Arrange gateway DNS and certificate trust before running the
+client; Compose does not provision public DNS or a CA. For example:
+
+```sh
+docker compose -f apps/repository-credentials/compose.yaml run --rm client \
+  /session git clone https://credentials.example.internal/example/project.git
+```
+
 ## Inspect and close
 
 ```sh

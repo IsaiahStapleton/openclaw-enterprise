@@ -51,7 +51,9 @@
     "credentials:check-config": "node apps/repository-credentials/dist/check-config.js --check-config",
     "credentials:start": "node apps/repository-credentials/dist/main.js",
     "credentials:operator": "node apps/repository-credentials/dist/client/operator.js",
-    "credentials:client": "node apps/repository-credentials/dist/client/launch.js"
+    "credentials:client": "node apps/repository-credentials/dist/client/launch.js",
+    "credentials:image": "docker build -f apps/repository-credentials/Dockerfile -t repository-credentials:local apps/repository-credentials",
+    "credentials:client-image": "docker build -f apps/repository-credentials/Dockerfile.client -t repository-credentials-client:local apps/repository-credentials"
   },
   "devDependencies": {
     "@types/node": "26.5.0",

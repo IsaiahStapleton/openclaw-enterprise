@@ -1,0 +1,52 @@
+import { lstat, readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
+
+// The trusted host scans this bounded snapshot in memory and never prints it:
+// the selected session bearer is legitimately present in these client files.
+const surfaces = [];
+let bytes = 0;
+async function walk(path) {
+  const stat = await lstat(path);
+  if (stat.isSymbolicLink()) return;
+  if (stat.isDirectory()) {
+    for (const name of await readdir(path)) await walk(join(path, name));
+  } else if (stat.isFile()) {
+    if (stat.size > 4 * 1024 * 1024 || (bytes += stat.size) > 16 * 1024 * 1024)
+      throw new Error("probe-size-limit");
+    surfaces.push(await readFile(path, "utf8"));
+  }
+}
+for (const path of ["/session", "/workspace", "/tmp", "/app"]) await walk(path);
+for (const name of await readdir("/proc")) {
+  if (!/^\d+$/.test(name)) continue;
+  for (const file of ["environ", "cmdline"]) {
+    try {
+      surfaces.push(await readFile(`/proc/${name}/${file}`, "utf8"));
+    } catch (error) {
+      if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error;
+    }
+  }
+}
+const forbidden = [
+  "/inputs",
+  "/state",
+  "/run/repository-control",
+  "/run/repository-credentials",
+  "/var/run/docker.sock",
+  "/source",
+  "/session-parent",
+  "/sessions",
+  "/sibling",
+  "/app/dist/main.js",
+  "/app/dist/backends",
+];
+const present = [];
+for (const path of forbidden) {
+  try {
+    await lstat(path);
+    present.push(path);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+process.stdout.write(JSON.stringify({ surfaces, present, bytes, environment: process.env }));

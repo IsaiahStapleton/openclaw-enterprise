@@ -879,7 +879,13 @@
       ]
     },
     "repository-credentials-container": {
-      "requiredEnv": ["REPOSITORY_CREDENTIALS_NODE_IMAGE", "REPOSITORY_CREDENTIALS_GH_BINARY"],
+      "requiredEnv": [
+        "REPOSITORY_CREDENTIALS_NODE_IMAGE",
+        "REPOSITORY_CREDENTIALS_GH_BINARY",
+        "REPOSITORY_CREDENTIALS_TEST_IMAGE",
+        "REPOSITORY_CREDENTIALS_SERVICE_IMAGE",
+        "REPOSITORY_CREDENTIALS_CLIENT_IMAGE"
+      ],
       "prepare": {
         "requiresPreparedStateForFile": true
       },
@@ -892,6 +898,31 @@
         },
         {
           "path": "tests/integration/repository-credentials-gh.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-long-session.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-container.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-isolation.test.mjs"
+        }
+      ]
+    },
+    "repository-credentials-live": {
+      "env": {
+        "REPOSITORY_CREDENTIALS_LIVE": "1"
+      },
+      "requiredEnv": [
+        "REPOSITORY_CREDENTIALS_LIVE_AUTHORIZED",
+        "REPOSITORY_CREDENTIALS_LIVE_CONTROL_SOCKET",
+        "REPOSITORY_CREDENTIALS_LIVE_CA"
+      ],
+      "prepare": {},
+      "files": [
+        {
+          "path": "tests/integration/repository-credentials-live.test.mjs"
         }
       ]
     }
