@@ -37,6 +37,8 @@ Start with [Docker or Podman Compose development](flows/docker-compose-developme
 [platform startup](flows/platform-startup.md), or the
 [controller worker](flows/controller-worker.md). The **Understand the code** tab
 lists runtime traces for authentication, configuration, Drivers, and Agent execution.
+The [repository credential flow](flows/repository-credentials.md) traces admission,
+credential ownership, forwarding and cleanup.
 The [Agent plugin flow](flows/agent-plugins.md) traces desired state through
 revision startup and runtime configuration.
 

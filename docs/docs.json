@@ -147,7 +147,8 @@
                   "flows/service-account-driver-credential-delivery",
                   "flows/service-api-keys",
                   "flows/workspace-files",
-                  "flows/pr-24-ssh-compute"
+                  "flows/pr-24-ssh-compute",
+                  "flows/repository-credentials"
                 ]
               }
             ]

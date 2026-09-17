@@ -52,3 +52,7 @@ configured repository. Native repository rules still apply. Administration,
 workflow changes requiring additional permissions, Actions, packages, projects,
 SSH, LFS, and other repositories are outside the supported scope. Missing App
 permissions cause failure rather than a broader grant.
+
+## Common lifecycle
+
+The callable service owns session admission, bearer lookup, immutable grants, bounded custody, credential replacement, and close/status operations. Closing denies new use immediately; upstream cleanup remains separately pending or uncertain until original actions settle. Demand-driven replacement retains the same session after hour thirteen. The GitHub and alternate fixture factories use these same owners. See the [lifecycle flow](../flows/repository-credentials.md).

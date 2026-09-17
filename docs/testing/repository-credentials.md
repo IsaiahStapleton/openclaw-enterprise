@@ -5,9 +5,12 @@ Run from the repository root with Node 24, Git, OpenSSL, and prepared workspace 
 ```sh
 pnpm credentials:build
 node --test tests/conformance/repository-credentials-contracts.test.mjs \
+  tests/conformance/repository-credentials-custody.test.mjs \
   tests/conformance/repository-credentials-github.test.mjs \
+  tests/conformance/repository-credentials-lifecycle.test.mjs \
+  tests/conformance/repository-credentials-sessions.test.mjs \
   tests/integration/repository-credentials-config.test.mjs \
   tests/integration/repository-credentials-package.test.mjs
 ```
 
-These checks prove adapter/configuration behavior and detached emitted configuration loading. Common lifecycle and forwarding qualification follow their implementations.
+Common-owner tests cover custody, immutable admission, controlled-time replacement, closure, and uncertainty. GitHub and the alternate fixture use the same service owners.
