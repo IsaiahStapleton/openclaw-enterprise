@@ -82,16 +82,20 @@ impose a Namespace-wide Agent limit.
 ## Local Compose and PostgreSQL configuration
 
 The root Compose development stack starts PostgreSQL 18.6, migrations,
-bootstrap, API, and worker. `scripts/dev-up` is the recommended wrapper for the
-full stack because it validates Compose configuration, waits for startup, copies
+bootstrap, API, and worker. `occ dev up` starts the supported development
+profile; the checkout-local `scripts/dev-up` entry point uses the same path.
+Startup validates Compose configuration, waits for services, copies
 the bootstrap service-key response to a private file, and proves authenticated
-access. The helper prefers a usable Docker Engine and otherwise selects Podman
-directly, even when no `docker` compatibility alias exists. Podman requires the
-standalone `podman-compose` provider and `yq` v4; the helper pins that provider
-for consistent behavior. Its helper-owned override mounts the reported API
-socket into the worker and disables SELinux labeling only for that socket-owning
-service. Direct `docker compose` commands remain supported. The Podman override
-is helper-owned; do not apply it to Docker Engine.
+access. `OCC_DEVELOPMENT_COMPUTE_DRIVER` selects Docker Compute or the
+Compose-hosted [local Kubernetes profile](../../guides/deploy/local-kubernetes-development.md).
+The helper prefers a usable Docker Engine and otherwise selects Podman directly,
+even when no `docker` compatibility alias exists. Podman requires the standalone
+`podman-compose` provider; Docker Compute also requires `yq` v4. The helper
+pins that provider for consistent behavior. Docker Compute mounts the selected engine socket into its
+worker. That socket-owning worker disables SELinux process labeling because the
+host engine socket must not be relabeled; all other services retain SELinux
+confinement. Direct `docker compose` commands remain supported. The Podman
+override supplies the reported Podman socket and is not used with Docker Engine.
 [`compose.postgres.yaml`](../../../compose.postgres.yaml) remains the focused
 database-only helper for tests and manual PostgreSQL debugging.
 
@@ -177,9 +181,11 @@ named volume. The configuration volume is mounted only into the controller at
 `/app/.development/configurations`; it is not mounted into the worker or
 runtime containers. Initial service-key output uses a third bootstrap-only
 volume, `occ_bootstrap_data`, at `/var/lib/openclaw/bootstrap`; the API and
-worker do not mount it. The cleanup command printed by `dev-up` retains all
-three volumes. Add `--volumes` only when intentionally deleting them, including
-the initial credential delivery copy.
+worker do not mount it. For Docker Compute, the printed cleanup command retains
+all three volumes. Add `--volumes` before any `--` separator only when
+intentionally deleting them, including the initial credential delivery copy.
+[Kubernetes development cleanup](../../guides/deploy/local-kubernetes-development.md#stop-and-clean-up)
+always deletes the selected profile's volumes.
 
 ### Migration environment
 
