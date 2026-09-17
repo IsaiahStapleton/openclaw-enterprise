@@ -595,19 +595,6 @@ function probeOpenClawAuthentication() {
 }
 `;
 
-export const EMBEDDED_AUTH_PROBE_ENTRYPOINT = String.raw`
-${OPENCLAW_AUTH_PROBE_HELPERS}
-const fs = require("node:fs");
-const marker = "/tmp/harness-auth-ready";
-fs.rmSync(marker, { force: true });
-if (probeOpenClawAuthentication()) {
-  fs.writeFileSync(marker, "ready\n", { mode: 0o600 });
-  setInterval(() => {}, 3600000);
-} else {
-  holdFailedAuthentication();
-}
-`;
-
 export const GATEWAY_RUNTIME_ENTRYPOINT = String.raw`
 const { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } = require("node:fs");
 const { join } = require("node:path");

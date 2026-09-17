@@ -125,6 +125,19 @@ recovery remain unproved. The disposable Kubernetes attempt could not start
 because the host lacks required cgroup delegation; authorized managed-account
 inputs were unavailable. Fixture checks do not replace those acceptance rows.
 
+## Embedded activation decision (2026-09-17)
+
+The approved simplification supersedes predecessor preservation during embedded
+credential validation. Embedded deployment uses the shared gateway's `Recreate`
+cutover, then one bounded credential/model check in the actual gateway startup.
+Invalid credentials or provider failure may leave the Agent unavailable until
+repair and restart or redeployment; automatic rollback is not required. The
+separate authentication preflight Deployment and its lifecycle are removed.
+Dedicated validation, credential isolation, authorization, immutable bindings,
+and existing revision ownership and bookkeeping remain required. The
+[current harness reference](../docs/reference/harness-execution.md#harness-authentication)
+owns this behavior; the preceding delivery evidence records the earlier design.
+
 ## Manual Notes
 
 [keep this for the user to add notes. do not change between edits]

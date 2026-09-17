@@ -97,12 +97,13 @@ remain separate. A dedicated gateway receives no model credential. Model auth
 cannot be supplied through Configuration `secretBindings` or the initial runtime
 credential API; those own gateway credentials and transport/channel setup.
 
-Embedded OpenClaw performs a bounded native model probe before gateway startup.
-Replacing a serving embedded revision first probes the candidate in a separate,
-unroutable Deployment with temporary state and its exact model Secret projection.
-The serving gateway and its persistent workspace remain untouched until that
-preflight succeeds. Probe failure leaves the candidate unready; readiness polls do
-not retry model calls. An explicit restart or new deployment starts a new attempt.
+Embedded OpenClaw performs one bounded native model probe in the actual gateway
+startup, for both initial and replacement deployments. Embedded activation uses
+the shared gateway's `Recreate` strategy: cutover can stop the working gateway
+before the replacement validates its credentials. Invalid credentials or a
+provider failure leave the replacement unready and the Agent unavailable until
+repair and restart or a new deployment. There is no automatic rollback.
+Readiness polling does not repeat model calls.
 
 Both probes check the configured primary model. OpenClaw disables tools and
 model fallback. Codex ignores user configuration and rules, disables execution
@@ -111,13 +112,9 @@ a tool event cannot satisfy its success check. Each probe has a process timeout
 and captures native output, emitting only a fixed failure message if unsuccessful.
 A failed Codex probe also holds the process unready until restart.
 
-Probes incur provider requests and may incur model usage charges. An embedded
-replacement probes both before cutover and during gateway startup. They do not
+Probes incur provider requests and may incur model usage charges. They do not
 verify access to every other configured model or guarantee continued validity
-after upstream revocation. If the second probe fails, including on a provider
-timeout or rate limit, the already-active replacement holds unready until restart
-or a new deployment. The existing `Recreate` cutover cannot restore the removed
-predecessor. Embedded probe transport configuration must use
+after upstream revocation. Embedded probe transport configuration must use
 literal metadata rather than additional environment or Secret references. The
 canonical `OPENAI_API_KEY` authentication alias remains supported, and unrelated
 gateway/channel configuration bindings remain separate.
@@ -158,10 +155,12 @@ and permitted transport depend on the selected Driver and admitted topology.
 The [Kubernetes security reference](security.md) defines its concrete credential
 exceptions and enforcement limitations; Docker has its own narrower boundaries.
 
-A replacement can be prepared while its predecessor serves. Guarded activation
-publishes the replacement before the prior revision is retired, and retries
-cannot allow an older operation to overwrite a newer active revision. OCC records
-one active revision and routes new requests to it during normal reconciliation.
+A replacement can be prepared while its predecessor serves. Embedded preparation
+does not validate replacement credentials; its activation can interrupt service
+as described above. Guarded activation publishes the replacement before the
+prior revision is retired, and retries cannot allow an older operation to
+overwrite a newer active revision. OCC records one active revision and routes
+new requests to it during normal reconciliation.
 Kubernetes Deployments do not guarantee a physical process singleton during node
 partitions or manual replacement; see the
 [gateway rollout limitation](drivers/kubernetes-compute.md#execution-modes).

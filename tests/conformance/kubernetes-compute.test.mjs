@@ -1371,7 +1371,7 @@ test("native channel providers supply only owning gateway secrets and reviewed p
   ]);
 });
 
-test("embedded replacement preserves its predecessor until its provider probe is ready and cleans exact probes", async () => {
+test("embedded replacement cuts over an unready shared gateway and waits for actual startup readiness", async () => {
   const driver = createKubernetesComputeDriver(
     routedOptions({
       runtime: {
@@ -1535,10 +1535,8 @@ test("embedded replacement preserves its predecessor until its provider probe is
   activeRoute.metadata.uid = "route-uid";
   save(activeRoute);
   const predecessor = structuredClone(objects.get(key("Deployment", gatewayName)));
-  const probeName = `auth-probe-${digest(agentId)}-${digest(replacement.id)}`;
 
   const patches = [];
-  const deletions = [];
   const readyDeployments = new Set();
   let replacementDeploymentPatched = false;
   driver.apiClients = Promise.resolve({
@@ -1591,19 +1589,6 @@ test("embedded replacement preserves its predecessor until its provider probe is
       },
     },
     apps: {
-      async listNamespacedDeployment({ namespace: requestedNamespace, labelSelector }) {
-        assert.equal(requestedNamespace, namespace);
-        const selectors = labelSelector.split(",").map((entry) => entry.split("="));
-        return {
-          items: [...objects.values()]
-            .filter(
-              (object) =>
-                object.kind === "Deployment" &&
-                selectors.every(([name, value]) => object.metadata.labels[name] === value),
-            )
-            .map((object) => structuredClone(object)),
-        };
-      },
       async readNamespacedDeployment({ name }) {
         const current = objects.get(key("Deployment", name));
         if (current === undefined) throw missing(name);
@@ -1620,13 +1605,6 @@ test("embedded replacement preserves its predecessor until its provider probe is
         patches.push({ kind: body.kind, name: body.metadata.name });
         if (body.metadata.name === gatewayName) replacementDeploymentPatched = true;
         const previous = objects.get(key("Deployment", body.metadata.name));
-        if (previous !== undefined && body.metadata.name !== gatewayName) {
-          assert.deepEqual(
-            body.spec,
-            previous.spec,
-            "reconciliation must reuse the same probe without restarting its Pod",
-          );
-        }
         save({
           ...previous,
           ...body,
@@ -1636,10 +1614,6 @@ test("embedded replacement preserves its predecessor until its provider probe is
             uid: previous?.metadata.uid ?? `${body.metadata.name}-uid`,
           },
         });
-      },
-      async deleteNamespacedDeployment(request) {
-        deletions.push(request);
-        objects.delete(key("Deployment", request.name));
       },
     },
     discovery: {
@@ -1684,38 +1658,47 @@ test("embedded replacement preserves its predecessor until its provider probe is
   });
 
   const expected = { namespaceId: tenant.id, agentId, revisionId: replacement.id };
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    assert.deepEqual(await driver.prepareRevision(replacement, authContext(replacement)), {
-      ...expected,
-      ready: false,
-    });
-    assert.deepEqual(objects.get(key("Deployment", gatewayName)), predecessor);
-    assert.deepEqual(objects.get(key("Service", gatewayName)), gatewayService);
-    assert.deepEqual(objects.get(key("HTTPRoute", gatewayName)), activeRoute);
-  }
-  const probe = objects.get(key("Deployment", probeName));
-  assert.ok(probe, "the candidate must have its own unready authentication witness");
-  const probePod = probe.spec.template.spec;
-  const probeEnvironment = Object.fromEntries(
-    probePod.containers[0].env.map((entry) => [entry.name, entry]),
+  assert.deepEqual(await driver.prepareRevision(replacement, authContext(replacement)), {
+    ...expected,
+    ready: true,
+  });
+  assert.deepEqual(objects.get(key("Deployment", gatewayName)), predecessor);
+  assert.deepEqual(objects.get(key("HTTPRoute", gatewayName)), activeRoute);
+  assert.equal(
+    patches.some(({ kind }) => kind === "Deployment"),
+    false,
   );
-  assert.equal(probeEnvironment.OPENCLAW_HARNESS_MODEL.value, "openai/gpt-5");
-  assert.deepEqual(probeEnvironment.OPENAI_API_KEY.valueFrom.secretKeyRef, {
+
+  // The guarded activation replaces the shared workload before model authentication
+  // succeeds. Its failing startup may leave the Agent unavailable until redeploy.
+  await assert.rejects(
+    driver.activateRevision(replacement, authContext(replacement)),
+    /gateway is not ready/i,
+  );
+  const replaced = objects.get(key("Deployment", gatewayName));
+  assert.equal(replaced.metadata.annotations["openclaw.dev/agent-revision-id"], replacement.id);
+  assert.equal(replaced.spec.strategy.type, "Recreate");
+  assert.deepEqual(
+    [...objects.values()]
+      .filter(({ kind }) => kind === "Deployment")
+      .map(({ metadata }) => metadata.name),
+    [gatewayName],
+    "embedded authentication runs only inside the shared gateway",
+  );
+  assert.equal(
+    objects.get(key("PersistentVolumeClaim", driver.gatewayPrivateStateClaimName(agentId)))
+      ?.metadata.annotations["openclaw.dev/agent-id"],
+    agentId,
+  );
+  const gatewayEnvironment = Object.fromEntries(
+    replaced.spec.template.spec.containers[0].env.map((entry) => [entry.name, entry]),
+  );
+  assert.equal(gatewayEnvironment.OPENCLAW_HARNESS_MODEL.value, "openai/gpt-5");
+  assert.deepEqual(gatewayEnvironment.OPENAI_API_KEY.valueFrom.secretKeyRef, {
     name: "occ-model-key",
     key: "value",
   });
-  for (const name of [
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_GATEWAY_PASSWORD",
-    "APP_SERVER_TOKEN",
-    "SLACK_BOT_TOKEN",
-    "SLACK_APP_TOKEN",
-    "MSTEAMS_APP_PASSWORD",
-    "CODEX_ACCESS_TOKEN",
-  ]) {
-    assert.equal(probeEnvironment[name], undefined, `${name} must not reach the provider probe`);
-  }
-  const probeConfiguration = JSON.parse(probeEnvironment.OPENCLAW_HARNESS_PROBE_CONFIG.value);
+  const probeConfiguration = JSON.parse(gatewayEnvironment.OPENCLAW_HARNESS_PROBE_CONFIG.value);
   assert.equal(probeConfiguration.agents.defaults.model, "openai/gpt-5");
   assert.deepEqual(probeConfiguration.agents.defaults.models, {
     "openai/gpt-5": {
@@ -1730,154 +1713,52 @@ test("embedded replacement preserves its predecessor until its provider probe is
     assert.equal(
       probeConfiguration[section],
       undefined,
-      `${section} must not reach the provider probe`,
+      `${section} must not reach native validation`,
     );
   }
-  assert.equal(probePod.automountServiceAccountToken, false);
-  assert.ok(
-    probePod.volumes.every((volume) => volume.emptyDir !== undefined),
-    "provider probes must not mount persistent state or projected identity tokens",
-  );
-  assert.notEqual(
-    probe.spec.template.metadata.labels["app.kubernetes.io/name"],
-    gatewayService.spec.selector["app.kubernetes.io/name"],
-  );
-  for (const [name, value] of Object.entries({
-    "openclaw.dev/namespace-id": tenant.id,
-    "openclaw.dev/agent-id": agentId,
-    "openclaw.dev/revision-id": replacement.id,
-    "openclaw.dev/service-principal-id": replacement.servicePrincipalId,
-  }))
-    assert.equal(probe.metadata.annotations[name], value);
   const egressWrite = patches.findIndex(
     ({ kind, name }) => kind === "NetworkPolicy" && name === `allow-agent-runtime-${suffix}`,
   );
-  const probeWrite = patches.findIndex(
-    ({ kind, name }) => kind === "Deployment" && name === probeName,
+  const gatewayWrite = patches.findIndex(
+    ({ kind, name }) => kind === "Deployment" && name === gatewayName,
   );
-  assert.ok(
-    egressWrite >= 0 && egressWrite < probeWrite,
-    "provider egress must precede candidate startup",
-  );
-  const policy = objects.get(key("NetworkPolicy", `allow-agent-runtime-${suffix}`));
-  for (const [name, value] of Object.entries(policy.spec.podSelector.matchLabels)) {
-    assert.equal(
-      probe.spec.template.metadata.labels[name],
-      value,
-      "the isolated probe must match its model egress policy",
-    );
-  }
+  assert.ok(egressWrite >= 0 && egressWrite < gatewayWrite);
 
-  assert.equal(replacementDeploymentPatched, false);
-  await assert.rejects(
-    driver.activateRevision(replacement, authContext(replacement)),
-    /probe.*not ready|authentication.*not ready/i,
-  );
-  assert.deepEqual(objects.get(key("Deployment", gatewayName)), predecessor);
-
-  const foreignProbe = structuredClone(probe);
-  foreignProbe.metadata.annotations["openclaw.dev/revision-id"] = "foreign-revision";
-  save(foreignProbe);
-  await assert.rejects(
-    driver.prepareRevision(replacement, authContext(replacement)),
-    /Refusing unowned/i,
-  );
-  save(probe);
-
-  readyDeployments.add(probeName);
+  // Reconciliation observes readiness without replacing the Pod or retrying the
+  // native model call; explicit deployment/restart owns recovery from bad auth.
   assert.deepEqual(await driver.prepareRevision(replacement, authContext(replacement)), {
     ...expected,
-    ready: true,
+    ready: false,
   });
-  assert.equal(replacementDeploymentPatched, false);
-  assert.deepEqual(objects.get(key("HTTPRoute", gatewayName)), activeRoute);
-  assert.equal(
-    objects.get(key("Deployment", gatewayName)).metadata.annotations[
-      "openclaw.dev/agent-revision-id"
-    ],
-    oldRevision.id,
+  await assert.rejects(
+    driver.activateRevision(replacement, authContext(replacement)),
+    /gateway is not ready/i,
   );
+  assert.deepEqual(objects.get(key("Deployment", gatewayName)), replaced);
+
   readyDeployments.add(gatewayName);
-  await driver.activateRevision(replacement, authContext(replacement));
-  assert.equal(
-    objects.get(key("PersistentVolumeClaim", driver.gatewayPrivateStateClaimName(agentId)))
-      ?.metadata.annotations["openclaw.dev/agent-id"],
-    agentId,
-  );
-  const replaced = objects.get(key("Deployment", gatewayName));
-  assert.equal(replaced.metadata.annotations["openclaw.dev/agent-revision-id"], replacement.id);
-  assert.equal(objects.has(key("Deployment", probeName)), false);
-  assert.deepEqual(deletions, [
-    { name: probeName, namespace, body: { preconditions: { uid: probe.metadata.uid } } },
-  ]);
-  assert.equal(patches.filter(({ kind }) => kind === "HTTPRoute").length, 1);
-
-  // Ordinary reconciliation of the active revision must not recreate a billable provider probe.
-  const probeWrites = () =>
-    patches.filter(({ kind, name }) => kind === "Deployment" && name.startsWith("auth-probe-"));
-  const probesBeforeMaintenance = probeWrites().length;
   assert.equal((await driver.prepareRevision(replacement, authContext(replacement))).ready, true);
-  assert.equal(probeWrites().length, probesBeforeMaintenance);
-
-  // Supersession/retirement and explicit stop clean pending witnesses while retaining the active predecessor.
-  for (const [offset, operation] of [
-    [1, "stopRevision"],
-    [2, "retireRevision"],
-  ]) {
-    const pending = {
-      ...replacement,
-      id: `${replacement.id}-${operation}`,
-      revision: replacement.revision + offset,
-    };
-    const pendingName = `auth-probe-${digest(agentId)}-${digest(pending.id)}`;
-    assert.equal((await driver.prepareRevision(pending, authContext(pending))).ready, false);
-    const pendingProbe = objects.get(key("Deployment", pendingName));
-    assert.ok(pendingProbe);
-    const activeGateway = structuredClone(objects.get(key("Deployment", gatewayName)));
-    await driver[operation](pending);
-    assert.equal(objects.has(key("Deployment", pendingName)), false);
-    assert.deepEqual(objects.get(key("Deployment", gatewayName)), activeGateway);
-    assert.deepEqual(deletions.at(-1), {
-      name: pendingName,
-      namespace,
-      body: { preconditions: { uid: pendingProbe.metadata.uid } },
-    });
-  }
-  const superseded = { ...replacement, id: "superseded-probe", revision: replacement.revision + 3 };
-  const successor = { ...replacement, id: "successor-probe", revision: replacement.revision + 4 };
-  const supersededName = `auth-probe-${digest(agentId)}-${digest(superseded.id)}`;
-  const successorName = `auth-probe-${digest(agentId)}-${digest(successor.id)}`;
-  assert.equal((await driver.prepareRevision(superseded, authContext(superseded))).ready, false);
-  const supersededProbe = objects.get(key("Deployment", supersededName));
-  assert.ok(supersededProbe);
-  assert.equal((await driver.prepareRevision(successor, authContext(successor))).ready, false);
-  assert.equal(objects.has(key("Deployment", supersededName)), false);
-  assert.ok(objects.has(key("Deployment", successorName)));
-  assert.deepEqual(deletions.at(-1), {
-    name: supersededName,
-    namespace,
-    body: { preconditions: { uid: supersededProbe.metadata.uid } },
-  });
-  await driver.retireRevision(superseded);
-  assert.ok(
-    objects.has(key("Deployment", successorName)),
-    "predecessor cleanup must preserve a pending successor probe",
+  await driver.activateRevision(replacement, authContext(replacement));
+  assert.deepEqual(objects.get(key("Deployment", gatewayName)), replaced);
+  await assert.rejects(
+    driver.activateRevision(oldRevision, authContext(oldRevision)),
+    /stale AgentRevision gateway activation/i,
   );
-  await driver.stopRevision(successor);
-  assert.equal(objects.has(key("Deployment", successorName)), false);
+  assert.deepEqual(objects.get(key("Deployment", gatewayName)), replaced);
+
   const initial = {
     ...replacement,
     id: "initial-embedded-revision",
     agentId: "initial-embedded-agent",
     revision: 1,
   };
-  const probesBeforeInitial = probeWrites().length;
   assert.equal((await driver.prepareRevision(initial, authContext(initial))).ready, false);
-  assert.ok(objects.has(key("Deployment", `gateway-${digest(initial.agentId)}`)));
-  assert.equal(
-    probeWrites().length,
-    probesBeforeInitial,
-    "initial deployments use their own native startup gate without a second probe workload",
+  const initialGateway = objects.get(key("Deployment", `gateway-${digest(initial.agentId)}`));
+  assert.ok(initialGateway);
+  assert.deepEqual(
+    initialGateway.spec.template.spec.containers[0].command,
+    replaced.spec.template.spec.containers[0].command,
+    "initial and replacement gateways execute the same native startup validation",
   );
 });
 

@@ -1506,7 +1506,7 @@ async function assertActualModelTurn(topology) {
 
 // Exercise the regular Secret -> Agent draft -> deployment -> worker -> native startup path.
 // The failure log distinguishes rejected native authentication from ordinary startup latency.
-async function assertInvalidHarnessAuthCannotActivate(context, topology) {
+async function assertInvalidHarnessAuthStaysUnready(context, topology) {
   const namespaceId = topology.agent.namespaceId;
   const agentPath = `/namespaces/${namespaceId}/agents/${topology.agent.id}`;
   const validBinding = structuredClone(topology.agent.harnessAuth);
@@ -1541,13 +1541,14 @@ async function assertInvalidHarnessAuthCannotActivate(context, topology) {
     `native authentication rejection for ${candidate.data.id}`,
     async () => {
       const pod = (await resources("pods", topology.placement)).find(
-        ({ metadata }) =>
-          metadata.deletionTimestamp === undefined &&
-          metadata.labels?.["openclaw.dev/agent"] === topology.agent.id &&
-          metadata.labels?.["openclaw.dev/revision"] === candidate.data.id &&
+        (pod) =>
+          pod.metadata.deletionTimestamp === undefined &&
+          pod.metadata.labels?.["openclaw.dev/agent"] === topology.agent.id &&
           (topology.mode === "dedicated"
-            ? metadata.labels?.["openclaw.dev/workload-role"] === "agent"
-            : metadata.labels?.["openclaw.dev/auth-probe"] === "true"),
+            ? pod.metadata.labels?.["openclaw.dev/workload-role"] === "agent" &&
+              pod.metadata.labels?.["openclaw.dev/revision"] === candidate.data.id
+            : pod.metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
+              gatewayConsumesRevision(pod, topology.agent.id, candidate.data.id)),
       );
       if (!pod?.status.containerStatuses?.some(({ state }) => state?.running)) return undefined;
       let logs;
@@ -1599,35 +1600,47 @@ async function assertInvalidHarnessAuthCannotActivate(context, topology) {
           event.event === "worker.completed" &&
           event.revisionId === candidate.data.id &&
           event.outcome === "pending" &&
-          event.code === "REVISION_INCOMPLETE",
+          (event.code === "REVISION_INCOMPLETE" ||
+            (topology.mode === "embedded" && event.code === "REVISION_FINALIZATION_INCOMPLETE")),
       ),
     60_000,
   );
   assertNoSecretMaterial(topology.events, [invalidKey], "failed candidate worker events");
   const active = await topology.request("GET", agentPath);
   assert.equal(active.status, 200);
-  assert.equal(
-    active.data.activeRevisionId,
-    predecessor.id,
-    "invalid credentials cannot activate the candidate",
-  );
-  assert.equal(
-    (await resource("pod", topology.gatewayPod.metadata.name, topology.placement)).metadata.uid,
-    topology.gatewayPod.metadata.uid,
-    "invalid auth must preserve the serving gateway Pod",
-  );
-  if (topology.harnessPod !== undefined) {
+  if (topology.mode === "dedicated") {
+    assert.equal(active.data.activeRevisionId, predecessor.id);
+    assert.equal(
+      (await resource("pod", topology.gatewayPod.metadata.name, topology.placement)).metadata.uid,
+      topology.gatewayPod.metadata.uid,
+      "invalid auth must preserve the dedicated serving gateway Pod",
+    );
     assert.equal(
       (await resource("pod", topology.harnessPod.metadata.name, topology.placement)).metadata.uid,
       topology.harnessPod.metadata.uid,
       "invalid auth must preserve the serving Codex Pod",
     );
+  } else {
+    // Embedded activation publishes the revision before replacing the shared
+    // gateway. Failed native startup keeps that replacement unready, with no rollback.
+    assert.equal(active.data.activeRevisionId, candidate.data.id);
+    const gateways = (await resources("pods", topology.placement)).filter(
+      ({ metadata }) =>
+        metadata.labels?.["openclaw.dev/agent"] === topology.agent.id &&
+        metadata.labels?.["openclaw.dev/workload-role"] === "gateway",
+    );
+    assert.equal(
+      gateways.some(({ metadata }) => metadata.uid === topology.gatewayPod.metadata.uid),
+      false,
+    );
+    assert.equal(gateways.length, 1);
+    assert.equal(gateways[0].metadata.uid, rejectedPod.metadata.uid);
   }
   const stillServing = await resource("service", serviceName, topology.placement);
   assert.deepEqual(
     stillServing.spec.selector,
     servingService.spec.selector,
-    "candidate rejection must preserve the active route",
+    "the Service keeps its existing topology selector through failed authentication",
   );
   const slices = await resources("endpointslices", topology.placement);
   assert.equal(
@@ -1642,6 +1655,16 @@ async function assertInvalidHarnessAuthCannotActivate(context, topology) {
     false,
     "the rejected candidate must never become a serving endpoint",
   );
+  if (topology.mode === "embedded") {
+    assert.equal(
+      slices
+        .filter(({ metadata }) => metadata.labels?.["kubernetes.io/service-name"] === serviceName)
+        .flatMap(({ endpoints = [] }) => endpoints)
+        .some((endpoint) => endpoint.conditions?.ready !== false),
+      false,
+      "failed embedded cutover leaves no ready gateway endpoint",
+    );
+  }
   const retained = await topology.request(
     "DELETE",
     `/namespaces/${namespaceId}/secrets/${invalidSecret.id}`,
@@ -1651,10 +1674,12 @@ async function assertInvalidHarnessAuthCannotActivate(context, topology) {
   const historical = await topology.request("GET", `${agentPath}/revisions/${predecessor.id}`);
   assert.equal(historical.status, 200);
   assert.deepEqual(historical.data.harnessAuth, predecessor.harnessAuth);
-  await assertActualModelTurn(topology);
-  const afterTurn = await topology.request("GET", agentPath);
-  assert.equal(afterTurn.status, 200);
-  assert.equal(afterTurn.data.activeRevisionId, predecessor.id);
+  if (topology.mode === "dedicated") {
+    await assertActualModelTurn(topology);
+    const afterTurn = await topology.request("GET", agentPath);
+    assert.equal(afterTurn.status, 200);
+    assert.equal(afterTurn.data.activeRevisionId, predecessor.id);
+  }
 
   const restored = await topology.request("PATCH", agentPath, { harnessAuth: validBinding });
   assert.equal(restored.status, 200, JSON.stringify(restored.error));
@@ -1686,7 +1711,9 @@ async function assertInvalidHarnessAuthCannotActivate(context, topology) {
   assert.deepEqual(recovery.data.harnessAuth, validBinding);
   await assertActualModelTurn(topology);
   context.diagnostic(
-    `${topology.mode}: native invalid-key candidate remained unready and unrouted; predecessor served and valid binding recovered`,
+    topology.mode === "dedicated"
+      ? "dedicated: invalid-key candidate stayed unready; predecessor served and valid binding recovered"
+      : "embedded: invalid-key replacement left the shared gateway unavailable; valid redeploy recovered",
   );
 }
 
@@ -3681,7 +3708,7 @@ export {
   assertGatewayPodContinuity,
   assertGatewayPrivateResources,
   assertKubernetesOtelLogs,
-  assertInvalidHarnessAuthCannotActivate,
+  assertInvalidHarnessAuthStaysUnready,
   assertNativeReferenceNegativeControl,
   assertPrivateStateInitContainer,
   assertRoutedWorkspaceFileReads,

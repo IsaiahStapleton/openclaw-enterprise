@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   arrangeProductionTopology,
   assertActualModelTurn,
-  assertInvalidHarnessAuthCannotActivate,
+  assertInvalidHarnessAuthStaysUnready,
   assertDedicatedAgentsInstructionsInFreshSession,
   assertLegacyModelSecretBindingDenied,
   assertDedicatedSharedWorkspaceResources,
@@ -117,7 +117,7 @@ test(
       target.status.podIP,
     );
     await assertActualModelTurn(topology);
-    await assertInvalidHarnessAuthCannotActivate(context, topology);
+    await assertInvalidHarnessAuthStaysUnready(context, topology);
     await assertLegacyModelSecretBindingDenied(topology);
     await assertDedicatedAgentsInstructionsInFreshSession(topology);
     await assertGatewayPodContinuity(context, topology, privateClaim);
@@ -181,7 +181,7 @@ test(
       target.status.podIP,
     );
     await assertGatewayPodContinuity(context, topology, privateClaim);
-    await assertInvalidHarnessAuthCannotActivate(context, topology);
+    await assertInvalidHarnessAuthStaysUnready(context, topology);
   },
 );
 

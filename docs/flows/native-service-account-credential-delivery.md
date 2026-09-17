@@ -36,14 +36,14 @@ graph TD
   D -->|denied or changed source| E["Reject candidate before projection"]
   D -->|valid| F["Kubernetes prepares explicit login mode and projections"]
   F --> G{"Admitted topology"}
-  G -->|embedded API key| H["Combined OpenClaw workload receives key"]
+  G -->|embedded API key| H["Create or replace shared gateway with projected key"]
   G -->|dedicated key or account| I["Only Codex receives model credential"]
   I --> J{"Login and primary model turn succeed?"}
   J -->|no| K["Candidate remains unready"]
   J -->|yes| L["Runtime readiness and guarded activation"]
   H --> M{"Native primary model probe succeeds?"}
-  M -->|no| K
-  M -->|yes| L
+  M -->|no| N["Gateway stays unready; replacement may interrupt service"]
+  M -->|yes| O["Gateway becomes ready; complete activation"]
 ```
 
 ## Execution Trace
@@ -118,10 +118,10 @@ honor genuine Secret projection fails explicitly. Network policies retain the
 provider-login egress required by the admitted auth method. Gateway transport
 and Kubernetes workload identity remain separate credentials.
 
-### 5. Authenticate before readiness and activation
+### 5. Authenticate during runtime startup
 
 `apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:AGENT_RUNTIME_ENTRYPOINT`,
-`GATEWAY_RUNTIME_ENTRYPOINT`, `EMBEDDED_AUTH_PROBE_ENTRYPOINT`
+`GATEWAY_RUNTIME_ENTRYPOINT`
 
 Codex consumes explicit `CODEX_LOGIN_MODE`: API-key login receives the key through
 stdin; account login forces the admitted workspace. Missing or conflicting
@@ -131,25 +131,24 @@ and configuration, disables execution and external tools, and applies read-only
 filesystem policy without approval grants. Tool events fail the probe. Login
 state remains in the bounded ephemeral home.
 
-Embedded OpenClaw consumes its native OpenAI key and runs a bounded native primary
-model probe with tools and fallback disabled before starting its gateway. Its
-16-token output limit meets the provider's minimum request size. A
-replacement first runs that probe in an isolated, unroutable Deployment without
-the serving gateway's credentials or persistent workspace. A failed preflight
-therefore prevents embedded cutover while preserving the predecessor. Successful
-cutover starts the actual gateway, which probes again because the referenced
-Secret's bytes can change between processes. Failure of that second probe holds
-the already-active replacement unready until restart or a new deployment; it
-cannot restore the predecessor removed by the existing `Recreate` cutover.
-Exact revision ownership governs temporary probe cleanup.
+Embedded OpenClaw consumes its native OpenAI key and runs one bounded native
+primary-model probe in the actual gateway startup, with tools and fallback
+disabled. Its 16-token output limit meets the provider's minimum request size.
+Initial and replacement deployments use this same startup path. For replacement,
+activation first updates the shared gateway's `Recreate` Deployment, which can
+stop the serving gateway before the new process validates credentials. Invalid
+credentials or provider failure hold the replacement unready, leaving the Agent
+unavailable until repair and restart or a new deployment. No automatic rollback
+restores the predecessor.
 
 Both runtimes capture native output and hold failed probes unready with a fixed
 message. Readiness polling does not repeat provider calls; restart or deployment
 starts another attempt. These requests may incur usage charges and check only the
 primary model. See [probe limitations](../reference/harness-execution.md#harness-authentication).
 
-Readiness hands off to the [existing activation and recovery flow](harness-execution-topology.md#3-publish-safely-and-complete-activation-once).
-Auth selection and successful storage do not establish provider acceptance.
+The [existing activation and recovery flow](harness-execution-topology.md#3-publish-safely-and-complete-activation-once)
+completes activation after readiness. Auth selection and successful storage do
+not establish provider acceptance.
 Updating a Secret leaves existing process environments unchanged: deploy each
 consumer, verify a real turn, then revoke the previous key upstream. Revision
 history cannot restore historical Secret values.
@@ -184,6 +183,8 @@ history cannot restore historical Secret values.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 02:58: Remove embedded preflight and document one actual-gateway startup check with accepted replacement downtime. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - cfb384f22ebcbadcfb421b3020b4bb72fd657160)
 
 - 2026-09-17 01:10: Trace bounded native model probes and predecessor-preserving embedded authentication checks. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 177a24e4)
 

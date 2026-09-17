@@ -1,7 +1,7 @@
 ---
 created: 2026-08-21
 updated: 2026-09-17
-last_updated_session: codex/01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04
+last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 ---
 
 # Harness Execution Topology Flow
@@ -31,12 +31,15 @@ graph TD
   B --> C["Freeze configuration, harness identity, and harness authentication binding"]
   C --> D["Claim and reauthorize revision work"]
   D --> E{"Approved topology"}
-  E -->|embedded OpenClaw| F["Start one Agent-owned OpenClaw gateway"]
+  E -->|embedded OpenClaw| F["Create gateway or stage replacement"]
   E -->|dedicated Codex| G["Start gateway and authenticated Codex workload"]
   E -->|unsupported or mismatched| H["Reject before workload creation"]
-  F --> I["Activate exact revision without disconnecting its predecessor"]
-  G --> I
-  I --> J["Retire predecessor and commit activation audit with claim"]
+  F --> I["Activate shared gateway; Recreate on replacement"]
+  I --> K{"Gateway ready after startup authentication?"}
+  K -->|no| L["Stay unready; Agent may be unavailable until repair"]
+  K -->|yes| J["Complete activation, retire predecessor, and commit audit"]
+  G --> M["Activate authenticated dedicated revision"]
+  M --> J
 ```
 
 ## Execution Trace
@@ -109,23 +112,23 @@ for candidate rules and the limits of this observation.
 The predecessor's Kubernetes Service selector remains intact while
 `prepareRevision` stages the replacement. Dedicated Codex must complete its
 bounded native authentication/model probe before its app-server becomes ready.
-For an embedded replacement, an isolated temporary Deployment first verifies the
-candidate's primary model access without mounting the serving gateway's workspace
-or receiving gateway credentials. Preflight failure leaves the predecessor
-serving; readiness polling does not repeat the model request. See the
-[authentication flow](native-service-account-credential-delivery.md#5-authenticate-before-readiness-and-activation).
-The worker then commits the database
-`activeRevisionId` with an exact compare-and-set before Kubernetes default
-after-commit activation. During that cutover, `KubernetesComputeDriver.activateRevision`
-can mutate the `Recreate` gateway Deployment and Service before the replacement
-is ready. If activation, readiness, predecessor retirement, or audit completion
-fails, the worker requeues the revision with `REVISION_FINALIZATION_INCOMPLETE`;
-recovery retries activation and retirement for the already-active revision.
-This path does not guarantee the previous route stays serving through every
-failed cutover. The replacement gateway repeats its authentication probe against
-its own projected Secret; a failure at that point holds it unready until restart
-or a new deployment, including transient provider failures. Worker retries do not
-restart an unchanged gateway Pod. Lost claims and foreign/stale workloads fail closed.
+Embedded preparation does not validate the replacement's credentials. See the
+[authentication flow](native-service-account-credential-delivery.md#5-authenticate-during-runtime-startup).
+
+The worker commits the database `activeRevisionId` with an exact compare-and-set
+before Kubernetes default after-commit activation.
+`KubernetesComputeDriver.activateRevision` updates the shared gateway's `Recreate`
+Deployment and Service. Embedded cutover can stop the serving gateway before the
+replacement validates credentials in its own startup. The same bounded check
+runs for initial and replacement gateways. A failed check, including a provider
+timeout or rate limit, holds the gateway unready until repair and restart or a
+new deployment. Readiness polling does not repeat model requests; worker retries
+do not restart an unchanged Pod. No automatic rollback restores the predecessor.
+
+If activation, readiness, predecessor retirement, or audit completion fails,
+the worker requeues the revision with `REVISION_FINALIZATION_INCOMPLETE`; recovery
+retries activation and retirement for the already-active revision. Lost claims
+and foreign/stale workloads fail closed.
 
 Kubernetes gateways in both modes mount their own persistent SQLite and media
 directories. Embedded gateways also retain their attested default workspace on
@@ -190,6 +193,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 02:58: Remove embedded preflight and trace shared-gateway cutover before actual startup credential validation. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - cfb384f22ebcbadcfb421b3020b4bb72fd657160)
 
 - 2026-09-17 01:10: Document native authentication gates before dedicated readiness and embedded replacement cutover. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 177a24e4)
 
