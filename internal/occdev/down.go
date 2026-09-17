@@ -20,9 +20,17 @@ func Down(ctx context.Context, opts Options) error {
 		}
 		args := append([]string{"compose"}, opts.ComposeArgs...)
 		if r.engine == "podman" {
-			if err := r.pinEndpoint(ctx); err != nil {
+			data, err := r.output(ctx, "podman", "info", "--format", "{{.Host.RemoteSocket.Path}}")
+			if err != nil {
 				return err
 			}
+			socket := strings.TrimPrefix(string(data), "unix://")
+			if !strings.HasPrefix(socket, "/") {
+				return fmt.Errorf("Podman did not report an absolute API socket path")
+			}
+			// The socket is on the engine host, so use it only for the worker mount.
+			// Host-side Compose commands must retain Podman's selected connection.
+			r.env["OCC_CONTAINER_ENGINE_SOCKET"] = socket
 			args = append([]string{"compose"}, podmanComposeArgs(opts.ComposeArgs, r.env["COMPOSE_FILE"], r.env["COMPOSE_PATH_SEPARATOR"])...)
 		}
 		args = append(args, "down")
