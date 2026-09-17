@@ -696,6 +696,15 @@ export interface AgentRuntimeCredentialStatus {
   readonly slackConfigured: boolean;
 }
 
+export interface ComputePreflightWarning {
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface ComputePreflightResult {
+  readonly warnings: readonly ComputePreflightWarning[];
+}
+
 export interface ComputeDriver extends Driver {
   readonly capability: "compute";
   readonly activationOrder?: "beforeCommit" | "afterCommit";
@@ -705,6 +714,7 @@ export interface ComputeDriver extends Driver {
     auth: HarnessAuthSnapshot,
     configuration: OpenClawConfigurationDocument,
   ): void;
+  preflight?(): Promise<void | ComputePreflightResult>;
   setLifecycleDrivers?(drivers: readonly Driver[]): void;
   bindAgent?(binding: ComputeAgentBinding): void | Promise<void>;
   getAgentRuntimeCredentialStatus?(

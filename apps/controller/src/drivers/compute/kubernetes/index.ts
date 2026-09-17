@@ -15,6 +15,7 @@ import type {
   KubernetesObject,
   KubernetesObjectApi,
   NetworkingV1Api,
+  VersionApi,
   V1ConfigMap,
   V1EnvVar,
   V1NetworkPolicyPeer,
@@ -33,6 +34,7 @@ import type {
   ComputeDriver,
   ComputeAgentBinding,
   ComputeReadiness,
+  ComputePreflightResult,
   ComputeRevisionContext,
   Driver,
   HarnessWorkloadRequirements,
@@ -120,11 +122,43 @@ export type {
 } from "@openclaw-enterprise/contracts";
 
 interface KubernetesApiClients {
+  readonly version: VersionApi;
   readonly core: CoreV1Api;
   readonly apps: AppsV1Api;
   readonly discovery: DiscoveryV1Api;
   readonly networking: NetworkingV1Api;
   readonly objects: KubernetesObjectApi;
+}
+
+export const MINIMUM_KUBERNETES_VERSION = "1.35.0";
+const MINIMUM_KUBERNETES_VERSION_PARTS = [1, 35, 0] as const;
+
+function kubernetesVersion(value: unknown): {
+  readonly normalized: string;
+  readonly parts: readonly [number, number, number];
+} {
+  if (typeof value !== "string") {
+    throw new Error("The Kubernetes version preflight returned invalid data.");
+  }
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(value);
+  if (match === null) {
+    throw new Error("The Kubernetes version preflight returned invalid data.");
+  }
+  const parts = match.slice(1, 4).map(Number) as [number, number, number];
+  if (!parts.every(Number.isSafeInteger)) {
+    throw new Error("The Kubernetes version preflight returned invalid data.");
+  }
+  return { normalized: parts.join("."), parts };
+}
+
+function versionIsOlder(
+  candidate: readonly [number, number, number],
+  minimum: readonly [number, number, number],
+): boolean {
+  for (const [index, value] of candidate.entries()) {
+    if (value !== minimum[index]) return value < minimum[index]!;
+  }
+  return false;
 }
 
 export interface KubernetesComputeDriverOptions {
@@ -925,8 +959,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     this.lifecycle = new ComputeLifecycleDispatcher(drivers);
   }
 
-  async preflight(): Promise<void> {
+  async preflight(): Promise<ComputePreflightResult> {
     const clients = await this.clients();
+    const observedVersion = kubernetesVersion(
+      (await this.request(() => clients.version.getCode())).gitVersion,
+    );
     const namespaces = await this.request(() =>
       clients.core.listNamespace({
         limit: 1,
@@ -936,6 +973,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (!Array.isArray(namespaces.items)) {
       throw new Error("The authenticated Kubernetes Namespace preflight returned invalid data.");
     }
+    return {
+      warnings: versionIsOlder(observedVersion.parts, MINIMUM_KUBERNETES_VERSION_PARTS)
+        ? [
+            {
+              code: "KUBERNETES_VERSION_BELOW_MINIMUM",
+              message: `Kubernetes ${observedVersion.normalized} is below the supported minimum ${MINIMUM_KUBERNETES_VERSION}.`,
+            },
+          ]
+        : [],
+    };
   }
 
   validateHarnessAuth(
@@ -2751,6 +2798,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     this.patchOptions = sdk.setHeaderOptions("Content-Type", APPLY_CONTENT_TYPE);
     return {
+      version: new sdk.VersionApi(clientConfiguration),
       core: new sdk.CoreV1Api(clientConfiguration),
       apps: new sdk.AppsV1Api(clientConfiguration),
       discovery: new sdk.DiscoveryV1Api(clientConfiguration),

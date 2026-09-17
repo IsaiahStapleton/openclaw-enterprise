@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { composeProduction } from "../../apps/controller/src/composition/production.ts";
 import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
+import { createOccLogger } from "../../apps/controller/src/logging.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { createInstallationDriverConfiguration } from "../helpers/installation-driver-configuration.mjs";
@@ -48,7 +49,16 @@ function createPassiveComputeDriver() {
     id: "compute-production-wireup",
     capability: "compute",
     implementation: "production-wireup-memory-compute",
-    async preflight() {},
+    async preflight() {
+      return {
+        warnings: [
+          {
+            code: "KUBERNETES_VERSION_BELOW_MINIMUM",
+            message: "Kubernetes 1.34.12 is below the supported minimum 1.35.0.",
+          },
+        ],
+      };
+    },
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -64,6 +74,24 @@ function createPassiveComputeDriver() {
       };
     },
     async retireRevision() {},
+  };
+}
+
+function memoryLog() {
+  const lines = [];
+  return {
+    lines,
+    logger: createOccLogger({
+      component: "occ-api-production-wireup",
+      destination: {
+        write(chunk) {
+          for (const line of String(chunk).split("\n")) {
+            if (line.length > 0) lines.push(JSON.parse(line));
+          }
+          return true;
+        },
+      },
+    }),
   };
 }
 
@@ -354,6 +382,7 @@ test(
       );
       assert.equal(privileges.rows[0].can_create_schema, false);
 
+      const apiLog = memoryLog();
       app = await composeProduction({
         mode: "production",
         host: "127.0.0.1",
@@ -361,7 +390,29 @@ test(
         authSecret,
         authBaseURL,
         drivers: await productionDrivers(),
+        logger: apiLog.logger,
       });
+      assert.deepEqual(
+        apiLog.lines
+          .filter(({ event }) => event === "compute.preflight-warning")
+          .map(({ event, severity, computeDriverId, code, message }) => ({
+            event,
+            severity,
+            computeDriverId,
+            code,
+            message,
+          })),
+        [
+          {
+            event: "compute.preflight-warning",
+            severity: "WARN",
+            computeDriverId: "compute-production-wireup",
+            code: "KUBERNETES_VERSION_BELOW_MINIMUM",
+            message: "Kubernetes 1.34.12 is below the supported minimum 1.35.0.",
+          },
+        ],
+        "production API composition must emit the Compute warning and continue startup",
+      );
       endpoint = await app.listen({ port: 0, host: "127.0.0.1" });
 
       await assert.rejects(

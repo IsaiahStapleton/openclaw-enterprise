@@ -25,6 +25,9 @@
           "path": "tests/conformance/kubernetes-compute.test.mjs"
         },
         {
+          "path": "tests/conformance/kubernetes-preflight.test.mjs"
+        },
+        {
           "path": "tests/conformance/kubernetes-runtime-credentials.test.mjs"
         },
         {
@@ -331,6 +334,7 @@
         {
           "path": "tests/integration/compute-singleton-worker-postgres.test.mjs",
           "expectedTests": [
+            "production worker emits Compute preflight warnings before worker.started and continues startup",
             "a worker binds persisted Namespace, Agent, and service principal before provider effects",
             "a production singleton driver activates under its claim heartbeat before CAS and retires only after CAS",
             "failed singleton activation retries without publishing or retiring the previous revision",

@@ -87,6 +87,15 @@ chmod 600 "$KUBECONFIG_FILE" "$OCC_INPUT_DIRECTORY/values.yaml" \
   "$OCC_INPUT_DIRECTORY/installation.yaml" "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml"
 ```
 
+Verify Kubernetes 1.35+:
+
+```bash
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" version
+```
+
+Older servers continue but remain unsupported; API and worker emit
+`compute.preflight-warning`.
+
 The default examples use native API-key operation. Helm values own the
 controller image, API endpoint, Secret names, bootstrap claim, optional
 Collector, and network selectors. Installation YAML owns gateway/Agent images,

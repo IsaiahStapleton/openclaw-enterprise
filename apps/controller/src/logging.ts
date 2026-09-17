@@ -42,6 +42,7 @@ const ALLOWED_FIELDS = new Set([
   "durationMs",
   "event",
   "host",
+  "message",
   "method",
   "namespaceId",
   "operation",
@@ -145,6 +146,7 @@ function sanitizedEvent(
   const result: Record<string, unknown> = { event: eventName };
   for (const [key, value] of Object.entries(event)) {
     if (key === "event" || !ALLOWED_FIELDS.has(key)) continue;
+    if (key === "message" && eventName !== "compute.preflight-warning") continue;
     const safe = key === "attempt" ? safeAttempt(value) : safeScalar(key, value);
     if (safe !== undefined) result[key] = safe;
   }

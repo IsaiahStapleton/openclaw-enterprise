@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: 2026-09-01
-last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
+updated: 2026-09-17
+last_updated_session: authoring-run/a6571e7c-996e-4f11-9c4c-f61418a8d109
 ---
 
 # Production Startup Flow
@@ -48,10 +48,14 @@ graph TD
         F --> G["Bootstrap administrators and write protected key output"]
         G --> H["Start private API Deployment"]
         G --> I["Start independent worker Deployment"]
+        H --> L["Run Kubernetes Compute preflight"]
+        I --> L
+        L --> M{"Kubernetes older than 1.35?"}
+        M -->|Yes| N["Emit advisory warning and continue"]
     end
     subgraph Proof["Operator-owned authenticated proof"]
-        H --> J["Retrieve service-key response from protected storage"]
-        I --> J
+        M -->|No| J["Retrieve service-key response from protected storage"]
+        N --> J
         J --> K["occ installation get from approved client"]
     end
 ```
@@ -124,6 +128,8 @@ Job; Helm failure does not imply the database hook was rolled back.
 
 `apps/controller/src/server.mjs:138`, `apps/controller/src/worker.ts:312`
 
+`apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.preflight`
+
 After successful initialization, Kubernetes starts separate API and worker
 Deployments. The API validates production listener settings, Better Auth,
 database access, trusted Installation YAML, selected Drivers, Provider
@@ -131,11 +137,19 @@ membership, and Kubernetes Compute preflight before readiness. It serves private
 controller routes, `/healthz`, and database-backed `/readyz` behind the
 operator-managed endpoint.
 
+The Kubernetes Compute Driver queries the API server version and verifies
+authenticated Namespace access. Kubernetes 1.35 or later is the supported
+baseline. An older server returns a structured preflight warning instead of
+blocking startup; the API logs `compute.preflight-warning` with the observed and
+minimum versions in its message and continues. An invalid version response,
+unreachable API, or failed Namespace access still fails preflight.
+
 The worker independently validates production settings, opens the same
 application-role database, loads the selected Driver bundle, validates IAM, runs
-Compute preflight, emits `worker.started`, and polls durable Namespace and
-AgentRevision work. Worker readiness depends on fresh queue-health observations.
-Neither process mounts the bootstrap PVC.
+Compute preflight, emits the same advisory warning for an older Kubernetes
+server, emits `worker.started`, and polls durable Namespace and AgentRevision
+work. Worker readiness depends on fresh queue-health observations. Neither
+process mounts the bootstrap PVC.
 
 ### 5. Retrieve the key and prove authenticated access
 
@@ -162,6 +176,10 @@ tenant deployment and TUI procedures run.
   should succeed before API and worker rollout checks.
 - The API should emit `listening`; the worker should emit `worker.started`
   followed by `worker.health`.
+- `compute.preflight-warning` with code `KUBERNETES_VERSION_BELOW_MINIMUM`
+  identifies a server below the supported Kubernetes 1.35 baseline; startup
+  continues, but operators should upgrade before treating the deployment as
+  supported.
 - `kubectl -n openclaw-system logs job/oce-initialization -c bootstrap` is the
   first check for unsafe output storage, existing output files, database-role
   failures, auth origin errors, and administrator/IAM mismatch.
@@ -191,6 +209,7 @@ tenant deployment and TUI procedures run.
 
 ## Changelog
 
+- 2026-09-17 12:56: Trace the advisory Kubernetes 1.35 startup preflight and warning handoff. (authoring-run/a6571e7c-996e-4f11-9c4c-f61418a8d109 - 324fe2d17f3856cd1602a57e4d8aa99a34d6514c)
 - 2026-09-01 19:09: Document initial default Namespace creation and unchanged repeat-bootstrap behavior. (codex/01a05ef1-ee29-7941-80f2-448bb0789969 - 872fa544c98bb7ad11b2d92d777e49229ececbf5) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-09-01 12:58: Trace production bootstrap-volume preparation, Helm startup, and authenticated Installation proof. (codex/01a05e87-6c64-7960-b9c2-f444d4a3d737 - bdb846c38d5dae6085a8841f720c93068ba8ad15)
 - 2026-09-01 10:19: Validate Provider configuration at startup and exact saved ownership at use, preserving API repair access. (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158)

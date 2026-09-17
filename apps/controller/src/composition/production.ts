@@ -16,7 +16,7 @@ import type {
   ServiceAccountDriverFactory,
 } from "./installation-config.ts";
 import { providerSummariesFromDefinitions } from "./installation-config.ts";
-import type { OccLogger } from "../logging.ts";
+import { emitOccLogEvent, type OccLogger } from "../logging.ts";
 import { resolveApprovedProductionHarness } from "./production-harness.ts";
 import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import { createWorkspaceFilesAccess, validateWorkspaceFilesApiKeyPath } from "./workspace-files.ts";
@@ -101,11 +101,7 @@ export async function composeProduction(config: ProductionConfig) {
     if (!resolved || resolved.kind !== "principal" || resolved.id !== principal.id)
       throw new Error("The persisted IAM Principal cannot be resolved uniquely.");
 
-    const preflight = (
-      computeDriver as ComputeDriver & {
-        readonly preflight?: () => Promise<void>;
-      }
-    ).preflight;
+    const preflight = computeDriver.preflight;
     if (preflight !== undefined && typeof preflight !== "function") {
       throw new Error("The selected Compute Driver exposes an invalid production preflight.");
     }
@@ -115,7 +111,18 @@ export async function composeProduction(config: ProductionConfig) {
     ) {
       throw new Error("The bundled Kubernetes Compute Driver requires production preflight.");
     }
-    if (preflight !== undefined) await preflight.call(computeDriver);
+    if (preflight !== undefined) {
+      const result = await preflight.call(computeDriver);
+      if (result !== undefined && config.logger !== undefined) {
+        for (const warning of result.warnings) {
+          emitOccLogEvent(config.logger, {
+            event: "compute.preflight-warning",
+            computeDriverId: computeDriver.id,
+            ...warning,
+          });
+        }
+      }
+    }
 
     const controller = new OpenClawController(persistedInstallation, {
       state,

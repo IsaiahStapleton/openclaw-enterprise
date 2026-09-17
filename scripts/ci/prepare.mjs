@@ -549,6 +549,7 @@ async function ensureK3dCluster(statePath, state) {
     directory,
     kubeconfig,
     context: `k3d-${cluster}`,
+    ...(!openShell ? { nodeImage: "+v1.35" } : {}),
   });
   await writeState(statePath, state);
   if (openShell) {
@@ -603,6 +604,22 @@ async function ensureK3dCluster(statePath, state) {
     "--all",
     "--timeout=120s",
   ]);
+  if (!openShell) {
+    const version = await execFile(process.env.OCC_KUBECTL_BIN ?? "kubectl", [
+      "--kubeconfig",
+      kubeconfig,
+      "--context",
+      resource.context,
+      "version",
+      "-o",
+      "json",
+    ]);
+    const gitVersion = JSON.parse(version.stdout)?.serverVersion?.gitVersion;
+    if (typeof gitVersion !== "string" || !/^v1\.35\./.test(gitVersion)) {
+      throw new Error("The ordinary k3d test cluster must resolve to Kubernetes 1.35.x.");
+    }
+    resource.kubernetesVersion = gitVersion;
+  }
   await markResourceReady(statePath, state, resource);
   return resource;
 }

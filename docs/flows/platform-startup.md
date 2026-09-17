@@ -1,7 +1,7 @@
 ---
 created: 2026-08-20
-updated: 2026-09-01
-last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
+updated: 2026-09-17
+last_updated_session: authoring-run/a6571e7c-996e-4f11-9c4c-f61418a8d109
 ---
 
 # Platform Startup Flow
@@ -131,6 +131,9 @@ IAM policy, validates its user session configuration, constructs the
 exact bundled or installed IAM Driver with platform state, and structurally
 verifies the selected Compute and Configuration Drivers. It runs a selected
 Compute preflight when present; bundled Kubernetes Compute must provide one.
+Preflight warnings are emitted through the API logger and do not block
+composition. The [production startup flow](production-startup.md#4-start-private-api-and-worker-deployments)
+owns the Kubernetes version decision and warning details.
 It registers IAM, Compute, Configuration, and any selected API-only
 ServiceAccount Driver with OCC before
 [`createFastifyApp`](../../apps/controller/src/index.ts) installs authenticated,
@@ -168,9 +171,10 @@ dedicated Codex AgentRevision work using the exact selected Compute Driver.
 IAM policy from PostgreSQL, and uses its stable selected bundled or installed
 IAM Driver. That Driver loads current policy for every identity lookup and
 authorization decision. Production runs available Compute preflight and
-requires it for bundled Kubernetes. Successful startup emits `worker.started`
-with the selected `computeDriverId`; no AgentRevision workload is admitted or
-started merely because the worker boots.
+requires it for bundled Kubernetes. The worker emits any preflight warnings
+before `worker.started`; a warning does not block startup. Successful startup
+emits `worker.started` with the selected `computeDriverId`; no AgentRevision
+workload is admitted or started merely because the worker boots.
 
 ### 5. Hand off to request serving and durable queue processing
 
@@ -233,5 +237,7 @@ execution begins in the adjacent
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 12:56: Record generic Compute preflight warning handoff to API and worker logs. (authoring-run/a6571e7c-996e-4f11-9c4c-f61418a8d109 - 324fe2d17f3856cd1602a57e4d8aa99a34d6514c)
 
 [Platform startup documentation history](platform-startup/history.md) preserves the original dated entries.

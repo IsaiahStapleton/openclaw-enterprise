@@ -193,7 +193,7 @@ test("OCC logger emits structured severity and filters below the configured leve
   assert.equal(Object.hasOwn(output.lines[0], "level"), false);
 });
 
-test("OCC event severity mapping treats failed diagnostics as errors", () => {
+test("OCC event severity mapping treats failed diagnostics as errors and warnings as warnings", () => {
   const output = memoryDestination();
   const logger = createOccLogger({
     component: "occ-script",
@@ -203,13 +203,23 @@ test("OCC event severity mapping treats failed diagnostics as errors", () => {
 
   emitOccLogEvent(logger, { event: "installation.bootstrap-failed" });
   emitOccLogEvent(logger, { event: "migration.failed" });
+  emitOccLogEvent(logger, {
+    event: "compute.preflight-warning",
+    code: "KUBERNETES_VERSION_BELOW_MINIMUM",
+    message: "Kubernetes 1.34.12 is below the supported minimum 1.35.0.",
+  });
 
   assert.deepEqual(
     output.lines.map(({ event, severity }) => ({ event, severity })),
     [
       { event: "installation.bootstrap-failed", severity: "ERROR" },
       { event: "migration.failed", severity: "ERROR" },
+      { event: "compute.preflight-warning", severity: "WARN" },
     ],
+  );
+  assert.equal(
+    output.lines[2].message,
+    "Kubernetes 1.34.12 is below the supported minimum 1.35.0.",
   );
 });
 
@@ -225,6 +235,7 @@ test("OCC event sanitizer drops arbitrary fields and unsafe diagnostic text", ()
     event: "worker.error",
     attempt: 2,
     code: "WORKER_UNAVAILABLE",
+    message: "ordinary diagnostic text must not enter operational logs",
     secret: "sk-proj-secret-value-that-must-not-log",
     error: "Bearer token-that-must-not-log",
   });
@@ -251,6 +262,7 @@ test("OCC event sanitizer drops arbitrary fields and unsafe diagnostic text", ()
     serviceKeyId: "key_safe",
   });
   assert.equal(Object.hasOwn(output.lines[0], "error"), false);
+  assert.equal(Object.hasOwn(output.lines[0], "message"), false);
   assert.equal(Object.hasOwn(output.lines[0], "secret"), false);
   assert.equal(JSON.stringify(output.lines).includes("token-that-must-not-log"), false);
   assert.equal(JSON.stringify(output.lines).includes("arbitrary"), false);

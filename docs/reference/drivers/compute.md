@@ -63,6 +63,15 @@ Configuration bindings for gateway credentials. Drivers must preserve this
 separation and project model credentials only into the selected Harness workload;
 see the [credential delivery flow](../../flows/native-service-account-credential-delivery.md).
 
+## Optional startup preflight
+
+`preflight()` verifies external dependencies before production readiness. It
+may return structured warnings with a stable `code` and safe `message`; the API
+and worker emit each warning as `compute.preflight-warning` and continue.
+Thrown errors still block startup. Production requires preflight from the
+bundled Kubernetes Compute Driver. Other implementations expose it when their
+dependency checks require startup validation.
+
 ## SandboxDriver coordination
 
 Current startup composes a selected SandboxDriver only with bundled Kubernetes
