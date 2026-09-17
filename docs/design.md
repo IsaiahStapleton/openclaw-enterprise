@@ -129,100 +129,109 @@ runtime detail.
 
 ## Architecture
 
+This overview shows the target architecture. Dashed arrows describe target
+relationships, not verified implementation or deployment status. Runtime targets show the two alternative execution modes; each Agent selects
+one. Placement preserves the owning Namespace and Agent across targets.
+
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontSize: 15px
+    lineColor: "#8b949e"
+    edgeLabelBackground: "#ffffff"
+  flowchart:
+    htmlLabels: true
+    nodeSpacing: 30
+    rankSpacing: 45
+    subGraphTitleMargin:
+      top: 8
+      bottom: 16
+---
 flowchart TB
-    USERS["Users and automation"] --> INGRESS["Ingress Gateway"]
-    INGRESS <-->|"identity verification and admission"| OAG["OpenClaw Access Gateway"]
+    USERS["<b>Users and automation</b>"]
 
-    subgraph CONTROL["OpenClaw Control Plane (OCC)"]
-        OCC["OpenClaw Controller"]
-        COMPUTE["Selected ComputeDriver"]
-        IAM["IAMDriver"]
-        BROKER["SecretBroker (deferred)"]
-        API["OCC API"]
-        CONSOLE["OCC Console"]
-        CONFIG["Configuration"]
-        SERVICE_ACCOUNT["ServiceAccount"]
-        AGENT["Agent"]
-        REVISION["AgentRevision"]
-
-        CONSOLE -->|"resource operations"| API
-        API -->|"admitted requests"| OCC
-        OCC -->|"authorizes exact resources"| IAM
-        OCC -->|"manages"| AGENT
-        OCC -->|"future broker operations"| BROKER
-        CONFIG -->|"configures"| AGENT
-        SERVICE_ACCOUNT -->|"supplies credential reference"| AGENT
-        AGENT -->|"deployment creates"| REVISION
-
-        subgraph GATEWAY_TARGET["Control-plane runtime target"]
-            GATEWAY["Agent-owned OpenClaw gateway (dedicated)"]
-        end
+    subgraph CONTROL["Control plane"]
+        INGRESS["<b>Ingress Gateway</b><br/>Public entry point"]
+        OAG["<b>Access Gateway</b><br/>Identity and admission"]
+        SURFACES["<b>OCC API and Console</b>"]
+        OCC["<b>OpenClaw Control Plane</b><br/>Resource lifecycles<br/>and authorization"]
+        STATE[("<b>Platform state</b><br/>Resources, revisions,<br/>and audit evidence")]
+        GATEWAY["<b>Dedicated Agent gateway</b><br/>Control-plane runtime target"]
     end
 
-    INGRESS -->|"verified browser access"| CONSOLE
-    INGRESS -->|"verified requests"| API
+    DRIVERS["<b>Selected Drivers</b><br/>Capability contracts"]
 
-    subgraph DATA_PLANE["Selected tenant data-plane runtime target"]
-        SANDBOX["SandboxDriver"]
-
-        subgraph NAMESPACE["Namespace-isolated Agent workloads"]
-            WORKLOAD["Revision-scoped Harness (dedicated)"]
-            EMBEDDED["Combined gateway and Harness (embedded)"]
-        end
-
-        SANDBOX -->|"enforces admitted containment"| WORKLOAD
-        SANDBOX -->|"enforces admitted containment"| EMBEDDED
+    subgraph DATA["Namespace-isolated data plane"]
+        HARNESS["<b>Dedicated Harness</b><br/>Revision-scoped workload"]
+        EMBEDDED["<b>Embedded Agent runtime</b><br/>Combined gateway and Harness"]
     end
 
-    COMPUTE -->|"reconciles exact Agent gateway"| GATEWAY
-    COMPUTE -->|"reconciles exact revision Harness"| WORKLOAD
-    COMPUTE -->|"reconciles combined workload"| EMBEDDED
-
-    subgraph EXTERNAL["Selected external integrations"]
-        SERVICE_ACCOUNT_DRIVER["ServiceAccountDriver"]
-        PROVIDER_CLIENT["Installation-scoped provider client"]
-        INFERENCE_DRIVER["InferenceDriver"]
-        SECRET_DRIVER["SecretDriver"]
-        PLUGIN_DRIVER["PluginDriver"]
-        PROVIDER["External provider"]
-        LOCAL_MODEL["Local model source"]
-        SECRET_STORE["Secret backend"]
-
-        SERVICE_ACCOUNT_DRIVER -->|"authorized account and credential lifecycle"| PROVIDER_CLIENT
-        PROVIDER_CLIENT -->|"provider-authenticated requests"| PROVIDER
-        INFERENCE_DRIVER -->|"authorized provider model inference"| PROVIDER
-        INFERENCE_DRIVER -->|"authorized local model inference"| LOCAL_MODEL
-        SECRET_DRIVER -->|"stores Namespace-owned material"| SECRET_STORE
-        PLUGIN_DRIVER -->|"resolves curated plugin selections"| PROVIDER
+    subgraph EXTERNAL["External systems"]
+        PROVIDERS["<b>Providers and models</b><br/>External providers<br/>or local model sources"]
+        SECRETS[("<b>Secret backend</b><br/>Namespace-owned material")]
     end
 
-    GATEWAY <-->|"Exact Agent and active revision traffic"| WORKLOAD
-    OCC -->|"namespace-scoped ensureNamespace"| COMPUTE
-    OCC -->|"revision-scoped prepareRevision"| COMPUTE
-    OCC -->|"dispatches authorized service account operation"| SERVICE_ACCOUNT_DRIVER
-    OCC -->|"dispatches authorized model inference"| INFERENCE_DRIVER
-    BROKER -->|"dispatches exact namespace operation"| SECRET_DRIVER
-    REVISION -->|"immutable deployment configuration"| COMPUTE
-    REVISION -->|"requested plugin policy"| PLUGIN_DRIVER
+    USERS -.->|"requests"| INGRESS
+    INGRESS <-.->|"verifies identity and scope"| OAG
+    INGRESS -.->|"forwards admitted requests"| SURFACES
+    SURFACES -.->|"resource operations"| OCC
+    OCC -.->|"persists"| STATE
+    OCC -.->|"invokes scoped contracts"| DRIVERS
+    DRIVERS -.->|"provisions exact Agent gateway"| GATEWAY
+    DRIVERS -.->|"provisions and contains"| HARNESS
+    DRIVERS -.->|"provisions and contains"| EMBEDDED
+    GATEWAY <-.->|"exact Agent and active revision traffic"| HARNESS
+    DRIVERS -.->|"authorized operations"| PROVIDERS
+    DRIVERS -.->|"stores secret material"| SECRETS
+
+    classDef platform fill:#e8eef5,stroke:#7d91a8,color:#172b42,stroke-width:1px
+    classDef capability fill:#e4efeb,stroke:#78968b,color:#19372d,stroke-width:1px
+    classDef external fill:#eee9f2,stroke:#95859f,color:#35263f,stroke-width:1px
+    class INGRESS,SURFACES,OCC,STATE platform
+    class OAG,DRIVERS,GATEWAY,HARNESS,EMBEDDED capability
+    class USERS,PROVIDERS,SECRETS external
+    style CONTROL fill:#fafafa,stroke:#b7bec6,stroke-width:1px
+    style DATA fill:#fafafa,stroke:#b7bec6,stroke-width:1px
+    style EXTERNAL fill:#fafafa,stroke:#b7bec6,stroke-width:1px
 ```
 
-The Ingress Gateway is the public control-plane boundary. An external identity
-provider authenticates the caller, OAG verifies the resulting identity evidence
-and tenant admission, and OCC authorizes the exact platform operation. The
-selected `ComputeDriver` reconciles both runtime targets while OCC owns
-lifecycle decisions. The diagram shows the two alternative execution modes;
-each Agent selects one. Targets initially share a Kubernetes cluster, but may
-later occupy separate clusters or other Compute-backed locations. Physical
-separation does not change the owning Namespace or Agent. See
-[Agent gateways and deployment](design/workloads.md) for placement and lifecycle
-boundaries. `IAMDriver` evaluates the selected authorization policy.
-`SandboxDriver` enforces the admitted policy for the exact Agent workload.
-`InferenceDriver` invokes the selected external provider or local model source.
-`PluginDriver` translates Agent-owned desired plugin selections into native runtime
-policy during revision startup.
-OCC API and OCC Console are named surfaces, not implementation or deployment
-decisions.
+**Access and ownership.** An external identity provider authenticates the caller.
+The Ingress Gateway forwards protected requests only after OAG verifies that
+identity and admits the exact Installation and Namespace. OCC independently
+authorizes each exact resource operation through `IAMDriver` and owns resource
+and deployment lifecycles. OCC API and Console are named surfaces, not process
+or deployment boundaries. One Installation contains multiple isolated Namespaces;
+the diagram shows one representative Namespace and Agent.
+
+**Agent runtime.** Each deployed Agent owns exactly one OpenClaw gateway. Its
+Harness runs either inside that gateway (`embedded`) or in a distinct Codex
+workload (`dedicated`); a dedicated gateway routes only its owner's runtime
+traffic and does not receive the Codex workload's identity or model credential.
+A Namespace can contain multiple independently owned Agent runtimes. The selected
+`ComputeDriver` reconciles the dedicated gateway in the control-plane runtime
+target and its Harness in the selected tenant data-plane target from an immutable
+`AgentRevision`. Embedded execution keeps both in the tenant data plane. Targets
+initially share a Kubernetes cluster but may later occupy separate clusters or
+other Compute-backed locations. Physical separation does not change Namespace
+isolation or Agent ownership. The implementation-status note above distinguishes
+this target from the current same-namespace Kubernetes implementation. `SandboxDriver` verifies the admitted
+containment policy before Agent turns can execute. See [execution topologies and
+activation](design/workloads.md).
+
+**Integration and storage.** The Driver box groups capability contracts, not a
+shared service. Installation configuration selects each implementation;
+Drivers do not acquire platform-resource ownership or authorization authority
+outside their assigned role. `ServiceAccountDriver` manages authorized upstream
+accounts and credentials, `InferenceDriver` invokes approved provider or local
+models, and `PluginDriver` translates Agent-owned plugin selections at revision
+startup. Platform state retains resources, immutable revisions, and audit
+evidence; secret material belongs in the selected Secret backend, with references
+in OCC state. Explicit delivery and topology-specific credential boundaries remain
+as defined in [Secret access](design/safeguards.md#secret-access). `SecretBroker`
+and broker/substitution delivery are deferred. Required authorization, isolation,
+or dependency failures block the operation; there is no unauthorized fallback.
 
 ## Design chapters
 

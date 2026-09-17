@@ -80,7 +80,7 @@ require_command() {
   fi
 }
 
-require_command curl
+require_command occ
 require_command python3
 
 temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-dev-up.XXXXXXXXXX")"
@@ -134,21 +134,20 @@ compose_capability_probe="$temporary_directory/compose-capability.yaml"
 printf 'services:\n  probe:\n    image: scratch\n' >"$compose_capability_probe"
 
 if command -v docker >/dev/null 2>&1; then
-  docker_server_platform="$(docker version --format '{{.Server.Platform.Name}}' 2>/dev/null || true)"
-  case "$docker_server_platform" in
-    *[Dd][Oo][Cc][Kk][Ee][Rr]*)
-      if docker_root_directory="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null)" &&
-        [ -n "$docker_root_directory" ] &&
-        docker compose version >/dev/null 2>&1 &&
-        docker compose -f "$compose_capability_probe" config --format json \
-          >"$temporary_directory/docker-compose-capability.json" 2>/dev/null; then
-        container_engine="docker"
-        container_engine_label="Docker"
-        engine_command=(docker)
-        compose_command=(docker compose)
-      fi
-      ;;
-  esac
+  # Some Docker servers omit the platform name. Only a positive Podman identity
+  # selects its separate socket, Compose and logging configuration.
+  docker_platform="$(docker version --format '{{.Server.Platform.Name}}' 2>/dev/null || true)"
+  if [ "$docker_platform" != "Podman Engine" ] &&
+    docker_root_directory="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null)" &&
+    [ -n "$docker_root_directory" ] &&
+    docker compose version >/dev/null 2>&1 &&
+    docker compose -f "$compose_capability_probe" config --format json \
+      >"$temporary_directory/docker-compose-capability.json" 2>/dev/null; then
+    container_engine="docker"
+    container_engine_label="Docker"
+    engine_command=(docker)
+    compose_command=(docker compose)
+  fi
 fi
 
 if [ -z "$container_engine" ] && command -v podman >/dev/null 2>&1; then
@@ -634,8 +633,8 @@ PY
 fi
 
 installation_response="$temporary_directory/installation-response.json"
-if ! OCC_URL="$api_url" OCC_SERVICE_KEY_FILE="$key_output" scripts/occ-api GET /installation >"$installation_response"; then
-  fail "authorization" "scripts/occ-api could not read /installation" scripts/occ-api GET /installation
+if ! OCC_URL="$api_url" OCC_SERVICE_KEY_FILE="$key_output" occ installation get --output json >"$installation_response"; then
+  fail "authorization" "occ could not read the Installation" occ installation get --output json
 fi
 
 if ! installation_id="$(
@@ -646,14 +645,14 @@ import sys
 
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected = sys.argv[2]
-observed = payload.get("data", {}).get("id")
+observed = payload.get("id")
 if observed != expected:
     raise SystemExit(f"Installation ID mismatch: key belongs to {expected}, API returned {observed}")
 print(observed)
 PY
 )"; then
   match_error="$(cat "$temporary_directory/installation-match.err" 2>/dev/null || true)"
-  fail "authorization" "${match_error:-Installation ID mismatch}" scripts/occ-api GET /installation
+  fail "authorization" "${match_error:-Installation ID mismatch}" occ installation get --output json
 fi
 
 if [ "$container_engine" = "podman" ]; then
@@ -661,7 +660,7 @@ if [ "$container_engine" = "podman" ]; then
 else
   cleanup_command="$(quote_command "${compose_command[@]}" "${compose_args[@]}" down)"
 fi
-next_check_command="$(quote_command "OCC_URL=$api_url" "OCC_SERVICE_KEY_FILE=$key_output" scripts/occ-api GET /installation)"
+next_check_command="$(quote_command "OCC_URL=$api_url" "OCC_SERVICE_KEY_FILE=$key_output" occ installation get)"
 
 cat <<EOF
 OpenClaw Enterprise development stack is ready.

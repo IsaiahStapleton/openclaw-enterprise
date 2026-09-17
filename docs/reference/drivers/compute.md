@@ -5,7 +5,8 @@ orchestration, and the AgentRevision lifecycle. OCC selects one ComputeDriver
 for the Installation. A selected
 [SandboxDriver](sandbox.md) can own a dedicated Harness workload while
 Compute retains Namespace, gateway, identity, routing, and activation ownership.
-IAM owns authorization.
+IAM owns authorization. Compare the bundled implementations in the
+[ComputeDriver feature matrix](compute-matrix.md).
 
 The exported interface is in
 [shared contracts](../../../packages/contracts/src/index.ts). See
@@ -25,6 +26,10 @@ and [deployment](../../guides/deploy.md) for operator setup.
   `embedded` OpenClaw or a separate exact-revision Codex workload for
   `dedicated` execution. Compute creates the workload unless the selected
   SandboxDriver implements `provisionHarness`.
+- `stopRevision(revision)` idempotently removes inbound routing and terminates
+  execution for the exact revision. It invokes workload-stop hooks and delegated
+  Sandbox cleanup while retaining revision snapshots, runtime credentials,
+  workspace data, and other Agent-owned persistent state.
 - `retireRevision(revision)` first revokes that revision's workload access,
   then stops its owned embedded gateway or dedicated Codex workload and delegates
   provider-owned Sandbox cleanup when applicable. It preserves an Agent gateway
@@ -61,9 +66,9 @@ and immutable revision admission.
 ## Production revision stages
 
 `activateRevision(revision)` and `deactivateRevision(revision)` are optional in
-the shared TypeScript contract. Trusted startup requires **both** on every
-production-selected Compute Driver before returning a runtime; development
-Drivers can implement only the four core operations. When a development Driver
+the shared TypeScript contract. `stopRevision` is required for every Compute
+Driver. Trusted startup additionally requires both activation stages on every
+production-selected Compute Driver before returning a runtime. When a development Driver
 implements `activateRevision`, the worker invokes it after the active-revision
 commit and on finalization retry, unless the Driver selects `beforeCommit`.
 The worker fails closed if

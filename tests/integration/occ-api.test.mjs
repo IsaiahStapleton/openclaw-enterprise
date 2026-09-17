@@ -343,6 +343,7 @@ async function createInjectedFixture(options = {}) {
         ready: true,
       };
     },
+    async stopRevision() {},
     async retireRevision() {},
   };
   const auditSink = options.auditSink ?? new InMemoryAuditSink();
@@ -557,6 +558,14 @@ test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource
   );
   assert.equal(agentDetail.status, 200);
   assert.deepEqual(agentDetail.data, agent);
+
+  const stopped = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.id}/stop`,
+  );
+  assert.equal(stopped.status, 202);
+  assert.equal(stopped.data.desiredRuntimeState, "stopped");
+  assert.equal(stopped.data.id, agent.id);
 
   const deployment = await controller.request(
     "POST",
@@ -1698,6 +1707,7 @@ test("bodyless OCC routes reject request payloads before IAM or domain side effe
         `/namespaces/${namespace.data.id}/agents/${agent.data.id}/revisions/${missingRevisionId}`,
       ],
       ["POST", `/namespaces/${namespace.data.id}/agents/${agent.data.id}/deploy`],
+      ["POST", `/namespaces/${namespace.data.id}/agents/${agent.data.id}/stop`],
     ]) {
       const response = await app.inject({
         method,
@@ -1743,6 +1753,7 @@ test("OCC isolates Namespace ownership and filters collections by exact IAM gran
   for (const [method, path, options] of [
     ["GET", `/namespaces/${namespaceB.id}/agents/${agentA.id}`],
     ["POST", `/namespaces/${namespaceB.id}/agents/${agentA.id}/deploy`],
+    ["POST", `/namespaces/${namespaceB.id}/agents/${agentA.id}/stop`],
     [
       "PATCH",
       `/namespaces/${namespaceB.id}/agents/${agentA.id}`,

@@ -166,6 +166,9 @@
           "path": "tests/browser/console.test.mjs"
         },
         {
+          "path": "tests/browser/docs-compute-matrix.test.mjs"
+        },
+        {
           "path": "tests/integration/ci-logging.test.mjs"
         },
         {
@@ -230,9 +233,14 @@
           ]
         },
         {
+          "path": "tests/integration/postgres-controller-work-targets.test.mjs",
+          "expectedTests": ["PostgreSQL controller work requires exactly one complete target shape"]
+        },
+        {
           "path": "tests/integration/postgres-migration-compatibility.test.mjs",
           "expectedTests": [
             "Drizzle generates repository schema migrations without redundant regeneration",
+            "Agent stop migration rejects pre-existing active runtime state",
             "Drizzle second migration preserves the applied journal and PostgreSQL schema"
           ]
         },

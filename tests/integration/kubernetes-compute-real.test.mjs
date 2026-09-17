@@ -458,6 +458,15 @@ async function createScopedController(context, installationId, platformNamespace
         path: "/rules/-",
         value: {
           apiGroups: [""],
+          resources: ["pods"],
+          verbs: ["get", "list", "watch"],
+        },
+      },
+      {
+        op: "add",
+        path: "/rules/-",
+        value: {
+          apiGroups: [""],
           resources: ["persistentvolumeclaims"],
           verbs: ["get", "create", "patch", "delete"],
         },
@@ -1376,12 +1385,23 @@ test(
         },
       );
     }
-    await driver.retireRevision(candidate);
+    await driver.stopRevision(candidate);
     assert.equal(await missing("deployment", revisionName(candidate), existingName), true);
     assert.equal(await missing("deployment", gatewayName(agentId), existingName), true);
-    // Kubernetes PVC protection can keep an in-use claim terminating until its Pods are gone.
-    await waitFor(`shared workspace claim ${sharedClaim.metadata.name} to be deleted`, () =>
-      missing("persistentvolumeclaim", sharedClaim.metadata.name, existingName),
+    assert.deepEqual(
+      (await resources("pods", existingName)).filter(
+        ({ metadata }) =>
+          metadata.labels?.["openclaw.dev/agent"] === agentId &&
+          metadata.labels?.["openclaw.dev/revision"] === candidate.id,
+      ),
+      [],
+      "stop must not return while an exact revision Pod can still execute",
+    );
+    assert.equal(
+      (await resource("persistentvolumeclaim", sharedClaim.metadata.name, existingName)).metadata
+        .uid,
+      sharedClaim.metadata.uid,
+      "stop must preserve the Agent-owned shared workspace claim",
     );
 
     // Namespace deletion is legal only for an owner with no Agents or Configurations.
@@ -1738,11 +1758,111 @@ test(
         await assertNonservingAgentService(placement, agent.id);
       }),
     );
-    await assertSharedWorkspaceClaim(existingName, adopted.data.id, adoptedTenant.id);
+    const adoptedWorkspace = await assertSharedWorkspaceClaim(
+      existingName,
+      adopted.data.id,
+      adoptedTenant.id,
+    );
     await resource(
       "configmap",
       kubernetesConfigurationName(adoptedTenant.configurationId),
       existingName,
+    );
+
+    const retainedFile = `stop-state-${randomUUID()}.txt`;
+    const retainedValue = `retained-${randomUUID()}`;
+    const adoptedRevisionPod = await waitFor(
+      "adopted Agent revision Pod to become ready",
+      async () =>
+        (await resources("pods", existingName)).find(
+          ({ metadata, status }) =>
+            metadata.labels?.["openclaw.dev/agent"] === adoptedTenant.id &&
+            metadata.labels?.["openclaw.dev/revision"] === admitted[3].id &&
+            status.conditions?.some(
+              ({ type, status: conditionStatus }) => type === "Ready" && conditionStatus === "True",
+            ),
+        ),
+    );
+    await kubectl(
+      "exec",
+      adoptedRevisionPod.metadata.name,
+      "--namespace",
+      existingName,
+      "--",
+      "node",
+      "-e",
+      `require('node:fs').writeFileSync('/home/node/workspace/${retainedFile}', ${JSON.stringify(retainedValue)})`,
+    );
+    const stopped = await request(
+      "POST",
+      `/namespaces/${adopted.data.id}/agents/${adoptedTenant.id}/stop`,
+    );
+    assert.equal(stopped.status, 202, JSON.stringify(stopped.error));
+    assert.equal(stopped.data.desiredRuntimeState, "stopped");
+    await waitFor("the stopped Agent pointer and real runtime to be cleared", async () => {
+      const current = await request(
+        "GET",
+        `/namespaces/${adopted.data.id}/agents/${adoptedTenant.id}`,
+      );
+      assert.equal(current.status, 200);
+      if (current.data.activeRevisionId !== undefined) return undefined;
+      if (!(await missing("deployment", revisionName(admitted[3]), existingName))) return undefined;
+      if (!(await missing("deployment", gatewayName(adoptedTenant.id), existingName))) {
+        return undefined;
+      }
+      const ownedPods = (await resources("pods", existingName)).filter(
+        ({ metadata }) => metadata.labels?.["openclaw.dev/agent"] === adoptedTenant.id,
+      );
+      return ownedPods.length === 0 ? current.data : undefined;
+    });
+    assert.equal(
+      (await resource("persistentvolumeclaim", adoptedWorkspace.metadata.name, existingName))
+        .metadata.uid,
+      adoptedWorkspace.metadata.uid,
+      "API stop must retain the exact Agent workspace claim",
+    );
+    assert.equal(
+      (
+        await state.read((view) =>
+          view.revisions.findRevision(adopted.data.id, adoptedTenant.id, admitted[3].id),
+        )
+      ).id,
+      admitted[3].id,
+      "API stop must retain immutable revision history",
+    );
+
+    const restarted = await deploy(adopted.data.id, adoptedTenant.id);
+    assert.notEqual(restarted.id, admitted[3].id);
+    await waitForActive(adopted.data.id, adoptedTenant.id, restarted.id);
+    await assertReadyGateway(existingName, adoptedTenant.id, adopted.data.id, restarted);
+    const restartedPod = await waitFor("redeployed Agent revision Pod to become ready", async () =>
+      (await resources("pods", existingName)).find(
+        ({ metadata, status }) =>
+          metadata.labels?.["openclaw.dev/agent"] === adoptedTenant.id &&
+          metadata.labels?.["openclaw.dev/revision"] === restarted.id &&
+          status.conditions?.some(
+            ({ type, status: conditionStatus }) => type === "Ready" && conditionStatus === "True",
+          ),
+      ),
+    );
+    assert.equal(
+      await kubectl(
+        "exec",
+        restartedPod.metadata.name,
+        "--namespace",
+        existingName,
+        "--",
+        "node",
+        "-e",
+        `process.stdout.write(require('node:fs').readFileSync('/home/node/workspace/${retainedFile}', 'utf8'))`,
+      ),
+      retainedValue,
+      "redeployment must mount the exact persistent data retained by stop",
+    );
+    assert.equal(
+      (await assertSharedWorkspaceClaim(existingName, adopted.data.id, adoptedTenant.id)).metadata
+        .uid,
+      adoptedWorkspace.metadata.uid,
     );
 
     await worker.stop();

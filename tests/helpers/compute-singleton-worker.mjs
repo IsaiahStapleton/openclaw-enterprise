@@ -145,6 +145,12 @@ async function setup(context) {
     const idempotencyKey = `agent_revision:${candidate.id}:reconcile`;
     await state.transactWithQueue(async (unit, queue) => {
       await unit.revisions.createRevision(candidate);
+      await unit.agents.transitionAgentDesiredRuntimeState(
+        namespace.id,
+        owner.id,
+        ["stopped", "running"],
+        "running",
+      );
       await queue.enqueue({
         idempotencyKey,
         namespaceId: namespace.id,
