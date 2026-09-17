@@ -3,8 +3,8 @@
 The Kubernetes Secret Driver stores OCC Secret values in the Kubernetes
 namespace selected for the owning OpenClaw Namespace. Each Secret belongs to one
 Namespace, returns metadata only through OCC, and can be delivered as an
-environment variable to an explicitly selected Agent's OpenClaw gateway through a
-Configuration `secretBindings` entry and Agent assignment.
+environment variable through an Agent `harnessAuth` API-key binding or a
+Configuration `secretBindings` entry for gateway-only credentials.
 
 This driver is storage and env delivery only. It does not issue credentials,
 share Secrets across Namespaces, keep value history, restart workloads after an
@@ -123,7 +123,7 @@ resolves and validates the stored backend identity:
 ```json
 {
   "secretBindings": {
-    "OPENAI_API_KEY": {
+    "SLACK_BOT_TOKEN": {
       "source": {
         "kind": "secret",
         "namespaceId": "ns_123e4567-e89b-42d3-a456-426614174000",
@@ -162,11 +162,11 @@ Driver renders Kubernetes `secretKeyRef` environment variables only into each
 explicitly selected consuming gateway. Native OpenClaw configuration then
 resolves the env SecretRefs normally.
 
-Dedicated Codex model credentials do not use this binding path: the separate
-Codex workload keeps its existing Agent-specific model Secret or provider-issued
-account token path, and the dedicated gateway does not receive the model
-credential. The combined embedded OpenClaw gateway may use a Secret binding for
-its own Agent-specific `OPENAI_API_KEY`.
+For model credentials, use [Agent harness authentication](../agents.md#harness-authentication).
+The API-key binding uses this same Secret Driver and exact authorization, but
+Kubernetes places the projection only in the selected model-executing Harness.
+Dedicated gateways cannot receive model credentials through Configuration
+bindings. Embedded OpenClaw also selects its key through `harnessAuth`.
 
 ## Update and redeploy
 
@@ -185,7 +185,7 @@ current value because revisions hold references, not historical Secret bytes.
 There is no value history, automatic rotation, automatic workload restart, or
 value rollback. Updating or deleting an OCC Secret does not remove credentials
 already delivered to a running process environment, and deletion is blocked while
-current Configurations, active revisions, or pending deployments still depend on
+current Configurations, Agent drafts, active revisions, or pending deployments still depend on
 the Secret. For a compromised credential, stop the affected workloads and revoke
 the credential at the upstream provider; then update the OCC Secret with a
 replacement value and redeploy the intended consumers. Delete the Secret only
@@ -203,7 +203,8 @@ curl -fsS \
 ```
 
 Successful deletion returns HTTP `204`. OCC denies deletion while the Secret is
-referenced by any current Configuration, active revision, or pending deployment.
+referenced by any current Configuration, Agent draft, active revision, or pending deployment.
+Inactive historical revisions alone do not prevent deletion.
 Namespace removal is also blocked while owned Secrets remain. Agent removal does
 not own or garbage-collect Namespace Secret storage.
 

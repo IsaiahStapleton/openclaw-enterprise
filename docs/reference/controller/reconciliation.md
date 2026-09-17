@@ -45,7 +45,7 @@ server-approved version, explicit Agent execution mode, and Compute
 implementation. If the Agent has an associated native
 [service account](../service-accounts.md), the revision also snapshots its
 identity and opaque credential reference. OCC separately
-authorizes the referenced Configuration and any exact associated account,
+authorizes the referenced Configuration and exact harness credential source,
 then queues one revision operation in the same transaction. The source Configuration identity and generation remain pinned even when the
 admitted copy differs. Later Configuration, account, or Agent placement changes
 never mutate an admitted revision; see [Agent references and deployment](../agents/deployment.md#revisions-and-deployment).

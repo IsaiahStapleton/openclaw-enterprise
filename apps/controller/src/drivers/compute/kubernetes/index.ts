@@ -7,6 +7,7 @@ import {
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type {
   AppsV1Api,
   CoreV1Api,
@@ -27,12 +28,18 @@ import type {
 } from "@kubernetes/client-node";
 import type {
   AgentRevision,
+  AgentRuntimeCredentialsInput,
+  AgentRuntimeCredentialStatus,
   ComputeDriver,
   ComputeAgentBinding,
   ComputeReadiness,
   ComputeRevisionContext,
   Driver,
   HarnessWorkloadRequirements,
+  HarnessAuthSnapshot,
+  ResolvedHarnessAuth,
+  RevisionHarnessDescriptor,
+  OpenClawConfigurationDocument,
   Namespace,
   NamespaceDeleteResult,
   NamespaceEnsureResult,
@@ -107,19 +114,10 @@ export interface KubernetesGatewayRoutingOptions {
   readonly envoyNamespace: string;
 }
 
-export interface AgentRuntimeCredentialsInput {
-  readonly modelApiKey?: string;
-  readonly slack?: {
-    readonly appToken: string;
-    readonly botToken: string;
-  };
-}
-
-export interface AgentRuntimeCredentialStatus {
-  readonly transportConfigured: boolean;
-  readonly modelConfigured: boolean;
-  readonly slackConfigured: boolean;
-}
+export type {
+  AgentRuntimeCredentialsInput,
+  AgentRuntimeCredentialStatus,
+} from "@openclaw-enterprise/contracts";
 
 interface KubernetesApiClients {
   readonly core: CoreV1Api;
@@ -160,7 +158,6 @@ export interface KubernetesComputeDriverOptions {
       };
   readonly runtime?: {
     readonly transportSecretPrefix: string;
-    readonly modelSecretPrefix: string;
     readonly gatewayStorageClassName: string;
     readonly codexSeccompProfile?: string;
     readonly channels?: {
@@ -214,7 +211,7 @@ interface PluginRuntimeSnapshot {
 class OwnershipFailure extends Error {}
 class ConfigurationFailure extends Error {}
 
-type RuntimeCredentialGroup = "transport" | "model" | "slack";
+type RuntimeCredentialGroup = "transport" | "slack";
 
 interface RuntimeCredentialSecretSpec {
   readonly group: RuntimeCredentialGroup;
@@ -230,9 +227,49 @@ interface RuntimeCredentialContext {
   readonly ownership: Ownership;
   readonly specs: {
     readonly transport: RuntimeCredentialSecretSpec;
-    readonly model: RuntimeCredentialSecretSpec;
     readonly slack?: RuntimeCredentialSecretSpec;
   };
+}
+
+interface PreparedHarnessAuth {
+  readonly loginMode: HarnessAuthSnapshot["method"];
+  readonly environment: readonly V1EnvVar[];
+}
+
+/** One rendering step; neither credential values nor backend lookups belong here. */
+function prepareHarnessAuth(
+  harness: RevisionHarnessDescriptor,
+  resolvedAuth: ResolvedHarnessAuth,
+): PreparedHarnessAuth {
+  const secret = (
+    name: string,
+    reference: { readonly name: string; readonly key: string },
+  ): V1EnvVar => ({
+    name,
+    valueFrom: { secretKeyRef: { name: reference.name, key: reference.key } },
+  });
+  const environment: V1EnvVar[] = [];
+  if (resolvedAuth.method === "api_key") {
+    environment.push(secret(MODEL_API_KEY, resolvedAuth.backendRef));
+  } else if (
+    resolvedAuth.method === "chatgpt_service_account" &&
+    harness.mode === "dedicated" &&
+    harness.id === "codex"
+  ) {
+    environment.push(
+      secret(CODEX_ACCESS_TOKEN, resolvedAuth.credential.secretRef),
+      secret(CODEX_CHATGPT_WORKSPACE_ID, {
+        name: resolvedAuth.credential.secretRef.name,
+        key: SERVICE_ACCOUNT_WORKSPACE_KEY,
+      }),
+    );
+  } else {
+    throw new ConfigurationFailure("Harness authentication method is unsupported.");
+  }
+  if (harness.mode === "dedicated") {
+    environment.push({ name: "CODEX_LOGIN_MODE", value: resolvedAuth.method });
+  }
+  return { loginMode: resolvedAuth.method, environment };
 }
 
 const MANAGER = "openclaw-enterprise";
@@ -594,11 +631,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
       },
       runtime: {
         type: "object",
-        required: ["transportSecretPrefix", "modelSecretPrefix", "gatewayStorageClassName"],
+        required: ["transportSecretPrefix", "gatewayStorageClassName"],
         additionalProperties: false,
         properties: {
           transportSecretPrefix: { type: "string" },
-          modelSecretPrefix: { type: "string" },
           gatewayStorageClassName: { type: "string", minLength: 1 },
           codexSeccompProfile: { type: "string", minLength: 1 },
           channels: {
@@ -749,7 +785,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       );
     }
     if (options.runtime !== undefined) {
-      const { transportSecretPrefix, modelSecretPrefix, channels } = options.runtime;
+      const { transportSecretPrefix, channels } = options.runtime;
       const runtimeProperties = asRecord(
         KubernetesComputeDriver.configurationSchema.properties.runtime.properties,
       );
@@ -765,15 +801,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }
       }
       required(transportSecretPrefix, "Agent transport Secret name prefix");
-      required(modelSecretPrefix, "Agent model Secret name prefix");
       required(options.runtime.gatewayStorageClassName, "SQLite-compatible gateway storage class");
       if (options.runtime.codexSeccompProfile !== undefined) {
         validateCodexSeccompProfile(options.runtime.codexSeccompProfile);
-      }
-      if (transportSecretPrefix === modelSecretPrefix) {
-        throw new ConfigurationFailure(
-          "Gateway, Agent transport, and model credentials must remain separate.",
-        );
       }
       if (channels !== undefined) {
         if (asRecord(channels) === undefined) {
@@ -782,7 +812,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           );
         }
         const prefix = required(channels.secretPrefix, "Agent channel Secret name prefix");
-        if ([transportSecretPrefix, modelSecretPrefix].includes(prefix)) {
+        if (transportSecretPrefix === prefix) {
           throw new ConfigurationFailure("Agent channel credentials must remain separate.");
         }
         channelProxy(channels.proxyUrl);
@@ -858,6 +888,100 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
+  validateHarnessAuth(
+    harness: RevisionHarnessDescriptor,
+    auth: HarnessAuthSnapshot,
+    configuration: OpenClawConfigurationDocument,
+  ): void {
+    const embedded = harness.mode === "embedded" && harness.id === "openclaw";
+    const dedicated = harness.mode === "dedicated" && harness.id === "codex";
+    if (
+      (!embedded && !dedicated) ||
+      !auth ||
+      (auth.method !== "api_key" && auth.method !== "chatgpt_service_account") ||
+      (embedded && auth.method !== "api_key")
+    ) {
+      throw new ConfigurationFailure(
+        "Harness authentication is incompatible with the selected topology.",
+      );
+    }
+    if (
+      auth.method === "chatgpt_service_account" &&
+      (auth.credential.kind !== "access_token" ||
+        auth.credential.secretRef.name !==
+          `service-account-${sha256Hex(required(auth.serviceAccountId, "ServiceAccount ID"), 32)}` ||
+        auth.credential.secretRef.key !== SERVICE_ACCOUNT_TOKEN_KEY)
+    ) {
+      throw new OwnershipFailure(
+        "Harness authentication credential does not match the admitted account.",
+      );
+    }
+    const agents = asRecord(configuration.agents);
+    const defaults = asRecord(agents?.defaults);
+    const entries = Object.values(asRecord(agents?.entries) ?? {});
+    const selections = [defaults?.model, ...entries.map((entry) => asRecord(entry)?.model)].filter(
+      (value) => value !== undefined,
+    );
+    const models = selections.flatMap((selection) => {
+      const value = asRecord(selection);
+      return typeof selection === "string"
+        ? [selection]
+        : [value?.primary, ...(Array.isArray(value?.fallbacks) ? value.fallbacks : [])];
+    });
+    const prefixes = embedded ? ["openai/"] : ["openai/", "codex/"];
+    if (
+      models.length === 0 ||
+      models.some(
+        (model) =>
+          typeof model !== "string" ||
+          !prefixes.some((prefix) => model.startsWith(prefix) && model.length > prefix.length),
+      )
+    ) {
+      throw new ConfigurationFailure("Harness authentication requires a compatible OpenAI model.");
+    }
+    const conflictingAuth = () =>
+      new ConfigurationFailure("Model credentials must use the Harness authentication binding.");
+    if (Object.keys(asRecord(configuration.auth) ?? {}).length > 0) throw conflictingAuth();
+    const env = asRecord(configuration.env);
+    for (const values of [env, asRecord(env?.vars)]) {
+      if (
+        Object.keys(values ?? {}).some((name) =>
+          /^(?:OPENAI_|CODEX_(?:ACCESS_TOKEN|CHATGPT_WORKSPACE_ID|LOGIN_MODE)$)/i.test(name),
+        )
+      )
+        throw conflictingAuth();
+    }
+    const providers = asRecord(asRecord(configuration.models)?.providers) ?? {};
+    const selectedProviders = new Set(models.map((model) => (model as string).split("/", 1)[0]));
+    for (const provider of selectedProviders) {
+      const config = asRecord(providers[provider!]);
+      if (
+        Object.keys(asRecord(config?.headers) ?? {}).some((name) =>
+          /^(?:authorization|api-key|x-api-key)$/i.test(name),
+        )
+      )
+        throw conflictingAuth();
+      if (config?.apiKey === undefined) continue;
+      if (!embedded) throw conflictingAuth();
+      if (config.apiKey === "${OPENAI_API_KEY}") continue;
+      const ref = asRecord(config.apiKey);
+      const source =
+        typeof ref?.provider === "string"
+          ? asRecord(asRecord(asRecord(configuration.secrets)?.providers)?.[ref.provider])
+          : undefined;
+      if (
+        !ref ||
+        Object.keys(ref).length !== 3 ||
+        ref.source !== "env" ||
+        ref.id !== MODEL_API_KEY ||
+        source?.source !== "env" ||
+        (source.allowlist !== undefined &&
+          (!Array.isArray(source.allowlist) || !source.allowlist.includes(MODEL_API_KEY)))
+      )
+        throw conflictingAuth();
+    }
+  }
+
   getGatewayEndpoint(revision: AgentRevision): string | undefined {
     const routing = this.options.gatewayRouting;
     if (routing === undefined) return undefined;
@@ -883,16 +1007,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       const context = await this.runtimeCredentialContext(binding, credentials.slack !== undefined);
       const observed = await this.readRuntimeCredentialSecrets(context);
       const status = this.runtimeCredentialStatus(observed);
-      if (status.modelConfigured === false && credentials.modelApiKey === undefined) {
-        throw new DependencyUnavailableError("The Agent model credential is not configured.");
-      }
-      if (status.modelConfigured && credentials.modelApiKey !== undefined) {
-        this.requireExactRuntimeCredentialBytes(
-          observed.model,
-          MODEL_API_KEY,
-          credentials.modelApiKey,
-        );
-      }
       if (context.specs.slack !== undefined && status.slackConfigured && credentials.slack) {
         this.requireExactRuntimeCredentialBytes(
           observed.slack,
@@ -922,12 +1036,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
           },
         });
       }
-      if (!status.modelConfigured && credentials.modelApiKey !== undefined) {
-        writes.push({
-          spec: context.specs.model,
-          values: { [MODEL_API_KEY]: credentials.modelApiKey },
-        });
-      }
       if (
         context.specs.slack !== undefined &&
         !status.slackConfigured &&
@@ -948,7 +1056,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
       return {
         transportConfigured: true,
-        modelConfigured: true,
         slackConfigured: status.slackConfigured || credentials.slack !== undefined,
       };
     });
@@ -1223,24 +1330,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (sandboxDriver !== undefined && embedded) {
       throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
     }
-    if (revision.serviceAccount?.credential.kind === "access_token") {
-      if (embedded || this.options.runtime === undefined) {
-        throw new ConfigurationFailure(
-          "ServiceAccount access tokens require a dedicated Codex runtime.",
-        );
-      }
-      const { id, credential } = revision.serviceAccount;
-      const expectedName = `service-account-${sha256Hex(required(id, "ServiceAccount ID"), 32)}`;
-      if (
-        credential.secretRef.name !== expectedName ||
-        credential.secretRef.key !== SERVICE_ACCOUNT_TOKEN_KEY
-      ) {
-        throw new OwnershipFailure("Refusing another ServiceAccount's credential Secret.");
-      }
-    }
+    this.validateHarnessAuth(revision.harness, revision.harnessAuth, revision.configuration);
     const channels = this.enabledChannels(revision);
     const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
     const secretEnvironment = this.secretEnvironmentForRevision(revision, context, namespace);
+    const harnessAuth = this.harnessAuthForRevision(revision, context, namespace);
     const tenantOwnership = { namespaceId: revision.namespaceId };
     const observed = await this.get("Namespace", namespace);
     if (observed === undefined) return result;
@@ -1399,7 +1493,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
             configuration,
             embedded,
             embedded ? revision.servicePrincipalId : undefined,
-            undefined,
+            embedded ? harnessAuth : undefined,
             channels,
             secretEnvironment,
             pluginRuntime,
@@ -1467,7 +1561,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
       const revisionOwnership = { ...agentOwnership, revisionId: revision.id };
-      if (revision.serviceAccount?.credential.kind === "access_token") {
+      if (revision.harnessAuth.method === "chatgpt_service_account") {
         await this.reconcile(
           this.agentAuthenticationNetworkPolicy(revision, namespace),
           agentOwnership,
@@ -1488,13 +1582,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
         undefined,
         false,
         undefined,
-        revision.serviceAccount,
+        harnessAuth,
         [],
         [],
         pluginRuntime,
       );
       if (sandboxDriver?.provisionHarness !== undefined) {
-        const requirements = this.harnessRequirementsFromDeployment(agentDeployment);
+        const requirements = this.harnessRequirementsFromDeployment(
+          agentDeployment,
+          harnessAuth.loginMode,
+        );
         const sandbox = await sandboxDriver.provisionHarness({
           ...(await this.sandboxNamespaceContext(
             this.sandboxNamespaceForRevision(revision, namespace),
@@ -1540,10 +1637,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
   async activateRevision(revision: AgentRevision, context?: ComputeRevisionContext): Promise<void> {
     if (this.options.runtime === undefined) return;
     this.verifyGatewayRoutingConfiguration(revision);
+    this.validateHarnessAuth(revision.harness, revision.harnessAuth, revision.configuration);
     const channels = this.enabledChannels(revision);
     const pluginRuntime = this.pluginRuntimeSnapshot(revision);
     const { name: namespace } = await this.resolveNamespace(revision.namespaceId);
     const secretEnvironment = this.secretEnvironmentForRevision(revision, context, namespace);
+    const harnessAuth = this.harnessAuthForRevision(revision, context, namespace);
     const agentName = `agent-${sha256Hex(revision.agentId, 12)}`;
     const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
     const gatewayOwnership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
@@ -1597,7 +1696,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
               this.gatewayConfiguration(revision),
               true,
               revision.servicePrincipalId,
-              undefined,
+              harnessAuth,
               channels,
               secretEnvironment,
               pluginRuntime,
@@ -1641,7 +1740,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       undefined,
       false,
       undefined,
-      revision.serviceAccount,
+      harnessAuth,
       [],
       [],
       pluginRuntime,
@@ -1655,7 +1754,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
         throw new Error("The exact AgentRevision workload is not ready.");
       }
     } else {
-      const requirements = this.harnessRequirementsFromDeployment(agentDeployment);
+      const requirements = this.harnessRequirementsFromDeployment(
+        agentDeployment,
+        harnessAuth.loginMode,
+      );
       if (!(await this.providerHarnessReady(revision, namespace, requirements.labels))) {
         throw new Error("The exact AgentRevision workload is not ready.");
       }
@@ -1686,7 +1788,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         undefined,
         undefined,
         channels,
-        [],
+        secretEnvironment,
         pluginRuntime,
       ),
       gatewayOwnership,
@@ -2075,10 +2177,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     input: AgentRuntimeCredentialsInput,
   ): AgentRuntimeCredentialsInput {
     const value = asRecord(input) ?? {};
-    const modelApiKey =
-      value.modelApiKey === undefined
-        ? undefined
-        : this.runtimeCredentialValue(value.modelApiKey, "Agent model credential");
+    if (Object.keys(value).some((key) => key !== "slack")) {
+      throw new DependencyUnavailableError(
+        "Runtime credentials support only transport and channels.",
+      );
+    }
     const slackRecord = value.slack === undefined ? undefined : asRecord(value.slack);
     if (value.slack !== undefined && slackRecord === undefined) {
       throw new DependencyUnavailableError("The Agent Slack credentials are incomplete.");
@@ -2096,7 +2199,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
               "Agent Slack bot credential",
             ),
           };
-    return { ...(modelApiKey === undefined ? {} : { modelApiKey }), ...(slack ? { slack } : {}) };
+    return slack ? { slack } : {};
   }
 
   private runtimeCredentialValue(value: unknown, description: string): string {
@@ -2157,7 +2260,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
           GATEWAY_TOKEN_KEY,
           GATEWAY_PASSWORD_KEY,
         ]),
-        model: secret("model", runtime.modelSecretPrefix, [MODEL_API_KEY]),
         ...(runtime.channels === undefined
           ? {}
           : {
@@ -2177,7 +2279,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
   > {
     const entries = [
       context.specs.transport,
-      context.specs.model,
       ...(context.specs.slack === undefined ? [] : [context.specs.slack]),
     ] as const;
     const observed: Partial<Record<RuntimeCredentialGroup, ManagedKubernetesObject<"Secret">>> = {};
@@ -2198,7 +2299,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
   ): AgentRuntimeCredentialStatus {
     return {
       transportConfigured: observed.transport !== undefined,
-      modelConfigured: observed.model !== undefined,
       slackConfigured: observed.slack !== undefined,
     };
   }
@@ -2804,6 +2904,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private harnessRequirementsFromDeployment(
     deployment: ManagedKubernetesObject,
+    loginMode: HarnessWorkloadRequirements["loginMode"],
   ): HarnessWorkloadRequirements {
     const template = asRecord(deployment.spec?.template);
     const metadata = asRecord(template?.metadata);
@@ -2849,6 +2950,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       serviceAccountToken,
       workspaceMounts,
       environment,
+      loginMode,
       labels: harnessLabels,
     };
   }
@@ -3811,6 +3913,41 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ];
   }
 
+  private harnessAuthForRevision(
+    revision: AgentRevision,
+    context: ComputeRevisionContext | undefined,
+    namespace: string,
+  ): PreparedHarnessAuth {
+    const auth = context?.harnessAuth;
+    if (auth === undefined || auth.method !== revision.harnessAuth.method) {
+      throw new ConfigurationFailure(
+        "Harness authentication delivery context is missing or invalid.",
+      );
+    }
+    if (auth.method === "api_key") {
+      const { backendRef, ...snapshot } = auth;
+      if (
+        !isDeepStrictEqual(snapshot, revision.harnessAuth) ||
+        auth.source.namespaceId !== revision.namespaceId ||
+        backendRef.namespaceName !== namespace ||
+        !backendRef.name?.trim() ||
+        !backendRef.key?.trim() ||
+        !backendRef.uid?.trim()
+      ) {
+        throw new OwnershipFailure(
+          "Harness authentication Secret does not match the admitted source.",
+        );
+      }
+    } else {
+      if (!isDeepStrictEqual(auth, revision.harnessAuth)) {
+        throw new OwnershipFailure(
+          "Harness authentication credential does not match the admitted account.",
+        );
+      }
+    }
+    return prepareHarnessAuth(revision.harness, auth);
+  }
+
   private secretEnvironmentForRevision(
     revision: AgentRevision,
     context: ComputeRevisionContext | undefined,
@@ -3837,11 +3974,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       revision.secretDriverId.trim().length === 0
     ) {
       throw new ConfigurationFailure("AgentRevision Secret Driver selection is missing.");
-    }
-    if (revision.harness.mode !== "embedded" && destinations.has(MODEL_API_KEY)) {
-      throw new ConfigurationFailure(
-        "Dedicated Codex runtimes cannot bind gateway model credentials.",
-      );
     }
     if (projected.length !== destinations.size) {
       throw new ConfigurationFailure(
@@ -3884,7 +4016,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     configuration?: GatewayConfigurationSnapshot,
     embedded = false,
     workloadServicePrincipalId?: string,
-    serviceAccount?: AgentRevision["serviceAccount"],
+    harnessAuth?: PreparedHarnessAuth,
     enabledChannels: readonly ChannelRequirements[] = [],
     secretEnvironment: readonly SecretEnvironmentProjection[] = [],
     pluginRuntime?: PluginRuntimeSnapshot,
@@ -4075,10 +4207,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       if (role === "gateway") {
         if (embedded) {
-          // TODO(model-credential-broker): Replace direct per-Agent API keys with brokered credentials.
-          if (!secretEnvironment.some(({ name }) => name === MODEL_API_KEY)) {
-            variables.push(secret(MODEL_API_KEY, runtime.modelSecretPrefix, MODEL_API_KEY));
-          }
           variables.push({
             name: "HOME",
             value: "/home/node",
@@ -4119,24 +4247,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
           );
         }
       } else {
-        if (serviceAccount?.credential.kind === "access_token") {
-          const reference = serviceAccount.credential.secretRef;
-          variables.push(
-            {
-              name: CODEX_ACCESS_TOKEN,
-              valueFrom: { secretKeyRef: { name: reference.name, key: reference.key } },
-            },
-            {
-              name: CODEX_CHATGPT_WORKSPACE_ID,
-              valueFrom: {
-                secretKeyRef: { name: reference.name, key: SERVICE_ACCOUNT_WORKSPACE_KEY },
-              },
-            },
-          );
-        } else {
-          // TODO(model-credential-broker): Replace direct per-Agent API keys with brokered credentials.
-          variables.push(secret(MODEL_API_KEY, runtime.modelSecretPrefix, MODEL_API_KEY));
-        }
         variables.push(
           { name: "CODEX_HOME", value: "/home/node/.codex" },
           { name: "HOME", value: "/home/node" },
@@ -4148,6 +4258,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
           { name: "APP_SERVER_PORT", value: String(AGENT_TRANSPORT_PORT) },
         );
       }
+    }
+    if (role === "agent" || embedded) {
+      if (harnessAuth === undefined) {
+        throw new ConfigurationFailure("Harness authentication preparation is missing.");
+      }
+      variables.push(...harnessAuth.environment);
     }
     const names = new Set<string>();
     for (const variable of variables) {

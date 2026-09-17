@@ -174,11 +174,10 @@
           "data": {
             "additionalProperties": false,
             "properties": {
-              "modelConfigured": { "type": "boolean" },
               "slackConfigured": { "type": "boolean" },
               "transportConfigured": { "type": "boolean" }
             },
-            "required": ["transportConfigured", "modelConfigured", "slackConfigured"],
+            "required": ["transportConfigured", "slackConfigured"],
             "type": "object"
           },
           "meta": {
@@ -2048,6 +2047,55 @@
                               { "const": "dedicated", "type": "string" }
                             ]
                           },
+                          "harnessAuth": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "method": { "const": "api_key", "type": "string" },
+                                      "source": {
+                                        "additionalProperties": false,
+                                        "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                        "properties": {
+                                          "id": {
+                                            "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                            "type": "string"
+                                          },
+                                          "kind": { "const": "secret", "type": "string" },
+                                          "namespaceId": {
+                                            "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["kind", "namespaceId", "id"],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": ["method", "source"],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "method": {
+                                        "const": "chatgpt_service_account",
+                                        "type": "string"
+                                      },
+                                      "serviceAccountId": {
+                                        "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["method", "serviceAccountId"],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              { "type": "null" }
+                            ]
+                          },
                           "id": {
                             "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                             "type": "string"
@@ -2073,10 +2121,6 @@
                               },
                               { "type": "null" }
                             ]
-                          },
-                          "serviceAccountId": {
-                            "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                            "type": "string"
                           }
                         },
                         "required": [
@@ -2085,6 +2129,7 @@
                           "name",
                           "configurationId",
                           "providerId",
+                          "harnessAuth",
                           "executionMode",
                           "desiredRuntimeState",
                           "createdAt"
@@ -2186,6 +2231,52 @@
                       { "const": "dedicated", "type": "string" }
                     ]
                   },
+                  "harnessAuth": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "method": { "const": "api_key", "type": "string" },
+                              "source": {
+                                "additionalProperties": false,
+                                "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                "properties": {
+                                  "id": {
+                                    "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                    "type": "string"
+                                  },
+                                  "kind": { "const": "secret", "type": "string" },
+                                  "namespaceId": {
+                                    "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind", "namespaceId", "id"],
+                                "type": "object"
+                              }
+                            },
+                            "required": ["method", "source"],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "method": { "const": "chatgpt_service_account", "type": "string" },
+                              "serviceAccountId": {
+                                "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["method", "serviceAccountId"],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      { "type": "null" }
+                    ]
+                  },
                   "name": {
                     "maxLength": 200,
                     "minLength": 1,
@@ -2203,10 +2294,6 @@
                       },
                       { "type": "null" }
                     ]
-                  },
-                  "serviceAccountId": {
-                    "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                    "type": "string"
                   }
                 },
                 "required": ["name", "configurationId"],
@@ -2251,6 +2338,55 @@
                             { "const": "dedicated", "type": "string" }
                           ]
                         },
+                        "harnessAuth": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "api_key", "type": "string" },
+                                    "source": {
+                                      "additionalProperties": false,
+                                      "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                      "properties": {
+                                        "id": {
+                                          "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                          "type": "string"
+                                        },
+                                        "kind": { "const": "secret", "type": "string" },
+                                        "namespaceId": {
+                                          "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind", "namespaceId", "id"],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": ["method", "source"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": {
+                                      "const": "chatgpt_service_account",
+                                      "type": "string"
+                                    },
+                                    "serviceAccountId": {
+                                      "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["method", "serviceAccountId"],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "id": {
                           "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -2276,10 +2412,6 @@
                             },
                             { "type": "null" }
                           ]
-                        },
-                        "serviceAccountId": {
-                          "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                          "type": "string"
                         }
                       },
                       "required": [
@@ -2288,6 +2420,7 @@
                         "name",
                         "configurationId",
                         "providerId",
+                        "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
                         "createdAt"
@@ -2447,6 +2580,55 @@
                             { "const": "dedicated", "type": "string" }
                           ]
                         },
+                        "harnessAuth": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "api_key", "type": "string" },
+                                    "source": {
+                                      "additionalProperties": false,
+                                      "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                      "properties": {
+                                        "id": {
+                                          "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                          "type": "string"
+                                        },
+                                        "kind": { "const": "secret", "type": "string" },
+                                        "namespaceId": {
+                                          "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind", "namespaceId", "id"],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": ["method", "source"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": {
+                                      "const": "chatgpt_service_account",
+                                      "type": "string"
+                                    },
+                                    "serviceAccountId": {
+                                      "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["method", "serviceAccountId"],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "id": {
                           "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -2472,10 +2654,6 @@
                             },
                             { "type": "null" }
                           ]
-                        },
-                        "serviceAccountId": {
-                          "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                          "type": "string"
                         }
                       },
                       "required": [
@@ -2484,6 +2662,7 @@
                         "name",
                         "configurationId",
                         "providerId",
+                        "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
                         "createdAt"
@@ -2591,6 +2770,52 @@
                       { "const": "dedicated", "type": "string" }
                     ]
                   },
+                  "harnessAuth": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "method": { "const": "api_key", "type": "string" },
+                              "source": {
+                                "additionalProperties": false,
+                                "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                "properties": {
+                                  "id": {
+                                    "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                    "type": "string"
+                                  },
+                                  "kind": { "const": "secret", "type": "string" },
+                                  "namespaceId": {
+                                    "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind", "namespaceId", "id"],
+                                "type": "object"
+                              }
+                            },
+                            "required": ["method", "source"],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "method": { "const": "chatgpt_service_account", "type": "string" },
+                              "serviceAccountId": {
+                                "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["method", "serviceAccountId"],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      { "type": "null" }
+                    ]
+                  },
                   "plugins": { "$ref": "#/components/schemas/def-4" },
                   "providerId": {
                     "anyOf": [
@@ -2598,15 +2823,6 @@
                         "maxLength": 200,
                         "minLength": 1,
                         "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                        "type": "string"
-                      },
-                      { "type": "null" }
-                    ]
-                  },
-                  "serviceAccountId": {
-                    "anyOf": [
-                      {
-                        "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                         "type": "string"
                       },
                       { "type": "null" }
@@ -2655,6 +2871,55 @@
                             { "const": "dedicated", "type": "string" }
                           ]
                         },
+                        "harnessAuth": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "api_key", "type": "string" },
+                                    "source": {
+                                      "additionalProperties": false,
+                                      "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                      "properties": {
+                                        "id": {
+                                          "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                          "type": "string"
+                                        },
+                                        "kind": { "const": "secret", "type": "string" },
+                                        "namespaceId": {
+                                          "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind", "namespaceId", "id"],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": ["method", "source"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": {
+                                      "const": "chatgpt_service_account",
+                                      "type": "string"
+                                    },
+                                    "serviceAccountId": {
+                                      "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["method", "serviceAccountId"],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "id": {
                           "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -2680,10 +2945,6 @@
                             },
                             { "type": "null" }
                           ]
-                        },
-                        "serviceAccountId": {
-                          "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                          "type": "string"
                         }
                       },
                       "required": [
@@ -2692,6 +2953,7 @@
                         "name",
                         "configurationId",
                         "providerId",
+                        "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
                         "createdAt"
@@ -2875,6 +3137,47 @@
                           "required": ["id", "version", "mode"],
                           "type": "object"
                         },
+                        "harnessAuth": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "method": { "const": "api_key", "type": "string" },
+                                "source": {
+                                  "additionalProperties": false,
+                                  "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                  "properties": {
+                                    "id": {
+                                      "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    },
+                                    "kind": { "const": "secret", "type": "string" },
+                                    "namespaceId": {
+                                      "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["kind", "namespaceId", "id"],
+                                  "type": "object"
+                                }
+                              },
+                              "required": ["method", "source"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "method": { "const": "chatgpt_service_account", "type": "string" },
+                                "serviceAccountId": {
+                                  "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["method", "serviceAccountId"],
+                              "type": "object"
+                            }
+                          ]
+                        },
                         "id": {
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -2937,52 +3240,11 @@
                             "required": ["source"],
                             "type": "object"
                           },
-                          "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination.",
+                          "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.",
                           "maxProperties": 64,
                           "type": "object"
                         },
-                        "secretDriverId": { "minLength": 1, "type": "string" },
-                        "serviceAccount": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "credential": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "kind": {
-                                  "anyOf": [
-                                    { "const": "api_key", "type": "string" },
-                                    { "const": "access_token", "type": "string" }
-                                  ]
-                                },
-                                "secretRef": {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "key": {
-                                      "maxLength": 253,
-                                      "pattern": "^(?![.]{1,2}$)[-._a-zA-Z0-9]+$",
-                                      "type": "string"
-                                    },
-                                    "name": {
-                                      "maxLength": 253,
-                                      "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": ["name", "key"],
-                                  "type": "object"
-                                }
-                              },
-                              "required": ["kind", "secretRef"],
-                              "type": "object"
-                            },
-                            "id": {
-                              "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                              "type": "string"
-                            }
-                          },
-                          "required": ["id", "credential"],
-                          "type": "object"
-                        }
+                        "secretDriverId": { "minLength": 1, "type": "string" }
                       },
                       "required": [
                         "id",
@@ -2996,6 +3258,7 @@
                         "configuration",
                         "harness",
                         "compute",
+                        "harnessAuth",
                         "createdAt"
                       ],
                       "type": "object"
@@ -3166,6 +3429,50 @@
                             "required": ["id", "version", "mode"],
                             "type": "object"
                           },
+                          "harnessAuth": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "method": { "const": "api_key", "type": "string" },
+                                  "source": {
+                                    "additionalProperties": false,
+                                    "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                    "properties": {
+                                      "id": {
+                                        "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                        "type": "string"
+                                      },
+                                      "kind": { "const": "secret", "type": "string" },
+                                      "namespaceId": {
+                                        "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["kind", "namespaceId", "id"],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": ["method", "source"],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "method": {
+                                    "const": "chatgpt_service_account",
+                                    "type": "string"
+                                  },
+                                  "serviceAccountId": {
+                                    "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["method", "serviceAccountId"],
+                                "type": "object"
+                              }
+                            ]
+                          },
                           "id": {
                             "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                             "type": "string"
@@ -3228,52 +3535,11 @@
                               "required": ["source"],
                               "type": "object"
                             },
-                            "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination.",
+                            "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.",
                             "maxProperties": 64,
                             "type": "object"
                           },
-                          "secretDriverId": { "minLength": 1, "type": "string" },
-                          "serviceAccount": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "credential": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "kind": {
-                                    "anyOf": [
-                                      { "const": "api_key", "type": "string" },
-                                      { "const": "access_token", "type": "string" }
-                                    ]
-                                  },
-                                  "secretRef": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "key": {
-                                        "maxLength": 253,
-                                        "pattern": "^(?![.]{1,2}$)[-._a-zA-Z0-9]+$",
-                                        "type": "string"
-                                      },
-                                      "name": {
-                                        "maxLength": 253,
-                                        "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": ["name", "key"],
-                                    "type": "object"
-                                  }
-                                },
-                                "required": ["kind", "secretRef"],
-                                "type": "object"
-                              },
-                              "id": {
-                                "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                                "type": "string"
-                              }
-                            },
-                            "required": ["id", "credential"],
-                            "type": "object"
-                          }
+                          "secretDriverId": { "minLength": 1, "type": "string" }
                         },
                         "required": [
                           "id",
@@ -3287,6 +3553,7 @@
                           "configuration",
                           "harness",
                           "compute",
+                          "harnessAuth",
                           "createdAt"
                         ],
                         "type": "object"
@@ -3449,6 +3716,47 @@
                           "required": ["id", "version", "mode"],
                           "type": "object"
                         },
+                        "harnessAuth": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "method": { "const": "api_key", "type": "string" },
+                                "source": {
+                                  "additionalProperties": false,
+                                  "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                  "properties": {
+                                    "id": {
+                                      "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    },
+                                    "kind": { "const": "secret", "type": "string" },
+                                    "namespaceId": {
+                                      "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["kind", "namespaceId", "id"],
+                                  "type": "object"
+                                }
+                              },
+                              "required": ["method", "source"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "method": { "const": "chatgpt_service_account", "type": "string" },
+                                "serviceAccountId": {
+                                  "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["method", "serviceAccountId"],
+                              "type": "object"
+                            }
+                          ]
+                        },
                         "id": {
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -3511,52 +3819,11 @@
                             "required": ["source"],
                             "type": "object"
                           },
-                          "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination.",
+                          "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.",
                           "maxProperties": 64,
                           "type": "object"
                         },
-                        "secretDriverId": { "minLength": 1, "type": "string" },
-                        "serviceAccount": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "credential": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "kind": {
-                                  "anyOf": [
-                                    { "const": "api_key", "type": "string" },
-                                    { "const": "access_token", "type": "string" }
-                                  ]
-                                },
-                                "secretRef": {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "key": {
-                                      "maxLength": 253,
-                                      "pattern": "^(?![.]{1,2}$)[-._a-zA-Z0-9]+$",
-                                      "type": "string"
-                                    },
-                                    "name": {
-                                      "maxLength": 253,
-                                      "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": ["name", "key"],
-                                  "type": "object"
-                                }
-                              },
-                              "required": ["kind", "secretRef"],
-                              "type": "object"
-                            },
-                            "id": {
-                              "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                              "type": "string"
-                            }
-                          },
-                          "required": ["id", "credential"],
-                          "type": "object"
-                        }
+                        "secretDriverId": { "minLength": 1, "type": "string" }
                       },
                       "required": [
                         "id",
@@ -3570,6 +3837,7 @@
                         "configuration",
                         "harness",
                         "compute",
+                        "harnessAuth",
                         "createdAt"
                       ],
                       "type": "object"
@@ -3671,11 +3939,10 @@
                     "data": {
                       "additionalProperties": false,
                       "properties": {
-                        "modelConfigured": { "type": "boolean" },
                         "slackConfigured": { "type": "boolean" },
                         "transportConfigured": { "type": "boolean" }
                       },
-                      "required": ["transportConfigured", "modelConfigured", "slackConfigured"],
+                      "required": ["transportConfigured", "slackConfigured"],
                       "type": "object"
                     },
                     "meta": {
@@ -3769,13 +4036,6 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
-                  "modelApiKey": {
-                    "description": "Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value.",
-                    "maxLength": 65536,
-                    "minLength": 1,
-                    "pattern": "^[^\\u0000]*$",
-                    "type": "string"
-                  },
                   "slack": {
                     "additionalProperties": false,
                     "properties": {
@@ -3814,11 +4074,10 @@
                     "data": {
                       "additionalProperties": false,
                       "properties": {
-                        "modelConfigured": { "type": "boolean" },
                         "slackConfigured": { "type": "boolean" },
                         "transportConfigured": { "type": "boolean" }
                       },
-                      "required": ["transportConfigured", "modelConfigured", "slackConfigured"],
+                      "required": ["transportConfigured", "slackConfigured"],
                       "type": "object"
                     },
                     "meta": {
@@ -3962,6 +4221,55 @@
                             { "const": "dedicated", "type": "string" }
                           ]
                         },
+                        "harnessAuth": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "api_key", "type": "string" },
+                                    "source": {
+                                      "additionalProperties": false,
+                                      "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                      "properties": {
+                                        "id": {
+                                          "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                          "type": "string"
+                                        },
+                                        "kind": { "const": "secret", "type": "string" },
+                                        "namespaceId": {
+                                          "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind", "namespaceId", "id"],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": ["method", "source"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": {
+                                      "const": "chatgpt_service_account",
+                                      "type": "string"
+                                    },
+                                    "serviceAccountId": {
+                                      "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["method", "serviceAccountId"],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "id": {
                           "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -3987,10 +4295,6 @@
                             },
                             { "type": "null" }
                           ]
-                        },
-                        "serviceAccountId": {
-                          "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                          "type": "string"
                         }
                       },
                       "required": [
@@ -3999,6 +4303,7 @@
                         "name",
                         "configurationId",
                         "providerId",
+                        "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
                         "createdAt"
@@ -4387,7 +4692,7 @@
                       "required": ["source"],
                       "type": "object"
                     },
-                    "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination.",
+                    "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.",
                     "maxProperties": 64,
                     "type": "object"
                   },
@@ -4467,7 +4772,7 @@
                             "required": ["source"],
                             "type": "object"
                           },
-                          "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination.",
+                          "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.",
                           "maxProperties": 64,
                           "type": "object"
                         },
@@ -4735,7 +5040,7 @@
                             "required": ["source"],
                             "type": "object"
                           },
-                          "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination.",
+                          "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.",
                           "maxProperties": 64,
                           "type": "object"
                         },
@@ -4880,7 +5185,7 @@
                       "required": ["source"],
                       "type": "object"
                     },
-                    "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination.",
+                    "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.",
                     "maxProperties": 64,
                     "type": "object"
                   },
@@ -4960,7 +5265,7 @@
                             "required": ["source"],
                             "type": "object"
                           },
-                          "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination.",
+                          "description": "Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: \"env\"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.",
                           "maxProperties": 64,
                           "type": "object"
                         },
@@ -5475,26 +5780,9 @@
                                   { "const": "access_token", "type": "string" },
                                   { "const": "oauth_access_token", "type": "string" }
                                 ]
-                              },
-                              "secretRef": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "key": {
-                                    "maxLength": 253,
-                                    "pattern": "^(?![.]{1,2}$)[-._a-zA-Z0-9]+$",
-                                    "type": "string"
-                                  },
-                                  "name": {
-                                    "maxLength": 253,
-                                    "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
-                                    "type": "string"
-                                  }
-                                },
-                                "required": ["name", "key"],
-                                "type": "object"
                               }
                             },
-                            "required": ["kind", "secretRef"],
+                            "required": ["kind"],
                             "type": "object"
                           },
                           "id": {
@@ -5633,26 +5921,9 @@
                                 { "const": "access_token", "type": "string" },
                                 { "const": "oauth_access_token", "type": "string" }
                               ]
-                            },
-                            "secretRef": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "key": {
-                                  "maxLength": 253,
-                                  "pattern": "^(?![.]{1,2}$)[-._a-zA-Z0-9]+$",
-                                  "type": "string"
-                                },
-                                "name": {
-                                  "maxLength": 253,
-                                  "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["name", "key"],
-                              "type": "object"
                             }
                           },
-                          "required": ["kind", "secretRef"],
+                          "required": ["kind"],
                           "type": "object"
                         },
                         "id": {
@@ -5871,26 +6142,9 @@
                                 { "const": "access_token", "type": "string" },
                                 { "const": "oauth_access_token", "type": "string" }
                               ]
-                            },
-                            "secretRef": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "key": {
-                                  "maxLength": 253,
-                                  "pattern": "^(?![.]{1,2}$)[-._a-zA-Z0-9]+$",
-                                  "type": "string"
-                                },
-                                "name": {
-                                  "maxLength": 253,
-                                  "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["name", "key"],
-                              "type": "object"
                             }
                           },
-                          "required": ["kind", "secretRef"],
+                          "required": ["kind"],
                           "type": "object"
                         },
                         "id": {
@@ -6054,26 +6308,9 @@
                                 { "const": "access_token", "type": "string" },
                                 { "const": "oauth_access_token", "type": "string" }
                               ]
-                            },
-                            "secretRef": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "key": {
-                                  "maxLength": 253,
-                                  "pattern": "^(?![.]{1,2}$)[-._a-zA-Z0-9]+$",
-                                  "type": "string"
-                                },
-                                "name": {
-                                  "maxLength": 253,
-                                  "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["name", "key"],
-                              "type": "object"
                             }
                           },
-                          "required": ["kind", "secretRef"],
+                          "required": ["kind"],
                           "type": "object"
                         },
                         "id": {
@@ -6226,26 +6463,9 @@
                                 { "const": "access_token", "type": "string" },
                                 { "const": "oauth_access_token", "type": "string" }
                               ]
-                            },
-                            "secretRef": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "key": {
-                                  "maxLength": 253,
-                                  "pattern": "^(?![.]{1,2}$)[-._a-zA-Z0-9]+$",
-                                  "type": "string"
-                                },
-                                "name": {
-                                  "maxLength": 253,
-                                  "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:[.][a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["name", "key"],
-                              "type": "object"
                             }
                           },
-                          "required": ["kind", "secretRef"],
+                          "required": ["kind"],
                           "type": "object"
                         },
                         "id": {

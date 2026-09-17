@@ -342,6 +342,10 @@ export class SshComputeDriver implements ComputeDriver {
     }
   }
 
+  validateHarnessAuth(): never {
+    throw new ConfigurationFailure("SSH Compute does not support Harness authentication bindings.");
+  }
+
   async prepareRevision(
     revision: AgentRevision,
     context?: ComputeRevisionContext,
@@ -457,6 +461,7 @@ export class SshComputeDriver implements ComputeDriver {
   }
 
   private validateRevision(revision: AgentRevision): Readonly<Namespace> {
+    if (revision.harnessAuth !== undefined) this.validateHarnessAuth();
     const namespace = this.namespaces.get(revision.namespaceId);
     const binding = this.agents.get(revision.agentId);
     if (namespace === undefined || binding === undefined)

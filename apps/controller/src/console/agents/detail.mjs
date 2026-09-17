@@ -1,4 +1,5 @@
 import { element, button } from "../dom.mjs";
+import { createHarnessAuthFields, harnessAuthDescription } from "./harness-auth.mjs";
 import { renderChannels } from "../channels.mjs";
 import { renderWorkspaceFiles } from "./workspace.mjs";
 import { displayDate, shortId, namespacePath, link, message } from "./list.mjs";
@@ -238,8 +239,11 @@ export async function renderAgentDetail(context) {
         : null;
   function updateDeployControls() {
     if (!deploy || !deployStatus || !credentials) return;
-    deploy.disabled = deployPending || !credentials.canDeploy();
-    if (!deployPending) deployStatus.textContent = credentials.deployGateMessage();
+    deploy.disabled = deployPending || !agent.harnessAuth || !credentials.canDeploy();
+    if (!deployPending)
+      deployStatus.textContent = agent.harnessAuth
+        ? credentials.deployGateMessage()
+        : "Select a harness authentication source in Credentials before deployment.";
   }
   if (draft) {
     deployStatus = element("p", { className: "muted", role: "status" });
@@ -259,6 +263,7 @@ export async function renderAgentDetail(context) {
         if (!context.isCurrent()) return;
         if (
           freshAgent.configurationId !== snapshot.id ||
+          JSON.stringify(freshAgent.harnessAuth) !== JSON.stringify(agent.harnessAuth) ||
           freshConfig.generation !== snapshot.generation
         ) {
           deployStatus.textContent = "The saved draft changed. Refresh before deploying.";
@@ -376,12 +381,61 @@ export async function renderAgentDetail(context) {
     });
     content.append(channels);
   } else if (selectedTab === "credentials" && credentials) {
-    content.append(credentials.section);
+    const auth = createHarnessAuthFields(context, agent.harnessAuth);
+    const feedback = element("p", { role: "status", className: "hint" });
+    const save = element(
+      "button",
+      { type: "submit", className: "primary" },
+      "Save authentication source",
+    );
+    const form = element("form", { className: "agent-card" }, auth.section, save, feedback);
+    let outcomeUnknown = false;
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!form.reportValidity() || save.disabled) return;
+      save.disabled = true;
+      auth.setDisabled(true);
+      let mutationStarted = false;
+      try {
+        const harnessAuth = await auth.readBinding();
+        const current = await request(path);
+        if (!context.isCurrent()) return;
+        if (
+          current.configurationId !== agent.configurationId ||
+          JSON.stringify(current.harnessAuth) !== JSON.stringify(agent.harnessAuth)
+        ) {
+          feedback.textContent = "The saved draft changed. Refresh before saving authentication.";
+          return;
+        }
+        mutationStarted = true;
+        await request(path, {
+          method: "PATCH",
+          body: { configurationId: agent.configurationId, harnessAuth },
+        });
+        if (context.isCurrent()) change("draft", "credentials");
+      } catch (error) {
+        if (!context.isCurrent()) return;
+        if (error.status === 401) context.onExpired();
+        else {
+          feedback.textContent = message(error, mutationStarted);
+          outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
+        }
+      } finally {
+        if (context.isCurrent()) {
+          save.disabled = outcomeUnknown;
+          auth.setDisabled(outcomeUnknown);
+        }
+      }
+    });
+    content.append(form, credentials.section);
   } else {
     const details = [
       ["Execution mode", executionMode === "dedicated" ? "Dedicated" : "Embedded"],
       ["Provider", draft ? agent.providerId : snapshot.providerId],
-      ["Service account", draft ? agent.serviceAccountId : snapshot.serviceAccount?.id],
+      [
+        "Harness authentication",
+        harnessAuthDescription(draft ? agent.harnessAuth : snapshot.harnessAuth),
+      ],
       ["Created", displayDate(snapshot.createdAt)],
     ];
     if (!draft)

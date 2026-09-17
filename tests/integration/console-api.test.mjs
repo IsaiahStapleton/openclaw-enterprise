@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createConsoleAppFixture, providerFixtures } from "../helpers/console-app.mjs";
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { cookieHeaderFromSetCookie, setCookieHeaders } from "../helpers/auth-session.mjs";
 
 function noSecretProviderFields(provider) {
@@ -128,6 +129,7 @@ test("console static routes expose only public assets and preserve API JSON fail
     ["/console/console.css", /text\/css/i],
     ["/console/console.mjs", /javascript/i],
     ["/console/agents.mjs", /javascript/i],
+    ["/console/agents/harness-auth.mjs", /javascript/i],
     ["/console/channels.mjs", /javascript/i],
     ["/console/dom.mjs", /javascript/i],
     ["/console/channels.css", /text\/css/i],
@@ -216,4 +218,85 @@ test("console auth routes reject untrusted browser origins and issue production 
     headers: { cookie: requestCookie },
   });
   assert.equal(cliSignOut.response.status, 200, cliSignOut.text);
+});
+
+test("Agent harness authentication API preserves omitted bindings, clears null, and rejects legacy selectors", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Harness binding API", { ready: true });
+  const configuration = await fixture.createConfiguration(namespace.id);
+  const collection = `/namespaces/${namespace.id}/agents`;
+  const created = await fixture.request("POST", collection, {
+    body: { name: "Unbound draft", configurationId: configuration.id },
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.data.harnessAuth, null);
+  const path = `${collection}/${created.data.id}`;
+  const noBinding = await fixture.request("POST", `${path}/deploy`);
+  assert.equal(noBinding.status, 409);
+  const secret = await fixture.createSecret(
+    namespace.id,
+    "Harness API key",
+    "never-public-api-key",
+  );
+  const binding = { method: "api_key", source: secret.ref };
+  const selected = await fixture.updateAgent(namespace.id, created.data.id, {
+    configurationId: configuration.id,
+    harnessAuth: binding,
+  });
+  assert.deepEqual(selected.harnessAuth, binding);
+  const preserved = await fixture.updateAgent(namespace.id, created.data.id, {
+    configurationId: configuration.id,
+  });
+  assert.deepEqual(preserved.harnessAuth, binding);
+  for (const method of ["POST", "PATCH"]) {
+    const rejected = await fixture.request(method, method === "POST" ? collection : path, {
+      body: {
+        ...(method === "POST" ? { name: "Legacy selector" } : {}),
+        configurationId: configuration.id,
+        serviceAccountId: "sa_00000000-0000-4000-8000-000000000000",
+      },
+    });
+    assert.equal(rejected.status, 400);
+  }
+  const cleared = await fixture.updateAgent(namespace.id, created.data.id, {
+    configurationId: configuration.id,
+    harnessAuth: null,
+  });
+  assert.equal(cleared.harnessAuth, null);
+  const malformed = await fixture.request("PATCH", path, {
+    body: {
+      configurationId: configuration.id,
+      harnessAuth: { ...binding, credential: "plaintext" },
+    },
+  });
+  assert.equal(malformed.status, 400);
+});
+
+test("public Agent revisions return the selected binding without private credential resolution metadata", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Public binding snapshot", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Bound Agent",
+    createHarnessConfiguration("openclaw", "gpt-4.1"),
+  );
+  const revision = await fixture.deployAgent(namespace.id, agent.id);
+  assert.deepEqual(revision.harnessAuth, agent.harnessAuth);
+  const path = `/namespaces/${namespace.id}/agents/${agent.id}/revisions`;
+  for (const endpoint of [path, `${path}/${revision.id}`]) {
+    const response = await fixture.request("GET", endpoint);
+    assert.equal(response.status, 200);
+    assert.doesNotMatch(
+      JSON.stringify(response.data),
+      /backendRef|secretDriverId|workspaceId|secretRef|test-api-key/,
+    );
+  }
+  await fixture.updateAgent(namespace.id, agent.id, {
+    configurationId: agent.configurationId,
+    harnessAuth: null,
+  });
+  const historical = await fixture.request("GET", `${path}/${revision.id}`);
+  assert.deepEqual(historical.data.harnessAuth, agent.harnessAuth);
 });

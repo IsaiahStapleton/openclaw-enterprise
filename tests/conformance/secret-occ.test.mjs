@@ -29,16 +29,8 @@ const installation = Object.freeze({
 
 function configurationValues() {
   return {
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.example.test/v1",
-          apiKey: { source: "env", provider: "model", id: "OPENAI_API_KEY" },
-        },
-      },
-    },
     secrets: {
-      providers: { model: { source: "env", allowlist: ["OPENAI_API_KEY"] } },
+      providers: { model: { source: "env", allowlist: ["GATEWAY_TOOL_TOKEN"] } },
     },
   };
 }
@@ -183,15 +175,39 @@ async function fixture(options = {}) {
     await controller.transact((transaction) =>
       transaction.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
     );
+    if (agent) {
+      const modelSecret = await controller.createSecret(administrator, {
+        namespaceId: namespace.id,
+        name: "fixture-harness-key",
+        value: "synthetic-harness-key",
+      });
+      grantAgentSecretOperate(agent, modelSecret);
+      iamState.bindings.push({
+        id: "fixture-harness-consumer",
+        subjectKind: "identity",
+        subjectId: noSecretOperator,
+        roleId: "secret-occ-agent-secret-role",
+        namespaceId: namespace.id,
+        resourceKind: "secret",
+        resourceId: modelSecret.id,
+      });
+      await controller.updateAgent(administrator, {
+        namespaceId: namespace.id,
+        agentId: agent.id,
+        configurationId: agent.configurationId,
+        harnessAuth: { method: "api_key", source: modelSecret.ref },
+      });
+    }
   }
 
   function grantAgentSecretOperate(targetAgent, secret) {
-    iamState.identities.push({
-      kind: "service_principal",
-      id: targetAgent.servicePrincipalId,
-      namespaceId: targetAgent.namespaceId,
-      agentId: targetAgent.id,
-    });
+    if (!iamState.identities.some(({ id }) => id === targetAgent.servicePrincipalId))
+      iamState.identities.push({
+        kind: "service_principal",
+        id: targetAgent.servicePrincipalId,
+        namespaceId: targetAgent.namespaceId,
+        agentId: targetAgent.id,
+      });
     iamState.bindings.push({
       id: `secret-occ-agent-binding-${targetAgent.id}-${secret.id}`,
       namespaceId: targetAgent.namespaceId,
@@ -256,7 +272,7 @@ test("Secret bindings freeze public refs in revisions while value-only updates k
   });
   grantAgentSecretOperate(agent, secret);
   const secretBindings = {
-    OPENAI_API_KEY: { source: secret.ref },
+    GATEWAY_TOOL_TOKEN: { source: secret.ref },
   };
   const configuration = await controller.createConfiguration(administrator, {
     namespaceId: namespace.id,
@@ -265,7 +281,7 @@ test("Secret bindings freeze public refs in revisions while value-only updates k
     secretBindings,
   });
   assert.deepEqual(configuration.secretBindings, {
-    OPENAI_API_KEY: { source: secret.ref, delivery: { type: "env" } },
+    GATEWAY_TOOL_TOKEN: { source: secret.ref, delivery: { type: "env" } },
   });
   const preserved = await controller.updateConfiguration(administrator, {
     namespaceId: namespace.id,
@@ -314,7 +330,7 @@ test("Secret bindings freeze public refs in revisions while value-only updates k
   assert.equal(first.secretDriverId, secretDriver.id);
   assert.equal(second.secretDriverId, secretDriver.id);
   assert.deepEqual(first.secretBindings, {
-    OPENAI_API_KEY: { source: secret.ref, delivery: { type: "env" } },
+    GATEWAY_TOOL_TOKEN: { source: secret.ref, delivery: { type: "env" } },
   });
   assert.deepEqual(second.secretBindings, first.secretBindings);
   assert.equal(first.configurationGeneration, restored.generation);
@@ -351,7 +367,7 @@ test("Secret bindings can be shared inside a Namespace and still deny cross-Name
     namespaceId: namespace.id,
     kind: "agent",
     values: configurationValues(),
-    secretBindings: { OPENAI_API_KEY: { source: ownerSecret.ref } },
+    secretBindings: { GATEWAY_TOOL_TOKEN: { source: ownerSecret.ref } },
   });
   await controller.updateAgent(administrator, {
     namespaceId: namespace.id,
@@ -364,12 +380,12 @@ test("Secret bindings can be shared inside a Namespace and still deny cross-Name
     kind: "agent",
     values: configurationValues(),
     secretBindings: {
-      OPENAI_API_KEY: { source: ownerSecret.ref },
+      GATEWAY_TOOL_TOKEN: { source: ownerSecret.ref },
       MODEL_FALLBACK_KEY: { source: siblingSecret.ref },
     },
   });
   assert.deepEqual(mixedConfiguration.secretBindings, {
-    OPENAI_API_KEY: { source: ownerSecret.ref, delivery: { type: "env" } },
+    GATEWAY_TOOL_TOKEN: { source: ownerSecret.ref, delivery: { type: "env" } },
     MODEL_FALLBACK_KEY: { source: siblingSecret.ref, delivery: { type: "env" } },
   });
 
@@ -385,7 +401,7 @@ test("Secret bindings can be shared inside a Namespace and still deny cross-Name
       namespaceId: namespace.id,
       kind: "agent",
       values: configurationValues(),
-      secretBindings: { OPENAI_API_KEY: { source: foreignSecret.ref } },
+      secretBindings: { GATEWAY_TOOL_TOKEN: { source: foreignSecret.ref } },
     }),
     ScopeViolationError,
   );
@@ -404,10 +420,10 @@ test("Secret bindings can be shared inside a Namespace and still deny cross-Name
     namespaceId: namespace.id,
     configurationId: assignedConfiguration.id,
     values: configurationValues(),
-    secretBindings: { OPENAI_API_KEY: { source: ownerSecret.ref } },
+    secretBindings: { GATEWAY_TOOL_TOKEN: { source: ownerSecret.ref } },
   });
   assert.deepEqual(updatedAssigned.secretBindings, {
-    OPENAI_API_KEY: { source: ownerSecret.ref, delivery: { type: "env" } },
+    GATEWAY_TOOL_TOKEN: { source: ownerSecret.ref, delivery: { type: "env" } },
   });
 });
 
@@ -434,7 +450,7 @@ test("Secret material, metadata, and binding permissions stay separate", async (
   );
   assert.deepEqual(await controller.readSecret(metadataReader, namespace.id, secret.id), secret);
 
-  const secretBindings = { OPENAI_API_KEY: { source: secret.ref } };
+  const secretBindings = { GATEWAY_TOOL_TOKEN: { source: secret.ref } };
   await assert.rejects(
     controller.createConfiguration(metadataReader, {
       namespaceId: namespace.id,
@@ -568,7 +584,7 @@ test("deploying a bound Secret requires both the caller and Agent service princi
     namespaceId: namespace.id,
     kind: "agent",
     values: configurationValues(),
-    secretBindings: { OPENAI_API_KEY: { source: secret.ref } },
+    secretBindings: { GATEWAY_TOOL_TOKEN: { source: secret.ref } },
   });
   await controller.updateAgent(administrator, {
     namespaceId: namespace.id,
@@ -582,7 +598,10 @@ test("deploying a bound Secret requires both the caller and Agent service princi
       { namespaceId: namespace.id, agentId: agent.id },
       resolveApprovedDevelopmentHarness,
     ),
-    AuthorizationDeniedError,
+    {
+      name: "AuthorizationDeniedError",
+      authorization: { action: "operate", resource: secret.ref },
+    },
   );
   grantAgentSecretOperate(agent, secret);
   await assert.rejects(
@@ -591,7 +610,10 @@ test("deploying a bound Secret requires both the caller and Agent service princi
       { namespaceId: namespace.id, agentId: agent.id },
       resolveApprovedDevelopmentHarness,
     ),
-    AuthorizationDeniedError,
+    {
+      name: "AuthorizationDeniedError",
+      authorization: { action: "operate", resource: secret.ref },
+    },
   );
   const revision = await controller.deployAgent(
     deployer,
@@ -601,7 +623,7 @@ test("deploying a bound Secret requires both the caller and Agent service princi
   assert.equal(revision.agentId, agent.id);
   assert.equal(revision.servicePrincipalId, agent.servicePrincipalId);
   assert.deepEqual(revision.secretBindings, {
-    OPENAI_API_KEY: { source: secret.ref, delivery: { type: "env" } },
+    GATEWAY_TOOL_TOKEN: { source: secret.ref, delivery: { type: "env" } },
   });
 });
 
@@ -619,7 +641,7 @@ test("Secret binding admission fails closed for missing selection and backend id
     namespaceId: namespace.id,
     kind: "agent",
     values: configurationValues(),
-    secretBindings: { OPENAI_API_KEY: { source: secret.ref } },
+    secretBindings: { GATEWAY_TOOL_TOKEN: { source: secret.ref } },
   });
   await controller.updateAgent(administrator, {
     namespaceId: namespace.id,
@@ -639,7 +661,9 @@ test("Secret binding admission fails closed for missing selection and backend id
     DependencyUnavailableError,
   );
   controller.selectDriver("secret", secretDriver.id);
-  secretDriver.setResolveOverride((stored) => ({ ...stored.backendRef, uid: "uid-foreign" }));
+  secretDriver.setResolveOverride((stored) =>
+    stored.id === secret.id ? { ...stored.backendRef, uid: "uid-foreign" } : stored.backendRef,
+  );
   await assert.rejects(
     controller.deployAgent(
       administrator,
@@ -665,7 +689,7 @@ test("bound Secrets block deletion across current Configuration and admitted dep
     namespaceId: namespace.id,
     kind: "agent",
     values: configurationValues(),
-    secretBindings: { OPENAI_API_KEY: { source: secret.ref } },
+    secretBindings: { GATEWAY_TOOL_TOKEN: { source: secret.ref } },
   });
 
   await assert.rejects(

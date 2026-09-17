@@ -144,13 +144,14 @@ cancelled rollback receives a bounded cleanup signal.
 ## Optional initial runtime credential provisioning
 
 `getAgentRuntimeCredentialStatus(binding)` reports whether the admitted Agent's
-transport, model, and Slack credential groups are stored. The
-`transportConfigured`, `modelConfigured`, and `slackConfigured` flags describe
+transport and Slack credential groups are stored. The
+`transportConfigured` and `slackConfigured` flags describe
 complete, correctly owned storage; they do not probe provider authentication or
 workload readiness.
 
-`provisionAgentRuntimeCredentials(binding, input)` supports initial transport,
-OpenAI API key, and optional Slack credential setup. OCC authorizes the exact
+`provisionAgentRuntimeCredentials(binding, input)` supports initial transport
+and optional Slack credential setup. Model auth uses Agent `harnessAuth` and is
+validated separately at deployment. OCC authorizes the exact
 Agent and holds Namespace and Agent locks while checking that no historical
 revision exists and invoking the selected Driver. Drivers receive admitted
 `ComputeAgentBinding`, never caller-selected physical storage names. Unsupported

@@ -14,6 +14,7 @@ import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
 import { signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 
 const run = promisify(execFile);
@@ -55,6 +56,7 @@ test("service API keys authenticate scoped automation without replacing sessions
     auditSink,
     development: { enabled: true, installationId },
     computeDriver: createDevelopmentComputeDriver(),
+    secretDriver: createTestSecretDriver(),
     configurationDriver: createTestConfigurationDriver(),
     resolveHarness: resolveApprovedDevelopmentHarness,
     createController(installation) {
@@ -205,6 +207,36 @@ test("service API keys authenticate scoped automation without replacing sessions
       body: { name: "cli-stop-agent", configurationId: agentConfiguration.data.id },
     });
     assert.equal(agent.status, 201);
+    const source = await controller.createSecret(seed.principal.id, {
+      namespaceId,
+      name: "cli-model-key",
+      value: "synthetic-cli-model-key",
+    });
+    const boundAgent = await controller.updateAgent(seed.principal.id, {
+      namespaceId,
+      agentId: agent.data.id,
+      configurationId: agentConfiguration.data.id,
+      harnessAuth: { method: "api_key", source: source.ref },
+    });
+    policy.identities.push({
+      kind: "service_principal",
+      id: boundAgent.servicePrincipalId,
+      namespaceId,
+      agentId: boundAgent.id,
+    });
+    policy.roles.push({
+      id: "cli-model-consumer",
+      permissions: [{ action: "operate", resourceKind: "secret" }],
+    });
+    policy.bindings.push({
+      id: "cli-model-consumer",
+      subjectKind: "identity",
+      subjectId: boundAgent.servicePrincipalId,
+      roleId: "cli-model-consumer",
+      namespaceId,
+      resourceKind: "secret",
+      resourceId: source.id,
+    });
     const deployed = await request(
       "POST",
       `/namespaces/${namespaceId}/agents/${agent.data.id}/deploy`,
@@ -277,7 +309,8 @@ test("service API keys authenticate scoped automation without replacing sessions
     assert.equal((await request("GET", "/installation", { headers })).status, 403);
     assert.equal((await request("DELETE", path, { headers })).status, 403);
     // Removing a grant is immediately visible without reissuing the credential.
-    const binding = policy.bindings.pop();
+    const bindingIndex = policy.bindings.findIndex((entry) => entry.id === "service-automation");
+    const [binding] = policy.bindings.splice(bindingIndex, 1);
     assert.equal((await request("GET", path, { headers })).status, 403);
     policy.bindings.push(binding);
     policy.restrictions.push({

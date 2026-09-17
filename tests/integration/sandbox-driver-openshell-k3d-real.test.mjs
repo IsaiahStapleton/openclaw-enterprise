@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
 import { createAuthenticatedControllerRequest } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
@@ -67,12 +65,8 @@ const adminCredentials = Object.freeze({
   email: "admin-openshell-sandboxdriver@example.test",
   password: "openshell-sandboxdriver-admin-password",
 });
-const credentialMountPath = "/run/enterprise-credentials";
 const diagnosticQueryTimeoutMs = 3_000;
 const observerPoolConnectionTimeoutMs = 5_000;
-const controllerRequire = createRequire(
-  new URL("../../apps/controller/package.json", import.meta.url),
-);
 
 const fixture = createOpenShellKubernetesFixture({
   kubeconfigPath,
@@ -95,9 +89,7 @@ const {
   createControllerIdentity,
   waitFor,
   validateOpenShellPrerequisites,
-  createOperatorSecret,
   provisionAgentTransportCredentials,
-  materializeModelSecret,
   waitForOpenShellGateway,
   installOpenShellGateway,
   startOpenShellGatewayPortForward,
@@ -119,10 +111,21 @@ async function createScopedController(context, identifier, platformNamespace, ku
   const namespaceRole = `oce-openshell-namespaces-${suffix}`;
   const tenantRole = `oce-openshell-tenant-${suffix}`;
   const binding = `oce-openshell-controller-${suffix}`;
+  const apiNamespaceRole = `oce-openshell-secret-namespaces-${suffix}`;
+  const apiSecretRole = `oce-openshell-secrets-${suffix}`;
+  const apiBinding = `oce-openshell-secret-api-${suffix}`;
   const directory = await mkdtemp(join(tmpdir(), "openclaw-openshell-controller-"));
   context.after(async () => {
-    await kubectl("delete", "clusterrolebinding", binding, "--ignore-not-found=true");
-    await kubectl("delete", "clusterrole", namespaceRole, tenantRole, "--ignore-not-found=true");
+    await kubectl("delete", "clusterrolebinding", binding, apiBinding, "--ignore-not-found=true");
+    await kubectl(
+      "delete",
+      "clusterrole",
+      namespaceRole,
+      tenantRole,
+      apiNamespaceRole,
+      apiSecretRole,
+      "--ignore-not-found=true",
+    );
     await rm(directory, { recursive: true, force: true });
   });
 
@@ -187,7 +190,7 @@ async function createScopedController(context, identifier, platformNamespace, ku
       },
     ]),
   );
-  return await createControllerIdentity({
+  const identity = await createControllerIdentity({
     directory,
     platformNamespace,
     kubeconfig,
@@ -195,7 +198,31 @@ async function createScopedController(context, identifier, platformNamespace, ku
     clusterRole: namespaceRole,
     clusterRoleBinding: binding,
     context: `openshell-production-${suffix}`,
-  }).then((identity) => ({ ...identity, tenantRole }));
+  });
+  await kubectl(
+    "create",
+    "clusterrole",
+    apiNamespaceRole,
+    "--verb=get,list",
+    "--resource=namespaces",
+  );
+  await kubectl(
+    "create",
+    "clusterrole",
+    apiSecretRole,
+    "--verb=get,create,patch,update,delete",
+    "--resource=secrets",
+  );
+  const apiIdentity = await createControllerIdentity({
+    directory,
+    platformNamespace,
+    kubeconfig,
+    account: "openclaw-secret-api",
+    clusterRole: apiNamespaceRole,
+    clusterRoleBinding: apiBinding,
+    context: `openshell-secret-api-${suffix}`,
+  });
+  return { ...identity, tenantRole, apiSecretRole, apiIdentity };
 }
 
 function nativeCodexConfiguration() {
@@ -309,343 +336,14 @@ async function assertWorkerCompleted(options) {
   }
 }
 
-// TODO(OpenShell secretKeyRef support): remove credential Jobs, PVC-backed secret files, the
-// startup wrapper, and cleanup once the upstream gateway accepts Kubernetes Secret references.
-function credentialJobName(revisionId) {
-  return `openshell-cred-${hash(revisionId)}`;
-}
-
-function secretEnvironment(requirements, name) {
-  const variable = requirements.environment.find((entry) => entry.name === name);
-  assert.ok(variable?.valueFrom?.secretKeyRef, `${name} must come from an exact SecretKeyRef.`);
-  return variable;
-}
-
-async function waitForCredentialJob(operatorKubernetes, context, name, namespaceName) {
-  const deadline = Date.now() + 180_000;
-  while (Date.now() < deadline) {
-    context.signal.throwIfAborted();
-    const job = await operatorKubernetes.read({
-      apiVersion: "batch/v1",
-      kind: "Job",
-      metadata: { namespace: namespaceName, name },
-    });
-    const conditions = Array.isArray(job?.status?.conditions) ? job.status.conditions : [];
-    if (
-      conditions.some((condition) => condition.type === "Complete" && condition.status === "True")
-    ) {
-      return;
-    }
-    const failed = conditions.find(
-      (condition) => condition.type === "Failed" && condition.status === "True",
-    );
-    assert.equal(failed, undefined, `credential bridge Job ${name} failed.`);
-    await delay(750, undefined, { signal: context.signal });
-  }
-  assert.fail(`Timed out waiting for credential bridge Job ${name}.`);
-}
-
-async function applyCredentialJob(operatorKubernetes, resource) {
-  return operatorKubernetes.patch(
-    resource,
-    undefined,
-    undefined,
-    "openclaw-enterprise-compute",
-    false,
-    "application/apply-patch+yaml",
-  );
-}
-
-async function deleteCredentialJob(
-  operatorKubernetes,
-  context,
-  name,
-  namespace = context.namespace.name,
-) {
-  await operatorKubernetes.delete({
-    apiVersion: "batch/v1",
-    kind: "Job",
-    metadata: { namespace, name },
-  });
-}
-
-function credentialBridgeResource(context, claimName, subPath) {
-  const namespaceName = context.namespace.name;
-  const name = credentialJobName(context.revision.id);
-  return {
-    apiVersion: "batch/v1",
-    kind: "Job",
-    metadata: {
-      name,
-      namespace: namespaceName,
-      labels: {
-        ...context.requirements.labels,
-        "openclaw.dev/workload-role": "sandbox-credential-bridge",
-      },
-      annotations: {
-        "openclaw.dev/namespace-id": context.revision.namespaceId,
-        "openclaw.dev/agent-id": context.revision.agentId,
-        "openclaw.dev/revision-id": context.revision.id,
-      },
-    },
-    spec: {
-      backoffLimit: 0,
-      ttlSecondsAfterFinished: 300,
-      template: {
-        metadata: {
-          labels: {
-            ...context.requirements.labels,
-            "openclaw.dev/workload-role": "sandbox-credential-bridge",
-          },
-        },
-        spec: {
-          restartPolicy: "Never",
-          serviceAccountName: context.requirements.serviceAccountName,
-          automountServiceAccountToken: false,
-          securityContext: {
-            runAsNonRoot: true,
-            runAsUser: 1000,
-            runAsGroup: 1000,
-            fsGroup: 1000,
-            seccompProfile: { type: "RuntimeDefault" },
-          },
-          containers: [
-            {
-              name: "write-credentials",
-              image: context.requirements.image,
-              imagePullPolicy: "IfNotPresent",
-              command: [
-                "sh",
-                "-ceu",
-                [
-                  "umask 077",
-                  "mkdir -p /credentials",
-                  'printf "%s" "$APP_SERVER_TOKEN" > /credentials/app-server-token',
-                  'printf "%s" "$OPENAI_API_KEY" > /credentials/openai-api-key',
-                  "chmod 0400 /credentials/app-server-token /credentials/openai-api-key",
-                ].join("\n"),
-              ],
-              env: [
-                secretEnvironment(context.requirements, "APP_SERVER_TOKEN"),
-                secretEnvironment(context.requirements, "OPENAI_API_KEY"),
-              ],
-              volumeMounts: [{ name: "credentials", mountPath: "/credentials", subPath }],
-              securityContext: {
-                allowPrivilegeEscalation: false,
-                readOnlyRootFilesystem: true,
-                capabilities: { drop: ["ALL"] },
-              },
-            },
-          ],
-          volumes: [{ name: "credentials", persistentVolumeClaim: { claimName } }],
-        },
-      },
-    },
-  };
-}
-
-function bridgeRequirements(context) {
-  const claimName = context.requirements.workspaceMounts[0]?.claimName;
-  assert.ok(claimName, "the credential bridge requires the Agent shared PVC claim.");
-  const subPath = `.openclaw/integration-credentials/${hash(context.revision.id, 32)}`;
-  const command = [
-    "sh",
-    "-ceu",
-    [
-      `export APP_SERVER_TOKEN="$(cat ${credentialMountPath}/app-server-token)"`,
-      `export OPENAI_API_KEY="$(cat ${credentialMountPath}/openai-api-key)"`,
-      'exec "$@"',
-    ].join("\n"),
-    "--",
-    ...context.requirements.command,
-  ];
-  return {
-    ...context.requirements,
-    command,
-    environment: context.requirements.environment.filter(
-      ({ name }) => name !== "APP_SERVER_TOKEN" && name !== "OPENAI_API_KEY",
-    ),
-    workspaceMounts: [
-      ...context.requirements.workspaceMounts,
-      // TODO(OpenShell existing-workspace support): remove this alias when the upstream gateway
-      // can reuse approved Enterprise PVC mounts without requiring its own workspace mount.
-      { claimName, subPath: "workspace", mountPath: "/sandbox/enterprise", readOnly: false },
-      { claimName, subPath, mountPath: credentialMountPath, readOnly: true },
-    ],
-  };
-}
-
-function protobufValue(value) {
-  if (value.structValue !== undefined) {
-    return Object.fromEntries(
-      Object.entries(value.structValue.fields).map(([name, entry]) => [name, protobufValue(entry)]),
-    );
-  }
-  if (value.listValue !== undefined) return value.listValue.values.map(protobufValue);
-  if (value.stringValue !== undefined) return value.stringValue;
-  if (value.numberValue !== undefined) return value.numberValue;
-  if (value.boolValue !== undefined) return value.boolValue;
-  if (value.nullValue !== undefined) return null;
-  assert.fail("OpenShell driver_config contains an unsupported protobuf Struct value.");
-}
-
-function removeStockUnsupportedTokenProjection(request, requirements) {
-  const compatible = structuredClone(request);
-  const kubernetes = compatible.spec.template.driver_config.fields.kubernetes.structValue.fields;
-  const volumes = kubernetes.volumes.listValue.values;
-  const volumeIndex = volumes.findIndex(
-    (volume) => volume.structValue.fields.name.stringValue === "openclaw-service-principal",
-  );
-  assert.notEqual(
-    volumeIndex,
-    -1,
-    "production OpenShell request must include the Enterprise token.",
-  );
-  assert.deepEqual(protobufValue(volumes[volumeIndex]), {
-    name: "openclaw-service-principal",
-    projected: {
-      sources: [
-        {
-          service_account_token: {
-            audience: requirements.serviceAccountToken.audience,
-            expiration_seconds: requirements.serviceAccountToken.expirationSeconds,
-            path: requirements.serviceAccountToken.path,
-          },
-        },
-      ],
-    },
-  });
-  volumes.splice(volumeIndex, 1);
-
-  const mounts =
-    kubernetes.containers.structValue.fields.agent.structValue.fields.volume_mounts.listValue
-      .values;
-  const mountIndex = mounts.findIndex(
-    (mount) => mount.structValue.fields.name.stringValue === "openclaw-service-principal",
-  );
-  assert.notEqual(mountIndex, -1, "production OpenShell request must mount the Enterprise token.");
-  assert.deepEqual(protobufValue(mounts[mountIndex]), {
-    name: "openclaw-service-principal",
-    mount_path: requirements.serviceAccountToken.mountPath,
-    read_only: true,
-  });
-  mounts.splice(mountIndex, 1);
-  return compatible;
-}
-
-async function operatorProjectServicePrincipalToken(operatorKubernetes, context, request) {
-  const namespace = context.namespace.name;
-  const reference = {
-    apiVersion: "agents.x-k8s.io/v1beta1",
-    kind: "Sandbox",
-    metadata: { name: `${request.workspace}--${request.name}`, namespace },
-  };
-  const patchSandbox = (spec) =>
-    operatorKubernetes.patch(
-      { ...reference, spec },
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "application/merge-patch+json",
-    );
-
-  await patchSandbox({ operatingMode: "Suspended" });
-  const suspended = await waitFor(
-    `provider Sandbox ${reference.metadata.name} suspension`,
-    async () => {
-      context.signal.throwIfAborted();
-      const sandbox = await operatorKubernetes.read(reference);
-      const stopped = sandbox.status?.conditions?.some(
-        ({ type, status }) => type === "Suspended" && status === "True",
-      );
-      if (!stopped) return undefined;
-      const pods = await resources("pods", namespace);
-      return pods.some((pod) =>
-        pod.metadata.ownerReferences?.some(({ uid }) => uid === sandbox.metadata.uid),
-      )
-        ? undefined
-        : sandbox;
-    },
-  );
-
-  const podSpec = structuredClone(suspended.spec.podTemplate.spec);
-  const agent = podSpec.containers.find(({ name }) => name === "agent");
-  assert.ok(agent, "the OpenShell Sandbox must provide its agent container.");
-  assert.equal(
-    (podSpec.volumes ?? []).some(({ name }) => name === "openclaw-service-principal"),
-    false,
-  );
-  assert.equal(
-    (agent.volumeMounts ?? []).some(({ name }) => name === "openclaw-service-principal"),
-    false,
-  );
-  const token = context.requirements.serviceAccountToken;
-  podSpec.volumes.push({
-    name: "openclaw-service-principal",
-    projected: {
-      sources: [
-        {
-          serviceAccountToken: {
-            audience: token.audience,
-            expirationSeconds: token.expirationSeconds,
-            path: token.path,
-          },
-        },
-      ],
-    },
-  });
-  agent.volumeMounts.push({
-    name: "openclaw-service-principal",
-    mountPath: token.mountPath,
-    readOnly: true,
-  });
-  await patchSandbox({
-    operatingMode: "Running",
-    podTemplate: { ...suspended.spec.podTemplate, spec: podSpec },
-  });
-}
-
-function projectedTokenGatewayClient(
-  GrpcOpenShellGatewayClient,
-  endpoint,
-  operatorKubernetes,
-  context,
-) {
-  const gateway = new GrpcOpenShellGatewayClient({ endpoint });
-  return {
-    health(signal) {
-      return gateway.health(signal);
-    },
-    async createSandbox(request, signal) {
-      const compatible = removeStockUnsupportedTokenProjection(request, context.requirements);
-      const response = await gateway.createSandbox(compatible, signal);
-      // TODO(OpenShell projected-volume support): remove this operator-owned, integration-only
-      // compatibility bridge when the upstream gateway accepts projected ServiceAccount volumes.
-      await operatorProjectServicePrincipalToken(operatorKubernetes, context, request);
-      return response;
-    },
-    deleteSandbox(request, signal) {
-      return gateway.deleteSandbox(request, signal);
-    },
-    close() {
-      gateway.close();
-    },
-  };
-}
-
 function throwOpenShellAbortReason(signal) {
   if (!signal.aborted) return;
   throw signal.reason ?? new Error("OpenShell management port-forward operation was aborted.");
 }
 
-function createIntegrationSandboxDriverFactory(
-  OpenShellSandboxDriver,
-  GrpcOpenShellGatewayClient,
-  operatorKubernetes,
-) {
+function createIntegrationSandboxDriverFactory(OpenShellSandboxDriver) {
   const gatewayState = new Map();
-  const credentialBridges = new Map();
+  const provisioningFailures = new Map();
 
   async function stopGatewayForward(namespaceName, expectedState) {
     const state = gatewayState.get(namespaceName);
@@ -735,20 +433,10 @@ function createIntegrationSandboxDriverFactory(
       return options;
     }
 
-    function delegate(requirements, namespaceName, endpoint, context) {
+    function delegate(requirements, namespaceName, endpoint) {
       return new OpenShellSandboxDriver(optionsFor(requirements, namespaceName, endpoint), {
         id: selection.id,
         implementation: "openshell",
-        ...(context === undefined
-          ? {}
-          : {
-              gatewayClient: projectedTokenGatewayClient(
-                GrpcOpenShellGatewayClient,
-                endpoint,
-                operatorKubernetes,
-                context,
-              ),
-            }),
       });
     }
 
@@ -775,97 +463,41 @@ function createIntegrationSandboxDriverFactory(
         }
       },
       async provisionHarness(context) {
-        assert.notEqual(
-          context.kubernetes,
-          operatorKubernetes,
-          "production Compute must retain its restricted controller identity.",
-        );
-        const claimName = context.requirements.workspaceMounts[0]?.claimName;
-        assert.ok(claimName, "OpenShell credential bridge requires the shared workspace PVC.");
-        const subPath = `.openclaw/integration-credentials/${hash(context.revision.id, 32)}`;
-        const bridge = credentialBridgeResource(context, claimName, subPath);
-        credentialBridges.set(context.revision.id, bridge);
-        // Current upstream OpenShell cannot inject Kubernetes Secret references. The temporary
-        // credential bridge is operator-owned test infrastructure, never controller authority.
-        await applyCredentialJob(operatorKubernetes, bridge);
-        await waitForCredentialJob(
-          operatorKubernetes,
-          context,
-          bridge.metadata.name,
-          context.namespace.name,
-        );
+        const endpoint = await endpointForNamespace(context, {
+          sandboxServiceAccountName: context.requirements.serviceAccountName,
+        });
         try {
-          const requirements = bridgeRequirements(context);
-          const endpoint = await endpointForNamespace(context, {
-            sandboxServiceAccountName: requirements.serviceAccountName,
-          });
-          const provisioning = { ...context, requirements };
+          // Hand the real Driver exactly what Compute rendered. No credential files,
+          // replacement startup commands, or operator-patched provider Pods are permitted.
           return await delegate(
-            requirements,
+            context.requirements,
             context.namespace.name,
             endpoint,
-            provisioning,
-          ).provisionHarness(provisioning);
+          ).provisionHarness(context);
         } catch (error) {
-          await deleteCredentialJob(operatorKubernetes, context, bridge.metadata.name);
+          provisioningFailures.set(context.revision.id, error);
           throw error;
         }
       },
-
       async cleanup(context) {
-        try {
-          if (context.revision !== undefined) {
-            const endpoint = existingEndpointForNamespace(context);
-            await delegate(undefined, context.namespace.name, endpoint).cleanup(context);
-          }
-        } finally {
-          if (context.revision === undefined) {
-            await stopGatewayForward(context.namespace.name);
-          }
-          if (context.revision !== undefined) {
-            const bridge = credentialBridges.get(context.revision.id);
-            if (bridge !== undefined) {
-              const cleaner = structuredClone(bridge);
-              cleaner.metadata.name = `${bridge.metadata.name}-cleanup`;
-              const container = cleaner.spec.template.spec.containers[0];
-              container.name = "delete-credentials";
-              container.env = [];
-              container.command = [
-                "sh",
-                "-ceu",
-                "rm -f /credentials/app-server-token /credentials/openai-api-key",
-              ];
-              await applyCredentialJob(operatorKubernetes, cleaner);
-              await waitForCredentialJob(
-                operatorKubernetes,
-                context,
-                cleaner.metadata.name,
-                context.namespace.name,
-              );
-              await deleteCredentialJob(
-                operatorKubernetes,
-                context,
-                cleaner.metadata.name,
-                context.namespace.name,
-              );
-              credentialBridges.delete(context.revision.id);
-            }
-            await deleteCredentialJob(
-              operatorKubernetes,
-              context,
-              credentialJobName(context.revision.id),
-              context.namespace.name,
-            );
-          }
+        if (context.revision === undefined) {
+          await stopGatewayForward(context.namespace.name);
+          return;
         }
+        const endpoint = existingEndpointForNamespace(context);
+        await delegate(undefined, context.namespace.name, endpoint).cleanup(context);
       },
     };
   };
   createDriver.disposeGatewayForwards = disposeGatewayForwards;
+  createDriver.provisioningFailures = provisioningFailures;
   return createDriver;
 }
 
-async function prepareProductionInstallation(context) {
+async function prepareProductionInstallation(
+  context,
+  { expectUnsupportedProjection = false } = {},
+) {
   const kubeconfig = await validateOpenShellPrerequisites();
   await configureExistingK3dLocalPathSharedFileSystem({ kubeconfigPath, kubernetesContext });
   const identifier = randomUUID();
@@ -895,8 +527,6 @@ async function prepareProductionInstallation(context) {
     { createControllerWorker },
     { kubernetesNamespaceName },
     { OpenShellSandboxDriver },
-    { GrpcOpenShellGatewayClient },
-    { KubeConfig, KubernetesObjectApi },
   ] = await Promise.all([
     import("pg"),
     import("../../packages/occ/src/state/postgres-state.ts"),
@@ -905,17 +535,7 @@ async function prepareProductionInstallation(context) {
     import("../../apps/controller/src/worker.ts"),
     import("../../apps/controller/src/drivers/compute/kubernetes/index.ts"),
     import("../../apps/controller/src/drivers/sandbox/openshell.ts"),
-    import("../../apps/controller/src/drivers/sandbox/openshell-gateway-client.ts"),
-    import(controllerRequire.resolve("@kubernetes/client-node")),
   ]);
-
-  // TODO(OpenShell secretKeyRef and projected-volume support): remove this fixture-only operator
-  // client once upstream accepts both requirements directly. Production callbacks retain their
-  // namespace-scoped controller SDK client.
-  const operatorConfiguration = new KubeConfig();
-  operatorConfiguration.loadFromFile(kubeconfigPath);
-  operatorConfiguration.setCurrentContext(kubernetesContext);
-  const operatorKubernetes = KubernetesObjectApi.makeApiClient(operatorConfiguration);
 
   const directory = await mkdtemp(join(tmpdir(), "oce-openshell-sandboxdriver-"));
   const startupPath = join(directory, "installation.json");
@@ -927,15 +547,22 @@ async function prepareProductionInstallation(context) {
     openShellRuntimeClass,
     cluster: "k3d-openshell-sandboxdriver",
   });
-  await writeFile(startupPath, JSON.stringify(configuration), { mode: 0o600 });
-  const createSandboxDriver = createIntegrationSandboxDriverFactory(
-    OpenShellSandboxDriver,
-    GrpcOpenShellGatewayClient,
-    operatorKubernetes,
-  );
+  configuration.drivers.secret.configuration.authentication = controller.authentication;
+  const workerStartupPath = join(directory, "worker-installation.json");
+  await writeFile(workerStartupPath, JSON.stringify(configuration), { mode: 0o600 });
+  const apiConfiguration = structuredClone(configuration);
+  apiConfiguration.drivers.secret.configuration.authentication =
+    controller.apiIdentity.authentication;
+  await writeFile(startupPath, JSON.stringify(apiConfiguration), { mode: 0o600 });
+  const createSandboxDriver = createIntegrationSandboxDriverFactory(OpenShellSandboxDriver);
   const drivers = await loadInstallationConfiguration({
     mode: "production",
     environment: { OCC_CONFIG_PATH: startupPath },
+    createSandboxDriver,
+  });
+  const workerDrivers = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: workerStartupPath },
     createSandboxDriver,
   });
   assert.equal(drivers.sandboxDriver?.capability, "sandbox");
@@ -1029,7 +656,7 @@ async function prepareProductionInstallation(context) {
   worker = createControllerWorker({
     mode: "production",
     pool: workerPool,
-    drivers,
+    drivers: workerDrivers,
     pollIntervalMs: 50,
     leaseDurationMs: 60_000,
     maxAttempts: 40,
@@ -1068,51 +695,21 @@ async function prepareProductionInstallation(context) {
   });
   await waitForOpenShellGateway(placement);
   await assertGatewayBootstrapPolicies(placement);
-  const openShellGatewayInstance = `openshell-${hash(placement, 10)}`;
-  const firstGatewayPods = (await resources("pods", placement)).filter(
-    (pod) =>
-      pod.metadata.labels?.["app.kubernetes.io/name"] === "openshell" &&
-      pod.metadata.labels?.["app.kubernetes.io/instance"] === openShellGatewayInstance,
+  await kubectl(
+    "create",
+    "rolebinding",
+    "openshell-secret-api",
+    "--namespace",
+    placement,
+    `--clusterrole=${controller.apiSecretRole}`,
+    `--serviceaccount=${platformNamespace}:${controller.apiIdentity.account}`,
   );
-
-  const createdAccount = await request("POST", `/namespaces/${namespaceId}/service-accounts`, {
-    name: `openshell-${randomUUID()}`,
+  const modelSecret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
+    name: `openshell-model-${randomUUID()}`,
+    value: process.env.OPENAI_API_KEY,
   });
-  assert.equal(createdAccount.status, 201, JSON.stringify(createdAccount.error));
-  const sourceName = `service-account-${hash(createdAccount.data.id)}`;
-  const sourceKey = "openshell-provider-api-key";
-  await createOperatorSecret(placement, sourceName, sourceKey, process.env.OPENAI_API_KEY);
-  await kubectl(
-    "label",
-    "secret",
-    sourceName,
-    "--namespace",
-    placement,
-    `openclaw.dev/namespace=${namespaceId}`,
-    `openclaw.dev/service-account=${createdAccount.data.id}`,
-  );
-  await kubectl(
-    "annotate",
-    "secret",
-    sourceName,
-    "--namespace",
-    placement,
-    `openclaw.dev/namespace-id=${namespaceId}`,
-    `openclaw.dev/service-account-id=${createdAccount.data.id}`,
-  );
-  const expectedCredential = { kind: "api_key", secretRef: { name: sourceName, key: sourceKey } };
-  const updatedAccount = await request(
-    "PATCH",
-    `/namespaces/${namespaceId}/service-accounts/${createdAccount.data.id}/credential`,
-    expectedCredential,
-  );
-  assert.equal(updatedAccount.status, 200, JSON.stringify(updatedAccount.error));
-  const persistedAccount = await request(
-    "GET",
-    `/namespaces/${namespaceId}/service-accounts/${createdAccount.data.id}`,
-  );
-  assert.equal(persistedAccount.status, 200, JSON.stringify(persistedAccount.error));
-  assert.deepEqual(persistedAccount.data.credential, expectedCredential);
+  assert.equal(modelSecret.status, 201, JSON.stringify(modelSecret.error));
+  assert.equal(JSON.stringify(modelSecret).includes(process.env.OPENAI_API_KEY), false);
 
   const agentConfiguration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
@@ -1123,12 +720,33 @@ async function prepareProductionInstallation(context) {
     name: `openshell-${randomUUID()}`,
     configurationId: agentConfiguration.data.id,
     executionMode: "dedicated",
-    serviceAccountId: createdAccount.data.id,
+    harnessAuth: { method: "api_key", source: modelSecret.data.ref },
   });
   assert.equal(agent.status, 201, JSON.stringify(agent.error));
 
   const transport = await provisionAgentTransportCredentials(directory, placement, agent.data.id);
-  await materializeModelSecret(placement, namespaceId, persistedAccount.data, agent.data.id);
+  const {
+    rows: [principal],
+  } = await observerPool.query(
+    "SELECT service_principal_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+    [namespaceId, agent.data.id],
+  );
+  const roleId = `openshell-secret-operate-${randomUUID()}`;
+  await observerPool.query(
+    "INSERT INTO occ.iam_roles (id, namespace_id, name, permissions) VALUES ($1, $2, $3, $4::jsonb)",
+    [
+      roleId,
+      namespaceId,
+      "Exact model Secret operate",
+      JSON.stringify([{ action: "operate", resourceKind: "secret" }]),
+    ],
+  );
+  await observerPool.query(
+    `INSERT INTO occ.iam_access_bindings
+       (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+     VALUES ($1, $2, $3, $4, 'secret', $5)`,
+    [randomUUID(), namespaceId, principal.service_principal_id, roleId, modelSecret.data.id],
+  );
   const deployed = await request(
     "POST",
     `/namespaces/${namespaceId}/agents/${agent.data.id}/deploy`,
@@ -1140,6 +758,46 @@ async function prepareProductionInstallation(context) {
     "danger-full-access",
     "OCC must freeze OpenShell-selected Codex revisions with the inner sandbox disabled.",
   );
+
+  assert.deepEqual(deployed.data.harnessAuth, agent.data.harnessAuth);
+  if (expectUnsupportedProjection) {
+    const failure = await waitFor("stock OpenShell to explicitly reject Secret projection", () =>
+      createSandboxDriver.provisioningFailures.get(deployed.data.id),
+    );
+    assert.match(
+      failure.message,
+      /cannot receive secretKeyRef.*upstream Secret projection support is required/,
+    );
+    await waitFor("failed Sandbox provisioning worker observation", () =>
+      events.find(
+        (event) =>
+          event.event === "worker.completed" &&
+          event.revisionId === deployed.data.id &&
+          event.outcome !== "success",
+      ),
+    );
+    const observed = await request("GET", `/namespaces/${namespaceId}/agents/${agent.data.id}`);
+    assert.equal(observed.status, 200);
+    assert.notEqual(observed.data.activeRevisionId, deployed.data.id);
+    assert.equal((await resources("sandboxes.agents.x-k8s.io", placement)).length, 0);
+    assert.equal(
+      (await resources("pods", placement)).some(
+        (pod) => pod.metadata.labels?.["openclaw.dev/workload-role"] === "agent",
+      ),
+      false,
+    );
+    for (const pod of await resources("pods", placement)) {
+      if (pod.metadata.labels?.["openclaw.dev/workload-role"] !== "gateway") continue;
+      assert.equal(
+        pod.spec.containers.some((container) =>
+          (container.env ?? []).some(({ name }) => name === "OPENAI_API_KEY"),
+        ),
+        false,
+      );
+    }
+    await assertNoSecretBytes(placement, [process.env.OPENAI_API_KEY, transport.appServerToken]);
+    return { request, namespaceId, agent: agent.data, observerPool };
+  }
 
   await waitFor(`OpenShell revision ${deployed.data.id} activation`, async () => {
     const observed = await request("GET", `/namespaces/${namespaceId}/agents/${agent.data.id}`);
@@ -1205,7 +863,6 @@ async function prepareProductionInstallation(context) {
     sandbox,
     gatewayToken: transport.gatewayToken,
     gatewayUrl: gatewayForward.url,
-    firstGatewayPodUid: firstGatewayPods[0]?.metadata.uid,
     observerPool,
   };
 }
@@ -1401,23 +1058,40 @@ async function assertEmbeddedOpenShellFailsClosed(topology) {
     name: `openshell-embedded-${randomUUID()}`,
     configurationId: createdConfiguration.data.id,
     executionMode: "embedded",
-    serviceAccountId: topology.agent.serviceAccountId,
+    harnessAuth: topology.agent.harnessAuth,
   });
   assert.equal(agent.status, 201, JSON.stringify(agent.error));
   const deployed = await topology.request(
     "POST",
     `/namespaces/${topology.namespaceId}/agents/${agent.data.id}/deploy`,
   );
-  assert.notEqual(
+  assert.equal(
     deployed.status,
-    202,
+    404,
     "OpenShell-selected installations must reject embedded Agents before provisioning.",
   );
 }
 
 test(
-  "OpenShell SandboxDriver provisions and enforces one provider-owned dedicated Codex Harness",
+  "stock OpenShell rejects unsupported Secret projection without activating the Agent",
   { ...requiresOpenShellK3d, timeout: 900_000 },
+  async (context) => {
+    const topology = await prepareProductionInstallation(context, {
+      expectUnsupportedProjection: true,
+    });
+    await assertEmbeddedOpenShellFailsClosed(topology);
+  },
+);
+
+test(
+  "OpenShell with genuine Secret projection executes and enforces a provider-owned Codex Harness",
+  {
+    skip:
+      process.env.OCC_TEST_OPENSHELL_SECRET_PROJECTION === "1"
+        ? requiresOpenShellK3d.skip
+        : "Requires production Driver and upstream support for genuine Secret and ServicePrincipal projections; stock v0.0.113 is unsupported. Set OCC_TEST_OPENSHELL_SECRET_PROJECTION=1 only with that implementation.",
+    timeout: 900_000,
+  },
   async (context) => {
     const topology = await prepareProductionInstallation(context);
     assert.equal(

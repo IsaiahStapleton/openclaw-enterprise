@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import test from "node:test";
 import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { createControllerApp } from "../../apps/controller/src/index.ts";
@@ -7,6 +11,7 @@ import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
+import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import {
   authenticatedHeaders,
   createTestAuthPrincipal,
@@ -59,6 +64,7 @@ async function fixture({
       permissions: permissions ?? authFixture.seed.roles[0].permissions,
     },
   ];
+  const identities = [principal];
   const bindings = [
     {
       id: "binding-configuration-integration",
@@ -69,7 +75,7 @@ async function fixture({
   ];
   const iam = new NativeIAMDriver({
     loadNativeIAMState: async () => ({
-      identities: [principal],
+      identities,
       groups: [],
       memberships: [],
       roles,
@@ -87,6 +93,7 @@ async function fixture({
       return controller;
     },
     iamDriver: iam,
+    secretDriver: createTestSecretDriver(),
     ...(configurationDriver === null ? {} : { configurationDriver }),
     ...(computeDriver === undefined ? {} : { computeDriver }),
     resolveHarness: resolveApprovedDevelopmentHarness,
@@ -104,6 +111,10 @@ async function fixture({
 
   return {
     app,
+    principal,
+    identities,
+    roles,
+    bindings,
     session: app.defaultSession,
     auditSink,
     get controller() {
@@ -360,6 +371,7 @@ test("Configuration deletion rejects an Agent reference and deployments retain i
     id: "compute-configuration-integration",
     capability: "compute",
     implementation: "integration-compute-substrate",
+    validateHarnessAuth() {},
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -400,6 +412,36 @@ test("Configuration deletion rejects an Agent reference and deployments retain i
   await context.controller.transact((state) =>
     state.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
   );
+  const source = await context.controller.createSecret(context.principal.id, {
+    namespaceId: namespace.id,
+    name: "configuration-model-key",
+    value: "synthetic-configuration-key",
+  });
+  const admittedAgent = await context.controller.updateAgent(context.principal.id, {
+    namespaceId: namespace.id,
+    agentId: agent.body.data.id,
+    configurationId,
+    harnessAuth: { method: "api_key", source: source.ref },
+  });
+  context.identities.push({
+    kind: "service_principal",
+    id: admittedAgent.servicePrincipalId,
+    namespaceId: namespace.id,
+    agentId: admittedAgent.id,
+  });
+  context.roles.push({
+    id: "model-consumer",
+    permissions: [{ action: "operate", resourceKind: "secret" }],
+  });
+  context.bindings.push({
+    id: "model-consumer",
+    subjectKind: "identity",
+    subjectId: admittedAgent.servicePrincipalId,
+    roleId: "model-consumer",
+    namespaceId: namespace.id,
+    resourceKind: "secret",
+    resourceId: source.id,
+  });
   const deployed = await request(
     context.app,
     "POST",
@@ -540,3 +582,51 @@ for (const [method, action] of [
     assert.deepEqual(restored.body.data, configuration);
   });
 }
+
+test("Filesystem Configuration API rejects plaintext model writes without changing stored references", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "occ-model-configuration-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configurationDriver = new FilesystemConfigurationDriver(root);
+  const context = await fixture({ configurationDriver });
+  const namespace = await bootstrapAndCreateNamespace(context);
+  const collection = `/namespaces/${namespace.id}/configurations`;
+  const sentinel = `synthetic-configuration-credential-${randomUUID()}`;
+  const unsafe = { models: { providers: { openai: { apiKey: sentinel } } } };
+  const rejected = await request(context.app, "POST", collection, {
+    body: { kind: "agent", values: unsafe },
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(JSON.stringify(rejected.body).includes(sentinel), false);
+  assert.deepEqual(await readdir(root), []);
+
+  const values = createOpenClawConfiguration();
+  const created = await request(context.app, "POST", collection, {
+    body: { kind: "agent", values },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const id = created.body.data.id;
+  const path = join(root, namespace.id, `${id}.json`);
+  const original = await readFile(path, "utf8");
+  const failedUpdate = await request(context.app, "PATCH", `${collection}/${id}`, {
+    body: { values: unsafe },
+  });
+  assert.equal(failedUpdate.status, 400);
+  assert.equal(JSON.stringify(failedUpdate.body).includes(sentinel), false);
+  assert.equal(await readFile(path, "utf8"), original);
+  const unchanged = await request(context.app, "GET", `${collection}/${id}`);
+  assert.equal(unchanged.status, 200);
+  assert.deepEqual(unchanged.body.data, created.body.data);
+
+  // Direct Driver callers and externally modified storage retain the same boundary.
+  const persisted = JSON.parse(original);
+  await assert.rejects(
+    configurationDriver.create({ ...persisted, values: unsafe }),
+    /Model credentials must use unresolved references/,
+  );
+  assert.equal(await readFile(path, "utf8"), original);
+  await writeFile(path, JSON.stringify({ ...persisted, values: unsafe }));
+  const unreadable = await request(context.app, "GET", `${collection}/${id}`);
+  assert.equal(unreadable.status, 503);
+  assert.equal(JSON.stringify(unreadable.body).includes(sentinel), false);
+  assert.equal(JSON.stringify(context.auditSink.events).includes(sentinel), false);
+});

@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-09-01
-last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
+updated: 2026-09-17
+last_updated_session: codex/01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04
 ---
 
 # Service Account Driver Credential Delivery Flow
@@ -98,8 +98,8 @@ query observes active pointers and pending work together during worker cutover.
 `OpenClawController.createServiceAccountCredential` authorizes account `update`
 before `ChatGPTServiceAccountDriver.createCredential` issues a Codex-scoped
 token. `KubernetesComputeDriver.storeServiceAccountCredential` stores it with
-the workspace ID in one account-owned Secret. The private credential ID, public
-`{ kind: "access_token", secretRef }`, and audit changes commit together;
+the workspace ID in one account-owned Secret. The private credential ID, internal
+credential reference, and audit changes commit together;
 confirmed failures compensate created provider and Kubernetes resources.
 
 ### 4. Save Agent provider intent and admit the revision
@@ -109,16 +109,18 @@ confirmed failures compensate created provider and Kubernetes resources.
 Agent `providerId` is nullable. Create omission saves `null`; PATCH omission
 preserves the current value; explicit `null` clears it; and a nonnull ID must
 name a configured Provider. Saving or changing the draft Agent reference makes
-no upstream call.
+no upstream call. The Agent selects the issued account through
+`harnessAuth: { method: "chatgpt_service_account", serviceAccountId }`.
 
 `deployAgent` authorizes the Agent, Configuration, and associated account, then
 validates `access_token` ownership with
 `validateServiceAccountProviderBinding`. Managed access-token deployment requires
 the exact nonnull Provider, selected member Driver, workspace, account, recorded
-credential issuance, and dedicated Codex execution. Native API-key accounts can
-remain providerless, and an account with no credential cannot deploy. Admission
-freezes the account identity, credential kind, Secret reference, and Agent
-`providerId` in the immutable revision.
+credential issuance, and dedicated Codex execution. An account without an issued
+credential cannot deploy. Admission freezes the account identity, exact credential
+reference, private Provider binding, and Agent `providerId` in the revision.
+Supplied API keys use the same [harness binding path](native-service-account-credential-delivery.md)
+through an OCC Secret; native account references are not model-auth selectors.
 
 ### 5. Recheck metadata and project the account Secret
 
@@ -131,7 +133,8 @@ before Compute reconciliation. It rejects a missing configured Provider as
 and issuance metadata leave the repository; upstream account IDs, admin keys,
 and credential values stay private.
 
-`KubernetesComputeDriver.prepareRevision` projects the account Secret directly
+`KubernetesComputeDriver.prepareRevision` uses its internal `prepareHarnessAuth`
+rendering step and explicit login mode to project the account Secret directly
 into dedicated Codex. Embedded execution is rejected for managed access tokens.
 The gateway receives no model credential, and the worker receives no direct
 Secret API permission.
@@ -168,7 +171,7 @@ Refresh, rotation, and automated reconciliation remain deferred.
 - [Service Account Driver specification](../../specs/.archive/11-service-account-driver.md)
 - [Platform design](../design.md)
 - [Kubernetes Compute Driver](../reference/drivers/kubernetes-compute.md)
-- [Native service account credential delivery](native-service-account-credential-delivery.md)
+- [Harness authentication binding](native-service-account-credential-delivery.md)
 - [Harness execution topology](harness-execution-topology.md)
 
 ## Manual Notes
@@ -176,6 +179,8 @@ Refresh, rotation, and automated reconciliation remain deferred.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 00:31: Align credential selection and delivery with Agent harnessAuth and the shared Kubernetes rendering path. (01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04 - d2bcbd1c53acb2582a774b5158f254d726abd33f)
 
 - 2026-09-01 19:09: Merged Provider and Driver lifecycle details into the managed credential delivery flow, including nullable Agent Provider references and worker metadata checks. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)

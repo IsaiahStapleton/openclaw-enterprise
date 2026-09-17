@@ -97,7 +97,12 @@ approved `HarnessWorkloadRequirements`:
   token filename, and read-only mount requirement.
 - Approved Agent-owned PVC subpaths and read-only or writable mount modes.
 - Literal environment values or exact Kubernetes `secretKeyRef` references.
+- Explicit harness login mode prepared from the admitted `harnessAuth` binding.
 - Immutable Agent and revision workload labels.
+
+Kubernetes prepares auth once during workload rendering. The Sandbox consumes
+these already-rendered requirements; it does not resolve another source or
+infer login mode from whichever credential variables happen to exist.
 
 Providers must preserve these requirements without exposing Secret values in
 configuration, revision metadata, logs, or provider requests. A provider that

@@ -7,6 +7,7 @@ import type {
   ConfigurationReference,
   JSONSchema,
 } from "@openclaw-enterprise/contracts";
+import { ConfigurationValidationError, validateModelCredentialReferences } from "../model-auth.ts";
 import { resolveKubernetesNamespace } from "../../compute/kubernetes/index.ts";
 
 type KubernetesAuthentication =
@@ -22,7 +23,7 @@ interface KubernetesConfigurationDriverSelection {
   readonly implementation?: string;
 }
 
-export class ConfigurationValidationError extends Error {}
+export { ConfigurationValidationError } from "../model-auth.ts";
 export class ConfigurationOwnershipError extends Error {}
 
 const MANAGER = "openclaw-enterprise";
@@ -185,6 +186,7 @@ export class KubernetesConfigurationDriver implements ConfigurationDriver {
     if (values === undefined) {
       throw new ConfigurationValidationError("Configuration values must be a JSON object.");
     }
+    validateModelCredentialReferences(configuration.values);
     if (Buffer.byteLength(JSON.stringify(values), "utf8") >= MAX_CONFIGMAP_BYTES) {
       throw new ConfigurationValidationError(
         "Configuration exceeds the Kubernetes ConfigMap size limit.",

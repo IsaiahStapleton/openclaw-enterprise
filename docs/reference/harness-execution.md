@@ -48,8 +48,8 @@ it does not implement fallback execution or allow changing topology.
 
 ## Admission and immutable execution
 
-Deployment authorizes the exact Agent, its Configuration, and any associated
-ServiceAccount. A selected SandboxDriver may transform a copy of the native
+Deployment authorizes the exact Agent, its Configuration, and its selected
+harness credential source. A selected SandboxDriver may transform a copy of the native
 configuration before validation and admission. The stored source Configuration
 is unchanged; the revision freezes the admitted document, source Configuration
 identity and generation, approved Harness identity/version, execution mode,
@@ -71,6 +71,36 @@ revoked authority, or a missing required Driver fail closed. See
 [Agents](agents.md), [Configuration](configuration.md), and
 [controller reconciliation](controller.md) for their respective ownership and
 queue guarantees.
+
+## Harness authentication
+
+The Agent's [harnessAuth binding](agents.md#harness-authentication) is the sole
+model-auth selector. Kubernetes supports these combinations:
+
+| Binding                      | Topology          | Credential consumer                                             |
+| ---------------------------- | ----------------- | --------------------------------------------------------------- |
+| `api_key` with an OCC Secret | Embedded OpenClaw | Combined gateway/Harness receives `OPENAI_API_KEY`.             |
+| `api_key` with an OCC Secret | Dedicated Codex   | Only Codex receives `OPENAI_API_KEY` and logs in through stdin. |
+| `chatgpt_service_account`    | Dedicated Codex   | Only Codex receives the account token and forced workspace.     |
+
+Kubernetes workload rendering prepares one explicit login mode and exact Secret
+projections. The selected Sandbox consumes the same already-rendered workload
+requirements. It does not resolve a second credential source. Other Compute
+implementations reject bindings they do not support.
+
+Codex rejects missing or conflicting runtime inputs before starting its app
+server; login failure leaves the candidate unready. Login state stays in its
+bounded ephemeral home. Gateway transport and workload identity credentials
+remain separate. A dedicated gateway receives no model credential. Model auth
+cannot be supplied through Configuration `secretBindings` or the initial runtime
+credential API; those own gateway credentials and transport/channel setup.
+
+The revision freezes the admitted source reference, not historical Secret bytes.
+A managed account snapshot also retains its exact credential and verified private
+Provider/workspace ownership. Later reconciliation cannot substitute a newly
+issued account credential. Source updates require explicit deployment and a real
+model turn to verify consumption; selected metadata does not establish readiness.
+See [renewal and revocation](../guides/deploy/credential-lifecycle.md).
 
 ## Runtime logging
 

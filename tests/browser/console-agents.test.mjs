@@ -128,12 +128,20 @@ async function optionValues(locator) {
   );
 }
 
-async function seedNativeServiceAccount(state, namespaceId, name) {
+async function seedServiceAccount(state, namespaceId, name, issued = true) {
   return state.transact((unit) =>
     unit.serviceAccounts.createServiceAccount({
       id: `sa_${randomUUID()}`,
       namespaceId,
       name,
+      ...(issued
+        ? {
+            credential: {
+              kind: "access_token",
+              secretRef: { name: "issued-credential", key: "token" },
+            },
+          }
+        : {}),
     }),
   );
 }
@@ -164,6 +172,11 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Agent authoring", { ready: true });
+  const secret = await fixture.createSecret(
+    namespace.id,
+    "Existing model credential",
+    "never-visible-model-secret",
+  );
   const values = nativeValues("create", { harnessId: "codex", providerModel: "gpt-5.1" });
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
@@ -171,6 +184,8 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByText("Choose an installed Provider.").waitFor();
+  await page.getByLabel("Authentication source").selectOption("api_key");
+  await page.getByLabel("OpenAI API key Secret ID").fill(secret.id);
   await page.getByLabel("Agent name").fill("Console-created Agent");
   await page.getByLabel("Execution mode").selectOption("dedicated");
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
@@ -194,7 +209,11 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
   assert.equal(created.data.configurationId, configuration.data.id);
   assert.equal(created.data.executionMode, "dedicated");
   assert.equal(created.data.providerId, null);
-  assert.equal(created.data.serviceAccountId, undefined);
+  assert.deepEqual(created.data.harnessAuth, { method: "api_key", source: secret.ref });
+  assert.equal(
+    (await page.locator("body").textContent()).includes("never-visible-model-secret"),
+    false,
+  );
   assert.equal(created.data.activeRevisionId, undefined);
 
   await page.waitForURL((url) => {
@@ -282,15 +301,12 @@ test("Agent creation renders provider and service account choices and saves sele
   const fixture = await createConsoleAppFixture(t, { state });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Dropdown choices", { ready: true });
-  const firstAccount = await seedNativeServiceAccount(
+  const firstAccount = await seedServiceAccount(state, namespace.id, "Console Primary Account");
+  const secondAccount = await seedServiceAccount(
     state,
     namespace.id,
-    "Console Primary Account",
-  );
-  const secondAccount = await seedNativeServiceAccount(
-    state,
-    namespace.id,
-    "Console Secondary Account",
+    "Console Unissued Account",
+    false,
   );
   const values = nativeValues("dropdown", { harnessId: "codex", providerModel: "gpt-5.1" });
   const { page } = await newPage(t, fixture);
@@ -299,9 +315,10 @@ test("Agent creation renders provider and service account choices and saves sele
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   const provider = page.getByLabel("Provider (optional)");
-  const account = page.getByLabel("Service account (optional)");
+  await page.getByLabel("Authentication source").selectOption("chatgpt_service_account");
+  const account = page.getByLabel("Issued ChatGPT service account");
   await page.getByText("Choose an installed Provider.").waitFor();
-  await page.getByText("Choose an existing account in this Namespace.").waitFor();
+  await page.getByText("Issued accounts in this Namespace are available.").waitFor();
   assert.equal(await provider.isDisabled(), false);
   assert.equal(await account.isDisabled(), false);
 
@@ -311,7 +328,10 @@ test("Agent creation renders provider and service account choices and saves sele
   const accountOptions = await optionValues(account);
   assert.ok(accountOptions.some((option) => option.value === ""));
   assert.ok(accountOptions.some((option) => option.value === firstAccount.id));
-  assert.ok(accountOptions.some((option) => option.value === secondAccount.id));
+  assert.equal(
+    accountOptions.some((option) => option.value === secondAccount.id),
+    false,
+  );
   assert.equal(JSON.stringify(accountOptions).includes("workspaceId"), false);
   assert.equal(JSON.stringify(accountOptions).includes("providerId"), false);
 
@@ -334,13 +354,16 @@ test("Agent creation renders provider and service account choices and saves sele
   const created = await (await createResponse).json();
 
   assert.equal(created.data.providerId, providerFixtures[0].id);
-  assert.equal(created.data.serviceAccountId, firstAccount.id);
+  assert.deepEqual(created.data.harnessAuth, {
+    method: "chatgpt_service_account",
+    serviceAccountId: firstAccount.id,
+  });
   assert.equal(created.data.activeRevisionId, undefined);
   assert.deepEqual(agentPostRequests(requests, namespace.id).at(-1).body, {
     name: "Associated Agent",
     executionMode: "dedicated",
     providerId: providerFixtures[0].id,
-    serviceAccountId: firstAccount.id,
+    harnessAuth: { method: "chatgpt_service_account", serviceAccountId: firstAccount.id },
     configurationId: created.data.configurationId,
   });
   const savedConfiguration = await fixture.request(
@@ -353,6 +376,11 @@ test("Agent creation renders provider and service account choices and saves sele
     `/namespaces/${namespace.id}/service-accounts/${firstAccount.id}`,
   );
   assert.equal(Object.hasOwn(listedAccount.data, "providerId"), false);
+  assert.deepEqual(listedAccount.data.credential, { kind: "access_token" });
+  assert.doesNotMatch(
+    JSON.stringify(listedAccount.data),
+    /issued-credential|secretRef|workspaceId/,
+  );
 });
 
 test("Agent creation leaves optional lists disabled when discovery is inaccessible", async (t) => {
@@ -370,9 +398,9 @@ test("Agent creation leaves optional lists disabled when discovery is inaccessib
   await page.getByText(/Providers unavailable\./).waitFor();
   await page.getByText(/Service accounts unavailable\./).waitFor();
   assert.equal(await page.getByLabel("Provider (optional)").isDisabled(), true);
-  assert.equal(await page.getByLabel("Service account (optional)").isDisabled(), true);
+  assert.equal(await page.getByLabel("Issued ChatGPT service account").isDisabled(), true);
   assert.equal(await page.getByLabel("Provider (optional)").inputValue(), "");
-  assert.equal(await page.getByLabel("Service account (optional)").inputValue(), "");
+  assert.equal(await page.getByLabel("Issued ChatGPT service account").inputValue(), "");
 });
 
 test("Agent creation reuses the saved Configuration after an Agent creation conflict", async (t) => {
@@ -523,6 +551,24 @@ test("Agent detail preserves admitted revision history while draft edits change 
   assertRevisionUrl(page, "draft");
 
   assert.deepEqual(nonAuthWriteRequests(requests), []);
+  await page.getByRole("button", { name: "Credentials", exact: true }).click();
+  await page.getByLabel("Authentication source").selectOption("");
+  const saved = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}` &&
+      response.request().method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "Save authentication source" }).click();
+  assert.equal((await saved).status(), 200);
+  await page
+    .getByText("Select a harness authentication source in Credentials before deployment.")
+    .waitFor();
+  const current = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
+  assert.equal(current.data.harnessAuth, null);
+  await page.getByLabel("AgentRevision").selectOption(first.revision.id);
+  await page
+    .getByText(`OpenAI API key · ${agent.harnessAuth.source.id}`, { exact: true })
+    .waitFor();
 });
 
 test("Channel drawer saves channel edits without exposing Secret values or dropping unrelated draft state", async (t) => {

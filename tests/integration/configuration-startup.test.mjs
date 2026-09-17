@@ -14,6 +14,7 @@ import {
 import { kubernetesNamespaceName } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { createInstallationDriverConfiguration as installation } from "../helpers/installation-driver-configuration.mjs";
 
 function jsonLines(text) {
@@ -247,7 +248,15 @@ test("production embedded and dedicated replacements preserve their active Servi
       configurationId: `cfg_production-${harness.mode}-cutover`,
       configurationKind: "agent",
       configurationGeneration: 1,
-      configuration: admitLoggingConfiguration({}, "info"),
+      configuration: admitLoggingConfiguration(
+        createHarnessConfiguration(harness.id, "gpt-4.1"),
+        "info",
+      ),
+      harnessAuth: {
+        method: "api_key",
+        source: { kind: "secret", namespaceId, id: "sec_production-model" },
+        secretDriverId: "secret-kubernetes",
+      },
       harness,
       compute: { id: computeDriver.id, implementation: computeDriver.implementation },
       servicePrincipalId,
@@ -257,6 +266,17 @@ test("production embedded and dedicated replacements preserve their active Servi
       ...predecessor,
       id: `rev_production-${harness.mode}-candidate`,
       revision: 2,
+    };
+    const authContext = {
+      harnessAuth: {
+        ...candidate.harnessAuth,
+        backendRef: {
+          namespaceName: kubernetesNamespaceName(namespaceId),
+          name: "model-key",
+          key: "value",
+          uid: "model-key-uid",
+        },
+      },
     };
     const embedded = harness.mode === "embedded";
     const name = `${embedded ? "gateway" : "agent"}-${shortHash(agentId, 12)}`;
@@ -379,6 +399,11 @@ test("production embedded and dedicated replacements preserve their active Servi
         computeDriver.gatewayConfiguration(candidate),
         true,
         servicePrincipalId,
+        computeDriver.harnessAuthForRevision(
+          candidate,
+          authContext,
+          kubernetesNamespaceName(namespaceId),
+        ),
       );
       const originalGet = computeDriver.get;
       computeDriver.get = async (kind, requestedName) => {
@@ -387,7 +412,10 @@ test("production embedded and dedicated replacements preserve their active Servi
         return newerGateway;
       };
       try {
-        await assert.rejects(computeDriver.activateRevision(predecessor), /stale.*activation/i);
+        await assert.rejects(
+          computeDriver.activateRevision(predecessor, authContext),
+          /stale.*activation/i,
+        );
       } finally {
         computeDriver.get = originalGet;
       }
@@ -615,7 +643,7 @@ test("startup rejects plaintext secrets, caller-authored identities, and unsuppo
       (value) =>
         (value.drivers.compute.configuration.runtime.modelSecretPrefix =
           value.drivers.compute.configuration.runtime.transportSecretPrefix),
-      /credentials must remain separate/,
+      /schema|unsupported option/,
     ],
   ]) {
     const configuration = installation();

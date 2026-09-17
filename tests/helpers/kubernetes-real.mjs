@@ -1,7 +1,7 @@
 import { sha256Hex } from "../../packages/utils/src/index.ts";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -203,6 +203,7 @@ export function createKubernetesInstallationConfiguration({
   configuration.occ.cluster = cluster;
   configuration.drivers.configuration.configuration.authentication =
     structuredClone(authentication);
+  configuration.drivers.secret.configuration.authentication = structuredClone(authentication);
   compute.authentication = structuredClone(authentication);
   compute.images.gateway = gatewayImage;
   compute.images.agent = codexImage;
@@ -217,6 +218,35 @@ export function createKubernetesInstallationConfiguration({
     },
   ];
   return configuration;
+}
+
+/** Provision only a synthetic fixture credential through the actual owning Secret Driver. */
+export async function createKubernetesFixtureHarnessAuth({ authentication, namespaceId }) {
+  const { KubernetesSecretDriver } =
+    await import("../../apps/controller/src/drivers/secret/kubernetes/index.ts");
+  const driver = new KubernetesSecretDriver({ authentication });
+  const identity = { id: `sec_${randomUUID()}`, namespaceId, name: "Kubernetes fixture model key" };
+  const backendRef = await driver.create(identity, `fixture-only-${randomUUID()}`);
+  const snapshot = {
+    method: "api_key",
+    source: { kind: "secret", namespaceId, id: identity.id },
+    secretDriverId: driver.id,
+  };
+  return {
+    snapshot,
+    context: {
+      secretEnvironment: [],
+      harnessAuth: {
+        ...snapshot,
+        backendRef: await driver.resolve({
+          ...identity,
+          driverId: driver.id,
+          createdAt: new Date().toISOString(),
+          backendRef,
+        }),
+      },
+    },
+  };
 }
 
 export async function assertGatewayModelTurn({ gatewayUrl, gatewayToken, nonce, secrets = [] }) {

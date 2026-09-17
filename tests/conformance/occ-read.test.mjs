@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
@@ -9,6 +10,7 @@ import {
   ResourceConflictError,
   ScopeViolationError,
 } from "../../packages/occ/src/index.ts";
+import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 
@@ -32,6 +34,8 @@ async function createFixture() {
         { action: "read", resourceKind: "namespace" },
         { action: "read", resourceKind: "agent" },
         { action: "read", resourceKind: "agent_revision" },
+        { action: "create", resourceKind: "secret" },
+        { action: "operate", resourceKind: "secret" },
         { action: "create", resourceKind: "namespace" },
         { action: "create", resourceKind: "configuration" },
         { action: "read", resourceKind: "configuration" },
@@ -42,7 +46,7 @@ async function createFixture() {
     },
     {
       id: "role-principal-exact-a",
-      namespaceId: "namespace-1",
+      namespaceId: "ns_00000000-0000-4000-8000-000000000001",
       permissions: [
         { action: "read", resourceKind: "namespace" },
         { action: "read", resourceKind: "agent" },
@@ -51,7 +55,7 @@ async function createFixture() {
     },
     {
       id: "role-principal-scoped-b",
-      namespaceId: "namespace-2",
+      namespaceId: "ns_00000000-0000-4000-8000-000000000002",
       permissions: [
         { action: "read", resourceKind: "namespace" },
         { action: "read", resourceKind: "agent" },
@@ -67,12 +71,12 @@ async function createFixture() {
       roleId: "role-admin",
     },
     ...[
-      ["namespace", "namespace-1"],
+      ["namespace", "ns_00000000-0000-4000-8000-000000000001"],
       ["agent", "agent-3"],
       ["agent_revision", "agent_revision-6"],
     ].map(([resourceKind, resourceId]) => ({
       id: `binding-a-${resourceKind}`,
-      namespaceId: "namespace-1",
+      namespaceId: "ns_00000000-0000-4000-8000-000000000001",
       subjectKind: "identity",
       subjectId: "principal-exact-a",
       roleId: "role-principal-exact-a",
@@ -81,7 +85,7 @@ async function createFixture() {
     })),
     {
       id: "binding-scoped-b",
-      namespaceId: "namespace-2",
+      namespaceId: "ns_00000000-0000-4000-8000-000000000002",
       subjectKind: "identity",
       subjectId: "principal-scoped-b",
       roleId: "role-principal-scoped-b",
@@ -105,9 +109,13 @@ async function createFixture() {
   const controller = new OpenClawController(installation, {
     now: () => new Date(installation.createdAt),
     createId: (kind) =>
-      kind === "configuration"
-        ? `cfg_00000000-0000-4000-8000-${String(++configurationSequence).padStart(12, "0")}`
-        : `${kind}-${++sequence}`,
+      kind === "namespace"
+        ? `ns_00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`
+        : kind === "secret"
+          ? `sec_${randomUUID()}`
+          : kind === "configuration"
+            ? `cfg_00000000-0000-4000-8000-${String(++configurationSequence).padStart(12, "0")}`
+            : `${kind}-${++sequence}`,
   });
   controller.registerDriver(iam);
   controller.selectDriver("iam", iam.id);
@@ -118,6 +126,7 @@ async function createFixture() {
     id: "compute-read-test",
     capability: "compute",
     implementation: "deterministic-read-test",
+    validateHarnessAuth() {},
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -136,6 +145,10 @@ async function createFixture() {
   };
   controller.registerDriver(compute);
   controller.selectDriver("compute", compute.id);
+
+  const secretDriver = createTestSecretDriver();
+  controller.registerDriver(secretDriver);
+  controller.selectDriver("secret", secretDriver.id);
 
   const namespaceA = await controller.createNamespace("principal-admin", { name: "Namespace A" });
   const namespaceB = await controller.createNamespace("principal-admin", { name: "Namespace B" });
@@ -168,6 +181,38 @@ async function createFixture() {
     await state.namespaces.transitionNamespaceStatus(namespaceA.id, "provisioning", "ready");
     await state.namespaces.transitionNamespaceStatus(namespaceB.id, "provisioning", "ready");
   });
+  for (const agent of [agentA, hiddenAgentA, agentB]) {
+    const secret = await controller.createSecret("principal-admin", {
+      namespaceId: agent.namespaceId,
+      name: `harness-${agent.id}`,
+      value: "synthetic-harness-key",
+    });
+    identities.push({
+      kind: "service_principal",
+      id: agent.servicePrincipalId,
+      namespaceId: agent.namespaceId,
+      agentId: agent.id,
+    });
+    roles.push({
+      id: `role-${agent.id}`,
+      permissions: [{ action: "operate", resourceKind: "secret" }],
+    });
+    bindings.push({
+      id: `binding-${agent.id}`,
+      subjectKind: "identity",
+      subjectId: agent.servicePrincipalId,
+      roleId: `role-${agent.id}`,
+      namespaceId: agent.namespaceId,
+      resourceKind: "secret",
+      resourceId: secret.id,
+    });
+    await controller.updateAgent("principal-admin", {
+      namespaceId: agent.namespaceId,
+      agentId: agent.id,
+      configurationId: agent.configurationId,
+      harnessAuth: { method: "api_key", source: secret.ref },
+    });
+  }
   const revisionA = await controller.deployAgent(
     "principal-admin",
     { namespaceId: namespaceA.id, agentId: agentA.id },
@@ -194,8 +239,8 @@ async function createFixture() {
     resolveApprovedDevelopmentHarness,
   );
 
-  assert.equal(namespaceA.id, "namespace-1");
-  assert.equal(namespaceB.id, "namespace-2");
+  assert.equal(namespaceA.id, "ns_00000000-0000-4000-8000-000000000001");
+  assert.equal(namespaceB.id, "ns_00000000-0000-4000-8000-000000000002");
 
   return {
     agentA,

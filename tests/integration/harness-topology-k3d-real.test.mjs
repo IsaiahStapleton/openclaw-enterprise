@@ -4,7 +4,7 @@ import {
   arrangeProductionTopology,
   assertActualModelTurn,
   assertDedicatedAgentsInstructionsInFreshSession,
-  assertDedicatedModelSecretBindingDenied,
+  assertLegacyModelSecretBindingDenied,
   assertDedicatedSharedWorkspaceResources,
   assertDedicatedSharedWorkspaceRuntime,
   assertDeniedConnection,
@@ -71,10 +71,10 @@ test(
     const modelProjection = topology.harnessPod.spec.containers[0].env.find(
       ({ name }) => name === "OPENAI_API_KEY",
     );
-    assert.deepEqual(modelProjection.valueFrom.secretKeyRef, {
-      name: `${modelPrefix}-${hash(topology.agent.id)}`,
-      key: "OPENAI_API_KEY",
-    });
+    assert.equal(modelProjection.valueFrom.secretKeyRef.optional, false);
+    assert.equal(modelProjection.valueFrom.secretKeyRef.name.startsWith(`${modelPrefix}-`), false);
+    assert.deepEqual(topology.revision.harnessAuth, topology.agent.harnessAuth);
+    assert.equal(topology.agent.harnessAuth.method, "api_key");
     assert.equal(gatewayIdentity, null, "the dedicated gateway must never receive Agent identity");
     assert.equal(
       harnessIdentity.subject,
@@ -116,7 +116,7 @@ test(
       target.status.podIP,
     );
     await assertActualModelTurn(topology);
-    await assertDedicatedModelSecretBindingDenied(topology);
+    await assertLegacyModelSecretBindingDenied(topology);
     await assertDedicatedAgentsInstructionsInFreshSession(topology);
     await assertGatewayPodContinuity(context, topology, privateClaim);
     await assertDedicatedSharedWorkspaceRuntime(
@@ -129,7 +129,7 @@ test(
 );
 
 test(
-  "production service account powers embedded OpenClaw through its exact persisted provider credential",
+  "production Secret binding powers embedded OpenClaw and preserves conversations across Pod replacement",
   { ...requiresProductionCluster, timeout: 900_000 },
   async (context) => {
     const topology = await arrangeProductionTopology(context, "embedded");
@@ -154,10 +154,10 @@ test(
     const modelProjection = topology.gatewayPod.spec.containers[0].env.find(
       ({ name }) => name === "OPENAI_API_KEY",
     );
-    assert.deepEqual(modelProjection.valueFrom.secretKeyRef, {
-      name: `${modelPrefix}-${hash(topology.agent.id)}`,
-      key: "OPENAI_API_KEY",
-    });
+    assert.equal(modelProjection.valueFrom.secretKeyRef.optional, false);
+    assert.equal(modelProjection.valueFrom.secretKeyRef.name.startsWith(`${modelPrefix}-`), false);
+    assert.deepEqual(topology.revision.harnessAuth, topology.agent.harnessAuth);
+    assert.equal(topology.agent.harnessAuth.method, "api_key");
     assert.equal(
       identity.subject,
       `system:serviceaccount:${topology.placement}:${topology.agentServiceName}`,
@@ -187,7 +187,7 @@ test(
   { ...requiresProductionCluster, timeout: 480_000 },
   async (context) => {
     const topology = await arrangeProductionTopology(context, "embedded", undefined, {
-      modelCredential: "secret-api",
+      secretLifecycle: true,
     });
     assert.equal(topology.harnessPod, undefined, "embedded execution must not create a Codex Pod");
     assert.equal(topology.gatewayPod.spec.serviceAccountName, topology.agentServiceName);

@@ -222,7 +222,7 @@ function environment(requirements: HarnessWorkloadRequirements): Record<string, 
   for (const entry of requirements.environment) {
     if ("valueFrom" in entry) {
       throw new OpenShellSandboxConfigurationFailure(
-        `OpenShell v0.0.113 cannot receive secretKeyRef environment ${entry.name}; use the integration credential bridge or upstream secretKeyRef support.`,
+        `OpenShell v0.0.113 cannot receive secretKeyRef environment ${entry.name}; upstream Secret projection support is required.`,
       );
     }
     result[nonempty(entry.name, "Environment variable name")] = entry.value;

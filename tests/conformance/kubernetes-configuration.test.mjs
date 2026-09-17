@@ -286,3 +286,56 @@ test("the official Kubernetes client rejects ambiguous identities and insecure A
     );
   }
 });
+
+test("Kubernetes Configuration rejects literal model credentials before writes and stored reads", async () => {
+  const driver = createDriver();
+  const sentinel = "synthetic-model-credential-not-for-configuration";
+  const valuesWithCredential = [
+    { models: { providers: { openai: { apiKey: sentinel } } } },
+    { models: { providers: { codex: { headers: { Authorization: `Bearer ${sentinel}` } } } } },
+    { models: { providers: { openai: { headers: { "x-api-key": sentinel } } } } },
+    { env: { OPENAI_API_KEY: sentinel } },
+    { env: { vars: { CODEX_ACCESS_TOKEN: sentinel } } },
+  ];
+  for (const values of valuesWithCredential) {
+    const unsafe = { ...configuration, values };
+    for (const operation of ["create", "update"]) {
+      await assert.rejects(driver[operation](unsafe), (error) => {
+        assert.match(error.message, /Model credentials must use unresolved references/);
+        assert.equal(error.message.includes(sentinel), false);
+        return true;
+      });
+    }
+    const stored = driver.manifest(unsafe, "existing-tenant");
+    await assert.rejects(
+      driver.checkedConfiguration(stored, configuration, "existing-tenant"),
+      (error) => {
+        assert.match(error.message, /security boundaries/);
+        assert.equal(error.message.includes(sentinel), false);
+        return true;
+      },
+    );
+  }
+  const referenceOnly = {
+    ...configuration,
+    values: {
+      models: {
+        providers: {
+          openai: {
+            apiKey: "${OPENAI_API_KEY}",
+            headers: { Authorization: "Bearer ${MODEL_TOKEN}" },
+          },
+        },
+      },
+      env: { OPENAI_API_KEY: { source: "env", provider: "default", id: "MODEL_KEY" } },
+      channels: {
+        slack: { botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" } },
+      },
+    },
+  };
+  const stored = driver.manifest(referenceOnly, "existing-tenant");
+  assert.deepEqual(
+    await driver.checkedConfiguration(stored, referenceOnly, "existing-tenant"),
+    referenceOnly,
+  );
+});

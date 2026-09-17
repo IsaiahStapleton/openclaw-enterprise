@@ -6,6 +6,10 @@ Each Agent has one systemd gateway unit. OCC still owns resources, authorization
 immutable admission, and activation; the Driver owns only their host realization.
 Trusted Installation YAML can select this bundled Driver in development or production.
 
+The current Agent `harnessAuth` contract requires Kubernetes Compute. This Driver
+rejects unsupported bindings at deployment; its existing topology implementation
+and prior runtime proof do not establish support for this authentication path.
+
 ## Requirements and configuration
 
 Provision Linux with systemd, util-linux `flock`, `getent`, the shadow account

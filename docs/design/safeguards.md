@@ -10,7 +10,7 @@ The approved [SecretDriver storage and delivery](../../specs/.archive/14-secret-
 contract uses Installation-selected `KubernetesSecretDriver` by default. Each
 Secret belongs to one Namespace, can be created before any Agent exists, and
 uses a Namespace-unique name. Same-Namespace Agents may consume it only through
-explicit Configuration bindings and Agent assignment checks; cross-Namespace
+explicit Agent harness-auth or Configuration bindings and assignment checks; cross-Namespace
 references are unsupported. Namespace membership, Configuration access, Agent
 access, or possession of a reference does not grant consumption. OCC stores
 immutable Namespace/backend metadata without `agentId`, and the driver stores
@@ -19,9 +19,10 @@ writes may contain plaintext; ordinary responses, OCC persistence, revisions,
 ConfigMaps, and audit records contain references only.
 
 Default delivery is explicit Kubernetes `secretKeyRef` environment injection
-into only the selected consuming Agent gateway for an admitted revision. Native
-OpenClaw SecretRefs resolve that environment. The separate dedicated Codex
-[model-credential boundary](workloads.md#openclaw-gateways) is unchanged. Updating a Secret keeps its
+into the selected consumer for an admitted revision. Configuration bindings
+serve the gateway; Agent `harnessAuth` serves only the model-executing Harness.
+Native OpenClaw SecretRefs resolve the embedded environment. The dedicated
+[model-credential boundary](workloads.md#openclaw-gateways) keeps keys out of its gateway. Updating a Secret keeps its
 reference stable and does not restart a workload; the operator redeploys or
 restarts each consumer that should observe the latest value. Old revisions
 retain references, not historical values. Admission checks current authorization;
@@ -34,17 +35,17 @@ may keep values outside workloads and authorize each access, but those guarantee
 do not describe environment delivery. The project-root `ref/design.md` remains
 the external broker-target owner handoff outside this implementation worktree.
 
-Production execution has two narrowly scoped exceptions while provider-credential
-brokerage remains unavailable. The existing native API-key path uses an
-operator-owned, Agent-specific Kubernetes Secret; for an associated native
-account, an independently authorized operator materializes its exact source.
-Only dedicated Codex or the combined embedded OpenClaw gateway/Harness receives
-that Agent's `OPENAI_API_KEY`.
+Production execution retains scoped direct-credential delivery while
+provider-credential brokerage remains unavailable. The Agent's `harnessAuth`
+API-key binding references an OCC Secret in its exact Namespace. The Secret
+Driver owns storage; Kubernetes projects the source only into dedicated Codex
+or the combined embedded OpenClaw gateway/Harness. Each consumer requires its
+own admission and dispatch authorization; the dedicated gateway gets no key.
 
 For a provider-managed account, API-side Kubernetes Compute stores the issued
 access token and pinned provider workspace in one account-owned Secret in the
 exact backing namespace. The revision snapshots only the OCC account identity,
-generic `access_token` kind, and opaque Secret reference. Kubernetes projects
+exact credential reference, and verified private Provider/workspace ownership. Kubernetes projects
 that account Secret directly into each associated dedicated Codex workload;
 there is no Agent-specific credential copy. Codex logs in with its access token
 under the forced provider workspace. Its separate gateway never receives the
@@ -148,14 +149,12 @@ The platform preserves:
   traffic before its selected sandbox driver proves enforcement of the entire
   admitted policy.
 - **Namespace-owned secrets:** the selected `SecretDriver` stores material without
-  requiring an Agent or gateway. Explicit env bindings deliver it only to each
-  selected consuming gateway; no cross-Namespace sharing, value snapshots, or
-  automatic rotation is supported.
-  Only the combined embedded gateway may bind its model API key through this
-  path; dedicated Codex retains its separately owned model credential. Only dedicated
-  Codex may instead receive its associated account's directly projected access
-  token and forced provider workspace; its separate gateway never receives
-  either credential.
+  requiring an Agent or gateway. Explicit Configuration bindings serve gateways;
+  Agent `harnessAuth` serves the selected model-executing Harness. Each consumer
+  requires independent exact authorization. Cross-Namespace sharing, historical
+  value snapshots, and automatic rotation are unsupported. Dedicated Codex may
+  instead receive its bound account's directly projected token and forced
+  workspace; its separate gateway receives neither model credential.
 - **Selected model inference:** one Installation-selected `InferenceDriver`
   invokes only the exact approved external-provider or local model target. A
   denied or unavailable target never falls back to another model or source.

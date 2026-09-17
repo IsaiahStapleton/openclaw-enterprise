@@ -8,6 +8,8 @@ import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
+import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
@@ -35,7 +37,6 @@ function createRuntimeCredentialComputeDriver(options = {}) {
   const calls = [];
   const emptyStatus = Object.freeze({
     transportConfigured: false,
-    modelConfigured: false,
     slackConfigured: false,
   });
   const keyOf = (binding) => `${binding.namespace.id}:${binding.agent.id}`;
@@ -50,6 +51,7 @@ function createRuntimeCredentialComputeDriver(options = {}) {
     setStatus(namespaceId, agentId, status) {
       statusByAgent.set(explicitKeyOf(namespaceId, agentId), { ...status });
     },
+    validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -79,7 +81,6 @@ function createRuntimeCredentialComputeDriver(options = {}) {
       const previous = statusOf(binding);
       const status = {
         transportConfigured: true,
-        modelConfigured: input.modelApiKey !== undefined || previous.modelConfigured,
         slackConfigured: input.slack !== undefined || previous.slackConfigured,
       };
       statusByAgent.set(keyOf(binding), status);
@@ -188,7 +189,7 @@ async function createFixture(t, options = {}) {
     });
   }
 
-  async function bootstrapAgent(options = {}) {
+  async function bootstrapAgent() {
     if (!bootstrapped) {
       const created = await request("POST", "/installation/bootstrap", {
         body: { name: "Runtime credential test" },
@@ -201,32 +202,14 @@ async function createFixture(t, options = {}) {
     });
     assert.equal(namespace.status, 201);
     await controller.handleNamespaceLifecycle(seed.principal.id, namespace.data.id, "ready");
-    const serviceAccount = options.serviceAccount
-      ? await request("POST", `/namespaces/${namespace.data.id}/service-accounts`, {
-          body: { name: "Managed ServiceAccount" },
-        })
-      : undefined;
-    if (serviceAccount !== undefined) assert.equal(serviceAccount.status, 201);
-    const secret = options.modelSecretBinding
-      ? await request("POST", `/namespaces/${namespace.data.id}/secrets`, {
-          body: { name: "Model API key", value: `model-key-${randomUUID()}` },
-        })
-      : undefined;
-    if (secret !== undefined) assert.equal(secret.status, 201);
+    const secret = await request("POST", `/namespaces/${namespace.data.id}/secrets`, {
+      body: { name: "Model API key", value: `model-key-${randomUUID()}` },
+    });
+    assert.equal(secret.status, 201);
     const configuration = await request("POST", `/namespaces/${namespace.data.id}/configurations`, {
       body: {
         kind: "agent",
-        values: {},
-        ...(secret === undefined
-          ? {}
-          : {
-              secretBindings: {
-                OPENAI_API_KEY: {
-                  source: secret.data.ref,
-                  delivery: { type: "env" },
-                },
-              },
-            }),
+        values: createHarnessConfiguration("openclaw", "gpt-4.1"),
       },
     });
     assert.equal(configuration.status, 201);
@@ -234,16 +217,37 @@ async function createFixture(t, options = {}) {
       body: {
         name: "Runtime credential Agent",
         configurationId: configuration.data.id,
-        ...(serviceAccount === undefined ? {} : { serviceAccountId: serviceAccount.data.id }),
+        harnessAuth: { method: "api_key", source: secret.data.ref },
       },
     });
     assert.equal(agent.status, 201);
+    const servicePrincipalId = `service-agent-${agent.data.id}`;
+    const roleId = `auth-${agent.data.id}`;
+    policy.identities.push({
+      id: servicePrincipalId,
+      kind: "service_principal",
+      namespaceId: namespace.data.id,
+      agentId: agent.data.id,
+    });
+    policy.roles.push({
+      id: roleId,
+      namespaceId: namespace.data.id,
+      permissions: [{ action: "operate", resourceKind: "secret" }],
+    });
+    policy.bindings.push({
+      id: roleId,
+      namespaceId: namespace.data.id,
+      subjectKind: "identity",
+      subjectId: servicePrincipalId,
+      roleId,
+      resourceKind: "secret",
+      resourceId: secret.data.id,
+    });
     return {
       namespace: namespace.data,
       configuration: configuration.data,
       agent: agent.data,
-      serviceAccount: serviceAccount?.data,
-      secret: secret?.data,
+      secret: secret.data,
     };
   }
 
@@ -280,7 +284,6 @@ test("runtime credential API provisions metadata only through the selected Compu
   const fixture = await createFixture(t);
   const { namespace, agent } = await fixture.bootstrapAgent();
   const path = `/namespaces/${namespace.id}/agents/${agent.id}/runtime-credentials`;
-  const modelApiKey = `model-secret-${randomUUID()}`;
   const slack = {
     appToken: `xapp-${randomUUID()}`,
     botToken: `xoxb-${randomUUID()}`,
@@ -290,20 +293,17 @@ test("runtime credential API provisions metadata only through the selected Compu
   assert.equal(initial.status, 200);
   assert.deepEqual(initial.data, {
     transportConfigured: false,
-    modelConfigured: false,
     slackConfigured: false,
   });
 
   const provisioned = await fixture.request("POST", path, {
-    body: { modelApiKey, slack },
+    body: { slack },
   });
   assert.equal(provisioned.status, 200);
   assert.deepEqual(provisioned.data, {
     transportConfigured: true,
-    modelConfigured: true,
     slackConfigured: true,
   });
-  assert.equal(JSON.stringify(provisioned.body).includes(modelApiKey), false);
   assert.equal(JSON.stringify(provisioned.body).includes(slack.appToken), false);
   assert.equal(JSON.stringify(provisioned.body).includes(slack.botToken), false);
 
@@ -314,10 +314,9 @@ test("runtime credential API provisions metadata only through the selected Compu
     fixture.computeDriver.calls.map((call) => call.operation),
     ["status", "provision", "status"],
   );
-  assert.deepEqual(fixture.computeDriver.calls[1].input, { modelApiKey, slack });
+  assert.deepEqual(fixture.computeDriver.calls[1].input, { slack });
 
   const audit = JSON.stringify(fixture.auditSink.events);
-  assert.equal(audit.includes(modelApiKey), false);
   assert.equal(audit.includes(slack.appToken), false);
   assert.equal(audit.includes(slack.botToken), false);
   assert.ok(
@@ -337,7 +336,6 @@ test("runtime credential POST accepts empty input when only transport provisioni
   const path = `/namespaces/${namespace.id}/agents/${agent.id}/runtime-credentials`;
   fixture.computeDriver.setStatus(namespace.id, agent.id, {
     transportConfigured: false,
-    modelConfigured: true,
     slackConfigured: false,
   });
 
@@ -345,7 +343,6 @@ test("runtime credential POST accepts empty input when only transport provisioni
   assert.equal(provisioned.status, 200);
   assert.deepEqual(provisioned.data, {
     transportConfigured: true,
-    modelConfigured: true,
     slackConfigured: false,
   });
   assert.deepEqual(fixture.computeDriver.calls.at(-1).input, {});
@@ -355,12 +352,11 @@ test("runtime credential POST keeps session CSRF and exact Agent read plus opera
   const fixture = await createFixture(t);
   const { namespace, agent } = await fixture.bootstrapAgent();
   const path = `/namespaces/${namespace.id}/agents/${agent.id}/runtime-credentials`;
-  const modelApiKey = `csrf-secret-${randomUUID()}`;
 
   const wrongLoopbackOrigin = fixture.origin.replace(/:\d+$/, ":1");
   const csrfRejected = await fixture.request("POST", path, {
     origin: wrongLoopbackOrigin,
-    body: { modelApiKey },
+    body: {},
   });
   assert.equal(csrfRejected.status, 403);
   assert.equal(csrfRejected.body.error.code, "FORBIDDEN");
@@ -385,7 +381,7 @@ test("runtime credential POST keeps session CSRF and exact Agent read plus opera
   );
   const denied = await fixture.request("POST", path, {
     session,
-    body: { modelApiKey },
+    body: {},
   });
   assert.equal(denied.status, 403);
   assert.equal(denied.body.error.code, "FORBIDDEN");
@@ -397,7 +393,6 @@ test("runtime credential POST keeps session CSRF and exact Agent read plus opera
     action: "read",
     resource: { kind: "agent", id: agent.id, namespaceId: namespace.id },
   });
-  assert.equal(JSON.stringify(denial).includes(modelApiKey), false);
 });
 
 test("runtime credential API rejects unsupported initial provisioning states and request shapes", async (t) => {
@@ -405,7 +400,7 @@ test("runtime credential API rejects unsupported initial provisioning states and
   const { namespace, agent } = await fixture.bootstrapAgent();
   const path = `/namespaces/${namespace.id}/agents/${agent.id}/runtime-credentials`;
   const invalidBodies = [
-    { modelApiKey: "" },
+    { modelApiKey: "legacy-model-secret" },
     { modelApiKey: "valid", extra: "unsupported" },
     { slack: { appToken: "xapp-valid" } },
     { slack: { appToken: "xapp-valid", botToken: "xoxb-valid", extra: "unsupported" } },
@@ -418,31 +413,13 @@ test("runtime credential API rejects unsupported initial provisioning states and
   }
   assert.equal(fixture.computeDriver.calls.length, 0);
 
-  const withServiceAccount = await fixture.bootstrapAgent({ serviceAccount: true });
-  const serviceAccountRejected = await fixture.request(
-    "POST",
-    `/namespaces/${withServiceAccount.namespace.id}/agents/${withServiceAccount.agent.id}/runtime-credentials`,
-    { body: { modelApiKey: `service-account-conflict-${randomUUID()}` } },
-  );
-  assert.equal(serviceAccountRejected.status, 409);
-  assert.equal(serviceAccountRejected.body.error.code, "RESOURCE_CONFLICT");
-
-  const withModelSecret = await fixture.bootstrapAgent({ modelSecretBinding: true });
-  const modelSecretRejected = await fixture.request(
-    "POST",
-    `/namespaces/${withModelSecret.namespace.id}/agents/${withModelSecret.agent.id}/runtime-credentials`,
-    { body: { modelApiKey: `model-secret-conflict-${randomUUID()}` } },
-  );
-  assert.equal(modelSecretRejected.status, 409);
-  assert.equal(modelSecretRejected.body.error.code, "RESOURCE_CONFLICT");
-
   const revision = await fixture.request(
     "POST",
     `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
   );
   assert.equal(revision.status, 202);
   const deployedRejected = await fixture.request("POST", path, {
-    body: { modelApiKey: `historical-revision-conflict-${randomUUID()}` },
+    body: {},
   });
   assert.equal(deployedRejected.status, 409);
   assert.equal(deployedRejected.body.error.code, "RESOURCE_CONFLICT");
@@ -458,7 +435,7 @@ test("runtime credential driver and audit failures stay sanitized and recoverabl
   const failedAgent = await driverFailureFixture.bootstrapAgent();
   const failedPath = `/namespaces/${failedAgent.namespace.id}/agents/${failedAgent.agent.id}/runtime-credentials`;
   const failed = await driverFailureFixture.request("POST", failedPath, {
-    body: { modelApiKey: leakedDriverValue },
+    body: { slack: { appToken: leakedDriverValue, botToken: "xoxb-test" } },
   });
   assert.equal(failed.status, 503);
   assert.equal(failed.body.error.code, "DEPENDENCY_UNAVAILABLE");
@@ -471,8 +448,7 @@ test("runtime credential driver and audit failures stay sanitized and recoverabl
   assert.equal(recovered.status, 200);
   assert.deepEqual(recovered.data, {
     transportConfigured: true,
-    modelConfigured: true,
-    slackConfigured: false,
+    slackConfigured: true,
   });
 
   const leakedAuditValue = `audit-leak-${randomUUID()}`;
@@ -487,7 +463,7 @@ test("runtime credential driver and audit failures stay sanitized and recoverabl
   const auditAgent = await auditFailureFixture.bootstrapAgent();
   const auditPath = `/namespaces/${auditAgent.namespace.id}/agents/${auditAgent.agent.id}/runtime-credentials`;
   const auditFailed = await auditFailureFixture.request("POST", auditPath, {
-    body: { modelApiKey: leakedAuditValue },
+    body: { slack: { appToken: leakedAuditValue, botToken: "xoxb-test" } },
   });
   assert.equal(auditFailed.status, 503);
   assert.equal(auditFailed.body.error.code, "DEPENDENCY_UNAVAILABLE");
@@ -500,7 +476,6 @@ test("runtime credential driver and audit failures stay sanitized and recoverabl
   assert.equal(auditRecovered.status, 200);
   assert.deepEqual(auditRecovered.data, {
     transportConfigured: true,
-    modelConfigured: true,
-    slackConfigured: false,
+    slackConfigured: true,
   });
 });

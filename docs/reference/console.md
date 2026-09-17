@@ -49,7 +49,7 @@ not broaden access.
 ## Agent creation and deployment
 
 The console creates an Agent and reusable Configuration, records optional
-Agent-owned plugin selections, provisions supported initial runtime credentials,
+Agent-owned plugin selections and a harness authentication binding, provisions transport/channel credentials,
 and deploys the saved draft. Follow
 [Create and deploy Agents](console/create-and-deploy.md) for the complete
 workflow, channel constraints, and recovery after partial or uncertain writes.
@@ -61,7 +61,7 @@ unsupported catalog or policy choices.
 
 An Agent detail page has the saved draft and immutable AgentRevisions. The draft
 reads the current Configuration and is editable only through the supported
-channel editor. **Selected revision** displays `activeRevisionId`; neither the
+channel editor and harness authentication controls. **Selected revision** displays `activeRevisionId`; neither the
 newest admitted revision nor the viewed snapshot must match it.
 
 Read-only AgentRevision snapshots cannot be edited, rolled back, redeployed, or
@@ -110,7 +110,7 @@ An authorized empty list is different from a failed read. Access denied,
 unavailable dependencies, missing resources, and network failures clear affected
 rows and offer the relevant recovery action. Include a displayed request ID when
 reporting an API failure. Backend error text is not rendered. A current protected
-`401` clears private content and closes an open channel editor. Provider
+`401` clears private content and closes an open channel editor and harness authentication controls. Provider
 discovery shows configured IDs and types only; see
 [Providers](providers.md#read-configured-providers) for its limits.
 

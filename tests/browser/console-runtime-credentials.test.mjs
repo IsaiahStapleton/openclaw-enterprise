@@ -153,11 +153,9 @@ test("draft Agent deploy waits for stored runtime credential metadata", async (t
     nativeValues("gate"),
     { executionMode: "dedicated" },
   );
-  const secretValue = "sk-console-runtime-secret";
   const requests = [];
   let status = {
     transportConfigured: false,
-    modelConfigured: false,
     slackConfigured: false,
   };
   const { page, artifacts } = await newPage(t, fixture);
@@ -166,7 +164,6 @@ test("draft Agent deploy waits for stored runtime credential metadata", async (t
       requests.push(request.postDataJSON());
       status = {
         transportConfigured: true,
-        modelConfigured: request.postDataJSON().modelApiKey === secretValue,
         slackConfigured: false,
       };
     }
@@ -180,22 +177,15 @@ test("draft Agent deploy waits for stored runtime credential metadata", async (t
   await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
   await page.getByRole("heading", { name: "Runtime credentials" }).waitFor();
   await expectNoText(page, /Slack app token|Slack bot token/);
-  await page
-    .getByText(/Deploy requires stored runtime credential metadata: Transport, Model/)
-    .waitFor();
+  await page.getByText(/Deploy requires stored runtime credential metadata: Transport/).waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), true);
-  assert.equal(await page.getByRole("button", { name: "Save credentials" }).isDisabled(), true);
-  await page.getByLabel("OpenAI API key").fill(secretValue);
   assert.equal(await page.getByRole("button", { name: "Save credentials" }).isDisabled(), false);
-  await expectNoText(page, secretValue);
   await page.getByRole("button", { name: "Save credentials" }).click();
   await page.getByText("Credential metadata refreshed.").waitFor();
-  assert.deepEqual(requests, [{ modelApiKey: secretValue }]);
-  assert.equal(await page.getByLabel("OpenAI API key").inputValue(), "");
-  await expectNoText(page, secretValue);
+  assert.deepEqual(requests, [{}]);
   await page
     .getByText(
-      "Stored runtime credential metadata is present. This does not confirm live model or Slack readiness.",
+      "Stored runtime credential metadata is present. This does not confirm live Slack readiness.",
     )
     .waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), false);
@@ -208,51 +198,6 @@ test("draft Agent deploy waits for stored runtime credential metadata", async (t
   await page.getByRole("button", { name: "Deploy saved draft" }).click();
   assert.equal((await deployResponse).status(), 202);
   await page.screenshot({ path: join(artifacts, "runtime-credentials.png"), fullPage: true });
-});
-
-test("transport-only credential recovery can save an empty body", async (t) => {
-  const fixture = await createConsoleAppFixture(t);
-  await fixture.bootstrap();
-  const namespace = await fixture.createNamespace("Transport credential recovery", {
-    ready: true,
-  });
-  const agent = await fixture.createAgent(
-    namespace.id,
-    "Transport Credential Agent",
-    nativeValues("transport"),
-    { executionMode: "dedicated" },
-  );
-  const requests = [];
-  let status = {
-    transportConfigured: false,
-    modelConfigured: true,
-    slackConfigured: false,
-  };
-  const { page } = await newPage(t, fixture);
-  await routeRuntimeCredentials(page, fixture, namespace.id, agent.id, async (route, request) => {
-    if (request.method() === "POST") {
-      requests.push(request.postDataJSON());
-      status = {
-        transportConfigured: true,
-        modelConfigured: true,
-        slackConfigured: false,
-      };
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(credentialEnvelope(status)),
-    });
-  });
-
-  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
-  await page.getByRole("heading", { name: "Runtime credentials" }).waitFor();
-  await page.getByText(/Deploy requires stored runtime credential metadata: Transport/).waitFor();
-  assert.equal(await page.getByRole("button", { name: "Save credentials" }).isDisabled(), false);
-  await page.getByRole("button", { name: "Save credentials" }).click();
-  await page.getByText("Credential metadata refreshed.").waitFor();
-  assert.deepEqual(requests, [{}]);
-  assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), false);
 });
 
 test("Slack credential gate treats omitted enabled as enabled", async (t) => {
@@ -275,7 +220,6 @@ test("Slack credential gate treats omitted enabled as enabled", async (t) => {
       body: JSON.stringify(
         credentialEnvelope({
           transportConfigured: true,
-          modelConfigured: true,
           slackConfigured: false,
         }),
       ),
@@ -311,7 +255,6 @@ test("Teams-enabled drafts keep console deploy blocked", async (t) => {
       body: JSON.stringify(
         credentialEnvelope({
           transportConfigured: true,
-          modelConfigured: true,
           slackConfigured: false,
         }),
       ),
@@ -343,7 +286,6 @@ test("Slack credential fields appear only when Slack is enabled and unknown save
   let postCount = 0;
   let status = {
     transportConfigured: true,
-    modelConfigured: true,
     slackConfigured: false,
   };
   const hostileBackendMessage = "sk-hostile-backend-error-sentinel";
@@ -365,7 +307,6 @@ test("Slack credential fields appear only when Slack is enabled and unknown save
       }
       status = {
         transportConfigured: true,
-        modelConfigured: true,
         slackConfigured: true,
       };
     }

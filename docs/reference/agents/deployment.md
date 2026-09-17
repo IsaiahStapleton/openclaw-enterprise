@@ -30,8 +30,9 @@ identity exchange, and ServicePrincipal
 authentication through the controller API remain deferred.
 
 An Agent may also reference one same-Namespace, OCC-owned
-[service account](../service-accounts.md) through `serviceAccountId`; updating
-the field to `null` detaches it. This optional credential reference does not
+[service account](../service-accounts.md) through
+`harnessAuth: { method: "chatgpt_service_account", serviceAccountId }`; setting
+`harnessAuth` to `null` clears it. This credential binding does not
 replace its ServicePrincipal or Kubernetes ServiceAccount.
 
 ## Execution mode
@@ -54,10 +55,10 @@ boundaries. OCC rejects conflicting, unknown, or mode-incompatible selections
 before admitting a revision. A selected SandboxDriver currently requires
 `dedicated` Codex execution; it does not support embedded OpenClaw.
 
-An Agent update may include `executionMode`, `serviceAccountId`, and `providerId`
+An Agent update may include `executionMode`, `harnessAuth`, and `providerId`
 alongside its required `configurationId`. Omission preserves the current value;
-`serviceAccountId: null` detaches the account and `providerId: null` clears the
-Provider. Existing revisions retain their immutable placement, account, and
+`harnessAuth: null` clears authentication and `providerId: null` clears the
+Provider. Existing revisions retain their immutable placement, auth binding, and
 Provider association.
 See the
 [Harness execution topology flow](../../flows/harness-execution-topology.md) for
@@ -73,8 +74,9 @@ an earlier revision or make the new revision active immediately.
 The revision records the source `configurationId`, `configurationKind`, and
 `configurationGeneration`, its complete admitted native `configuration`
 document, the approved Harness identity/version/mode, selected Compute identity,
-nullable `providerId`, and any associated service account's opaque credential
-reference. The account association contains no credential bytes. Native Configuration values must use
+nullable `providerId`, and `harnessAuth` with its resolved internal source snapshot.
+The auth snapshot contains no credential bytes; public revisions omit private
+backend locators and Provider/workspace metadata. Native Configuration values must use
 unresolved inline SecretRefs because the admitted document is persisted and
 returned through the API; see [secret boundaries](../configuration/secrets.md#secret-boundaries).
 Nested objects and arrays are immutable.
@@ -89,7 +91,8 @@ revision schema. See [SandboxDriver](../drivers/sandbox.md).
 
 An authorized `POST /namespaces/:namespaceId/agents/:agentId/deploy` has no
 request body. It requires a `ready` Namespace, exact-Agent `deploy`, exact
-Configuration `read`, and exact associated-account `read` when present. A
+Configuration `read`, and the selected
+[harness source permissions](../agents.md#harness-authentication). A
 successful `202` means the immutable revision was admitted and its work queued;
 it does not mean the workload is ready. Later Configuration edits or changes to
 an account's selected credential reference affect only future deployments. A
@@ -98,9 +101,8 @@ snapshot freezes a Secret reference, not the value stored at that reference.
 The separate PostgreSQL controller worker prepares the exact Agent gateway and
 revision, activates its route, retires its predecessor, and sets
 `activeRevisionId`. Each Agent owns its gateway; sibling Agents never share
-one. The default PostgreSQL-backed development Compute Driver starts Docker
-runtime containers for embedded OpenClaw or dedicated Codex topologies. Selected
-Kubernetes Compute starts either an Agent-owned gateway plus a dedicated
+one. The new binding contract currently requires Kubernetes Compute; Docker and
+SSH reject unsupported bindings before deployment. Kubernetes Compute starts either an Agent-owned gateway plus a dedicated
 Codex workload with its separate ServiceAccount, or one embedded combined
 gateway/Harness. Without a SandboxDriver, Compute owns the Codex Deployment;
 with one selected, that Driver provisions the dedicated Harness workload.

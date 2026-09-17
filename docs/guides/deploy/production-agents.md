@@ -69,7 +69,7 @@ JSON
 ```
 
 Or use `dedicated` for the Codex runtime and its app-server placeholders. The
-Configuration keeps transport placeholders separate from the model Secret and
+Configuration keeps transport placeholders separate from harness authentication and
 does not contain `OPENAI_API_KEY`:
 
 ```bash
@@ -105,21 +105,26 @@ export CONFIGURATION_ID
 ```
 
 Create the Agent with the captured Configuration ID and the matching execution
-mode. Mismatched Harness and mode pairs fail before deployment. Optional
-`serviceAccountId` must identify a same-Namespace service account the caller can
-read.
+mode. Mismatched Harness and mode pairs fail before deployment. Create a
+[Namespace-owned OCC Secret](../../reference/drivers/kubernetes-secret.md#create-a-namespace-owned-secret)
+containing the protected OpenAI key first, then set `HARNESS_SECRET_ID` to its
+returned ID. The caller needs exact Secret `operate`; before deployment an IAM
+administrator must also grant the Agent service principal exact Secret `operate`.
+For the alternative ChatGPT method, select an already issued same-Namespace
+account and matching Provider as described in [Agent harness authentication](../../reference/agents.md#harness-authentication).
 
 ```bash
 : "${AGENT_EXECUTION_MODE:?choose embedded or dedicated above}"
-printf '{"name":"production-agent","configurationId":"%s","executionMode":"%s"}\n' \
-  "$CONFIGURATION_ID" "$AGENT_EXECUTION_MODE" > agent.json
+: "${HARNESS_SECRET_ID:?set the OCC Secret ID containing the key}"
+printf '{"name":"production-agent","configurationId":"%s","executionMode":"%s","harnessAuth":{"method":"api_key","source":{"kind":"secret","namespaceId":"%s","id":"%s"}}}\n' \
+  "$CONFIGURATION_ID" "$AGENT_EXECUTION_MODE" "$NAMESPACE_ID" "$HARNESS_SECRET_ID" > agent.json
 AGENT_RESPONSE="$(occ agent create --file agent.json --output json)"
 AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 export AGENT_ID
 ```
 
-For an Agent without any revisions, the console can provision initial transport,
-OpenAI API key, and Slack credentials through the exact-Agent API. See
+For an Agent without any revisions, the console can provision initial transport
+and Slack credentials through the exact-Agent API. See
 [initial runtime credentials](../../reference/console/create-and-deploy.md#initial-runtime-credentials).
 The operator commands below remain available for installations using externally
 provisioned inputs. Do not use both paths to replace an existing credential group.
@@ -143,27 +148,11 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
 ```
 
 Embedded OpenClaw uses only the gateway token. Dedicated Codex uses both
-transport tokens. Model credentials stay in an Agent-owned model Secret or an
-immutable service-account credential. They are not installed in controller runtime
-environment, fixture output, or shell history. Console provisioning carries the
-key transiently through the authorized API write without persisting it in the
-controller database or logs.
-
-For native API-key model turns through the native model Secret path, copy the
-operator's protected source key into the private input file and require it to be
-nonempty:
-
-```bash
-: "${OPERATOR_OPENAI_API_KEY_FILE:?set the protected source key path}"
-install -m 600 "$OPERATOR_OPENAI_API_KEY_FILE" /secure/occ/openai-api-key
-test -s /secure/occ/openai-api-key
-kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
-  -n "$TENANT_NAMESPACE" create secret generic "openclaw-agent-model-$AGENT_SUFFIX" \
-  --from-file=OPENAI_API_KEY=/secure/occ/openai-api-key
-```
-
-Do not store the native API key in Helm values, Installation YAML,
-Configurations, shell history, or this repository.
+transport tokens. Model authentication comes from the saved `harnessAuth` binding.
+Kubernetes projects its source only into the model-executing workload; initial
+transport/channel provisioning does not accept model keys. Keep credential values
+out of Helm values, Installation YAML, Configurations, shell history, and this
+repository.
 
 Deploy the Agent and capture the immutable revision ID:
 

@@ -25,6 +25,45 @@ const tenant = {
   createdAt: "2026-08-18T00:00:00.000Z",
 };
 
+const apiKeyAuth = {
+  method: "api_key",
+  source: {
+    kind: "secret",
+    namespaceId: tenant.id,
+    id: "sec_00000000-0000-4000-8000-000000000001",
+  },
+  secretDriverId: "kubernetes-secret",
+};
+
+function authContext(revision, namespace = kubernetesNamespaceName(tenant.id)) {
+  return {
+    harnessAuth:
+      revision.harnessAuth.method === "api_key"
+        ? {
+            ...revision.harnessAuth,
+            backendRef: {
+              namespaceName: namespace,
+              name: "occ-model-key",
+              key: "value",
+              uid: "model-secret-uid",
+            },
+          }
+        : revision.harnessAuth,
+  };
+}
+
+function preparedAuth(driver, namespace, embedded = false, harnessAuth = apiKeyAuth) {
+  const revision = {
+    namespaceId: tenant.id,
+    harness: embedded
+      ? { id: "openclaw", version: "1.0.0", mode: "embedded" }
+      : { id: "codex", version: "1.0.0", mode: "dedicated" },
+    harnessAuth,
+    configuration: { agents: { defaults: { model: embedded ? "openai/gpt-5" : "codex/gpt-5" } } },
+  };
+  return driver.harnessAuthForRevision(revision, authContext(revision, namespace), namespace);
+}
+
 function options(overrides = {}) {
   const resources = {
     requests: { cpu: "100m", memory: "64Mi" },
@@ -96,6 +135,7 @@ function routedRevision(driver, overrides = {}) {
     configurationKind: "agent",
     configurationGeneration: 1,
     configuration: {
+      agents: { defaults: { model: "codex/gpt-5" } },
       gateway: {
         trustedProxies: ["10.42.0.0/16"],
         allowRealIpFallback: true,
@@ -110,6 +150,7 @@ function routedRevision(driver, overrides = {}) {
       },
     },
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    harnessAuth: apiKeyAuth,
     compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: "service-principal-routed",
     createdAt: tenant.createdAt,
@@ -779,27 +820,24 @@ test("Kubernetes drivers require explicit authentication, images, and production
   );
 });
 
-test("the canonical Kubernetes runtime isolates transport and model Agent Secrets", () => {
+test("the canonical Kubernetes runtime isolates transport and channel Secrets", () => {
   const runtime = {
     transportSecretPrefix: "transport",
     gatewayStorageClassName: "local-path",
-    modelSecretPrefix: "model",
   };
   assert.doesNotThrow(() => createKubernetesComputeDriver(options({ runtime })));
-  for (const shared of [
-    {
-      transportSecretPrefix: "shared",
-      gatewayStorageClassName: "local-path",
-      modelSecretPrefix: "shared",
-    },
-    { ...runtime, channels: { secretPrefix: "transport", proxyUrl: "http://10.42.0.15:3128" } },
-    { ...runtime, channels: { secretPrefix: "model", proxyUrl: "http://10.42.0.15:3128" } },
-  ]) {
-    assert.throws(
-      () => createKubernetesComputeDriver(options({ runtime: shared })),
-      /credentials must remain separate/i,
-    );
-  }
+  assert.throws(
+    () =>
+      createKubernetesComputeDriver(
+        options({
+          runtime: {
+            ...runtime,
+            channels: { secretPrefix: "transport", proxyUrl: "http://10.42.0.15:3128" },
+          },
+        }),
+      ),
+    /credentials must remain separate/i,
+  );
 
   for (const proxyUrl of ["http://10.42.0.15:3128", "https://[2001:db8::15]:8443"]) {
     const channels = { secretPrefix: "channel", proxyUrl };
@@ -840,7 +878,6 @@ test("dedicated Codex localhost seccomp profile is validated and rendered only o
   const runtime = {
     transportSecretPrefix: "transport",
     gatewayStorageClassName: "local-path",
-    modelSecretPrefix: "model",
   };
   const profile = "profiles/codex-0.152.1.json";
   const driver = createKubernetesComputeDriver(
@@ -861,6 +898,8 @@ test("dedicated Codex localhost seccomp profile is validated and rendered only o
       "info",
       undefined,
       embedded,
+      undefined,
+      preparedAuth(computeDriver, namespace, embedded),
     ).spec.template.spec;
 
   const agent = workload(driver, "agent");
@@ -951,7 +990,6 @@ test("dedicated Codex projects the account-owned token and workspace without exp
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        modelSecretPrefix: "model",
         channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
       },
     }),
@@ -963,7 +1001,14 @@ test("dedicated Codex projects the account-owned token and workspace without exp
     .digest("hex")
     .slice(0, 32)}`;
   const account = {
-    id: serviceAccountId,
+    method: "chatgpt_service_account",
+    serviceAccountId,
+    providerBinding: {
+      providerId: "provider-chatgpt",
+      driverId: "chatgpt",
+      workspaceId: "ws_1",
+      credentialIssued: true,
+    },
     credential: { kind: "access_token", secretRef: { name: secretName, key: "token" } },
   };
   const namespace = kubernetesNamespaceName(tenant.id);
@@ -980,7 +1025,7 @@ test("dedicated Codex projects the account-owned token and workspace without exp
     undefined,
     false,
     undefined,
-    account,
+    preparedAuth(driver, namespace, false, account),
   );
   const agentEnvironment = Object.fromEntries(
     workload.spec.template.spec.containers[0].env.map((entry) => [entry.name, entry]),
@@ -995,6 +1040,7 @@ test("dedicated Codex projects the account-owned token and workspace without exp
     name: secretName,
     key: "workspace-id",
   });
+  assert.equal(agentEnvironment.CODEX_LOGIN_MODE.value, "chatgpt_service_account");
   assert.equal(agentEnvironment.OPENAI_API_KEY, undefined);
   assert.equal(agentEnvironment.SLACK_APP_TOKEN, undefined);
   assert.equal(agentEnvironment.SLACK_BOT_TOKEN, undefined);
@@ -1003,6 +1049,7 @@ test("dedicated Codex projects the account-owned token and workspace without exp
   const channels = driver.enabledChannels({
     configuration: { channels: { slack: {}, msteams: {} } },
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    harnessAuth: apiKeyAuth,
   });
 
   const gateway = driver.deployment(
@@ -1037,7 +1084,6 @@ test("account-token authentication grants only the exact Codex revision outbound
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        modelSecretPrefix: "model",
       },
     }),
   );
@@ -1047,6 +1093,7 @@ test("account-token authentication grants only the exact Codex revision outbound
     agentId: "agent-account-token",
     servicePrincipalId: "service-principal-account-token",
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    harnessAuth: apiKeyAuth,
   };
   const namespace = kubernetesNamespaceName(tenant.id);
   const digest = (value, length = 32) =>
@@ -1093,7 +1140,6 @@ test("native channel providers supply only owning gateway secrets and reviewed p
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        modelSecretPrefix: "model",
         channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
       },
     }),
@@ -1110,6 +1156,7 @@ test("native channel providers supply only owning gateway secrets and reviewed p
     configurationKind: "agent",
     configurationGeneration: 1,
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    harnessAuth: apiKeyAuth,
     compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: "service-principal-agent-a",
     createdAt: tenant.createdAt,
@@ -1203,6 +1250,10 @@ test("native channel providers supply only owning gateway secrets and reviewed p
       "agent",
       {},
       "info",
+      undefined,
+      undefined,
+      undefined,
+      preparedAuth(driver, namespace, false),
     );
     const agentEnvironment = agent.spec.template.spec.containers[0].env;
     for (const key of [...expectedSecrets, "HTTPS_PROXY"]) {
@@ -1217,6 +1268,7 @@ test("native channel providers supply only owning gateway secrets and reviewed p
   const activeRevision = {
     ...revision,
     configuration: {
+      agents: { defaults: { model: "codex/gpt-5" } },
       channels: { slack: {} },
       logging: {
         level: "info",
@@ -1235,7 +1287,6 @@ test("native channel providers supply only owning gateway secrets and reviewed p
     {
       transportSecretPrefix: "transport",
       gatewayStorageClassName: "local-path",
-      modelSecretPrefix: "model",
     },
     undefined,
   ]) {
@@ -1244,6 +1295,7 @@ test("native channel providers supply only owning gateway secrets and reviewed p
       ...revision,
       compute: { id: removed.id, implementation: removed.implementation },
       configuration: {
+        agents: { defaults: { model: "codex/gpt-5" } },
         channels: { slack: { enabled: false } },
         logging: {
           level: "info",
@@ -1270,6 +1322,7 @@ test("native channel providers supply only owning gateway secrets and reviewed p
     driver.prepareRevision({
       ...revision,
       configuration: {
+        agents: { defaults: { model: "codex/gpt-5" } },
         channels: { discord: { enabled: true } },
         logging: {
           level: "info",
@@ -1287,7 +1340,6 @@ test("native channel providers supply only owning gateway secrets and reviewed p
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        modelSecretPrefix: "model",
         channels: { secretPrefix: "channel", proxyUrl: "https://[2001:db8::15]:8443" },
       },
     }),
@@ -1296,6 +1348,7 @@ test("native channel providers supply only owning gateway secrets and reviewed p
     ...revision,
     compute: { id: ipv6.id, implementation: ipv6.implementation },
     configuration: {
+      agents: { defaults: { model: "codex/gpt-5" } },
       channels: { msteams: {} },
       logging: {
         level: "info",
@@ -1323,7 +1376,6 @@ test("embedded replacement preparation recovers past an unready active gateway w
     routedOptions({
       runtime: {
         transportSecretPrefix: "transport",
-        modelSecretPrefix: "model",
         gatewayStorageClassName: "local-path",
       },
       servicePrincipalCredentials: {
@@ -1343,6 +1395,7 @@ test("embedded replacement preparation recovers past an unready active gateway w
     configurationKind: "agent",
     configurationGeneration: 1,
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+    harnessAuth: apiKeyAuth,
     compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: "service-principal-embedded-recovery",
     createdAt: tenant.createdAt,
@@ -1352,6 +1405,7 @@ test("embedded replacement preparation recovers past an unready active gateway w
     id: "revision-embedded-recovery-bad",
     revision: 7,
     configuration: {
+      agents: { defaults: { model: "openai/gpt-5" } },
       logging: {
         level: "info",
         consoleLevel: "info",
@@ -1370,7 +1424,6 @@ test("embedded replacement preparation recovers past an unready active gateway w
           identityScopes: { "occ-workspace-files": ["operator.admin"] },
         },
       },
-      models: { providers: { openai: { apiKey: { source: "env" } } } },
     },
   };
   const replacement = {
@@ -1378,6 +1431,7 @@ test("embedded replacement preparation recovers past an unready active gateway w
     id: "revision-embedded-recovery-restored",
     revision: 8,
     configuration: {
+      agents: { defaults: { model: "openai/gpt-5" } },
       logging: {
         level: "info",
         consoleLevel: "info",
@@ -1396,7 +1450,6 @@ test("embedded replacement preparation recovers past an unready active gateway w
           identityScopes: { "occ-workspace-files": ["operator.admin"] },
         },
       },
-      models: { providers: { openai: { apiKey: { source: "env" } } } },
     },
   };
   const tenantOwnership = { namespaceId: tenant.id };
@@ -1436,6 +1489,7 @@ test("embedded replacement preparation recovers past an unready active gateway w
       driver.gatewayConfiguration(oldRevision),
       true,
       oldRevision.servicePrincipalId,
+      preparedAuth(driver, namespace, true),
     ),
     metadata: {
       ...driver.deployment(
@@ -1450,6 +1504,7 @@ test("embedded replacement preparation recovers past an unready active gateway w
         driver.gatewayConfiguration(oldRevision),
         true,
         oldRevision.servicePrincipalId,
+        preparedAuth(driver, namespace, true),
       ).metadata,
       generation: 2,
     },
@@ -1568,7 +1623,7 @@ test("embedded replacement preparation recovers past an unready active gateway w
 
   // The candidate revision is activation-ready after its immutable snapshot is staged;
   // the old crashed gateway stays in place until the worker wins the active-revision CAS.
-  assert.deepEqual(await driver.prepareRevision(replacement), {
+  assert.deepEqual(await driver.prepareRevision(replacement, authContext(replacement)), {
     namespaceId: tenant.id,
     agentId,
     revisionId: replacement.id,
@@ -1597,7 +1652,7 @@ test("embedded replacement preparation recovers past an unready active gateway w
     replacement.id,
   );
 
-  await driver.activateRevision(replacement);
+  await driver.activateRevision(replacement, authContext(replacement));
   const replaced = objects.get(key("Deployment", gatewayName));
   assert.equal(replaced.metadata.annotations["openclaw.dev/agent-revision-id"], replacement.id);
   assert.deepEqual(
@@ -1731,6 +1786,7 @@ test("Kubernetes lifecycle hooks never run before cluster ownership and workload
     configurationKind: "agent",
     configurationGeneration: 1,
     configuration: {
+      agents: { defaults: { model: "codex/gpt-5" } },
       gateway: { controlUi: { enabled: false } },
       logging: {
         level: "info",
@@ -1740,6 +1796,7 @@ test("Kubernetes lifecycle hooks never run before cluster ownership and workload
       diagnostics: { otel: { logs: false } },
     },
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    harnessAuth: apiKeyAuth,
     compute: { id: "another-driver", implementation: "another-implementation" },
     servicePrincipalId: "service-principal-agent-foreign",
     createdAt: tenant.createdAt,
@@ -1826,6 +1883,10 @@ test("containment-only Sandbox cleanup retries after its Compute-owned workload 
     "agent",
     {},
     "info",
+    undefined,
+    undefined,
+    undefined,
+    preparedAuth(driver, namespace, false),
   );
   deployment.metadata.uid = "containment-workload-uid";
   const gatewayName = `gateway-${digest(revision.agentId)}`;
@@ -2006,7 +2067,6 @@ test("provider-owned Harness requirements preserve the exact projected ServicePr
   const runtime = {
     transportSecretPrefix: "transport",
     gatewayStorageClassName: "local-path",
-    modelSecretPrefix: "model",
   };
   const driver = createKubernetesComputeDriver(
     options({
@@ -2034,9 +2094,14 @@ test("provider-owned Harness requirements preserve the exact projected ServicePr
     "agent",
     {},
     "info",
+    undefined,
+    undefined,
+    undefined,
+    preparedAuth(driver, kubernetesNamespaceName(tenant.id), false),
   );
 
-  const requirements = driver.harnessRequirementsFromDeployment(workload);
+  const requirements = driver.harnessRequirementsFromDeployment(workload, "api_key");
+  assert.equal(requirements.loginMode, "api_key");
   // Provider requirements must carry readable identities unchanged into Pod labels and selectors.
   for (const [key, value] of Object.entries({
     "openclaw.dev/namespace": ownership.namespaceId,
@@ -2090,7 +2155,10 @@ test("provider-owned Harness requirements preserve the exact projected ServicePr
     // A provider must receive exactly the same audience, expiry, token path, and readonly mount.
     const altered = structuredClone(workload);
     mutate(altered.spec.template.spec);
-    assert.throws(() => driver.harnessRequirementsFromDeployment(altered), /ServicePrincipal/i);
+    assert.throws(
+      () => driver.harnessRequirementsFromDeployment(altered, "api_key"),
+      /ServicePrincipal/i,
+    );
   }
 
   const withoutProjection = createKubernetesComputeDriver(options({ runtime }));
@@ -2103,9 +2171,13 @@ test("provider-owned Harness requirements preserve the exact projected ServicePr
     "agent",
     {},
     "info",
+    undefined,
+    undefined,
+    undefined,
+    preparedAuth(withoutProjection, kubernetesNamespaceName(tenant.id), false),
   );
   assert.throws(
-    () => withoutProjection.harnessRequirementsFromDeployment(unprojected),
+    () => withoutProjection.harnessRequirementsFromDeployment(unprojected, "api_key"),
     /projected ServicePrincipal token/i,
   );
 });
@@ -2116,7 +2188,6 @@ function providerReadinessFixture({ provisionHarness, lifecycleDrivers = [] } = 
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        modelSecretPrefix: "model",
       },
       servicePrincipalCredentials: {
         mode: "projectedServiceAccountToken",
@@ -2138,7 +2209,10 @@ function providerReadinessFixture({ provisionHarness, lifecycleDrivers = [] } = 
   const revision = routedRevision(driver, {
     sandboxDriverId: "sandbox-provider",
     configuration: admitLoggingConfiguration(
-      { gateway: { controlUi: { enabled: false } } },
+      {
+        agents: { defaults: { model: "codex/gpt-5" } },
+        gateway: { controlUi: { enabled: false } },
+      },
       "info",
     ),
   });
@@ -2158,8 +2232,12 @@ function providerReadinessFixture({ provisionHarness, lifecycleDrivers = [] } = 
     "agent",
     {},
     "info",
+    undefined,
+    undefined,
+    undefined,
+    preparedAuth(driver, namespace, false),
   );
-  const { labels } = driver.harnessRequirementsFromDeployment(deployment);
+  const { labels } = driver.harnessRequirementsFromDeployment(deployment, "api_key");
   const requests = [];
   let observe = () => ({ apiVersion: "v1", kind: "PodList", items: [] });
   const core = {
@@ -2333,6 +2411,26 @@ test("provider Harness readiness rejects malformed or incomplete Pod observation
 
 test("provider Harness activation fails before routing on absent, ambiguous, or malformed Pods", async () => {
   const fixture = providerReadinessFixture();
+  const context = authContext(fixture.revision);
+  const resolved = context.harnessAuth;
+  for (const invalidContext of [
+    undefined,
+    { harnessAuth: { ...resolved, source: { ...resolved.source, id: "sec_other" } } },
+    { harnessAuth: { ...resolved, secretDriverId: "another-secret-driver" } },
+    {
+      harnessAuth: {
+        ...resolved,
+        backendRef: { ...resolved.backendRef, namespaceName: "another-tenant" },
+      },
+    },
+    { harnessAuth: { ...resolved, backendRef: { ...resolved.backendRef, uid: "" } } },
+  ]) {
+    await assert.rejects(
+      fixture.driver.activateRevision(fixture.revision, invalidContext),
+      /authentication.*(?:context|source)/i,
+    );
+  }
+  assert.equal(fixture.requests.length, 0, "invalid authentication must fail before Pod readiness");
   for (const items of [
     [],
     [fixture.pod("starting", "False")],
@@ -2341,12 +2439,15 @@ test("provider Harness activation fails before routing on absent, ambiguous, or 
   ]) {
     fixture.setObservation({ items });
     await assert.rejects(
-      fixture.driver.activateRevision(fixture.revision),
+      fixture.driver.activateRevision(fixture.revision, authContext(fixture.revision)),
       /The exact AgentRevision workload is not ready/,
     );
   }
   fixture.setObservation({ items: [fixture.pod("ready"), null] });
-  await assert.rejects(fixture.driver.activateRevision(fixture.revision), /invalid or incomplete/);
+  await assert.rejects(
+    fixture.driver.activateRevision(fixture.revision, authContext(fixture.revision)),
+    /invalid or incomplete/,
+  );
   assert.equal(fixture.requests.length, 5);
 });
 
@@ -2461,7 +2562,10 @@ test("provider Harness preparation preserves readiness and cleanup contracts", a
     [[fixture.pod("ready")], true],
   ]) {
     fixture.setObservation({ items });
-    assert.deepEqual(await driver.prepareRevision(revision), { ...expected, ready });
+    assert.deepEqual(await driver.prepareRevision(revision, authContext(revision)), {
+      ...expected,
+      ready,
+    });
   }
   assert.deepEqual(hooks, ["start", "start", "start", "start"]);
   assert.equal(provisions.length, 4);
@@ -2473,14 +2577,20 @@ test("provider Harness preparation preserves readiness and cleanup contracts", a
   );
 
   fixture.setObservation({ items: [fixture.pod("ready"), null] });
-  await assert.rejects(driver.prepareRevision(revision), /invalid or incomplete/);
+  await assert.rejects(
+    driver.prepareRevision(revision, authContext(revision)),
+    /invalid or incomplete/,
+  );
   assert.deepEqual(hooks.slice(-2), ["start", "stop"]);
   const writesBeforeActivation = writes.length;
-  await assert.rejects(driver.activateRevision(revision), /invalid or incomplete/);
+  await assert.rejects(
+    driver.activateRevision(revision, authContext(revision)),
+    /invalid or incomplete/,
+  );
   assert.equal(writes.length, writesBeforeActivation);
 
   fixture.setObservation({ items: [fixture.pod("ready")] });
-  await driver.activateRevision(revision);
+  await driver.activateRevision(revision, authContext(revision));
   assert.deepEqual(objects.get(key("Service", agentServiceName)).spec.selector, {
     "openclaw.dev/agent": revision.agentId,
     "openclaw.dev/revision": revision.id,
@@ -2550,6 +2660,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
     configurationKind: "agent",
     configurationGeneration: 1,
     configuration: {
+      agents: { defaults: { model: "codex/gpt-5" } },
       gateway: { controlUi: { enabled: false } },
       logging: {
         level: "info",
@@ -2559,6 +2670,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
       diagnostics: { otel: { logs: false } },
     },
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    harnessAuth: apiKeyAuth,
     compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: "service-principal-agent-a",
     createdAt: tenant.createdAt,
@@ -2615,7 +2727,6 @@ test("revision lifecycle rejects another driver or missing identity before clust
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        modelSecretPrefix: "model",
         channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
       },
       servicePrincipalCredentials: {
@@ -2627,7 +2738,14 @@ test("revision lifecycle rejects another driver or missing identity before clust
   );
   const serviceAccountId = "sa_00000000-0000-4000-8000-000000000001";
   const serviceAccount = {
-    id: serviceAccountId,
+    method: "chatgpt_service_account",
+    serviceAccountId,
+    providerBinding: {
+      providerId: "provider-chatgpt",
+      driverId: "chatgpt",
+      workspaceId: "ws_1",
+      credentialIssued: true,
+    },
     credential: {
       kind: "access_token",
       secretRef: {
@@ -2642,7 +2760,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
   const accessTokenRevision = {
     ...revision,
     compute: { id: production.id, implementation: production.implementation },
-    serviceAccount,
+    harnessAuth: serviceAccount,
   };
 
   // Unsupported access-token execution and cross-account references fail before cluster access.
@@ -2651,7 +2769,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
       ...accessTokenRevision,
       harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     }),
-    /dedicated Codex runtime/i,
+    /incompatible.*topology/i,
   );
   for (const secretRef of [
     { ...serviceAccount.credential.secretRef, name: "service-account-another" },
@@ -2660,19 +2778,72 @@ test("revision lifecycle rejects another driver or missing identity before clust
     await assert.rejects(
       production.prepareRevision({
         ...accessTokenRevision,
-        serviceAccount: {
+        harnessAuth: {
           ...serviceAccount,
           credential: { ...serviceAccount.credential, secretRef },
         },
       }),
-      /another ServiceAccount/i,
+      /admitted account/i,
     );
   }
   const embeddedRevision = {
     ...revision,
     compute: { id: production.id, implementation: production.implementation },
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+    harnessAuth: apiKeyAuth,
+    configuration: { ...revision.configuration, agents: { defaults: { model: "openai/gpt-5" } } },
   };
+  // Admission must retain supported model choices without permitting a second credential selector.
+  for (const model of ["codex/gpt-5", "openai/gpt-5"]) {
+    const configuration = { agents: { defaults: { model } } };
+    assert.doesNotThrow(() =>
+      production.validateHarnessAuth(revision.harness, apiKeyAuth, configuration),
+    );
+    assert.equal(configuration.agents.defaults.model, model);
+  }
+  for (const apiKey of [
+    "plaintext-fixture",
+    "${ANOTHER_API_KEY}",
+    { source: "env", provider: "model", id: "ANOTHER_API_KEY" },
+    { source: "store", provider: "model", id: "OPENAI_API_KEY" },
+  ]) {
+    await assert.rejects(
+      production.prepareRevision({
+        ...embeddedRevision,
+        configuration: {
+          ...embeddedRevision.configuration,
+          models: { providers: { openai: { apiKey } } },
+        },
+      }),
+      /credentials must use.*binding/i,
+    );
+  }
+  for (const apiKey of [
+    "${OPENAI_API_KEY}",
+    { source: "env", provider: "model", id: "OPENAI_API_KEY" },
+  ]) {
+    assert.doesNotThrow(() =>
+      production.validateHarnessAuth(embeddedRevision.harness, apiKeyAuth, {
+        ...embeddedRevision.configuration,
+        secrets: { providers: { model: { source: "env", allowlist: ["OPENAI_API_KEY"] } } },
+        models: { providers: { openai: { apiKey } } },
+      }),
+    );
+  }
+  for (const conflicting of [
+    { auth: { profiles: { alternate: { provider: "openai", mode: "api_key" } } } },
+    { env: { OPENAI_API_KEY: "plaintext-fixture" } },
+    { env: { vars: { OPENAI_API_KEY: "plaintext-fixture" } } },
+    { models: { providers: { openai: { headers: { Authorization: "Bearer fixture" } } } } },
+  ]) {
+    await assert.rejects(
+      production.prepareRevision({
+        ...embeddedRevision,
+        configuration: { ...embeddedRevision.configuration, ...conflicting },
+      }),
+      /credentials must use.*binding/i,
+    );
+  }
   // Channel credentials must never enter the combined embedded Agent and gateway workload.
   for (const provider of ["slack", "msteams"]) {
     await assert.rejects(
@@ -2700,6 +2871,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
     production.gatewayConfiguration(embeddedRevision),
     true,
     revision.servicePrincipalId,
+    preparedAuth(production, namespace, true),
   );
   const pod = gateway.spec.template.spec;
   const environment = Object.fromEntries(pod.containers[0].env.map((entry) => [entry.name, entry]));
@@ -2708,8 +2880,8 @@ test("revision lifecycle rejects another driver or missing identity before clust
   assert.equal(pod.serviceAccountName, `agent-${agentHash.slice(0, 12)}`);
   assert.ok(pod.volumes.some(({ name }) => name === "openclaw-service-principal"));
   assert.deepEqual(environment.OPENAI_API_KEY.valueFrom.secretKeyRef, {
-    name: `model-${agentHash.slice(0, 12)}`,
-    key: "OPENAI_API_KEY",
+    name: "occ-model-key",
+    key: "value",
   });
   assert.deepEqual(environment.OPENCLAW_GATEWAY_TOKEN.valueFrom.secretKeyRef, {
     name: `transport-${agentHash.slice(0, 12)}`,
@@ -2739,6 +2911,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
     production.gatewayConfiguration(trustedProxyRevision),
     true,
     revision.servicePrincipalId,
+    preparedAuth(production, namespace, true),
   );
   const trustedProxyEnvironment = Object.fromEntries(
     trustedProxyGateway.spec.template.spec.containers[0].env.map((entry) => [entry.name, entry]),
@@ -2778,7 +2951,6 @@ test("real gateways require an explicit SQLite-compatible storage class", () => 
           options({
             runtime: {
               transportSecretPrefix: "transport",
-              modelSecretPrefix: "model",
               gatewayStorageClassName,
             },
           }),
@@ -2793,7 +2965,6 @@ test("gateway SQLite and media mounts are private, durable, and preserve ephemer
     options({
       runtime: {
         transportSecretPrefix: "transport",
-        modelSecretPrefix: "model",
         gatewayStorageClassName: "local-path",
       },
     }),
@@ -2837,6 +3008,8 @@ test("gateway SQLite and media mounts are private, durable, and preserve ephemer
       "info",
       undefined,
       embedded,
+      undefined,
+      preparedAuth(driver, namespace, embedded),
     );
     const pod = gateway.spec.template.spec;
     const privateVolume = pod.volumes.find(({ name }) => name === "openclaw-gateway-state");
@@ -2893,6 +3066,8 @@ test("gateway SQLite and media mounts are private, durable, and preserve ephemer
           loggingLevel: "info",
         },
         true,
+        undefined,
+        preparedAuth(driver, namespace, true),
       ).spec.template.spec;
       assert.deepEqual(
         replacement.volumes.find(({ name }) => name === privateVolume.name),
@@ -2935,6 +3110,10 @@ test("gateway SQLite and media mounts are private, durable, and preserve ephemer
     "agent",
     {},
     "info",
+    undefined,
+    undefined,
+    undefined,
+    preparedAuth(driver, namespace, false),
   );
   assert.equal(JSON.stringify(harness).includes(claim.metadata.name), false);
   assert.equal(JSON.stringify(harness).includes("openclaw-gateway-state"), false);
@@ -2945,7 +3124,6 @@ test("private gateway claim reuse and deletion verify exact ownership and storag
     options({
       runtime: {
         transportSecretPrefix: "transport",
-        modelSecretPrefix: "model",
         gatewayStorageClassName: "local-path",
       },
     }),
@@ -3032,7 +3210,6 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
     routedOptions({
       runtime: {
         transportSecretPrefix: "transport",
-        modelSecretPrefix: "model",
         gatewayStorageClassName: "local-path",
       },
     }),
@@ -3046,6 +3223,7 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
     id: revisionId,
     agentId,
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+    harnessAuth: apiKeyAuth,
   });
   const namespaceResource = {
     apiVersion: "v1",
@@ -3205,6 +3383,10 @@ test("stopping a containment-only Kubernetes revision removes its workload befor
     "agent",
     {},
     "info",
+    undefined,
+    undefined,
+    undefined,
+    preparedAuth(driver, namespace, false),
   );
   deployment.metadata.uid = "containment-stop-workload-uid";
   const pod = {
@@ -3372,7 +3554,6 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
     routedOptions({
       runtime: {
         transportSecretPrefix: "transport",
-        modelSecretPrefix: "model",
         gatewayStorageClassName: "local-path",
       },
     }),

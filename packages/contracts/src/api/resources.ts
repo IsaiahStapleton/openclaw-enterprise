@@ -7,6 +7,7 @@ import {
   ConfigurationKindSchema,
   ConfigurationValues,
   HarnessExecutionModeSchema,
+  HarnessAuthBindingSchema,
   InstallationId,
   KubernetesNamespaceName,
   Meta,
@@ -53,7 +54,7 @@ export const AgentSchema = Type.Object(
     name: Name,
     configurationId: ConfigurationId,
     providerId: Type.Union([ProviderId, Type.Null()]),
-    serviceAccountId: Type.Optional(ServiceAccountId),
+    harnessAuth: Type.Union([HarnessAuthBindingSchema, Type.Null()]),
     executionMode: HarnessExecutionModeSchema,
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     desiredRuntimeState: Type.Union([Type.Literal("running"), Type.Literal("stopped")]),
@@ -138,7 +139,6 @@ export const SecretSchema = Type.Object(
 export const AgentRuntimeCredentialStatusSchema = Type.Object(
   {
     transportConfigured: Type.Boolean(),
-    modelConfigured: Type.Boolean(),
     slackConfigured: Type.Boolean(),
   },
   { additionalProperties: false },
@@ -149,7 +149,12 @@ export const ServiceAccountSchema = Type.Object(
     id: ServiceAccountId,
     namespaceId: NamespaceId,
     name: Name,
-    credential: Type.Optional(ServiceAccountCredentialSchema),
+    credential: Type.Optional(
+      Type.Object(
+        { kind: ServiceAccountCredentialSchema.properties.kind },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -251,21 +256,7 @@ export const AgentRevisionSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
-    serviceAccount: Type.Optional(
-      Type.Object(
-        {
-          id: ServiceAccountId,
-          credential: Type.Object(
-            {
-              kind: Type.Union([Type.Literal("api_key"), Type.Literal("access_token")]),
-              secretRef: ServiceAccountCredentialSchema.properties.secretRef,
-            },
-            { additionalProperties: false },
-          ),
-        },
-        { additionalProperties: false },
-      ),
-    ),
+    harnessAuth: HarnessAuthBindingSchema,
     createdAt: Timestamp,
   },
   { additionalProperties: false },

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { AGENT_RUNTIME_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import test from "node:test";
 import {
   createKubernetesComputeDriver,
@@ -57,7 +59,6 @@ function options(overrides = {}) {
     runtime: {
       transportSecretPrefix: "transport",
       gatewayStorageClassName: "local-path",
-      modelSecretPrefix: "model",
       channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
     },
     ...overrides,
@@ -155,15 +156,11 @@ test("mocked Kubernetes client reports only complete owned Agent runtime credent
       "gateway-token": "gateway-token-value",
       "gateway-password": "gateway-password-value",
     }),
-    [`model-${digest(agent.id)}`]: runtimeSecret(driver, namespaceName, "model", {
-      OPENAI_API_KEY: "model-key",
-    }),
   };
   const fixture = credentialFixture({ secrets });
 
   assert.deepEqual(await fixture.driver.getAgentRuntimeCredentialStatus(binding()), {
     transportConfigured: true,
-    modelConfigured: true,
     slackConfigured: false,
   });
 });
@@ -173,10 +170,9 @@ test("mocked Kubernetes client preflights all credential Secrets before initial 
 
   assert.deepEqual(
     await driver.provisionAgentRuntimeCredentials(binding(), {
-      modelApiKey: "model-key",
       slack: { appToken: "xapp-test", botToken: "xoxb-test" },
     }),
-    { transportConfigured: true, modelConfigured: true, slackConfigured: true },
+    { transportConfigured: true, slackConfigured: true },
   );
 
   const firstCreate = calls.findIndex(({ kind }) => kind === "createSecret");
@@ -186,7 +182,7 @@ test("mocked Kubernetes client preflights all credential Secrets before initial 
       .slice(0, firstCreate)
       .filter(({ kind }) => kind === "readSecret")
       .map(({ name }) => name),
-    [`transport-${digest(agent.id)}`, `model-${digest(agent.id)}`, `channel-${digest(agent.id)}`],
+    [`transport-${digest(agent.id)}`, `channel-${digest(agent.id)}`],
   );
   assert.equal(
     calls.slice(0, firstCreate).some(({ kind }) => kind === "listDeployments"),
@@ -194,7 +190,7 @@ test("mocked Kubernetes client preflights all credential Secrets before initial 
   );
   assert.deepEqual(
     created.map((secret) => secret.metadata.name),
-    [`transport-${digest(agent.id)}`, `model-${digest(agent.id)}`, `channel-${digest(agent.id)}`],
+    [`transport-${digest(agent.id)}`, `channel-${digest(agent.id)}`],
   );
   const transport = created[0].stringData;
   assert.match(transport["app-server-token"], /^[A-Za-z0-9_-]+$/);
@@ -203,8 +199,7 @@ test("mocked Kubernetes client preflights all credential Secrets before initial 
   assert.notEqual(transport["app-server-token"], transport["gateway-token"]);
   assert.notEqual(transport["app-server-token"], transport["gateway-password"]);
   assert.notEqual(transport["gateway-token"], transport["gateway-password"]);
-  assert.deepEqual(created[1].stringData, { OPENAI_API_KEY: "model-key" });
-  assert.deepEqual(created[2].stringData, {
+  assert.deepEqual(created[1].stringData, {
     SLACK_APP_TOKEN: "xapp-test",
     SLACK_BOT_TOKEN: "xoxb-test",
   });
@@ -228,14 +223,13 @@ test("mocked Kubernetes client completes missing credential groups without repla
 
   assert.deepEqual(
     await driver.provisionAgentRuntimeCredentials(binding(), {
-      modelApiKey: "model-key",
       slack: { appToken: "xapp-test", botToken: "xoxb-test" },
     }),
-    { transportConfigured: true, modelConfigured: true, slackConfigured: true },
+    { transportConfigured: true, slackConfigured: true },
   );
   assert.deepEqual(
     created.map((secret) => secret.metadata.name),
-    [`model-${digest(agent.id)}`, `channel-${digest(agent.id)}`],
+    [`channel-${digest(agent.id)}`],
   );
 });
 
@@ -250,7 +244,6 @@ test("mocked Kubernetes client can recover missing transport when model credenti
 
   assert.deepEqual(await driver.provisionAgentRuntimeCredentials(binding(), {}), {
     transportConfigured: true,
-    modelConfigured: true,
     slackConfigured: false,
   });
   assert.deepEqual(
@@ -272,9 +265,6 @@ test("mocked Kubernetes client returns configured metadata without writes for ex
         "gateway-password": "gateway-password-value",
       },
     ),
-    [`model-${digest(agent.id)}`]: runtimeSecret(first.driver, first.namespaceName, "model", {
-      OPENAI_API_KEY: "model-key",
-    }),
     [`channel-${digest(agent.id)}`]: runtimeSecret(first.driver, first.namespaceName, "channel", {
       SLACK_APP_TOKEN: "xapp-test",
       SLACK_BOT_TOKEN: "xoxb-test",
@@ -284,7 +274,6 @@ test("mocked Kubernetes client returns configured metadata without writes for ex
 
   assert.deepEqual(await driver.provisionAgentRuntimeCredentials(binding(), {}), {
     transportConfigured: true,
-    modelConfigured: true,
     slackConfigured: true,
   });
   assert.equal(created.length, 0);
@@ -302,9 +291,6 @@ test("mocked Kubernetes client treats legacy two-token transport Secrets as conf
         "gateway-token": "gateway-token-value",
       },
     ),
-    [`model-${digest(agent.id)}`]: runtimeSecret(first.driver, first.namespaceName, "model", {
-      OPENAI_API_KEY: "model-key",
-    }),
   };
   const { driver, created } = credentialFixture({ secrets });
 
@@ -330,8 +316,14 @@ test("gateway password env references project only from the Agent transport Secr
     configuration: {
       logging: { level: "info", consoleLevel: "info", consoleStyle: "json" },
       diagnostics: { otel: { logs: false } },
+      agents: { defaults: { model: "openai/gpt-5" } },
     },
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+    harnessAuth: {
+      method: "api_key",
+      source: { kind: "secret", namespaceId: namespace.id, id: "secret-model" },
+      secretDriverId: "kubernetes-secret",
+    },
     compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: "service-principal-password-projection",
     createdAt: namespace.createdAt,
@@ -354,6 +346,17 @@ test("gateway password env references project only from the Agent transport Secr
       snapshot,
       true,
       revision.servicePrincipalId,
+      driver.harnessAuthForRevision(
+        revision,
+        {
+          secretEnvironment: [],
+          harnessAuth: {
+            ...revision.harnessAuth,
+            backendRef: { namespaceName, name: "occ-secret-model", key: "value", uid: "model-uid" },
+          },
+        },
+        namespaceName,
+      ),
     );
     return Object.fromEntries(
       gateway.spec.template.spec.containers[0].env.map((entry) => [entry.name, entry]),
@@ -382,17 +385,19 @@ test("gateway password env references project only from the Agent transport Secr
   );
 });
 
-test("mocked Kubernetes client rejects existing credential conflicts before writes", async () => {
+test("mocked Kubernetes client rejects existing channel credential conflicts before writes", async () => {
   const first = credentialFixture();
   const secrets = {
-    [`model-${digest(agent.id)}`]: runtimeSecret(first.driver, first.namespaceName, "model", {
-      OPENAI_API_KEY: "different-model-key",
+    [`channel-${digest(agent.id)}`]: runtimeSecret(first.driver, first.namespaceName, "channel", {
+      SLACK_APP_TOKEN: "different-app-token",
+      SLACK_BOT_TOKEN: "existing-bot-token",
     }),
   };
   const { driver, created } = credentialFixture({ secrets });
-
   await assert.rejects(
-    driver.provisionAgentRuntimeCredentials(binding(), { modelApiKey: "model-key" }),
+    driver.provisionAgentRuntimeCredentials(binding(), {
+      slack: { appToken: "new-app-token", botToken: "existing-bot-token" },
+    }),
     ResourceConflictError,
   );
   assert.equal(created.length, 0);
@@ -432,9 +437,9 @@ test("mocked Kubernetes client rejects malformed existing credential Secrets bef
       runtimeSecret(
         first.driver,
         first.namespaceName,
-        "model",
-        { OPENAI_API_KEY: "model-key" },
-        { data: { OPENAI_API_KEY: "Zg" } },
+        "channel",
+        {},
+        { data: { SLACK_APP_TOKEN: "Zg", SLACK_BOT_TOKEN: encode("bot") } },
       ),
     ],
     [
@@ -442,9 +447,14 @@ test("mocked Kubernetes client rejects malformed existing credential Secrets bef
       runtimeSecret(
         first.driver,
         first.namespaceName,
-        "model",
-        { OPENAI_API_KEY: "model-key" },
-        { data: { OPENAI_API_KEY: Buffer.alloc(65_537, 65).toString("base64") } },
+        "channel",
+        {},
+        {
+          data: {
+            SLACK_APP_TOKEN: Buffer.alloc(65_537, 65).toString("base64"),
+            SLACK_BOT_TOKEN: encode("bot"),
+          },
+        },
       ),
     ],
   ]) {
@@ -452,7 +462,7 @@ test("mocked Kubernetes client rejects malformed existing credential Secrets bef
     const { driver, created } = credentialFixture({ secrets });
 
     await assert.rejects(
-      driver.provisionAgentRuntimeCredentials(binding(), { modelApiKey: "model-key" }),
+      driver.provisionAgentRuntimeCredentials(binding(), {}),
       ResourceConflictError,
       name,
     );
@@ -460,11 +470,11 @@ test("mocked Kubernetes client rejects malformed existing credential Secrets bef
   }
 });
 
-test("mocked Kubernetes client requires a model credential when the model Secret is missing", async () => {
+test("mocked Kubernetes client rejects retired model provisioning input without writes", async () => {
   const { driver, calls, created } = credentialFixture();
 
   await assert.rejects(
-    driver.provisionAgentRuntimeCredentials(binding(), {}),
+    driver.provisionAgentRuntimeCredentials(binding(), { modelApiKey: "unsupported-model-key" }),
     DependencyUnavailableError,
   );
   assert.equal(
@@ -492,8 +502,60 @@ test("mocked Kubernetes client refuses initial provisioning after Agent deployme
   const { driver, created } = credentialFixture({ deployments: [deployment] });
 
   await assert.rejects(
-    driver.provisionAgentRuntimeCredentials(binding(), { modelApiKey: "model-key" }),
+    driver.provisionAgentRuntimeCredentials(binding(), {}),
     ResourceConflictError,
   );
   assert.equal(created.length, 0);
+});
+
+// Run the actual generated bootstrap in a fresh process. No provider login is
+// attempted: malformed credential combinations must fail before launching Codex.
+test("Codex startup rejects missing, blank, conflicting, and unsupported authentication inputs", () => {
+  const cases = [
+    {},
+    { CODEX_LOGIN_MODE: "unknown" },
+    { CODEX_LOGIN_MODE: "api_key" },
+    { CODEX_LOGIN_MODE: "api_key", OPENAI_API_KEY: " " },
+    {
+      CODEX_LOGIN_MODE: "api_key",
+      OPENAI_API_KEY: "fixture-key",
+      CODEX_ACCESS_TOKEN: "fixture-token",
+    },
+    {
+      CODEX_LOGIN_MODE: "api_key",
+      OPENAI_API_KEY: "fixture-key",
+      CODEX_CHATGPT_WORKSPACE_ID: "workspace",
+    },
+    { CODEX_LOGIN_MODE: "chatgpt_service_account", CODEX_ACCESS_TOKEN: "fixture-token" },
+    {
+      CODEX_LOGIN_MODE: "chatgpt_service_account",
+      CODEX_ACCESS_TOKEN: " ",
+      CODEX_CHATGPT_WORKSPACE_ID: "workspace",
+    },
+    {
+      CODEX_LOGIN_MODE: "chatgpt_service_account",
+      CODEX_ACCESS_TOKEN: "fixture-token",
+      CODEX_CHATGPT_WORKSPACE_ID: " ",
+    },
+    {
+      CODEX_LOGIN_MODE: "chatgpt_service_account",
+      CODEX_ACCESS_TOKEN: "fixture-token",
+      CODEX_CHATGPT_WORKSPACE_ID: "workspace",
+      OPENAI_API_KEY: "fixture-key",
+    },
+  ];
+  for (const env of cases) {
+    const child = spawnSync(process.execPath, ["-e", AGENT_RUNTIME_ENTRYPOINT], {
+      env,
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    assert.equal(child.status, 1);
+    assert.match(
+      child.stderr,
+      /Codex (?:API-key authentication configuration|service-account authentication configuration|authentication mode) is (?:invalid|missing or unsupported)/,
+    );
+    assert.equal(child.stdout, "");
+    assert.doesNotMatch(child.stderr, /fixture-key|fixture-token/);
+  }
 });

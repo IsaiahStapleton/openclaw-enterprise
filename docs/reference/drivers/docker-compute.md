@@ -10,6 +10,10 @@ This driver is a development runtime. Production can select bundled
 [Kubernetes](kubernetes-compute.md), [SSH](ssh-compute.md), or an installed
 Compute Driver through trusted Installation configuration.
 
+The current Agent `harnessAuth` contract requires Kubernetes Compute. This Driver
+rejects unsupported bindings at deployment; its existing topology implementation
+and prior runtime proof do not establish support for this authentication path.
+
 ## Requirements
 
 - Docker Engine with Docker Compose, or Podman with `podman-compose` and `yq` v4.

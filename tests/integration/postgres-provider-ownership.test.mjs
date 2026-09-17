@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
+import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import {
@@ -193,7 +194,7 @@ test(
       {
         configurationId: configuration.payload.data.id,
         providerId: null,
-        serviceAccountId: null,
+        harnessAuth: null,
         executionMode: "dedicated",
       },
     );
@@ -201,10 +202,10 @@ test(
     assert.equal(repaired.payload.data.providerId, null);
 
     const persisted = await fixture.pool.query(
-      "SELECT provider_id, service_account_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+      "SELECT provider_id, harness_auth FROM occ.agents WHERE namespace_id = $1 AND id = $2",
       [namespace.payload.data.id, agent.payload.data.id],
     );
-    assert.deepEqual(persisted.rows, [{ provider_id: null, service_account_id: null }]);
+    assert.deepEqual(persisted.rows, [{ provider_id: null, harness_auth: null }]);
   },
 );
 
@@ -273,7 +274,7 @@ test(
       name: `dedicated-${randomUUID()}`,
       configurationId: dedicatedConfiguration.id,
       providerId,
-      serviceAccountId: account.id,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
       executionMode: "dedicated",
     });
     const admitted = await controller.deployAgent(
@@ -282,12 +283,17 @@ test(
       resolveApprovedHarness,
     );
     assert.equal(admitted.providerId, providerId);
-    assert.deepEqual(admitted.serviceAccount, {
-      id: account.id,
+    assert.deepEqual(admitted.harnessAuth, {
+      method: "chatgpt_service_account",
+      serviceAccountId: account.id,
       credential: account.credential,
+      providerBinding: binding,
     });
 
-    const { worker, calls } = fixture.startWorker();
+    const secretDriver = createTestSecretDriver({ id: "secret-test" });
+    controller.registerDriver(secretDriver);
+    controller.selectDriver("secret", secretDriver.id);
+    const { worker, calls } = fixture.startWorker({ secretDriver });
     await worker.start();
     await waitForWork(fixture.pool, admitted.id, "succeeded");
     assert.deepEqual(calls, [{ action: "prepare", revisionId: admitted.id, providerId }]);
@@ -314,7 +320,7 @@ test(
       name: `embedded-${randomUUID()}`,
       configurationId: embeddedConfiguration.id,
       providerId,
-      serviceAccountId: account.id,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
       executionMode: "embedded",
     });
     await expectProviderConflict(
@@ -324,7 +330,7 @@ test(
           { namespaceId: exactNamespace.id, agentId: embedded.id },
           resolveApprovedHarness,
         ),
-      /dedicated Codex Harness/,
+      /configured model and topology/,
     );
     await assertNoRevision(
       fixture.pool,
@@ -348,27 +354,62 @@ test(
       agentId: embedded.id,
       configurationId: embeddedConfiguration.id,
       providerId: null,
-      serviceAccountId: null,
+      harnessAuth: null,
       executionMode: "embedded",
     });
     const independentConfiguration = await createConfiguration(fixture, controller, exactNamespace);
+    const replacementSecret = await controller.createSecret(fixture.actor.id, {
+      namespaceId: exactNamespace.id,
+      name: `independent-key-${randomUUID()}`,
+      value: "synthetic-provider-independent-key",
+    });
+    const replacementAuth = {
+      method: "api_key",
+      source: { kind: "secret", namespaceId: exactNamespace.id, id: replacementSecret.id },
+    };
+    const roleId = `harness-key-${randomUUID()}`;
+    await fixture.pool.query(
+      `INSERT INTO occ.iam_roles (id, namespace_id, name, permissions)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        roleId,
+        exactNamespace.id,
+        roleId,
+        JSON.stringify([{ action: "operate", resourceKind: "secret" }]),
+      ],
+    );
+    await fixture.pool.query(
+      `INSERT INTO occ.iam_access_bindings
+         (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+       VALUES ($1, $2, $3, $4, 'secret', $5)`,
+      [
+        `binding-${randomUUID()}`,
+        exactNamespace.id,
+        dedicated.servicePrincipalId,
+        roleId,
+        replacementSecret.id,
+      ],
+    );
     const independent = await controller.updateAgent(fixture.actor.id, {
       namespaceId: exactNamespace.id,
       agentId: dedicated.id,
       configurationId: independentConfiguration.id,
       providerId: null,
-      serviceAccountId: null,
+      harnessAuth: replacementAuth,
       executionMode: "dedicated",
     });
     assert.equal(independent.providerId, null);
-    assert.equal(independent.serviceAccountId, undefined);
+    assert.deepEqual(independent.harnessAuth, replacementAuth);
     const replacement = await controller.deployAgent(
       fixture.actor.id,
       { namespaceId: exactNamespace.id, agentId: dedicated.id },
       resolveApprovedHarness,
     );
     assert.equal(replacement.providerId, null);
-    assert.equal(replacement.serviceAccount, undefined);
+    assert.deepEqual(replacement.harnessAuth, {
+      ...replacementAuth,
+      secretDriverId: secretDriver.id,
+    });
     await waitForWork(fixture.pool, replacement.id, "succeeded");
     assert.deepEqual(calls, [
       { action: "prepare", revisionId: admitted.id, providerId },
@@ -384,6 +425,7 @@ test(
       view.revisions.findRevision(exactNamespace.id, dedicated.id, admitted.id),
     );
     assert.equal(oldRevision?.providerId, providerId);
+    assert.deepEqual(oldRevision?.harnessAuth, admitted.harnessAuth);
     const activeReplacement = await fixture.pool.query(
       "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
       [exactNamespace.id, dedicated.id],
@@ -438,7 +480,7 @@ test(
         name: `${scenario.label}-${randomUUID()}`,
         configurationId: configuration.id,
         providerId: scenario.agentProviderId,
-        serviceAccountId: brokenAccount.id,
+        harnessAuth: { method: "chatgpt_service_account", serviceAccountId: brokenAccount.id },
         executionMode: "dedicated",
       });
       await expectProviderConflict(
@@ -484,7 +526,7 @@ test(
           name: crossNamespaceAgentName,
           configurationId: targetConfiguration.id,
           providerId,
-          serviceAccountId: sourceAccount.id,
+          harnessAuth: { method: "chatgpt_service_account", serviceAccountId: sourceAccount.id },
           executionMode: "dedicated",
         }),
       (error) =>

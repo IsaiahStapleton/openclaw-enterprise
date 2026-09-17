@@ -12,8 +12,11 @@ import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import {
   configureExistingK3dLocalPathSharedFileSystem,
+  createKubernetesFixtureHarnessAuth,
   validateExplicitK3dLoopbackContext,
 } from "../helpers/kubernetes-real.mjs";
+
+import { createInstallationDriverConfiguration } from "../helpers/installation-driver-configuration.mjs";
 
 const execute = promisify(execFile);
 const kubeconfigPath = process.env.OCC_TEST_KUBERNETES_KUBECONFIG;
@@ -35,6 +38,7 @@ const requiresKubernetesAndPostgres = {
 };
 const driverPath = "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 const configurationIds = new Map();
+const harnessAuthentication = new Map();
 const sharedWorkspaceSize = "40Gi";
 
 function hash(value, length = 12) {
@@ -95,6 +99,20 @@ function namespace(label) {
   };
 }
 
+async function provisionFixtureAuth(owner) {
+  const auth = await createKubernetesFixtureHarnessAuth({
+    authentication: { mode: "kubeconfig", kubeconfigPath, context: kubernetesContext },
+    namespaceId: owner.id,
+  });
+  harnessAuthentication.set(owner.id, auth);
+}
+
+function revisionContext(candidate) {
+  const auth = harnessAuthentication.get(candidate.namespaceId);
+  assert.ok(auth, "the ready Namespace must have its fixture authentication provisioned");
+  return auth.context;
+}
+
 function revision(driver, owner, agentId, number) {
   const identity = `${owner.id}:${agentId}`;
   let configurationId = configurationIds.get(identity);
@@ -114,11 +132,13 @@ function revision(driver, owner, agentId, number) {
     configuration: admitLoggingConfiguration(
       {
         gateway: { controlUi: { enabled: false } },
+        agents: { defaults: { model: "codex/gpt-5" } },
         logging: { level: loggingLevel },
       },
       loggingLevel,
     ),
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    harnessAuth: harnessAuthentication.get(owner.id).snapshot,
     compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: `service-agent-${agentId}`,
     createdAt: new Date().toISOString(),
@@ -319,47 +339,48 @@ async function assertNonservingAgentService(name, agentId) {
   return service;
 }
 
-async function createDriver(overrides = {}, selection = {}) {
-  const { KubernetesComputeDriver, kubernetesNamespaceName } = await import(driverPath);
+function fixtureComputeConfiguration(overrides = {}) {
   const workloadResources = {
     requests: { cpu: "25m", memory: "48Mi" },
     limits: { cpu: "250m", memory: "192Mi" },
   };
   return {
-    driver: new KubernetesComputeDriver(
-      {
-        authentication: { mode: "kubeconfig", kubeconfigPath, context: kubernetesContext },
-        images: { gateway: fixtureImage, agent: fixtureImage, requireImmutableDigest: false },
-        resources: {
-          gateway: workloadResources,
-          agent: workloadResources,
-          namespace: {
-            quota: {
-              pods: "20",
-              "requests.cpu": "1",
-              "requests.memory": "1Gi",
-              "limits.cpu": "4",
-              "limits.memory": "3Gi",
-            },
-            containerDefaults: workloadResources,
-          },
+    authentication: { mode: "kubeconfig", kubeconfigPath, context: kubernetesContext },
+    images: { gateway: fixtureImage, agent: fixtureImage, requireImmutableDigest: false },
+    resources: {
+      gateway: workloadResources,
+      agent: workloadResources,
+      namespace: {
+        quota: {
+          pods: "20",
+          "requests.cpu": "1",
+          "requests.memory": "1Gi",
+          "limits.cpu": "4",
+          "limits.memory": "3Gi",
         },
-        network: {
-          dns: { namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
-          gatewayPort: 8080,
-          gatewayClients: [
-            { namespace: "default", podLabels: { "app.kubernetes.io/name": "platform-probe" } },
-          ],
-        },
-        servicePrincipalCredentials: {
-          mode: "projectedServiceAccountToken",
-          audience: "openclaw-enterprise",
-          expirationSeconds: 3_600,
-        },
-        ...overrides,
+        containerDefaults: workloadResources,
       },
-      selection,
-    ),
+    },
+    network: {
+      dns: { namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
+      gatewayPort: 8080,
+      gatewayClients: [
+        { namespace: "default", podLabels: { "app.kubernetes.io/name": "platform-probe" } },
+      ],
+    },
+    servicePrincipalCredentials: {
+      mode: "projectedServiceAccountToken",
+      audience: "openclaw-enterprise",
+      expirationSeconds: 3_600,
+    },
+    ...overrides,
+  };
+}
+
+async function createDriver(overrides = {}, selection = {}) {
+  const { KubernetesComputeDriver, kubernetesNamespaceName } = await import(driverPath);
+  return {
+    driver: new KubernetesComputeDriver(fixtureComputeConfiguration(overrides), selection),
     kubernetesNamespaceName,
   };
 }
@@ -636,6 +657,8 @@ test(
       );
     }
 
+    await Promise.all([first, second].map(provisionFixtureAuth));
+
     const primaryAgent = `agt_${randomUUID()}`;
     const secondaryAgent = `agt_${randomUUID()}`;
     const crossTenantAgent = `agt_${randomUUID()}`;
@@ -654,7 +677,10 @@ test(
 
     // Revisions pinned to another driver must never create actual tenant resources.
     assert.deepEqual(
-      await driver.prepareRevision({ ...firstRevision, compute: foreignCompute }),
+      await driver.prepareRevision(
+        { ...firstRevision, compute: foreignCompute },
+        revisionContext(firstRevision),
+      ),
       unreadyFirstRevision,
     );
     assert.equal(await missing("deployment", revisionName(firstRevision), owned[0]), true);
@@ -692,7 +718,7 @@ test(
     await kubectl("apply", "--filename", invalidClaimPath);
     try {
       await assert.rejects(
-        driver.prepareRevision(firstRevision),
+        driver.prepareRevision(firstRevision, revisionContext(firstRevision)),
         /invalid PersistentVolumeClaim workspace-/i,
       );
       assert.equal(await missing("deployment", gatewayName(primaryAgent), owned[0]), true);
@@ -720,7 +746,7 @@ test(
     const sharedWorkspaceIdentities = new Map();
     for (const candidate of candidates) {
       await waitFor(`AgentRevision ${candidate.id} to become ready`, async () => {
-        const observation = await driver.prepareRevision(candidate);
+        const observation = await driver.prepareRevision(candidate, revisionContext(candidate));
         assert.deepEqual(
           {
             namespaceId: observation.namespaceId,
@@ -820,7 +846,7 @@ test(
     );
 
     assert.deepEqual(
-      await driver.prepareRevision(firstRevision),
+      await driver.prepareRevision(firstRevision, revisionContext(firstRevision)),
       unreadyFirstRevision,
       "a stale previous revision cannot replace the newer live owner gateway",
     );
@@ -835,12 +861,15 @@ test(
     );
     try {
       // An externally scaled owner gateway must not start another revision or affect its sibling.
-      assert.deepEqual(await driver.prepareRevision(scaledRevision), {
-        namespaceId: first.id,
-        agentId: primaryAgent,
-        revisionId: scaledRevision.id,
-        ready: false,
-      });
+      assert.deepEqual(
+        await driver.prepareRevision(scaledRevision, revisionContext(scaledRevision)),
+        {
+          namespaceId: first.id,
+          agentId: primaryAgent,
+          revisionId: scaledRevision.id,
+          ready: false,
+        },
+      );
       assert.equal(await missing("deployment", revisionName(scaledRevision), owned[0]), true);
       await assertReadyGateway(owned[0], secondaryAgent, first.id);
     } finally {
@@ -855,7 +884,10 @@ test(
     await waitFor(
       "the externally scaled Agent gateway to return to one ready replica",
       async () => {
-        const observation = await driver.prepareRevision(secondRevision);
+        const observation = await driver.prepareRevision(
+          secondRevision,
+          revisionContext(secondRevision),
+        );
         return observation.ready ? observation : undefined;
       },
     );
@@ -1008,7 +1040,10 @@ test(
     await waitFor(
       "the controller to repair only the Agent's missing owned gateway Service",
       async () => {
-        const observation = await driver.prepareRevision(secondRevision);
+        const observation = await driver.prepareRevision(
+          secondRevision,
+          revisionContext(secondRevision),
+        );
         return observation.ready ? observation : undefined;
       },
     );
@@ -1069,8 +1104,12 @@ test(
       ...revision(driver, first, embeddedAgent, 1),
       harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     };
+    embeddedRevision.configuration.agents.defaults.model = "openai/gpt-5";
     await waitFor(`embedded AgentRevision ${embeddedRevision.id} to become ready`, async () => {
-      const observation = await driver.prepareRevision(embeddedRevision);
+      const observation = await driver.prepareRevision(
+        embeddedRevision,
+        revisionContext(embeddedRevision),
+      );
       return observation.ready ? observation : undefined;
     });
     await assertReadyGateway(owned[0], embeddedAgent, first.id, embeddedRevision);
@@ -1337,6 +1376,7 @@ test(
     await resource("resourcequota", "openclaw-quota", existingName);
     await resource("limitrange", "openclaw-limits", existingName);
     const readyOwner = { ...owner, status: "ready" };
+    await provisionFixtureAuth(readyOwner);
 
     // Configuration discovers ownership the Compute Driver bound to the selected namespace.
     const configuration = {
@@ -1369,7 +1409,7 @@ test(
     const agentId = `agt_${randomUUID()}`;
     const candidate = revision(driver, readyOwner, agentId, 1);
     await waitFor("discovered Agent gateway and immutable revision to become ready", async () => {
-      const observation = await driver.prepareRevision(candidate);
+      const observation = await driver.prepareRevision(candidate, revisionContext(candidate));
       assert.equal(observation.namespaceId, owner.id);
       return observation.ready ? observation : undefined;
     });
@@ -1486,12 +1526,14 @@ test(
       { default: pg },
       { PostgresPlatformState },
       { composePostgresDevelopment },
+      { loadInstallationConfiguration },
       { createControllerWorker },
       { authenticatedHeaders, signInToControllerApp },
     ] = await Promise.all([
       import("pg"),
       import("../../packages/occ/src/state/postgres-state.ts"),
       import("../../apps/controller/src/composition/development-postgres.ts"),
+      import("../../apps/controller/src/composition/installation-config.ts"),
       import("../../apps/controller/src/worker.ts"),
       import("../helpers/auth-session.mjs"),
     ]);
@@ -1507,12 +1549,25 @@ test(
       );
     }
 
-    const { driver, kubernetesNamespaceName } = await createDriver();
-    const { KubernetesConfigurationDriver, kubernetesConfigurationName } =
+    const { kubernetesNamespaceName } = await import(driverPath);
+    const { kubernetesConfigurationName } =
       await import("../../apps/controller/src/drivers/configuration/kubernetes/index.ts");
-    const configurationDriver = new KubernetesConfigurationDriver({
-      authentication: { mode: "kubeconfig", kubeconfigPath, context: kubernetesContext },
+    const configuration = createInstallationDriverConfiguration();
+    configuration.drivers.compute.configuration = fixtureComputeConfiguration();
+    for (const capability of ["configuration", "secret"]) {
+      configuration.drivers[capability].configuration.authentication = {
+        mode: "kubeconfig",
+        kubeconfigPath,
+        context: kubernetesContext,
+      };
+    }
+    const drivers = await loadInstallationConfiguration({
+      mode: "development",
+      environment: {},
+      startupConfiguration: { configuration, logging: { level: "info" } },
     });
+    assert.ok(drivers);
+    const driver = drivers.computeDriver;
     const adminCredentials = {
       email: "admin-kubernetes-integration@example.test",
       password: "kubernetes-integration-admin-password",
@@ -1556,7 +1611,7 @@ test(
         authSecret,
         authBaseURL,
       },
-      { computeDriver: driver, configurationDriver },
+      drivers,
     );
     const session = await signInToControllerApp(app, adminCredentials);
 
@@ -1578,7 +1633,7 @@ test(
       workerPool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
       worker = createControllerWorker({
         pool: workerPool,
-        computeDriver: driver,
+        drivers,
         pollIntervalMs: 25,
         leaseDurationMs: 30_000,
         maxAttempts: 20,
@@ -1690,10 +1745,19 @@ test(
         },
       });
       assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
+      const secret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
+        name: `${label} fixture model key`,
+        value: `fixture-only-${randomUUID()}`,
+      });
+      assert.equal(secret.status, 201, JSON.stringify(secret.error));
       const created = await request("POST", `/namespaces/${namespaceId}/agents`, {
         name: `${label}-${randomUUID()}`,
         configurationId: configuration.data.id,
         executionMode: "dedicated",
+        harnessAuth: {
+          method: "api_key",
+          source: { kind: "secret", namespaceId, id: secret.data.id },
+        },
       });
       assert.equal(created.status, 201, JSON.stringify(created.error));
       assert.equal(Object.hasOwn(created.data, "servicePrincipalId"), false);

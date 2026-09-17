@@ -6,6 +6,7 @@ import type {
   ConfigurationDriver,
   ConfigurationReference,
 } from "@openclaw-enterprise/contracts";
+import { validateModelCredentialReferences } from "../model-auth.ts";
 import { immutableCopy } from "@openclaw-enterprise/utils";
 
 const ID = /^(?:ns|cfg)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -39,6 +40,7 @@ export class FilesystemConfigurationDriver implements ConfigurationDriver {
 
   async validate(configuration: Configuration): Promise<void> {
     pathFor(this.root, configuration);
+    validateModelCredentialReferences(configuration.values);
   }
 
   async create(configuration: Configuration): Promise<Configuration> {
@@ -61,6 +63,7 @@ export class FilesystemConfigurationDriver implements ConfigurationDriver {
     ) {
       throw new Error("Stored Configuration does not belong to the exact requested Namespace.");
     }
+    await this.validate(configuration as Configuration);
     return immutableCopy(configuration as Configuration) as Configuration;
   }
 
@@ -75,6 +78,7 @@ export class FilesystemConfigurationDriver implements ConfigurationDriver {
   }
 
   private async write(configuration: Configuration): Promise<void> {
+    await this.validate(configuration);
     const path = pathFor(this.root, configuration);
     const directory = join(this.root, configuration.namespaceId);
     await mkdir(directory, { recursive: true, mode: 0o700 });

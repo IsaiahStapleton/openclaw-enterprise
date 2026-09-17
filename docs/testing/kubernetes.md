@@ -97,9 +97,9 @@ OCC_TEST_HARNESS_K3D_REAL=1 OCC_TEST_SLACK_LIVE=0 \
   node --env-file="$TEST_ENV_FILE" --test tests/integration/harness-topology-k3d-real.test.mjs
 ```
 
-Three non-Slack runtime cases must pass: dedicated Codex, embedded OpenClaw with
-a persisted service-account credential, and embedded OpenClaw using the Secret
-API. The Secret API case verifies native SecretRefs, exact grants and denial,
+Three non-Slack runtime cases must pass: dedicated Codex, embedded OpenClaw,
+and the extended Secret lifecycle case. Both topologies use OCC Secret-backed
+Agent `harnessAuth` bindings. The Secret API case verifies native SecretRefs, exact grants and denial,
 shared Secrets, rotation, and redeployment. It prepares those Secrets and grants
 itself. Routing, Slack and OTLP cases live in separate files, so this invocation
 contains only its three required runtime cases.

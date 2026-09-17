@@ -16,7 +16,7 @@ app-server transport.
 
 The initial credential API requires exact Agent read and operate access, a ready
 Namespace, and no historical revisions. It generates transport tokens and a local gateway password internally
-and stores supplied model and Slack values in correctly owned Kubernetes Secrets.
+and stores supplied Slack values in correctly owned Kubernetes Secrets.
 Those values pass transiently through the authorized API; they are excluded from
 Configuration, database records, audit fields, responses, and logs. Provisioning
 creates missing whole Secrets only and rejects foreign, malformed, or conflicting
@@ -26,13 +26,12 @@ metadata and never deletes them as a rollback.
 
 There are two supported model-credential paths:
 
-- **Existing API key:** An Agent-specific model Secret supplies
-  `OPENAI_API_KEY` only to dedicated Codex or the combined embedded OpenClaw
-  gateway/Harness. When a native account references an existing source Secret,
-  an independently authorized operator materializes that exact source into the
-  Agent Secret. That existing path does not require direct controller Secret
-  access; stale destination detection and production materializer ownership
-  remain unimplemented.
+- **Existing API key:** Agent `harnessAuth` references a same-Namespace OCC
+  Secret. Admission requires the actor and Agent principal's exact Secret
+  `operate`; dispatch rechecks both. The Secret Driver owns storage, and
+  Kubernetes supplies `OPENAI_API_KEY` only to dedicated Codex or the combined
+  embedded OpenClaw gateway/Harness. No per-Agent credential copy is created.
+
 - **Driver-issued access token:** After exact OCC and independent ChatGPT
   authorization, API-side Kubernetes Compute creates one account-owned Secret
   in the exact backing namespace. Its `token` and `workspace-id` keys are
@@ -46,11 +45,11 @@ There are two supported model-credential paths:
 A dedicated gateway never receives either model credential. Public OCC Agent
 and AgentRevision responses can include the configured provider ID, which is
 persisted on the mutable Agent row and immutable AgentRevision row. Credential
-bytes and upstream ChatGPT account, credential, and workspace identifiers stay
-out of public OCC resources, AgentRevision snapshots, ConfigMaps, responses,
-and audit records; the concrete Driver private binding and runtime Secret keep
-the upstream identifiers and credential material needed for runtime
-authentication.
+bytes stay out of OCC resources, AgentRevision snapshots, ConfigMaps, responses,
+and audit records. Upstream account, credential, and workspace identifiers remain
+private: the internal immutable auth snapshot retains verified Provider/workspace
+ownership, while public responses expose only safe references. The runtime
+Secret retains the credential material required for authentication.
 
 The API's dedicated controller identity receives only the tenant-local Secret
 operations needed to create, verify, and delete account-owned Secrets. Its
@@ -110,7 +109,7 @@ Kubernetes node partitions or manual replacement; the
 [Compute reference](../drivers/kubernetes-compute.md#execution-modes) records that
 limitation. Embedded OpenClaw receives only its operator-owned API
 key in its combined gateway/Harness. Dedicated Codex receives either its
-operator-owned API key or its associated account's directly projected access
+Secret-backed API key or its bound account's directly projected access
 token only in its separate workload, and uses authenticated WebSocket
 transport. A dedicated
 replacement app-server can start idle before the current workload is retired.

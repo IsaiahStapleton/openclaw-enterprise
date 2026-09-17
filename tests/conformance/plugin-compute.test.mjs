@@ -26,6 +26,8 @@ import {
 } from "../../apps/controller/src/drivers/compute/plugin-runtime.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+
 const OCC_DIFFS_DIGEST =
   "sha512-5VTDNEo7D3iOgRoL5C31JPTbA/EXQEFRuxOvLy67IMFmOajwroGsUMWeuKkmqzFbPNQxvn7GACDSr/5Vmpx3/g==";
 const CODEX_LINEAR_NATIVE_ID = "linear@openai-curated-remote";
@@ -47,6 +49,7 @@ const agent = Object.freeze({
   name: "Plugin compute agent",
   configurationId: "cfg_00000000-0000-4000-8000-000000000016",
   executionMode: "embedded",
+  harnessAuth: null,
   servicePrincipalId: "service-principal-plugin-compute",
   createdAt: tenant.createdAt,
 });
@@ -70,13 +73,39 @@ function revision(overrides = {}) {
     configurationId: agent.configurationId,
     configurationKind: "agent",
     configurationGeneration: 1,
-    configuration: admitLoggingConfiguration({}, "info"),
+    configuration: admitLoggingConfiguration(
+      createHarnessConfiguration(overrides.harness?.id ?? "codex", "gpt-4.1"),
+      "info",
+    ),
+    harnessAuth: {
+      method: "api_key",
+      source: {
+        kind: "secret",
+        namespaceId: tenant.id,
+        id: "sec_00000000-0000-4000-8000-000000000016",
+      },
+      secretDriverId: "secret-kubernetes",
+    },
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
     compute: { id: "compute-kubernetes", implementation: "kubernetes" },
     servicePrincipalId: agent.servicePrincipalId,
     secretDriverId: "secret-kubernetes",
     createdAt: tenant.createdAt,
     ...overrides,
+  };
+}
+
+function harnessAuthContext(candidate) {
+  return {
+    harnessAuth: {
+      ...candidate.harnessAuth,
+      backendRef: {
+        namespaceName: kubernetesNamespaceName(tenant.id),
+        name: "plugin-model-key",
+        key: "value",
+        uid: "plugin-model-key-uid",
+      },
+    },
   };
 }
 
@@ -155,7 +184,6 @@ function kubernetesOptions(overrides = {}) {
     servicePrincipalCredentials: { mode: "disabled" },
     runtime: {
       transportSecretPrefix: "transport",
-      modelSecretPrefix: "model",
       gatewayStorageClassName: "local-path",
     },
     ...overrides,
@@ -930,7 +958,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   };
   driver.gatewayReady = async () => true;
 
-  assert.deepEqual(await driver.prepareRevision(embedded), {
+  assert.deepEqual(await driver.prepareRevision(embedded, harnessAuthContext(embedded)), {
     namespaceId: embedded.namespaceId,
     agentId: embedded.agentId,
     revisionId: embedded.id,
@@ -967,6 +995,8 @@ test("Codex runtime clears stale readiness marker before startup failure", () =>
       process: {
         env: {
           CODEX_HOME: "/home/node/.codex",
+          CODEX_LOGIN_MODE: "api_key",
+          OPENAI_API_KEY: "fixture-api-key",
           OPENCLAW_PLUGIN_READY_MARKER: marker,
         },
       },
@@ -1007,7 +1037,8 @@ test("Codex runtime clears stale readiness marker before startup failure", () =>
 
 test("Kubernetes dedicated Codex agent mounts plugin runtime and gates readiness on it", async () => {
   const driver = createKubernetesComputeDriver(kubernetesOptions());
-  const runtime = pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() }));
+  const candidate = revision({ plugins: codexNoPluginState() });
+  const runtime = pluginRuntimeSpecForRevision(candidate);
   const deployment = driver.deployment(
     "agent-plugin-compute-rev",
     {
@@ -1015,7 +1046,7 @@ test("Kubernetes dedicated Codex agent mounts plugin runtime and gates readiness
       agentId: agent.id,
       revisionId: "revision-plugin-compute-1",
     },
-    "oce-plugin-compute",
+    kubernetesNamespaceName(tenant.id),
     "openclaw-enterprise/agent-fixture:local",
     "agent-plugin-compute",
     "agent",
@@ -1024,7 +1055,11 @@ test("Kubernetes dedicated Codex agent mounts plugin runtime and gates readiness
     undefined,
     false,
     undefined,
-    undefined,
+    driver.harnessAuthForRevision(
+      candidate,
+      harnessAuthContext(candidate),
+      kubernetesNamespaceName(tenant.id),
+    ),
     [],
     [],
     { name: "plugin-runtime-agent-plugin-compute", runtime },

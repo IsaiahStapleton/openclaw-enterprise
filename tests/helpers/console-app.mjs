@@ -6,6 +6,7 @@ import { once } from "node:events";
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
 import { providerSummariesFromDefinitions } from "../../apps/controller/src/composition/installation-config.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
+import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
@@ -32,6 +33,7 @@ function computeDriver() {
     id: "console-compute",
     capability: "compute",
     implementation: "test-memory-lifecycle",
+    validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -279,18 +281,50 @@ export async function createConsoleAppFixture(t, options = {}) {
     const configuration = await createConfiguration(namespaceId, values, {
       secretBindings: options.secretBindings,
     });
+    const namespace = await request("GET", `/namespaces/${namespaceId}`);
+    const harnessAuth =
+      options.harnessAuth === undefined && secretDriver && namespace.data.status === "ready"
+        ? {
+            method: "api_key",
+            source: (
+              await createSecret(namespaceId, `Auth ${name}`, `test-api-key-${randomUUID()}`)
+            ).ref,
+          }
+        : (options.harnessAuth ?? null);
     const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {
       body: {
         name,
         configurationId: configuration.id,
         ...(options.providerId === undefined ? {} : { providerId: options.providerId }),
-        ...(options.serviceAccountId === undefined
-          ? {}
-          : { serviceAccountId: options.serviceAccountId }),
+        harnessAuth,
         ...(options.executionMode === undefined ? {} : { executionMode: options.executionMode }),
       },
     });
     assert.equal(agent.status, 201);
+    if (harnessAuth?.method === "api_key") {
+      const servicePrincipalId = `service-agent-${agent.data.id}`;
+      const roleId = `auth-${agent.data.id}`;
+      policy.identities.push({
+        id: servicePrincipalId,
+        kind: "service_principal",
+        namespaceId,
+        agentId: agent.data.id,
+      });
+      policy.roles.push({
+        id: roleId,
+        namespaceId,
+        permissions: [{ action: "operate", resourceKind: "secret" }],
+      });
+      policy.bindings.push({
+        id: roleId,
+        namespaceId,
+        subjectKind: "identity",
+        subjectId: servicePrincipalId,
+        roleId,
+        resourceKind: "secret",
+        resourceId: harnessAuth.source.id,
+      });
+    }
     return agent.data;
   }
 
@@ -304,7 +338,7 @@ export async function createConsoleAppFixture(t, options = {}) {
 
   async function deployAgent(namespaceId, agentId) {
     const revision = await request("POST", `/namespaces/${namespaceId}/agents/${agentId}/deploy`);
-    assert.equal(revision.status, 202);
+    assert.equal(revision.status, 202, JSON.stringify(revision.body));
     return revision.data;
   }
 

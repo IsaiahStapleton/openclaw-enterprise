@@ -51,6 +51,14 @@ const kubernetesWorkloadResources = Object.freeze({
 });
 const defaultAgentConfigurationValues = Object.freeze({
   gateway: Object.freeze({ controlUi: Object.freeze({ enabled: false }) }),
+  agents: Object.freeze({
+    defaults: Object.freeze({
+      model: "openai/gpt-fixture",
+      models: Object.freeze({
+        "openai/gpt-fixture": Object.freeze({ agentRuntime: Object.freeze({ id: "openclaw" }) }),
+      }),
+    }),
+  }),
 });
 
 async function kubectl(...args) {
@@ -306,6 +314,21 @@ async function createConfiguredAgent(api, namespaceId, name, values, body = {}) 
   return { configuration, agent: agent.data };
 }
 
+async function createKubernetesHarnessAuth(api, namespaceId) {
+  // Fixture workloads receive an owned synthetic source, never a real provider credential.
+  const secret = await request(api, "POST", `/namespaces/${namespaceId}/secrets`, {
+    name: `fixture-model-${randomUUID()}`,
+    value: `synthetic-fixture-key-${randomUUID()}`,
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.error));
+  return { method: "api_key", source: secret.data.ref };
+}
+
+async function createKubernetesConfiguredAgent(api, namespaceId, name, values, body = {}) {
+  const harnessAuth = await createKubernetesHarnessAuth(api, namespaceId);
+  return createConfiguredAgent(api, namespaceId, name, values, { ...body, harnessAuth });
+}
+
 function admitted(values) {
   return admitLoggingConfiguration(values, "info");
 }
@@ -530,6 +553,8 @@ export {
   cleanupKubernetesNamespaces,
   createConfiguration,
   createConfiguredAgent,
+  createKubernetesConfiguredAgent,
+  createKubernetesHarnessAuth,
   createDurableController,
   databaseUrl,
   defaultAgentConfigurationValues,

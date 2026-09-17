@@ -91,7 +91,6 @@ function productionInstallation(adminKeyPath) {
           },
           runtime: {
             transportSecretPrefix: "agent-transport",
-            modelSecretPrefix: "agent-model",
             gatewayStorageClassName: "sqlite-block",
             channels: {
               secretPrefix: "agent-channels",

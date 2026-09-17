@@ -1861,7 +1861,7 @@
         },
         "kubernetes": {
           "status": "supported",
-          "detail": "Embedded gateway gets model key; dedicated Agent gets model Secret or account-owned access token.",
+          "detail": "Agent harnessAuth selects an OCC Secret API key or account-owned token; only the model-executing workload receives it.",
           "evidence": [
             {
               "path": "apps/controller/src/drivers/compute/kubernetes/index.ts",

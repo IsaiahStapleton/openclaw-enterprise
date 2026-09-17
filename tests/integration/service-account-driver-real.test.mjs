@@ -501,8 +501,15 @@ test(
       {},
     );
     assertControllerStatus(issued, 201, lastChatGptDiagnostic);
-    assert.equal(issued.data.credential.kind, "access_token");
-    const { secretRef } = issued.data.credential;
+    assert.deepEqual(issued.data.credential, { kind: "access_token" });
+    // The disposable observer reads private storage; public responses expose no backend references.
+    const storedAccount = await observerPool.query(
+      "SELECT credential FROM occ.service_accounts WHERE id = $1 AND namespace_id = $2",
+      [account.data.id, namespaceId],
+    );
+    assert.equal(storedAccount.rowCount, 1);
+    const { secretRef } = storedAccount.rows[0].credential;
+    assert.ok(secretRef);
     const credentialBinding = await observerPool.query(bindingQuery, [
       account.data.id,
       namespaceId,
@@ -530,6 +537,7 @@ test(
     );
     assert.equal(JSON.stringify(issued.data).includes(accessToken), false);
     assert.equal(JSON.stringify(issued.data).includes(adminKey), false);
+    assert.equal(JSON.stringify(issued.data).includes(secretRef.name), false);
 
     const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
       kind: "agent",
@@ -541,11 +549,14 @@ test(
       configurationId: configuration.data.id,
       providerId: "openai",
       executionMode: "dedicated",
-      serviceAccountId: account.data.id,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.data.id },
     });
     assertControllerStatus(agent, 201);
     assert.equal(agent.data.providerId, "openai");
-    assert.equal(agent.data.serviceAccountId, account.data.id);
+    assert.deepEqual(agent.data.harnessAuth, {
+      method: "chatgpt_service_account",
+      serviceAccountId: account.data.id,
+    });
 
     // Gateway transport remains operator-owned and separate from the account's model credential.
     const gatewayToken = await provisionAgentTransportSecret(
@@ -558,14 +569,12 @@ test(
       `/namespaces/${namespaceId}/agents/${agent.data.id}/deploy`,
     );
     assertControllerStatus(revision, 202);
-    assert.deepEqual(revision.data.serviceAccount, {
-      id: account.data.id,
-      credential: issued.data.credential,
-    });
+    assert.deepEqual(revision.data.harnessAuth, agent.data.harnessAuth);
     assert.equal(revision.data.providerId, "openai");
     assert.equal(JSON.stringify(revision.data).includes(externalAccountId), false);
     assert.equal(JSON.stringify(revision.data).includes(workspaceId), false);
     assert.equal(JSON.stringify(revision.data).includes(accessToken), false);
+    assert.equal(JSON.stringify(revision.data).includes(secretRef.name), false);
 
     // Access-token login contacts ChatGPT before readiness; only this candidate receives HTTPS egress.
     const authenticationPolicy = await waitFor(
@@ -622,6 +631,10 @@ test(
     assert.ok(codexPod);
     const codexEnvironment = codexPod.spec.containers[0].env;
     const gatewayEnvironment = gatewayPod.spec.containers[0].env;
+    assert.equal(
+      codexEnvironment.find(({ name }) => name === "CODEX_LOGIN_MODE")?.value,
+      "chatgpt_service_account",
+    );
     assert.deepEqual(
       codexEnvironment.find(({ name }) => name === "CODEX_ACCESS_TOKEN")?.valueFrom.secretKeyRef,
       { name: secretRef.name, key: secretRef.key },

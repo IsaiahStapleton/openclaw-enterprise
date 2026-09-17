@@ -618,6 +618,23 @@ const { spawn, spawnSync } = require("node:child_process");
 
 ${PLUGIN_RUNTIME_HELPERS}
 
+const loginMode = process.env.CODEX_LOGIN_MODE;
+const apiKey = process.env.OPENAI_API_KEY;
+const accessToken = process.env.CODEX_ACCESS_TOKEN;
+const workspaceId = process.env.CODEX_CHATGPT_WORKSPACE_ID;
+const nonempty = (value) => typeof value === "string" && value.trim().length > 0;
+if (loginMode === "api_key") {
+  if (!nonempty(apiKey) || accessToken !== undefined || workspaceId !== undefined) {
+    throw new Error("Codex API-key authentication configuration is invalid.");
+  }
+} else if (loginMode === "chatgpt_service_account") {
+  if (!nonempty(accessToken) || !nonempty(workspaceId) || apiKey !== undefined) {
+    throw new Error("Codex service-account authentication configuration is invalid.");
+  }
+} else {
+  throw new Error("Codex authentication mode is missing or unsupported.");
+}
+
 mkdirSync(process.env.CODEX_HOME, { recursive: true });
 mkdirSync("/home/node/workspace", { recursive: true });
 if (process.env.OPENCLAW_PLUGIN_READY_MARKER !== undefined) {
@@ -628,15 +645,7 @@ if (pluginRuntime !== undefined) {
   assertCodexPluginRuntime(pluginRuntime);
   writeCodexConfigToml(pluginRuntime);
 }
-const accessToken = process.env.CODEX_ACCESS_TOKEN;
-const workspaceId = process.env.CODEX_CHATGPT_WORKSPACE_ID;
-if (accessToken !== undefined && (!workspaceId || process.env.OPENAI_API_KEY !== undefined)) {
-  throw new Error("Codex service-account authentication configuration is invalid.");
-}
-if (accessToken === undefined && workspaceId !== undefined) {
-  throw new Error("Codex service-account authentication configuration is invalid.");
-}
-const loginArguments = accessToken === undefined
+const loginArguments = loginMode === "api_key"
   ? ["login", "--with-api-key"]
   : [
       "-c",
@@ -647,12 +656,14 @@ const loginArguments = accessToken === undefined
       "--with-access-token",
     ];
 const login = spawnSync("codex", loginArguments, {
-  input: accessToken ?? process.env.OPENAI_API_KEY,
+  input: loginMode === "api_key" ? apiKey : accessToken,
   encoding: "utf8",
   stdio: ["pipe", "ignore", "pipe"],
 });
 if (login.status !== 0) throw new Error("Codex model authentication initialization failed.");
 delete process.env.CODEX_ACCESS_TOKEN;
+delete process.env.OPENAI_API_KEY;
+delete process.env.CODEX_CHATGPT_WORKSPACE_ID;
 
 function forwardTermination(child) {
   let terminating = false;

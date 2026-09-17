@@ -24,6 +24,7 @@ import {
   signInToControllerApp,
 } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const entrypoint = fileURLToPath(new URL("../../apps/controller/src/server.mjs", import.meta.url));
@@ -269,6 +270,49 @@ async function createAgent(controller, namespaceId, name, values = {}) {
   return result.data;
 }
 
+async function bindHarnessKey(fixture, namespaceId, agent) {
+  const created = await injectedRequest(fixture.app, "POST", `/namespaces/${namespaceId}/secrets`, {
+    body: { name: `key-${agent.id}`, value: "synthetic-api-contract-key" },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const internalAgent = await fixture.controller.getAgent(
+    fixture.principal.id,
+    namespaceId,
+    agent.id,
+  );
+  const roleId = `harness-key-${agent.id}`;
+  fixture.state.identities.push({
+    kind: "service_principal",
+    id: internalAgent.servicePrincipalId,
+    namespaceId,
+  });
+  fixture.state.roles.push({
+    id: roleId,
+    namespaceId,
+    permissions: [{ action: "operate", resourceKind: "secret" }],
+  });
+  fixture.state.bindings.push({
+    id: roleId,
+    namespaceId,
+    subjectKind: "identity",
+    subjectId: internalAgent.servicePrincipalId,
+    roleId,
+    resourceKind: "secret",
+    resourceId: created.data.id,
+  });
+  const binding = { method: "api_key", source: created.data.ref };
+  const updated = await injectedRequest(
+    fixture.app,
+    "PATCH",
+    `/namespaces/${namespaceId}/agents/${agent.id}`,
+    {
+      body: { configurationId: agent.configurationId, harnessAuth: binding },
+    },
+  );
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  return binding;
+}
+
 const diffsPluginId = "occ-plugin:diffs";
 const linearPluginId = "codex-plugin:linear@openai-curated-remote";
 
@@ -335,6 +379,8 @@ async function createInjectedFixture(options = {}) {
         namespaceDeleted: true,
       };
     },
+    // OCC API coverage exercises admission; runtime compatibility belongs to Compute suites.
+    validateHarnessAuth() {},
     async prepareRevision(revision) {
       return {
         namespaceId: revision.namespaceId,
@@ -348,6 +394,7 @@ async function createInjectedFixture(options = {}) {
   };
   const auditSink = options.auditSink ?? new InMemoryAuditSink();
   const configurationDriver = createTestConfigurationDriver({ id: "configuration-integration" });
+  const secretDriver = createTestSecretDriver({ id: "secret-api-integration" });
   const sessionsByPrincipalId = new Map();
   let controller;
   let platformState;
@@ -399,6 +446,7 @@ async function createInjectedFixture(options = {}) {
       iamDriver,
       computeDriver,
       configurationDriver,
+      secretDriver,
       resolveHarness: resolveApprovedDevelopmentHarness,
       auditSink,
       development: {
@@ -659,6 +707,7 @@ test("Agent Provider API preserves nullable drafts and immutable revision associ
   assert.equal(preserved.status, 200);
   assert.equal(preserved.data.providerId, "openai");
   await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  await bindHarnessKey(fixture, namespace.id, selected);
   const revision = await controller.request("POST", `${target}/deploy`);
   assert.equal(revision.status, 202, JSON.stringify(revision.body));
   assert.equal(revision.data.providerId, "openai");
@@ -730,6 +779,7 @@ test("Agent create and update replace policy-only plugin maps and revisions free
     namespace.id,
     "ready",
   );
+  await bindHarnessKey(controller.fixture, namespace.id, created.data);
   const deployment = await controller.request(
     "POST",
     `/namespaces/${namespace.id}/agents/${created.data.id}/deploy`,
@@ -937,7 +987,7 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
   assert.deepEqual(afterAuditFailure.data, beforeAuditFailure.data);
 });
 
-test("native ServiceAccounts bind exact credential references and freeze Agent revision snapshots", async () => {
+test("native ServiceAccounts keep private credential references and cannot admit Harness authentication", async () => {
   const controller = await configuredController({ recordOperations: true });
   await bootstrap(controller);
   const namespace = await createNamespace(controller, "service-account-lifecycle");
@@ -952,11 +1002,11 @@ test("native ServiceAccounts bind exact credential references and freeze Agent r
     body: {
       name: "service-account-agent",
       configurationId: configuration.id,
-      serviceAccountId: account.id,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
     },
   });
   assert.equal(agentResult.status, 201);
-  assert.equal(agentResult.data.serviceAccountId, account.id);
+  assert.equal(agentResult.data.harnessAuth.serviceAccountId, account.id);
   const agent = agentResult.data;
   const deploymentPath = `/namespaces/${namespace.id}/agents/${agent.id}/deploy`;
 
@@ -978,14 +1028,21 @@ test("native ServiceAccounts bind exact credential references and freeze Agent r
     body: initialCredential,
   });
   assert.equal(assigned.status, 200);
-  assert.deepEqual(assigned.data.credential, initialCredential);
+  assert.deepEqual(assigned.data.credential, { kind: initialCredential.kind });
+  assert.deepEqual(
+    (
+      await controller.fixture.controller.getServiceAccount(
+        controller.fixture.principal.id,
+        namespace.id,
+        account.id,
+      )
+    ).credential,
+    initialCredential,
+  );
 
-  const initialRevision = await controller.request("POST", deploymentPath);
-  assert.equal(initialRevision.status, 202);
-  assert.deepEqual(initialRevision.data.serviceAccount, {
-    id: account.id,
-    credential: initialCredential,
-  });
+  const nativeDeployment = await controller.request("POST", deploymentPath);
+  assert.equal(nativeDeployment.status, 409);
+  assert.equal(nativeDeployment.body.error.code, "RESOURCE_CONFLICT");
 
   // OAuth references are representable, but no refresh or OAuth execution exists yet.
   const oauthCredential = {
@@ -1008,16 +1065,22 @@ test("native ServiceAccounts bind exact credential references and freeze Agent r
     body: replacementCredential,
   });
   assert.equal(replaced.status, 200);
-  const replacementRevision = await controller.request("POST", deploymentPath);
-  assert.equal(replacementRevision.status, 202);
-  assert.deepEqual(replacementRevision.data.serviceAccount.credential, replacementCredential);
-
-  // Credential edits affect future admissions only; a historical revision keeps its original reference.
-  const historical = await controller.request(
-    "GET",
-    `/namespaces/${namespace.id}/agents/${agent.id}/revisions/${initialRevision.data.id}`,
+  assert.deepEqual(replaced.data.credential, { kind: replacementCredential.kind });
+  assert.deepEqual(
+    (
+      await controller.fixture.controller.getServiceAccount(
+        controller.fixture.principal.id,
+        namespace.id,
+        account.id,
+      )
+    ).credential,
+    replacementCredential,
   );
-  assert.deepEqual(historical.data.serviceAccount.credential, initialCredential);
+  assert.deepEqual(
+    (await controller.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}/revisions`))
+      .data,
+    [],
+  );
 
   const boundDeletion = await controller.request("DELETE", accountPath);
   assert.equal(boundDeletion.status, 409);
@@ -1027,17 +1090,20 @@ test("native ServiceAccounts bind exact credential references and freeze Agent r
     "PATCH",
     `/namespaces/${namespace.id}/agents/${agent.id}`,
     {
-      body: { configurationId: configuration.id, serviceAccountId: null },
+      body: { configurationId: configuration.id, harnessAuth: null },
     },
   );
   assert.equal(detached.status, 200);
-  assert.equal(Object.hasOwn(detached.data, "serviceAccountId"), false);
+  assert.equal(detached.data.harnessAuth, null);
 
-  // Detaching the draft leaves admitted deployments using their frozen account reference.
-  const pendingDeletion = await controller.request("DELETE", accountPath);
-  assert.equal(pendingDeletion.status, 409);
-  assert.equal(pendingDeletion.body.error.code, "RESOURCE_CONFLICT");
-  assert.equal((await controller.request("GET", accountPath)).data.id, account.id);
+  // Failed admissions create no pending revision that could keep a detached account referenced.
+  const deletedDetached = await controller.fixture.app.fetch(
+    new Request(`http://127.0.0.1${accountPath}`, {
+      method: "DELETE",
+      headers: authenticatedHeaders(controller.fixture.session),
+    }),
+  );
+  assert.equal(deletedDetached.status, 204);
 
   const unusedAccount = await createServiceAccount(controller, namespace.id, "unused-provider");
   const unusedAccountPath = `/namespaces/${namespace.id}/service-accounts/${unusedAccount.id}`;
@@ -1149,7 +1215,7 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
       body: {
         name: "cross-namespace-agent",
         configurationId: configurationB.id,
-        serviceAccountId: accountA.id,
+        harnessAuth: { method: "chatgpt_service_account", serviceAccountId: accountA.id },
       },
     },
   );
@@ -1235,7 +1301,7 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
       body: {
         name: "denied-account-association",
         configurationId: configurationA.id,
-        serviceAccountId: accountB.id,
+        harnessAuth: { method: "chatgpt_service_account", serviceAccountId: accountB.id },
       },
     },
   );
@@ -1256,17 +1322,20 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
       body: {
         name: "allowed-account-association",
         configurationId: configurationA.id,
-        serviceAccountId: accountA.id,
+        harnessAuth: { method: "chatgpt_service_account", serviceAccountId: accountA.id },
       },
     },
   );
   assert.equal(allowedAssociation.status, 201);
-  assert.equal(allowedAssociation.data.serviceAccountId, accountA.id);
+  assert.equal(allowedAssociation.data.harnessAuth.serviceAccountId, accountA.id);
   const associatedAgentPath = `/namespaces/${namespaceA.id}/agents/${allowedAssociation.data.id}`;
 
   // Replacing A with B requires exact read on the new account, not merely authority over A.
   const deniedNewAccount = await injectedRequest(readerApp, "PATCH", associatedAgentPath, {
-    body: { configurationId: configurationA.id, serviceAccountId: accountB.id },
+    body: {
+      configurationId: configurationA.id,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: accountB.id },
+    },
   });
   assert.equal(deniedNewAccount.status, 403);
   const unchangedAfterNewAccountDenial = await injectedRequest(
@@ -1274,7 +1343,7 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
     "GET",
     associatedAgentPath,
   );
-  assert.equal(unchangedAfterNewAccountDenial.data.serviceAccountId, accountA.id);
+  assert.equal(unchangedAfterNewAccountDenial.data.harnessAuth.serviceAccountId, accountA.id);
 
   const deniedCreation = await injectedRequest(
     readerApp,
@@ -1300,7 +1369,15 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
       replacementOnlyApp,
       "PATCH",
       associatedAgentPath,
-      { body: { configurationId: configurationA.id, serviceAccountId } },
+      {
+        body: {
+          configurationId: configurationA.id,
+          harnessAuth:
+            serviceAccountId === null
+              ? null
+              : { method: "chatgpt_service_account", serviceAccountId },
+        },
+      },
     );
     assert.equal(deniedOldAccount.status, 403);
     const deniedOldAccountAudit = controller.fixture.auditSink.events.at(-1);
@@ -1316,7 +1393,7 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
     });
 
     const unchanged = await injectedRequest(replacementOnlyApp, "GET", associatedAgentPath);
-    assert.equal(unchanged.data.serviceAccountId, accountA.id);
+    assert.equal(unchanged.data.harnessAuth.serviceAccountId, accountA.id);
   }
 });
 
@@ -1965,6 +2042,10 @@ test("two Namespaces become independently ready and deletion tombstones only its
   );
   assert.deepEqual(fixture.computeCalls.ensureNamespace, [namespaceA.data.id, namespaceB.data.id]);
 
+  await bindHarnessKey(fixture, namespaceA.data.id, {
+    ...agentA.data,
+    configurationId: firstConfiguration.id,
+  });
   const readyDeployment = await injectedRequest(
     fixture.app,
     "POST",
@@ -1981,6 +2062,7 @@ test("two Namespaces become independently ready and deletion tombstones only its
     "configurationKind",
     "createdAt",
     "harness",
+    "harnessAuth",
     "id",
     "namespaceId",
     "providerId",

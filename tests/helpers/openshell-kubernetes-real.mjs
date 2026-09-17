@@ -1,6 +1,6 @@
 import { sha256Hex } from "../../packages/utils/src/index.ts";
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,8 +16,6 @@ const execute = promisify(execFile);
 const sandboxApiResource = "sandboxes.agents.x-k8s.io";
 const harnessPort = 18790;
 const gatewayPort = 8080;
-const credentialMountPath = "/run/enterprise-credentials";
-const modelSecretPrefix = "openclaw-agent-model";
 const transportSecretPrefix = "openclaw-agent-transport";
 
 const requiredWorkspaceMounts = Object.freeze([
@@ -256,7 +254,7 @@ export function createOpenShellKubernetesFixture({
     );
     assert.ok(
       process.env.OPENAI_API_KEY,
-      "OPENAI_API_KEY is required: the OpenShell integration must perform a real model turn.",
+      "OPENAI_API_KEY is required for the API binding workflow; a model turn additionally requires genuine upstream Secret projection support.",
     );
     assert.ok(
       openShellCliPath,
@@ -546,34 +544,6 @@ export function createOpenShellKubernetesFixture({
     return await base.startPortForward(namespace, openShellGatewayServiceName(namespace));
   }
 
-  async function createOperatorSecret(namespace, name, key, credential) {
-    await new Promise((resolve, reject) => {
-      const child = spawn(
-        "kubectl",
-        base.kubectlArguments([
-          "create",
-          "secret",
-          "generic",
-          name,
-          "--namespace",
-          namespace,
-          `--from-file=${key}=/dev/stdin`,
-        ]),
-        { stdio: ["pipe", "ignore", "pipe"] },
-      );
-      let stderr = "";
-      child.stderr.on("data", (chunk) => {
-        stderr = `${stderr}${chunk.toString()}`.slice(-2048);
-      });
-      child.once("error", reject);
-      child.once("exit", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`Operator Secret provisioning failed (${code}): ${stderr}`));
-      });
-      child.stdin.end(credential);
-    });
-  }
-
   async function provisionAgentTransportCredentials(directory, namespace, agentId) {
     const suffix = openshellHash(agentId);
     const tokenDirectory = await mkdtemp(join(directory, `openshell-transport-${suffix}-`));
@@ -600,36 +570,6 @@ export function createOpenShellKubernetesFixture({
       await rm(tokenDirectory, { recursive: true, force: true });
     }
     return { appServerToken, gatewayToken };
-  }
-
-  async function materializeModelSecret(namespace, namespaceId, account, agentId) {
-    assert.equal(account.namespaceId, namespaceId);
-    assert.equal(account.credential.kind, "api_key");
-    const source = await base.resource("secret", account.credential.secretRef.name, namespace);
-    assert.equal(source.metadata.annotations?.["openclaw.dev/service-account-id"], account.id);
-    const credential = Buffer.from(source.data[account.credential.secretRef.key], "base64");
-    assert.ok(credential.length > 0);
-    const destinationName = `${modelSecretPrefix}-${openshellHash(agentId)}`;
-    await createOperatorSecret(namespace, destinationName, "OPENAI_API_KEY", credential);
-    await kubectl(
-      "label",
-      "secret",
-      destinationName,
-      "--namespace",
-      namespace,
-      `openclaw.dev/namespace=${namespaceId}`,
-      `openclaw.dev/agent=${agentId}`,
-    );
-    await kubectl(
-      "annotate",
-      "secret",
-      destinationName,
-      "--namespace",
-      namespace,
-      `openclaw.dev/namespace-id=${namespaceId}`,
-      `openclaw.dev/agent-id=${agentId}`,
-      `openclaw.dev/service-account-id=${account.id}`,
-    );
   }
 
   async function waitForOpenShellGateway(namespace) {
@@ -719,19 +659,15 @@ export function createOpenShellKubernetesFixture({
   }
 
   function harnessContainer(pod) {
-    const container = pod.spec.containers.find(
-      (entry) =>
-        entry.name !== "openshell-network" &&
-        (entry.volumeMounts ?? []).some(({ mountPath }) => mountPath === credentialMountPath),
+    const container = pod.spec.containers.find((entry) =>
+      (entry.env ?? []).some(({ name }) => name === "OPENAI_API_KEY"),
     );
     assert.ok(container, "provider-owned Pod must contain the Codex Harness container.");
-    assert.equal(
-      (container.env ?? []).some(
-        ({ name }) => name === "APP_SERVER_TOKEN" || name === "OPENAI_API_KEY",
-      ),
-      false,
-      "integration credentials must be delivered through private files, never Pod environment values.",
-    );
+    for (const name of ["APP_SERVER_TOKEN", "OPENAI_API_KEY"]) {
+      const projection = container.env.find((entry) => entry.name === name);
+      assert.ok(projection?.valueFrom?.secretKeyRef, `${name} requires genuine Secret projection.`);
+      assert.equal(Object.hasOwn(projection, "value"), false);
+    }
     return container;
   }
 
@@ -756,11 +692,6 @@ export function createOpenShellKubernetesFixture({
       mounts.some(({ subPath, mountPath }) => subPath === "" || mountPath === "/"),
       false,
       "the Harness must never mount the PVC root.",
-    );
-    assert.equal(
-      mounts.some(({ mountPath }) => mountPath === credentialMountPath),
-      true,
-      "the integration credential bridge must be an explicit read-only extra mount.",
     );
     assert.equal(
       mounts.some(
@@ -980,9 +911,7 @@ export function createOpenShellKubernetesFixture({
     validateOpenShellPrerequisites: validatePrerequisites,
     customResources,
     maybeResource,
-    createOperatorSecret,
     provisionAgentTransportCredentials,
-    materializeModelSecret,
     waitForOpenShellGateway,
     installOpenShellGateway,
     startOpenShellGatewayPortForward,

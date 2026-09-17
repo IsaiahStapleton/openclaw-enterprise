@@ -172,6 +172,17 @@ test("an admitted AgentRevision is a detached and deeply immutable deployment sn
     configuration: { model: "gpt-test", temperature: "0", tool: "lookup" },
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
     compute: { id: "compute-test", implementation: "deterministic-fake" },
+    harnessAuth: {
+      method: "chatgpt_service_account",
+      serviceAccountId: "service-account-a",
+      credential: { kind: "access_token", secretRef: { name: "account-source", key: "token" } },
+      providerBinding: {
+        providerId: "chatgpt",
+        driverId: "accounts",
+        workspaceId: "workspace-a",
+        credentialIssued: true,
+      },
+    },
     sandboxDriverId: "sandbox-test",
     servicePrincipalId: "service-principal-agent-a",
     createdAt: "2026-08-15T00:00:00.000Z",
@@ -183,6 +194,9 @@ test("an admitted AgentRevision is a detached and deeply immutable deployment sn
   assert.equal(Object.isFrozen(admitted.configuration), true);
   assert.equal(Object.isFrozen(admitted.harness), true);
   assert.equal(Object.isFrozen(admitted.compute), true);
+  assert.equal(Object.isFrozen(admitted.harnessAuth), true);
+  assert.equal(Object.isFrozen(admitted.harnessAuth.credential.secretRef), true);
+  assert.equal(Object.isFrozen(admitted.harnessAuth.providerBinding), true);
   assert.equal(admitted.sandboxDriverId, "sandbox-test");
   assert.equal(admitted.configurationId, "configuration-a");
   assert.equal(admitted.configurationKind, "agent");
@@ -195,6 +209,10 @@ test("an admitted AgentRevision is a detached and deeply immutable deployment sn
   mutableRevision.harness.mode = "embedded";
   mutableRevision.compute.implementation = "changed-after-admission";
   mutableRevision.sandboxDriverId = "changed-after-admission";
+  mutableRevision.harnessAuth.credential.secretRef.name = "replacement-source";
+  mutableRevision.harnessAuth.providerBinding.workspaceId = "replacement-workspace";
+  assert.equal(admitted.harnessAuth.credential.secretRef.name, "account-source");
+  assert.equal(admitted.harnessAuth.providerBinding.workspaceId, "workspace-a");
 
   assert.deepEqual(admitted.configuration, {
     model: "gpt-test",

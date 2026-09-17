@@ -16,6 +16,7 @@ import {
   ScopeViolationError,
   resolveConfiguredHarnessId,
 } from "../../packages/occ/src/index.ts";
+import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 
 const administrator = "principal-configuration-administrator";
@@ -27,6 +28,8 @@ const installation = Object.freeze({
 });
 async function fixture() {
   const permissions = [
+    { action: "create", resourceKind: "secret" },
+    { action: "operate", resourceKind: "secret" },
     { action: "create", resourceKind: "namespace" },
     { action: "read", resourceKind: "namespace" },
     { action: "delete", resourceKind: "namespace" },
@@ -40,47 +43,50 @@ async function fixture() {
     { action: "deploy", resourceKind: "agent" },
     { action: "read", resourceKind: "agent_revision" },
   ];
+  const iamState = {
+    identities: [administrator, deployOnly].map((id) => ({
+      kind: "principal",
+      id,
+      issuer: "configuration-conformance",
+      subject: id,
+    })),
+    groups: [],
+    memberships: [],
+    roles: [
+      { id: "configuration-administrator-role", permissions },
+      {
+        id: "configuration-deploy-only-role",
+        permissions: [
+          { action: "deploy", resourceKind: "agent" },
+          { action: "operate", resourceKind: "secret" },
+        ],
+      },
+    ],
+    bindings: [
+      {
+        id: "configuration-administrator-binding",
+        subjectKind: "identity",
+        subjectId: administrator,
+        roleId: "configuration-administrator-role",
+      },
+      {
+        id: "configuration-deploy-only-binding",
+        subjectKind: "identity",
+        subjectId: deployOnly,
+        roleId: "configuration-deploy-only-role",
+      },
+    ],
+    restrictions: [],
+  };
   const iam = new NativeIAMDriver(
-    {
-      loadNativeIAMState: async () => ({
-        identities: [administrator, deployOnly].map((id) => ({
-          kind: "principal",
-          id,
-          issuer: "configuration-conformance",
-          subject: id,
-        })),
-        groups: [],
-        memberships: [],
-        roles: [
-          { id: "configuration-administrator-role", permissions },
-          {
-            id: "configuration-deploy-only-role",
-            permissions: [{ action: "deploy", resourceKind: "agent" }],
-          },
-        ],
-        bindings: [
-          {
-            id: "configuration-administrator-binding",
-            subjectKind: "identity",
-            subjectId: administrator,
-            roleId: "configuration-administrator-role",
-          },
-          {
-            id: "configuration-deploy-only-binding",
-            subjectKind: "identity",
-            subjectId: deployOnly,
-            roleId: "configuration-deploy-only-role",
-          },
-        ],
-        restrictions: [],
-      }),
-    },
+    { loadNativeIAMState: async () => iamState },
     { id: "configuration-occ-iam" },
   );
   const compute = {
     id: "configuration-occ-compute",
     capability: "compute",
     implementation: "configuration-conformance-compute",
+    validateHarnessAuth() {},
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -100,7 +106,8 @@ async function fixture() {
   const configurationDriver = createTestConfigurationDriver();
   const state = new InMemoryPlatformState();
   const controller = new OpenClawController(installation, { state });
-  for (const driver of [iam, compute, configurationDriver]) {
+  const secretDriver = createTestSecretDriver();
+  for (const driver of [iam, compute, configurationDriver, secretDriver]) {
     controller.registerDriver(driver);
     controller.selectDriver(driver.capability, driver.id);
   }
@@ -127,7 +134,7 @@ async function fixture() {
       plugins: { entries: { example: { enabled: true, regions: ["west"], retryCount: 2 } } },
     },
   });
-  const agent = await controller.createAgent(administrator, {
+  let agent = await controller.createAgent(administrator, {
     namespaceId: namespace.id,
     name: "Configuration conformance agent",
     configurationId: configuration.id,
@@ -136,7 +143,50 @@ async function fixture() {
     transaction.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
   );
 
-  return { agent, compute, configuration, configurationDriver, controller, iam, namespace, state };
+  const secret = await controller.createSecret(administrator, {
+    namespaceId: namespace.id,
+    name: "harness-key",
+    value: "synthetic-harness-key",
+  });
+  async function bindHarnessAuth(target) {
+    iamState.identities.push({
+      kind: "service_principal",
+      id: target.servicePrincipalId,
+      namespaceId: target.namespaceId,
+      agentId: target.id,
+    });
+    iamState.roles.push({
+      id: `harness-role-${target.id}`,
+      permissions: [{ action: "operate", resourceKind: "secret" }],
+    });
+    iamState.bindings.push({
+      id: `harness-binding-${target.id}`,
+      subjectKind: "identity",
+      subjectId: target.servicePrincipalId,
+      roleId: `harness-role-${target.id}`,
+      namespaceId: namespace.id,
+      resourceKind: "secret",
+      resourceId: secret.id,
+    });
+    return controller.updateAgent(administrator, {
+      namespaceId: namespace.id,
+      agentId: target.id,
+      configurationId: target.configurationId,
+      harnessAuth: { method: "api_key", source: secret.ref },
+    });
+  }
+  agent = await bindHarnessAuth(agent);
+  return {
+    agent,
+    bindHarnessAuth,
+    compute,
+    configuration,
+    configurationDriver,
+    controller,
+    iam,
+    namespace,
+    state,
+  };
 }
 
 test("concurrent Configuration updates serialize into distinct server-managed generations", async () => {
@@ -381,7 +431,7 @@ test("ambiguous and plugin-routed models require supported explicit native polic
 });
 
 test("one installation admits embedded and dedicated revisions without rewriting historical placement", async () => {
-  const { agent, configuration, controller, namespace } = await fixture();
+  const { agent, bindHarnessAuth, configuration, controller, namespace } = await fixture();
   const embedded = await controller.deployAgent(
     administrator,
     { namespaceId: namespace.id, agentId: agent.id },
@@ -405,6 +455,7 @@ test("one installation admits embedded and dedicated revisions without rewriting
     configurationId: codexConfiguration.id,
     executionMode: "dedicated",
   });
+  await bindHarnessAuth(dedicatedAgent);
   const dedicatedNeighbor = await controller.deployAgent(
     administrator,
     { namespaceId: namespace.id, agentId: dedicatedAgent.id },
@@ -445,7 +496,7 @@ test("one installation admits embedded and dedicated revisions without rewriting
 
 for (const scope of ["primary", "default-fallback", "entry-fallback", "provider-policy-fallback"]) {
   test(`actual OCC admission accepts a same-Harness OpenAI Codex ${scope} selection`, async () => {
-    const { controller, namespace } = await fixture();
+    const { bindHarnessAuth, controller, namespace } = await fixture();
     const selection = {
       primary: "openai/gpt-4.1",
       fallbacks: ["openai/gpt-4.1-mini", "openai/gpt-4.1-nano"],
@@ -507,6 +558,7 @@ for (const scope of ["primary", "default-fallback", "entry-fallback", "provider-
       executionMode: "dedicated",
     });
 
+    await bindHarnessAuth(dedicated);
     const admitted = await controller.deployAgent(
       administrator,
       { namespaceId: namespace.id, agentId: dedicated.id },
@@ -879,7 +931,14 @@ test("Agent deployment separately authorizes its exact Configuration", async () 
       { namespaceId: namespace.id, agentId: agent.id },
       resolveApprovedDevelopmentHarness,
     ),
-    AuthorizationDeniedError,
+    (error) => {
+      assert.ok(error instanceof AuthorizationDeniedError);
+      assert.deepEqual(error.authorization, {
+        action: "read",
+        resource: { kind: "configuration", id: agent.configurationId, namespaceId: namespace.id },
+      });
+      return true;
+    },
   );
   assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), []);
 });

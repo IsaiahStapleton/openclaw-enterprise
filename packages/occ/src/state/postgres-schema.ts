@@ -1,6 +1,7 @@
 import type {
   AgentDesiredRuntimeState,
   HarnessExecutionMode,
+  HarnessAuthBinding,
   PluginDesiredState,
   SecretBindings,
   ServiceAccountCredential,
@@ -228,7 +229,13 @@ export const agents = occSchema.table(
     executionMode: text("execution_mode").$type<HarnessExecutionMode>().notNull(),
     plugins: jsonb("plugins").$type<PluginDesiredState>(),
     servicePrincipalId: text("service_principal_id").notNull(),
-    serviceAccountId: text("service_account_id"),
+    harnessAuth: jsonb("harness_auth").$type<HarnessAuthBinding>(),
+    harnessAuthSecretId: text("harness_auth_secret_id").generatedAlwaysAs(
+      sql`CASE WHEN harness_auth->>'method' = 'api_key' THEN harness_auth #>> '{source,id}' END`,
+    ),
+    harnessAuthServiceAccountId: text("harness_auth_service_account_id").generatedAlwaysAs(
+      sql`CASE WHEN harness_auth->>'method' = 'chatgpt_service_account' THEN harness_auth->>'serviceAccountId' END`,
+    ),
     activeRevisionId: text("active_revision_id"),
     desiredRuntimeState: text("desired_runtime_state")
       .$type<AgentDesiredRuntimeState>()
@@ -270,9 +277,20 @@ export const agents = occSchema.table(
     })
       .onUpdate("restrict")
       .onDelete("restrict"),
+    check(
+      "agents_harness_auth_valid",
+      sql`${table.harnessAuth} IS NULL OR occ.harness_auth_is_valid(${table.harnessAuth}, ${table.namespaceId}, false)`,
+    ),
     foreignKey({
-      name: "agents_service_account_owner",
-      columns: [table.namespaceId, table.serviceAccountId],
+      name: "agents_harness_auth_secret_owner",
+      columns: [table.namespaceId, table.harnessAuthSecretId],
+      foreignColumns: [secrets.namespaceId, secrets.id],
+    })
+      .onUpdate("restrict")
+      .onDelete("restrict"),
+    foreignKey({
+      name: "agents_harness_auth_service_account_owner",
+      columns: [table.namespaceId, table.harnessAuthServiceAccountId],
       foreignColumns: [serviceAccounts.namespaceId, serviceAccounts.id],
     })
       .onUpdate("restrict")
@@ -387,12 +405,12 @@ export const agentRevisions = occSchema.table(
       "agent_revisions_admitted_snapshot",
       sql`(${table.admittedSpec} ?& ARRAY[
           'configuration_id', 'configuration_kind', 'configuration_generation',
-          'draft_spec', 'harness', 'compute'
+          'draft_spec', 'harness', 'compute', 'harness_auth'
         ])
         AND (${table.admittedSpec}
           - 'configuration_id' - 'configuration_kind' - 'configuration_generation'
           - 'draft_spec' - 'harness' - 'compute' - 'sandbox_driver_id'
-          - 'secret_driver_id' - 'secret_bindings' - 'service_account' - 'plugins') = '{}'::jsonb
+          - 'secret_driver_id' - 'secret_bindings' - 'harness_auth' - 'plugins') = '{}'::jsonb
         AND jsonb_typeof(${table.admittedSpec}->'configuration_id') = 'string'
         AND (${table.admittedSpec}->>'configuration_id') ~ ${identifierPatterns.configuration}
         AND jsonb_typeof(${table.admittedSpec}->'configuration_kind') = 'string'
@@ -436,32 +454,7 @@ export const agentRevisions = occSchema.table(
           NOT (${table.admittedSpec} ? 'secret_bindings')
           OR occ.secret_bindings_are_valid(${table.admittedSpec}->'secret_bindings', ${table.namespaceId})
         )
-        AND (
-          NOT (${table.admittedSpec} ? 'service_account')
-          OR (
-            jsonb_typeof(${table.admittedSpec}->'service_account') = 'object'
-            AND ((${table.admittedSpec}->'service_account') ?& ARRAY['id', 'credential'])
-            AND ((${table.admittedSpec}->'service_account') - 'id' - 'credential') = '{}'::jsonb
-            AND jsonb_typeof(${table.admittedSpec} #> '{service_account,id}') = 'string'
-            AND (${table.admittedSpec} #>> '{service_account,id}') ~ ${identifierPatterns.serviceAccount}
-            AND jsonb_typeof(${table.admittedSpec} #> '{service_account,credential}') = 'object'
-            AND ((${table.admittedSpec} #> '{service_account,credential}') ?& ARRAY['kind', 'secretRef'])
-            AND ((${table.admittedSpec} #> '{service_account,credential}') - 'kind' - 'secretRef') = '{}'::jsonb
-            AND jsonb_typeof(${table.admittedSpec} #> '{service_account,credential,kind}') = 'string'
-            AND (${table.admittedSpec} #>> '{service_account,credential,kind}')
-              IN ('api_key', 'access_token')
-            AND jsonb_typeof(${table.admittedSpec} #> '{service_account,credential,secretRef}') = 'object'
-            AND ((${table.admittedSpec} #> '{service_account,credential,secretRef}') ?& ARRAY['name', 'key'])
-            AND ((${table.admittedSpec} #> '{service_account,credential,secretRef}') - 'name' - 'key') = '{}'::jsonb
-            AND jsonb_typeof(${table.admittedSpec} #> '{service_account,credential,secretRef,name}') = 'string'
-            AND char_length(${table.admittedSpec} #>> '{service_account,credential,secretRef,name}') BETWEEN 1 AND 253
-            AND (${table.admittedSpec} #>> '{service_account,credential,secretRef,name}') ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
-            AND jsonb_typeof(${table.admittedSpec} #> '{service_account,credential,secretRef,key}') = 'string'
-            AND char_length(${table.admittedSpec} #>> '{service_account,credential,secretRef,key}') BETWEEN 1 AND 253
-            AND (${table.admittedSpec} #>> '{service_account,credential,secretRef,key}') ~ '^[-._a-zA-Z0-9]+$'
-            AND (${table.admittedSpec} #>> '{service_account,credential,secretRef,key}') NOT IN ('.', '..')
-          )
-        )
+        AND occ.harness_auth_is_valid(${table.admittedSpec}->'harness_auth', ${table.namespaceId}, true)
         AND (
           NOT (${table.admittedSpec} ? 'plugins')
           OR jsonb_typeof(${table.admittedSpec}->'plugins') = 'object'

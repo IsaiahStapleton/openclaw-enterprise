@@ -122,7 +122,6 @@ drivers:
       runtime:
         gatewayStorageClassName: sqlite-block
         transportSecretPrefix: openclaw-agent-transport
-        modelSecretPrefix: openclaw-agent-model
         # Optional; first install this reviewed profile on every eligible node.
         codexSeccompProfile: profiles/codex-0.152.1.json
 ```

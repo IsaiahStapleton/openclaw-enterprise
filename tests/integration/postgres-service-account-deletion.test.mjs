@@ -19,7 +19,7 @@ import {
 } from "../helpers/postgres-provider-state.mjs";
 
 test(
-  "ServiceAccount deletion protects queued, claimed, and active revisions before Driver effects",
+  "ServiceAccount deletion protects draft, queued, claimed, and active references before Driver effects",
   requiresPostgres,
   async (context) => {
     const fixture = await createProviderFixture(context);
@@ -73,7 +73,7 @@ test(
       namespaceId: namespace.id,
       name: "account-consumer",
       configurationId: configuration.id,
-      serviceAccountId: account.id,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
       providerId,
       executionMode: "dedicated",
     });
@@ -88,7 +88,8 @@ test(
           "SELECT idempotency_key FROM occ.controller_work WHERE namespace_id <> $1 FOR UPDATE SKIP LOCKED",
           [namespace.id],
         );
-        const claim = await new PostgresWorkQueue(client).claim();
+        // Claim on another connection: PostgreSQL does not skip a transaction's own locks.
+        const claim = await new PostgresWorkQueue(pool).claim();
         await client.query("COMMIT");
         return claim;
       } catch (error) {
@@ -98,11 +99,13 @@ test(
         client.release();
       }
     }
+    // A draft binding alone protects the source before any deployment exists.
+    await assertProtected();
     const revision = await controller.deployAgent(actor.id, target, resolveApprovedHarness);
     await controller.updateAgent(actor.id, {
       ...target,
       configurationId: configuration.id,
-      serviceAccountId: null,
+      harnessAuth: null,
     });
 
     async function assertProtected() {
@@ -142,6 +145,17 @@ test(
     });
     await assertProtected();
 
+    const replacementAccount = await createAccessTokenServiceAccount(
+      state,
+      namespace.id,
+      "replacement",
+    );
+    await seedProviderBinding(pool, replacementAccount);
+    await controller.updateAgent(actor.id, {
+      ...target,
+      configurationId: configuration.id,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: replacementAccount.id },
+    });
     const replacement = await controller.deployAgent(actor.id, target, resolveApprovedHarness);
     const next = await claimRevision();
     assert.equal(next?.revisionId, replacement.id);
@@ -164,10 +178,10 @@ test(
       await state.read((unit) => unit.serviceAccounts.findServiceAccount(namespace.id, account.id)),
       undefined,
     );
-    assert.equal(
+    assert.deepEqual(
       (await state.read((unit) => unit.revisions.findRevision(namespace.id, agent.id, revision.id)))
-        .serviceAccount.id,
-      account.id,
+        .harnessAuth,
+      revision.harnessAuth,
     );
 
     // A deployment that fails permanently without becoming active releases its account reference.
@@ -180,13 +194,13 @@ test(
     await controller.updateAgent(actor.id, {
       ...target,
       configurationId: configuration.id,
-      serviceAccountId: failedAccount.id,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: failedAccount.id },
     });
     const failedRevision = await controller.deployAgent(actor.id, target, resolveApprovedHarness);
     await controller.updateAgent(actor.id, {
       ...target,
       configurationId: configuration.id,
-      serviceAccountId: null,
+      harnessAuth: null,
     });
     const failedClaim = await claimRevision();
     assert.equal(failedClaim?.revisionId, failedRevision.id);

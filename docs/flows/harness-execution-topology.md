@@ -1,7 +1,7 @@
 ---
 created: 2026-08-21
-updated: 2026-09-01
-last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
+updated: 2026-09-17
+last_updated_session: codex/01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04
 ---
 
 # Harness Execution Topology Flow
@@ -9,7 +9,7 @@ last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ## Overview
 
 An authorized deployment resolves its harness from native selected-model/provider policy, freezes
-the Agent's explicit `embedded` or `dedicated` placement and provider-neutral account credential
+the Agent's explicit `embedded` or `dedicated` placement and harness authentication binding
 in its AgentRevision, and asks Compute to start that topology. The flow ends after guarded route
 publication, predecessor retirement, and exactly-once activation audit.
 
@@ -20,15 +20,15 @@ publication, predecessor retirement, and exactly-once activation audit.
 - Source: `packages/occ/src/index.ts:OpenClawController.deployAgent` and
   `apps/controller/src/worker.ts:ControllerWorker`.
 - Assumptions: authorized actor; ready Namespace; same-Namespace native agent Configuration;
-  explicit Agent execution mode; and either operator-materialized API-key credentials or a
-  Driver-issued, account-owned access-token Secret.
+  explicit Agent execution mode; and `harnessAuth` referencing an authorized OCC
+  Secret API key or a Driver-issued account-owned access-token credential.
 
 ## Flow
 
 ```mermaid
 graph TD
   A["Authorize Agent and Configuration"] --> B["Resolve explicit native runtime and placement"]
-  B --> C["Freeze configuration, harness identity, and opaque account credential"]
+  B --> C["Freeze configuration, harness identity, and harness authentication binding"]
   C --> D["Claim and reauthorize revision work"]
   D --> E{"Approved topology"}
   E -->|embedded OpenClaw| F["Start one Agent-owned OpenClaw gateway"]
@@ -67,23 +67,30 @@ approved harness, and calls `ComputeDriver.prepareRevision`.
 
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver.prepareRevision`
 
-Docker embedded execution starts one Agent-owned OpenClaw gateway container. Dedicated
-execution starts a separate Codex container before its gateway, using authenticated
-`APP_SERVER_URL`/`APP_SERVER_TOKEN` WebSocket transport. Only the embedded gateway or
-dedicated Codex container receives the provider key and workload-hook environment.
+Docker's existing topology implementation starts an embedded gateway or dedicated
+Codex container, but it does not support the new harness-auth binding contract;
+unsupported bindings fail before deployment. Kubernetes is the supported binding
+implementation.
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.prepareRevision`
 
-Production dedicated workloads use separate Agent-owned gateway/Codex ServiceAccounts,
-authenticated same-Agent transport, and default-deny NetworkPolicies. Native API-key execution
-retains its independently materialized operator-owned model key. Provider-backed dedicated Codex
-instead receives `CODEX_ACCESS_TOKEN` and `CODEX_CHATGPT_WORKSPACE_ID` directly from one
-account-owned Secret; its separate gateway receives neither value. API-side Kubernetes Compute
-creates that exact tenant Secret during credential issuance. The worker has no direct Secret API
-permissions, although its trusted Deployment authority can indirectly project tenant Secrets.
-Production embedded OpenClaw starts one combined gateway/Harness with the exact Agent
-ServiceAccount, projected token, operator-materialized Agent-specific model key, and initially
-nonserving gateway route; no Codex workload or app-server credential exists.
+Kubernetes workload rendering calls `prepareHarnessAuth` once for the resolved
+source. It projects the OCC Secret key only into embedded OpenClaw or dedicated
+Codex. For ChatGPT it projects the account's token and workspace directly into
+Codex with no credential copy. Dedicated gateways receive neither source.
+See the [harness authentication flow](native-service-account-credential-delivery.md)
+for admission, immutable source snapshots, and worker reauthorization.
+
+Production dedicated workloads keep separate Agent-owned gateway/Codex
+ServiceAccounts, authenticated same-Agent transport, and default-deny network
+policies with auth-method-specific provider login egress. Embedded OpenClaw uses
+one combined workload with its exact Agent identity and model key. The worker
+has no direct Secret API permissions, although its trusted workload-writing
+authority can indirectly project tenant Secrets.
+
+The selected Sandbox consumes the same rendered projections and explicit login
+mode in `HarnessWorkloadRequirements`. Unsupported upstream projection fails
+without a test-only credential bridge.
 
 When a selected SandboxDriver provisions the dedicated Harness,
 `providerHarnessReady` lists Pods using the same Agent/revision/role labels as
@@ -173,6 +180,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 00:31: Align credential selection and delivery with Agent harnessAuth and the shared Kubernetes rendering path. (01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04 - d2bcbd1c53acb2582a774b5158f254d726abd33f)
 
 - 2026-09-01 19:09: Corrected Kubernetes after-commit activation semantics and merged the dedicated shared-workspace runtime ordering into this topology trace. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-28 21:20: Removed host-process local-test topology coverage; document Docker and Kubernetes runtime execution and verification. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 3ec166eb5fae39ed0f51ffb5ebd93338c4a2db94)

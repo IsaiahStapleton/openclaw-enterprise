@@ -7,6 +7,8 @@ import type {
   AgentRevision,
   AuditEvent,
   HarnessExecutionMode,
+  HarnessAuthBinding,
+  HarnessAuthSnapshot,
   Installation,
   Namespace,
   NamespaceStatus,
@@ -18,6 +20,7 @@ import type {
 } from "@openclaw-enterprise/contracts";
 import {
   normalizePluginDesiredState,
+  normalizeHarnessAuthBinding,
   normalizeSecretBindings,
   validPluginRevisionState,
 } from "@openclaw-enterprise/contracts";
@@ -80,7 +83,7 @@ export interface AgentRepository extends AgentReadRepository {
     agentId: string,
     configurationId: string,
     executionMode?: HarnessExecutionMode,
-    serviceAccountId?: string | null,
+    harnessAuth?: HarnessAuthBinding | null,
     providerId?: string | null,
     plugins?: PluginDesiredState,
   ): Promise<Readonly<Agent> | undefined>;
@@ -241,6 +244,111 @@ function normalizedPlugins(plugins?: PluginDesiredState): PluginDesiredState | u
   return normalizePluginDesiredState(plugins, invalidPluginState);
 }
 
+export function validHarnessAuthSnapshot(value: HarnessAuthSnapshot, namespaceId: string): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  try {
+    const binding =
+      value.method === "api_key"
+        ? normalizeHarnessAuthBinding({ method: value.method, source: value.source })
+        : normalizeHarnessAuthBinding({
+            method: value.method,
+            serviceAccountId: value.serviceAccountId,
+          });
+    if (binding?.method === "api_key") {
+      return (
+        Object.keys(value).length === 3 &&
+        binding.source.namespaceId === namespaceId &&
+        value.method === "api_key" &&
+        isNonEmptyString(value.secretDriverId)
+      );
+    }
+    if (
+      value.method !== "chatgpt_service_account" ||
+      Object.keys(value).length !== 4 ||
+      !validCredential(value.credential) ||
+      value.credential.kind !== "access_token"
+    )
+      return false;
+    const provider = value.providerBinding;
+    return (
+      provider !== null &&
+      typeof provider === "object" &&
+      !Array.isArray(provider) &&
+      Object.keys(provider).length === 4 &&
+      isNonEmptyString(provider.providerId) &&
+      isNonEmptyString(provider.driverId) &&
+      isNonEmptyString(provider.workspaceId) &&
+      provider.credentialIssued === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function harnessAuthMatches(
+  binding: HarnessAuthBinding | null,
+  snapshot: HarnessAuthSnapshot,
+): boolean {
+  if (binding === null || binding.method !== snapshot.method) return false;
+  return binding.method === "api_key" && snapshot.method === "api_key"
+    ? binding.source.namespaceId === snapshot.source.namespaceId &&
+        binding.source.id === snapshot.source.id
+    : binding.method === "chatgpt_service_account" &&
+        snapshot.method === "chatgpt_service_account" &&
+        binding.serviceAccountId === snapshot.serviceAccountId;
+}
+
+function harnessSecretReference(
+  binding: HarnessAuthBinding | undefined | null,
+  namespaceId: string,
+  secretId: string,
+): boolean {
+  return (
+    binding?.method === "api_key" &&
+    binding.source.namespaceId === namespaceId &&
+    binding.source.id === secretId
+  );
+}
+
+function harnessAccountReference(
+  binding: HarnessAuthBinding | undefined | null,
+  serviceAccountId: string,
+): boolean {
+  return (
+    binding?.method === "chatgpt_service_account" && binding.serviceAccountId === serviceAccountId
+  );
+}
+
+export async function assertHarnessAuthAvailable(
+  state: Pick<PlatformReadView, "secrets" | "serviceAccounts">,
+  namespaceId: string,
+  value: HarnessAuthBinding | null,
+): Promise<void> {
+  let binding: HarnessAuthBinding | null;
+  try {
+    binding = normalizeHarnessAuthBinding(value);
+  } catch {
+    throw new ScopeViolationError("The Agent harness authentication binding is invalid.");
+  }
+  if (binding === null) return;
+  if (binding.method === "api_key") {
+    if (
+      binding.source.namespaceId !== namespaceId ||
+      (await state.secrets.findSecret(namespaceId, binding.source.id)) === undefined
+    )
+      throw new ScopeViolationError(
+        "The Agent harness authentication references an unavailable Secret.",
+      );
+  } else if (
+    (await state.serviceAccounts.findServiceAccount(namespaceId, binding.serviceAccountId)) ===
+    undefined
+  ) {
+    throw new ScopeViolationError(
+      "The Agent harness authentication references an unavailable ServiceAccount.",
+    );
+  }
+}
+
 function assertAdmittedAgentRevision(revision: AgentRevision): void {
   if (
     (revision.providerId !== null &&
@@ -274,15 +382,8 @@ function assertAdmittedAgentRevision(revision: AgentRevision): void {
     !isNonEmptyString(revision.compute.implementation) ||
     (revision.sandboxDriverId !== undefined && !isNonEmptyString(revision.sandboxDriverId)) ||
     (revision.secretDriverId !== undefined && !isNonEmptyString(revision.secretDriverId)) ||
-    (revision.serviceAccount !== undefined &&
-      (revision.serviceAccount === null ||
-        typeof revision.serviceAccount !== "object" ||
-        Array.isArray(revision.serviceAccount) ||
-        Object.keys(revision.serviceAccount).length !== 2 ||
-        !serviceAccountIdentifier.test(revision.serviceAccount.id) ||
-        !validCredential(revision.serviceAccount.credential) ||
-        (revision.serviceAccount.credential.kind !== "api_key" &&
-          revision.serviceAccount.credential.kind !== "access_token"))) ||
+    Object.hasOwn(revision, "serviceAccount") ||
+    !validHarnessAuthSnapshot(revision.harnessAuth, revision.namespaceId) ||
     !validPluginRevisionState(revision.plugins)
   ) {
     throw new ScopeViolationError(
@@ -794,8 +895,9 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
           ).find((revision) => revision.id === agent.activeRevisionId);
           return (
             agent.namespaceId === namespaceId &&
-            activeRevision !== undefined &&
-            secretBindingsReference(activeRevision.secretBindings, namespaceId, secretId)
+            (harnessSecretReference(agent.harnessAuth, namespaceId, secretId) ||
+              harnessSecretReference(activeRevision?.harnessAuth, namespaceId, secretId) ||
+              secretBindingsReference(activeRevision?.secretBindings, namespaceId, secretId))
           );
         }) ||
         snapshot.operations.some((operation) => {
@@ -807,7 +909,10 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
               (candidate) =>
                 candidate.namespaceId === namespaceId && candidate.id === operation.resourceId,
             );
-          return secretBindingsReference(revision?.secretBindings, namespaceId, secretId);
+          return (
+            secretBindingsReference(revision?.secretBindings, namespaceId, secretId) ||
+            harnessSecretReference(revision?.harnessAuth, namespaceId, secretId)
+          );
         })
       );
     },
@@ -893,8 +998,8 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
             snapshot.revisions.get(agentKey(namespaceId, agent.id)) ?? []
           ).find((revision) => revision.id === agent.activeRevisionId);
           return (
-            agent.serviceAccountId === serviceAccountId ||
-            activeRevision?.serviceAccount?.id === serviceAccountId
+            harnessAccountReference(agent.harnessAuth, serviceAccountId) ||
+            harnessAccountReference(activeRevision?.harnessAuth, serviceAccountId)
           );
         }) ||
         snapshot.operations.some((operation) => {
@@ -905,7 +1010,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
               (revision) =>
                 revision.namespaceId === namespaceId &&
                 revision.id === operation.resourceId &&
-                revision.serviceAccount?.id === serviceAccountId,
+                harnessAccountReference(revision.harnessAuth, serviceAccountId),
             ),
           );
         })
@@ -958,12 +1063,13 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         agent.namespaceId,
         agent.configurationId,
       );
-      if (
-        agent.serviceAccountId !== undefined &&
-        (await serviceAccounts.findServiceAccount(agent.namespaceId, agent.serviceAccountId)) ===
-          undefined
-      )
-        throw new ScopeViolationError("The Agent references an unavailable ServiceAccount.");
+      if (Object.hasOwn(agent, "serviceAccountId"))
+        throw new ScopeViolationError("Legacy Agent authentication selectors are unsupported.");
+      await assertHarnessAuthAvailable(
+        { secrets, serviceAccounts },
+        agent.namespaceId,
+        agent.harnessAuth,
+      );
       const key = agentKey(agent.namespaceId, agent.id);
       if (snapshot.agents.has(key))
         throw new ResourceConflictError("The server generated an existing Agent identity.");
@@ -1010,7 +1116,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       agentId,
       configurationId,
       executionMode,
-      serviceAccountId,
+      harnessAuth,
       providerId,
       nextPlugins,
     ) => {
@@ -1027,24 +1133,17 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       if ((await configurations.findConfiguration(namespaceId, configurationId)) === undefined)
         throw new ScopeViolationError("The Agent references an unavailable Configuration.");
       await assertConfigurationUsableByAgent(configurations, secrets, namespaceId, configurationId);
-      if (
-        serviceAccountId !== undefined &&
-        serviceAccountId !== null &&
-        (await serviceAccounts.findServiceAccount(namespaceId, serviceAccountId)) === undefined
-      )
-        throw new ScopeViolationError("The Agent references an unavailable ServiceAccount.");
-      const { serviceAccountId: previousAssociation, ...withoutAssociation } = current;
-      const association =
-        serviceAccountId === null ? undefined : (serviceAccountId ?? previousAssociation);
+      const association = harnessAuth === undefined ? current.harnessAuth : harnessAuth;
+      await assertHarnessAuthAvailable({ secrets, serviceAccounts }, namespaceId, association);
       const nextProviderId = providerId === undefined ? current.providerId : providerId;
       const plugins = nextPlugins === undefined ? current.plugins : normalizedPlugins(nextPlugins);
-      const { plugins: _currentPlugins, ...withoutPlugins } = withoutAssociation;
+      const { plugins: _currentPlugins, ...withoutPlugins } = current;
       const updated = immutableCopy({
         ...withoutPlugins,
         configurationId,
         providerId: nextProviderId,
         executionMode: executionMode ?? current.executionMode,
-        ...(association === undefined ? {} : { serviceAccountId: association }),
+        harnessAuth: association,
         ...(plugins === undefined ? {} : { plugins }),
       });
       snapshot.agents.set(agentKey(namespaceId, agentId), updated);
@@ -1103,9 +1202,19 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         owner === undefined ||
         owner.servicePrincipalId !== revision.servicePrincipalId ||
         owner.providerId !== revision.providerId ||
-        revision.serviceAccount?.id !== owner.serviceAccountId
+        !harnessAuthMatches(owner.harnessAuth, revision.harnessAuth)
       )
         throw new ScopeViolationError("The AgentRevision belongs to an unavailable Agent.");
+      await assertHarnessAuthAvailable(
+        { secrets, serviceAccounts },
+        revision.namespaceId,
+        revision.harnessAuth.method === "api_key"
+          ? { method: "api_key", source: revision.harnessAuth.source }
+          : {
+              method: "chatgpt_service_account",
+              serviceAccountId: revision.harnessAuth.serviceAccountId,
+            },
+      );
       const secretBindings = normalizedSecretBindings(revision.secretBindings);
       const plugins = revision.plugins === undefined ? undefined : immutableCopy(revision.plugins);
       await assertSecretBindingsAvailable(secrets, revision.namespaceId, secretBindings);

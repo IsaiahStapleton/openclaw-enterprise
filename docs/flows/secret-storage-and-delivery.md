@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-01
-last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
+updated: 2026-09-17
+last_updated_session: codex/01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04
 ---
 
 # Secret Storage and Gateway Delivery Flow
@@ -9,8 +9,9 @@ last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ## Overview
 
 An authorized owner stores a Namespace-owned Secret before any Agent exists,
-binds its stable reference in Configuration, then assigns and deploys a
-consuming Agent. OCC admits references; Kubernetes supplies values only to each
+binds its stable reference in Configuration for gateway delivery, then assigns
+and deploys a consuming Agent. Harness model authentication uses the
+[shared Agent binding flow](native-service-account-credential-delivery.md). OCC admits references; Kubernetes supplies values only to each
 selected gateway environment. This trace ends when native OpenClaw secret
 resolution hands the configured credential to its consumer. Credential issuance,
 provider internals, and future broker substitution are outside this flow.
@@ -106,9 +107,9 @@ serializes binding/admission changes against deletion. Admission freezes
 normalized refs and the selected SecretDriver identity, not backend locators or
 values, in the revision.
 
-An explicit `OPENAI_API_KEY` binding is allowed only for embedded execution without
-a competing ServiceAccount source. Dedicated Codex keeps its independent model
-credential; the separate gateway cannot receive it through this binding.
+Model-auth environment destinations are reserved for Agent `harnessAuth`;
+Configuration bindings cannot select or override model credentials in either
+execution topology.
 
 ### 4. Render only the exact gateway's projection
 
@@ -122,8 +123,8 @@ does not call the Kubernetes Secret API or add backend metadata to the revision.
 [KubernetesComputeDriver.prepareRevision](../../apps/controller/src/drivers/compute/kubernetes/index.ts)
 checks the revision, projection identities, and verified backing Namespace. It
 renders `env[].valueFrom.secretKeyRef` with `optional: false` only in each
-selected consuming gateway. The explicit embedded model binding replaces the old
-operator projection. ConfigMaps retain native references only. A missing
+selected consuming gateway. Model-auth projections are prepared separately from
+Agent `harnessAuth`. ConfigMaps retain native references only. A missing
 Secret/key prevents startup; normal readiness and cutover rules still control
 activation.
 
@@ -157,7 +158,7 @@ restore old secret bytes. Revoking `operate` blocks new OCC admission, not
 kubelet process starts or already delivered bytes.
 
 [deleteSecret](../../packages/occ/src/index.ts) rejects current Configuration,
-active revision, and pending-work dependencies under the same serialization
+Agent harness-binding draft, active revision, and pending-work dependencies under the same serialization
 boundary. Once unreferenced, it deletes only the exact Namespace-owned backend and metadata.
 A partial delete can be retried; missing or foreign objects never become an
 adoption or recreation path. Gateway replacement does not garbage-collect
@@ -197,6 +198,8 @@ credential at its issuer.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 00:31: Align credential selection and delivery with Agent harnessAuth and the shared Kubernetes rendering path. (01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04 - d2bcbd1c53acb2582a774b5158f254d726abd33f)
 
 - 2026-09-01 19:09: Moved historical pass counts, run timing, and stale environment blockers out of active Debugging while keeping current runnable checks and proof requirements. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-28: Historical verification retained from prior Debugging: focused conformance reported 134 cases with 1 optional skip; the real Kubernetes Secret API scenario after rebasing onto main `84e773f` reported 1 passed, 0 failed, 0 skipped, exit 0, in 386.4s with OpenClaw 2026.8.1; additional static, API, startup, Helm, PostgreSQL Secret-state, and real Compute checks were reported. Broader host and dedicated file-edit suites were not established because the host OpenClaw build had stale generated assets and the native hook relay was unavailable.

@@ -6,7 +6,8 @@ import {
   admitted,
   cleanupKubernetesNamespaces,
   createConfiguration,
-  createConfiguredAgent,
+  createKubernetesConfiguredAgent as createConfiguredAgent,
+  createKubernetesHarnessAuth,
   databaseUrl,
   defaultAgentConfigurationValues,
   grantTenantAccess,
@@ -163,10 +164,12 @@ test(
       request(process, "POST", `/namespaces/${namespace.data.id}/agents`, {
         name: `first-${randomUUID()}`,
         configurationId: firstConfiguration.id,
+        harnessAuth: await createKubernetesHarnessAuth(process, namespace.data.id),
       }),
       request(process, "POST", `/namespaces/${namespace.data.id}/agents`, {
         name: `second-${randomUUID()}`,
         configurationId: secondConfiguration.id,
+        harnessAuth: await createKubernetesHarnessAuth(process, namespace.data.id),
       }),
     ]);
     assert.equal(first.status, 201);

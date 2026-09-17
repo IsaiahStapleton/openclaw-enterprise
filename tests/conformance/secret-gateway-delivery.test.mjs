@@ -6,6 +6,8 @@ import {
   kubernetesNamespaceName,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+
 const kubeconfigPath = "/tmp/openclaw-enterprise-conformance/kubeconfig";
 const contextName = "openclaw-enterprise-local";
 const tenant = {
@@ -46,7 +48,6 @@ function options(overrides = {}) {
     servicePrincipalCredentials: { mode: "disabled" },
     runtime: {
       transportSecretPrefix: "transport",
-      modelSecretPrefix: "model",
       gatewayStorageClassName: "local-path",
     },
     ...overrides,
@@ -63,31 +64,25 @@ function revision(driver, overrides = {}) {
     configurationKind: "agent",
     configurationGeneration: 1,
     configuration: {
-      logging: {
-        level: "info",
-        consoleLevel: "info",
-        consoleStyle: "json",
-      },
+      ...createHarnessConfiguration("openclaw", "gpt-4.1"),
+      logging: { level: "info", consoleLevel: "info", consoleStyle: "json" },
       diagnostics: { otel: { logs: false } },
-      secrets: {
-        providers: {
-          model: { source: "env", allowlist: ["OPENAI_API_KEY"] },
-        },
+    },
+    harnessAuth: {
+      method: "api_key",
+      source: {
+        kind: "secret",
+        namespaceId: tenant.id,
+        id: "sec_00000000-0000-4000-8000-000000000015",
       },
-      models: {
-        providers: {
-          openai: {
-            apiKey: { source: "env", provider: "model", id: "OPENAI_API_KEY" },
-          },
-        },
-      },
+      secretDriverId: "secret-kubernetes",
     },
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: "service-principal-secret-gateway-delivery",
     secretDriverId: "secret-kubernetes",
     secretBindings: {
-      OPENAI_API_KEY: {
+      EXTERNAL_SERVICE_TOKEN: {
         source: {
           kind: "secret",
           namespaceId: tenant.id,
@@ -102,13 +97,13 @@ function revision(driver, overrides = {}) {
 
 function projection(overrides = {}) {
   return {
-    name: "OPENAI_API_KEY",
+    name: "EXTERNAL_SERVICE_TOKEN",
     secretId: "sec_00000000-0000-4000-8000-000000000014",
     namespaceId: tenant.id,
     agentId: "agent-secret-gateway-delivery",
     backendRef: {
       namespaceName: kubernetesNamespaceName(tenant.id),
-      name: "stored-model-key",
+      name: "stored-service-key",
       key: "value",
       uid: "uid-secret-gateway-delivery",
     },
@@ -141,7 +136,16 @@ test("secret-gateway-delivery renders exact bound Namespace Secret env only into
     driver.gatewayConfiguration(candidate),
     true,
     candidate.servicePrincipalId,
-    undefined,
+    driver.harnessAuthForRevision(
+      candidate,
+      {
+        harnessAuth: {
+          ...candidate.harnessAuth,
+          backendRef: { ...projection().backendRef, name: "stored-model-key" },
+        },
+      },
+      namespace,
+    ),
     [],
     secretEnvironment,
   );
@@ -149,13 +153,13 @@ test("secret-gateway-delivery renders exact bound Namespace Secret env only into
     gateway.spec.template.spec.containers[0].env.map((entry) => [entry.name, entry]),
   );
 
-  // The explicit binding replaces the legacy per-Agent model Secret and remains required.
-  assert.deepEqual(environment.OPENAI_API_KEY.valueFrom.secretKeyRef, {
-    name: "stored-model-key",
+  // Generic gateway credentials and harness credentials remain independently bound.
+  assert.deepEqual(environment.EXTERNAL_SERVICE_TOKEN.valueFrom.secretKeyRef, {
+    name: "stored-service-key",
     key: "value",
     optional: false,
   });
-  assert.notEqual(environment.OPENAI_API_KEY.valueFrom.secretKeyRef.name, `model-${suffix}`);
+  assert.equal(environment.OPENAI_API_KEY.valueFrom.secretKeyRef.name, "stored-model-key");
   assert.ok(environment.OPENCLAW_GATEWAY_TOKEN);
   assert.equal(environment.APP_SERVER_TOKEN, undefined);
   assert.equal(environment.CODEX_ACCESS_TOKEN, undefined);
@@ -198,7 +202,7 @@ test("secret-gateway-delivery renders exact bound Namespace Secret env only into
   );
 });
 
-test("secret-gateway-delivery rejects missing, foreign, and dedicated model projections", () => {
+test("secret-gateway-delivery rejects missing, foreign, and reserved model projections", () => {
   const driver = createKubernetesComputeDriver(options());
   const candidate = revision(driver);
   const namespace = kubernetesNamespaceName(tenant.id);
@@ -233,12 +237,12 @@ test("secret-gateway-delivery rejects missing, foreign, and dedicated model proj
     () =>
       driver.secretEnvironmentForRevision(
         revision(driver, {
-          harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+          secretBindings: { OPENAI_API_KEY: candidate.secretBindings.EXTERNAL_SERVICE_TOKEN },
         }),
-        { secretEnvironment: [projection()] },
+        { secretEnvironment: [projection({ name: "OPENAI_API_KEY" })] },
         namespace,
       ),
-    /Dedicated Codex runtimes cannot bind gateway model credentials/i,
+    /Secret bindings are invalid|Model authentication must use/i,
   );
   assert.throws(
     () =>

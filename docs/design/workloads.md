@@ -48,7 +48,7 @@ Each Agent explicitly selects one Harness execution topology:
 - `dedicated`: the Agent-owned gateway connects to its own distinct Codex
   workload. They use separate Kubernetes ServiceAccounts and network access;
   only Codex receives the exact Agent's projected identity and either its
-  operator-owned model API key or its associated account-owned access token.
+  Secret-backed model API key or its bound account-owned access token.
   The gateway never assumes that identity or receives the model credential.
 
 The selected Harness comes from the Agent's native provider/model configuration;

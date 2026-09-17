@@ -34,6 +34,7 @@ import {
   type ConfigurationDriver,
   type ComputeDriver,
   type HarnessExecutionMode,
+  type HarnessAuthBinding,
   type IAMDriver,
   type Installation,
   type OccApiRoute,
@@ -454,7 +455,7 @@ function clientServiceAccount(account: Readonly<ServiceAccount>): Record<string,
     id: account.id,
     namespaceId: account.namespaceId,
     name: account.name,
-    ...(account.credential === undefined ? {} : { credential: account.credential }),
+    ...(account.credential === undefined ? {} : { credential: { kind: account.credential.kind } }),
   };
 }
 
@@ -467,7 +468,7 @@ function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
     providerId: agent.providerId,
     executionMode: agent.executionMode,
     ...(agent.plugins === undefined ? {} : { plugins: agent.plugins }),
-    ...(agent.serviceAccountId === undefined ? {} : { serviceAccountId: agent.serviceAccountId }),
+    harnessAuth: agent.harnessAuth,
     ...(agent.activeRevisionId === undefined ? {} : { activeRevisionId: agent.activeRevisionId }),
     desiredRuntimeState: agent.desiredRuntimeState,
     createdAt: agent.createdAt,
@@ -499,7 +500,13 @@ function clientRevision(revision: Readonly<AgentRevision>): Record<string, unkno
     ...(revision.secretDriverId === undefined ? {} : { secretDriverId: revision.secretDriverId }),
     ...(revision.secretBindings === undefined ? {} : { secretBindings: revision.secretBindings }),
     ...(revision.plugins === undefined ? {} : { plugins: revision.plugins }),
-    ...(revision.serviceAccount === undefined ? {} : { serviceAccount: revision.serviceAccount }),
+    harnessAuth:
+      revision.harnessAuth.method === "api_key"
+        ? { method: "api_key", source: revision.harnessAuth.source }
+        : {
+            method: "chatgpt_service_account",
+            serviceAccountId: revision.harnessAuth.serviceAccountId,
+          },
     createdAt: revision.createdAt,
   };
 }
@@ -1667,9 +1674,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           ...(body?.executionMode === undefined
             ? {}
             : { executionMode: body.executionMode as HarnessExecutionMode }),
-          ...(body?.serviceAccountId === undefined
+          ...(body?.harnessAuth === undefined
             ? {}
-            : { serviceAccountId: body.serviceAccountId as string }),
+            : { harnessAuth: body.harnessAuth as HarnessAuthBinding | null }),
           ...(body?.plugins === undefined ? {} : { plugins: body.plugins as never }),
         });
         await unit.audit.append(
@@ -1716,9 +1723,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           ...(body?.executionMode === undefined
             ? {}
             : { executionMode: body.executionMode as HarnessExecutionMode }),
-          ...(body?.serviceAccountId === undefined
+          ...(body?.harnessAuth === undefined
             ? {}
-            : { serviceAccountId: body.serviceAccountId as string | null }),
+            : { harnessAuth: body.harnessAuth as HarnessAuthBinding | null }),
           ...(body?.plugins === undefined ? {} : { plugins: body.plugins as never }),
         });
         await unit.audit.append(
