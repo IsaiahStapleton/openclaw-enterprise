@@ -268,8 +268,20 @@ test(
     const tenantApiRole = roles.find(({ metadata }) =>
       metadata.name.endsWith("-openclaw-tenant-api"),
     );
+    const preflightRoles = roles.filter(({ metadata }) =>
+      ["-openclaw-namespace-observer", "-openclaw-namespace-worker"].some((suffix) =>
+        metadata.name.endsWith(suffix),
+      ),
+    );
     assert.ok(tenant);
     assert.ok(tenantApiRole);
+    assert.equal(preflightRoles.length, 2);
+    for (const role of preflightRoles) {
+      assert.deepEqual(
+        role.rules.filter(({ nonResourceURLs }) => nonResourceURLs !== undefined),
+        [{ nonResourceURLs: ["/version"], verbs: ["get"] }],
+      );
+    }
     assert.ok(!bindings.has(tenant.metadata.name));
     assert.ok(!bindings.has(tenantApiRole.metadata.name));
     assert.ok(tenant.rules.some(({ resources }) => resources.includes("configmaps")));
@@ -292,14 +304,16 @@ test(
       ],
     );
     for (const role of roles.filter(({ metadata }) => metadata.name !== tenant.metadata.name)) {
-      assert.ok(!role.rules.some(({ resources }) => resources.includes("persistentvolumeclaims")));
+      assert.ok(
+        !role.rules.some(({ resources }) => resources?.includes("persistentvolumeclaims") === true),
+      );
     }
     for (const role of roles.filter(
       ({ metadata }) => metadata.name !== tenantApiRole.metadata.name,
     ))
       for (const rule of role.rules) {
-        assert.ok(!rule.resources.includes("secrets"));
-        assert.ok(!rule.resources.includes("rolebindings"));
+        assert.ok(rule.resources?.includes("secrets") !== true);
+        assert.ok(rule.resources?.includes("rolebindings") !== true);
         assert.ok(!rule.verbs.includes("*"));
       }
 
@@ -401,7 +415,7 @@ test(
     for (const role of roles.filter(
       ({ metadata }) => metadata.name !== tenantApiRole.metadata.name,
     ))
-      for (const rule of role.rules) assert.ok(!rule.resources.includes("secrets"));
+      for (const rule of role.rules) assert.ok(rule.resources?.includes("secrets") !== true);
 
     // Only API Pods may reach the single approved provider/proxy host, exclusively over HTTPS.
     const providerPolicy = objects.find(

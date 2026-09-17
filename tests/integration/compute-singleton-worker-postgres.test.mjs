@@ -4,6 +4,45 @@ import test from "node:test";
 import { requiresPostgres, setup, waitFor } from "../helpers/compute-singleton-worker.mjs";
 
 test(
+  "production worker emits Compute preflight warnings before worker.started and continues startup",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const events = [];
+
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async preflight() {
+          return {
+            warnings: [
+              {
+                code: "KUBERNETES_VERSION_BELOW_MINIMUM",
+                message: "Kubernetes 1.34.12 is below the supported minimum 1.35.0.",
+              },
+            ],
+          };
+        },
+      },
+      30_000,
+      900_000,
+      "production",
+      (event) => events.push(event),
+    );
+
+    assert.deepEqual(events.slice(0, 2), [
+      {
+        event: "compute.preflight-warning",
+        computeDriverId: fixture.compute.id,
+        code: "KUBERNETES_VERSION_BELOW_MINIMUM",
+        message: "Kubernetes 1.34.12 is below the supported minimum 1.35.0.",
+      },
+      { event: "worker.started", computeDriverId: fixture.compute.id },
+    ]);
+  },
+);
+
+test(
   "a worker binds persisted Namespace, Agent, and service principal before provider effects",
   requiresPostgres,
   async (context) => {

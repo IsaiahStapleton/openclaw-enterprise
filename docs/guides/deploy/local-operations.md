@@ -17,7 +17,7 @@ Create a disposable single-server cluster without changing your kubeconfig:
 ```bash
 export CLUSTER="occ-images-$(date +%s)"
 export OCC_EXAMPLE_DIRECTORY="$(mktemp -d)"
-k3d cluster create "$CLUSTER" --servers 1 --agents 0 \
+k3d cluster create "$CLUSTER" --image +v1.35 --servers 1 --agents 0 \
   --api-port 127.0.0.1:0 \
   --kubeconfig-update-default=false --kubeconfig-switch-context=false
 k3d kubeconfig get "$CLUSTER" > "$OCC_EXAMPLE_DIRECTORY/kubeconfig"

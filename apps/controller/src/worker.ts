@@ -345,10 +345,21 @@ export class ControllerWorker {
     validatePersistedNativeIAMState(await this.loadIAMState());
     this.attachLifecycleDrivers(this.iam);
     if (this.mode === "production") {
-      const compute = this.compute as ComputeDriver & { preflight?: () => Promise<void> };
-      if (typeof compute.preflight === "function") await compute.preflight();
-      else if (this.requireComputePreflight)
+      const compute = this.compute;
+      if (typeof compute.preflight === "function") {
+        const result = await compute.preflight();
+        if (result !== undefined) {
+          for (const warning of result.warnings) {
+            this.emit({
+              event: "compute.preflight-warning",
+              computeDriverId: compute.id,
+              ...warning,
+            });
+          }
+        }
+      } else if (this.requireComputePreflight) {
         throw new Error("The selected bundled production Compute Driver requires preflight.");
+      }
     }
     this.emit({
       event: "worker.started",

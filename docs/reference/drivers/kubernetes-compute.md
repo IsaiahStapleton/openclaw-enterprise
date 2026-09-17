@@ -15,11 +15,19 @@ For detailed operator contracts, see:
 
 ## Requirements
 
+- Kubernetes 1.35 or later. On an older API server, API and worker startup each
+  emit `compute.preflight-warning`; its message includes the observed and
+  minimum versions. Startup continues, but versions below 1.35 are outside the
+  supported and CI-verified boundary even though this advisory does not block
+  startup.
 - A Kubernetes cluster dedicated to one OpenClaw Enterprise Installation.
 - Enforced Kubernetes NetworkPolicies, verified Kubernetes API TLS, and
   restricted Pod security.
 - Separate controller API and worker ServiceAccounts with operator-managed,
   tenant-local permissions.
+- API and worker permission to `GET` the Kubernetes `/version` non-resource URL.
+  The production chart grants it through the same narrowly scoped ClusterRoles
+  used for startup Namespace observation and management.
 - Approved, digest-pinned gateway and Agent images.
 - Explicit container resource limits, namespace quotas, DNS settings, and
   approved gateway clients.

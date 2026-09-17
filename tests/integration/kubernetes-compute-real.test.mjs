@@ -462,6 +462,20 @@ async function createScopedController(context, installationId, platformNamespace
     "--resource=namespaces",
   );
   await kubectl(
+    "patch",
+    "clusterrole",
+    namespaceRole,
+    "--type=json",
+    "--patch",
+    JSON.stringify([
+      {
+        op: "add",
+        path: "/rules/-",
+        value: { nonResourceURLs: ["/version"], verbs: ["get"] },
+      },
+    ]),
+  );
+  await kubectl(
     "create",
     "clusterrole",
     tenantRole,
@@ -587,6 +601,9 @@ test(
     });
     assert.equal(driver.id, "compute-kubernetes-local");
     assert.equal(driver.implementation, "kubernetes-local");
+    // The production preflight must observe the real API server through the same scoped identity
+    // used for Namespace lifecycle without reporting the CI-supported 1.35 family as advisory.
+    assert.deepEqual(await driver.preflight(), { warnings: [] });
 
     const first = namespace("first");
     const second = namespace("second");

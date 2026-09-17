@@ -13,6 +13,7 @@ exists, use a new name consistently throughout these commands.
 ```sh
 mkdir -m 700 -p /tmp/oce-k3d
 k3d cluster create oce \
+  --image +v1.35 \
   --api-port 127.0.0.1:6443 \
   --kubeconfig-update-default=false \
   --kubeconfig-switch-context=false
@@ -137,6 +138,11 @@ remote HTTPS API servers and in-cluster ServiceAccount authentication. These
 variables do not configure `server.mjs`, `worker.mjs`, the normal controller, or
 its default Compute Driver.
 
+CI selects the Kubernetes 1.35 family so the fixture proves the supported
+minimum line; a manually selected server must be 1.35 or later. The test
+exercises the real version endpoint through its scoped controller identity
+before creating tenant resources.
+
 | Variable                         | Requirement                                                                                        |
 | -------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `OCC_TEST_KUBERNETES_KUBECONFIG` | Absolute path to the dedicated disposable local-cluster kubeconfig.                                |
@@ -151,6 +157,14 @@ coverage. Kubernetes API-and-worker coverage rejects the ordinary
 `openclaw_enterprise` development database. The real-cluster suite uses an HTTP
 fixture and does not establish a real gateway, authenticated Codex connection,
 or model turn. The [real-runtime suite](#kubernetes-model-turns-and-secrets) provides model-turn proof.
+
+CI keeps the project-pinned k3d 5.8.3 binary and passes `--image +v1.35` when it
+creates ordinary disposable clusters. k3d resolves the K3s `v1.35` release
+channel at cluster creation, so these lanes follow the current Kubernetes
+1.35.z patch rather than one immutable node image. Preparation rejects a server
+outside the 1.35 family. The CI `kubectl` client is pinned to 1.35.0. The
+separately prepared OpenShell lane retains its own pinned K3s and `kubectl`
+versions.
 
 ## Kubernetes real-runtime test environment
 

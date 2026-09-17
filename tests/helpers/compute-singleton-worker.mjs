@@ -219,6 +219,7 @@ async function setup(context) {
     leaseDurationMs = 30_000,
     convergenceTimeoutMs = 900_000,
     mode = "production",
+    emit = () => {},
   ) {
     configuration.drivers.compute.id = computeDriver.id;
     worker = createControllerWorker({
@@ -242,7 +243,7 @@ async function setup(context) {
       leaseDurationMs,
       convergenceTimeoutMs,
       maxAttempts: 5,
-      emit() {},
+      emit,
     });
     return worker.start();
   }

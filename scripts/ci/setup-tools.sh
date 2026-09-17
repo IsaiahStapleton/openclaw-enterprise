@@ -113,7 +113,7 @@ require_docker() {
 }
 
 install_kubectl() {
-  local version="1.31.5"
+  local version="1.35.0"
   if kubectl_version_matches "${version}"; then
     kubectl version --client=true
     return
@@ -123,7 +123,7 @@ install_kubectl() {
   download_file \
     "https://dl.k8s.io/release/v${version}/bin/linux/amd64/kubectl" \
     "${binary}" \
-    "fbecbfd375b3686002c2e81d51c390172f5ffba3d6b47920d55342cb03f557af"
+    "a2e984a18a0c063279d692533031c1eff93a262afcc0afdc517375432d060989"
   chmod 0755 "${binary}"
   kubectl version --client=true
 }

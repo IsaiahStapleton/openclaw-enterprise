@@ -112,11 +112,12 @@ if (command === "docker") {
 }
 if (command === "k3d") {
   if (equals(args, ["version"])) finish("k3d version v5.8.3\n");
-  if (equals(args.slice(0, 2), ["cluster", "create"]) && args.length === 11) {
+  if (equals(args.slice(0, 2), ["cluster", "create"]) && args.length === 13) {
     assert.match(args[2], /^openclaw-k8s-/);
-    assert.deepEqual(args.slice(3, 8), ["--servers", "1", "--agents", "0", "--api-port"]);
-    assert.match(args[8], /^127\.0\.0\.1:\d+$/);
-    assert.deepEqual(args.slice(9), ["--kubeconfig-update-default=false", "--kubeconfig-switch-context=false"]);
+    assert.deepEqual(args.slice(3, 5), ["--image", "+v1.35"]);
+    assert.deepEqual(args.slice(5, 10), ["--servers", "1", "--agents", "0", "--api-port"]);
+    assert.match(args[10], /^127\.0\.0\.1:\d+$/);
+    assert.deepEqual(args.slice(11), ["--kubeconfig-update-default=false", "--kubeconfig-switch-context=false"]);
     state.cluster = args[2];
     finish();
   }
@@ -146,6 +147,9 @@ if (command === "kubectl") {
       finish(JSON.stringify({ clusters: [{ cluster: { server: "https://127.0.0.1:6443" } }] }));
     }
     if (equals(args.slice(4), ["wait", "--for=condition=Ready", "nodes", "--all", "--timeout=120s"])) finish();
+    if (equals(args.slice(4), ["version", "-o", "json"])) {
+      finish(JSON.stringify({ serverVersion: { gitVersion: "v1.35.8+k3s1" } }));
+    }
   }
 }
 throw new Error("Unexpected external command: " + command + " " + JSON.stringify(args));
@@ -220,6 +224,8 @@ for (const { scenario, error } of [
     }
 
     const cluster = state.resources.find((resource) => resource.kind === "k3d-cluster");
+    assert.equal(cluster.nodeImage, "+v1.35");
+    assert.equal(cluster.kubernetesVersion, "v1.35.8+k3s1");
     const localImage = state.resources.find((resource) => resource.kind === "image-tag");
     const importedImage = state.resources.find((resource) => resource.kind === "k3d-image");
     assert.equal(localImage.status, "ready");
