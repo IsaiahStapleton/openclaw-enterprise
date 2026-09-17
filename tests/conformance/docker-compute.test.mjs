@@ -36,6 +36,80 @@ const tenant = {
   createdAt: "2026-09-01T00:00:00.000Z",
 };
 
+test("Docker stop removes exact runtime containers and is retry-safe", async () => {
+  const driver = new DockerComputeDriver({
+    images: { gateway: "gateway:local", agent: "agent:local" },
+  });
+  const revision = {
+    id: "revision-docker-stop",
+    namespaceId: tenant.id,
+    agentId: "agent-docker-stop",
+    revision: 1,
+    configurationId: "configuration-docker-stop",
+    configurationKind: "agent",
+    configurationGeneration: 1,
+    configuration: admitLoggingConfiguration({}, "info"),
+    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    compute: { id: driver.id, implementation: driver.implementation },
+    servicePrincipalId: "service-principal-docker-stop",
+    createdAt: tenant.createdAt,
+  };
+  const existing = new Map();
+  const stopped = [];
+  driver.setLifecycleDrivers([
+    {
+      id: "docker-stop-hooks",
+      capability: "configuration",
+      implementation: "test",
+      computeLifecycleHooks: {
+        async beforeWorkloadStop(candidate) {
+          stopped.push(candidate.id);
+        },
+      },
+    },
+  ]);
+  await assert.rejects(
+    driver.stopRevision({
+      ...revision,
+      compute: { id: "another-driver", implementation: "another-implementation" },
+    }),
+    /another Compute Driver/i,
+  );
+  driver.container = async (name) => existing.get(name);
+  driver.removeContainer = async (name) => {
+    existing.delete(name);
+  };
+  const agentName = driver.agentContainerName(tenant.id, revision.agentId, revision.id);
+  const gatewayName = driver.gatewayContainerName(tenant.id, revision.agentId);
+  existing.set(agentName, {
+    Config: {
+      Labels: {
+        "org.openclaw.enterprise.managed": "true",
+        "org.openclaw.enterprise.compute-driver": "docker",
+        "org.openclaw.enterprise.namespace-id": tenant.id,
+        "org.openclaw.enterprise.agent-id": revision.agentId,
+        "org.openclaw.enterprise.revision-id": revision.id,
+      },
+    },
+  });
+  existing.set(gatewayName, {
+    Config: {
+      Labels: {
+        "org.openclaw.enterprise.managed": "true",
+        "org.openclaw.enterprise.compute-driver": "docker",
+        "org.openclaw.enterprise.namespace-id": tenant.id,
+        "org.openclaw.enterprise.agent-id": revision.agentId,
+        "org.openclaw.enterprise.revision-id": revision.id,
+      },
+    },
+  });
+
+  await driver.stopRevision(revision);
+  await driver.stopRevision(revision);
+  assert.deepEqual([...existing.keys()], []);
+  assert.deepEqual(stopped, [revision.id, revision.id]);
+});
+
 test("Docker Compute gateway containers keep token auth by default and omit it for trusted proxy auth", async () => {
   const defaultEnvironment = await gatewayContainerEnvironment();
   assert.match(defaultEnvironment.OPENCLAW_GATEWAY_TOKEN ?? "", /^[0-9a-f]{64}$/);

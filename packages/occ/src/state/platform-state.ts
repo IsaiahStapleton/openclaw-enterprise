@@ -3,6 +3,7 @@ import { bindPlatformUnitOfWork } from "../ports/platform-unit-of-work.ts";
 import { createPlatformReadView } from "../ports/platform-read-view.ts";
 import type {
   Agent,
+  AgentDesiredRuntimeState,
   AgentRevision,
   AuditEvent,
   HarnessExecutionMode,
@@ -88,6 +89,17 @@ export interface AgentRepository extends AgentReadRepository {
     agentId: string,
     expectedRevisionId: string | undefined,
     candidateRevisionId: string,
+  ): Promise<Readonly<Agent> | undefined>;
+  compareAndClearActiveRevision(
+    namespaceId: string,
+    agentId: string,
+    expectedRevisionId: string,
+  ): Promise<Readonly<Agent> | undefined>;
+  transitionAgentDesiredRuntimeState(
+    namespaceId: string,
+    agentId: string,
+    expected: AgentDesiredRuntimeState | readonly AgentDesiredRuntimeState[],
+    next: AgentDesiredRuntimeState,
   ): Promise<Readonly<Agent> | undefined>;
 }
 
@@ -180,6 +192,7 @@ export interface ServiceAccountRepository extends ServiceAccountReadRepository {
     credential: ServiceAccountCredential,
   ): Promise<Readonly<ServiceAccount> | undefined>;
   deleteServiceAccount(namespaceId: string, serviceAccountId: string): Promise<boolean>;
+  hasReferences(namespaceId: string, serviceAccountId: string): Promise<boolean>;
 }
 
 const serviceAccountIdentifier =
@@ -298,6 +311,11 @@ export type PlatformOperation =
   | (PlatformOperationBase & {
       readonly kind: "agent_revision";
       readonly target?: never;
+    })
+  | (PlatformOperationBase & {
+      readonly kind: "agent";
+      readonly target: "stopped";
+      readonly operationId: string;
     });
 
 export interface PlatformOperationReadRepository {
@@ -865,16 +883,39 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       snapshot.serviceAccounts.set(agentKey(namespaceId, serviceAccountId), updated);
       return immutableCopy(updated);
     },
+    hasReferences: async (namespaceId, serviceAccountId) => {
+      if ((await serviceAccounts.findServiceAccount(namespaceId, serviceAccountId)) === undefined)
+        return false;
+      return (
+        Array.from(snapshot.agents.values()).some((agent) => {
+          if (agent.namespaceId !== namespaceId) return false;
+          const activeRevision = (
+            snapshot.revisions.get(agentKey(namespaceId, agent.id)) ?? []
+          ).find((revision) => revision.id === agent.activeRevisionId);
+          return (
+            agent.serviceAccountId === serviceAccountId ||
+            activeRevision?.serviceAccount?.id === serviceAccountId
+          );
+        }) ||
+        snapshot.operations.some((operation) => {
+          if (operation.kind !== "agent_revision" || operation.namespaceId !== namespaceId)
+            return false;
+          return Array.from(snapshot.revisions.values()).some((revisions) =>
+            revisions.some(
+              (revision) =>
+                revision.namespaceId === namespaceId &&
+                revision.id === operation.resourceId &&
+                revision.serviceAccount?.id === serviceAccountId,
+            ),
+          );
+        })
+      );
+    },
     deleteServiceAccount: async (namespaceId, serviceAccountId) => {
       if ((await serviceAccounts.findServiceAccount(namespaceId, serviceAccountId)) === undefined)
         return false;
-      if (
-        Array.from(snapshot.agents.values()).some(
-          (agent) =>
-            agent.namespaceId === namespaceId && agent.serviceAccountId === serviceAccountId,
-        )
-      )
-        throw new ScopeViolationError("The ServiceAccount is referenced by an Agent.");
+      if (await serviceAccounts.hasReferences(namespaceId, serviceAccountId))
+        throw new ScopeViolationError("The ServiceAccount is referenced by active platform state.");
       snapshot.serviceAccounts.delete(agentKey(namespaceId, serviceAccountId));
       return true;
     },
@@ -944,11 +985,26 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       const saved = immutableCopy({
         ...withoutPlugins,
         ...(plugins === undefined ? {} : { plugins }),
+        desiredRuntimeState: "stopped" as const,
       });
       snapshot.agents.set(key, saved);
       return immutableCopy(saved);
     },
     lockAgent: async (namespaceId, agentId) => agents.findAgent(namespaceId, agentId),
+    transitionAgentDesiredRuntimeState: async (namespaceId, agentId, expected, next) => {
+      const key = agentKey(namespaceId, agentId);
+      const agent = snapshot.agents.get(key);
+      const expectedStates = Array.isArray(expected) ? expected : [expected];
+      if (
+        agent === undefined ||
+        agent.namespaceId !== namespaceId ||
+        !expectedStates.includes(agent.desiredRuntimeState)
+      )
+        return undefined;
+      const saved = immutableCopy({ ...agent, desiredRuntimeState: next });
+      snapshot.agents.set(key, saved);
+      return immutableCopy(saved);
+    },
     updateConfiguration: async (
       namespaceId,
       agentId,
@@ -991,6 +1047,14 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         ...(association === undefined ? {} : { serviceAccountId: association }),
         ...(plugins === undefined ? {} : { plugins }),
       });
+      snapshot.agents.set(agentKey(namespaceId, agentId), updated);
+      return immutableCopy(updated);
+    },
+    compareAndClearActiveRevision: async (namespaceId, agentId, expectedRevisionId) => {
+      const current = await agents.findAgent(namespaceId, agentId);
+      if (!current || current.activeRevisionId !== expectedRevisionId) return undefined;
+      const { activeRevisionId: _activeRevisionId, ...stopped } = current;
+      const updated = immutableCopy(stopped);
       snapshot.agents.set(agentKey(namespaceId, agentId), updated);
       return immutableCopy(updated);
     },
@@ -1085,7 +1149,11 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     operations: {
       append: async (operation) => {
         assertInitialized(snapshot);
-        if (operation.kind !== "namespace" && operation.kind !== "agent_revision")
+        if (
+          operation.kind !== "namespace" &&
+          operation.kind !== "agent_revision" &&
+          operation.kind !== "agent"
+        )
           throw new ScopeViolationError("The platform operation has an unsupported resource kind.");
         if (
           operation.kind === "namespace" &&
@@ -1095,13 +1163,25 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
           throw new ScopeViolationError(
             "Namespace work does not match its exact lifecycle target.",
           );
+        if (
+          operation.kind === "agent" &&
+          (operation.namespaceId === operation.resourceId ||
+            !snapshot.agents.has(agentKey(operation.namespaceId, operation.resourceId)) ||
+            operation.target !== "stopped" ||
+            !isNonEmptyString(operation.operationId))
+        )
+          throw new ScopeViolationError("Agent work does not match its exact lifecycle target.");
         const duplicate = snapshot.operations.find(
           (existing) =>
             existing.kind === operation.kind &&
             existing.resourceId === operation.resourceId &&
             existing.action === operation.action &&
             (existing.kind !== "namespace" ||
-              (operation.kind === "namespace" && existing.target === operation.target)),
+              (operation.kind === "namespace" && existing.target === operation.target)) &&
+            (existing.kind !== "agent" ||
+              (operation.kind === "agent" &&
+                existing.target === operation.target &&
+                existing.operationId === operation.operationId)),
         );
         if (duplicate !== undefined) {
           if (

@@ -5,22 +5,25 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
+import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
 import { signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 
 const run = promisify(execFile);
-const occApi = fileURLToPath(new URL("../../scripts/occ-api", import.meta.url));
+const occCli = join(process.cwd(), "bin", "occ");
 
 // Real Fastify HTTP, Better Auth plugin/storage, OCC, and native IAM. This test
 // does not claim PostgreSQL or Agent runtime coverage.
 test("service API keys authenticate scoped automation without replacing sessions or IAM", async (t) => {
+  // Build the real CLI once, then exercise it through a live Fastify socket below.
+  await run("go", ["build", "-trimpath", "-o", occCli, "./cmd/occ"]);
   const installationId = `ins_${randomUUID()}`;
   const memoryDatabase = { user: [], account: [], session: [], verification: [], apikey: [] };
   const authOptions = {
@@ -51,10 +54,9 @@ test("service API keys authenticate scoped automation without replacing sessions
     iamDriver,
     auditSink,
     development: { enabled: true, installationId },
+    computeDriver: createDevelopmentComputeDriver(),
     configurationDriver: createTestConfigurationDriver(),
-    resolveHarness: async () => {
-      throw new Error("No runtime is needed for authentication tests.");
-    },
+    resolveHarness: resolveApprovedDevelopmentHarness,
     createController(installation) {
       controller = new OpenClawController(installation, {
         state: new InMemoryPlatformState({ auditSink }),
@@ -97,7 +99,10 @@ test("service API keys authenticate scoped automation without replacing sessions
     namespaceId,
     permissions: [
       { action: "read", resourceKind: "namespace" },
+      { action: "create", resourceKind: "configuration" },
       { action: "delete", resourceKind: "configuration" },
+      { action: "read", resourceKind: "agent" },
+      { action: "operate", resourceKind: "agent" },
     ],
   });
   policy.bindings.push({
@@ -128,22 +133,114 @@ test("service API keys authenticate scoped automation without replacing sessions
     },
   );
 
-  await t.test("occ-api accepts a real bodyless Configuration deletion", async (t) => {
-    const created = await request("POST", `/namespaces/${namespaceId}/configurations`, {
-      body: { kind: "agent", values: { model: "gpt-test" } },
-    });
-    assert.equal(created.status, 201);
-    const configurationPath = `/namespaces/${namespaceId}/configurations/${created.data.id}`;
-    const directory = await mkdtemp(join(tmpdir(), "openclaw-occ-api-"));
+  await t.test("occ CLI creates and deletes a real Configuration and stops an Agent", async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "openclaw-occ-cli-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const keyFile = join(directory, "service-key.json");
+    const bodyFile = join(directory, "configuration.json");
+    const ambiguousBodyFile = join(directory, "ambiguous-configuration.json");
     await writeFile(keyFile, JSON.stringify(issued), { mode: 0o600 });
-    const env = { ...process.env, OCC_URL: origin, OCC_SERVICE_KEY_FILE: keyFile };
+    await writeFile(bodyFile, JSON.stringify({ kind: "agent", values: { model: "gpt-test" } }), {
+      mode: 0o600,
+    });
+    await writeFile(
+      ambiguousBodyFile,
+      '{"kind":"agent","kind":"agent","values":{"model":"gpt-test"}}',
+      { mode: 0o600 },
+    );
+    const env = {
+      ...process.env,
+      OCC_URL: origin,
+      OCC_SERVICE_KEY_FILE: keyFile,
+      OCC_NAMESPACE: namespaceId,
+    };
 
-    // Exercise the supported shell client against the real Configuration DELETE route.
-    const deleted = await run(occApi, ["DELETE", configurationPath], { env });
-    assert.equal(deleted.stdout, "");
+    // Reject ambiguous object members before a credentialed mutation can reach OCC.
+    await assert.rejects(
+      run(occCli, ["configuration", "create", "--file", ambiguousBodyFile], { env }),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.equal(error.stdout, "");
+        assert.match(error.stderr, /invalid JSON file/);
+        return true;
+      },
+    );
+
+    // Exercise a domain command and JSON file input against a real write route.
+    const created = await run(
+      occCli,
+      ["configuration", "create", "--file", bodyFile, "--output", "json"],
+      { env },
+    );
+    const configuration = JSON.parse(created.stdout);
+    const configurationPath = `/namespaces/${namespaceId}/configurations/${configuration.id}`;
+    assert.equal(configuration.values.model, "gpt-test");
+
+    // A bodyless 204 becomes a stable domain result instead of leaking transport details.
+    const deleted = await run(
+      occCli,
+      ["configuration", "delete", configuration.id, "--output", "json"],
+      { env },
+    );
+    assert.deepEqual(JSON.parse(deleted.stdout), {
+      deleted: true,
+      id: configuration.id,
+      kind: "configuration",
+    });
     assert.equal((await request("GET", configurationPath)).status, 404);
+
+    // Seed the server-owned resource through the administrator session so the
+    // scoped CLI credential exercises only its granted Agent operations.
+    const readyNamespace = await controller.handleNamespaceLifecycle(
+      seed.principal.id,
+      namespaceId,
+      "ready",
+    );
+    assert.equal(readyNamespace.status, "ready");
+    const agentConfiguration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
+      body: { kind: "agent", values: {} },
+    });
+    assert.equal(agentConfiguration.status, 201);
+    const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {
+      body: { name: "cli-stop-agent", configurationId: agentConfiguration.data.id },
+    });
+    assert.equal(agent.status, 201);
+    const deployed = await request(
+      "POST",
+      `/namespaces/${namespaceId}/agents/${agent.data.id}/deploy`,
+    );
+    assert.equal(deployed.status, 202);
+    assert.equal(
+      (await request("GET", `/namespaces/${namespaceId}/agents/${agent.data.id}`)).data
+        .desiredRuntimeState,
+      "running",
+    );
+
+    const stopped = await run(occCli, ["agent", "stop", agent.data.id], { env });
+    assert.match(stopped.stdout, /DESIRED STATE/);
+    assert.match(stopped.stdout, new RegExp(`${agent.data.id}.*stopped`));
+    const current = await run(occCli, ["agent", "get", agent.data.id, "--output", "json"], {
+      env,
+    });
+    const currentAgent = JSON.parse(current.stdout);
+    assert.deepEqual(
+      {
+        id: currentAgent.id,
+        desiredRuntimeState: currentAgent.desiredRuntimeState,
+      },
+      { id: agent.data.id, desiredRuntimeState: "stopped" },
+    );
+
+    await assert.rejects(
+      run(occCli, ["installation", "get", "--output", "json"], { env }),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.equal(error.stdout, "");
+        assert.match(error.stderr, /FORBIDDEN/);
+        assert.match(error.stderr, /HTTP 403/);
+        return true;
+      },
+    );
   });
 
   await t.test(

@@ -420,13 +420,21 @@ export class DockerComputeDriver implements ComputeDriver {
     }
   }
 
+  async stopRevision(revision: AgentRevision): Promise<void> {
+    await this.stopRevisionRuntime(revision);
+  }
+
   async retireRevision(revision: AgentRevision): Promise<void> {
+    await this.stopRevisionRuntime(revision);
+  }
+
+  private async stopRevisionRuntime(revision: AgentRevision): Promise<void> {
     this.lifecycleStarted = true;
     if (
       revision.compute.id !== this.id ||
       revision.compute.implementation !== this.implementation
     ) {
-      throw new Error("Refusing to retire an AgentRevision pinned to another Compute Driver.");
+      throw new Error("Refusing to stop an AgentRevision pinned to another Compute Driver.");
     }
     await this.lifecycle.beforeWorkloadStop(revision);
     const agentName = this.agentContainerName(revision.namespaceId, revision.agentId, revision.id);

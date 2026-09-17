@@ -110,6 +110,13 @@ images.
 preserves another Agent's containers and preserves a gateway still required by
 a replacement revision for the same Agent.
 
+`stopRevision(revision)` removes the exact dedicated Agent container and a
+gateway only when it still serves that revision. Embedded execution removes the
+combined gateway container. Repeating stop is safe; Docker stop does not retire
+the persisted AgentRevision or remove credentials outside the containers. The
+Driver's current writable container tmpfs is ephemeral and is not supported as
+persistent Agent storage.
+
 ## Credential and container-engine boundaries
 
 Only the worker container receives Docker-compatible engine access. The OCC API,

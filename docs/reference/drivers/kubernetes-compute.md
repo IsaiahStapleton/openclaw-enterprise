@@ -47,9 +47,12 @@ also used directly by the optional `SandboxDriver.ensureNamespace` hook to
 apply approved namespace-scoped OpenShell NetworkPolicy resources
 and check gateway readiness. The selected driver's optional `provisionHarness`
 hook creates the provider-owned Harness Sandbox; without that hook, Compute
-creates the ordinary Harness Deployment. Revision cleanup is delegated to the
-provider, so Compute does not need Sandbox custom-resource permissions. No
-separate SandboxDriver Kubernetes access adapter is introduced. The privileged
+creates the ordinary Harness Deployment. Stop and retirement delete that
+ordinary Deployment when present and then always invoke the selected provider's
+required revision cleanup. An absent Deployment does not skip cleanup.
+Provider-owned Harness removal remains delegated to the provider, so Compute
+does not need Sandbox custom-resource permissions. No separate SandboxDriver
+Kubernetes access adapter is introduced. The privileged
 OpenShell init or sidecar containers must be allowed only through an
 operator-approved RuntimeClass or equivalent admission exemption with a
 matching fail-closed policy; the Harness container itself remains unprivileged.
@@ -169,6 +172,14 @@ Provider-issued access tokens and enabled external channels require dedicated
 execution. Unsupported Harness and execution-mode combinations fail deployment.
 OpenShell sandboxing currently supports only this dedicated Codex path; embedded
 OpenClaw Agents fail closed when the OpenShell SandboxDriver is selected.
+
+Stopping an Agent first deletes its exact gateway route and gateway runtime,
+then removes the dedicated Harness Deployment or delegates provider-owned
+Harness removal. A selected Sandbox Driver's revision cleanup always runs after
+an ordinary Harness Deployment is absent. Stop retains Agent-owned
+PersistentVolumeClaims and runtime credential Secrets. Retirement remains the
+destructive revision cleanup operation. Repeated stop observes exact ownership
+and converges when the runtime objects are already absent.
 
 See the [Harness execution topology flow](../../flows/harness-execution-topology.md)
 for additional execution details.

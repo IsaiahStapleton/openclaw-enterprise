@@ -40,7 +40,7 @@ human administrator session path, not service keys. The
 ### Production prerequisites
 
 - Explicit Kubernetes context, enforcing NetworkPolicies, Helm, `kubectl`,
-  Python 3, and `yq` v4.
+  Python 3, `yq` v4, and the installed [OCC CLI](cli.md).
 - Controller and runtime image digests (build them in the first step).
 - External PostgreSQL with separate migrator and application roles.
 - Operator-managed HTTPS access for approved clients; the chart does not create
@@ -62,6 +62,9 @@ Follow these pages in order in the same operator shell:
 3. [Verify the production workload](deploy/production-agents.md#verify-production-workloads).
    Confirm the active revision, gateway access, and TUI model-turn proof for
    token-authenticated gateways.
+
+For ongoing business operation, use [production handoff](deploy/production-handoff.md)
+to record owners, credential renewal, alert response, and recovery decisions.
 
 For private workspace-file administration, configure
 [Agent workspace routing](deploy/workspace-routing.md). For operational logs,
@@ -109,5 +112,6 @@ so use Kubernetes Compute for plugin-enabled runtime proof. See
 ## Related
 
 - [Service API keys, rotation, and bootstrap recovery](deploy/service-keys.md)
+- [Credential renewal and revocation](deploy/credential-lifecycle.md)
 - [Local Kubernetes, development TUI, and cleanup](deploy/local-operations.md)
 - [Configuration and settings](../reference/settings.md)

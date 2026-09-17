@@ -19,9 +19,9 @@ production database, cluster, or credential for tests without explicit approval.
 
 ## Set up a development checkout
 
-Use Node.js 24 or newer and the exact pnpm version in
-[`package.json`](package.json). In a trusted checkout, explicitly prepare
-dependencies with:
+Use Node.js 24 or newer, the exact pnpm version in [`package.json`](package.json),
+and the Go version selected by [`go.mod`](go.mod). In a trusted checkout,
+explicitly prepare dependencies with:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -41,6 +41,15 @@ use dependency-independent checks rather than installing as an agent side effect
 For a running local stack, follow the [quickstart](docs/guides/quickstart.md).
 It uses Docker Compose and has different prerequisites from source-only checks.
 
+### Dependency release waiting period
+
+The root and independent docs package require registry releases to be at least
+seven days old (`minimumReleaseAge: 10080` minutes). The pinned pnpm checks direct,
+transitive, and frozen-lockfile dependencies and rejects missing publication dates.
+If installation rejects a release, wait until it matures or select a compatible
+older version. This policy applies to pnpm registry installs; Git/local dependencies
+and separate npm-based image builds are outside its scope.
+
 ## Validate the change
 
 With matching dependencies installed and infrastructure selectors unset:
@@ -49,6 +58,8 @@ With matching dependencies installed and infrastructure selectors unset:
 pnpm check:workspace
 pnpm format:check
 pnpm typecheck
+pnpm cli:check
+pnpm cli:test
 pnpm openapi:check
 pnpm test:conformance
 pnpm test:integration

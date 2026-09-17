@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { composeConfigurationProvider } from "./compose.mjs";
+
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const serviceKey = "sk-test-secret-value";
 const matchingInstallationId = "ins_3033697e-6397-4cc6-9b04-8ec17af78cf1";
@@ -23,30 +25,6 @@ function commandPath(name) {
     encoding: "utf8",
     env: process.env,
   }).stdout.trim();
-}
-
-function composeConfigurationProvider() {
-  const cleanEnvironment = {
-    ...process.env,
-    OPENAI_API_KEY: "",
-    OCC_DOCKER_RUNTIME_IMAGE: "",
-    OCC_DOCKER_GATEWAY_IMAGE: "",
-    OCC_DOCKER_AGENT_IMAGE: "",
-  };
-  const docker = commandPath("docker");
-  if (docker) {
-    const result = spawnSync(docker, ["compose", "config", "--format", "json"], {
-      cwd: repository,
-      env: cleanEnvironment,
-      encoding: "utf8",
-    });
-    if (result.status === 0) return { command: docker, prefix: ["compose"], format: "json" };
-  }
-  const podmanCompose = commandPath("podman-compose");
-  const yq = commandPath("yq");
-  assert.ok(podmanCompose, "Docker Compose or podman-compose is required for dev-up tests");
-  assert.ok(yq, "yq is required when dev-up tests use podman-compose");
-  return { command: podmanCompose, prefix: [], format: "yaml", yq };
 }
 
 async function createFixture(t, options = {}) {
@@ -154,7 +132,7 @@ function delegateComposeConfig() {
 }
 if (args[0] === "--version") exit(0, engine === "podman" ? "podman version 6.1.0" : "Docker version 29.4.0");
 if (args[0] === "version") {
-  if (engine === "docker") process.stdout.write("Docker Engine - Community\\n");
+  if (engine === "docker") process.stdout.write(${JSON.stringify((options.dockerPlatformName ?? "Docker Engine - Community") + "\n")});
   else if (podmanDockerApi) process.stdout.write("Podman Engine\\n");
   else exit(1);
   exit(0);
@@ -266,30 +244,25 @@ exit(99, "unhandled " + engine + " compose command: " + command);
     await symlink("podman", join(bin, "podman-compose"));
   }
   await writeExecutable(
-    join(bin, "curl"),
+    join(bin, "occ"),
     `#!${nodeExecutable}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-const log = process.env.DEV_UP_CURL_LOG;
+const log = process.env.DEV_UP_OCC_LOG;
 if (log) fs.appendFileSync(log, JSON.stringify({ args }) + "\\n");
 const scenario = process.env.DEV_UP_FAKE_SCENARIO || "success";
-const outputIndex = args.indexOf("--output");
-const output = outputIndex === -1 ? undefined : args[outputIndex + 1];
 let payload;
-let status = "200";
 let exitCode = 0;
 if (scenario === "api-unauthorized") {
-  status = "401";
-  exitCode = 22;
+  exitCode = 1;
   payload = { error: { code: "UNAUTHENTICATED", message: "A valid service API key is required." }, meta: { requestId: "req_1" } };
 } else {
   payload = {
-    data: { id: scenario === "api-mismatch" ? ${JSON.stringify(mismatchedInstallationId)} : ${JSON.stringify(matchingInstallationId)} },
-    meta: { requestId: "req_1" },
+    id: scenario === "api-mismatch" ? ${JSON.stringify(mismatchedInstallationId)} : ${JSON.stringify(matchingInstallationId)},
   };
 }
-if (output) fs.writeFileSync(output, JSON.stringify(payload));
-process.stdout.write(status);
+if (exitCode === 0) process.stdout.write(JSON.stringify(payload) + "\\n");
+else process.stderr.write(JSON.stringify(payload) + "\\nHTTP 401\\n");
 process.exit(exitCode);
 `,
   );
@@ -307,7 +280,7 @@ process.exit(exitCode);
   );
   const dockerLog = engine === "docker" ? engineLog : join(directory, "docker.log");
   const podmanLog = engine === "podman" ? engineLog : join(directory, "podman.log");
-  const curlLog = join(directory, "curl.log");
+  const occLog = join(directory, "occ.log");
   const env = {
     ...process.env,
     PATH: engine === "podman" ? bin : `${bin}${delimiter}${process.env.PATH ?? ""}`,
@@ -316,7 +289,7 @@ process.exit(exitCode);
     OCC_DOCKER_GATEWAY_IMAGE: "",
     OCC_DOCKER_AGENT_IMAGE: "",
     DEV_UP_ENGINE_LOG: engineLog,
-    DEV_UP_CURL_LOG: curlLog,
+    DEV_UP_OCC_LOG: occLog,
     DEV_UP_FAKE_SCENARIO: options.scenario ?? "success",
     DEV_UP_REAL_COMPOSE_COMMAND: provider.command,
     DEV_UP_REAL_COMPOSE_PREFIX: JSON.stringify(provider.prefix),
@@ -331,7 +304,7 @@ process.exit(exitCode);
     emptyEnv,
     dockerLog,
     podmanLog,
-    curlLog,
+    occLog,
     env,
   };
 }

@@ -203,6 +203,9 @@ function agentFromRow(row: PostgresRow): Readonly<Agent> {
   const activeRevisionId = optionalText(row, "active_revision_id");
   const serviceAccountId = optionalText(row, "service_account_id");
   const providerId = row.provider_id === null ? null : text(row, "provider_id");
+  const desiredRuntimeState = text(row, "desired_runtime_state");
+  if (desiredRuntimeState !== "running" && desiredRuntimeState !== "stopped")
+    throw new DependencyUnavailableError("Persisted Agent desired runtime state is invalid.");
   return immutableCopy({
     id: text(row, "id"),
     namespaceId: text(row, "namespace_id"),
@@ -216,6 +219,7 @@ function agentFromRow(row: PostgresRow): Readonly<Agent> {
     servicePrincipalId: text(row, "service_principal_id"),
     ...(serviceAccountId === undefined ? {} : { serviceAccountId }),
     ...(activeRevisionId === undefined ? {} : { activeRevisionId }),
+    desiredRuntimeState,
     createdAt: timestamp(row, "created_at"),
   });
 }
@@ -1454,7 +1458,44 @@ export class PostgresPlatformState implements PlatformStateStore {
         )[0];
         return updated === undefined ? undefined : serviceAccountFromRow(updated);
       },
+      hasReferences: async (namespaceId, serviceAccountId) => {
+        if ((await findServiceAccount(namespaceId, serviceAccountId)) === undefined) return false;
+        // One statement observes both sides of the worker's pending-to-active handoff.
+        const found = rows(
+          (
+            await client.query(
+              `SELECT EXISTS (
+                 SELECT 1 FROM occ.agents
+                 WHERE namespace_id = $1 AND service_account_id = $2
+               ) OR EXISTS (
+                 SELECT 1 FROM occ.agents AS a
+                 JOIN occ.agent_revisions AS r
+                   ON r.namespace_id = a.namespace_id
+                  AND r.agent_id = a.id
+                  AND r.id = a.active_revision_id
+                 WHERE a.namespace_id = $1
+                   AND r.admitted_spec #>> '{service_account,id}' = $2
+               ) OR EXISTS (
+                 SELECT 1 FROM occ.controller_work AS w
+                 JOIN occ.agent_revisions AS r
+                   ON r.namespace_id = w.namespace_id
+                  AND r.agent_id = w.agent_id
+                  AND r.id = w.revision_id
+                 WHERE w.namespace_id = $1
+                   AND w.state IN ('queued', 'claimed')
+                   AND r.admitted_spec #>> '{service_account,id}' = $2
+               ) AS present`,
+              [namespaceId, serviceAccountId],
+            )
+          ).rows,
+        )[0];
+        return found?.present === true;
+      },
       deleteServiceAccount: async (namespaceId, serviceAccountId) => {
+        if (await serviceAccounts.hasReferences(namespaceId, serviceAccountId))
+          throw new ScopeViolationError(
+            "The ServiceAccount is referenced by active platform state.",
+          );
         const deleted = await client.query(
           `DELETE FROM occ.service_accounts AS s USING occ.namespaces AS n
            WHERE s.namespace_id = $1 AND s.id = $2
@@ -1475,7 +1516,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           await client.query(
             `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                     a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
-                    a.active_revision_id, a.created_at
+                    a.active_revision_id, a.desired_runtime_state, a.created_at
              FROM occ.agents AS a
              JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
              WHERE a.namespace_id = $1 AND a.id = $2${lock ? " FOR UPDATE OF a" : ""}`,
@@ -1495,7 +1536,7 @@ export class PostgresPlatformState implements PlatformStateStore {
             await client.query(
               `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                       a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
-                      a.active_revision_id, a.created_at
+                      a.active_revision_id, a.desired_runtime_state, a.created_at
                FROM occ.agents AS a
                JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
                WHERE a.namespace_id = $1 ORDER BY a.created_at, a.id`,
@@ -1525,6 +1566,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         const saved = immutableCopy({
           ...withoutPlugins,
           ...(plugins === undefined ? {} : { plugins }),
+          desiredRuntimeState: "stopped" as const,
         });
         await client.query(
           `INSERT INTO occ.agents
@@ -1579,7 +1621,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                           a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
-                          a.active_revision_id, a.created_at`,
+                          a.active_revision_id, a.desired_runtime_state, a.created_at`,
               [
                 namespaceId,
                 agentId,
@@ -1613,8 +1655,44 @@ export class PostgresPlatformState implements PlatformStateStore {
                 AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                           a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
-                          a.active_revision_id, a.created_at`,
+                          a.active_revision_id, a.desired_runtime_state, a.created_at`,
               [namespaceId, agentId, expectedRevisionId ?? null, candidateRevisionId],
+            )
+          ).rows,
+        )[0];
+        return updated === undefined ? undefined : agentFromRow(updated);
+      },
+      compareAndClearActiveRevision: async (namespaceId, agentId, expectedRevisionId) => {
+        const updated = rows(
+          (
+            await client.query(
+              `UPDATE occ.agents AS a SET active_revision_id = NULL
+               FROM occ.namespaces AS n
+               WHERE a.namespace_id = $1 AND a.id = $2 AND a.active_revision_id = $3
+                 AND n.id = a.namespace_id AND n.deleted_at IS NULL
+               RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+                         a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                         a.active_revision_id, a.desired_runtime_state, a.created_at`,
+              [namespaceId, agentId, expectedRevisionId],
+            )
+          ).rows,
+        )[0];
+        return updated === undefined ? undefined : agentFromRow(updated);
+      },
+      transitionAgentDesiredRuntimeState: async (namespaceId, agentId, expected, next) => {
+        const expectedStates = Array.isArray(expected) ? expected : [expected];
+        const updated = rows(
+          (
+            await client.query(
+              `UPDATE occ.agents AS a SET desired_runtime_state = $4
+               FROM occ.namespaces AS n
+               WHERE a.namespace_id = $1 AND a.id = $2
+                 AND a.desired_runtime_state = ANY($3::text[])
+                 AND n.id = a.namespace_id AND n.deleted_at IS NULL
+               RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+                         a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                         a.active_revision_id, a.desired_runtime_state, a.created_at`,
+              [namespaceId, agentId, expectedStates, next],
             )
           ).rows,
         )[0];
@@ -1772,6 +1850,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           let agentId: string | undefined;
           let revisionId: string | undefined;
           let namespaceTarget: "ready" | "deleted" | undefined;
+          let agentTarget: "stopped" | undefined;
           if (operation.kind === "namespace") {
             if (namespaceId !== operation.resourceId)
               throw new ScopeViolationError("Namespace work does not match its exact owner.");
@@ -1789,18 +1868,35 @@ export class PostgresPlatformState implements PlatformStateStore {
             if (owner === undefined)
               throw new ScopeViolationError("AgentRevision work does not match its exact owner.");
             agentId = text(owner, "agent_id");
+          } else if (operation.kind === "agent") {
+            const owner = rows(
+              (
+                await client.query(
+                  "SELECT id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+                  [namespaceId, operation.resourceId],
+                )
+              ).rows,
+            )[0];
+            if (owner === undefined)
+              throw new ScopeViolationError("Agent work does not match its exact owner.");
+            agentId = text(owner, "id");
+            agentTarget = operation.target;
           } else {
             throw new ScopeViolationError("Unsupported controller work resource kind.");
           }
 
           await queue.enqueue({
-            idempotencyKey: `${operation.kind}:${operation.resourceId}:${operation.action}${
-              namespaceTarget === undefined ? "" : `:${namespaceTarget}`
-            }`,
+            idempotencyKey:
+              operation.kind === "agent"
+                ? `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`
+                : `${operation.kind}:${operation.resourceId}:${operation.action}${
+                    namespaceTarget === undefined ? "" : `:${namespaceTarget}`
+                  }`,
             namespaceId,
             ...(agentId === undefined ? {} : { agentId }),
             ...(revisionId === undefined ? {} : { revisionId }),
             ...(namespaceTarget === undefined ? {} : { namespaceTarget }),
+            ...(agentTarget === undefined ? {} : { agentTarget }),
             actorId: operation.actorId,
           });
         },
@@ -1809,7 +1905,8 @@ export class PostgresPlatformState implements PlatformStateStore {
           const found = rows(
             (
               await client.query(
-                `SELECT namespace_id, agent_id, revision_id, actor_id, namespace_target
+                `SELECT idempotency_key, namespace_id, agent_id, revision_id, actor_id,
+                        namespace_target, agent_target
                  FROM occ.controller_work ORDER BY created_at, idempotency_key`,
               )
             ).rows,
@@ -1818,19 +1915,39 @@ export class PostgresPlatformState implements PlatformStateStore {
             found.map((row): Readonly<PlatformOperation> => {
               const namespaceId = text(row, "namespace_id");
               const revisionId = optionalText(row, "revision_id");
+              const agentId = optionalText(row, "agent_id");
               const base = {
                 action: "reconcile" as const,
                 namespaceId,
-                resourceId: revisionId ?? namespaceId,
+                resourceId: revisionId ?? agentId ?? namespaceId,
                 actorId: text(row, "actor_id"),
               };
-              if (revisionId === undefined) {
+              if (agentId === undefined) {
                 const target = text(row, "namespace_target");
                 if (target !== "ready" && target !== "deleted")
                   throw new DependencyUnavailableError(
                     "Persisted Namespace work has an invalid target.",
                   );
                 return immutableCopy({ ...base, kind: "namespace", target });
+              }
+              if (revisionId === undefined) {
+                const target = text(row, "agent_target");
+                if (target !== "stopped")
+                  throw new DependencyUnavailableError(
+                    "Persisted Agent work has an invalid target.",
+                  );
+                const key = text(row, "idempotency_key");
+                const prefix = `agent:${agentId}:reconcile:${target}:`;
+                if (!key.startsWith(prefix) || key.length === prefix.length)
+                  throw new DependencyUnavailableError(
+                    "Persisted Agent work has an invalid operation identity.",
+                  );
+                return immutableCopy({
+                  ...base,
+                  kind: "agent",
+                  target,
+                  operationId: key.slice(prefix.length),
+                });
               }
               return immutableCopy({ ...base, kind: "agent_revision" });
             }),

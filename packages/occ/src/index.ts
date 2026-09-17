@@ -1257,7 +1257,7 @@ export class OpenClawController {
   ): Promise<void> {
     this.serviceAccountIdentity(namespaceId, serviceAccountId);
     return this.mutate(async (state) => {
-      const namespace = await this.exactNamespace(state, namespaceId);
+      const namespace = await this.lockNamespace(state, namespaceId);
       await this.authorize(principalId, "delete", {
         kind: "service_account",
         id: serviceAccountId,
@@ -1269,9 +1269,10 @@ export class OpenClawController {
       );
       if (account === undefined)
         throw new ScopeViolationError("The ServiceAccount does not belong to the exact Namespace.");
-      const agents = await state.agents.listAgents(namespace.id);
-      if (agents.some((agent) => agent.serviceAccountId === account.id))
-        throw new ResourceConflictError("An Agent still references the exact ServiceAccount.");
+      if (await state.serviceAccounts.hasReferences(namespace.id, account.id))
+        throw new ResourceConflictError(
+          "An Agent draft, active revision, or pending deployment still references the exact ServiceAccount.",
+        );
       const driver = this.serviceAccountDriver();
       if (account.credential?.kind === "access_token" && driver === undefined)
         throw new DependencyUnavailableError("The selected ServiceAccount Driver is unavailable.");
@@ -1465,6 +1466,7 @@ export class OpenClawController {
         executionMode,
         ...(plugins === undefined ? {} : { plugins }),
         servicePrincipalId: `service-agent-${agentId}`,
+        desiredRuntimeState: "stopped",
         createdAt: this.timestamp(),
       });
       return agent;
@@ -1754,6 +1756,14 @@ export class OpenClawController {
           createdAt: this.timestamp(),
         }),
       );
+      const running = await state.agents.transitionAgentDesiredRuntimeState(
+        namespace.id,
+        lockedAgent.id,
+        lockedAgent.desiredRuntimeState,
+        "running",
+      );
+      if (running === undefined)
+        throw new ResourceConflictError("The Agent lifecycle changed during deployment.");
       await this.record(state, {
         kind: "agent_revision",
         action: "reconcile",
@@ -1762,6 +1772,48 @@ export class OpenClawController {
         actorId: principalId,
       });
       return revision;
+    });
+  }
+
+  async stopAgent(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<Readonly<Agent>> {
+    if (!isNonEmptyString(namespaceId))
+      throw new ScopeViolationError("The exact Namespace identity is missing.");
+    if (!isNonEmptyString(agentId))
+      throw new ScopeViolationError("The exact Agent identity is missing.");
+    return this.mutate(async (state) => {
+      await this.lockNamespace(state, namespaceId);
+      const agent = await state.agents.lockAgent(namespaceId, agentId);
+      if (agent === undefined)
+        throw new ScopeViolationError(
+          "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      await this.authorize(principalId, "operate", {
+        kind: "agent",
+        id: agent.id,
+        namespaceId: agent.namespaceId,
+      });
+      const stopped = await state.agents.transitionAgentDesiredRuntimeState(
+        namespaceId,
+        agentId,
+        agent.desiredRuntimeState,
+        "stopped",
+      );
+      if (stopped === undefined)
+        throw new ResourceConflictError("The Agent lifecycle changed during stop.");
+      await this.record(state, {
+        kind: "agent",
+        action: "reconcile",
+        target: "stopped",
+        namespaceId,
+        resourceId: agentId,
+        actorId: principalId,
+        operationId: crypto.randomUUID(),
+      });
+      return stopped;
     });
   }
 

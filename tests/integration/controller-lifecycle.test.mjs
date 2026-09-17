@@ -49,8 +49,10 @@ function createIAMDriver({ identities = [], roles = [], bindings = [], restricti
           { action: "create", resourceKind: "configuration" },
           { action: "read", resourceKind: "configuration" },
           { action: "create", resourceKind: "agent" },
+          { action: "read", resourceKind: "agent" },
           { action: "update", resourceKind: "agent" },
           { action: "deploy", resourceKind: "agent" },
+          { action: "operate", resourceKind: "agent" },
         ],
       },
       ...roles,
@@ -73,7 +75,13 @@ function createIAMDriver({ identities = [], roles = [], bindings = [], restricti
 }
 
 function createDrivers(iam) {
-  const calls = { ensureNamespace: 0, deleteNamespace: 0, prepareRevision: 0, retire: 0 };
+  const calls = {
+    ensureNamespace: 0,
+    deleteNamespace: 0,
+    prepareRevision: 0,
+    stop: 0,
+    retire: 0,
+  };
   const compute = {
     id: "compute-driver-a",
     capability: "compute",
@@ -100,6 +108,9 @@ function createDrivers(iam) {
         revisionId: revision.id,
         ready: true,
       };
+    },
+    async stopRevision() {
+      calls.stop += 1;
     },
     async retireRevision() {
       calls.retire += 1;
@@ -151,6 +162,52 @@ async function createConfiguration(
 ) {
   return controller.createConfiguration(principalId, { namespaceId, kind: "agent", values });
 }
+
+test("Agent stop records an authorized Agent-scoped target without deleting its revision", async () => {
+  const { controller } = createController();
+  const namespace = await controller.createNamespace("principal-admin", { name: "Stop target" });
+  await controller.transact((state) =>
+    state.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
+  );
+  const configuration = await createConfiguration(controller, namespace.id, { model: "gpt-test" });
+  const created = await controller.createAgent("principal-admin", {
+    namespaceId: namespace.id,
+    name: "Stoppable Agent",
+    configurationId: configuration.id,
+  });
+  assert.equal(created.desiredRuntimeState, "stopped");
+  const revision = await controller.deployAgent(
+    "principal-admin",
+    { namespaceId: namespace.id, agentId: created.id },
+    resolveApprovedDevelopmentHarness,
+  );
+  assert.equal(
+    (await controller.getAgent("principal-admin", namespace.id, created.id)).desiredRuntimeState,
+    "running",
+  );
+
+  const beforeDenial = controller.pendingOperations().length;
+  await assert.rejects(
+    controller.stopAgent("principal-unbound", namespace.id, created.id),
+    AuthorizationDeniedError,
+  );
+  assert.equal(controller.pendingOperations().length, beforeDenial);
+
+  const stopped = await controller.stopAgent("principal-admin", namespace.id, created.id);
+  assert.equal(stopped.desiredRuntimeState, "stopped");
+  assert.equal(
+    (
+      await controller.transact((state) => state.revisions.listRevisions(namespace.id, created.id))
+    ).at(-1)?.id,
+    revision.id,
+  );
+  const operation = controller.pendingOperations().at(-1);
+  assert.equal(operation.kind, "agent");
+  assert.equal(operation.resourceId, created.id);
+  assert.equal(operation.target, "stopped");
+  assert.equal(operation.actorId, "principal-admin");
+  assert.match(operation.operationId, /^[0-9a-f-]{36}$/);
+});
 
 test("only the controller selects explicitly registered Drivers for each capability", () => {
   const { controller, iam, compute } = createController();
@@ -379,6 +436,7 @@ test("authorized resources retain exact Namespace ownership without metadata-onl
     ensureNamespace: 0,
     deleteNamespace: 0,
     prepareRevision: 0,
+    stop: 0,
     retire: 0,
   });
 });
@@ -579,6 +637,7 @@ test("Agent configuration references stay mutable while deployment admits deeply
     ensureNamespace: 1,
     deleteNamespace: 0,
     prepareRevision: 0,
+    stop: 0,
     retire: 0,
   });
 });
@@ -1041,6 +1100,7 @@ test("denied or cross-Namespace mutations never write resources or queue Driver 
     ensureNamespace: 0,
     deleteNamespace: 0,
     prepareRevision: 0,
+    stop: 0,
     retire: 0,
   });
 });
@@ -1173,6 +1233,7 @@ test("two Namespace tenants cannot create or deploy each other's Agents", async 
     ensureNamespace: 0,
     deleteNamespace: 0,
     prepareRevision: 0,
+    stop: 0,
     retire: 0,
   });
 });

@@ -306,10 +306,12 @@ export interface ServiceAccountRevision {
   readonly credential: ServiceAccountCredential & { readonly kind: "api_key" | "access_token" };
 }
 
+export type AgentDesiredRuntimeState = "running" | "stopped";
 export interface Agent extends Scope {
   readonly id: string;
   readonly namespaceId: string;
   readonly name: string;
+  readonly desiredRuntimeState: AgentDesiredRuntimeState;
   readonly configurationId: string;
   readonly providerId: ProviderRef;
   readonly serviceAccountId?: string;
@@ -609,6 +611,7 @@ export interface SandboxDriver extends Driver {
   ): OpenClawConfigurationDocument;
   ensureNamespace?(context: SandboxNamespaceContext): Promise<void>;
   provisionHarness?(context: SandboxHarnessContext): Promise<SandboxResourceRef>;
+  /** Required for revision stop, retirement, and Namespace cleanup, independent of Harness ownership. */
   cleanup(
     context: SandboxNamespaceContext & { readonly revision?: Readonly<AgentRevision> },
   ): Promise<void>;
@@ -690,6 +693,7 @@ export interface ComputeDriver extends Driver {
   ): Promise<ComputeReadiness>;
   activateRevision?(revision: AgentRevision, context?: ComputeRevisionContext): Promise<void>;
   deactivateRevision?(revision: AgentRevision): Promise<void>;
+  stopRevision(revision: AgentRevision): Promise<void>;
   retireRevision(revision: AgentRevision): Promise<void>;
 }
 

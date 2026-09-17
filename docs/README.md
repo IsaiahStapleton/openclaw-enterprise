@@ -8,6 +8,9 @@ Start locally, install a production control plane, or look up supported behavior
 - [Quickstart](guides/quickstart.md): start locally on Docker or Podman, sign in,
   and verify API access.
 - [Deploy](guides/deploy.md): choose a deployment and follow its installation steps.
+- [Production handoff](guides/deploy/production-handoff.md): assign owners and verify a business workflow, alert response, and recovery readiness.
+- [Credential lifecycle](guides/deploy/credential-lifecycle.md): select the supported renewal or revocation path and verify its consumers.
+- [OCC CLI](guides/cli.md): manage OCC resources through domain commands.
 - [Concepts](guides/concepts.md): understand Namespaces, Agents, revisions, and credentials.
 - [Observability](guides/observability.md): export logs and check Collector health.
 
@@ -16,6 +19,7 @@ Start locally, install a production control plane, or look up supported behavior
 Use the [feature and Driver index](reference/README.md) for supported behavior,
 configuration, and limits. The [HTTP API](reference/api.md) describes request and
 response schemas. The [console guide](reference/console.md) covers browser tasks.
+Compare bundled implementations in the [ComputeDriver feature matrix](reference/drivers/compute-matrix.md).
 [Agent plugins](reference/agent-plugins.md) and
 [PluginDriver](reference/drivers/plugin.md) cover curated plugin selection, startup
 validation, and native runtime policy.

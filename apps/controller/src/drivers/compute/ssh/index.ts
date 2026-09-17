@@ -423,6 +423,13 @@ export class SshComputeDriver implements ComputeDriver {
     await this.revisionOperation("verify-revision", revision);
   }
 
+  async stopRevision(revision: AgentRevision): Promise<void> {
+    this.lifecycleStarted = true;
+    this.validateRevision(revision);
+    await this.lifecycle.beforeWorkloadStop(revision);
+    await this.revisionOperation("stop-revision", revision);
+  }
+
   async retireRevision(revision: AgentRevision): Promise<void> {
     this.lifecycleStarted = true;
     this.validateRevision(revision);

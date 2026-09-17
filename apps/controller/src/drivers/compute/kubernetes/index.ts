@@ -249,6 +249,8 @@ const GATEWAY_API_VERSION = "gateway.networking.k8s.io/v1";
 const GATEWAY_LISTENER_SECTION = "https";
 const GATEWAY_MEMBERSHIP_LABEL = "openclaw-enterprise.io/gateway";
 const REQUEST_TIMEOUT_MS = 10_000;
+const WORKLOAD_TERMINATION_TIMEOUT_MS = 120_000;
+const WORKLOAD_TERMINATION_POLL_MS = 100;
 const AGENT_TRANSPORT_PORT = 18_790;
 const AGENT_TRANSPORT_TOKEN_KEY = "app-server-token";
 const GATEWAY_TOKEN_KEY = "gateway-token";
@@ -1758,18 +1760,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
   }
 
-  async retireRevision(revision: AgentRevision): Promise<void> {
+  async stopRevision(revision: AgentRevision): Promise<void> {
     this.lifecycleStarted = true;
     if (
       revision.compute.id !== this.id ||
       revision.compute.implementation !== this.implementation
     ) {
-      throw new Error("Refusing to retire an AgentRevision pinned to another Compute Driver.");
+      throw new Error("Refusing to stop an AgentRevision pinned to another Compute Driver.");
     }
     required(revision.agentId, "Agent ID");
     required(revision.id, "AgentRevision ID");
     required(revision.servicePrincipalId, "Agent ServicePrincipal ID");
-    const clients = await this.clients();
     const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
     const existingNamespace = await this.get("Namespace", namespace);
     if (existingNamespace === undefined) {
@@ -1781,17 +1782,83 @@ export class KubernetesComputeDriver implements ComputeDriver {
       { namespaceId: revision.namespaceId },
       external,
     );
-    if (revision.harness.mode === "embedded") {
-      if (this.sandboxDriverForRevision(revision) !== undefined) {
-        throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
-      }
+    if (
+      revision.harness.mode !== "dedicated" &&
+      this.sandboxDriverForRevision(revision) !== undefined
+    ) {
+      throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
+    }
+    await this.lifecycle.beforeWorkloadStop(revision);
+    // Stop removes the serving path first so no new traffic reaches a runtime while
+    // its exact Harness is being shut down.
+    await this.removeStoppedGateway(revision, namespace);
+    await this.shutdownRevisionRuntime(revision, namespace);
+  }
+
+  async retireRevision(revision: AgentRevision): Promise<void> {
+    this.lifecycleStarted = true;
+    if (
+      revision.compute.id !== this.id ||
+      revision.compute.implementation !== this.implementation
+    ) {
+      throw new Error("Refusing to retire an AgentRevision pinned to another Compute Driver.");
+    }
+    required(revision.agentId, "Agent ID");
+    required(revision.id, "AgentRevision ID");
+    required(revision.servicePrincipalId, "Agent ServicePrincipal ID");
+    const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
+    const existingNamespace = await this.get("Namespace", namespace);
+    if (existingNamespace === undefined) {
       await this.lifecycle.beforeWorkloadStop(revision);
-      await this.removeRetiredGateway(revision, namespace);
       return;
     }
+    this.verifyNamespaceOwnership(
+      existingNamespace,
+      { namespaceId: revision.namespaceId },
+      external,
+    );
+    if (
+      revision.harness.mode !== "dedicated" &&
+      this.sandboxDriverForRevision(revision) !== undefined
+    ) {
+      throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
+    }
+    await this.lifecycle.beforeWorkloadStop(revision);
+    await this.shutdownRevisionRuntime(revision, namespace);
+    await this.removeRetiredGateway(revision, namespace);
+  }
+
+  private async shutdownRevisionRuntime(revision: AgentRevision, namespace: string): Promise<void> {
+    if (revision.harness.mode === "embedded") return;
     const sandboxDriver = this.sandboxDriverForRevision(revision);
-    if (sandboxDriver?.provisionHarness !== undefined) {
-      await this.lifecycle.beforeWorkloadStop(revision);
+    const computeOwnsWorkload = sandboxDriver?.provisionHarness === undefined;
+    const name = `agent-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`;
+    const deployment = computeOwnsWorkload
+      ? await this.getOwned("Deployment", name, namespace, {
+          namespaceId: revision.namespaceId,
+          agentId: revision.agentId,
+          servicePrincipalId: revision.servicePrincipalId,
+          revisionId: revision.id,
+        })
+      : undefined;
+    if (deployment !== undefined) {
+      const clients = await this.clients();
+      await this.request(
+        () =>
+          clients.apps.deleteNamespacedDeployment({
+            name,
+            namespace,
+            ...(deployment.metadata.uid === undefined
+              ? {}
+              : { body: { preconditions: { uid: deployment.metadata.uid } } }),
+          }),
+        { mutating: true },
+      );
+    }
+    if (computeOwnsWorkload) {
+      await this.waitForRevisionPodsToTerminate(revision, namespace, "agent");
+    }
+    if (sandboxDriver !== undefined) {
       await sandboxDriver.cleanup({
         ...(await this.sandboxNamespaceContext(
           this.sandboxNamespaceForRevision(revision, namespace),
@@ -1799,34 +1866,94 @@ export class KubernetesComputeDriver implements ComputeDriver {
         )),
         revision,
       });
-      await this.removeRetiredGateway(revision, namespace);
+    }
+    if (!computeOwnsWorkload) {
+      await this.waitForRevisionPodsToTerminate(revision, namespace, "agent");
+    }
+  }
+
+  private async removeStoppedGateway(revision: AgentRevision, namespace: string): Promise<void> {
+    const name = `gateway-${sha256Hex(revision.agentId, 12)}`;
+    const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+    const gateway = await this.getOwned("Deployment", name, namespace, ownership);
+    const route = await this.gatewayRouteForRevision(name, ownership, namespace, revision.id);
+    if (
+      gateway?.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revision.id &&
+      route === undefined
+    ) {
+      await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
       return;
     }
-    const name = `agent-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`;
-    const deployment = await this.getOwned("Deployment", name, namespace, {
-      namespaceId: revision.namespaceId,
-      agentId: revision.agentId,
-      servicePrincipalId: revision.servicePrincipalId,
-      revisionId: revision.id,
-    });
-    if (deployment === undefined) {
-      await this.lifecycle.beforeWorkloadStop(revision);
-      await this.removeRetiredGateway(revision, namespace);
-      return;
+    await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
+    await this.deleteGateway(name, ownership, namespace);
+    await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+  }
+
+  private async waitForRevisionPodsToTerminate(
+    revision: AgentRevision,
+    namespace: string,
+    role: "agent" | "gateway",
+  ): Promise<void> {
+    const clients = await this.clients();
+    const signal = this.operationSignal();
+    const labels = {
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/agent": revision.agentId,
+      "openclaw.dev/revision": revision.id,
+      "openclaw.dev/workload-role": role,
+    };
+    const deadline = Date.now() + WORKLOAD_TERMINATION_TIMEOUT_MS;
+    for (;;) {
+      signal.throwIfAborted();
+      const observed = asRecord(
+        await this.request(() =>
+          clients.core.listNamespacedPod({
+            namespace,
+            labelSelector: labelsToSelector(labels),
+            timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
+          }),
+        ),
+      );
+      signal.throwIfAborted();
+      const metadata = asRecord(observed?.metadata);
+      if (
+        !Array.isArray(observed?.items) ||
+        (observed.apiVersion !== undefined && observed.apiVersion !== "v1") ||
+        (observed.kind !== undefined && observed.kind !== "PodList") ||
+        (observed.metadata !== undefined && metadata === undefined) ||
+        (metadata?.continue !== undefined && metadata.continue !== "") ||
+        (metadata?._continue !== undefined && metadata._continue !== "") ||
+        (metadata?.remainingItemCount !== undefined && metadata.remainingItemCount !== 0)
+      ) {
+        throw new DependencyUnavailableError(
+          "The Kubernetes client returned an invalid workload Pod list.",
+        );
+      }
+      for (const item of observed.items) {
+        const pod = asRecord(item);
+        const podMetadata = asRecord(pod?.metadata);
+        const podLabels = asRecord(podMetadata?.labels);
+        if (
+          pod === undefined ||
+          (pod.apiVersion !== undefined && pod.apiVersion !== "v1") ||
+          (pod.kind !== undefined && pod.kind !== "Pod") ||
+          podMetadata === undefined ||
+          !isNonEmptyString(podMetadata.name) ||
+          podMetadata.namespace !== namespace ||
+          podLabels === undefined ||
+          Object.entries(labels).some(([key, value]) => podLabels[key] !== value)
+        ) {
+          throw new OwnershipFailure("Refusing an ambiguous AgentRevision workload Pod.");
+        }
+      }
+      if (observed.items.length === 0) return;
+      if (Date.now() >= deadline) {
+        throw new DependencyUnavailableError(
+          "The AgentRevision workload Pods did not terminate before the deadline.",
+        );
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, WORKLOAD_TERMINATION_POLL_MS));
     }
-    await this.lifecycle.beforeWorkloadStop(revision);
-    await this.request(
-      () =>
-        clients.apps.deleteNamespacedDeployment({
-          name,
-          namespace,
-          ...(deployment.metadata.uid === undefined
-            ? {}
-            : { body: { preconditions: { uid: deployment.metadata.uid } } }),
-        }),
-      { mutating: true },
-    );
-    await this.removeRetiredGateway(revision, namespace);
   }
 
   private async removeRetiredGateway(revision: AgentRevision, namespace: string): Promise<void> {
