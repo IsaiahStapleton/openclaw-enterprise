@@ -241,6 +241,10 @@ test(
     assert.equal(revision.configurationId, firstConfiguration.id);
     assert.equal(revision.configurationKind, "agent");
     assert.equal(revision.configurationGeneration, 1);
+    assert.deepEqual(revision.harnessAuth, {
+      method: "api_key",
+      source: first.data.harnessAuth.source,
+    });
     assert.deepEqual(revision.configuration, admitted(firstValues));
     assert.deepEqual(revision.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
     assert.deepEqual(revision.compute, {
@@ -304,6 +308,11 @@ test(
       configuration_kind: revision.configurationKind,
       configuration_generation: revision.configurationGeneration,
       draft_spec: admitted(firstValues),
+      harness_auth: {
+        method: "api_key",
+        source: first.data.harnessAuth.source,
+        secretDriverId: "secret-kubernetes",
+      },
       harness: revision.harness,
       compute: revision.compute,
     });
@@ -635,6 +644,7 @@ test(
       "configurationKind",
       "createdAt",
       "harness",
+      "harnessAuth",
       "id",
       "namespaceId",
       "providerId",
@@ -646,6 +656,10 @@ test(
     assert.equal(firstRevision.configurationId, primaryConfiguration.id);
     assert.equal(firstRevision.configurationKind, "agent");
     assert.equal(firstRevision.configurationGeneration, 2);
+    assert.deepEqual(firstRevision.harnessAuth, {
+      method: "api_key",
+      source: primary.harnessAuth.source,
+    });
     assert.deepEqual(firstRevision.configuration, admitted(persistedConfigValues));
     assert.deepEqual(firstRevision.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
     assert.deepEqual(firstRevision.compute, {
@@ -690,6 +704,7 @@ test(
     assert.notEqual(secondRevision.id, firstRevision.id);
     assert.equal(secondRevision.configurationId, primaryConfiguration.id);
     assert.equal(secondRevision.configurationGeneration, 3);
+    assert.deepEqual(secondRevision.harnessAuth, firstRevision.harnessAuth);
     assert.deepEqual(secondRevision.configuration, admitted(replacementConfigValues));
 
     for (const [namespaceId, agent, revision] of [
@@ -749,6 +764,11 @@ test(
       configuration_kind: firstRevision.configurationKind,
       configuration_generation: firstRevision.configurationGeneration,
       draft_spec: admitted(persistedConfigValues),
+      harness_auth: {
+        method: "api_key",
+        source: primary.harnessAuth.source,
+        secretDriverId: "secret-kubernetes",
+      },
       harness: firstRevision.harness,
       compute: firstRevision.compute,
     });
@@ -757,6 +777,11 @@ test(
       configuration_kind: secondRevision.configurationKind,
       configuration_generation: secondRevision.configurationGeneration,
       draft_spec: admitted(replacementConfigValues),
+      harness_auth: {
+        method: "api_key",
+        source: primary.harnessAuth.source,
+        secretDriverId: "secret-kubernetes",
+      },
       harness: secondRevision.harness,
       compute: secondRevision.compute,
     });

@@ -1625,11 +1625,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
       const revisionOwnership = { ...agentOwnership, revisionId: revision.id };
-      await this.reconcile(
-        this.agentAuthenticationNetworkPolicy(revision, namespace),
-        agentOwnership,
-        namespace,
-      );
+      if (this.options.runtime !== undefined) {
+        await this.reconcile(
+          this.agentAuthenticationNetworkPolicy(revision, namespace),
+          agentOwnership,
+          namespace,
+        );
+      }
       const launch = await this.lifecycle.beforeWorkloadStart(revision);
       launchPrepared = true;
       const agentDeployment = this.deployment(
