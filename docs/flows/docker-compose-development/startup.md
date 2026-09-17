@@ -41,6 +41,10 @@ target once per service, `dev-up` builds it once through the migration service
 and starts the stack with `--no-build`. Docker keeps its native `up --build`
 path. Expanded configuration and credentials are never printed.
 
+On macOS, run `podman` as your normal host user, without `sudo`. The k3d
+workflow requires a rootful Podman machine; rootful describes the VM, not
+running `podman` as root on the host.
+
 If neither a shared runtime image nor separate gateway/Agent images are set,
 the helper selects `openclaw-enterprise-runtime:quickstart` for this invocation.
 It builds that default image from `deploy/runtime` only when the image is

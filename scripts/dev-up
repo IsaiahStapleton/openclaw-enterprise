@@ -246,6 +246,73 @@ if [ -z "$container_engine" ]; then
   fail "prerequisite" "a running Docker Engine with Docker Compose or Podman with podman-compose is required"
 fi
 
+if [ "$container_engine" = "podman" ] && [ "$(uname -s)" = "Darwin" ]; then
+  if [ -n "${CONTAINER_HOST:-}" ]; then
+    fail "prerequisite" "CONTAINER_HOST does not identify a supported local Podman machine connection"
+  fi
+  connection_format='{{.Name}}|{{.Default}}|{{.IsMachine}}|{{.URI}}'
+  if ! podman_connections="$(podman system connection list --format "$connection_format" 2>"$temporary_directory/podman-connections.err")"; then
+    fail "prerequisite" "could not inspect the selected Podman connection" podman system connection list --format "$connection_format"
+  fi
+  selected_connection="${CONTAINER_CONNECTION:-}"
+  connection_matches=0
+  while IFS='|' read -r name is_default is_machine uri; do
+    if { [ -n "$selected_connection" ] && [ "$name" = "$selected_connection" ]; } ||
+      { [ -z "$selected_connection" ] && [ "$is_default" = "true" ]; }; then
+      connection_matches=$((connection_matches + 1))
+      podman_connection_name="$name"
+      podman_connection_is_machine="$is_machine"
+      podman_connection_uri="$uri"
+    fi
+  done <<<"$podman_connections"
+  if [ "$connection_matches" -ne 1 ] || [ "$podman_connection_is_machine" != "true" ]; then
+    fail "prerequisite" "could not identify the effective Podman machine connection" podman system connection list --format "$connection_format"
+  fi
+  case "$podman_connection_uri" in
+    ssh://root@*)
+      case "$podman_connection_name" in
+        *-root) podman_machine="${podman_connection_name%-root}" ;;
+        *) fail "prerequisite" "could not identify the effective Podman machine connection" ;;
+      esac
+      podman_connection_mode="rootful"
+      ;;
+    ssh://*)
+      podman_machine="$podman_connection_name"
+      podman_connection_mode="rootless"
+      ;;
+    *) fail "prerequisite" "could not identify the effective Podman machine connection" ;;
+  esac
+  export CONTAINER_CONNECTION="$podman_connection_name"
+  if ! user_mode_networking="$(podman machine inspect "$podman_machine" --format '{{.UserModeNetworking}}' 2>"$temporary_directory/podman-machine.err")"; then
+    fail "prerequisite" "could not inspect the selected Podman machine" podman machine inspect "$podman_machine"
+  fi
+  if [ "$user_mode_networking" != "true" ]; then
+    fail "prerequisite" "could not inspect the selected Podman machine networking mode" podman machine inspect "$podman_machine"
+  fi
+  if [ "$podman_connection_mode" = "rootful" ]; then
+    podman_default_route="$temporary_directory/podman-default-route.txt"
+    if ! podman machine ssh "$podman_machine" -- ip route show default >"$podman_default_route" 2>"$temporary_directory/podman-default-route.err"; then
+      fail "prerequisite" "could not inspect the Podman machine gateway" podman machine ssh "$podman_machine" -- ip route show default
+    fi
+    podman_gateway="$(sed -n 's/^default via \([^ ]*\) dev .*/\1/p' "$podman_default_route")"
+    if ! OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR="$(python3 - "$podman_gateway" <<'PY'
+import ipaddress
+import sys
+
+address = ipaddress.ip_address(sys.argv[1])
+if address.version != 4 or not address.is_private:
+    raise SystemExit("expected one private IPv4 address")
+print(f"{address}/32")
+PY
+)"; then
+      fail "prerequisite" "could not identify one private Podman machine gateway" podman machine ssh "$podman_machine" -- ip route show default
+    fi
+    export OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR
+  else
+    unset OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR
+  fi
+fi
+
 if [ "$container_engine" = "docker" ]; then
   compose_ps_status_args=(ps --all --format json)
   compose_ps_diagnostic_args=(ps --all)
@@ -578,7 +645,11 @@ PY
   fail "authorization" "${match_error:-Installation ID mismatch}" "$occ_cli" installation get --output json
 fi
 
-cleanup_command="$(quote_command env "OCC_DEVELOPMENT_COMPUTE_DRIVER=docker" "OCC_DEVELOPMENT_CONTAINER_ENGINE=$container_engine" "$occ_cli" dev down -- "${compose_args[@]}")"
+cleanup_environment=("OCC_DEVELOPMENT_COMPUTE_DRIVER=docker" "OCC_DEVELOPMENT_CONTAINER_ENGINE=$container_engine")
+if [ -n "${podman_connection_name:-}" ]; then
+  cleanup_environment+=("CONTAINER_CONNECTION=$podman_connection_name")
+fi
+cleanup_command="$(quote_command env "${cleanup_environment[@]}" "$occ_cli" dev down -- "${compose_args[@]}")"
 next_check_command="$(quote_command "OCC_URL=$api_url" "OCC_SERVICE_KEY_FILE=$key_output" "$occ_cli" installation get)"
 
 cat <<EOF

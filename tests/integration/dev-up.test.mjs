@@ -327,6 +327,86 @@ test("dev-up selects Podman when no docker command exists and completes the supp
   assert.equal(await readJsonLines(fixture.dockerLog).then((entries) => entries.length), 0);
 });
 
+test("dev-up trusts only the rootful macOS Podman machine gateway", async (t) => {
+  // Podman machine forwards a host-loopback publication from its private gateway,
+  // which is outside the Compose bridge and must be trusted as one exact peer.
+  const fixture = await createFixture(t, { engine: "podman", macosPodmanMachine: "rootful" });
+  const keyOutput = join(fixture.directory, "podman-macos-service-key.json");
+
+  const result = runDevUp(
+    ["--key-output", keyOutput, "--", ...composeOptions(fixture)],
+    fixture.env,
+  );
+
+  assert.equal(result.status, 0, result.stderr ?? result.error?.message ?? "dev-up did not exit");
+  const invocations = await readJsonLines(fixture.podmanLog);
+  assert.ok(
+    invocations.some(
+      (entry) =>
+        entry.args.includes("up") &&
+        entry.env.OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR === "192.168.127.1/32" &&
+        entry.env.CONTAINER_CONNECTION === "podman-machine-default-root",
+    ),
+  );
+  assert.match(result.stdout, /CONTAINER_CONNECTION=podman-machine-default-root .*\/occ dev down/);
+});
+
+test("dev-up honors an effective rootless macOS Podman connection", async (t) => {
+  // A rootless publication reaches the controller from inside the Compose bridge,
+  // so it must not inherit the rootful machine gateway trust.
+  const fixture = await createFixture(t, {
+    engine: "podman",
+    macosPodmanMachine: "rootful",
+    containerConnection: "podman-machine-default",
+  });
+  const keyOutput = join(fixture.directory, "podman-macos-rootless-service-key.json");
+
+  const result = runDevUp(
+    ["--key-output", keyOutput, "--", ...composeOptions(fixture)],
+    fixture.env,
+  );
+
+  assert.equal(result.status, 0, result.stderr ?? result.error?.message ?? "dev-up did not exit");
+  const invocations = await readJsonLines(fixture.podmanLog);
+  assert.ok(
+    invocations.some(
+      (entry) =>
+        entry.args.includes("up") &&
+        !entry.env.OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR &&
+        entry.env.CONTAINER_CONNECTION === "podman-machine-default",
+    ),
+  );
+  assert.match(result.stdout, /CONTAINER_CONNECTION=podman-machine-default .*\/occ dev down/);
+  assert.equal(
+    invocations.some((entry) => entry.args[0] === "machine" && entry.args[1] === "ssh"),
+    false,
+  );
+});
+
+test("dev-up rejects a macOS Podman host override that does not identify a machine", async (t) => {
+  // Gateway trust must remain bound to a machine connection that dev-up can inspect.
+  const fixture = await createFixture(t, {
+    engine: "podman",
+    macosPodmanMachine: "rootful",
+    containerHost: "unix:///tmp/opaque-podman.sock",
+  });
+
+  const result = runDevUp(
+    ["--key-output", join(fixture.directory, "unused-service-key.json")],
+    fixture.env,
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /CONTAINER_HOST does not identify a supported local Podman machine connection/,
+  );
+  assert.equal(
+    (await readJsonLines(fixture.podmanLog)).some((entry) => entry.args.includes("up")),
+    false,
+  );
+});
+
 test("dev-up starts Podman without Compose options on Bash 3.2", async (t) => {
   // The documented no-options invocation must not trip nounset on an empty Bash array.
   const fixture = await createFixture(t, { engine: "podman" });

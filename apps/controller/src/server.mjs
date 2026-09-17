@@ -66,6 +66,7 @@ function configuration() {
 
   const host = requiredEnvironment("OCC_HOST");
   const trustedDevelopmentBridgeCidr = process.env.OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR;
+  const trustedDevelopmentForwarderCidr = process.env.OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR;
   if (
     mode === "development" &&
     (!developmentBindHosts.has(host) ||
@@ -176,6 +177,9 @@ function configuration() {
     authBaseURL,
     ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
     ...(trustedDevelopmentBridgeCidr === undefined ? {} : { trustedDevelopmentBridgeCidr }),
+    ...(trustedDevelopmentForwarderCidr === undefined || trustedDevelopmentForwarderCidr === ""
+      ? {}
+      : { trustedDevelopmentForwarderCidr }),
   });
 }
 
