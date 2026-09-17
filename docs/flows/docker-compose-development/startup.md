@@ -8,8 +8,10 @@ Trace host preflight, database initialization, and API/worker startup. See the [
 
 `scripts/dev-up:50`, `deploy/runtime`
 
-The helper runs from the checkout root. It accepts an optional `--key-output`
-destination and forwards arguments after `--` to the selected Compose
+The helper runs from the checkout root and requires the executable OCC CLI at
+`bin/occ`, as produced by `pnpm cli:build`; it does not resolve `occ` from
+`PATH`. It accepts an optional `--key-output` destination and forwards arguments
+after `--` to the selected Compose
 implementation, so native project names, profiles, and override files keep
 their normal precedence. It first probes a running Docker Engine and the JSON
 configuration capability required from Docker Compose. If that probe fails, it
@@ -102,8 +104,8 @@ directory; otherwise the helper creates a private temporary directory. The
 helper never overwrites an existing local file, never prints `data.key`, and
 never reruns bootstrap to replace a missing key.
 
-`dev-up` then reads the Installation with `occ installation get` and the copied
-service-key response. `apps/controller/src/auth/index.ts:ControllerAdmissionVerifier.verify`
+`dev-up` then reads the Installation with `bin/occ installation get` and the
+copied service-key response. `apps/controller/src/auth/index.ts:ControllerAdmissionVerifier.verify`
 validates the `x-api-key` and maps it to the Installation-scoped service
 administrator; current IAM policy still authorizes each resource operation. The
 startup proof succeeds only when the returned resource ID matches the copied

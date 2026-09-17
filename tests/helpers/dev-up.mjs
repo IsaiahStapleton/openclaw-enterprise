@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +31,13 @@ async function writeExecutable(path, body) {
 }
 
 function commandPath(name) {
+  if (name === "python3") {
+    return spawnSync(name, ["-c", "import sys; print(sys.executable)"], {
+      cwd: repository,
+      encoding: "utf8",
+      env: process.env,
+    }).stdout.trim();
+  }
   return spawnSync(bashExecutable, ["-c", `command -v ${name}`], {
     encoding: "utf8",
     env: process.env,
@@ -30,6 +47,17 @@ function commandPath(name) {
 async function createFixture(t, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), "openclaw-dev-up-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
+
+  const fixtureRepository = join(directory, "repository");
+  await mkdir(join(fixtureRepository, "scripts"), { recursive: true });
+  await mkdir(join(fixtureRepository, "bin"), { recursive: true });
+  const fixtureDevUp = join(fixtureRepository, "scripts", "dev-up");
+  await copyFile(join(repository, "scripts", "dev-up"), fixtureDevUp);
+  await chmod(fixtureDevUp, 0o755);
+  await symlink(
+    join(repository, "compose.podman.yaml"),
+    join(fixtureRepository, "compose.podman.yaml"),
+  );
 
   const bin = join(directory, "bin");
   await mkdir(bin);
@@ -244,7 +272,7 @@ exit(99, "unhandled " + engine + " compose command: " + command);
     await symlink("podman", join(bin, "podman-compose"));
   }
   await writeExecutable(
-    join(bin, "occ"),
+    join(fixtureRepository, "bin", "occ"),
     `#!${nodeExecutable}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -264,6 +292,13 @@ if (scenario === "api-unauthorized") {
 if (exitCode === 0) process.stdout.write(JSON.stringify(payload) + "\\n");
 else process.stderr.write(JSON.stringify(payload) + "\\nHTTP 401\\n");
 process.exit(exitCode);
+`,
+  );
+  await writeExecutable(
+    join(bin, "occ"),
+    `#!${nodeExecutable}
+process.stderr.write("dev-up invoked occ from PATH instead of the project bin directory\\n");
+process.exit(86);
 `,
   );
 
@@ -297,10 +332,13 @@ process.exit(exitCode);
     DEV_UP_REAL_YQ: provider.yq ?? "",
     DEV_UP_REAL_PATH: process.env.PATH ?? "",
     DEV_UP_REPOSITORY: repository,
+    DEV_UP_FIXTURE_REPOSITORY: fixtureRepository,
   };
 
   return {
     directory,
+    fixtureRepository,
+    occCli: join(fixtureRepository, "bin", "occ"),
     emptyEnv,
     dockerLog,
     podmanLog,
@@ -363,7 +401,7 @@ function composeOptions(fixture, overridePath) {
 
 function runDevUp(args, env) {
   return spawnSync(bashExecutable, ["scripts/dev-up", ...args], {
-    cwd: repository,
+    cwd: env.DEV_UP_FIXTURE_REPOSITORY,
     encoding: "utf8",
     env,
   });
