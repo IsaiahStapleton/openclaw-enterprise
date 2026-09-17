@@ -73,7 +73,7 @@ is not currently a supported API operation.
 ## Runtime credentials
 
 Before the first AgentRevision, the [console credential workflow](../../console/create-and-deploy.md#initial-runtime-credentials)
-can create initial per-Agent transport, OpenAI API key, and Slack Secrets through
+can create initial per-Agent transport and Slack Secrets through
 the selected Driver. It derives their names internally, checks Namespace and
 Agent ownership, and creates missing whole Secrets without replacing existing
 values. Provider-managed credentials and Configuration Secret bindings retain
@@ -92,12 +92,12 @@ that ID. This supports native local-direct password access alongside trusted-pro
 authentication; the API never returns the password. Plaintext password Configuration
 is rejected.
 
-The selected model credential determines how model access is configured:
-
-- **API key:** Provision the Agent's model Secret using
-  `runtime.modelSecretPrefix` and the `OPENAI_API_KEY` key.
-- **Provider-issued access token:** The selected Provider-owned ServiceAccount Driver
-  creates an account-owned Secret projected only into the dedicated Codex Pod.
+The Agent's required [harnessAuth binding](../../agents.md#harness-authentication)
+selects the model credential. API keys use the selected OCC Secret Driver's
+exact reference; account tokens use one directly projected account-owned
+Secret. Kubernetes prepares the projection and explicit login mode during
+workload rendering. Only the combined embedded gateway/Harness or dedicated
+Codex consumer receives it; a dedicated gateway never receives model auth.
 
 If channels are enabled, configure `runtime.channels.secretPrefix` and
 `runtime.channels.proxyUrl`, then provide the Agent's channel credentials in

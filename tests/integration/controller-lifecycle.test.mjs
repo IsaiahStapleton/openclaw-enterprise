@@ -14,12 +14,15 @@ import {
   ScopeViolationError,
 } from "../../packages/occ/src/index.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 
 const installation = {
   id: "installation-a",
   name: "Enterprise installation",
   createdAt: "2026-08-15T00:00:00.000Z",
 };
+const iamStates = new WeakMap();
+
 function createIAMDriver({ identities = [], roles = [], bindings = [], restrictions = [] } = {}) {
   const state = {
     identities: [
@@ -48,6 +51,8 @@ function createIAMDriver({ identities = [], roles = [], bindings = [], restricti
           { action: "delete", resourceKind: "namespace" },
           { action: "create", resourceKind: "configuration" },
           { action: "read", resourceKind: "configuration" },
+          { action: "create", resourceKind: "secret" },
+          { action: "operate", resourceKind: "secret" },
           { action: "create", resourceKind: "agent" },
           { action: "read", resourceKind: "agent" },
           { action: "update", resourceKind: "agent" },
@@ -55,6 +60,7 @@ function createIAMDriver({ identities = [], roles = [], bindings = [], restricti
           { action: "operate", resourceKind: "agent" },
         ],
       },
+      { id: "role-harness-secret", permissions: [{ action: "operate", resourceKind: "secret" }] },
       ...roles,
     ],
     bindings: [
@@ -68,10 +74,12 @@ function createIAMDriver({ identities = [], roles = [], bindings = [], restricti
     ],
     restrictions,
   };
-  return new NativeIAMDriver(
+  const iam = new NativeIAMDriver(
     { loadNativeIAMState: async () => state },
     { id: "iam-native-a", implementation: "native" },
   );
+  iamStates.set(iam, state);
+  return iam;
 }
 
 function createDrivers(iam) {
@@ -86,6 +94,17 @@ function createDrivers(iam) {
     id: "compute-driver-a",
     capability: "compute",
     implementation: "test-only-compute",
+    // This passive lifecycle fixture admits synthetic API-key references, not provider login.
+    validateHarnessAuth(harness, auth) {
+      if (
+        auth.method !== "api_key" ||
+        !(
+          (harness.id === "openclaw" && harness.mode === "embedded") ||
+          (harness.id === "codex" && harness.mode === "dedicated")
+        )
+      )
+        throw new ScopeViolationError("Unsupported lifecycle fixture authentication.");
+    },
     async ensureNamespace(namespace) {
       calls.ensureNamespace += 1;
       return {
@@ -144,14 +163,55 @@ function createController(iam = createIAMDriver()) {
   const controller = new OpenClawController(installation, {
     now: () => new Date("2026-08-15T00:00:00.000Z"),
     createId: (kind) =>
-      kind === "configuration" ? `cfg_${randomUUID()}` : `${kind}-${++nextIdentifier}`,
+      kind === "configuration"
+        ? `cfg_${randomUUID()}`
+        : kind === "secret"
+          ? `sec_${randomUUID()}`
+          : kind === "namespace"
+            ? `ns_00000000-0000-4000-8000-${String(++nextIdentifier).padStart(12, "0")}`
+            : `${kind}-${++nextIdentifier}`,
   });
   const drivers = createDrivers(iam);
-  for (const driver of [drivers.iam, drivers.compute, drivers.configuration]) {
+  for (const driver of [
+    drivers.iam,
+    drivers.compute,
+    drivers.configuration,
+    createTestSecretDriver(),
+  ]) {
     controller.registerDriver(driver);
     controller.selectDriver(driver.capability, driver.id);
   }
   return { controller, ...drivers };
+}
+
+async function bindHarnessAuth(controller, agent) {
+  const secret = await controller.createSecret("principal-admin", {
+    namespaceId: agent.namespaceId,
+    name: `harness-key-${agent.id}`,
+    value: "synthetic-lifecycle-key",
+  });
+  const iamState = iamStates.get(controller.selectedDriver("iam"));
+  iamState.identities.push({
+    kind: "service_principal",
+    id: agent.servicePrincipalId,
+    namespaceId: agent.namespaceId,
+    agentId: agent.id,
+  });
+  iamState.bindings.push({
+    id: `harness-secret-${agent.id}`,
+    namespaceId: agent.namespaceId,
+    subjectKind: "identity",
+    subjectId: agent.servicePrincipalId,
+    roleId: "role-harness-secret",
+    resourceKind: "secret",
+    resourceId: secret.id,
+  });
+  await controller.updateAgent("principal-admin", {
+    namespaceId: agent.namespaceId,
+    agentId: agent.id,
+    configurationId: agent.configurationId,
+    harnessAuth: { method: "api_key", source: secret.ref },
+  });
 }
 
 async function createConfiguration(
@@ -176,6 +236,7 @@ test("Agent stop records an authorized Agent-scoped target without deleting its 
     configurationId: configuration.id,
   });
   assert.equal(created.desiredRuntimeState, "stopped");
+  await bindHarnessAuth(controller, created);
   const revision = await controller.deployAgent(
     "principal-admin",
     { namespaceId: namespace.id, agentId: created.id },
@@ -379,6 +440,7 @@ test("authorized resources retain exact Namespace ownership without metadata-onl
   await controller.transact((state) =>
     state.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
   );
+  await bindHarnessAuth(controller, agent);
   const firstRevision = await controller.deployAgent(
     "principal-admin",
     { namespaceId: namespace.id, agentId: agent.id },
@@ -542,6 +604,7 @@ test("Agent configuration references stay mutable while deployment admits deeply
   );
 
   await controller.handleNamespaceLifecycle("principal-admin", namespace.id, "ready");
+  await bindHarnessAuth(controller, updated);
   await assert.rejects(
     controller.deployAgent(
       "principal-admin",
@@ -690,6 +753,7 @@ test("Sandbox admission applies provider-owned Agent configuration before freezi
     executionMode: "dedicated",
   });
 
+  await bindHarnessAuth(controller, agent);
   const revision = await controller.deployAgent(
     "principal-admin",
     { namespaceId: namespace.id, agentId: agent.id },
@@ -741,6 +805,7 @@ test("Sandbox Drivers without an Agent configuration hook preserve the admitted 
     executionMode: "dedicated",
   });
 
+  await bindHarnessAuth(controller, agent);
   const revision = await controller.deployAgent(
     "principal-admin",
     { namespaceId: namespace.id, agentId: agent.id },
@@ -775,6 +840,7 @@ test("Sandbox admission rejects malformed provider configuration before creating
     configurationId: configuration.id,
     executionMode: "dedicated",
   });
+  await bindHarnessAuth(controller, agent);
 
   await assert.rejects(
     controller.deployAgent(
@@ -816,6 +882,7 @@ for (const facets of [["networking"], ["filesystem"], ["process"], ["networking"
     });
 
     // A provider's declared subset is sufficient to admit and persist a revision.
+    await bindHarnessAuth(controller, agent);
     const revision = await controller.deployAgent(
       "principal-admin",
       { namespaceId: namespace.id, agentId: agent.id },
@@ -931,6 +998,7 @@ test("the one-shot lifecycle harness gates deployment and tombstones an empty Na
   );
   const ready = await controller.handleNamespaceLifecycle("principal-admin", namespace.id, "ready");
   assert.equal(ready?.status, "ready");
+  await bindHarnessAuth(controller, agent);
   assert.equal(
     (
       await controller.deployAgent(
@@ -1143,8 +1211,9 @@ test("an authorization callback cannot bypass the selected IAM Driver", async ()
 test("two Namespace tenants cannot create or deploy each other's Agents", async () => {
   const tenantRole = {
     id: "role-tenant-b",
-    namespaceId: "namespace-2",
+    namespaceId: "ns_00000000-0000-4000-8000-000000000002",
     permissions: [
+      { action: "operate", resourceKind: "secret" },
       { action: "create", resourceKind: "configuration" },
       { action: "read", resourceKind: "configuration" },
       { action: "create", resourceKind: "agent" },
@@ -1211,6 +1280,7 @@ test("two Namespace tenants cannot create or deploy each other's Agents", async 
   await controller.transact((state) =>
     state.namespaces.transitionNamespaceStatus(namespaceB.id, "provisioning", "ready"),
   );
+  await bindHarnessAuth(controller, agentB);
   const revisionB = await controller.deployAgent(
     "principal-tenant-b",
     { namespaceId: namespaceB.id, agentId: agentB.id },

@@ -6,6 +6,11 @@ Each Agent has one systemd gateway unit. OCC still owns resources, authorization
 immutable admission, and activation; the Driver owns only their host realization.
 Trusted Installation YAML can select this bundled Driver in development or production.
 
+Select `harnessAuth: { "method": "runtime" }` for embedded OpenClaw. The operator
+supplies model credentials on the host; OCC does not deliver or validate them.
+Managed API-key and ChatGPT account bindings remain unsupported on SSH, as does
+dedicated Codex.
+
 ## Requirements and configuration
 
 Provision Linux with systemd, util-linux `flock`, `getent`, the shadow account
@@ -152,7 +157,7 @@ production startup.
 revision operations, the worker calls `bindAgent` with server-owned Namespace,
 Agent, and ServicePrincipal identities; an unbound revision fails closed.
 
-`prepareRevision` accepts only `openclaw`/`embedded` without OCC Secret bindings.
+`prepareRevision` accepts only `openclaw`/`embedded` with `runtime` authentication and without OCC Secret bindings.
 It verifies ownership, creates or verifies the Agent's Unix identity, allocates
 or reuses the Agent port, and writes the immutable snapshot. A superseded
 candidate returns not-ready. Preparation does not replace `current`, write the
@@ -205,6 +210,17 @@ or written by the Driver. Provision model/channel credential lines there and
 reference them through native environment SecretRefs. Systemd reads this file
 as root; keep it `root:root 0600`. Protect the state root and SSH identity and
 never put plaintext credentials in native Configuration or Installation YAML.
+
+The revision records only `{ "method": "runtime" }`; there is no Secret source,
+account identity, key value, or configurable environment-variable field in this
+binding. OCC still authorizes deployment and checks gateway `/readyz`, but makes
+no model request and does not inspect the operator file. A gateway can be ready
+while its model credentials are invalid. Verify model access separately.
+
+Redeployment, stop, and revision retirement preserve the operator file. Changing
+it can affect an existing revision without redeployment; restart the process to
+load changed environment values. Namespace deletion removes the owned Namespace
+tree, including this file.
 
 Embedded Agents may use any channel provider supported by the host's OpenClaw
 build. Separate Unix users and private groups protect sibling state and native

@@ -327,7 +327,14 @@ export class DockerComputeDriver implements ComputeDriver {
     }
   }
 
+  validateHarnessAuth(): never {
+    throw new ConfigurationFailure(
+      "DOCKER Compute does not support Harness authentication bindings.",
+    );
+  }
+
   async prepareRevision(revision: AgentRevision): Promise<ComputeReadiness> {
+    if (revision.harnessAuth !== undefined) this.validateHarnessAuth();
     this.lifecycleStarted = true;
     const result = {
       namespaceId: revision.namespaceId,

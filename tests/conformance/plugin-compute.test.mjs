@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +26,8 @@ import {
 } from "../../apps/controller/src/drivers/compute/plugin-runtime.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+
 const OCC_DIFFS_DIGEST =
   "sha512-5VTDNEo7D3iOgRoL5C31JPTbA/EXQEFRuxOvLy67IMFmOajwroGsUMWeuKkmqzFbPNQxvn7GACDSr/5Vmpx3/g==";
 const CODEX_LINEAR_NATIVE_ID = "linear@openai-curated-remote";
@@ -47,6 +49,7 @@ const agent = Object.freeze({
   name: "Plugin compute agent",
   configurationId: "cfg_00000000-0000-4000-8000-000000000016",
   executionMode: "embedded",
+  harnessAuth: null,
   servicePrincipalId: "service-principal-plugin-compute",
   createdAt: tenant.createdAt,
 });
@@ -70,13 +73,39 @@ function revision(overrides = {}) {
     configurationId: agent.configurationId,
     configurationKind: "agent",
     configurationGeneration: 1,
-    configuration: admitLoggingConfiguration({}, "info"),
+    configuration: admitLoggingConfiguration(
+      createHarnessConfiguration(overrides.harness?.id ?? "codex", "gpt-4.1"),
+      "info",
+    ),
+    harnessAuth: {
+      method: "api_key",
+      source: {
+        kind: "secret",
+        namespaceId: tenant.id,
+        id: "sec_00000000-0000-4000-8000-000000000016",
+      },
+      secretDriverId: "secret-kubernetes",
+    },
     harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
     compute: { id: "compute-kubernetes", implementation: "kubernetes" },
     servicePrincipalId: agent.servicePrincipalId,
     secretDriverId: "secret-kubernetes",
     createdAt: tenant.createdAt,
     ...overrides,
+  };
+}
+
+function harnessAuthContext(candidate) {
+  return {
+    harnessAuth: {
+      ...candidate.harnessAuth,
+      backendRef: {
+        namespaceName: kubernetesNamespaceName(tenant.id),
+        name: "plugin-model-key",
+        key: "value",
+        uid: "plugin-model-key-uid",
+      },
+    },
   };
 }
 
@@ -155,7 +184,6 @@ function kubernetesOptions(overrides = {}) {
     servicePrincipalCredentials: { mode: "disabled" },
     runtime: {
       transportSecretPrefix: "transport",
-      modelSecretPrefix: "model",
       gatewayStorageClassName: "local-path",
     },
     ...overrides,
@@ -915,6 +943,10 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   );
   const reconciled = [];
 
+  // This fresh Agent has no prior authentication-probe workloads to retire.
+  driver.clients = async () => ({
+    apps: { listNamespacedDeployment: async () => ({ items: [] }) },
+  });
   driver.resolveNamespace = async () => ({ name: namespace, external: false });
   driver.get = async (kind, name) =>
     kind === "Namespace"
@@ -930,7 +962,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   };
   driver.gatewayReady = async () => true;
 
-  assert.deepEqual(await driver.prepareRevision(embedded), {
+  assert.deepEqual(await driver.prepareRevision(embedded, harnessAuthContext(embedded)), {
     namespaceId: embedded.namespaceId,
     agentId: embedded.agentId,
     revisionId: embedded.id,
@@ -956,58 +988,147 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   ]);
 });
 
-test("Codex runtime clears stale readiness marker before startup failure", () => {
-  const directory = mkdtempSync(join(tmpdir(), "openclaw-plugin-ready-"));
-  const marker = join(directory, "ready");
-  writeFileSync(marker, "ready\n", { mode: 0o600 });
-  assert.equal(existsSync(marker), true);
-  try {
-    const sandbox = {
-      console: { error() {} },
-      process: {
-        env: {
-          CODEX_HOME: "/home/node/.codex",
-          OPENCLAW_PLUGIN_READY_MARKER: marker,
+test("Codex runtime gates startup and readiness on a successful native authentication turn", async (t) => {
+  const started = { type: "turn.started" };
+  const assistant = { type: "item.completed", item: { type: "agent_message", text: "READY" } };
+  const completed = { type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } };
+  const advisory = {
+    type: "item.completed",
+    item: { type: "error", message: "Model catalog metadata unavailable" },
+  };
+  const scenarios = [
+    { name: "failed login", loginStatus: 1 },
+    {
+      name: "nonfatal advisory followed by completed assistant turn",
+      events: [started, advisory, assistant, completed],
+      ready: true,
+    },
+    {
+      name: "fatal top-level error despite assistant output",
+      events: [started, assistant, { type: "error", message: "authentication failed" }, completed],
+    },
+    {
+      name: "failed turn",
+      events: [
+        started,
+        assistant,
+        { type: "turn.failed", error: { message: "authentication failed" } },
+      ],
+    },
+    { name: "completed turn without visible assistant", events: [started, advisory, completed] },
+    {
+      name: "tool event despite completed assistant turn",
+      events: [
+        started,
+        {
+          type: "item.completed",
+          item: { type: "command_execution", command: "echo READY", exit_code: 0 },
         },
-      },
-      require(specifier) {
-        if (specifier === "node:fs") {
-          return {
-            mkdirSync() {},
-            rmSync,
-            readFileSync() {
-              throw new Error("plugin runtime payload should not be read before login failure");
+        assistant,
+        completed,
+      ],
+    },
+    {
+      name: "nonzero native exit despite completed assistant turn",
+      events: [started, assistant, completed],
+      probeStatus: 1,
+    },
+  ];
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, () => {
+      const directory = mkdtempSync(join(tmpdir(), "openclaw-plugin-ready-"));
+      const marker = join(directory, "ready");
+      writeFileSync(marker, "stale\n", { mode: 0o600 });
+      try {
+        const diagnostics = [];
+        const idleTimers = [];
+        let appServerStarts = 0;
+        let nativeCalls = 0;
+        const sandbox = {
+          console: {
+            error(message) {
+              diagnostics.push(message);
             },
-            writeFileSync() {},
-          };
+          },
+          setInterval(callback, delay) {
+            idleTimers.push({ callback, delay });
+          },
+          process: {
+            env: {
+              CODEX_HOME: join(directory, "codex"),
+              CODEX_LOGIN_MODE: "api_key",
+              OPENAI_API_KEY: "fixture-api-key",
+              OPENCLAW_HARNESS_MODEL: "codex/gpt-4.1",
+              OPENCLAW_PLUGIN_READY_MARKER: marker,
+              APP_SERVER_TOKEN: "fixture-transport-token",
+              APP_SERVER_PORT: "4500",
+            },
+            on() {},
+            exit() {
+              assert.fail("startup must either remain unready or start the app server");
+            },
+          },
+          require(specifier) {
+            if (specifier === "node:fs") {
+              return {
+                mkdirSync() {},
+                mkdtempSync: () => mkdtempSync(join(directory, "probe-")),
+                rmSync,
+                readFileSync() {
+                  throw new Error("no plugin runtime payload is configured");
+                },
+                writeFileSync,
+              };
+            }
+            if (specifier === "node:child_process") {
+              return {
+                spawnSync() {
+                  nativeCalls++;
+                  // Substitute only native process output; execute the production
+                  // login/probe parser and readiness control flow unmodified.
+                  return nativeCalls === 1
+                    ? { status: scenario.loginStatus ?? 0 }
+                    : {
+                        status: scenario.probeStatus ?? 0,
+                        stdout: scenario.events.map((event) => JSON.stringify(event)).join("\n"),
+                      };
+                },
+                spawn(_command, args) {
+                  assert.ok(args.includes("app-server"));
+                  appServerStarts++;
+                  return { on() {}, kill() {} };
+                },
+              };
+            }
+            return nodeRequire(specifier);
+          },
+        };
+        vm.runInNewContext(AGENT_RUNTIME_ENTRYPOINT, sandbox);
+        assert.equal(nativeCalls, scenario.loginStatus === 1 ? 1 : 2);
+        if (scenario.ready) {
+          assert.equal(appServerStarts, 1);
+          assert.deepEqual(diagnostics, []);
+          assert.equal(idleTimers.length, 0);
+          assert.equal(readFileSync(marker, "utf8"), "ready\n");
+        } else {
+          assert.equal(appServerStarts, 0);
+          assert.deepEqual(diagnostics, ["Harness model authentication probe failed."]);
+          assert.equal(idleTimers.length, 1);
+          assert.equal(typeof idleTimers[0].callback, "function");
+          assert.ok(idleTimers[0].delay > 0);
+          assert.equal(existsSync(marker), false);
         }
-        if (specifier === "node:child_process") {
-          return {
-            spawnSync() {
-              return { status: 1 };
-            },
-            spawn() {
-              assert.fail("app-server must not start after login failure");
-            },
-          };
-        }
-        return nodeRequire(specifier);
-      },
-    };
-
-    assert.throws(
-      () => vm.runInNewContext(AGENT_RUNTIME_ENTRYPOINT, sandbox),
-      /Codex model authentication initialization failed/,
-    );
-    assert.equal(existsSync(marker), false);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
   }
 });
 
 test("Kubernetes dedicated Codex agent mounts plugin runtime and gates readiness on it", async () => {
   const driver = createKubernetesComputeDriver(kubernetesOptions());
-  const runtime = pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() }));
+  const candidate = revision({ plugins: codexNoPluginState() });
+  const runtime = pluginRuntimeSpecForRevision(candidate);
   const deployment = driver.deployment(
     "agent-plugin-compute-rev",
     {
@@ -1015,7 +1136,7 @@ test("Kubernetes dedicated Codex agent mounts plugin runtime and gates readiness
       agentId: agent.id,
       revisionId: "revision-plugin-compute-1",
     },
-    "oce-plugin-compute",
+    kubernetesNamespaceName(tenant.id),
     "openclaw-enterprise/agent-fixture:local",
     "agent-plugin-compute",
     "agent",
@@ -1024,7 +1145,11 @@ test("Kubernetes dedicated Codex agent mounts plugin runtime and gates readiness
     undefined,
     false,
     undefined,
-    undefined,
+    driver.harnessAuthForRevision(
+      candidate,
+      harnessAuthContext(candidate),
+      kubernetesNamespaceName(tenant.id),
+    ),
     [],
     [],
     { name: "plugin-runtime-agent-plugin-compute", runtime },

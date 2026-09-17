@@ -1,4 +1,5 @@
 import { element, button } from "../dom.mjs";
+import { createHarnessAuthFields } from "./harness-auth.mjs";
 import { renderChannels } from "../channels.mjs";
 import { link, message, namespacePath } from "./list.mjs";
 
@@ -127,19 +128,9 @@ export function renderCreateAgent(context) {
     { id: "provider-id", disabled: true },
     element("option", { value: "" }, "None"),
   );
-  const account = element(
-    "select",
-    { id: "service-account-id", disabled: true },
-    element("option", { value: "" }, "None"),
-  );
+  const auth = createHarnessAuthFields(context);
   const providerStatus = element("p", { className: "hint", role: "status" }, "Loading Providers…");
-  const accountStatus = element(
-    "p",
-    { className: "hint", role: "status" },
-    "Loading service accounts…",
-  );
   let providersLoaded = false;
-  let accountsLoaded = false;
   let pending = false;
   let outcomeUnknown = false;
   let savedConfiguration;
@@ -168,12 +159,11 @@ export function renderCreateAgent(context) {
     ),
     field("Provider (optional)", provider),
     providerStatus,
-    field("Service account (optional)", account),
-    accountStatus,
+    auth.section,
     field(
       "Configuration JSON",
       configuration,
-      "Starter template applied. Edit the sample model and settings before saving. After creation, use the Agent Credentials tab for OpenAI and Slack credentials. Microsoft Teams credentials remain operator-managed.",
+      "Starter template applied. Edit the sample model and settings before saving. After creation, use the Agent Credentials tab for transport and Slack credentials. Microsoft Teams credentials remain operator-managed.",
     ),
     reset,
   );
@@ -265,52 +255,31 @@ export function renderCreateAgent(context) {
     channelEditor.toggleAttribute("inert", pending);
     channelEditor.setAttribute("aria-busy", pending ? "true" : "false");
     provider.disabled = pending || !providersLoaded;
-    account.disabled = pending || !accountsLoaded;
+    auth.setDisabled(pending);
     reset.disabled = pending || Boolean(savedConfiguration);
     mode.disabled = pending || Boolean(savedConfiguration);
     configuration.readOnly = Boolean(savedConfiguration);
     submit.disabled = pending || outcomeUnknown;
   };
   renderChannelEditor();
-  for (const [path, control, status, label] of [
-    ["/providers", provider, providerStatus, "Providers"],
-    [`${namespacePath(namespaceId)}/service-accounts`, account, accountStatus, "Service accounts"],
-  ]) {
-    request(path)
-      .then((items) => {
-        if (!context.isCurrent()) return;
-        if (control === provider) {
-          provider.append(
-            ...items.map((item) =>
-              element("option", { value: item.id }, `${item.id} · ${item.type}`),
-            ),
-          );
-          providersLoaded = true;
-          status.textContent = items.length
-            ? "Choose an installed Provider."
-            : "No Providers configured.";
-        } else {
-          account.append(
-            ...items.map((item) =>
-              element("option", { value: item.id }, `${item.name} · ${item.id}`),
-            ),
-          );
-          accountsLoaded = true;
-          status.textContent = items.length
-            ? "Choose an existing account in this Namespace."
-            : "No service accounts available in this Namespace.";
-        }
-        updateControls();
-      })
-      .catch((error) => {
-        if (!context.isCurrent()) return;
-        if (error.status === 401) {
-          context.onExpired();
-          return;
-        }
-        status.textContent = `${label} unavailable. ${message(error)} You can continue with None.`;
-      });
-  }
+  request("/providers")
+    .then((items) => {
+      if (!context.isCurrent()) return;
+      provider.append(
+        ...items.map((item) => element("option", { value: item.id }, `${item.id} · ${item.type}`)),
+      );
+      providersLoaded = true;
+      providerStatus.textContent = items.length
+        ? "Choose an installed Provider."
+        : "No Providers configured.";
+      updateControls();
+    })
+    .catch((error) => {
+      if (!context.isCurrent()) return;
+      if (error.status === 401) context.onExpired();
+      else
+        providerStatus.textContent = `Providers unavailable. ${message(error)} You can continue with None.`;
+    });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (pending || outcomeUnknown || !form.reportValidity()) return;
@@ -325,12 +294,15 @@ export function renderCreateAgent(context) {
       name: name.value.trim(),
       executionMode: mode.value,
       ...(provider.value ? { providerId: provider.value } : {}),
-      ...(account.value ? { serviceAccountId: account.value } : {}),
     };
     pending = true;
     updateControls();
     feedback.textContent = "";
+    let mutationStarted = false;
     try {
+      body.harnessAuth = await auth.readBinding();
+      if (!context.isCurrent()) return;
+      mutationStarted = true;
       if (!savedConfiguration) {
         savedConfiguration = await request(`${namespacePath(namespaceId)}/configurations`, {
           method: "POST",
@@ -354,8 +326,8 @@ export function renderCreateAgent(context) {
       const detail =
         error.status === 409 && savedConfiguration
           ? "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again."
-          : message(error, true);
-      outcomeUnknown = ![400, 403, 404, 409, 429].includes(error.status);
+          : message(error, mutationStarted);
+      outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
       feedback.textContent = detail + (error.requestId ? ` Request ID: ${error.requestId}` : "");
     } finally {
       if (context.isCurrent()) {

@@ -19,11 +19,11 @@ are flagged for review and pages above 2,500 fail, except the approved single-pa
 and links must pass. Run `pnpm docs:check-length` for the word-count
 check alone.
 
-The PR workflow runs exactly five lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, and logging collector. Full Integration runs only through manual dispatch from `main`, using that immutable commit. Environment gates apply only to lanes that declare an environment; `helper-timeout` and standalone `logging-collector` declare none. The ChatGPT `provider-account` lane keeps its main-only credential environment without per-run approval. Other model, routing, Slack, OpenShell, and additional OpenTelemetry lanes require separately approved environments. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
+The PR workflow runs exactly five lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, and logging collector. Full Integration runs through manual dispatch using the immutable event commit. All lanes require `main` except `k3d-model`, which also accepts a branch explicitly allowed by the `integration-model` environment. Environment gates apply only to lanes that declare an environment; `helper-timeout` and standalone `logging-collector` declare none. The ChatGPT `provider-account` lane keeps its main-only credential environment without per-run approval. Other model, routing, Slack, OpenShell, and additional OpenTelemetry lanes require separately approved environments. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
 
 Implementation status: routing, OpenShell, and logging now have concrete CI preparation contracts. Routing installs pinned Gateway API, cert-manager v1.18.4, and Envoy Gateway v1.6.7 controller manifests and generates a private test CA. OpenShell creates an owned K3s v1.36.4 cluster, installs a matched kubectl, configures the selected RuntimeClass with the cluster's `runc` handler, verifies handler availability with a smoke Pod, installs OpenShell CLI/chart assets, imports gateway and supervisor images, and installs Agent Sandbox resources. Only the disposable CI OpenShell cluster exempts its selected RuntimeClass from Pod Security Admission. Preparation proves that a violating ordinary Pod is rejected in a restricted namespace and that the same Pod is admitted with the selected class. The full OpenShell suite proves provider-owned supervisor enforcement for filesystem, endpoint/L7 network, and process boundaries while preserving the current binary-unaware sidecar policy. Logging preparation owns a real OpenTelemetry Collector backend with JSONL evidence, and `OCC_TEST_OTEL_LOGS_URL` is no longer a required external input. The Collector and Docker-model jobs use the shared [setup-test-docker action](../../.github/actions/setup-test-docker/action.yml) to pin Docker 29.4.0, which supports the production `fluentd-write-timeout` logging option. The action stops the preinstalled daemon on the ephemeral runner, installs Docker 29.4.0 through the SHA-pinned official Docker setup action, and points `/var/run/docker.sock` at the action socket so the CLI, production Compose, and Driver use one daemon. Other jobs keep the runner Docker daemon. Full-suite acceptance remains incomplete until main-only protected hosted execution records every selected lane. See the [delivery status](../../specs/19-github-actions-test-coverage/delivery-status.md#delivery-status) for current proof boundaries and live gaps.
 
-Each lane runs whole test files. The runner validates actual Node case results and required names; any skip or TODO fails a selected lane. Missing results, zero cases, failures and cleanup errors also fail. The aggregate checks required job and lane results at the same source commit without repeating case validation. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use trusted main inputs.
+Each lane runs whole test files. The runner validates actual Node case results and required names; any skip or TODO fails a selected lane. Missing results, zero cases, failures and cleanup errors also fail. The aggregate checks required job and lane results at the same source commit without repeating case validation. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use the approved event commit and do not promote PR build artifacts.
 
 Prepare infrastructure only on a disposable host or through the reviewed CI helpers. Each run owns its Compose project, file-specific databases, cluster and temporary files. CI writes private cleanup state under `RUNNER_TEMP` and uploads only sanitized result JSON, so hosted-runner cleanup state is unavailable after the job ends. Local failures can retain cleanup state while the host and state path still exist. On local Docker Desktop or equivalent VM-backed Docker hosts, run one Kubernetes lane at a time when disk or network pressure has caused measured instability. The GitHub matrix remains parallel; this local guidance is for reproducible operator runs. Model/service tests require the approved credentials and spend policy described in the [implementation specification](../../specs/19-github-actions-test-coverage.md); configuring workflow files does not prove those tests have passed.
 
@@ -34,9 +34,29 @@ See the [execution flow](../flows/github-actions-testing.md) for entrypoints, re
 The [CI workflow](../../.github/workflows/ci.yml) runs five noncredentialed lanes on
 pull requests, pushes to `main`, merge groups, and manual dispatch.
 [Full Integration](../../.github/workflows/full-integration.yml) runs only through
-manual dispatch from `main`, using the requested lane or `all`. It does not run
+manual dispatch, using the requested lane or `all`. The `k3d-model` branch exception below does not enable other lanes outside `main`. It does not run
 on pushes or merges. The `provider-account` lane remains manual because its
 configured admin credential cannot authenticate from the hosted runner.
+
+### Run Kubernetes model tests before merge
+
+A repository administrator must add the exact branch name to the
+`integration-model` environment's deployment branch rules, retaining `main`,
+required reviewers, and self-review prevention. Wildcard rules do not satisfy
+the preflight. This grants the reviewed branch access to the existing model
+credential only after a reviewer approves the run.
+
+```sh
+gh workflow run full-integration.yml --ref '<approved-branch>' -f lane=k3d-model
+```
+
+The reviewer must inspect the run's commit before approval. Every job checks out
+that immutable `github.sha`; moving the branch does not change an existing run.
+The dispatcher cannot approve their own run. Have a different collaborator
+perform one of those actions. Remove the branch rule after the proof completes.
+Other lanes, including `all` and `provider-account`, remain main-only. This lane
+runs the real Kubernetes topology tests, including embedded invalid-credential
+cutover and recovery; passing ordinary fixture CI does not prove those outcomes.
 
 ### Integration tests outside automatic CI
 
@@ -47,7 +67,7 @@ whether a test has ever passed in a local or hosted run.
 #### Manual Full Integration lanes
 
 In GitHub Actions, these nine files run only when explicitly selected in
-[Full Integration](../../.github/workflows/full-integration.yml) from `main`, using
+[Full Integration](../../.github/workflows/full-integration.yml), using
 the listed lane or `all`. The model/service lanes require their configured
 credentials and infrastructure. All credentialed lanes except `provider-account`
 require protected-environment approval; `provider-account` remains restricted to
@@ -81,10 +101,12 @@ run in the mandatory `postgres` lane.
 [ssh-compute-real.test.mjs](../../tests/integration/ssh-compute-real.test.mjs) belongs
 to the `ssh-host` lane, which is excluded from both the `ci` and `full` groups
 and is not a Full Integration dispatch option. No current workflow provisions
-its disposable Linux/systemd SSH host or invokes that lane. It proves real-host
-readiness, revision cutover, state isolation/persistence, and deletion, without a
-model call. Follow [SSH raw hosts](ssh.md#ssh-raw-hosts) for the disposable host,
-required environment settings, and direct test command.
+its disposable Linux/systemd SSH host or invokes that lane. The readiness-only
+selector proves real-host readiness, revision cutover, state isolation/persistence,
+and deletion without a model call. The optional `OCC_TEST_SSH_MODEL=1` selector adds
+[real provider execution and runtime credential proof](ssh.md#runtime-credential-model-proof).
+Follow [SSH raw hosts](ssh.md#ssh-raw-hosts) for the disposable host, required
+environment settings, and direct test command.
 
 Every current `tests/integration/*.test.mjs` file has a suite-map owner. Ownership
 alone does not mean a workflow runs it; keep this list aligned with both the

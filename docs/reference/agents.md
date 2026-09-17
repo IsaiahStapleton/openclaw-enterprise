@@ -1,8 +1,7 @@
 # Agents
 
 An Agent is a named, persistent resource representing one AI workload inside a
-[Namespace](namespaces.md). Each Agent has its own identity and revision
-history. Agents in the same Namespace remain separate, and Agents never cross
+[Namespace](namespaces.md). Each Agent has its own identity and revision history and cannot cross
 Namespace boundaries.
 
 ```text
@@ -30,7 +29,7 @@ Collection reads include only Agents
 for which the caller has an exact `read` grant. The [API reference](api.md)
 owns route schemas, response envelopes, and permission annotations.
 
-A representative creation body is:
+Creation body:
 
 ```json
 {
@@ -44,8 +43,8 @@ A representative creation body is:
 Creation requires an existing Namespace in `provisioning` or `ready` status
 and a same-Namespace Configuration with `kind: "agent"`. The caller needs
 Agent `create` permission in that Namespace and `read` permission on the
-exact Configuration. An optional associated service account requires its own
-exact `read` permission. [Authentication](authentication.md) establishes the
+exact Configuration. A selected harness credential source requires its own exact permissions; see
+[harness authentication](#harness-authentication). [Authentication](authentication.md) establishes the
 caller; [authorization](authorization.md) defines its grants.
 
 ## Provider association
@@ -57,11 +56,58 @@ resolve to a configured Provider. No default is inferred. The nullable reference
 is returned on both Agent and AgentRevision responses.
 
 The Provider reference is independent of native model names and Harness
-selection. Providerless Agents remain supported with native API-key or
-independently supplied model credentials. A managed access token requires the
+selection. Providerless Agents remain supported with an OpenAI API-key harness binding. A managed access token requires the
 matching Provider and private account binding at admission and reconciliation;
 see [Provider deployment checks](providers.md#agent-association-and-immutable-deployment).
 Creating an Agent does not create a provider account or issue credentials.
+
+## Harness authentication
+
+`harnessAuth` selects how an Agent obtains model credentials. Creation
+omission stores `null`; PATCH omission preserves the binding and explicit `null`
+clears it. Both supported topologies require a valid binding at deployment.
+A managed source must belong to the Agent's exact Namespace:
+
+```json
+{
+  "harnessAuth": {
+    "method": "api_key",
+    "source": {
+      "kind": "secret",
+      "namespaceId": "ns_123e4567-e89b-42d3-a456-426614174000",
+      "id": "sec_123e4567-e89b-42d3-a456-426614174000"
+    }
+  }
+}
+```
+
+For an already issued ChatGPT account credential, use
+`{ "method": "chatgpt_service_account", "serviceAccountId": "sa_123e4567-e89b-42d3-a456-426614174000" }`.
+This requires dedicated Codex and the account's matching `providerId`. Binding
+an account does not issue its credential or change the model, Harness, or Provider.
+
+For SSH embedded OpenClaw, use `{ "method": "runtime" }`. The operator supplies
+credentials in the protected host environment file; OCC neither reads nor
+delivers credentials and performs no authentication/model probe. Agent and
+Configuration authorization, topology checks, and process readiness remain
+required. No credential-source permission is needed because OCC owns no source.
+Kubernetes and Docker reject this method. See [SSH credentials](drivers/ssh-compute.md#credentials-and-supported-boundaries).
+
+API-key binding requires the actor's exact Secret `operate`. Deployment also
+requires the Agent service principal's exact Secret `operate`. ChatGPT binding
+requires the actor's exact account `read`, including the current account when
+replacing or clearing a binding. There is no implied account grant for the Agent
+principal. Each consumer of a shared source is authorized independently.
+
+A deployment freezes the binding and, for managed methods, resolved reference metadata.
+A `runtime` snapshot contains only its method. Operator changes to host credentials
+can affect an existing revision without redeployment; readiness does not prove model access. Dispatch
+reauthorizes the admitted actor and required Agent grants, and checks source
+ownership again. Public responses expose safe references only. Backend Secret
+names, provider workspace IDs, upstream identities, and credential values remain
+private. Changing a draft requires a later explicit deployment. See
+[credential delivery](harness-execution.md#harness-authentication) and
+[Secret consumption grants](drivers/kubernetes-secret.md#bind-a-secret-to-gateway-environment).
 
 ## Plugin selections
 
@@ -143,7 +189,8 @@ Each Agent has one stable service principal and explicitly selects embedded Open
 An authorized bodyless `POST /namespaces/:namespaceId/agents/:agentId/stop`
 sets desired state to `stopped`. The worker removes execution and routing before
 clearing `activeRevisionId`; revision history, credentials, and persistent state
-remain. Repeating stop is safe. A later deployment admits a new revision and sets
+remain. Cleanup includes failed candidate resources and interrupted predecessor
+retirement owned by the current Compute. Repeating stop is safe. A later deployment admits a new revision and sets
 desired state back to `running`; stop does not restart an old revision directly.
 
 ## Editable configuration
@@ -151,8 +198,7 @@ desired state back to `running`; stop does not restart an old revision directly.
 An Agent's `configurationId` selects exactly one native OpenClaw Configuration
 document with `kind: "agent"` in its own Namespace. A PATCH requires
 `configurationId`, exact-Agent `update`, and exact-Configuration `read`.
-For example, the body below replaces the reference and preserves the current
-execution mode, service account, and Provider:
+This replaces the reference, preserving execution mode, harness binding, and Provider:
 
 ```json
 {
@@ -165,8 +211,8 @@ native nested document through its own exact-resource PATCH endpoint; see
 [Configuration CRUD](configuration.md#create-read-update-and-delete). Changing
 the Agent reference or Configuration values does not queue Compute work,
 change the active revision, or mutate earlier revisions. Agent create and update
-accept a Configuration reference, optional execution mode, optional service
-account and Provider associations, and optional Agent-owned plugin selections;
+accept a Configuration reference, optional execution mode, optional harness authentication
+binding and Provider association, and optional Agent-owned plugin selections;
 they do not accept an inline configuration document or competing gateway
 settings. Multiple Agents can
 share the same Configuration;
@@ -194,10 +240,10 @@ combinations are rejected.
 - `404`: The Namespace or Agent does not exist under the requested parent.
 - `404`: The selected Configuration does not belong to the Agent's Namespace.
 - `404`: An associated service account does not belong to the Agent's Namespace.
-- `409 RESOURCE_CONFLICT`: The associated account has no credential, stores an
-  unsupported OAuth credential, or uses a provider-managed access token with
-  an unsupported non-Codex or embedded Harness, or lacks a matching Provider
-  and private managed-account binding.
+- `409 RESOURCE_CONFLICT`: Harness authentication is missing, the selected
+  account has no issued access token, or its Provider binding or topology is incompatible.
+- `400 INVALID_REQUEST`: A removed top-level `serviceAccountId` or runtime
+  `modelApiKey` selector is supplied. Use `harnessAuth` explicitly.
 - `409 RESOURCE_CONFLICT`: Another Agent already uses that name in the same
   Namespace, or the Namespace cannot accept new Agents.
 - `409 NAMESPACE_NOT_READY`: The backing Namespace infrastructure is not ready

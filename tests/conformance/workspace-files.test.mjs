@@ -12,6 +12,7 @@ import {
   createTestAuthPrincipal,
   signInToControllerApp,
 } from "../helpers/auth-session.mjs";
+import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 
 const installationId = "ins_4033697e-6397-4cc6-9b04-8ec17af78cf1";
@@ -26,6 +27,8 @@ const administratorPermissions = [
   { action: "read", resourceKind: "namespace" },
   { action: "create", resourceKind: "configuration" },
   { action: "read", resourceKind: "configuration" },
+  { action: "create", resourceKind: "secret" },
+  { action: "operate", resourceKind: "secret" },
   { action: "create", resourceKind: "agent" },
   { action: "read", resourceKind: "agent" },
   { action: "update", resourceKind: "agent" },
@@ -92,6 +95,7 @@ async function createFixture(options = {}) {
   const configurationDriver = createTestConfigurationDriver({
     id: "configuration-workspace-files",
   });
+  const secretDriver = createTestSecretDriver();
   const sessions = new Map();
   let controller;
   let sequence = 0;
@@ -101,6 +105,7 @@ async function createFixture(options = {}) {
     id: "compute-workspace-files",
     capability: "compute",
     implementation: "deterministic-test",
+    validateHarnessAuth() {},
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -136,6 +141,7 @@ async function createFixture(options = {}) {
                     namespace: "ns",
                     agent: "agt",
                     agent_revision: "rev",
+                    secret: "sec",
                   }[kind];
                   return `${prefix}_00000000-0000-4000-8000-${String(sequence).padStart(12, "0")}`;
                 },
@@ -147,6 +153,7 @@ async function createFixture(options = {}) {
       iamDriver,
       computeDriver,
       configurationDriver,
+      secretDriver,
       resolveHarness: resolveApprovedDevelopmentHarness,
       auditSink,
       development: {
@@ -239,10 +246,44 @@ async function createAgent(fixture, namespace, name) {
     body: { kind: "agent", values: {} },
   });
   assert.equal(configuration.response.status, 201);
+  const secret = await fixture.controller.createSecret(fixture.administrator.id, {
+    namespaceId: namespace.id,
+    name: `key-${name}`,
+    value: "synthetic-workspace-model-key",
+  });
   const created = await request(fixture.app, `/namespaces/${namespace.id}/agents`, {
-    body: { name, configurationId: configuration.payload.data.id },
+    body: {
+      name,
+      configurationId: configuration.payload.data.id,
+      harnessAuth: { method: "api_key", source: secret.ref },
+    },
   });
   assert.equal(created.response.status, 201);
+  // Workspace routes require an admitted Agent, with its own exact credential grant.
+  const agent = await fixture.controller.getAgent(
+    fixture.administrator.id,
+    namespace.id,
+    created.payload.data.id,
+  );
+  fixture.state.identities.push({
+    kind: "service_principal",
+    id: agent.servicePrincipalId,
+    namespaceId: namespace.id,
+    agentId: agent.id,
+  });
+  fixture.state.roles.push({
+    id: `model-${agent.id}`,
+    permissions: [{ action: "operate", resourceKind: "secret" }],
+  });
+  fixture.state.bindings.push({
+    id: `model-${agent.id}`,
+    subjectKind: "identity",
+    subjectId: agent.servicePrincipalId,
+    roleId: `model-${agent.id}`,
+    namespaceId: namespace.id,
+    resourceKind: "secret",
+    resourceId: secret.id,
+  });
   const deployed = await request(
     fixture.app,
     `/namespaces/${namespace.id}/agents/${created.payload.data.id}/deploy`,

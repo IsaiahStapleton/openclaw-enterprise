@@ -39,6 +39,7 @@ function resources() {
     name: `Secret owner ${randomUUID()}`,
     configurationId,
     providerId: null,
+    harnessAuth: null,
     executionMode: "embedded",
     servicePrincipalId: `service-agent-${randomUUID()}`,
     createdAt,
@@ -73,7 +74,7 @@ function bindingValue(storedSecret) {
   };
 }
 
-function bindingFor(storedSecret, destination = "OPENAI_API_KEY") {
+function bindingFor(storedSecret, destination = "SERVICE_TOKEN") {
   return {
     [destination]: bindingValue(storedSecret),
   };
@@ -93,7 +94,7 @@ function tooManyBindings(storedSecret) {
 }
 
 function acceptedBindings(storedSecret) {
-  return bindingsFor(storedSecret, ["SERVICE_TOKEN", "OPENAI_API_KEY"]);
+  return bindingsFor(storedSecret, ["SERVICE_TOKEN", "EXTERNAL_API_KEY"]);
 }
 
 async function assertStateBindingDestinationGrammar(
@@ -104,6 +105,7 @@ async function assertStateBindingDestinationGrammar(
 ) {
   for (const bindings of [
     bindingFor(storedSecret, "CODEX_TOKEN"),
+    bindingFor(storedSecret, "OPENAI_API_KEY"),
     bindingFor(storedSecret, "PATH"),
     tooManyBindings(storedSecret),
   ]) {
@@ -137,7 +139,7 @@ function insertSqlConfiguration(pool, namespaceId, bindings) {
 }
 
 function revisionFor(agent, configuration, storedSecret, revisionNumber = 1) {
-  const revision = {
+  return {
     id: identifier("rev"),
     namespaceId: agent.namespaceId,
     agentId: agent.id,
@@ -146,19 +148,19 @@ function revisionFor(agent, configuration, storedSecret, revisionNumber = 1) {
     configurationKind: configuration.kind,
     configurationGeneration: configuration.generation,
     providerId: null,
+    harnessAuth: {
+      method: "api_key",
+      source: { kind: "secret", namespaceId: agent.namespaceId, id: storedSecret.id },
+      secretDriverId: storedSecret.driverId,
+    },
     configuration: { models: { providers: { openai: {} } } },
     harness: { id: "openclaw", version: "1.0.0", mode: agent.executionMode },
     compute: { id: "compute-test", implementation: "deterministic-test" },
     servicePrincipalId: agent.servicePrincipalId,
     createdAt: new Date().toISOString(),
+    secretDriverId: "kubernetes-secret",
+    secretBindings: bindingFor(storedSecret),
   };
-  return storedSecret === undefined
-    ? revision
-    : {
-        ...revision,
-        secretDriverId: "kubernetes-secret",
-        secretBindings: bindingFor(storedSecret),
-      };
 }
 
 async function ensureInstallation(store) {
@@ -297,8 +299,19 @@ async function exerciseRepository(store) {
   await store.transact(async (state) => {
     await state.secrets.createSecret(revisionSecret);
     await state.secrets.createSecret(activeSecret);
+    await state.agents.updateConfiguration(namespace.id, agent.id, configuration.id, undefined, {
+      method: "api_key",
+      source: bindingValue(revisionSecret).source,
+    });
     const revision = await state.revisions.createRevision(
       revisionFor(agent, { ...configuration, generation: 3 }, revisionSecret, 1),
+    );
+    await state.agents.updateConfiguration(
+      namespace.id,
+      agent.id,
+      configuration.id,
+      undefined,
+      null,
     );
     assert.equal(await state.secrets.hasReferences(namespace.id, revisionSecret.id), false);
     await state.operations.append({
@@ -310,6 +323,10 @@ async function exerciseRepository(store) {
     });
     assert.equal(await state.secrets.hasReferences(namespace.id, revisionSecret.id), true);
 
+    await state.agents.updateConfiguration(namespace.id, agent.id, configuration.id, undefined, {
+      method: "api_key",
+      source: bindingValue(activeSecret).source,
+    });
     const activeRevision = await state.revisions.createRevision(
       revisionFor(agent, { ...configuration, generation: 3 }, activeSecret, 2),
     );
@@ -329,8 +346,12 @@ async function exerciseRepository(store) {
   );
 
   await store.transact(async (state) => {
+    await state.agents.updateConfiguration(namespace.id, agent.id, configuration.id, undefined, {
+      method: "api_key",
+      source: bindingValue(secondSharedSecret).source,
+    });
     const replacementRevision = await state.revisions.createRevision(
-      revisionFor(agent, { ...configuration, generation: 3 }, undefined, 3),
+      revisionFor(agent, { ...configuration, generation: 3 }, secondSharedSecret, 3),
     );
     await state.agents.compareAndSetActiveRevision(
       namespace.id,
@@ -373,6 +394,7 @@ test(
     await store.transact((state) => state.secrets.createSecret(sqlSecret));
     for (const bindings of [
       bindingFor(sqlSecret, "CODEX_TOKEN"),
+      bindingFor(sqlSecret, "OPENAI_API_KEY"),
       bindingFor(sqlSecret, "PATH"),
       tooManyBindings(sqlSecret),
     ]) {

@@ -12,12 +12,12 @@ console sign-in, service-key handling, and the first authenticated
 [Compose development flow](../flows/docker-compose-development.md) owns startup
 internals.
 
-The current Podman verification baseline is Podman client 6.1.0, server 5.7.1,
-and podman-compose 1.6.0. The verified boundary is default control-plane startup,
-worker access to the Podman API, authenticated Installation access, Namespace
-isolation, and an embedded OpenClaw Agent with a provider-backed model turn.
-Dedicated Codex, interactive TUI, and the optional Fluentd logging override
-remain Docker-verified.
+Compose supports control-plane startup, authenticated Installation access, and
+Namespace operations. Docker Compute currently rejects Agent harness bindings,
+so Docker and Podman Agent deployment and model/TUI journeys are unavailable.
+Use [local Kubernetes setup](deploy/local-operations.md#build-images-for-local-kubernetes)
+and the production procedure for authenticated Agent execution. Historical
+Docker/Podman model-turn results do not establish current support.
 
 ### Verify development
 

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +6,7 @@ import { join } from "node:path";
 import pg from "pg";
 import { ensureDevelopmentBootstrap } from "./bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "./harness-configuration.mjs";
+import { grantAgentSecretOperate } from "./postgres-harness-auth.mjs";
 import {
   configureExistingK3dLocalPathSharedFileSystem,
   createKubernetesInstallationConfiguration,
@@ -67,21 +67,7 @@ export function assertNoSecretMaterial(value, secrets, description) {
 
 function nativeConfiguration(harnessId) {
   const configuration = createHarnessConfiguration(harnessId, optionalPluginProofModel());
-  if (harnessId === "openclaw") {
-    configuration.secrets = {
-      providers: {
-        model: {
-          source: "env",
-          allowlist: ["OPENAI_API_KEY"],
-        },
-      },
-    };
-    configuration.models.providers.openai.apiKey = {
-      source: "env",
-      provider: "model",
-      id: "OPENAI_API_KEY",
-    };
-  } else {
+  if (harnessId === "codex") {
     configuration.tools = {
       fs: { workspaceOnly: true },
     };
@@ -143,7 +129,7 @@ function installationAdministratorServicePrincipal(iamState) {
 }
 
 function createAgentPluginApi({ request, namespaceId }) {
-  async function createAgent({ harnessId, executionMode, name, serviceAccountId, providerId }) {
+  async function createAgent({ harnessId, executionMode, name, harnessAuth, providerId }) {
     const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
       kind: "agent",
       values: nativeConfiguration(harnessId),
@@ -154,7 +140,7 @@ function createAgentPluginApi({ request, namespaceId }) {
       configurationId: configuration.data.id,
       executionMode,
       ...(providerId === undefined ? {} : { providerId }),
-      ...(serviceAccountId === undefined ? {} : { serviceAccountId }),
+      ...(harnessAuth === undefined ? {} : { harnessAuth }),
     });
     assert.equal(agent.status, 201, JSON.stringify(agent.error));
     return agent.data;
@@ -172,9 +158,6 @@ function createAgentPluginApi({ request, namespaceId }) {
       configurationId: current.configurationId,
       executionMode: current.executionMode,
       ...(current.providerId === undefined ? {} : { providerId: current.providerId }),
-      ...(current.serviceAccountId === undefined
-        ? {}
-        : { serviceAccountId: current.serviceAccountId }),
       plugins,
     });
     assert.equal(response.status, 200, JSON.stringify(response.error));
@@ -368,38 +351,6 @@ function createImportedCodexServiceAccountDriverFactory(imported, compute) {
       throw new Error("The configured ServiceAccount Driver was not selected correctly.");
     }
   };
-}
-
-async function createOperatorSecret(kubectlArguments, namespace, name, values) {
-  await new Promise((resolve, reject) => {
-    const child = spawn("kubectl", kubectlArguments(["create", "-f", "-"]), {
-      stdio: ["pipe", "ignore", "pipe"],
-    });
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr = `${stderr}${chunk.toString()}`.slice(-2048);
-    });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Operator Secret provisioning failed (${code}): ${stderr}`));
-    });
-    child.stdin.once("error", reject);
-    child.stdin.end(
-      JSON.stringify({
-        apiVersion: "v1",
-        kind: "Secret",
-        metadata: { namespace, name },
-        type: "Opaque",
-        data: Object.fromEntries(
-          Object.entries(values).map(([key, value]) => [
-            key,
-            Buffer.from(value).toString("base64"),
-          ]),
-        ),
-      }),
-    );
-  });
 }
 
 async function waitForPluginProofWorkerSuccess(waitFor, events, revisionId, options) {
@@ -910,7 +861,6 @@ export async function createPluginDriverRealFixture(
     password: `plugin-driver-password-${randomUUID()}`,
   };
   const {
-    kubectlArguments,
     kubectl,
     resource,
     resources,
@@ -1295,13 +1245,28 @@ export async function createPluginDriverRealFixture(
     },
   });
 
-  async function materializeOpenAIModelSecret(agentId) {
+  async function bindOpenAIModelSecret(agentId) {
     const key = requiredPluginProofEnv("OPENAI_API_KEY", "OpenClaw embedded model credential");
-    await createOperatorSecret(
-      kubectlArguments,
-      tenantNamespace,
-      `openclaw-agent-model-${hash(agentId)}`,
-      { OPENAI_API_KEY: key },
+    const secret = await request("POST", `/namespaces/${createdNamespace.data.id}/secrets`, {
+      name: `Plugin model key ${agentId}`,
+      value: key,
+    });
+    assert.equal(secret.status, 201, JSON.stringify(secret.error));
+    const agent = await agentApi.getAgent(agentId);
+    const bound = await request(
+      "PATCH",
+      `/namespaces/${createdNamespace.data.id}/agents/${agentId}`,
+      {
+        configurationId: agent.configurationId,
+        harnessAuth: { method: "api_key", source: secret.data.ref },
+      },
+    );
+    assert.equal(bound.status, 200, JSON.stringify(bound.error));
+    await grantAgentSecretOperate(pool, bound.data, secret.data.id);
+    assertNoSecretMaterial(
+      [secret, bound],
+      [key],
+      "Harness binding responses must not expose the API key.",
     );
     return key;
   }
@@ -1325,7 +1290,7 @@ export async function createPluginDriverRealFixture(
     normalGatewayTurn: nativeAssertions.normalGatewayTurn,
     assertSessionToolCallEvidence: nativeAssertions.assertSessionToolCallEvidence,
     assertNoSessionToolCallEvidence: nativeAssertions.assertNoSessionToolCallEvidence,
-    materializeOpenAIModelSecret,
+    bindOpenAIModelSecret,
   };
 }
 

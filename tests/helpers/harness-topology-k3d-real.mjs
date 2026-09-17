@@ -93,7 +93,6 @@ const sharedWorkspaceSubPaths = Object.freeze([
   "workspace",
 ]);
 const {
-  kubectlArguments,
   kubectl,
   applyManifest,
   resource,
@@ -373,35 +372,6 @@ function nativeConfiguration(harnessId, slack, options = {}) {
     },
   };
   return configuration;
-}
-
-async function createOperatorSecret(namespace, name, key, credential) {
-  await new Promise((resolve, reject) => {
-    const child = spawn("kubectl", kubectlArguments(["create", "-f", "-"]), {
-      stdio: ["pipe", "ignore", "pipe"],
-    });
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr = `${stderr}${chunk.toString()}`.slice(-2048);
-    });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Operator Secret provisioning failed (${code}): ${stderr}`));
-    });
-    // Read stdin directly: Node's Linux subprocess pipes cannot be reopened as /dev/stdin.
-    // Secret bytes remain out of command arguments and temporary files.
-    child.stdin.once("error", reject);
-    child.stdin.end(
-      JSON.stringify({
-        apiVersion: "v1",
-        kind: "Secret",
-        metadata: { namespace, name },
-        type: "Opaque",
-        data: { [key]: Buffer.from(credential).toString("base64") },
-      }),
-    );
-  });
 }
 
 async function captureCommand(command, args, options = {}) {
@@ -737,68 +707,6 @@ async function storedAgent(pool, namespaceId, agentId) {
   };
 }
 
-async function materializeServiceAccountCredential(namespace, namespaceId, account, agentId) {
-  assert.equal(account.namespaceId, namespaceId, "the account must own the exact tenant Namespace");
-  assert.equal(account.credential.kind, "api_key", "only API-key credentials can be materialized");
-
-  const reference = account.credential.secretRef;
-  const source = await resource("secret", reference.name, namespace);
-  assert.equal(source.metadata.namespace, namespace);
-  assert.equal(source.metadata.labels?.["openclaw.dev/namespace"], namespaceId);
-  assert.equal(source.metadata.annotations?.["openclaw.dev/namespace-id"], namespaceId);
-  assert.equal(
-    source.metadata.annotations?.["openclaw.dev/service-account-id"],
-    account.id,
-    "the source Secret must belong to the exact service account",
-  );
-  assert.ok(
-    Object.hasOwn(source.data ?? {}, reference.key),
-    "the account-owned source Secret must contain its exact persisted credential key",
-  );
-
-  // Only the independently authorized operator can resolve the account's exact source Secret.
-  const credential = Buffer.from(source.data[reference.key], "base64");
-  assert.ok(credential.length > 0, "the account's exact source credential must not be empty");
-  const destinationName = `${modelPrefix}-${hash(agentId)}`;
-  await createOperatorSecret(namespace, destinationName, "OPENAI_API_KEY", credential);
-  await kubectl(
-    "label",
-    "secret",
-    destinationName,
-    "--namespace",
-    namespace,
-    `openclaw.dev/namespace=${namespaceId}`,
-    `openclaw.dev/agent=${agentId}`,
-  );
-  await kubectl(
-    "annotate",
-    "secret",
-    destinationName,
-    "--namespace",
-    namespace,
-    `openclaw.dev/namespace-id=${namespaceId}`,
-    `openclaw.dev/agent-id=${agentId}`,
-    `openclaw.dev/service-account-id=${account.id}`,
-  );
-
-  const destination = await resource("secret", destinationName, namespace);
-  assert.equal(destination.metadata.namespace, namespace);
-  assert.equal(destination.metadata.annotations?.["openclaw.dev/agent-id"], agentId);
-  assert.equal(destination.metadata.annotations?.["openclaw.dev/service-account-id"], account.id);
-  assert.ok(Object.hasOwn(destination.data ?? {}, "OPENAI_API_KEY"));
-
-  // One-way fingerprints prove source-to-workload provenance without logging credential bytes.
-  const sourceFingerprint = createHash("sha256").update(credential).digest("hex");
-  const destinationFingerprint = createHash("sha256")
-    .update(Buffer.from(destination.data.OPENAI_API_KEY, "base64"))
-    .digest("hex");
-  assert.equal(
-    destinationFingerprint,
-    sourceFingerprint,
-    "the Agent model Secret must contain only the exact persisted account-source credential",
-  );
-}
-
 async function provisionAgentChannelSecret(directory, namespace, agentId, slack) {
   const suffix = hash(agentId);
   const tokenDirectory = await mkdtemp(join(directory, `channel-tokens-${suffix}-`));
@@ -826,12 +734,7 @@ async function provisionAgentChannelSecret(directory, namespace, agentId, slack)
 
 async function arrangeProductionTopology(context, mode, slack, options = {}) {
   const loggingObservationStartedAt = Date.now();
-  const modelCredential = options.modelCredential ?? "service-account";
-  assert.ok(
-    modelCredential === "service-account" ||
-      (modelCredential === "secret-api" && mode === "embedded"),
-    "Secret API model credentials are covered only by embedded OpenClaw topology",
-  );
+  const includeSecretProbes = options.secretLifecycle === true;
   const kubeconfig = await validatePrerequisites();
   const identifier = randomUUID();
   const credentials = {
@@ -1142,7 +1045,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   });
 
   let secretApi;
-  if (modelCredential === "secret-api") {
+  {
     const secretAssignmentCaller = await createSecretAssignmentCallerRequest({
       pool: observerPool,
       createPostgresControllerAuth,
@@ -1160,146 +1063,96 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       "model-key",
       process.env.OPENAI_API_KEY,
     );
-    const initialProbeValue = `secret-rotation-initial-${randomUUID()}`;
-    const probeSecret = await createApiSecret(
-      request,
-      namespaceId,
-      "rotation-probe",
-      initialProbeValue,
-    );
-    const initialPeerProbeValue = `secret-rotation-peer-${randomUUID()}`;
-    const peerProbeSecret = await createApiSecret(
-      request,
-      namespaceId,
-      "rotation-peer-probe",
-      initialPeerProbeValue,
-    );
-    const initialSharedProbeValue = `secret-rotation-shared-initial-${randomUUID()}`;
-    const sharedProbeSecret = await createApiSecret(
-      request,
-      namespaceId,
-      "rotation-shared-probe",
-      initialSharedProbeValue,
-    );
-    const missingBackendValue = `missing-backend-secret-${randomUUID()}`;
-    const missingBackendSecret = await createApiSecret(
-      request,
-      namespaceId,
-      "missing-backend",
-      missingBackendValue,
-    );
-    const unboundDeleteValue = `unbound-delete-${randomUUID()}`;
-    const unboundDeleteSecret = await createApiSecret(
-      request,
-      namespaceId,
-      "unbound-delete",
-      unboundDeleteValue,
-    );
-    const deniedConfiguration = await expectApiFailureWithoutSecret(
-      request,
-      "POST",
-      `/namespaces/${namespaceId}/configurations`,
-      {
-        kind: "agent",
-        values: nativeConfiguration("openclaw", slack),
-        secretBindings: { OPENAI_API_KEY: secretBinding(modelSecret.ref) },
-      },
-      [
-        process.env.OPENAI_API_KEY,
+    secretApi = { assignmentPrincipalId: secretAssignmentPrincipalId, model: modelSecret };
+    if (includeSecretProbes) {
+      const initialProbeValue = `secret-rotation-initial-${randomUUID()}`;
+      const probeSecret = await createApiSecret(
+        request,
+        namespaceId,
+        "rotation-probe",
+        initialProbeValue,
+      );
+      const initialPeerProbeValue = `secret-rotation-peer-${randomUUID()}`;
+      const peerProbeSecret = await createApiSecret(
+        request,
+        namespaceId,
+        "rotation-peer-probe",
+        initialPeerProbeValue,
+      );
+      const initialSharedProbeValue = `secret-rotation-shared-initial-${randomUUID()}`;
+      const sharedProbeSecret = await createApiSecret(
+        request,
+        namespaceId,
+        "rotation-shared-probe",
+        initialSharedProbeValue,
+      );
+      const missingBackendValue = `missing-backend-secret-${randomUUID()}`;
+      const missingBackendSecret = await createApiSecret(
+        request,
+        namespaceId,
+        "missing-backend",
+        missingBackendValue,
+      );
+      const unboundDeleteValue = `unbound-delete-${randomUUID()}`;
+      const unboundDeleteSecret = await createApiSecret(
+        request,
+        namespaceId,
+        "unbound-delete",
+        unboundDeleteValue,
+      );
+      secretApi = {
+        assignmentPrincipalId: secretAssignmentPrincipalId,
+        model: modelSecret,
+        probe: probeSecret,
+        peerProbe: peerProbeSecret,
+        sharedProbe: sharedProbeSecret,
+        missingBackend: missingBackendSecret,
+        unboundDelete: unboundDeleteSecret,
         initialProbeValue,
         initialPeerProbeValue,
         initialSharedProbeValue,
         missingBackendValue,
         unboundDeleteValue,
-      ],
-      "Secret binding assignment without exact caller operate",
+      };
+    }
+    const ungranted = await createUndeployedAgent(
+      request,
+      namespaceId,
+      mode,
+      `ungranted-model-${randomUUID()}`,
     );
-    assert.equal(
-      deniedConfiguration.status,
-      403,
-      `caller assignment without Secret operate returned HTTP ${deniedConfiguration.status}`,
+    const actorDenied = await expectApiFailureWithoutSecret(
+      request,
+      "PATCH",
+      `/namespaces/${namespaceId}/agents/${ungranted.agent.id}`,
+      { harnessAuth: { method: "api_key", source: modelSecret.ref } },
+      [process.env.OPENAI_API_KEY],
+      "Harness auth assignment without exact actor Secret operate",
     );
+    assert.equal(actorDenied.status, 403);
     await Promise.all(
       [
-        modelSecret,
-        probeSecret,
-        peerProbeSecret,
-        sharedProbeSecret,
-        missingBackendSecret,
-        unboundDeleteSecret,
-      ].map((secret) =>
-        grantSecretOperate(observerPool, namespaceId, secretAssignmentPrincipalId, secret.id),
-      ),
+        secretApi.model,
+        secretApi.probe,
+        secretApi.peerProbe,
+        secretApi.sharedProbe,
+        secretApi.missingBackend,
+        secretApi.unboundDelete,
+      ]
+        .filter(Boolean)
+        .map((secret) =>
+          grantSecretOperate(observerPool, namespaceId, secretAssignmentPrincipalId, secret.id),
+        ),
     );
-    secretApi = {
-      assignmentPrincipalId: secretAssignmentPrincipalId,
-      model: modelSecret,
-      probe: probeSecret,
-      peerProbe: peerProbeSecret,
-      sharedProbe: sharedProbeSecret,
-      missingBackend: missingBackendSecret,
-      unboundDelete: unboundDeleteSecret,
-      initialProbeValue,
-      initialPeerProbeValue,
-      initialSharedProbeValue,
-      missingBackendValue,
-      unboundDeleteValue,
-    };
-  }
-
-  let createdAccount;
-  let expectedCredential;
-  let sourceName;
-  if (modelCredential === "service-account") {
-    // The provider credential begins only in an independently owned Secret for this exact account.
-    createdAccount = await request("POST", `/namespaces/${namespaceId}/service-accounts`, {
-      name: `production-${mode}-${randomUUID()}`,
-    });
-    assert.equal(createdAccount.status, 201, JSON.stringify(createdAccount.error));
-    assert.equal(createdAccount.data.namespaceId, namespaceId);
-    sourceName = `service-account-${hash(createdAccount.data.id)}`;
-    const sourceKey = `${mode}-provider-api-key`;
-    await createOperatorSecret(placement, sourceName, sourceKey, process.env.OPENAI_API_KEY);
-    await kubectl(
-      "label",
-      "secret",
-      sourceName,
-      "--namespace",
-      placement,
-      `openclaw.dev/namespace=${namespaceId}`,
-      `openclaw.dev/service-account=${createdAccount.data.id}`,
-    );
-    await kubectl(
-      "annotate",
-      "secret",
-      sourceName,
-      "--namespace",
-      placement,
-      `openclaw.dev/namespace-id=${namespaceId}`,
-      `openclaw.dev/service-account-id=${createdAccount.data.id}`,
-    );
-    expectedCredential = {
-      kind: "api_key",
-      secretRef: { name: sourceName, key: sourceKey },
-    };
-    const updatedAccount = await request(
-      "PATCH",
-      `/namespaces/${namespaceId}/service-accounts/${createdAccount.data.id}/credential`,
-      expectedCredential,
-    );
-    assert.equal(updatedAccount.status, 200, JSON.stringify(updatedAccount.error));
-    assert.deepEqual(updatedAccount.data.credential, expectedCredential);
   }
 
   const harnessId = mode === "dedicated" ? "codex" : "openclaw";
-  const secretBindings =
-    secretApi === undefined
-      ? undefined
-      : {
-          OPENAI_API_KEY: secretBinding(secretApi.model.ref),
-          [secretRotationProbe]: secretBinding(secretApi.probe.ref),
-          [sharedSecretRotationProbe]: secretBinding(secretApi.sharedProbe.ref),
-        };
+  const secretBindings = !includeSecretProbes
+    ? undefined
+    : {
+        [secretRotationProbe]: secretBinding(secretApi.probe.ref),
+        [sharedSecretRotationProbe]: secretBinding(secretApi.sharedProbe.ref),
+      };
   const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
     values: nativeConfiguration(
@@ -1316,31 +1169,16 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     name: `production-${mode}-${randomUUID()}`,
     configurationId: configuration.data.id,
     executionMode: mode,
-    ...(createdAccount === undefined ? {} : { serviceAccountId: createdAccount.data.id }),
+    harnessAuth: { method: "api_key", source: secretApi.model.ref },
   });
   assert.equal(agent.status, 201, JSON.stringify(agent.error));
-  if (createdAccount === undefined) {
-    assert.equal(Object.hasOwn(agent.data, "serviceAccountId"), false);
-  } else {
-    assert.equal(agent.data.serviceAccountId, createdAccount.data.id);
-  }
+  assert.deepEqual(agent.data.harnessAuth, { method: "api_key", source: secretApi.model.ref });
   const persistedAgent = await storedAgent(observerPool, namespaceId, agent.data.id);
-
-  let persistedAccount;
-  if (createdAccount !== undefined) {
-    // Resolve the source from persisted production state, never from fixture inputs or process env.
-    persistedAccount = await request(
-      "GET",
-      `/namespaces/${namespaceId}/service-accounts/${agent.data.serviceAccountId}`,
-    );
-    assert.equal(persistedAccount.status, 200, JSON.stringify(persistedAccount.error));
-    assert.deepEqual(persistedAccount.data.credential, expectedCredential);
-  }
   const gatewayToken = await provisionAgentTransportSecret(directory, placement, agent.data.id);
   if (slack !== undefined) {
     await provisionAgentChannelSecret(directory, placement, agent.data.id, slack);
   }
-  if (modelCredential === "secret-api") {
+  {
     const revisionsBefore = await request(
       "GET",
       `/namespaces/${namespaceId}/agents/${agent.data.id}/revisions`,
@@ -1369,84 +1207,22 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       revisionsBefore.data.map(({ id }) => id),
       "missing Agent service-principal Secret operate must reject deployment before revision admission",
     );
-    await Promise.all([
-      grantSecretOperate(
-        observerPool,
-        namespaceId,
-        persistedAgent.servicePrincipalId,
-        secretApi.model.id,
-      ),
-      grantSecretOperate(
-        observerPool,
-        namespaceId,
-        persistedAgent.servicePrincipalId,
-        secretApi.probe.id,
-      ),
-      grantSecretOperate(
-        observerPool,
-        namespaceId,
-        persistedAgent.servicePrincipalId,
-        secretApi.sharedProbe.id,
-      ),
-    ]);
+    await Promise.all(
+      [secretApi.model, secretApi.probe, secretApi.sharedProbe]
+        .filter(Boolean)
+        .map((secret) =>
+          grantSecretOperate(
+            observerPool,
+            namespaceId,
+            persistedAgent.servicePrincipalId,
+            secret.id,
+          ),
+        ),
+    );
     secretApi = {
       ...secretApi,
       configuration: configuration.data,
     };
-  }
-
-  if (mode === "embedded" && modelCredential === "service-account") {
-    // A sibling account's real Secret cannot be adopted merely because its Namespace and key match.
-    const siblingAccount = await request("POST", `/namespaces/${namespaceId}/service-accounts`, {
-      name: `production-${mode}-sibling-${randomUUID()}`,
-    });
-    assert.equal(siblingAccount.status, 201, JSON.stringify(siblingAccount.error));
-    await kubectl(
-      "annotate",
-      "secret",
-      sourceName,
-      "--namespace",
-      placement,
-      `openclaw.dev/service-account-id=${siblingAccount.data.id}`,
-      "--overwrite",
-    );
-    await assert.rejects(
-      () =>
-        materializeServiceAccountCredential(
-          placement,
-          namespaceId,
-          persistedAccount.data,
-          agent.data.id,
-        ),
-      /the source Secret must belong to the exact service account/,
-    );
-    const modelSecretName = `${modelPrefix}-${hash(agent.data.id)}`;
-    let destinationMissing = false;
-    try {
-      await kubectl("get", "secret", modelSecretName, "--namespace", placement, "-o", "name");
-    } catch (error) {
-      assert.match(error.stderr ?? error.message, /NotFound|not found/i);
-      destinationMissing = true;
-    }
-    assert.equal(destinationMissing, true, "rejected source ownership must create no Agent Secret");
-    await kubectl(
-      "annotate",
-      "secret",
-      sourceName,
-      "--namespace",
-      placement,
-      `openclaw.dev/service-account-id=${persistedAccount.data.id}`,
-      "--overwrite",
-    );
-  } else {
-    if (persistedAccount !== undefined) {
-      await materializeServiceAccountCredential(
-        placement,
-        namespaceId,
-        persistedAccount.data,
-        agent.data.id,
-      );
-    }
   }
 
   const deployed = await request(
@@ -1455,16 +1231,9 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   );
   assert.equal(deployed.status, 202, JSON.stringify(deployed.error));
   assert.deepEqual(deployed.data.harness, { id: harnessId, version: "1.0.0", mode });
-  if (createdAccount === undefined) {
-    assert.equal(Object.hasOwn(deployed.data, "serviceAccount"), false);
-  } else {
-    assert.deepEqual(deployed.data.serviceAccount, {
-      id: createdAccount.data.id,
-      credential: expectedCredential,
-    });
-  }
+  assert.deepEqual(deployed.data.harnessAuth, agent.data.harnessAuth);
+  assert.equal(Object.hasOwn(deployed.data, "serviceAccount"), false);
   for (const [description, response] of [
-    ...(persistedAccount === undefined ? [] : [["account", persistedAccount]]),
     ["Agent", agent],
     ["AgentRevision", deployed],
   ]) {
@@ -1472,50 +1241,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       JSON.stringify(response).includes(process.env.OPENAI_API_KEY),
       false,
       `the production ${description} response must never contain provider credential bytes`,
-    );
-  }
-
-  if (mode === "embedded" && modelCredential === "service-account") {
-    const modelSecretName = `${modelPrefix}-${hash(agent.data.id)}`;
-    // Missing operator materialization must hold this exact revision pending without activation.
-    await waitFor(`embedded workload to reject missing Secret ${modelSecretName}`, async () => {
-      const pod = (await resources("pods", placement)).find(
-        ({ metadata }) =>
-          metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
-          metadata.labels?.["openclaw.dev/agent"] === agent.data.id,
-      );
-      const waiting = pod?.status.containerStatuses?.find(({ state }) => state?.waiting)?.state
-        .waiting;
-      if (waiting?.reason !== "CreateContainerConfigError") return undefined;
-      assert.ok(
-        waiting.message?.includes(modelSecretName),
-        "the blocked Pod must identify only the exact absent Agent model Secret",
-      );
-      return pod;
-    });
-    await waitFor(`worker to defer incomplete embedded revision ${deployed.data.id}`, () =>
-      events.find(
-        (event) =>
-          event.event === "worker.completed" &&
-          event.revisionId === deployed.data.id &&
-          event.outcome === "pending" &&
-          event.code === "REVISION_INCOMPLETE",
-      ),
-    );
-    const blockedAgent = await request("GET", `/namespaces/${namespaceId}/agents/${agent.data.id}`);
-    assert.equal(blockedAgent.status, 200);
-    assert.notEqual(
-      blockedAgent.data.activeRevisionId,
-      deployed.data.id,
-      "the missing exact Agent model Secret must prevent revision activation",
-    );
-
-    // The same deferred revision recovers only after its real account source is materialized.
-    await materializeServiceAccountCredential(
-      placement,
-      namespaceId,
-      persistedAccount.data,
-      agent.data.id,
     );
   }
 
@@ -1537,7 +1262,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     `/namespaces/${namespaceId}/agents/${agent.data.id}/revisions/${deployed.data.id}`,
   );
   assert.equal(observedRevision.status, 200, JSON.stringify(observedRevision.error));
-  assert.deepEqual(observedRevision.data.serviceAccount, deployed.data.serviceAccount);
+  assert.deepEqual(observedRevision.data.harnessAuth, deployed.data.harnessAuth);
   if (secretApi !== undefined) {
     assert.deepEqual(observedRevision.data.secretBindings, secretApi.configuration.secretBindings);
   }
@@ -1585,6 +1310,22 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   const harnessPod = pods.find(
     ({ metadata }) => metadata.labels?.["openclaw.dev/workload-role"] === "agent",
   );
+  const modelStorage = await storedSecret(observerPool, namespaceId, secretApi.model.id);
+  const modelContainer = (harnessPod ?? gatewayPod).spec.containers[0];
+  const modelProjection = modelContainer.env.find(({ name }) => name === "OPENAI_API_KEY");
+  assert.deepEqual(modelProjection.valueFrom.secretKeyRef, {
+    name: modelStorage.backendRef.name,
+    key: modelStorage.backendRef.key,
+    optional: false,
+  });
+  if (mode === "dedicated") {
+    assert.equal(
+      gatewayPod.spec.containers.some((container) =>
+        (container.env ?? []).some(({ name }) => name === "OPENAI_API_KEY"),
+      ),
+      false,
+    );
+  }
   const gatewayVersion = (
     await kubectl(
       "exec",
@@ -1627,7 +1368,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     request,
     events,
     agent: agent.data,
-    ...(persistedAccount === undefined ? {} : { account: persistedAccount.data }),
     persistedAgent,
     revision: deployed.data,
     gatewayServiceName,
@@ -1762,6 +1502,219 @@ async function assertActualModelTurn(topology) {
     );
     throw new Error(`${error.message}\n${logs.join("\n")}`, { cause: error });
   }
+}
+
+// Exercise the regular Secret -> Agent draft -> deployment -> worker -> native startup path.
+// The failure log distinguishes rejected native authentication from ordinary startup latency.
+async function assertInvalidHarnessAuthStaysUnready(context, topology) {
+  const namespaceId = topology.agent.namespaceId;
+  const agentPath = `/namespaces/${namespaceId}/agents/${topology.agent.id}`;
+  const validBinding = structuredClone(topology.agent.harnessAuth);
+  const predecessor = structuredClone(topology.revision);
+  const invalidKey = `sk-invalid-harness-auth-${randomUUID()}`;
+  const invalidSecret = await createApiSecret(
+    topology.request,
+    namespaceId,
+    "invalid-model-key",
+    invalidKey,
+  );
+  await Promise.all(
+    [topology.secretApi.assignmentPrincipalId, topology.persistedAgent.servicePrincipalId].map(
+      (principalId) =>
+        grantSecretOperate(topology.observerPool, namespaceId, principalId, invalidSecret.id),
+    ),
+  );
+  const rebound = await topology.request("PATCH", agentPath, {
+    harnessAuth: { method: "api_key", source: invalidSecret.ref },
+  });
+  assertNoSecretMaterial(rebound, [invalidKey], "invalid-key binding response");
+  assert.equal(rebound.status, 200, JSON.stringify(rebound.error));
+  const serviceName =
+    topology.mode === "dedicated" ? topology.agentServiceName : topology.gatewayServiceName;
+  const servingService = await resource("service", serviceName, topology.placement);
+  const candidate = await topology.request("POST", `${agentPath}/deploy`);
+  assertNoSecretMaterial(candidate, [invalidKey], "invalid-key deployment response");
+  assert.equal(candidate.status, 202, JSON.stringify(candidate.error));
+  assert.deepEqual(candidate.data.harnessAuth, rebound.data.harnessAuth);
+  const storage = await storedSecret(topology.observerPool, namespaceId, invalidSecret.id);
+  const rejectedPod = await waitFor(
+    `native authentication rejection for ${candidate.data.id}`,
+    async () => {
+      const pod = (await resources("pods", topology.placement)).find(
+        (pod) =>
+          pod.metadata.deletionTimestamp === undefined &&
+          pod.metadata.labels?.["openclaw.dev/agent"] === topology.agent.id &&
+          (topology.mode === "dedicated"
+            ? pod.metadata.labels?.["openclaw.dev/workload-role"] === "agent" &&
+              pod.metadata.labels?.["openclaw.dev/revision"] === candidate.data.id
+            : pod.metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
+              gatewayConsumesRevision(pod, topology.agent.id, candidate.data.id)),
+      );
+      if (!pod?.status.containerStatuses?.some(({ state }) => state?.running)) return undefined;
+      let logs;
+      try {
+        logs = await kubectl(
+          "logs",
+          pod.metadata.name,
+          "--namespace",
+          topology.placement,
+          "--tail=100",
+        );
+      } catch (error) {
+        // A Pod can be replaced between observation and log retrieval; wait for its successor.
+        if (/NotFound|not found|PodInitializing|ContainerCreating/.test(error.stderr ?? ""))
+          return undefined;
+        throw error;
+      }
+      assertNoSecretMaterial(
+        logs,
+        [invalidKey, process.env.OPENAI_API_KEY],
+        "failed native authentication logs",
+      );
+      if (!logs.includes("Harness model authentication probe failed.")) return undefined;
+      assert.equal(
+        pod.status.conditions?.some(({ type, status }) => type === "Ready" && status === "True"),
+        false,
+      );
+      const projection = pod.spec.containers
+        .flatMap(({ env = [] }) => env)
+        .find(({ name }) => name === "OPENAI_API_KEY");
+      assert.deepEqual(
+        projection?.valueFrom?.secretKeyRef,
+        {
+          name: storage.backendRef.name,
+          key: storage.backendRef.key,
+          optional: false,
+        },
+        "the rejected runtime must consume the deliberately invalid candidate source",
+      );
+      return pod;
+    },
+    120_000,
+  );
+  await waitFor(
+    `unready candidate ${candidate.data.id} worker observation`,
+    () =>
+      topology.events.find(
+        (event) =>
+          event.event === "worker.completed" &&
+          event.revisionId === candidate.data.id &&
+          event.outcome === "pending" &&
+          (event.code === "REVISION_INCOMPLETE" ||
+            (topology.mode === "embedded" && event.code === "REVISION_FINALIZATION_INCOMPLETE")),
+      ),
+    60_000,
+  );
+  assertNoSecretMaterial(topology.events, [invalidKey], "failed candidate worker events");
+  const active = await topology.request("GET", agentPath);
+  assert.equal(active.status, 200);
+  if (topology.mode === "dedicated") {
+    assert.equal(active.data.activeRevisionId, predecessor.id);
+    assert.equal(
+      (await resource("pod", topology.gatewayPod.metadata.name, topology.placement)).metadata.uid,
+      topology.gatewayPod.metadata.uid,
+      "invalid auth must preserve the dedicated serving gateway Pod",
+    );
+    assert.equal(
+      (await resource("pod", topology.harnessPod.metadata.name, topology.placement)).metadata.uid,
+      topology.harnessPod.metadata.uid,
+      "invalid auth must preserve the serving Codex Pod",
+    );
+  } else {
+    // Embedded activation publishes the revision before replacing the shared
+    // gateway. Failed native startup keeps that replacement unready, with no rollback.
+    assert.equal(active.data.activeRevisionId, candidate.data.id);
+    const gateways = (await resources("pods", topology.placement)).filter(
+      ({ metadata }) =>
+        metadata.labels?.["openclaw.dev/agent"] === topology.agent.id &&
+        metadata.labels?.["openclaw.dev/workload-role"] === "gateway",
+    );
+    assert.equal(
+      gateways.some(({ metadata }) => metadata.uid === topology.gatewayPod.metadata.uid),
+      false,
+    );
+    assert.equal(gateways.length, 1);
+    assert.equal(gateways[0].metadata.uid, rejectedPod.metadata.uid);
+  }
+  const stillServing = await resource("service", serviceName, topology.placement);
+  assert.deepEqual(
+    stillServing.spec.selector,
+    servingService.spec.selector,
+    "the Service keeps its existing topology selector through failed authentication",
+  );
+  const slices = await resources("endpointslices", topology.placement);
+  assert.equal(
+    slices
+      .filter(({ metadata }) => metadata.labels?.["kubernetes.io/service-name"] === serviceName)
+      .flatMap(({ endpoints = [] }) => endpoints)
+      .some(
+        (endpoint) =>
+          endpoint.targetRef?.uid === rejectedPod.metadata.uid &&
+          endpoint.conditions?.ready !== false,
+      ),
+    false,
+    "the rejected candidate must never become a serving endpoint",
+  );
+  if (topology.mode === "embedded") {
+    assert.equal(
+      slices
+        .filter(({ metadata }) => metadata.labels?.["kubernetes.io/service-name"] === serviceName)
+        .flatMap(({ endpoints = [] }) => endpoints)
+        .some((endpoint) => endpoint.conditions?.ready !== false),
+      false,
+      "failed embedded cutover leaves no ready gateway endpoint",
+    );
+  }
+  const retained = await topology.request(
+    "DELETE",
+    `/namespaces/${namespaceId}/secrets/${invalidSecret.id}`,
+  );
+  assertNoSecretMaterial(retained, [invalidKey], "referenced invalid source deletion response");
+  assert.equal(retained.status, 409, "draft and pending deployment retain their exact auth source");
+  const historical = await topology.request("GET", `${agentPath}/revisions/${predecessor.id}`);
+  assert.equal(historical.status, 200);
+  assert.deepEqual(historical.data.harnessAuth, predecessor.harnessAuth);
+  if (topology.mode === "dedicated") {
+    await assertActualModelTurn(topology);
+    const afterTurn = await topology.request("GET", agentPath);
+    assert.equal(afterTurn.status, 200);
+    assert.equal(afterTurn.data.activeRevisionId, predecessor.id);
+  }
+
+  const restored = await topology.request("PATCH", agentPath, { harnessAuth: validBinding });
+  assert.equal(restored.status, 200, JSON.stringify(restored.error));
+  const recovery = await topology.request("POST", `${agentPath}/deploy`);
+  assert.equal(recovery.status, 202, JSON.stringify(recovery.error));
+  await waitFor(`valid authentication recovery ${recovery.data.id}`, async () => {
+    const observed = await topology.request("GET", agentPath);
+    assert.equal(observed.status, 200);
+    return observed.data.activeRevisionId === recovery.data.id ? observed.data : undefined;
+  });
+  await waitFor(`valid recovery ${recovery.data.id} worker completion`, () =>
+    topology.events.find(
+      (event) =>
+        event.event === "worker.completed" &&
+        event.revisionId === recovery.data.id &&
+        event.outcome === "success",
+    ),
+  );
+  topology.gatewayPod = await waitForReadyGatewayPod(topology, recovery.data.id);
+  if (topology.mode === "dedicated") {
+    topology.harnessPod = await waitForReadyAgentPod(
+      topology,
+      recovery.data.id,
+      topology.harnessPod.metadata.uid,
+    );
+  }
+  topology.agent = restored.data;
+  topology.revision = recovery.data;
+  assert.deepEqual(recovery.data.harnessAuth, validBinding);
+  await assertActualModelTurn(topology);
+  context.diagnostic(
+    topology.mode === "dedicated"
+      ? "dedicated: invalid-key candidate stayed unready; predecessor served and valid binding recovered"
+      : "embedded: invalid-key replacement left the shared gateway unavailable; valid redeploy recovered",
+  );
 }
 
 async function assertKubernetesOtelLogs(topology) {
@@ -2713,30 +2666,6 @@ async function assertOpenAiKeyProjectedFromSecret(topology, pod) {
   );
 }
 
-async function nativeFailureEvidence(namespace, podName, invalidModelEnv) {
-  const outputs = [];
-  for (const args of [
-    ["logs", podName, "--namespace", namespace, "--tail=80"],
-    ["logs", podName, "--namespace", namespace, "--previous", "--tail=80"],
-  ]) {
-    try {
-      outputs.push(await kubectl(...args));
-    } catch (error) {
-      outputs.push(`${error.stdout ?? ""}\n${error.stderr ?? ""}`);
-    }
-  }
-  const joined = outputs.join("\n");
-  assertNoSecretMaterial(
-    joined,
-    [process.env.OPENAI_API_KEY],
-    "Native resolution logs must not expose the model key",
-  );
-  return (
-    joined.includes(invalidModelEnv) &&
-    /SECRET_REF_(?:NOT_FOUND|POLICY_DENIED)|missing or empty|not allowlisted/.test(joined)
-  );
-}
-
 async function assertNoLegacyModelSecret(topology) {
   const legacyName = `${modelPrefix}-${hash(topology.agent.id)}`;
   let missing = false;
@@ -2857,23 +2786,20 @@ async function assertCrossNamespaceSecretBindingDenied(context, topology) {
   const denied = await expectApiFailureWithoutSecret(
     topology.request,
     "PATCH",
-    `/namespaces/${topology.agent.namespaceId}/configurations/${topology.agent.configurationId}`,
-    {
-      values: nativeConfiguration("openclaw"),
-      secretBindings: { OPENAI_API_KEY: secretBinding(crossSecret.ref) },
-    },
+    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}`,
+    { harnessAuth: { method: "api_key", source: crossSecret.ref } },
     secretApiProtectedValues(topology, [crossValue]),
     "cross-Namespace Secret binding",
   );
   assert.equal(denied.status, 404, `unexpected cross-Namespace denial ${denied.status}`);
   const observed = await topology.request(
     "GET",
-    `/namespaces/${topology.agent.namespaceId}/configurations/${topology.agent.configurationId}`,
+    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}`,
   );
   assert.equal(observed.status, 200, JSON.stringify(observed.error));
   assert.deepEqual(
-    observed.data.secretBindings,
-    topology.secretApi.configuration.secretBindings,
+    observed.data.harnessAuth,
+    topology.agent.harnessAuth,
     "cross-Namespace denial must preserve the valid same-Namespace bindings",
   );
   context.diagnostic(`secret-api cross-namespace: denied with HTTP ${denied.status}`);
@@ -2910,11 +2836,8 @@ async function assertMissingBackendSecretBindingFailsBounded(context, topology) 
   const stored = await storedSecret(topology.observerPool, topology.agent.namespaceId, secret.id);
   const bound = await topology.request(
     "PATCH",
-    `/namespaces/${topology.agent.namespaceId}/configurations/${missing.configuration.id}`,
-    {
-      values: nativeConfiguration("openclaw"),
-      secretBindings: { OPENAI_API_KEY: secretBinding(secret.ref) },
-    },
+    `/namespaces/${topology.agent.namespaceId}/agents/${missing.agent.id}`,
+    { harnessAuth: { method: "api_key", source: secret.ref } },
   );
   assert.equal(bound.status, 200, JSON.stringify(bound.error));
   assertNoSecretMaterial(
@@ -2983,7 +2906,6 @@ async function assertSecretApiNegativeRows(context, topology) {
 
 async function assertSameNamespaceSecretSharing(context, topology) {
   const peerBindings = {
-    OPENAI_API_KEY: secretBinding(topology.secretApi.model.ref),
     [peerSecretRotationProbe]: secretBinding(topology.secretApi.peerProbe.ref),
     [sharedSecretRotationProbe]: secretBinding(topology.secretApi.sharedProbe.ref),
   };
@@ -3000,6 +2922,7 @@ async function assertSameNamespaceSecretSharing(context, topology) {
     name: `secret-api-shared-consumer-${randomUUID()}`,
     configurationId: configuration.data.id,
     executionMode: "embedded",
+    harnessAuth: topology.agent.harnessAuth,
   });
   assert.equal(agent.status, 201, JSON.stringify(agent.error));
   const boundConfiguration = await topology.request(
@@ -3365,6 +3288,51 @@ async function assertSecretApiRotationAndRedeploy(context, topology) {
     { present: true, matches: true },
   );
 
+  // A different OCC Secret reference containing the same authorized key proves draft/revision
+  // isolation. This is binding replacement, not proof of upstream key rotation or revocation.
+  const previousRevision = structuredClone(topology.revision);
+  const replacement = await createApiSecret(
+    topology.request,
+    topology.agent.namespaceId,
+    "replacement-model-source",
+    process.env.OPENAI_API_KEY,
+  );
+  await Promise.all(
+    [topology.secretApi.assignmentPrincipalId, topology.persistedAgent.servicePrincipalId].map(
+      (principalId) =>
+        grantSecretOperate(
+          topology.observerPool,
+          topology.agent.namespaceId,
+          principalId,
+          replacement.id,
+        ),
+    ),
+  );
+  const rebound = await topology.request(
+    "PATCH",
+    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}`,
+    { harnessAuth: { method: "api_key", source: replacement.ref } },
+  );
+  assert.equal(rebound.status, 200, JSON.stringify(rebound.error));
+  assert.equal(rebound.data.activeRevisionId, previousRevision.id);
+  assert.equal(
+    (await resource("pod", topology.gatewayPod.metadata.name, topology.placement)).metadata.uid,
+    topology.gatewayPod.metadata.uid,
+    "draft binding changes cannot restart an active process",
+  );
+  const unchanged = await topology.request(
+    "GET",
+    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/revisions/${previousRevision.id}`,
+  );
+  assert.equal(unchanged.status, 200);
+  assert.deepEqual(unchanged.data.harnessAuth, previousRevision.harnessAuth);
+  const retained = await topology.request(
+    "DELETE",
+    `/namespaces/${topology.agent.namespaceId}/secrets/${model.id}`,
+  );
+  assert.equal(retained.status, 409, "active and sibling consumers must retain the former source");
+  topology.agent = rebound.data;
+
   const secondRevision = await deployEmbeddedAgentAndWait(
     topology,
     topology.agent.id,
@@ -3377,6 +3345,15 @@ async function assertSecretApiRotationAndRedeploy(context, topology) {
   assert.notEqual(secondRevision.revision.id, topology.revision.id);
   topology.gatewayPod = secondRevision.gatewayPod;
   topology.revision = secondRevision.revision;
+  topology.secretApi.model = replacement;
+  assert.deepEqual(topology.revision.harnessAuth, topology.agent.harnessAuth);
+  const historical = await topology.request(
+    "GET",
+    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/revisions/${previousRevision.id}`,
+  );
+  assert.equal(historical.status, 200);
+  assert.deepEqual(historical.data.harnessAuth, previousRevision.harnessAuth);
+  await assertActualModelTurn(topology);
   assert.deepEqual(
     await inspectEnvironmentValue(
       topology.placement,
@@ -3406,146 +3383,45 @@ async function assertSecretApiRotationAndRedeploy(context, topology) {
 }
 
 async function assertNativeReferenceNegativeControl(context, topology) {
-  const invalidModelEnv = "SECRET_API_DISABLED_OPENAI_KEY";
-  const invalidConfiguration = await topology.request(
+  const revisionsPath = `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/revisions`;
+  const before = await topology.request("GET", revisionsPath);
+  assert.equal(before.status, 200);
+  const invalid = await topology.request(
     "PATCH",
     `/namespaces/${topology.agent.namespaceId}/configurations/${topology.agent.configurationId}`,
     {
-      values: nativeConfiguration("openclaw", undefined, { modelEnvName: invalidModelEnv }),
+      values: nativeConfiguration("openclaw", undefined, {
+        modelEnvName: "SECRET_API_DISABLED_OPENAI_KEY",
+      }),
       secretBindings: topology.secretApi.configuration.secretBindings,
     },
   );
-  assertNoSecretMaterial(
-    invalidConfiguration,
-    [process.env.OPENAI_API_KEY, topology.secretApi.initialProbeValue],
-    "invalid native-ref configuration response must not leak secret material",
-  );
-  assert.equal(
-    invalidConfiguration.status,
-    200,
-    `native-ref Configuration was rejected before native OpenClaw resolution (${invalidConfiguration.error?.code ?? "unknown"})`,
-  );
-
-  const deniedRevision = await topology.request(
+  assert.equal(invalid.status, 200, JSON.stringify(invalid.error));
+  const denied = await expectApiFailureWithoutSecret(
+    topology.request,
     "POST",
     `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/deploy`,
+    undefined,
+    secretApiProtectedValues(topology),
+    "competing native model credential selector",
   );
-  assertNoSecretMaterial(
-    deniedRevision,
-    [process.env.OPENAI_API_KEY, topology.secretApi.initialProbeValue],
-    "invalid native-ref deploy response must not leak secret material",
+  assert.equal(denied.status, 409, "harnessAuth must remain the sole model-auth selector");
+  const after = await topology.request("GET", revisionsPath);
+  assert.equal(after.status, 200);
+  assert.deepEqual(
+    after.data,
+    before.data,
+    "a competing selector cannot admit or rewrite a revision",
   );
-  assert.equal(
-    deniedRevision.status,
-    202,
-    `native-ref deploy was rejected before native OpenClaw resolution (${deniedRevision.error?.code ?? "unknown"})`,
+  const active = await topology.request(
+    "GET",
+    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}`,
   );
-  const outcome = await waitFor(
-    `invalid native-ref revision ${deniedRevision.data.id} to reach native OpenClaw`,
-    async () => {
-      const gateway = (await resources("pods", topology.placement)).find(
-        (pod) =>
-          pod.metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
-          pod.metadata.labels?.["openclaw.dev/agent"] === topology.agent.id &&
-          gatewayConsumesRevision(pod, topology.agent.id, deniedRevision.data.id),
-      );
-      if (gateway !== undefined) {
-        const ready = gateway.status.conditions?.some(
-          ({ type, status }) => type === "Ready" && status === "True",
-        );
-        if (ready) return { kind: "gateway", gateway };
-        const status = gateway.status.containerStatuses?.[0];
-        const waiting = status?.state?.waiting;
-        const terminated = status?.state?.terminated ?? status?.lastState?.terminated;
-        if (
-          waiting?.reason === "CrashLoopBackOff" ||
-          waiting?.reason === "Error" ||
-          terminated !== undefined
-        ) {
-          return {
-            kind: "startup",
-            gateway,
-            reason: waiting?.reason ?? terminated?.reason ?? "terminated",
-          };
-        }
-      }
-      const completion = topology.events.find(
-        (event) =>
-          event.event === "worker.completed" && event.revisionId === deniedRevision.data.id,
-      );
-      if (completion?.outcome === "permanent") return { kind: "worker", completion };
-      return undefined;
-    },
-    90_000,
-  );
-
-  if (outcome.kind === "worker") {
-    assert.fail(
-      `native-ref negative failed before native OpenClaw consumer (${outcome.completion.outcome}/${outcome.completion.code})`,
-    );
-  }
-  await assertOpenAiKeyProjectedFromSecret(topology, outcome.gateway);
-  if (outcome.kind === "startup") {
-    assert.equal(
-      await nativeFailureEvidence(
-        topology.placement,
-        outcome.gateway.metadata.name,
-        invalidModelEnv,
-      ),
-      true,
-      "native startup failure must identify the invalid native env SecretRef without logging secret bytes",
-    );
-    context.diagnostic(
-      `native-ref negative: gateway startup failed with ${outcome.reason} and a native SecretRef resolution error for ${invalidModelEnv}`,
-    );
-  } else {
-    topology.gatewayUrl = await topology.refreshGatewayUrl();
-    const projected = await inspectEnvironmentValue(
-      topology.placement,
-      outcome.gateway.metadata.name,
-      "OPENAI_API_KEY",
-      process.env.OPENAI_API_KEY,
-    );
-    assert.deepEqual(
-      projected,
-      { present: true, matches: true },
-      "the valid Secret-backed OPENAI_API_KEY must remain projected for the invalid-native-ref control",
-    );
-    const response = await fetch(`${topology.gatewayUrl}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${topology.gatewayToken}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openclaw/default",
-        stream: false,
-        messages: [{ role: "user", content: "Reply with only: should-not-succeed" }],
-      }),
-      signal: AbortSignal.timeout(90_000),
-    });
-    const body = await response.text();
-    assertNoSecretMaterial(
-      body,
-      [process.env.OPENAI_API_KEY],
-      "Native resolution response must not expose the model key",
-    );
-    assert.notEqual(
-      response.status,
-      200,
-      "invalid native provider env reference unexpectedly reached a successful model turn",
-    );
-    assert.equal(
-      body.includes(invalidModelEnv) &&
-        /SECRET_REF_(?:NOT_FOUND|POLICY_DENIED)|missing or empty|not allowlisted/.test(body),
-      true,
-      "native turn failure must identify the invalid native env SecretRef without logging secret bytes",
-    );
-    context.diagnostic(
-      `native-ref negative: gateway reached, chat failed with HTTP ${response.status}`,
-    );
-  }
-
+  assert.equal(active.status, 200);
+  assert.equal(active.data.activeRevisionId, topology.revision.id);
+  const gateway = await resource("pod", topology.gatewayPod.metadata.name, topology.placement);
+  assert.equal(gateway.metadata.uid, topology.gatewayPod.metadata.uid);
+  await assertOpenAiKeyProjectedFromSecret(topology, gateway);
   const restored = await topology.request(
     "PATCH",
     `/namespaces/${topology.agent.namespaceId}/configurations/${topology.agent.configurationId}`,
@@ -3555,37 +3431,21 @@ async function assertNativeReferenceNegativeControl(context, topology) {
     },
   );
   assert.equal(restored.status, 200, JSON.stringify(restored.error));
-  const recovered = await topology.request(
-    "POST",
-    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/deploy`,
-  );
-  assert.equal(recovered.status, 202, JSON.stringify(recovered.error));
-  await waitFor(`restored native-ref revision ${recovered.data.id} activation`, async () => {
-    const observation = await topology.request(
-      "GET",
-      `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}`,
-    );
-    assert.equal(observation.status, 200);
-    return observation.data.activeRevisionId === recovered.data.id ? observation.data : undefined;
-  });
-  await waitFor(`worker completion of restored revision ${recovered.data.id}`, () =>
-    topology.events.find(
-      (event) =>
-        event.event === "worker.completed" &&
-        event.revisionId === recovered.data.id &&
-        event.outcome === "success",
-    ),
-  );
-  topology.gatewayPod = await waitForReadyGatewayPod(
+  const recovered = await deployEmbeddedAgentAndWait(
     topology,
-    recovered.data.id,
-    topology.gatewayPod.metadata.uid,
+    topology.agent.id,
+    "canonical native model credential reference",
+    { previousUid: topology.gatewayPod.metadata.uid },
   );
-  topology.revision = recovered.data;
+  topology.gatewayPod = recovered.gatewayPod;
+  topology.revision = recovered.revision;
   await assertActualModelTurn(topology);
+  context.diagnostic(
+    "competing native credential selector denied before revision admission; canonical reference served a real model turn",
+  );
 }
 
-async function assertDedicatedModelSecretBindingDenied(topology) {
+async function assertLegacyModelSecretBindingDenied(topology) {
   const value = `dedicated-denied-secret-${randomUUID()}`;
   const secret = await createApiSecret(
     topology.request,
@@ -3597,6 +3457,12 @@ async function assertDedicatedModelSecretBindingDenied(topology) {
     topology.observerPool,
     topology.agent.namespaceId,
     topology.persistedAgent.servicePrincipalId,
+    secret.id,
+  );
+  await grantSecretOperate(
+    topology.observerPool,
+    topology.agent.namespaceId,
+    topology.secretApi.assignmentPrincipalId,
     secret.id,
   );
   const revisionsBefore = await topology.request(
@@ -3612,16 +3478,8 @@ async function assertDedicatedModelSecretBindingDenied(topology) {
       secretBindings: { OPENAI_API_KEY: secretBinding(secret.ref) },
     },
   );
-  assert.equal(bound.status, 200, JSON.stringify(bound.error));
-  const denied = await expectApiFailureWithoutSecret(
-    topology.request,
-    "POST",
-    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/deploy`,
-    undefined,
-    [value, process.env.OPENAI_API_KEY],
-    "dedicated Codex model Secret binding",
-  );
-  assert.equal(denied.status, 404, `unexpected dedicated denial ${denied.status}`);
+  assert.equal(bound.status, 404, "Configuration cannot select model authentication");
+  assertNoSecretMaterial(bound, [value, process.env.OPENAI_API_KEY], "legacy model binding denial");
   const revisionsAfter = await topology.request(
     "GET",
     `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/revisions`,
@@ -3842,7 +3700,7 @@ export {
   arrangeProductionTopology,
   assertActualModelTurn,
   assertDedicatedAgentsInstructionsInFreshSession,
-  assertDedicatedModelSecretBindingDenied,
+  assertLegacyModelSecretBindingDenied,
   assertDedicatedSharedWorkspaceResources,
   assertDedicatedSharedWorkspaceRuntime,
   assertDeniedConnection,
@@ -3850,6 +3708,7 @@ export {
   assertGatewayPodContinuity,
   assertGatewayPrivateResources,
   assertKubernetesOtelLogs,
+  assertInvalidHarnessAuthStaysUnready,
   assertNativeReferenceNegativeControl,
   assertPrivateStateInitContainer,
   assertRoutedWorkspaceFileReads,

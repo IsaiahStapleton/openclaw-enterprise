@@ -21,7 +21,12 @@ and [deployment](../../guides/deploy.md) for operator setup.
   Namespace, Agent, and service-principal identities after IAM authorization
   and before any revision operation. A name-configured provider can use it to
   bind an existing company-specific tenant without caller-authored resource IDs.
-- `prepareRevision(revision)` creates or reuses that Agent's gateway and
+- `validateHarnessAuth(harness, auth, configuration)` validates the admitted
+  Harness, immutable authentication snapshot, and native Configuration without
+  side effects. Although optional in the TypeScript interface, deployment requires
+  this hook: its absence is a dependency-unavailable error; a thrown validation
+  error becomes a resource conflict before any revision is queued.
+- `prepareRevision(revision, context)` creates or reuses that Agent's gateway and
   realizes its immutable Harness topology: one combined gateway/Harness for
   `embedded` OpenClaw or a separate exact-revision Codex workload for
   `dedicated` execution. Compute creates the workload unless the selected
@@ -42,7 +47,21 @@ Namespace, admitted Agent context, and AgentRevision identify the exact tenant,
 Agent, revision, ServicePrincipal, and immutable harness placement; IAM owns
 authorization. Logical Compute ownership does not require the Gateway and
 Harness to share a Kubernetes cluster or a physical resource writer.
-Production accepts both embedded OpenClaw and dedicated Codex.
+Bundled Kubernetes supports both embedded OpenClaw and dedicated Codex with
+[managed Agent harness authentication](../agents.md#harness-authentication).
+Bundled SSH supports embedded OpenClaw with operator-managed `runtime`
+credentials; it rejects managed bindings and dedicated Codex. Bundled Docker
+rejects all harness authentication bindings.
+
+The worker passes `ComputeRevisionContext` to preparation and activation after
+reauthorizing the immutable revision. Its `harnessAuth` contains the admitted
+API-key source with its current authoritative OCC backend reference, or the exact
+managed-account credential and private Provider binding. For operator-managed
+credentials, it contains only `{ method: "runtime" }`, with no delivery reference.
+None of these forms contains credential bytes. Its separate `secretEnvironment` contains
+Configuration bindings for gateway credentials. Drivers must preserve this
+separation and project model credentials only into the selected Harness workload;
+see the [credential delivery flow](../../flows/native-service-account-credential-delivery.md).
 
 ## SandboxDriver coordination
 
@@ -65,7 +84,7 @@ and immutable revision admission.
 
 ## Production revision stages
 
-`activateRevision(revision)` and `deactivateRevision(revision)` are optional in
+`activateRevision(revision, context)` and `deactivateRevision(revision)` are optional in
 the shared TypeScript contract. `stopRevision` is required for every Compute
 Driver. Trusted startup additionally requires both activation stages on every
 production-selected Compute Driver before returning a runtime. When a development Driver
@@ -144,13 +163,14 @@ cancelled rollback receives a bounded cleanup signal.
 ## Optional initial runtime credential provisioning
 
 `getAgentRuntimeCredentialStatus(binding)` reports whether the admitted Agent's
-transport, model, and Slack credential groups are stored. The
-`transportConfigured`, `modelConfigured`, and `slackConfigured` flags describe
+transport and Slack credential groups are stored. The
+`transportConfigured` and `slackConfigured` flags describe
 complete, correctly owned storage; they do not probe provider authentication or
 workload readiness.
 
-`provisionAgentRuntimeCredentials(binding, input)` supports initial transport,
-OpenAI API key, and optional Slack credential setup. OCC authorizes the exact
+`provisionAgentRuntimeCredentials(binding, input)` supports initial transport
+and optional Slack credential setup. Model auth uses Agent `harnessAuth` and is
+validated separately at deployment. OCC authorizes the exact
 Agent and holds Namespace and Agent locks while checking that no historical
 revision exists and invoking the selected Driver. Drivers receive admitted
 `ComputeAgentBinding`, never caller-selected physical storage names. Unsupported

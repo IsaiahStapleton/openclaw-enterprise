@@ -7,6 +7,11 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
+import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+import { createInstallationDriverConfiguration } from "../helpers/installation-driver-configuration.mjs";
+import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { admittedLoggingLevel } from "../../packages/contracts/src/index.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import {
@@ -246,6 +251,7 @@ function passiveComputeDriver() {
     id: "compute-bootstrap-failure-passive",
     capability: "compute",
     implementation: "bootstrap-failure-passive",
+    validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
     async preflight() {},
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, status: "ready" };
@@ -442,6 +448,7 @@ test(
     assert.equal(counts.service_keys, loserCreatedServiceKey ? 2 : 1);
     assert.equal(counts.users, loserCreatedServiceKey ? 2 : 1);
 
+    const driverConfiguration = { ...createInstallationDriverConfiguration(), provider: [] };
     const reloaded = await composePostgresDevelopment(
       {
         mode: "development",
@@ -453,8 +460,13 @@ test(
         logging: { level: "warn" },
       },
       {
+        installation: driverConfiguration,
         computeDriver: passiveComputeDriver(),
         configurationDriver: createTestConfigurationDriver(),
+        secretDriver: createTestSecretDriver({ id: driverConfiguration.drivers.secret.id }),
+        createIAMDriver(state) {
+          return new NativeIAMDriver(state, { id: driverConfiguration.drivers.iam.id });
+        },
       },
     );
     apps.push(reloaded);
@@ -480,9 +492,20 @@ test(
       "POST",
       `/namespaces/${namespace.body.data.id}/configurations`,
       apiKey,
-      { kind: "agent", values: { model: "openclaw/local" } },
+      { kind: "agent", values: createHarnessConfiguration("openclaw", "gpt-4.1") },
     );
     assert.equal(configuration.status, 201, JSON.stringify(configuration.body));
+    const secret = await request(
+      reloaded,
+      "POST",
+      `/namespaces/${namespace.body.data.id}/secrets`,
+      apiKey,
+      {
+        name: "bootstrap-logging-model-key",
+        value: "synthetic-bootstrap-logging-model-key",
+      },
+    );
+    assert.equal(secret.status, 201, JSON.stringify(secret.body));
     const agent = await request(
       reloaded,
       "POST",
@@ -491,9 +514,35 @@ test(
       {
         name: "Logging Agent",
         configurationId: configuration.body.data.id,
+        harnessAuth: { method: "api_key", source: secret.body.data.ref },
       },
     );
     assert.equal(agent.status, 201, JSON.stringify(agent.body));
+    await withPool(failureDatabaseUrl, async (pool) => {
+      const roleId = `role-${randomUUID()}`;
+      await pool.query(
+        `INSERT INTO occ.iam_roles (id, namespace_id, name, permissions)
+         VALUES ($1, $2, 'Bootstrap logging model delivery', $3::jsonb)`,
+        [
+          roleId,
+          namespace.body.data.id,
+          JSON.stringify([{ action: "operate", resourceKind: "secret" }]),
+        ],
+      );
+      await pool.query(
+        `INSERT INTO occ.iam_access_bindings
+          (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+         SELECT $1, namespace_id, service_principal_id, $4, 'secret', $5
+         FROM occ.agents WHERE namespace_id = $2 AND id = $3`,
+        [
+          `binding-${randomUUID()}`,
+          namespace.body.data.id,
+          agent.body.data.id,
+          roleId,
+          secret.body.data.id,
+        ],
+      );
+    });
     const revision = await request(
       reloaded,
       "POST",

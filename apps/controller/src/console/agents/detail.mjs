@@ -1,4 +1,5 @@
 import { element, button } from "../dom.mjs";
+import { createHarnessAuthFields, harnessAuthDescription } from "./harness-auth.mjs";
 import { renderChannels } from "../channels.mjs";
 import { renderWorkspaceFiles } from "./workspace.mjs";
 import { displayDate, shortId, namespacePath, link, message } from "./list.mjs";
@@ -216,30 +217,37 @@ export async function renderAgentDetail(context) {
   let deploy;
   let deployPending = false;
   let deployStatus;
+  const runtimeAuth = agent.harnessAuth?.method === "runtime";
   const credentials =
-    draft && revisionResult.status === "fulfilled"
+    draft && !runtimeAuth
       ? createRuntimeCredentialsPanel({
           context,
           path,
           values,
-          revisionsLoaded: true,
+          revisionsLoaded: revisionResult.status === "fulfilled",
           revisionCount: revisions.length,
           onStatusChange: updateDeployControls,
         })
-      : draft
-        ? createRuntimeCredentialsPanel({
-            context,
-            path,
-            values,
-            revisionsLoaded: false,
-            revisionCount: 0,
-            onStatusChange: updateDeployControls,
-          })
-        : null;
+      : null;
   function updateDeployControls() {
-    if (!deploy || !deployStatus || !credentials) return;
-    deploy.disabled = deployPending || !credentials.canDeploy();
-    if (!deployPending) deployStatus.textContent = credentials.deployGateMessage();
+    if (!deploy || !deployStatus) return;
+    deploy.disabled =
+      deployPending ||
+      !agent.harnessAuth ||
+      revisionResult.status !== "fulfilled" ||
+      (!runtimeAuth && !credentials?.canDeploy());
+    if (!deployPending) {
+      if (revisionResult.status !== "fulfilled")
+        deployStatus.textContent =
+          "Revision history is required before deploying this saved draft.";
+      else if (runtimeAuth)
+        deployStatus.textContent =
+          "Configured on the runtime host; not validated by OCC. Gateway readiness does not confirm model access.";
+      else
+        deployStatus.textContent = agent.harnessAuth
+          ? credentials.deployGateMessage()
+          : "Select a harness authentication source in Credentials before deployment.";
+    }
   }
   if (draft) {
     deployStatus = element("p", { className: "muted", role: "status" });
@@ -254,11 +262,12 @@ export async function renderAgentDetail(context) {
           request(
             `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(snapshot.id)}`,
           ),
-          request(`${path}/runtime-credentials`),
+          runtimeAuth ? Promise.resolve(null) : request(`${path}/runtime-credentials`),
         ]);
         if (!context.isCurrent()) return;
         if (
           freshAgent.configurationId !== snapshot.id ||
+          JSON.stringify(freshAgent.harnessAuth) !== JSON.stringify(agent.harnessAuth) ||
           freshConfig.generation !== snapshot.generation
         ) {
           deployStatus.textContent = "The saved draft changed. Refresh before deploying.";
@@ -269,7 +278,7 @@ export async function renderAgentDetail(context) {
           deployStatus.textContent = credentialBlockReason;
           return;
         }
-        if (!hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values)) {
+        if (!runtimeAuth && !hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values)) {
           deployStatus.textContent =
             "Runtime credential metadata changed. Refresh status before deploying.";
           return;
@@ -375,13 +384,63 @@ export async function renderAgentDetail(context) {
       },
     });
     content.append(channels);
-  } else if (selectedTab === "credentials" && credentials) {
-    content.append(credentials.section);
+  } else if (selectedTab === "credentials" && draft) {
+    const auth = createHarnessAuthFields(context, agent.harnessAuth);
+    const feedback = element("p", { role: "status", className: "hint" });
+    const save = element(
+      "button",
+      { type: "submit", className: "primary" },
+      "Save authentication source",
+    );
+    const form = element("form", { className: "agent-card" }, auth.section, save, feedback);
+    let outcomeUnknown = false;
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!form.reportValidity() || save.disabled) return;
+      save.disabled = true;
+      auth.setDisabled(true);
+      let mutationStarted = false;
+      try {
+        const harnessAuth = await auth.readBinding();
+        const current = await request(path);
+        if (!context.isCurrent()) return;
+        if (
+          current.configurationId !== agent.configurationId ||
+          JSON.stringify(current.harnessAuth) !== JSON.stringify(agent.harnessAuth)
+        ) {
+          feedback.textContent = "The saved draft changed. Refresh before saving authentication.";
+          return;
+        }
+        mutationStarted = true;
+        await request(path, {
+          method: "PATCH",
+          body: { configurationId: agent.configurationId, harnessAuth },
+        });
+        if (context.isCurrent()) change("draft", "credentials");
+      } catch (error) {
+        if (!context.isCurrent()) return;
+        if (error.status === 401) context.onExpired();
+        else {
+          feedback.textContent = message(error, mutationStarted);
+          outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
+        }
+      } finally {
+        if (context.isCurrent()) {
+          save.disabled = outcomeUnknown;
+          auth.setDisabled(outcomeUnknown);
+        }
+      }
+    });
+    content.append(form);
+    if (credentials) content.append(credentials.section);
   } else {
     const details = [
       ["Execution mode", executionMode === "dedicated" ? "Dedicated" : "Embedded"],
       ["Provider", draft ? agent.providerId : snapshot.providerId],
-      ["Service account", draft ? agent.serviceAccountId : snapshot.serviceAccount?.id],
+      [
+        "Harness authentication",
+        harnessAuthDescription(draft ? agent.harnessAuth : snapshot.harnessAuth),
+      ],
       ["Created", displayDate(snapshot.createdAt)],
     ];
     if (!draft)

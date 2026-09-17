@@ -38,7 +38,14 @@ describes the supported edits and their deployment boundaries.
 
 ### 5. Provision initial runtime credentials
 
-The saved draft reads metadata from the exact Agent's `runtime-credentials`
+The **Operator-managed credentials** selection saves `{ "method": "runtime" }`
+without a source field. The console explains “Configured on the runtime host;
+not validated by OCC.” This mode does not request managed credential metadata
+or provisioning; it still requires readable revision history and unchanged draft
+state before submitting deployment. API authorization and selected-driver
+compatibility checks remain authoritative.
+
+For managed authentication methods, the saved draft reads metadata from the exact Agent's `runtime-credentials`
 endpoint. The console sends masked model and Slack inputs only on explicit
 submission and clears them afterward. The response reports stored groups, not
 provider validity or runtime health; an uncertain response requires a status

@@ -39,7 +39,6 @@ export function createInstallationDriverConfiguration() {
           runtime: {
             gatewayStorageClassName: "local-path",
             transportSecretPrefix: "openclaw-agent-transport",
-            modelSecretPrefix: "openclaw-agent-model",
           },
         },
       },

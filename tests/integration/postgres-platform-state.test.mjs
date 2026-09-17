@@ -65,6 +65,7 @@ test(
       name: "Uninitialized agent",
       configurationId: `cfg_${randomUUID()}`,
       providerId: null,
+      harnessAuth: null,
       draft_spec: {},
       executionMode: "embedded",
       servicePrincipalId: `service-agent-${randomUUID()}`,
@@ -310,6 +311,72 @@ test(
       },
     ]);
 
+    // Prove exact source scope at the actual SQL boundary, independent of OCC admission.
+    for (const [binding, code, constraint] of [
+      [
+        {
+          method: "api_key",
+          source: {
+            ...fixture.agent.harnessAuth.source,
+            namespaceId: fixture.serviceAccountNamespace.id,
+          },
+        },
+        "23514",
+        "agents_harness_auth_valid",
+      ],
+      [
+        {
+          method: "api_key",
+          source: { kind: "secret", namespaceId: fixture.namespace.id, id: `sec_${randomUUID()}` },
+        },
+        "23503",
+        "agents_harness_auth_secret_owner",
+      ],
+      [
+        { method: "chatgpt_service_account", serviceAccountId: fixture.serviceAccount.id },
+        "23503",
+        "agents_harness_auth_service_account_owner",
+      ],
+      [
+        { ...fixture.agent.harnessAuth, value: "sentinel-not-a-reference" },
+        "23514",
+        "agents_harness_auth_valid",
+      ],
+      ["api_key", "23514", "agents_harness_auth_valid"],
+    ]) {
+      await assert.rejects(
+        pool.query("UPDATE occ.agents SET harness_auth = $1::jsonb WHERE id = $2", [
+          JSON.stringify(binding),
+          fixture.agent.id,
+        ]),
+        (error) => error.code === code && error.constraint === constraint,
+      );
+    }
+    assert.deepEqual(
+      (await state.read((view) => view.agents.findAgent(fixture.namespace.id, fixture.agent.id)))
+        .harnessAuth,
+      fixture.agent.harnessAuth,
+    );
+    for (const [offset, invalid] of [
+      null,
+      {},
+      { ...fixture.revision.harnessAuth, secretDriverId: "" },
+      { ...fixture.revision.harnessAuth, secretValue: "sentinel-not-a-reference" },
+    ].entries()) {
+      await assert.rejects(
+        pool.query(
+          `INSERT INTO occ.agent_revisions
+        (id, namespace_id, agent_id, revision_number, provider_id, admitted_spec, admitted_at)
+        SELECT $1, namespace_id, agent_id, $2, provider_id,
+          jsonb_set(admitted_spec, '{harness_auth}', $3::jsonb), admitted_at
+        FROM occ.agent_revisions WHERE id = $4`,
+          [`rev_${randomUUID()}`, 1000 + offset, JSON.stringify(invalid), fixture.revision.id],
+        ),
+        ({ code, constraint }) =>
+          code === "23514" && constraint === "agent_revisions_admitted_snapshot",
+      );
+    }
+
     const sandboxDriverId = "openshell-sandbox";
     const sandboxRevision = await state.transact((unit) =>
       unit.revisions.createRevision({
@@ -439,6 +506,7 @@ test(
         name: `Sibling ${randomUUID()}`,
         configurationId: fixture.configuration.id,
         providerId: null,
+        harnessAuth: null,
         executionMode: "embedded",
         servicePrincipalId: `service-agent-${siblingId}`,
         createdAt: new Date().toISOString(),
@@ -742,6 +810,10 @@ test(
     const configurationDriver = createTestConfigurationDriver({
       id: `configuration-plugin-${randomUUID()}`,
     });
+    const { createTestSecretDriver } = await import("../helpers/secret-driver.mjs");
+    const harnessSecretDriver = createTestSecretDriver();
+    controller.registerDriver(harnessSecretDriver);
+    controller.selectDriver("secret", harnessSecretDriver.id);
     const pluginDriver = new OCCPluginDriver();
     controller.registerDriver(configurationDriver);
     controller.selectDriver("configuration", configurationDriver.id);
@@ -773,6 +845,7 @@ test(
           name: `postgres-plugin-malformed-agent-${randomUUID()}`,
           configurationId: configuration.id,
           providerId: null,
+          harnessAuth: null,
           executionMode: "embedded",
           servicePrincipalId: `service-agent-${malformedCreateAgentId}`,
           plugins: {
@@ -862,6 +935,40 @@ test(
     assert.equal(stagedAudit.rows[0].count, 0);
 
     await controller.handleNamespaceLifecycle(principalId, namespace.id, "ready");
+    const harnessSecret = await controller.createSecret(principalId, {
+      namespaceId: namespace.id,
+      name: `plugin-harness-${randomUUID()}`,
+      value: "synthetic-persistence-key",
+    });
+    await controller.updateAgent(principalId, {
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: configuration.id,
+      harnessAuth: {
+        method: "api_key",
+        source: { kind: "secret", namespaceId: namespace.id, id: harnessSecret.id },
+      },
+    });
+    const harnessRoleId = `role-${randomUUID()}`;
+    await pool.query(
+      "INSERT INTO occ.iam_roles(id, namespace_id, name, permissions) VALUES($1, $2, $3, $4::jsonb)",
+      [
+        harnessRoleId,
+        namespace.id,
+        "Harness Secret consumer",
+        JSON.stringify([{ action: "operate", resourceKind: "secret" }]),
+      ],
+    );
+    await pool.query(
+      "INSERT INTO occ.iam_access_bindings(id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id) VALUES($1, $2, $3, $4, 'secret', $5)",
+      [
+        `binding-${randomUUID()}`,
+        namespace.id,
+        agent.servicePrincipalId,
+        harnessRoleId,
+        harnessSecret.id,
+      ],
+    );
     const revision = await controller.deployAgent(
       principalId,
       { namespaceId: namespace.id, agentId: agent.id },

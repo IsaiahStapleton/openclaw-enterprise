@@ -23,11 +23,15 @@ only after the Agent has an active revision and a reachable gateway. Create and
 deploy the Agent, then open **Workspace files** to load or create the four supported
 files. The creation form does not store unsaved file contents.
 
-Choose an optional Provider and service account from the select lists. Provider
-discovery requires Installation `administer`; service accounts are readable
-accounts in the selected Namespace. Select the two associations independently.
-Unavailable or loading lists show their status. You can leave either association
-unset; the form does not accept freeform association IDs.
+Choose an optional Provider and a harness authentication method. For an API key,
+enter the exact same-Namespace OCC Secret ID. The save request validates the
+reference and exact Secret `operate` permission; Secret `read` is not required. Create
+the Secret through its [storage API](../drivers/kubernetes-secret.md#create-a-namespace-owned-secret)
+first. For ChatGPT, select a readable account with an issued credential and the
+matching Provider. The console does not issue credentials when selecting them.
+Provider discovery requires Installation `administer`. Source selection does not
+change the configured model or execution mode, or prove provider acceptance.
+A draft may remain unbound, but deployment requires a compatible binding.
 
 Submitting creates a same-Namespace `kind: "agent"` Configuration from the JSON,
 then submits `POST /namespaces/:namespaceId/agents` with its returned ID and the
@@ -45,20 +49,17 @@ admit an AgentRevision, deploy a workload, or prove runtime health.
 
 ## Initial runtime credentials
 
-Before an Agent's first deployment, open its saved draft and provision the runtime
-credentials. This path supports the Kubernetes Compute Driver's native per-Agent
-OpenAI API key and optional Slack Socket Mode credentials. It does not replace
-Provider-managed ServiceAccount credentials or Configuration Secret bindings.
+Before an Agent's first deployment, provision its transport credentials and,
+when Slack is enabled, its app and bot tokens. Model credentials are selected
+separately through `harnessAuth`; this form does not accept an OpenAI API key.
 
-Enter the OpenAI API key and, when Slack is enabled, its app and bot tokens.
 The server generates independent gateway and app-server transport tokens and a
 local gateway password. The password is projected only when native Configuration
 explicitly selects the supported environment reference; it is never returned by
-the credential API.
-Inputs are masked and cleared after submission; the browser does not store them
-in local storage, URLs, or Configuration. The API returns only whether each
-complete, correctly owned credential group is stored. **Stored** does not mean
-the provider accepted a credential or that a gateway is connected.
+the credential API. Slack inputs are masked and cleared after submission; the
+browser does not store them in local storage, URLs, or Configuration. Returned
+storage flags cover transport and Slack only. **Stored** does not mean the
+provider accepted a credential or that a gateway is connected.
 
 The API uses `GET` and `POST` on
 `/namespaces/:namespaceId/agents/:agentId/runtime-credentials`. Reading requires
@@ -79,7 +80,7 @@ fails; there is no automatic retry or rollback deletion.
 ## Deploy a saved draft
 
 Open the Agent's saved draft and select **Deploy saved draft** after all required
-credential groups show stored status. The console rereads the Agent and Configuration
+transport/channel credential groups show stored status and a harness source is selected. The console rereads the Agent and Configuration
 and requests deployment through the existing exact-Agent endpoint. A changed draft
 requires a refresh. These checks are separate reads, not an atomic compare-and-set.
 Teams-enabled drafts cannot deploy through this console path because Teams credential

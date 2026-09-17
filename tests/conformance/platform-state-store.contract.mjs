@@ -42,12 +42,25 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     generation: 1,
     createdAt: new Date().toISOString(),
   };
+  const harnessSecret = {
+    id: identifier("sec"),
+    namespaceId: namespace.id,
+    name: "Harness key " + randomUUID(),
+    driverId: "secret-contract",
+    backendRef: { namespaceName: "contract", name: "harness-key", key: "value", uid: randomUUID() },
+    createdAt: new Date().toISOString(),
+  };
+  const apiKeyBinding = {
+    method: "api_key",
+    source: { kind: "secret", namespaceId: namespace.id, id: harnessSecret.id },
+  };
   const agent = {
     id: identifier("agt"),
     namespaceId: namespace.id,
     name: `Agent ${randomUUID()}`,
     configurationId: configuration.id,
     providerId: null,
+    harnessAuth: apiKeyBinding,
     executionMode: "embedded",
     servicePrincipalId: identifier("service-agent"),
     desiredRuntimeState: "stopped",
@@ -71,6 +84,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
       agents: { defaults: { model: "openai/gpt-5", maxConcurrent: 2 } },
       gateway: { controlUi: { enabled: false } },
     },
+    harnessAuth: { ...apiKeyBinding, secretDriverId: harnessSecret.driverId },
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     compute: { id: "compute-contract", implementation: "deterministic-contract" },
     servicePrincipalId: agent.servicePrincipalId,
@@ -98,6 +112,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
       configuration,
     );
     assert.equal(await transaction.namespaces.hasConfigurations(namespace.id), true);
+    await transaction.secrets.createSecret(harnessSecret);
     assert.deepEqual(await transaction.agents.createAgent(agent), agent);
     assert.deepEqual(await transaction.revisions.createRevision(revision), revision);
     await transaction.audit.append(audit);
@@ -248,6 +263,8 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     assert.ok(Object.isFrozen(storedRevision.configuration));
     assert.ok(Object.isFrozen(storedRevision.harness));
     assert.ok(Object.isFrozen(storedRevision.compute));
+    assert.ok(Object.isFrozen(storedRevision.harnessAuth));
+    assert.ok(Object.isFrozen(storedRevision.harnessAuth.source));
     assert.equal(
       await state.revisions.findRevision(identifier("ns"), agent.id, revision.id),
       undefined,
@@ -651,12 +668,12 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     name: "Account " + randomUUID(),
   };
   const credential = {
-    kind: "api_key",
-    secretRef: { name: "account-source.credentials", key: "provider-api-key" },
+    kind: "access_token",
+    secretRef: { name: "account-source.credentials", key: "account-token" },
   };
   const alternateCredential = {
-    kind: "api_key",
-    secretRef: { name: "rotated-source", key: "next-provider-key" },
+    kind: "access_token",
+    secretRef: { name: "rotated-source", key: "next-account-token" },
   };
   const alternateAccount = {
     id: identifier("sa"),
@@ -670,9 +687,9 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     name: "Account agent " + randomUUID(),
     configurationId: accountConfiguration.id,
     providerId: null,
-    executionMode: "embedded",
+    executionMode: "dedicated",
     servicePrincipalId: identifier("service-agent"),
-    serviceAccountId: account.id,
+    harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
     desiredRuntimeState: "stopped",
     createdAt: new Date().toISOString(),
   };
@@ -690,9 +707,17 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     configurationId: accountConfiguration.id,
     configurationGeneration: accountConfiguration.generation,
     servicePrincipalId: accountAgent.servicePrincipalId,
-    serviceAccount: {
-      id: account.id,
+    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    harnessAuth: {
+      method: "chatgpt_service_account",
+      serviceAccountId: account.id,
       credential,
+      providerBinding: {
+        providerId: "chatgpt-contract",
+        driverId: "service-account-contract",
+        workspaceId: "workspace-contract",
+        credentialIssued: true,
+      },
     },
   };
 
@@ -733,9 +758,10 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     await transaction.serviceAccounts.updateCredential(accountNamespace.id, account.id, credential);
   });
 
-  // Accounts may represent OAuth, but admitted revisions accept only safe API-key references.
+  // ChatGPT revisions require an exact issued access-token reference with safe Secret keys.
   for (const invalidCredential of [
     oauthCredential,
+    { ...credential, kind: "api_key" },
     ...[".", ".."].map((key) => ({ ...credential, secretRef: { ...credential.secretRef, key } })),
   ]) {
     await assert.rejects(
@@ -744,8 +770,8 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
           ...accountRevision,
           id: identifier("rev"),
           revision: 2,
-          serviceAccount: {
-            ...accountRevision.serviceAccount,
+          harnessAuth: {
+            ...accountRevision.harnessAuth,
             credential: invalidCredential,
           },
         }),
@@ -769,11 +795,12 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
       accountAgent.id,
       accountRevision.id,
     );
-    assert.deepEqual(snapshot.serviceAccount, accountRevision.serviceAccount);
+    assert.deepEqual(snapshot.harnessAuth, accountRevision.harnessAuth);
     for (const value of [
-      snapshot.serviceAccount,
-      snapshot.serviceAccount.credential,
-      snapshot.serviceAccount.credential.secretRef,
+      snapshot.harnessAuth,
+      snapshot.harnessAuth.credential,
+      snapshot.harnessAuth.credential.secretRef,
+      snapshot.harnessAuth.providerBinding,
     ])
       assert.ok(Object.isFrozen(value));
   });
@@ -819,20 +846,17 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
         id: identifier("agt"),
         name: "Cross Namespace " + randomUUID(),
         servicePrincipalId: identifier("service-agent"),
-        serviceAccountId: account.id,
+        harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
       }),
     ),
     "An Agent cannot associate a ServiceAccount from another Namespace.",
   );
   await assert.rejects(
     store.transact((transaction) =>
-      transaction.agents.updateConfiguration(
-        namespace.id,
-        agent.id,
-        configuration.id,
-        undefined,
-        account.id,
-      ),
+      transaction.agents.updateConfiguration(namespace.id, agent.id, configuration.id, undefined, {
+        method: "chatgpt_service_account",
+        serviceAccountId: account.id,
+      }),
     ),
     "An existing Agent cannot associate a ServiceAccount from another Namespace.",
   );
@@ -860,13 +884,17 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
           accountAgent.id,
           accountRevision.id,
         )
-      ).serviceAccount,
-      accountRevision.serviceAccount,
+      ).harnessAuth,
+      accountRevision.harnessAuth,
     );
+    const alternateBinding = {
+      method: "chatgpt_service_account",
+      serviceAccountId: alternateAccount.id,
+    };
     for (const [requested, expected] of [
-      [alternateAccount.id, alternateAccount.id],
-      [undefined, alternateAccount.id],
-      [null, undefined],
+      [alternateBinding, alternateBinding],
+      [undefined, alternateBinding],
+      [null, null],
     ]) {
       const updated = await transaction.agents.updateConfiguration(
         accountNamespace.id,
@@ -875,7 +903,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
         undefined,
         requested,
       );
-      assert.equal(updated.serviceAccountId, expected);
+      assert.deepEqual(updated.harnessAuth, expected);
     }
   });
 
@@ -930,9 +958,20 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     "An active revision must protect its account even without pending work or draft references.",
   );
   await store.transact(async (transaction) => {
-    const { serviceAccount: _accountSnapshot, ...withoutAccount } = accountRevision;
+    const replacementBinding = {
+      method: "chatgpt_service_account",
+      serviceAccountId: alternateAccount.id,
+    };
+    await transaction.agents.updateConfiguration(
+      accountNamespace.id,
+      accountAgent.id,
+      accountConfiguration.id,
+      undefined,
+      replacementBinding,
+    );
     const replacement = await transaction.revisions.createRevision({
-      ...withoutAccount,
+      ...accountRevision,
+      harnessAuth: { ...accountRevision.harnessAuth, serviceAccountId: alternateAccount.id },
       id: identifier("rev"),
       revision: 2,
     });

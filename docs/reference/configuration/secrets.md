@@ -13,42 +13,29 @@ normal `env` SecretRef:
 ```json
 {
   "secretBindings": {
-    "OPENAI_API_KEY": {
+    "SLACK_BOT_TOKEN": {
       "source": {
         "kind": "secret",
         "namespaceId": "ns_123e4567-e89b-42d3-a456-426614174000",
         "id": "sec_123e4567-e89b-42d3-a456-426614174000"
       }
     }
-  },
-  "values": {
-    "secrets": {
-      "providers": {
-        "model": { "source": "env", "allowlist": ["OPENAI_API_KEY"] }
-      }
-    },
-    "models": {
-      "providers": {
-        "openai": {
-          "apiKey": {
-            "source": "env",
-            "provider": "model",
-            "id": "OPENAI_API_KEY"
-          }
-        }
-      }
-    }
   }
 }
 ```
+
+For example, native Slack configuration consumes `SLACK_BOT_TOKEN` with
+`{ "source": "env", "provider": "default", "id": "SLACK_BOT_TOKEN" }`.
+Supply model authentication through [Agent harnessAuth](../agents.md#harness-authentication),
+not a Configuration binding.
 
 Each binding value contains `source.kind: "secret"`, the source
 `namespaceId`, the source Secret `id`, and optional `delivery.type: "env"`.
 Omitting `delivery` normalizes to `{ "type": "env" }`; no other delivery mode is
 implemented. Binding names must be valid environment variable names and cannot
 use reserved process-control prefixes such as `OPENCLAW_`, `CODEX_`, `OCC_`,
-`KUBERNETES_`, `PATH`, `HOME`, or proxy variables. `OPENAI_API_KEY` is the only
-allowed `OPENAI_*` destination.
+`KUBERNETES_`, `OPENAI_`, `PATH`, `HOME`, or proxy variables. Model
+authentication destinations are reserved for `harnessAuth`.
 
 OCC rejects cross-Namespace references and missing or foreign backend objects
 even if IAM would otherwise allow the operation. Creating or updating a
@@ -66,25 +53,15 @@ Kubernetes Secret RBAC, no-leakage rules, and troubleshooting are owned by the
 
 ## Secret boundaries
 
-ConfigMaps are not secret storage. Provide OpenClaw credentials as canonical
-inline SecretRefs plus `secretBindings`, or by using the documented
-service-account credential paths. Never place plaintext credential values in a
-Configuration `values` document:
+ConfigMaps are not secret storage. Use canonical inline SecretRefs and
+`secretBindings` for gateway credentials. Use Agent `harnessAuth` for model
+credentials. Never put plaintext values in Configuration `values`.
 
-```json
-{
-  "models": {
-    "providers": {
-      "openai": {
-        "apiKey": {
-          "source": "env",
-          "name": "OPENAI_API_KEY"
-        }
-      }
-    }
-  }
-}
-```
+The Kubernetes and filesystem Configuration Drivers reject literal model API
+keys, credential headers, and model credential environment values in their
+known native fields before storage. Unresolved references remain valid
+Configuration data; deployment separately rejects model credential selectors
+that compete with the Agent's binding.
 
 OpenClaw owns SecretRef syntax, provider configuration, and validation. OCC,
 ConfigurationDriver, and Kubernetes Compute preserve native `env`, `file`, and

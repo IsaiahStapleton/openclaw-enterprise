@@ -3,12 +3,16 @@
 `DockerComputeDriver` is the default local development Compute Driver. Compose
 development runs PostgreSQL, migrations, and the shared initializer on Docker
 Engine or Podman before starting the OCC API and worker. The API uses filesystem
-Configuration. Both engines verify Namespace networks and embedded OpenClaw and dedicated Codex
-runtime topologies.
+Configuration. Both engines implement Namespace networks and embedded OpenClaw
+and dedicated Codex runtime topologies.
 
 This driver is a development runtime. Production can select bundled
 [Kubernetes](kubernetes-compute.md), [SSH](ssh-compute.md), or an installed
 Compute Driver through trusted Installation configuration.
+
+The current Agent `harnessAuth` contract requires Kubernetes Compute. This Driver
+rejects unsupported bindings at deployment; its existing topology implementation
+and prior runtime proof do not establish support for this authentication path.
 
 ## Requirements
 
@@ -31,12 +35,14 @@ the reported API socket through `compose.podman.yaml`, and preserves the
 driver's existing `/var/run/docker.sock` contract inside the worker. The
 Docker Compute worker disables SELinux process labeling because relabeling the
 host engine socket could disrupt the engine; the API, database, initializer,
-and migration services remain confined. The verified
-baseline is Podman client 6.1.0, server 5.7.1, and podman-compose 1.6.0. Verified
-Podman coverage includes control-plane startup, worker API preflight,
+and migration services remain confined. The prior verified
+baseline is Podman client 6.1.0, server 5.7.1, and podman-compose 1.6.0. Prior
+Podman runtime proof covered control-plane startup, worker API preflight,
 authenticated Installation access, isolated Namespace networks, embedded and
 dedicated model responses, recovery after worker interruption, and exact test
-cleanup. Interactive TUI execution remains unverified on Podman. `compose.logging.yaml` remains Docker-only because this Podman baseline
+cleanup. That proof predates required harness bindings; current Agent admission
+prevents reaching those model and recovery scenarios. Interactive TUI execution
+remains unverified on Podman. `compose.logging.yaml` remains Docker-only because this Podman baseline
 does not provide the required Fluentd log driver.
 
 ## Development configuration and persistence

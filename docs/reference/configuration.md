@@ -92,7 +92,7 @@ dependency conflicts `409`, and unavailable authorization or storage `503`.
 
 ## Credentials and channels
 
-Never put plaintext credentials in Configuration values. Use unresolved native SecretRefs and authorized same-Namespace Secret bindings, or documented service-account credentials. See [Configuration secrets and channels](configuration/secrets.md) for binding permissions, complete examples, runtime delivery, and supported Slack/Teams settings.
+Never put plaintext credentials in Configuration values. Use unresolved native SecretRefs and authorized same-Namespace Secret bindings for gateway credentials; select model credentials through Agent `harnessAuth`. See [Configuration secrets and channels](configuration/secrets.md) for binding permissions, complete examples, runtime delivery, and supported Slack/Teams settings.
 
 ## Agent references and immutable revisions
 

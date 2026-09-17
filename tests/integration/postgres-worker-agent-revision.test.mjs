@@ -7,6 +7,7 @@ import {
   cleanupProviderFixtures,
   createAccessTokenServiceAccount,
   createProviderWorkerDrivers,
+  createProviderController,
   databaseUrl,
   ensureInstallation,
   poolWithOneProviderBindingReadFault,
@@ -55,11 +56,56 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
   };
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = createDevelopmentComputeDriver();
+  const controller = createProviderController({ installation, state }, { providers: [] });
+  const secretDriver = createProviderWorkerDrivers(compute, []).secretDriver;
+  const secretRoleId = `role-${randomUUID()}`;
+  await observerPool.query(
+    `INSERT INTO occ.iam_roles (id, namespace_id, name, permissions)
+     VALUES ($1, $2, $3, $4::jsonb)`,
+    [
+      secretRoleId,
+      namespace.id,
+      `Harness Secrets ${randomUUID()}`,
+      JSON.stringify([{ action: "operate", resourceKind: "secret" }]),
+    ],
+  );
 
-  async function agent(label, executionMode = "embedded", serviceAccountId, providerId = null) {
+  async function agent(
+    label,
+    executionMode = "embedded",
+    serviceAccountId,
+    providerId = null,
+    grantHarnessSecret = true,
+    runtimeAuth = false,
+  ) {
     const id = `agt_${randomUUID()}`;
     const configurationId = `cfg_${randomUUID()}`;
-    return state.transact(async (unit) => {
+    let harnessAuth;
+    if (runtimeAuth) {
+      harnessAuth = { method: "runtime" };
+    } else if (serviceAccountId === undefined) {
+      const identity = {
+        id: `sec_${randomUUID()}`,
+        namespaceId: namespace.id,
+        name: `key-${randomUUID()}`,
+      };
+      const backendRef = await secretDriver.create(identity, "worker-fixture-key");
+      await state.transact((unit) =>
+        unit.secrets.createSecret({
+          ...identity,
+          driverId: secretDriver.id,
+          backendRef,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      harnessAuth = {
+        method: "api_key",
+        source: { kind: "secret", namespaceId: namespace.id, id: identity.id },
+      };
+    } else {
+      harnessAuth = { method: "chatgpt_service_account", serviceAccountId };
+    }
+    const owner = await state.transact(async (unit) => {
       await unit.configurations.createConfiguration({
         id: configurationId,
         namespaceId: namespace.id,
@@ -73,30 +119,43 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
         name: `${label}-${randomUUID()}`,
         configurationId,
         providerId,
-        ...(serviceAccountId === undefined ? {} : { serviceAccountId }),
+        harnessAuth,
         executionMode,
         servicePrincipalId: `service-agent-${id}`,
         createdAt: new Date().toISOString(),
       });
     });
+    if (harnessAuth.method === "api_key" && grantHarnessSecret) {
+      await observerPool.query(
+        `INSERT INTO occ.iam_access_bindings
+          (id, namespace_id, identity_subject_id, group_subject_id, role_id, resource_kind, resource_id)
+         VALUES ($1, $2, $3, NULL, $4, 'secret', $5)`,
+        [
+          `binding-${randomUUID()}`,
+          namespace.id,
+          owner.servicePrincipalId,
+          secretRoleId,
+          harnessAuth.source.id,
+        ],
+      );
+    }
+    return owner;
   }
 
   async function revision(owner, number, harness) {
-    const serviceAccount =
-      owner.serviceAccountId === undefined
-        ? undefined
-        : await state.read((view) =>
-            view.serviceAccounts.findServiceAccount(namespace.id, owner.serviceAccountId),
-          );
-    if (owner.serviceAccountId !== undefined) {
-      assert.ok(
-        serviceAccount,
-        "the associated account must belong to the Agent's exact Namespace",
+    let harnessAuth;
+    if (owner.harnessAuth.method === "runtime") {
+      harnessAuth = owner.harnessAuth;
+    } else if (owner.harnessAuth.method === "chatgpt_service_account") {
+      const account = await state.read((view) =>
+        view.serviceAccounts.findServiceAccount(namespace.id, owner.harnessAuth.serviceAccountId),
       );
-      assert.ok(
-        serviceAccount.credential,
-        "the associated account must have a provider credential",
+      const providerBinding = await state.read((view) =>
+        view.serviceAccounts.findServiceAccountProviderBinding(namespace.id, account.id),
       );
+      harnessAuth = { ...owner.harnessAuth, credential: account.credential, providerBinding };
+    } else {
+      harnessAuth = { ...owner.harnessAuth, secretDriverId: secretDriver.id };
     }
     const approvedHarness =
       harness ??
@@ -115,14 +174,7 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
       configurationGeneration: 1,
       harness: approvedHarness,
       compute: { id: compute.id, implementation: compute.implementation },
-      ...(serviceAccount === undefined
-        ? {}
-        : {
-            serviceAccount: {
-              id: serviceAccount.id,
-              credential: serviceAccount.credential,
-            },
-          }),
+      harnessAuth,
       servicePrincipalId: owner.servicePrincipalId,
       createdAt: new Date().toISOString(),
     };
@@ -158,27 +210,15 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
   }
 
   async function requestStop(owner) {
-    const operationId = randomUUID();
-    const idempotencyKey = `agent:${owner.id}:reconcile:stopped:${operationId}`;
-    await state.transactWithQueue(async (unit, queue) => {
-      const current = await unit.agents.lockAgent(namespace.id, owner.id);
-      assert.ok(current);
-      await unit.agents.transitionAgentDesiredRuntimeState(
-        namespace.id,
-        owner.id,
-        current.desiredRuntimeState,
-        "stopped",
-      );
-      await queue.enqueue({
-        idempotencyKey,
-        namespaceId: namespace.id,
-        agentId: owner.id,
-        agentTarget: "stopped",
-        actorId: actor.id,
-        availableAt: new Date(0),
-      });
-    });
-    return { id: owner.id, idempotencyKey };
+    await controller.stopAgent(actor.id, namespace.id, owner.id);
+    const work = await observerPool.query(
+      `SELECT idempotency_key FROM occ.controller_work
+       WHERE namespace_id = $1 AND agent_id = $2 AND agent_target = 'stopped'
+       ORDER BY created_at DESC LIMIT 1`,
+      [namespace.id, owner.id],
+    );
+    assert.equal(work.rowCount, 1, "OCC.stopAgent must durably enqueue its authorized stop");
+    return { id: owner.id, idempotencyKey: work.rows[0].idempotency_key };
   }
 
   function start(
@@ -189,10 +229,8 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
     pool = workerPool,
     transformDrivers = (drivers) => drivers,
   ) {
-    const configuredDrivers =
-      providers === undefined ? undefined : createProviderWorkerDrivers(computeDriver, providers);
-    const drivers =
-      configuredDrivers === undefined ? undefined : transformDrivers(configuredDrivers);
+    const configuredDrivers = createProviderWorkerDrivers(computeDriver, providers ?? []);
+    const drivers = transformDrivers({ ...configuredDrivers, secretDriver });
     worker = createControllerWorker({
       pool,
       pollIntervalMs: 15,
@@ -216,6 +254,7 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
     observerPool,
     state,
     compute,
+    secretDriver,
     productionHarness: PRODUCTION_HARNESS_DESCRIPTOR,
     PostgresWorkQueue,
     agent,
@@ -240,21 +279,43 @@ test(
     const siblingRevision = await fixture.revision(sibling, 1);
     const stoppedRevisions = [];
     let failStopOnce = true;
-    await fixture.start({
-      ...fixture.compute,
-      async stopRevision(revision) {
-        if (failStopOnce) {
-          failStopOnce = false;
-          throw new Error("transient Compute stop failure");
-        }
-        stoppedRevisions.push(revision.id);
+    let failedCandidate;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          const observation = await fixture.compute.prepareRevision(revision);
+          return revision.revision === 2 ? { ...observation, ready: false } : observation;
+        },
+        async stopRevision(revision) {
+          const current = await fixture.state.read((view) =>
+            view.agents.findAgent(fixture.namespace.id, owner.id),
+          );
+          if (stoppedRevisions.length < 3)
+            assert.equal(
+              current.activeRevisionId,
+              targetRevision.id,
+              "the serving pointer remains until candidate cleanup succeeds",
+            );
+          if (revision.id === failedCandidate.id && failStopOnce) {
+            failStopOnce = false;
+            throw new Error("transient Compute stop failure");
+          }
+          stoppedRevisions.push(revision.id);
+        },
       },
-    });
+      () => {},
+      50,
+    );
     await Promise.all([
       fixture.work(targetRevision, "succeeded"),
       fixture.work(siblingRevision, "succeeded"),
     ]);
 
+    // The replacement owns resources but never becomes ready. Terminal queue
+    // failure must not make it invisible to the real Agent-stop workflow.
+    failedCandidate = await fixture.revision(owner, 2);
+    await fixture.work(failedCandidate, "failed_permanent");
     const firstStop = await fixture.requestStop(owner);
     const completedStop = await fixture.work(firstStop, "succeeded");
     assert.equal(completedStop.attempt_count, 2);
@@ -269,11 +330,17 @@ test(
     assert.equal(stopped.activeRevisionId, undefined);
     assert.equal(unaffected.activeRevisionId, siblingRevision.id);
     assert.equal(retainedRevision.id, targetRevision.id);
-    assert.deepEqual(stoppedRevisions, [targetRevision.id]);
+    assert.deepEqual(stoppedRevisions, [targetRevision.id, targetRevision.id, failedCandidate.id]);
 
     const repeatedStop = await fixture.requestStop(owner);
     await fixture.work(repeatedStop, "succeeded");
-    assert.deepEqual(stoppedRevisions, [targetRevision.id]);
+    assert.deepEqual(stoppedRevisions, [
+      targetRevision.id,
+      targetRevision.id,
+      failedCandidate.id,
+      targetRevision.id,
+      failedCandidate.id,
+    ]);
     const audit = await fixture.observerPool.query(
       `SELECT action, resource_id, details->>'reasonCode' AS reason_code
        FROM occ.audit_events
@@ -378,6 +445,113 @@ test(
 );
 
 test(
+  "Agent stop cleans a terminal candidate without an active revision",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("stop-initial-failure");
+    const candidate = await fixture.revision(owner, 1);
+    const stopped = [];
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          return { ...(await fixture.compute.prepareRevision(revision)), ready: false };
+        },
+        async stopRevision(revision) {
+          stopped.push(revision.id);
+        },
+      },
+      () => {},
+      50,
+    );
+    await fixture.work(candidate, "failed_permanent");
+    // Historical records from another selected Compute are not cleanup inputs
+    // for this worker, even when the Agent has no active pointer.
+    await fixture.state.transact((unit) =>
+      unit.revisions.createRevision({
+        ...candidate,
+        id: `rev_${randomUUID()}`,
+        revision: 2,
+        compute: { id: "retired-compute", implementation: "retired-compute" },
+      }),
+    );
+    const stop = await fixture.requestStop(owner);
+    await fixture.work(stop, "succeeded");
+    assert.deepEqual(stopped, [candidate.id]);
+    const current = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(current.desiredRuntimeState, "stopped");
+    assert.equal(current.activeRevisionId, undefined);
+  },
+);
+
+for (const admissionDuring of ["active", "candidate"]) {
+  test(
+    `a deployment during ${admissionDuring} cleanup supersedes the remaining Agent stop effects`,
+    requiresPostgres,
+    async (context) => {
+      const fixture = await setup(context);
+      const owner = await fixture.agent(`stop-race-${admissionDuring}`);
+      const active = await fixture.revision(owner, 1);
+      const stopped = [];
+      let candidate;
+      let newer;
+      let activeWhenNewerPrepared;
+      await fixture.start(
+        {
+          ...fixture.compute,
+          async prepareRevision(revision) {
+            if (revision.revision === 3) {
+              const current = await fixture.state.read((view) =>
+                view.agents.findAgent(fixture.namespace.id, owner.id),
+              );
+              activeWhenNewerPrepared = current.activeRevisionId;
+            }
+            return {
+              ...(await fixture.compute.prepareRevision(revision)),
+              ready: revision.revision !== 2,
+            };
+          },
+          async stopRevision(revision) {
+            stopped.push(revision.id);
+            if (revision.id === (admissionDuring === "active" ? active.id : candidate.id)) {
+              // Admission changes desired state during an exact cleanup call. The
+              // old pointer must survive both the next-effect and final-CAS fences.
+              newer = await fixture.revision(owner, 3);
+            }
+          },
+        },
+        () => {},
+        50,
+      );
+      await fixture.work(active, "succeeded");
+      candidate = await fixture.revision(owner, 2);
+      await fixture.work(candidate, "failed_permanent");
+      const stop = await fixture.requestStop(owner);
+      await fixture.work(stop, "succeeded");
+      assert.ok(newer);
+      await fixture.work(newer, "succeeded");
+      assert.deepEqual(
+        stopped,
+        admissionDuring === "active" ? [active.id] : [active.id, candidate.id],
+      );
+      assert.equal(
+        activeWhenNewerPrepared,
+        active.id,
+        "stale stop must not clear the serving pointer after a later admission",
+      );
+      const current = await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+      );
+      assert.equal(current.desiredRuntimeState, "running");
+      assert.equal(current.activeRevisionId, newer.id);
+    },
+  );
+}
+
+test(
   "Agent stop reauthorizes the recorded actor before Compute mutation",
   requiresPostgres,
   async (context) => {
@@ -385,22 +559,26 @@ test(
     const owner = await fixture.agent("stop-reauthorization");
     const revision = await fixture.revision(owner, 1);
     const stoppedRevisions = [];
-    await fixture.start({
+    const compute = {
       ...fixture.compute,
       async stopRevision(candidate) {
         stoppedRevisions.push(candidate.id);
       },
-    });
+    };
+    await fixture.start(compute);
     await fixture.work(revision, "succeeded");
 
-    // Permission revoked after deployment must prevent asynchronous stop effects.
+    await fixture.stop();
+    const stop = await fixture.requestStop(owner);
+    // Admission was authorized; revoke before restarting the worker to prove
+    // dispatch independently rechecks the recorded actor's permission.
     await fixture.observerPool.query(
       `INSERT INTO occ.iam_restrictions
          (id, namespace_id, action, resource_kind, resource_id, effect)
        VALUES ($1, $2, 'operate', 'agent', $3, 'deny')`,
       [`restriction-${randomUUID()}`, fixture.namespace.id, owner.id],
     );
-    const stop = await fixture.requestStop(owner);
+    await fixture.start(compute, () => {}, undefined, undefined, fixture.createWorkerPool());
     await fixture.work(stop, "failed_permanent");
 
     assert.deepEqual(stoppedRevisions, []);
@@ -525,34 +703,19 @@ test(
       preparationStarted ? true : undefined,
     );
 
-    const stopKey = `agent:${owner.id}:reconcile:stopped:${randomUUID()}`;
-    await fixture.state.transactWithQueue(async (unit, queue) => {
-      const changed = await unit.agents.transitionAgentDesiredRuntimeState(
-        fixture.namespace.id,
-        owner.id,
-        "running",
-        "stopped",
-      );
-      assert.ok(changed);
-      await queue.enqueue({
-        idempotencyKey: stopKey,
-        namespaceId: fixture.namespace.id,
-        agentId: owner.id,
-        agentTarget: "stopped",
-        actorId: fixture.actor.id,
-        availableAt: new Date(0),
-      });
-    });
+    const stop = await fixture.requestStop(owner);
     releasePreparation();
     await fixture.work(candidate, "succeeded");
-    await fixture.work({ id: owner.id, idempotencyKey: stopKey }, "succeeded");
+    await fixture.work(stop, "succeeded");
 
     const stopped = await fixture.state.read((view) =>
       view.agents.findAgent(fixture.namespace.id, owner.id),
     );
     assert.equal(stopped.activeRevisionId, undefined);
     assert.equal(stopped.desiredRuntimeState, "stopped");
-    assert.deepEqual(stoppedRevisions, [candidate.id]);
+    // Both the interrupted revision and Agent-stop owner perform exact,
+    // idempotent cleanup; neither may activate the candidate.
+    assert.deepEqual(stoppedRevisions, [candidate.id, candidate.id]);
     const activation = await fixture.observerPool.query(
       `SELECT id FROM occ.audit_events
        WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.activate'
@@ -629,7 +792,14 @@ test(
     assert.equal(retainedPredecessor.id, predecessor.id);
     assert.equal(retainedReplacement.id, replacement.id);
     assert.deepEqual(retiredRevisions, [predecessor.id, predecessor.id]);
-    assert.deepEqual(stoppedRevisions, [replacement.id, replacement.id, replacement.id]);
+    // Agent stop also covers the older same-Compute predecessor whose
+    // retirement failed after publication, with serving revision cleanup first.
+    assert.deepEqual(stoppedRevisions, [
+      replacement.id,
+      replacement.id,
+      predecessor.id,
+      replacement.id,
+    ]);
   },
 );
 
@@ -783,8 +953,9 @@ test(
         }),
       ),
       ({ name, message }) =>
-        name === "ScopeViolationError" && /exact platform ownership or state/.test(message),
-      "the PostgreSQL adapter must translate malformed snapshots rejected by its database constraint",
+        name === "ScopeViolationError" &&
+        /harness authentication is invalid or legacy/.test(message),
+      "the PostgreSQL adapter rejects incomplete snapshots before persistence",
     );
     // Configuration metadata is valid, but the incomplete Harness and missing Compute are rejected.
     await assert.rejects(
@@ -907,18 +1078,19 @@ test(
   requiresPostgres,
   async (context) => {
     const fixture = await setup(context);
-    const account = await fixture.state.transact((unit) =>
-      unit.serviceAccounts.createServiceAccount({
-        id: `sa_${randomUUID()}`,
-        namespaceId: fixture.namespace.id,
-        name: `revision-worker-account-${randomUUID()}`,
-        credential: {
-          kind: "api_key",
-          secretRef: { name: "revision-worker-account-source", key: "api-key" },
-        },
-      }),
+    const provider = providerDefinition();
+    const account = await createAccessTokenServiceAccount(
+      fixture.state,
+      fixture.namespace.id,
+      "revoked-account",
     );
-    const owner = await fixture.agent("revoked-service-account", "embedded", account.id);
+    await seedProviderBinding(fixture.observerPool, account);
+    const owner = await fixture.agent(
+      "revoked-service-account",
+      "dedicated",
+      account.id,
+      provider.id,
+    );
     const candidate = await fixture.revision(owner, 1);
 
     // Admission captured a readable account, but its exact read permission is revoked before dispatch.
@@ -987,129 +1159,63 @@ test(
 );
 
 test(
-  "the revision worker rejects managed ServiceAccount provider mismatches before Compute",
+  "the revision worker rejects managed ServiceAccount issuance revoked after admission before Compute",
   requiresPostgres,
   async (context) => {
     const fixture = await setup(context);
     const provider = providerDefinition();
-    const cleanup = {
-      serviceAccountIds: [],
-      agentIds: [],
-      revisionIds: [],
-    };
-
-    async function account(label) {
-      const created = await createAccessTokenServiceAccount(
-        fixture.state,
-        fixture.namespace.id,
-        label,
-      );
-      cleanup.serviceAccountIds.push(created.id);
-      return created;
-    }
-
-    const [validAccount, missingAgentProviderAccount, missingIssuedCredentialAccount] =
-      await Promise.all([account("valid"), account("missing-agent-provider"), account("unissued")]);
-    await Promise.all([
-      seedProviderBinding(fixture.observerPool, validAccount),
-      seedProviderBinding(fixture.observerPool, missingAgentProviderAccount),
-      seedProviderBinding(fixture.observerPool, missingIssuedCredentialAccount, {
-        credentialIssued: false,
-      }),
-    ]);
-
-    const [validOwner, missingAgentProviderOwner, missingIssuedCredentialOwner] = await Promise.all(
-      [
-        fixture.agent("valid-managed-provider", "dedicated", validAccount.id, provider.id),
-        fixture.agent("missing-agent-provider", "dedicated", missingAgentProviderAccount.id, null),
-        fixture.agent(
-          "missing-issued-provider-credential",
-          "dedicated",
-          missingIssuedCredentialAccount.id,
-          provider.id,
-        ),
-      ],
+    const accounts = await Promise.all(
+      ["valid", "issuance-revoked"].map((label) =>
+        createAccessTokenServiceAccount(fixture.state, fixture.namespace.id, label),
+      ),
     );
-    cleanup.agentIds.push(
-      validOwner.id,
-      missingAgentProviderOwner.id,
-      missingIssuedCredentialOwner.id,
+    await Promise.all(
+      accounts.map((account) => seedProviderBinding(fixture.observerPool, account)),
     );
-    const [validRevision, missingAgentProviderRevision, missingIssuedCredentialRevision] =
-      await Promise.all([
-        fixture.revision(validOwner, 1),
-        fixture.revision(missingAgentProviderOwner, 1),
-        fixture.revision(missingIssuedCredentialOwner, 1),
-      ]);
-    cleanup.revisionIds.push(
-      validRevision.id,
-      missingAgentProviderRevision.id,
-      missingIssuedCredentialRevision.id,
+    const owners = await Promise.all(
+      accounts.map((account) => fixture.agent(account.name, "dedicated", account.id, provider.id)),
     );
-
+    const candidates = await Promise.all(owners.map((owner) => fixture.revision(owner, 1)));
+    // Only issuance metadata is mutable; private Provider/account ownership
+    // remains protected by PostgreSQL grants and the immutable snapshot.
+    await fixture.observerPool.query(
+      "UPDATE occ.service_account_driver_bindings SET external_credential_id = NULL WHERE namespace_id = $1 AND service_account_id = $2",
+      [fixture.namespace.id, accounts[1].id],
+    );
     const effects = [];
-    try {
-      await fixture.start(
-        {
-          ...fixture.compute,
-          async bindAgent({ agent }) {
-            effects.push({ action: "bind", agentId: agent.id });
-          },
-          async prepareRevision(revision) {
-            effects.push({ action: "prepare", revisionId: revision.id });
-            return fixture.compute.prepareRevision(revision);
-          },
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async bindAgent({ agent }) {
+          effects.push({ action: "bind", agentId: agent.id });
         },
-        () => {},
-        undefined,
-        [provider],
-      );
-
-      // These rows represent post-admission drift: the worker must defend the
-      // effect boundary even if earlier API or Driver operations admitted stale
-      // managed provider state.
-      await Promise.all([
-        fixture.work(validRevision, "succeeded"),
-        fixture.work(missingAgentProviderRevision, "failed_permanent"),
-        fixture.work(missingIssuedCredentialRevision, "failed_permanent"),
-      ]);
-
-      assert.deepEqual(effects, [
-        { action: "bind", agentId: validOwner.id },
-        { action: "prepare", revisionId: validRevision.id },
-      ]);
-
-      const active = await fixture.observerPool.query(
-        "SELECT id, active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = ANY($2::text[])",
-        [
-          fixture.namespace.id,
-          [validOwner.id, missingAgentProviderOwner.id, missingIssuedCredentialOwner.id],
-        ],
-      );
-      const activeByAgent = new Map(
-        active.rows.map(({ id, active_revision_id }) => [id, active_revision_id]),
-      );
-      assert.equal(activeByAgent.get(validOwner.id), validRevision.id);
-      assert.equal(activeByAgent.get(missingAgentProviderOwner.id), null);
-      assert.equal(activeByAgent.get(missingIssuedCredentialOwner.id), null);
-
-      const failures = await fixture.observerPool.query(
-        `SELECT resource_id, details->>'reasonCode' AS reason_code
-         FROM occ.audit_events
-         WHERE resource_id = ANY($1::text[])
-           AND action = 'reconcile'
-           AND outcome = 'failure'
-         ORDER BY resource_id`,
-        [[missingAgentProviderRevision.id, missingIssuedCredentialRevision.id]],
-      );
-      assert.deepEqual(
-        failures.rows.map(({ reason_code }) => reason_code),
-        ["SERVICE_ACCOUNT_PROVIDER_MISMATCH", "SERVICE_ACCOUNT_PROVIDER_MISMATCH"],
-      );
-    } finally {
-      await fixture.stop();
-      await cleanupProviderFixtures(fixture.observerPool, fixture.namespace.id, cleanup);
-    }
+        async prepareRevision(revision) {
+          effects.push({ action: "prepare", revisionId: revision.id });
+          return fixture.compute.prepareRevision(revision);
+        },
+      },
+      () => {},
+      undefined,
+      [provider],
+    );
+    await Promise.all(
+      candidates.map((candidate, index) =>
+        fixture.work(candidate, index === 0 ? "succeeded" : "failed_permanent"),
+      ),
+    );
+    assert.deepEqual(effects, [
+      { action: "bind", agentId: owners[0].id },
+      { action: "prepare", revisionId: candidates[0].id },
+    ]);
+    const current = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owners[1].id),
+    );
+    assert.equal(current.activeRevisionId, undefined);
+    const failures = await fixture.observerPool.query(
+      "SELECT details->>'reasonCode' AS reason_code FROM occ.audit_events WHERE resource_id = $1 AND action = 'reconcile' AND outcome = 'failure'",
+      [candidates[1].id],
+    );
+    assert.deepEqual(failures.rows, [{ reason_code: "SERVICE_ACCOUNT_PROVIDER_MISMATCH" }]);
   },
 );
 
@@ -1509,5 +1615,272 @@ test(
       [second.id],
     );
     assert.equal(activation.rowCount, 1);
+  },
+);
+
+test(
+  "revision dispatch rechecks Configuration and exact harness Secret grants without backend Secret reads",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owners = await Promise.all(
+      ["allowed", "configuration-denied", "actor-secret-denied", "agent-secret-ungranted"].map(
+        (name, index) => fixture.agent(name, "embedded", undefined, null, index !== 3),
+      ),
+    );
+    const candidates = await Promise.all(owners.map((owner) => fixture.revision(owner, 1)));
+    // Revoke actor permissions after admission and independently exercise an
+    // Agent lacking its own grant; actor authority never authorizes that Agent.
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_restrictions
+         (id, namespace_id, action, resource_kind, resource_id, effect)
+       VALUES ($1, $2, 'read', 'configuration', $3, 'deny'),
+              ($4, $2, 'operate', 'secret', $5, 'deny')`,
+      [
+        `restriction-${randomUUID()}`,
+        fixture.namespace.id,
+        owners[1].configurationId,
+        `restriction-${randomUUID()}`,
+        owners[2].harnessAuth.source.id,
+      ],
+    );
+    const prepared = [];
+    // Production workers have no Secret API permission. Dispatch must project
+    // authoritative OCC metadata without asking the backend owner to read values.
+    fixture.secretDriver.setResolveOverride(() => {
+      throw new Error("Worker cannot read backend Secrets.");
+    });
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision, operationContext) {
+        prepared.push({ id: revision.id, operationContext });
+        return fixture.compute.prepareRevision(revision);
+      },
+    });
+    await Promise.all(
+      candidates.map((candidate, index) =>
+        fixture.work(candidate, index === 0 ? "succeeded" : "failed_permanent"),
+      ),
+    );
+    const source = await fixture.state.read((view) =>
+      view.secrets.findSecret(fixture.namespace.id, owners[0].harnessAuth.source.id),
+    );
+    assert.deepEqual(
+      prepared,
+      [
+        {
+          id: candidates[0].id,
+          operationContext: {
+            secretEnvironment: [],
+            harnessAuth: { ...candidates[0].harnessAuth, backendRef: source.backendRef },
+          },
+        },
+      ],
+      "only the independently authorized binding reaches Compute, outside gateway environment projections",
+    );
+    const denied = await fixture.observerPool.query(
+      `SELECT details->'__occAuditMetadata'->'authorization' AS authorization
+       FROM occ.audit_events WHERE namespace_id = $1 AND kind = 'authorization_denial'`,
+      [fixture.namespace.id],
+    );
+    const deniedResources = denied.rows
+      .map(
+        ({ authorization }) =>
+          `${authorization.principalId}:${authorization.resource.kind}:${authorization.resource.id}`,
+      )
+      .sort();
+    assert.deepEqual(
+      deniedResources,
+      [
+        `${fixture.actor.id}:configuration:${owners[1].configurationId}`,
+        `${fixture.actor.id}:secret:${owners[2].harnessAuth.source.id}`,
+        `${owners[3].servicePrincipalId}:secret:${owners[3].harnessAuth.source.id}`,
+      ].sort(),
+    );
+  },
+);
+
+test(
+  "revision dispatch refuses a different selected Secret Driver before binding or activating the Agent",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("changed-secret-owner");
+    const candidate = await fixture.revision(owner, 1);
+    // Installation composition changed after admission. The revision remains
+    // pinned to its admitted Secret Driver and cannot use the replacement.
+    const effects = [];
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async bindAgent() {
+          effects.push("bind");
+        },
+        async prepareRevision(revision) {
+          effects.push("prepare");
+          return fixture.compute.prepareRevision(revision);
+        },
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (drivers) => ({
+        ...drivers,
+        installation: {
+          ...drivers.installation,
+          drivers: {
+            ...drivers.installation.drivers,
+            secret: { ...drivers.installation.drivers.secret, id: "secret-replacement" },
+          },
+        },
+        secretDriver: { ...drivers.secretDriver, id: "secret-replacement" },
+      }),
+    );
+    await fixture.work(candidate, "failed_permanent");
+    assert.deepEqual(effects, []);
+    const current = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(current.activeRevisionId, undefined);
+    const work = await fixture.observerPool.query(
+      "SELECT details->>'reasonCode' AS reason_code FROM occ.audit_events WHERE resource_id = $1 AND action = 'reconcile' AND outcome = 'failure'",
+      [candidate.id],
+    );
+    assert.equal(work.rows[0].reason_code, "SECRET_DRIVER_MISMATCH");
+  },
+);
+
+test(
+  "revision dispatch never substitutes a later ChatGPT credential or reconfigured Provider for its admitted snapshot",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const provider = providerDefinition();
+    const account = await createAccessTokenServiceAccount(
+      fixture.state,
+      fixture.namespace.id,
+      "credential-replaced",
+    );
+    await seedProviderBinding(fixture.observerPool, account);
+    const owner = await fixture.agent("credential-replaced", "dedicated", account.id, provider.id);
+    const candidate = await fixture.revision(owner, 1);
+    await fixture.state.transact((unit) =>
+      unit.serviceAccounts.updateCredential(fixture.namespace.id, account.id, {
+        kind: "access_token",
+        secretRef: { name: "later-issued-account-credential", key: "access-token" },
+      }),
+    );
+    const changedWorkspace = "22222222-2222-4222-8222-222222222222";
+    const workspaceAccount = await createAccessTokenServiceAccount(
+      fixture.state,
+      fixture.namespace.id,
+      "workspace-replaced",
+    );
+    await seedProviderBinding(fixture.observerPool, workspaceAccount);
+    const workspaceOwner = await fixture.agent(
+      "workspace-replaced",
+      "dedicated",
+      workspaceAccount.id,
+      provider.id,
+    );
+    const workspaceCandidate = await fixture.revision(workspaceOwner, 1);
+    // Reconfiguring the selected Provider cannot move an admitted credential
+    // across workspaces; the private source owner remains unchanged.
+    const effects = [];
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          effects.push(revision.id);
+          return fixture.compute.prepareRevision(revision);
+        },
+      },
+      () => {},
+      undefined,
+      [providerDefinition({ workspaceId: changedWorkspace })],
+    );
+    await fixture.work(candidate, "failed_permanent");
+    await fixture.work(workspaceCandidate, "failed_permanent");
+    assert.deepEqual(effects, []);
+    const snapshot = await fixture.state.read((view) =>
+      view.revisions.findRevision(fixture.namespace.id, owner.id, candidate.id),
+    );
+    assert.deepEqual(snapshot.harnessAuth.credential, account.credential);
+    const current = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(current.activeRevisionId, undefined);
+  },
+);
+
+test(
+  "runtime auth persists only its method and worker reauthorizes deployment without resolving credentials",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("runtime-owner", "embedded", undefined, null, false, true);
+    const denied = await fixture.agent("runtime-denied", "embedded", undefined, null, false, true);
+    const admitted = await fixture.revision(owner, 1);
+    const deniedRevision = await fixture.revision(denied, 1);
+    // Revoke deployment after admission: runtime does not bypass worker reauthorization.
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_restrictions (id, namespace_id, action, resource_kind, resource_id, effect)
+     VALUES ($1, $2, 'deploy', 'agent', $3, 'deny')`,
+      [`restriction-${randomUUID()}`, fixture.namespace.id, denied.id],
+    );
+    const prepared = [];
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision, dispatch) {
+          assert.deepEqual(dispatch.harnessAuth, { method: "runtime" });
+          assert.deepEqual(dispatch.secretEnvironment, []);
+          prepared.push(revision.id);
+          return fixture.compute.prepareRevision(revision, dispatch);
+        },
+      },
+      () => {},
+      undefined,
+      [],
+      fixture.workerPool,
+      (drivers) => ({
+        ...drivers,
+        secretDriver: {
+          ...drivers.secretDriver,
+          resolve() {
+            assert.fail("runtime must not resolve an OCC credential");
+          },
+        },
+      }),
+    );
+    await fixture.work(admitted, "succeeded");
+    await fixture.work(deniedRevision, "failed_permanent");
+    assert.ok(prepared.includes(admitted.id));
+    assert.ok(!prepared.includes(deniedRevision.id));
+    const persisted = await fixture.state.read((view) =>
+      view.revisions.findRevision(fixture.namespace.id, owner.id, admitted.id),
+    );
+    assert.deepEqual(persisted.harnessAuth, { method: "runtime" });
+    assert.ok(Object.isFrozen(persisted.harnessAuth));
+    const current = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(current.activeRevisionId, admitted.id);
+    // The database grammar rejects credential smuggling independently of the API grammar.
+    for (const extra of [
+      { source: {} },
+      { serviceAccountId: "account" },
+      { secretDriverId: "driver" },
+      { value: "key" },
+    ]) {
+      await assert.rejects(
+        fixture.observerPool.query(
+          "UPDATE occ.agents SET harness_auth = $1::jsonb WHERE namespace_id = $2 AND id = $3",
+          [JSON.stringify({ method: "runtime", ...extra }), fixture.namespace.id, owner.id],
+        ),
+        (error) => error.code === "23514",
+      );
+    }
   },
 );

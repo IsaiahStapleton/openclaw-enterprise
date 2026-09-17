@@ -4,6 +4,8 @@ export function createDevelopmentComputeDriver() {
     id: "compute-local-development",
     capability: "compute",
     implementation: "deterministic-local-development",
+    // Admission fixtures do not claim provider login or workload readiness proof.
+    validateHarnessAuth() {},
     async ensureNamespace(namespace) {
       return {
         namespaceId: namespace.id,

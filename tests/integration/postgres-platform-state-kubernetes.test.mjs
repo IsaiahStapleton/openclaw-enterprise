@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { grantAgentSecretOperate } from "../helpers/postgres-harness-auth.mjs";
 import {
   adminEmail,
   admitted,
   cleanupKubernetesNamespaces,
   createConfiguration,
-  createConfiguredAgent,
+  createKubernetesConfiguredAgent as createConfiguredAgent,
+  createKubernetesHarnessAuth,
   databaseUrl,
   defaultAgentConfigurationValues,
   grantTenantAccess,
@@ -54,6 +56,7 @@ test(
     const readyNamespace = await waitForNamespaceReady(first, namespace.data.id, worker);
 
     const { agent } = await createConfiguredAgent(
+      pool,
       first,
       namespace.data.id,
       `agent-${randomUUID()}`,
@@ -163,10 +166,12 @@ test(
       request(process, "POST", `/namespaces/${namespace.data.id}/agents`, {
         name: `first-${randomUUID()}`,
         configurationId: firstConfiguration.id,
+        harnessAuth: await createKubernetesHarnessAuth(process, namespace.data.id),
       }),
       request(process, "POST", `/namespaces/${namespace.data.id}/agents`, {
         name: `second-${randomUUID()}`,
         configurationId: secondConfiguration.id,
+        harnessAuth: await createKubernetesHarnessAuth(process, namespace.data.id),
       }),
     ]);
     assert.equal(first.status, 201);
@@ -176,6 +181,11 @@ test(
     assert.equal(second.data.namespaceId, namespace.data.id);
     assert.equal(Object.hasOwn(first.data, "servicePrincipalId"), false);
     assert.equal(Object.hasOwn(second.data, "servicePrincipalId"), false);
+    await Promise.all(
+      [first.data, second.data].map((agent) =>
+        grantAgentSecretOperate(pool, agent, agent.harnessAuth.source.id),
+      ),
+    );
 
     const stillReady = await request(process, "GET", `/namespaces/${namespace.data.id}`);
     assert.equal(stillReady.status, 200);
@@ -231,6 +241,10 @@ test(
     assert.equal(revision.configurationId, firstConfiguration.id);
     assert.equal(revision.configurationKind, "agent");
     assert.equal(revision.configurationGeneration, 1);
+    assert.deepEqual(revision.harnessAuth, {
+      method: "api_key",
+      source: first.data.harnessAuth.source,
+    });
     assert.deepEqual(revision.configuration, admitted(firstValues));
     assert.deepEqual(revision.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
     assert.deepEqual(revision.compute, {
@@ -294,6 +308,11 @@ test(
       configuration_kind: revision.configurationKind,
       configuration_generation: revision.configurationGeneration,
       draft_spec: admitted(firstValues),
+      harness_auth: {
+        method: "api_key",
+        source: first.data.harnessAuth.source,
+        secretDriverId: "secret-kubernetes",
+      },
       harness: revision.harness,
       compute: revision.compute,
     });
@@ -358,6 +377,7 @@ test(
     }
 
     const { agent } = await createConfiguredAgent(
+      pool,
       api,
       retained.data.id,
       `worker-agent-${randomUUID()}`,
@@ -511,20 +531,21 @@ test(
       { agent: restricted },
     ] = await Promise.all([
       createConfiguredAgent(
+        pool,
         api,
         namespaceA,
         `revision-primary-${randomUUID()}`,
         originalConfigValues,
       ),
-      createConfiguredAgent(api, namespaceA, `revision-sibling-${randomUUID()}`, {
+      createConfiguredAgent(pool, api, namespaceA, `revision-sibling-${randomUUID()}`, {
         ...defaultAgentConfigurationValues,
         model: { id: "tenant-a-sibling" },
       }),
-      createConfiguredAgent(api, namespaceB, `revision-foreign-${randomUUID()}`, {
+      createConfiguredAgent(pool, api, namespaceB, `revision-foreign-${randomUUID()}`, {
         ...defaultAgentConfigurationValues,
         model: { id: "tenant-b" },
       }),
-      createConfiguredAgent(api, namespaceA, `revision-restricted-${randomUUID()}`),
+      createConfiguredAgent(pool, api, namespaceA, `revision-restricted-${randomUUID()}`),
     ]);
     for (const created of [primary, sibling, foreign, restricted]) {
       assert.equal(Object.hasOwn(created, "servicePrincipalId"), false);
@@ -623,6 +644,7 @@ test(
       "configurationKind",
       "createdAt",
       "harness",
+      "harnessAuth",
       "id",
       "namespaceId",
       "providerId",
@@ -634,6 +656,10 @@ test(
     assert.equal(firstRevision.configurationId, primaryConfiguration.id);
     assert.equal(firstRevision.configurationKind, "agent");
     assert.equal(firstRevision.configurationGeneration, 2);
+    assert.deepEqual(firstRevision.harnessAuth, {
+      method: "api_key",
+      source: primary.harnessAuth.source,
+    });
     assert.deepEqual(firstRevision.configuration, admitted(persistedConfigValues));
     assert.deepEqual(firstRevision.harness, { id: "openclaw", version: "1.0.0", mode: "embedded" });
     assert.deepEqual(firstRevision.compute, {
@@ -678,6 +704,7 @@ test(
     assert.notEqual(secondRevision.id, firstRevision.id);
     assert.equal(secondRevision.configurationId, primaryConfiguration.id);
     assert.equal(secondRevision.configurationGeneration, 3);
+    assert.deepEqual(secondRevision.harnessAuth, firstRevision.harnessAuth);
     assert.deepEqual(secondRevision.configuration, admitted(replacementConfigValues));
 
     for (const [namespaceId, agent, revision] of [
@@ -737,6 +764,11 @@ test(
       configuration_kind: firstRevision.configurationKind,
       configuration_generation: firstRevision.configurationGeneration,
       draft_spec: admitted(persistedConfigValues),
+      harness_auth: {
+        method: "api_key",
+        source: primary.harnessAuth.source,
+        secretDriverId: "secret-kubernetes",
+      },
       harness: firstRevision.harness,
       compute: firstRevision.compute,
     });
@@ -745,6 +777,11 @@ test(
       configuration_kind: secondRevision.configurationKind,
       configuration_generation: secondRevision.configurationGeneration,
       draft_spec: admitted(replacementConfigValues),
+      harness_auth: {
+        method: "api_key",
+        source: primary.harnessAuth.source,
+        secretDriverId: "secret-kubernetes",
+      },
       harness: secondRevision.harness,
       compute: secondRevision.compute,
     });

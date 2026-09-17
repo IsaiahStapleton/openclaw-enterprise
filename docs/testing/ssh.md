@@ -1,7 +1,7 @@
 # SSH host tests
 
 Verify the SSH Compute Driver against a disposable Linux host with real
-OpenClaw and systemd. This suite does not make model requests.
+OpenClaw and systemd. The default real-host run checks readiness only; the model selector below adds provider execution.
 
 ## Local conformance and startup
 
@@ -106,10 +106,33 @@ See [SSH test settings](#ssh-real-host-test-environment)
 for every input and default. Inspect the Agent's exact unit with `journalctl -u`
 inside the container when readiness fails; keep logs free of credential values.
 
+## Runtime credential model proof
+
+With the disposable SSH host inputs above, also set `OCC_TEST_SSH_MODEL=1`,
+`OCC_TEST_OPENAI_API_KEY_FILE` to a protected local file containing an authorized
+OpenAI API key, and optionally `OCC_TEST_OPENAI_MODEL` (default `gpt-4.1`). Run the
+same `tests/integration/ssh-compute-real.test.mjs` file. This selector requires
+the SSH inputs and fails if the host or credential is unavailable; it never
+substitutes the local systemd fixture.
+
+The test checks the key/model against the provider first, then provisions the
+host's protected `<agentDir>/env` as an operator via SSH stdin. It deploys with
+`{ "method": "runtime" }`, verifies readiness and a real model turn, and counts
+provider requests through a loopback forwarding server. Startup and readiness
+must make zero model requests. After replacing the key with a synthetic invalid
+one and restarting the existing revision, readiness must still succeed while a
+real model request fails. Redeployment, retirement, and stop must preserve the
+operator file's bytes, mode, inode, and modification time. Cleanup stops the
+forwarder and deletes only the test Namespace.
+
+This test exercises the real SSH Driver/helper, systemd, OpenClaw, and provider;
+API admission, immutable PostgreSQL snapshots, and worker reauthorization have
+separate integration coverage. It is not a whole-controller production rollout.
+
 ## SSH real-host test environment
 
 `node --test tests/integration/ssh-compute-real.test.mjs` is selected only by
-`OCC_TEST_SSH_REAL=1`. Otherwise it explicitly skips and lists its inputs. When
+`OCC_TEST_SSH_REAL=1` or `OCC_TEST_SSH_MODEL=1`. Otherwise it explicitly skips and lists its inputs. When
 selected, missing inputs or unavailable hosts fail; there is no fixture fallback.
 
 | Variable                        | Meaning                                                                 |
@@ -128,8 +151,9 @@ selected, missing inputs or unavailable hosts fail; there is no fixture fallback
 
 The suite uses ports `18800`–`18899`, creates unique Namespace/Agent identities,
 verifies readiness through SSH, cuts over two revisions, checks private Agent
-UID/GID isolation and state persistence, retires the first snapshot, and deletes its Namespace. It requires
-no model credential and proves no model turn. Use the
+UID/GID isolation and state persistence, retires the first snapshot, and deletes its Namespace.
+The readiness-only selector requires no model credential and proves no model turn;
+the model selector adds the credential proof above. Use the
 [container rig](#ssh-raw-hosts) or a disposable host of your own.
 
 ## Related

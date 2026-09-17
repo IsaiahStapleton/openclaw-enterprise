@@ -1,7 +1,7 @@
 ---
 created: 2026-09-04
-updated: 2026-09-09
-last_updated_session: codex/01a08326-8d46-70c1-bd36-dcdfdd7cc25c
+updated: 2026-09-17
+last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 ---
 
 # GitHub Actions testing flow
@@ -13,7 +13,7 @@ GitHub Actions selects explicit test lanes, prepares disposable resources, runs 
 ## Entry Points
 
 - `.github/workflows/ci.yml:jobs`: PR, main push, merge-group and manual checks on ephemeral runners.
-- `.github/workflows/full-integration.yml:jobs`: manual main-only integration, bound to the dispatched commit.
+- `.github/workflows/full-integration.yml:jobs`: manual integration from main or an explicitly approved Kubernetes model branch, bound to the dispatched commit.
 - `scripts/ci/run-tests.mjs:main`: local or workflow `audit`, `run` and `aggregate` commands; the suite map is the coverage owner.
 
 ## Flow
@@ -50,7 +50,7 @@ graph TD
 `.github/workflows/ci.yml:jobs`, `.github/workflows/full-integration.yml:jobs`, and
 `scripts/ci/full-integration-preflight.mjs:validateFullIntegrationPreflight`
 
-The PR workflow uses the event checkout and supplies no external service credentials. Its aggregate requires exactly five lanes: `checks-baseline`, `postgres`, `images-packaging`, `k3d-fixture-configuration`, and `logging-collector`. Full Integration admits only `refs/heads/main`, checks configured environment protection, and checks out the immutable event SHA. A manual dispatch selects its requested lane or `all`; pushes and merges do not start this workflow. Manual runs share one concurrency group and do not cancel an in-progress run. The provider environment must allow exactly the `main` branch and needs no per-run reviewer approval. Other credentialed environments still require reviewers with self-review prevention. No PR event enters this credentialed workflow. A targeted integration run has a narrower claim than a full inventory run.
+The PR workflow uses the event checkout and supplies no external service credentials. Its aggregate requires exactly five lanes: `checks-baseline`, `postgres`, `images-packaging`, `k3d-fixture-configuration`, and `logging-collector`. Full Integration checks configured environment protection and checks out the immutable event SHA. It admits `refs/heads/main` for every lane. Only `k3d-model` may use another branch: preflight requires an exact branch rule in `integration-model`, and GitHub still requires reviewer approval with self-review prevention. Wildcards, tags, and other non-main lanes are rejected. The administrator removes the temporary branch rule after verification. A manual dispatch selects its requested lane or `all`; pushes and merges do not start this workflow. Manual runs share one concurrency group and do not cancel an in-progress run. The provider environment must allow exactly the `main` branch and needs no per-run reviewer approval. Other credentialed environments still require reviewers with self-review prevention. No PR event enters this credentialed workflow. A targeted integration run has a narrower claim than a full inventory run.
 
 Both workflows call the shared [run-ci-lane action](../../.github/actions/run-ci-lane/action.yml) after checkout. It owns tool and dependency setup, baseline checks when selected, lane preparation, execution, unconditional cleanup, and sanitized result upload. Callers keep the source revision, timeout, protected environment and explicit credentials.
 
@@ -59,6 +59,8 @@ Ordinary PR dependency caches may be restored and saved within GitHub's PR merge
 The provider job selects the shared `blacksmith-8vcpu-ubuntu-2404` runner for disk headroom during runtime image build and k3d import. The standard Ubuntu runner reached `DiskPressure` and evicted the seccomp probe before it could start. The repository must retain access to this organization runner label. Image preparation uses k3d's direct archive transport; the default tools-container transport reported success without registering the image on Blacksmith. The imported manifest and CRI checks remain required before any test starts.
 
 ### 2. Prepare resources under the job owner
+
+`scripts/ci/prepare.mjs:main`
 
 [CI resource preparation](github-actions-testing/preparation.md) traces tool setup, image and cluster preparation, protected credentials, and resource ownership. Continue below when preparation has produced the lane state.
 
@@ -99,6 +101,8 @@ The aggregate runs after success or failure and checks expected job outcomes plu
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 17:18: Allow manual Kubernetes model proof on an explicitly granted branch while retaining independent environment review and immutable checkout. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - d5e41d93d601a0349d7d551ff45b50f7580d72f3)
 
 - 2026-09-09: Restore manual-only Full Integration dispatch because the configured provider admin credential cannot authenticate from the hosted runner.
 

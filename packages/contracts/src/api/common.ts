@@ -127,6 +127,18 @@ export const SecretReference = Type.Object(
   },
 );
 
+export const HarnessAuthBindingSchema = Type.Union([
+  Type.Object({ method: Type.Literal("runtime") }, { additionalProperties: false }),
+  Type.Object(
+    { method: Type.Literal("api_key"), source: SecretReference },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { method: Type.Literal("chatgpt_service_account"), serviceAccountId: ServiceAccountId },
+    { additionalProperties: false },
+  ),
+]);
+
 export const SecretDelivery = Type.Object(
   { type: Type.Literal("env") },
   {
@@ -154,7 +166,7 @@ export const SecretBindings = Type.Record(
   {
     maxProperties: 64,
     description:
-      'Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables; `OPENAI_API_KEY` is the only allowed `OPENAI_*` destination.',
+      'Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.',
   },
 );
 
@@ -186,7 +198,6 @@ export const RuntimeCredentialValue = Type.String({
 
 export const AgentRuntimeCredentialsBody = Type.Object(
   {
-    modelApiKey: Type.Optional(RuntimeCredentialValue),
     slack: Type.Optional(
       Type.Object(
         {
@@ -255,7 +266,7 @@ export const CreateAgentBody = Type.Object(
     name: Name,
     configurationId: ConfigurationId,
     providerId: Type.Optional(Type.Union([ProviderId, Type.Null()])),
-    serviceAccountId: Type.Optional(ServiceAccountId),
+    harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
   },
@@ -266,7 +277,7 @@ export const UpdateAgentBody = Type.Object(
   {
     configurationId: ConfigurationId,
     providerId: Type.Optional(Type.Union([ProviderId, Type.Null()])),
-    serviceAccountId: Type.Optional(Type.Union([ServiceAccountId, Type.Null()])),
+    harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
   },

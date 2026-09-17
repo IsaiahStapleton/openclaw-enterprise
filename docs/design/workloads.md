@@ -55,8 +55,8 @@ Each Agent explicitly selects one Harness execution topology:
   data-plane runtime target. Dedicated Codex uses a separate workload. Gateway
   and Harness use separate Kubernetes ServiceAccounts and network access;
   only Codex receives the exact Agent's projected identity. The current
-  direct-credential exception also delivers either its operator-owned model API
-  key or its associated account-owned access token to Codex.
+  direct-credential exception also delivers either its bound Secret-backed model
+  API key or its bound account-owned access token to Codex.
   The gateway never assumes that identity or receives the model credential.
 
 The [model-credential boundary](safeguards.md#secret-access) distinguishes these

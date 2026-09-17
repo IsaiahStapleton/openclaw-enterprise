@@ -108,7 +108,6 @@ drivers:
         # Keep each Agent's transport tokens separate from its model API key.
         # See [Runtime credentials](../../../docs/reference/drivers/kubernetes-compute/storage-and-credentials.md#runtime-credentials).
         transportSecretPrefix: openclaw-agent-transport
-        modelSecretPrefix: openclaw-agent-model
   # Stores Namespace-owned Secret values and projects approved bindings to gateways.
   # See [Secret Driver](../../../docs/reference/drivers/kubernetes-secret.md#configure-the-driver).
   secret:

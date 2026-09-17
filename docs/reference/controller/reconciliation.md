@@ -42,25 +42,29 @@ Configuration and permits the selected SandboxDriver to transform a copy before
 validation. It snapshots the admitted document, including unresolved inline
 SecretRefs, alongside the native-selected Harness identity,
 server-approved version, explicit Agent execution mode, and Compute
-implementation. If the Agent has an associated native
-[service account](../service-accounts.md), the revision also snapshots its
-identity and opaque credential reference. OCC separately
-authorizes the referenced Configuration and any exact associated account,
-then queues one revision operation in the same transaction. The source Configuration identity and generation remain pinned even when the
+implementation. The required Agent `harnessAuth` selects either an OCC Secret
+API-key source or an issued managed ChatGPT account. The revision freezes the
+Secret reference and selected Driver, or the account's exact access-token
+reference and verified private Provider binding. OCC separately authorizes the
+Configuration and harness source before queueing one revision operation in the
+same transaction. The source Configuration identity and generation remain pinned even when the
 admitted copy differs. Later Configuration, account, or Agent placement changes
 never mutate an admitted revision; see [Agent references and deployment](../agents/deployment.md#revisions-and-deployment).
 PostgreSQL enforces the exact admitted snapshot shape, so the worker trusts
 persisted structure instead of revalidating it.
 
 Before processing that operation, the worker reloads current IAM policy,
-reauthorizes the original actor for the exact Agent and `read` on any exact
-account captured in the immutable revision, and checks its owning ready
-Namespace, stable Agent-owned service principal, and whether the pinned Harness
-identity, version, execution mode, and Compute implementation are approved.
-Account authorization uses the revision snapshot, not a later mutable Agent
-association. Revoked account access fails the operation permanently with
-`AUTHORIZATION_DENIED`, records an attributable deployment-denial audit, and
-never calls Compute or activates the revision. Production accepts both dedicated
+reauthorizes the original actor for the exact Agent and Configuration, and
+checks the frozen harness source. API-key delivery requires exact Secret
+`operate` for both actor and Agent service principal; managed ChatGPT delivery
+requires actor `read` on the exact account and matching credential/Provider
+ownership. It also checks the owning ready Namespace, stable Agent service
+principal, and approved Harness, version, mode, and Compute implementation.
+These checks use the immutable revision, not a later Agent draft. Revoked source
+access fails permanently with `AUTHORIZATION_DENIED`, records attributable
+deployment-denial audit evidence, and prevents Compute calls and activation.
+The [harness credential flow](../../flows/native-service-account-credential-delivery.md)
+owns the complete source-resolution sequence. Production accepts both dedicated
 Codex and embedded OpenClaw. It prepares the candidate
 and its Agent-owned gateway, records the exact active revision, activates the
 existing concrete Kubernetes route when applicable, and retires the prior
@@ -78,7 +82,8 @@ full placement, runtime, and recovery sequence.
 A recovered older operation never replaces a newer active revision: the worker
 marks it superseded without calling Compute. Sibling Agents have independent
 queue lanes, while revisions for the same Agent serialize. The default
-PostgreSQL-backed development Compute Driver provisions Docker resources; manual
+PostgreSQL-backed development Compute Driver provisions Docker Namespace resources
+but rejects harness bindings for Agent deployment; manual
 host-process debugging also needs PostgreSQL for a durable worker path. The explicitly selected
 Kubernetes driver creates a hardened Deployment and dedicated Kubernetes
 ServiceAccount for the revision's existing Agent ServicePrincipal. Its

@@ -176,7 +176,40 @@ export interface SecretEnvironmentProjection {
   readonly backendRef: SecretBackendRef;
 }
 
+export type HarnessAuthBinding =
+  | { readonly method: "api_key"; readonly source: SecretReference }
+  | { readonly method: "chatgpt_service_account"; readonly serviceAccountId: string }
+  | { readonly method: "runtime" };
+
+/** Private admission metadata. Public APIs expose only HarnessAuthBinding. */
+export type HarnessAuthSnapshot =
+  | { readonly method: "runtime" }
+  | {
+      readonly method: "api_key";
+      readonly source: SecretReference;
+      readonly secretDriverId: string;
+    }
+  | {
+      readonly method: "chatgpt_service_account";
+      readonly serviceAccountId: string;
+      readonly credential: ServiceAccountCredential & { readonly kind: "access_token" };
+      readonly providerBinding: {
+        readonly providerId: string;
+        readonly driverId: string;
+        readonly workspaceId: string;
+        readonly credentialIssued: boolean;
+      };
+    };
+
+/** Authoritative delivery references, resolved again at dispatch; never secret values. */
+export type ResolvedHarnessAuth =
+  | (Extract<HarnessAuthSnapshot, { method: "api_key" }> & {
+      readonly backendRef: SecretBackendRef;
+    })
+  | Extract<HarnessAuthSnapshot, { method: "chatgpt_service_account" | "runtime" }>;
+
 export interface ComputeRevisionContext {
+  readonly harnessAuth: ResolvedHarnessAuth;
   readonly secretEnvironment: readonly SecretEnvironmentProjection[];
 }
 
@@ -301,11 +334,6 @@ export interface ServiceAccount extends Scope {
   readonly credential?: ServiceAccountCredential;
 }
 
-export interface ServiceAccountRevision {
-  readonly id: string;
-  readonly credential: ServiceAccountCredential & { readonly kind: "api_key" | "access_token" };
-}
-
 export type AgentDesiredRuntimeState = "running" | "stopped";
 export interface Agent extends Scope {
   readonly id: string;
@@ -314,7 +342,7 @@ export interface Agent extends Scope {
   readonly desiredRuntimeState: AgentDesiredRuntimeState;
   readonly configurationId: string;
   readonly providerId: ProviderRef;
-  readonly serviceAccountId?: string;
+  readonly harnessAuth: HarnessAuthBinding | null;
   readonly executionMode: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
   readonly servicePrincipalId: string;
@@ -350,7 +378,7 @@ export interface AgentRevision extends Scope {
   readonly secretDriverId?: string;
   readonly secretBindings?: SecretBindings;
   readonly plugins?: PluginRevisionState;
-  readonly serviceAccount?: ServiceAccountRevision;
+  readonly harnessAuth: HarnessAuthSnapshot;
   readonly servicePrincipalId: string;
   readonly createdAt: string;
 }
@@ -365,9 +393,7 @@ export function freezeAgentRevision(revision: AgentRevision): Readonly<AgentRevi
     ...(revision.plugins === undefined ? {} : { plugins: immutableCopy(revision.plugins) }),
     harness: Object.freeze({ ...revision.harness }),
     compute: Object.freeze({ ...revision.compute }),
-    ...(revision.serviceAccount === undefined
-      ? {}
-      : { serviceAccount: immutableCopy(revision.serviceAccount) }),
+    harnessAuth: immutableCopy(revision.harnessAuth),
   });
 }
 
@@ -529,6 +555,7 @@ export type SandboxEnvironmentVariable =
     };
 
 export interface HarnessWorkloadRequirements {
+  readonly loginMode: HarnessAuthBinding["method"];
   readonly image: string;
   readonly command: readonly string[];
   readonly serviceAccountName: string;
@@ -658,7 +685,6 @@ export interface ComputeAgentBinding {
 }
 
 export interface AgentRuntimeCredentialsInput {
-  readonly modelApiKey?: string;
   readonly slack?: {
     readonly appToken: string;
     readonly botToken: string;
@@ -667,7 +693,6 @@ export interface AgentRuntimeCredentialsInput {
 
 export interface AgentRuntimeCredentialStatus {
   readonly transportConfigured: boolean;
-  readonly modelConfigured: boolean;
   readonly slackConfigured: boolean;
 }
 
@@ -675,6 +700,11 @@ export interface ComputeDriver extends Driver {
   readonly capability: "compute";
   readonly activationOrder?: "beforeCommit" | "afterCommit";
   readonly maintenanceIntervalMs?: number;
+  validateHarnessAuth?(
+    harness: RevisionHarnessDescriptor,
+    auth: HarnessAuthSnapshot,
+    configuration: OpenClawConfigurationDocument,
+  ): void;
   setLifecycleDrivers?(drivers: readonly Driver[]): void;
   bindAgent?(binding: ComputeAgentBinding): void | Promise<void>;
   getAgentRuntimeCredentialStatus?(
@@ -711,3 +741,5 @@ export { normalizeSecretBindings } from "./secret-bindings.ts";
 export * from "./api/common.ts";
 export * from "./api/resources.ts";
 export * from "./api/routes.ts";
+
+export { normalizeHarnessAuthBinding, harnessAuthBindingFromSnapshot } from "./harness-auth.ts";

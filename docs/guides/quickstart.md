@@ -84,8 +84,10 @@ must never enter a workload or TUI.
 ```
 
 On a fresh Installation, expect one Namespace named `default` with a server-assigned ID. Export it as
-`OCC_NAMESPACE` and wait for `STATUS` to become `ready` before deploying
-an Agent.
+`OCC_NAMESPACE` and wait for `STATUS` to become `ready` before creating Namespace
+resources. Docker and Podman Compute do not currently support Agent harness
+bindings; use [local Kubernetes](deploy/local-operations.md#build-images-for-local-kubernetes)
+for Agent deployment and model execution.
 
 ## Clean up and stop
 

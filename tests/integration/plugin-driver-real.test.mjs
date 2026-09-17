@@ -51,8 +51,8 @@ test(
       executionMode: "embedded",
       name: `openclaw-plugin-sibling-${randomUUID()}`,
     });
-    const modelSecret = await fixture.materializeOpenAIModelSecret(primary.id);
-    await fixture.materializeOpenAIModelSecret(sibling.id);
+    const modelSecret = await fixture.bindOpenAIModelSecret(primary.id);
+    await fixture.bindOpenAIModelSecret(sibling.id);
 
     const siblingBefore = await fixture.getAgent(sibling.id);
     assert.ok(
@@ -214,7 +214,7 @@ test(
       harnessId: "codex",
       executionMode: "dedicated",
       name: `codex-calendar-plugin-${randomUUID()}`,
-      serviceAccountId: account.id,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
       providerId: "openai",
     });
     const desired = await fixture.selectPlugin(agent.id, {
@@ -230,9 +230,9 @@ test(
     assert.equal(deployed.revision.plugins?.driver.id, "codex-plugin");
     assert.ok(Object.hasOwn(deployed.revision.plugins?.plugins ?? {}, pluginId));
     assert.equal(Object.hasOwn(deployed.revision.plugins, "artifacts"), false);
-    assert.deepEqual(deployed.revision.serviceAccount, {
-      id: account.id,
-      credential: account.credential,
+    assert.deepEqual(deployed.revision.harnessAuth, {
+      method: "chatgpt_service_account",
+      serviceAccountId: account.id,
     });
 
     const calendarSessionKey = `agent:main:codex-calendar-${randomUUID()}`;

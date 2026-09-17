@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { NativeIAMDriver, createAuthPrincipalSeed } from "../../packages/iam/src/index.ts";
 import { OpenClawController, PostgresPlatformState } from "../../packages/occ/src/index.ts";
+import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import { createDevelopmentComputeDriver } from "./development.mjs";
 import { createDevelopmentIAMState } from "./development-iam-state.mjs";
@@ -133,7 +134,7 @@ export async function cleanupNamespaces(pool, namespaceIds) {
     await client.query(
       `UPDATE occ.agents
        SET provider_id = NULL,
-           service_account_id = NULL,
+           harness_auth = NULL,
            active_revision_id = NULL
        WHERE namespace_id = ANY($1::text[])`,
       [namespaceIds],
@@ -166,7 +167,7 @@ export async function cleanupProviderFixtures(pool, namespaceId, cleanup) {
     );
     await client.query(
       `UPDATE occ.agents
-       SET provider_id = NULL, service_account_id = NULL, active_revision_id = NULL
+       SET provider_id = NULL, harness_auth = NULL, active_revision_id = NULL
        WHERE namespace_id = $1 AND id = ANY($2::text[])`,
       [namespaceId, cleanup.agentIds],
     );
@@ -198,14 +199,18 @@ function trackNamespaces(context, pool, close) {
 }
 
 export async function createAccessTokenServiceAccount(state, namespaceId, label) {
+  const id = `sa_${randomUUID()}`;
   return state.transact((unit) =>
     unit.serviceAccounts.createServiceAccount({
-      id: `sa_${randomUUID()}`,
+      id,
       namespaceId,
       name: `${label}-${randomUUID()}`,
       credential: {
         kind: "access_token",
-        secretRef: { name: `${label}-provider-token`, key: "access-token" },
+        secretRef: {
+          name: `service-account-${createHash("sha256").update(id).digest("hex").slice(0, 32)}`,
+          key: "token",
+        },
       },
     }),
   );
@@ -231,7 +236,10 @@ export async function seedProviderBinding(pool, account, options = {}) {
 
 export function registerCoreDrivers(controller, state, options = {}) {
   const iam = new NativeIAMDriver(state, { id: "native-iam", implementation: "native" });
-  const compute = createDevelopmentComputeDriver();
+  const compute = {
+    ...createDevelopmentComputeDriver(),
+    validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
+  };
   const configuration = createTestConfigurationDriver();
   controller.registerDriver(iam);
   controller.selectDriver("iam", iam.id);
@@ -260,10 +268,15 @@ export function registerCoreDrivers(controller, state, options = {}) {
   return { compute, configuration };
 }
 
-export function createProviderWorkerDrivers(computeDriver, providers = [providerDefinition()]) {
+export function createProviderWorkerDrivers(
+  computeDriver,
+  providers = [providerDefinition()],
+  options = {},
+) {
   const installation = createInstallationDriverConfiguration();
   installation.provider = providers;
   installation.drivers.compute.id = computeDriver.id;
+  if (options.secretDriver !== undefined) installation.drivers.secret.id = options.secretDriver.id;
   if (providers.length > 0) {
     installation.drivers.service_account = {
       id: providers[0]?.drivers.service_account ?? serviceAccountDriverId,
@@ -275,7 +288,8 @@ export function createProviderWorkerDrivers(computeDriver, providers = [provider
     configurationDriver: createTestConfigurationDriver({
       id: installation.drivers.configuration.id,
     }),
-    secretDriver: createTestSecretDriver({ id: installation.drivers.secret.id }),
+    secretDriver:
+      options.secretDriver ?? createTestSecretDriver({ id: installation.drivers.secret.id }),
     createIAMDriver(platformState) {
       return new NativeIAMDriver(platformState, {
         id: installation.drivers.iam.id,
@@ -321,7 +335,10 @@ export async function createProviderFixture(context) {
 
   function startWorker(options = {}) {
     const calls = [];
-    const compute = createDevelopmentComputeDriver();
+    const compute = {
+      ...createDevelopmentComputeDriver(),
+      validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
+    };
     const providers = options.providers ?? [providerDefinition()];
     const drivers = createProviderWorkerDrivers(
       {
@@ -344,6 +361,7 @@ export async function createProviderFixture(context) {
         },
       },
       providers,
+      options,
     );
     worker = createControllerWorker({
       pool: workerPool,

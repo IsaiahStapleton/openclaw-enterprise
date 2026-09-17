@@ -52,7 +52,7 @@ policy; explicit gateway, Agent, and namespace `resources`; exact DNS and
 either private `gatewayRouting` or direct gateway-client `network` peers;
 `servicePrincipalCredentials` policy; and an
 explicit production `runtime` containing per-Agent operator-provisioned
-transport and model Secret-name prefixes and required
+the transport Secret-name prefix and required
 `gatewayStorageClassName` selecting the StorageClass for each gateway's private
 disk, not its shared workspace. The operator must verify the backing disk's
 filesystem locking and durability guarantees.

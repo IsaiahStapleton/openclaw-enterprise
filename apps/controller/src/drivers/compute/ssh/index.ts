@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import type {
   AgentRevision,
+  HarnessAuthSnapshot,
+  RevisionHarnessDescriptor,
   ComputeAgentBinding,
   ComputeDriver,
   ComputeReadiness,
@@ -342,6 +344,15 @@ export class SshComputeDriver implements ComputeDriver {
     }
   }
 
+  validateHarnessAuth(harness: RevisionHarnessDescriptor, auth: HarnessAuthSnapshot): void {
+    if (auth?.method !== "runtime" || Object.keys(auth).length !== 1)
+      throw new ConfigurationFailure("SSH Compute requires operator-managed runtime credentials.");
+    if (harness.id !== "openclaw" || harness.mode !== "embedded")
+      throw new ConfigurationFailure(
+        "SSH Compute supports only embedded OpenClaw; dedicated Codex is not implemented.",
+      );
+  }
+
   async prepareRevision(
     revision: AgentRevision,
     context?: ComputeRevisionContext,
@@ -457,6 +468,7 @@ export class SshComputeDriver implements ComputeDriver {
   }
 
   private validateRevision(revision: AgentRevision): Readonly<Namespace> {
+    this.validateHarnessAuth(revision.harness, revision.harnessAuth);
     const namespace = this.namespaces.get(revision.namespaceId);
     const binding = this.agents.get(revision.agentId);
     if (namespace === undefined || binding === undefined)

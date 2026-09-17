@@ -21,6 +21,7 @@ import type {
   SandboxDriver,
   SecretBindings,
   SecretDriver,
+  ResolvedHarnessAuth,
   SecretEnvironmentProjection,
   SecretReference,
 } from "@openclaw-enterprise/contracts";
@@ -213,7 +214,7 @@ function revisionSecretBindings(
   }
 }
 
-function uniqueSecretRefs(bindings: SecretBindings): readonly SecretReference[] {
+function uniqueSecretRefs(bindings: SecretBindings): SecretReference[] {
   const refs = new Map<string, SecretReference>();
   for (const { source } of Object.values(bindings)) {
     refs.set(`${source.namespaceId}\u0000${source.id}`, source);
@@ -599,17 +600,10 @@ export class ControllerWorker {
       // Agent immediately before any provider effect so a later deployment wins.
       const resources = await this.state.read(async (view) => {
         const agent = await view.agents.findAgent(claim.namespaceId, claim.agentId!);
-        const revision =
-          agent?.activeRevisionId === undefined
-            ? undefined
-            : await view.revisions.findRevision(
-                claim.namespaceId,
-                claim.agentId!,
-                agent.activeRevisionId,
-              );
-        return { agent, revision };
+        const revisions = await view.revisions.listRevisions(claim.namespaceId, claim.agentId!);
+        return { agent, revisions };
       });
-      const { agent, revision } = resources;
+      const { agent, revisions } = resources;
       if (agent === undefined || agent.servicePrincipalId !== authorizedAgent.servicePrincipalId) {
         await this.finalizeAgentStop(claim, {
           outcome: "permanent",
@@ -625,20 +619,8 @@ export class ControllerWorker {
         });
         return;
       }
-      if (agent.activeRevisionId === undefined) {
-        await this.finalizeAgentStop(claim, {
-          outcome: "success",
-          code: "AGENT_ALREADY_STOPPED",
-          agent,
-        });
-        return;
-      }
-      if (
-        revision === undefined ||
-        revision.agentId !== agent.id ||
-        revision.namespaceId !== agent.namespaceId ||
-        revision.servicePrincipalId !== agent.servicePrincipalId
-      ) {
+      const active = revisions.find((revision) => revision.id === agent.activeRevisionId);
+      if (agent.activeRevisionId !== undefined && active === undefined) {
         await this.finalizeAgentStop(claim, {
           outcome: "permanent",
           code: "INVALID_ACTIVE_REVISION",
@@ -646,20 +628,67 @@ export class ControllerWorker {
         });
         return;
       }
-      if (
-        revision.compute.id !== this.compute.id ||
-        revision.compute.implementation !== this.compute.implementation
-      ) {
+      const ownedByCompute = (revision: Readonly<AgentRevision>) =>
+        revision.compute.id === this.compute.id &&
+        revision.compute.implementation === this.compute.implementation;
+      if (active !== undefined && !ownedByCompute(active)) {
         await this.finalizeAgentStop(claim, {
           outcome: "permanent",
           code: "COMPUTE_DRIVER_MISMATCH",
           agent,
-          revision,
+          revision: active,
         });
         return;
       }
-      await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
-      result = { outcome: "success", code: "AGENT_STOPPED", agent, revision };
+      // A terminal candidate or a predecessor with failed retirement can still
+      // own resources. Capture this Driver's history once; never include a later
+      // admission, and stop the serving revision before any candidate cleanup.
+      const cleanup = [
+        ...(active === undefined ? [] : [active]),
+        ...revisions.filter((revision) => revision.id !== active?.id && ownedByCompute(revision)),
+      ];
+      if (
+        cleanup.some(
+          (revision) =>
+            revision.agentId !== agent.id ||
+            revision.namespaceId !== agent.namespaceId ||
+            revision.servicePrincipalId !== agent.servicePrincipalId,
+        )
+      ) {
+        await this.finalizeAgentStop(claim, {
+          outcome: "permanent",
+          code: "INVALID_REVISION_OWNER",
+          agent,
+        });
+        return;
+      }
+      for (const revision of cleanup) {
+        const current = await this.state.read((view) =>
+          view.agents.findAgent(claim.namespaceId, claim.agentId!),
+        );
+        if (current === undefined || current.servicePrincipalId !== agent.servicePrincipalId) {
+          await this.finalizeAgentStop(claim, {
+            outcome: "permanent",
+            code: "INVALID_AGENT_OWNER",
+          });
+          return;
+        }
+        if (current.desiredRuntimeState !== "stopped") {
+          await this.finalizeAgentStop(claim, {
+            outcome: "success",
+            code: "STOP_SUPERSEDED",
+            agent: current,
+          });
+          return;
+        }
+        await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
+      }
+      result = {
+        outcome: "success",
+        code: active === undefined ? "AGENT_ALREADY_STOPPED" : "AGENT_STOPPED",
+        agent,
+        ...(active === undefined ? {} : { revision: active }),
+      };
     } catch (error) {
       if (error instanceof WorkClaimLostError) throw error;
       result = { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
@@ -696,12 +725,15 @@ export class ControllerWorker {
   ): Promise<void> {
     await this.state.transactWithQueue(async (unit, queue) => {
       if ((await queue.heartbeat(claim)) === undefined) throw new WorkClaimLostError();
-      const terminalFailure =
-        result.outcome === "permanent" ||
-        (result.outcome === "retry" && claim.attemptCount >= this.maxAttempts);
-      if (result.outcome === "success" && result.revision !== undefined) {
+      if (result.outcome === "success" && result.agent !== undefined) {
         const agent = await unit.agents.lockAgent(claim.namespaceId, claim.agentId!);
-        if (agent?.activeRevisionId === result.revision.id) {
+        if (agent === undefined || agent.servicePrincipalId !== result.agent.servicePrincipalId) {
+          result = { outcome: "permanent", code: "INVALID_AGENT_OWNER" };
+        } else if (agent.desiredRuntimeState !== "stopped") {
+          // A later deployment may retain the old active pointer while preparing.
+          // Never clear it merely because the final exact stop call completed.
+          result = { ...result, code: "STOP_SUPERSEDED" };
+        } else if (result.revision !== undefined && agent.activeRevisionId === result.revision.id) {
           await unit.agents.compareAndClearActiveRevision(
             claim.namespaceId,
             agent.id,
@@ -709,6 +741,9 @@ export class ControllerWorker {
           );
         }
       }
+      const terminalFailure =
+        result.outcome === "permanent" ||
+        (result.outcome === "retry" && claim.attemptCount >= this.maxAttempts);
       if (result.decision !== undefined) await this.appendAgentStopDenial(unit, claim, result);
       else if (result.outcome === "success" || terminalFailure)
         await this.appendAgentStopOutcome(unit, claim, result);
@@ -888,11 +923,6 @@ export class ControllerWorker {
         await this.completeStoppedRevisionWork(claim, revision, "REVISION_STOPPED");
         return;
       }
-      if (this.compute.bindAgent !== undefined) {
-        await this.withClaimHeartbeat(claim, async () => {
-          await this.compute.bindAgent!({ namespace, agent });
-        });
-      }
       const secretContext = await this.resolveRevisionSecretContext(revision);
       if ("result" in secretContext) {
         if (agent.activeRevisionId === revision.id) {
@@ -901,6 +931,11 @@ export class ControllerWorker {
           await this.finalizeRevision(claim, secretContext.result);
         }
         return;
+      }
+      if (this.compute.bindAgent !== undefined) {
+        await this.withClaimHeartbeat(claim, async () => {
+          await this.compute.bindAgent!({ namespace, agent });
+        });
       }
       if (agent.activeRevisionId === revision.id) {
         try {
@@ -1003,9 +1038,43 @@ export class ControllerWorker {
         decision,
       };
 
+    const configurationAuthorization: AuthorizationRequest = {
+      principalId: claim.actorId,
+      action: "read",
+      resource: {
+        kind: "configuration",
+        id: revision.configurationId,
+        namespaceId: revision.namespaceId,
+      },
+    };
+    const configurationDecision = await this.iamDecision(driver, configurationAuthorization);
+    if (!configurationDecision.allowed)
+      return {
+        outcome: "permanent",
+        code: "AUTHORIZATION_DENIED",
+        authorization: configurationAuthorization,
+        decision: configurationDecision,
+      };
+
+    if (revision.harnessAuth === undefined || revision.harnessAuth === null)
+      return { outcome: "permanent", code: "HARNESS_AUTH_REQUIRED" };
     const secretBindings = revisionSecretBindings(revision);
     if ("result" in secretBindings) return secretBindings.result;
-    for (const ref of uniqueSecretRefs(secretBindings.bindings)) {
+    const refs = uniqueSecretRefs(secretBindings.bindings);
+    const auth = revision.harnessAuth;
+    if (auth.method === "api_key") {
+      if (auth.source?.kind !== "secret" || auth.source.namespaceId !== revision.namespaceId)
+        return { outcome: "permanent", code: "INVALID_HARNESS_AUTH" };
+      if (
+        !refs.some(
+          (ref) => ref.id === auth.source.id && ref.namespaceId === auth.source.namespaceId,
+        )
+      )
+        refs.push(auth.source);
+    } else if (auth.method !== "chatgpt_service_account" && auth.method !== "runtime") {
+      return { outcome: "permanent", code: "INVALID_HARNESS_AUTH" };
+    }
+    for (const ref of refs) {
       for (const principalId of [claim.actorId, revision.servicePrincipalId]) {
         const secretAuthorization: AuthorizationRequest = {
           principalId,
@@ -1023,13 +1092,13 @@ export class ControllerWorker {
       }
     }
 
-    if (revision.serviceAccount !== undefined) {
+    if (auth.method === "chatgpt_service_account") {
       const accountAuthorization: AuthorizationRequest = {
         principalId: claim.actorId,
         action: "read",
         resource: {
           kind: "service_account",
-          id: revision.serviceAccount.id,
+          id: auth.serviceAccountId,
           namespaceId: revision.namespaceId,
         },
       };
@@ -1051,15 +1120,41 @@ export class ControllerWorker {
     if (revision.providerId !== null && !this.providerMap.has(revision.providerId)) {
       return { outcome: "permanent", code: "PROVIDER_UNAVAILABLE" };
     }
-    if (revision.serviceAccount?.credential.kind !== "access_token") return undefined;
-    const binding = await this.state.read((view) =>
-      view.serviceAccounts.findServiceAccountProviderBinding(
+    const auth = revision.harnessAuth;
+    if (auth.method !== "chatgpt_service_account") return undefined;
+    const { account, binding } = await this.state.read(async (view) => ({
+      account: await view.serviceAccounts.findServiceAccount(
         revision.namespaceId,
-        revision.serviceAccount!.id,
+        auth.serviceAccountId,
       ),
-    );
+      binding: await view.serviceAccounts.findServiceAccountProviderBinding(
+        revision.namespaceId,
+        auth.serviceAccountId,
+      ),
+    }));
+    if (
+      account === undefined ||
+      account.namespaceId !== revision.namespaceId ||
+      account.credential?.kind !== "access_token" ||
+      auth.credential?.kind !== "access_token" ||
+      account.credential.secretRef.name !== auth.credential.secretRef.name ||
+      account.credential.secretRef.key !== auth.credential.secretRef.key
+    ) {
+      return { outcome: "permanent", code: "HARNESS_AUTH_SOURCE_CHANGED" };
+    }
     try {
       validateServiceAccountProviderBinding(this.providerMap, revision.providerId, binding);
+      const admitted = auth.providerBinding;
+      if (
+        admitted === undefined ||
+        binding === undefined ||
+        binding.providerId !== admitted.providerId ||
+        binding.driverId !== admitted.driverId ||
+        binding.workspaceId !== admitted.workspaceId ||
+        binding.credentialIssued !== admitted.credentialIssued
+      ) {
+        return { outcome: "permanent", code: "SERVICE_ACCOUNT_PROVIDER_MISMATCH" };
+      }
       return undefined;
     } catch {
       return { outcome: "permanent", code: "SERVICE_ACCOUNT_PROVIDER_MISMATCH" };
@@ -1112,9 +1207,11 @@ export class ControllerWorker {
   > {
     const bindings = revisionSecretBindings(revision);
     if ("result" in bindings) return { result: bindings.result };
-    if (Object.keys(bindings.bindings).length === 0) return { context: { secretEnvironment: [] } };
     const secretDriverId = this.secretDriverId;
-    if (typeof secretDriverId !== "string" || revision.secretDriverId !== secretDriverId) {
+    if (
+      Object.keys(bindings.bindings).length > 0 &&
+      (typeof secretDriverId !== "string" || revision.secretDriverId !== secretDriverId)
+    ) {
       return { result: { outcome: "permanent", code: "SECRET_DRIVER_MISMATCH" } };
     }
 
@@ -1144,9 +1241,36 @@ export class ControllerWorker {
       return projections;
     });
 
-    return resolved === undefined
-      ? { result: { outcome: "permanent", code: "SECRET_BINDING_UNAVAILABLE" } }
-      : { context: { secretEnvironment: Object.freeze(resolved) } };
+    if (resolved === undefined)
+      return { result: { outcome: "permanent", code: "SECRET_BINDING_UNAVAILABLE" } };
+
+    let harnessAuth: ResolvedHarnessAuth;
+    if (revision.harnessAuth.method === "api_key") {
+      const auth = revision.harnessAuth;
+      if (typeof secretDriverId !== "string" || auth.secretDriverId !== secretDriverId)
+        return { result: { outcome: "permanent", code: "SECRET_DRIVER_MISMATCH" } };
+      const secret = await this.state.read((view) =>
+        view.secrets.findSecret(auth.source.namespaceId, auth.source.id),
+      );
+      if (
+        secret === undefined ||
+        secret.namespaceId !== revision.namespaceId ||
+        secret.namespaceId !== auth.source.namespaceId ||
+        secret.id !== auth.source.id ||
+        secret.driverId !== secretDriverId ||
+        secret.backendRef.namespaceName.trim().length === 0 ||
+        secret.backendRef.name.trim().length === 0 ||
+        secret.backendRef.key.trim().length === 0 ||
+        secret.backendRef.uid.trim().length === 0
+      )
+        return { result: { outcome: "permanent", code: "HARNESS_AUTH_SOURCE_UNAVAILABLE" } };
+      // Admission verifies the physical source. Workers project authoritative
+      // OCC metadata without requiring permission to read backend Secret values.
+      harnessAuth = { ...auth, backendRef: secret.backendRef };
+    } else {
+      harnessAuth = revision.harnessAuth;
+    }
+    return { context: { secretEnvironment: Object.freeze(resolved), harnessAuth } };
   }
 
   private async withClaimHeartbeat<T>(claim: ClaimedWork, effect: () => Promise<T>): Promise<T> {

@@ -36,7 +36,7 @@ export function normalizeSecretBindings(input: unknown): SecretBindings {
           !/^[A-Za-z_][A-Za-z0-9_]{0,252}$/.test(name) ||
           reserved.test(name) ||
           controlNames.has(name.toUpperCase()) ||
-          (name.toUpperCase().startsWith("OPENAI_") && name !== "OPENAI_API_KEY")
+          name.toUpperCase().startsWith("OPENAI_")
         )
           throw new Error("A secret binding uses a reserved or invalid environment destination.");
         if (

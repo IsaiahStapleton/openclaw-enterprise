@@ -1,7 +1,7 @@
 ---
 created: 2026-08-31
-updated: 2026-09-01
-last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
+updated: 2026-09-17
+last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 ---
 
 # Production TUI Flow
@@ -36,7 +36,7 @@ graph TD
   Z["Operator reads Installation with protected bootstrap service key"] --> A["Service administrator creates Namespace"]
   A --> B["Worker prepares tenant namespace and policies"]
   B --> C["Operator creates native Configuration and embedded Agent"]
-  C --> D["Operator creates Agent transport and model Secrets"]
+  C --> D["Operator creates transport and binds OCC model Secret"]
   D --> E["Operator deploys Agent"]
   E --> F["OCC freezes AgentRevision and queues work"]
   F --> G["Worker prepares ConfigMap, ServiceAccount, PVC, and gateway resources"]
@@ -95,9 +95,12 @@ fresh-workspace `BOOTSTRAP.md` onboarding replacing the requested nonce reply;
 existing workspaces with bootstrap files are unaffected. The bodyless deploy request to
 `POST /namespaces/:namespaceId/agents/:agentId/deploy` locks the exact Agent,
 requires the Namespace to be `ready`, reauthorizes `deploy` on the Agent,
-reauthorizes `read` on the selected Configuration, validates any Secret
-bindings, resolves the approved `openclaw` embedded Harness, and stores an
-immutable AgentRevision.
+reauthorizes `read` on the selected Configuration, validates the required API-key
+`harnessAuth` and any gateway Secret bindings, resolves the approved `openclaw`
+embedded Harness, and stores an immutable AgentRevision. Both the actor and Agent
+service principal need exact Secret `operate`; the API checks physical backend
+identity before admission. An administrator with controller-owned IAM-state access
+must establish the Agent grant before this request.
 
 The API response returns the frozen revision as `data`. The operator keeps both
 `data.id` and the Agent's later `data.activeRevisionId`; the deployment request
@@ -110,7 +113,8 @@ does not by itself prove that Kubernetes is serving the new revision.
 
 The worker claims the durable AgentRevision work, reloads the Namespace, Agent,
 revision, and previous active revision, reauthorizes the deployment actor, and
-resolves the Secret delivery context. The broader activation contract lives in
+resolves the Secret delivery context from authoritative OCC metadata without
+calling the Kubernetes Secret API. The broader activation contract lives in
 the [controller worker flow](controller-worker.md#6-persist-the-result-and-finish-revision-activation)
 and the
 [Harness execution topology flow](harness-execution-topology.md#3-publish-safely-and-complete-activation-once).
@@ -125,9 +129,8 @@ with `Recreate` strategy.
 For embedded OpenClaw, the gateway Deployment is also the Harness workload. Its
 container receives `OPENCLAW_CONFIG_PATH=/etc/openclaw/openclaw.json`,
 `OPENCLAW_GATEWAY_PORT`, `OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_STATE_DIR`, and
-the exact Agent model credential by Secret projection unless the revision uses
-an OCC Secret binding for `OPENAI_API_KEY`. The API and worker do not receive
-the model credential. For the first embedded revision, `prepareRevision` creates
+the exact OCC Secret model credential selected by revision `harnessAuth`. The
+API handles the protected initial Secret write; the worker never reads its value. For the first embedded revision, `prepareRevision` creates
 the Deployment and keeps the Service on the inactive selector until the gateway
 is ready. When a predecessor gateway exists, embedded replacement preparation
 returns ready after staging the immutable ConfigMap and related ownership
@@ -185,7 +188,7 @@ ConfigMap-mounted gateway is Running and Ready.
   ```
 
   Expected failure signatures include missing transport Secret keys,
-  `CreateContainerConfigError` for a missing Agent model Secret, image pull
+  `CreateContainerConfigError` for a missing bound model Secret, image pull
   failures for unimported digest references, pending gateway PVCs, and resource
   limits too small for an interactive TUI process.
 
@@ -213,6 +216,10 @@ ConfigMap-mounted gateway is Running and Ready.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 00:48: Correct current harness admission and metadata-only dispatch boundaries after implementation review. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 107900e9551b90c3e9ac24d30f8ea866f17e5dbb)
+
+- 2026-09-17 00:31: Align credential selection and delivery with Agent harnessAuth and the shared Kubernetes rendering path. (01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04 - d2bcbd1c53acb2582a774b5158f254d726abd33f)
 
 - 2026-09-01 19:09: Correct production embedded activation ordering and replacement behavior for the post-commit Kubernetes TUI path. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-31 20:34: Use the checked-in operator API helper for service-key requests. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)

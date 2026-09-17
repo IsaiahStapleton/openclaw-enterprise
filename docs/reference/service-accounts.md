@@ -32,7 +32,7 @@ Namespace is `provisioning` or `ready`.
 Account creation and credential issuance are separate. OCC authorizes each
 operation before provider or Kubernetes effects; provider authorization remains
 independent. Responses expose only OCC account metadata and an optional generic
-credential/Secret reference, never provider identities or credential bytes.
+credential readiness metadata, never backend locators, provider identities, or credential bytes.
 Collection reads require `read` on the Namespace and return only accounts for
 which the caller also has exact-account `read`.
 
@@ -64,13 +64,15 @@ A representative account-creation body is:
 
 `POST /namespaces/:namespaceId/service-accounts/:serviceAccountId/credentials`
 accepts `{}` and issues a credential through the selected Driver. The `201`
-account envelope contains only `kind: "access_token"` and an opaque `secretRef`.
+account envelope exposes safe credential readiness metadata; backend Secret
+locators and Provider/workspace identities remain private.
 Compute creates one account-owned token/workspace Secret; the Driver privately
 persists the upstream credential ID for exact cleanup. A second issuance fails
 with `409`; rotation and reconciliation are not implemented. Calling issuance
 without a selected provider Driver fails with `503 DEPENDENCY_UNAVAILABLE`.
 
-An Agent associates the same-Namespace account through `serviceAccountId`.
+An Agent binds the same-Namespace account through
+`harnessAuth: { method: "chatgpt_service_account", serviceAccountId }`.
 Association and deployment require `read` on the exact account. Updating or
 detaching an associated account requires current-account `read`; replacement
 requires `read` on both accounts. An Agent can reference an account before it
@@ -129,10 +131,10 @@ names an existing Secret and key in the account's exact backing namespace:
 }
 ```
 
-An independently authorized operator materializes the exact source into the
-Agent-owned model Secret. Dedicated Codex or embedded OpenClaw receives
-`OPENAI_API_KEY` only in its Harness Pod; the Compute-owned account Secret path
-applies only to Driver-issued access tokens.
+Native account references are not model-auth selectors. To supply an OpenAI API
+key to either supported Harness, store it as an OCC Secret and select
+`harnessAuth.method: "api_key"`; see [Agent harness authentication](agents.md#harness-authentication).
+The Compute-owned account Secret path applies only to Driver-issued access tokens.
 
 `oauth_access_token` references remain representable, but deployment and
 refresh are unsupported. OAuth refresh belongs to a future credential-owning
@@ -164,7 +166,7 @@ owns private upstream bindings and compensation; the
 - [Kubernetes Compute reference](drivers/kubernetes-compute.md)
 - [Authorization](authorization.md)
 - [Provider-managed credential flow](../flows/service-account-driver-credential-delivery.md)
-- [Native API-key credential flow](../flows/native-service-account-credential-delivery.md)
+- [Harness authentication flow](../flows/native-service-account-credential-delivery.md)
 
 ## Manual Notes
 

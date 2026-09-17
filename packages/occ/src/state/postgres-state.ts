@@ -23,7 +23,9 @@ import type {
   ServiceAccountCredential,
 } from "@openclaw-enterprise/contracts";
 import {
+  harnessAuthBindingFromSnapshot,
   normalizePluginDesiredState,
+  normalizeHarnessAuthBinding,
   normalizeSecretBindings,
   RESOURCE_KINDS as PLATFORM_RESOURCE_KINDS,
   validPluginRevisionState,
@@ -49,6 +51,11 @@ import type {
   PlatformUnitOfWork,
   SecretRepository,
   ServiceAccountRepository,
+} from "./platform-state.ts";
+import {
+  assertHarnessAuthAvailable,
+  harnessAuthMatches,
+  validHarnessAuthSnapshot,
 } from "./platform-state.ts";
 import {
   PostgresWorkQueue,
@@ -201,7 +208,12 @@ function namespaceFromRow(row: PostgresRow): Readonly<PersistedNamespace> {
 
 function agentFromRow(row: PostgresRow): Readonly<Agent> {
   const activeRevisionId = optionalText(row, "active_revision_id");
-  const serviceAccountId = optionalText(row, "service_account_id");
+  let harnessAuth: Agent["harnessAuth"];
+  try {
+    harnessAuth = normalizeHarnessAuthBinding(row.harness_auth);
+  } catch {
+    throw new DependencyUnavailableError("Persisted Agent harness authentication is invalid.");
+  }
   const providerId = row.provider_id === null ? null : text(row, "provider_id");
   const desiredRuntimeState = text(row, "desired_runtime_state");
   if (desiredRuntimeState !== "running" && desiredRuntimeState !== "stopped")
@@ -217,7 +229,7 @@ function agentFromRow(row: PostgresRow): Readonly<Agent> {
       ? {}
       : { plugins: pluginStateFromJson(row.plugins)! }),
     servicePrincipalId: text(row, "service_principal_id"),
-    ...(serviceAccountId === undefined ? {} : { serviceAccountId }),
+    harnessAuth,
     ...(activeRevisionId === undefined ? {} : { activeRevisionId }),
     desiredRuntimeState,
     createdAt: timestamp(row, "created_at"),
@@ -278,11 +290,18 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
     harness: AgentRevision["harness"];
     compute: AgentRevision["compute"];
     sandbox_driver_id?: AgentRevision["sandboxDriverId"];
-    service_account?: AgentRevision["serviceAccount"];
+    harness_auth: AgentRevision["harnessAuth"];
     secret_driver_id?: AgentRevision["secretDriverId"];
     secret_bindings?: AgentRevision["secretBindings"];
     plugins?: AgentRevision["plugins"];
   };
+  if (
+    Object.hasOwn(admitted, "service_account") ||
+    !validHarnessAuthSnapshot(admitted.harness_auth, text(row, "namespace_id"))
+  )
+    throw new DependencyUnavailableError(
+      "Persisted AgentRevision harness authentication is invalid or legacy.",
+    );
   const secretBindings =
     admitted.secret_bindings === undefined
       ? undefined
@@ -309,7 +328,7 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
       : { secretDriverId: admitted.secret_driver_id }),
     ...(secretBindings === undefined ? {} : { secretBindings }),
     ...(admitted.plugins === undefined ? {} : { plugins: admitted.plugins }),
-    ...(admitted.service_account === undefined ? {} : { serviceAccount: admitted.service_account }),
+    harnessAuth: admitted.harness_auth,
     servicePrincipalId: text(row, "service_principal_id"),
     createdAt: timestamp(row, "admitted_at"),
   });
@@ -1340,6 +1359,23 @@ export class PostgresPlatformState implements PlatformStateStore {
                    AND binding.value #>> '{source,kind}' = 'secret'
                    AND binding.value #>> '{source,namespaceId}' = $1
                    AND binding.value #>> '{source,id}' = $2
+               ) OR EXISTS (
+                 SELECT 1 FROM occ.agents
+                 WHERE namespace_id = $1 AND harness_auth_secret_id = $2
+               ) OR EXISTS (
+                 SELECT 1 FROM occ.agents AS a
+                 JOIN occ.agent_revisions AS r ON r.namespace_id = a.namespace_id
+                   AND r.agent_id = a.id AND r.id = a.active_revision_id
+                 WHERE a.namespace_id = $1
+                   AND r.admitted_spec #>> '{harness_auth,method}' = 'api_key'
+                   AND r.admitted_spec #>> '{harness_auth,source,id}' = $2
+               ) OR EXISTS (
+                 SELECT 1 FROM occ.controller_work AS w
+                 JOIN occ.agent_revisions AS r ON r.namespace_id = w.namespace_id
+                   AND r.agent_id = w.agent_id AND r.id = w.revision_id
+                 WHERE w.namespace_id = $1 AND w.state IN ('queued', 'claimed')
+                   AND r.admitted_spec #>> '{harness_auth,method}' = 'api_key'
+                   AND r.admitted_spec #>> '{harness_auth,source,id}' = $2
                ) AS present`,
               [namespaceId, secretId],
             )
@@ -1466,7 +1502,7 @@ export class PostgresPlatformState implements PlatformStateStore {
             await client.query(
               `SELECT EXISTS (
                  SELECT 1 FROM occ.agents
-                 WHERE namespace_id = $1 AND service_account_id = $2
+                 WHERE namespace_id = $1 AND harness_auth_service_account_id = $2
                ) OR EXISTS (
                  SELECT 1 FROM occ.agents AS a
                  JOIN occ.agent_revisions AS r
@@ -1474,7 +1510,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                   AND r.agent_id = a.id
                   AND r.id = a.active_revision_id
                  WHERE a.namespace_id = $1
-                   AND r.admitted_spec #>> '{service_account,id}' = $2
+                   AND r.admitted_spec #>> '{harness_auth,serviceAccountId}' = $2
                ) OR EXISTS (
                  SELECT 1 FROM occ.controller_work AS w
                  JOIN occ.agent_revisions AS r
@@ -1483,7 +1519,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                   AND r.id = w.revision_id
                  WHERE w.namespace_id = $1
                    AND w.state IN ('queued', 'claimed')
-                   AND r.admitted_spec #>> '{service_account,id}' = $2
+                   AND r.admitted_spec #>> '{harness_auth,serviceAccountId}' = $2
                ) AS present`,
               [namespaceId, serviceAccountId],
             )
@@ -1515,7 +1551,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         (
           await client.query(
             `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                    a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                    a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
                     a.active_revision_id, a.desired_runtime_state, a.created_at
              FROM occ.agents AS a
              JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
@@ -1535,7 +1571,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           (
             await client.query(
               `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                      a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                      a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
                       a.active_revision_id, a.desired_runtime_state, a.created_at
                FROM occ.agents AS a
                JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
@@ -1561,6 +1597,13 @@ export class PostgresPlatformState implements PlatformStateStore {
         if (configuration === undefined)
           throw new ScopeViolationError("The Agent references an unavailable Configuration.");
         await validateSecretBindingsAvailable(agent.namespaceId, configuration.secretBindings);
+        if (Object.hasOwn(agent, "serviceAccountId"))
+          throw new ScopeViolationError("Legacy Agent authentication selectors are unsupported.");
+        await assertHarnessAuthAvailable(
+          { secrets, serviceAccounts },
+          agent.namespaceId,
+          agent.harnessAuth,
+        );
         const plugins = normalizedPlugins(agent.plugins);
         const { plugins: _providedPlugins, ...withoutPlugins } = agent;
         const saved = immutableCopy({
@@ -1571,8 +1614,8 @@ export class PostgresPlatformState implements PlatformStateStore {
         await client.query(
           `INSERT INTO occ.agents
            (id, namespace_id, name, configuration_id, provider_id, execution_mode,
-             service_principal_id, service_account_id, active_revision_id, created_at, plugins)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`,
+             service_principal_id, harness_auth, active_revision_id, created_at, plugins)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb)`,
           [
             saved.id,
             saved.namespaceId,
@@ -1581,7 +1624,7 @@ export class PostgresPlatformState implements PlatformStateStore {
             saved.providerId,
             saved.executionMode,
             saved.servicePrincipalId,
-            saved.serviceAccountId ?? null,
+            saved.harnessAuth === null ? null : JSON.stringify(saved.harnessAuth),
             saved.activeRevisionId ?? null,
             saved.createdAt,
             plugins === undefined ? null : JSON.stringify(plugins),
@@ -1599,10 +1642,12 @@ export class PostgresPlatformState implements PlatformStateStore {
         agentId,
         configurationId,
         executionMode,
-        serviceAccountId,
+        harnessAuth,
         providerId,
         plugins,
       ) => {
+        if (harnessAuth !== undefined)
+          await assertHarnessAuthAvailable({ secrets, serviceAccounts }, namespaceId, harnessAuth);
         const configuration = await configurations.findConfiguration(namespaceId, configurationId);
         if (configuration === undefined)
           throw new ScopeViolationError("The Agent references an unavailable Configuration.");
@@ -1613,22 +1658,22 @@ export class PostgresPlatformState implements PlatformStateStore {
             await client.query(
               `UPDATE occ.agents AS a
                SET configuration_id = $3, execution_mode = COALESCE($4::text, a.execution_mode),
-                   service_account_id = CASE WHEN $5::boolean THEN $6::text ELSE a.service_account_id END,
+                   harness_auth = CASE WHEN $5::boolean THEN $6::jsonb ELSE a.harness_auth END,
                    provider_id = CASE WHEN $7::boolean THEN $8::text ELSE a.provider_id END,
                    plugins = CASE WHEN $9::boolean THEN $10::jsonb ELSE a.plugins END
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                          a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                          a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
                           a.active_revision_id, a.desired_runtime_state, a.created_at`,
               [
                 namespaceId,
                 agentId,
                 configurationId,
                 executionMode ?? null,
-                serviceAccountId !== undefined,
-                serviceAccountId ?? null,
+                harnessAuth !== undefined,
+                harnessAuth == null ? null : JSON.stringify(harnessAuth),
                 providerId !== undefined,
                 providerId ?? null,
                 plugins !== undefined,
@@ -1654,7 +1699,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                 AND a.active_revision_id IS NOT DISTINCT FROM $3::text
                 AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                          a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                          a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
                           a.active_revision_id, a.desired_runtime_state, a.created_at`,
               [namespaceId, agentId, expectedRevisionId ?? null, candidateRevisionId],
             )
@@ -1671,7 +1716,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                WHERE a.namespace_id = $1 AND a.id = $2 AND a.active_revision_id = $3
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                         a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.created_at`,
               [namespaceId, agentId, expectedRevisionId],
             )
@@ -1690,7 +1735,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                  AND a.desired_runtime_state = ANY($3::text[])
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.provider_id, a.plugins, a.service_principal_id, a.service_account_id,
+                         a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.created_at`,
               [namespaceId, agentId, expectedStates, next],
             )
@@ -1737,12 +1782,24 @@ export class PostgresPlatformState implements PlatformStateStore {
       },
       createRevision: async (revision) => {
         await this.requireInitialized(context);
+        if (
+          Object.hasOwn(revision, "serviceAccount") ||
+          !validHarnessAuthSnapshot(revision.harnessAuth, revision.namespaceId)
+        )
+          throw new ScopeViolationError(
+            "The AgentRevision harness authentication is invalid or legacy.",
+          );
+        await assertHarnessAuthAvailable(
+          { secrets, serviceAccounts },
+          revision.namespaceId,
+          harnessAuthBindingFromSnapshot(revision.harnessAuth),
+        );
         const owner = await agents.findAgent(revision.namespaceId, revision.agentId);
         if (
           owner === undefined ||
           owner.servicePrincipalId !== revision.servicePrincipalId ||
           owner.providerId !== revision.providerId ||
-          revision.serviceAccount?.id !== owner.serviceAccountId
+          !harnessAuthMatches(owner.harnessAuth, revision.harnessAuth)
         )
           throw new ScopeViolationError("The AgentRevision belongs to an unavailable Agent.");
         const secretBindings =
@@ -1777,9 +1834,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                 : { secret_driver_id: revision.secretDriverId }),
               ...(secretBindings === undefined ? {} : { secret_bindings: secretBindings }),
               ...(revision.plugins === undefined ? {} : { plugins: revision.plugins }),
-              ...(revision.serviceAccount === undefined
-                ? {}
-                : { service_account: revision.serviceAccount }),
+              harness_auth: revision.harnessAuth,
             }),
             revision.createdAt,
           ],

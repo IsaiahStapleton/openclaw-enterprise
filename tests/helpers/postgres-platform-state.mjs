@@ -14,6 +14,7 @@ import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts
 import { verifyPlatformStateStoreContract } from "../conformance/platform-state-store.contract.mjs";
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
+import { grantAgentSecretOperate } from "./postgres-harness-auth.mjs";
 import {
   createKubernetesInstallationConfiguration,
   kubernetesHash,
@@ -51,6 +52,14 @@ const kubernetesWorkloadResources = Object.freeze({
 });
 const defaultAgentConfigurationValues = Object.freeze({
   gateway: Object.freeze({ controlUi: Object.freeze({ enabled: false }) }),
+  agents: Object.freeze({
+    defaults: Object.freeze({
+      model: "openai/gpt-fixture",
+      models: Object.freeze({
+        "openai/gpt-fixture": Object.freeze({ agentRuntime: Object.freeze({ id: "openclaw" }) }),
+      }),
+    }),
+  }),
 });
 
 async function kubectl(...args) {
@@ -306,6 +315,26 @@ async function createConfiguredAgent(api, namespaceId, name, values, body = {}) 
   return { configuration, agent: agent.data };
 }
 
+async function createKubernetesHarnessAuth(api, namespaceId) {
+  // Fixture workloads receive an owned synthetic source, never a real provider credential.
+  const secret = await request(api, "POST", `/namespaces/${namespaceId}/secrets`, {
+    name: `fixture-model-${randomUUID()}`,
+    value: `synthetic-fixture-key-${randomUUID()}`,
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.error));
+  return { method: "api_key", source: secret.data.ref };
+}
+
+async function createKubernetesConfiguredAgent(pool, api, namespaceId, name, values, body = {}) {
+  const harnessAuth = await createKubernetesHarnessAuth(api, namespaceId);
+  const created = await createConfiguredAgent(api, namespaceId, name, values, {
+    ...body,
+    harnessAuth,
+  });
+  await grantAgentSecretOperate(pool, created.agent, harnessAuth.source.id);
+  return created;
+}
+
 function admitted(values) {
   return admitLoggingConfiguration(values, "info");
 }
@@ -530,6 +559,8 @@ export {
   cleanupKubernetesNamespaces,
   createConfiguration,
   createConfiguredAgent,
+  createKubernetesConfiguredAgent,
+  createKubernetesHarnessAuth,
   createDurableController,
   databaseUrl,
   defaultAgentConfigurationValues,

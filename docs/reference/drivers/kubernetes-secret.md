@@ -3,8 +3,8 @@
 The Kubernetes Secret Driver stores OCC Secret values in the Kubernetes
 namespace selected for the owning OpenClaw Namespace. Each Secret belongs to one
 Namespace, returns metadata only through OCC, and can be delivered as an
-environment variable to an explicitly selected Agent's OpenClaw gateway through a
-Configuration `secretBindings` entry and Agent assignment.
+environment variable through an Agent `harnessAuth` API-key binding or a
+Configuration `secretBindings` entry for gateway-only credentials.
 
 This driver is storage and env delivery only. It does not issue credentials,
 share Secrets across Namespaces, keep value history, restart workloads after an
@@ -74,19 +74,29 @@ to exist yet. Keep the value in a protected file or secret manager output; do
 not put it in a shell command, URL, log line, or example JSON checked into
 source.
 
+Use `OCC_URL` and the protected `OCC_SERVICE_KEY_FILE` from
+[operator authentication](../../guides/deploy/production-installation.md#authenticate-to-the-production-api),
+plus `NAMESPACE_ID`. This Node.js example sends the key and value from protected
+files, follows no redirects, and prints only the metadata response. If the API
+uses a private CA, configure `NODE_EXTRA_CA_CERTS` with its CA bundle first.
+
 ```bash
 umask 077
 SECRET_VALUE_FILE=/secure/operator/agent-model-key
+export NAMESPACE_ID
 
-node - "$SECRET_VALUE_FILE" <<'JS' | \
-  curl -fsS "http://127.0.0.1:3000/namespaces/$NAMESPACE_ID/secrets" \
-    -b "$OCC_SESSION_COOKIE_JAR" \
-    -H 'Content-Type: application/json' \
-    --data-binary @-
-const { readFileSync } = require("node:fs");
-const [valuePath] = process.argv.slice(2);
-const value = readFileSync(valuePath, "utf8").replace(/\n$/, "");
-process.stdout.write(JSON.stringify({ name: "model-api-key", value }));
+node --input-type=module - "$SECRET_VALUE_FILE" <<'JS'
+import { readFileSync } from "node:fs";
+const value = readFileSync(process.argv[2], "utf8").replace(/\n$/, "");
+const { data: { key } } = JSON.parse(readFileSync(process.env.OCC_SERVICE_KEY_FILE, "utf8"));
+const url = new URL(`/namespaces/${encodeURIComponent(process.env.NAMESPACE_ID)}/secrets`, process.env.OCC_URL);
+const response = await fetch(url, {
+  method: "POST", redirect: "error",
+  headers: { "x-api-key": key, "content-type": "application/json" },
+  body: JSON.stringify({ name: "model-api-key", value }),
+});
+if (response.status !== 201) throw new Error(`Secret creation failed: HTTP ${response.status}`);
+console.log(JSON.stringify(await response.json()));
 JS
 ```
 
@@ -123,7 +133,7 @@ resolves and validates the stored backend identity:
 ```json
 {
   "secretBindings": {
-    "OPENAI_API_KEY": {
+    "SLACK_BOT_TOKEN": {
       "source": {
         "kind": "secret",
         "namespaceId": "ns_123e4567-e89b-42d3-a456-426614174000",
@@ -162,18 +172,19 @@ Driver renders Kubernetes `secretKeyRef` environment variables only into each
 explicitly selected consuming gateway. Native OpenClaw configuration then
 resolves the env SecretRefs normally.
 
-Dedicated Codex model credentials do not use this binding path: the separate
-Codex workload keeps its existing Agent-specific model Secret or provider-issued
-account token path, and the dedicated gateway does not receive the model
-credential. The combined embedded OpenClaw gateway may use a Secret binding for
-its own Agent-specific `OPENAI_API_KEY`.
+For model credentials, use [Agent harness authentication](../agents.md#harness-authentication).
+The API-key binding uses this same Secret Driver and exact authorization, but
+Kubernetes places the projection only in the selected model-executing Harness.
+Dedicated gateways cannot receive model credentials through Configuration
+bindings. Embedded OpenClaw also selects its key through `harnessAuth`.
 
 ## Update and redeploy
 
 Patch only the value with
 `PATCH /namespaces/:namespaceId/secrets/:secretId { "value": "..." }`. Keep the
-value in a protected file or secret manager output and pass the request body
-through stdin, as in the create example. The Secret reference stays stable.
+value in a protected file or secret manager output and send it with the protected
+request pattern above, changing the method, exact-Secret URL, and body to match
+the PATCH operation. The Secret reference stays stable.
 
 The response returns the same metadata and `ref`. Update success means the
 driver stored the new value; it does not restart a gateway, edit an existing
@@ -185,7 +196,7 @@ current value because revisions hold references, not historical Secret bytes.
 There is no value history, automatic rotation, automatic workload restart, or
 value rollback. Updating or deleting an OCC Secret does not remove credentials
 already delivered to a running process environment, and deletion is blocked while
-current Configurations, active revisions, or pending deployments still depend on
+current Configurations, Agent drafts, active revisions, or pending deployments still depend on
 the Secret. For a compromised credential, stop the affected workloads and revoke
 the credential at the upstream provider; then update the OCC Secret with a
 replacement value and redeploy the intended consumers. Delete the Secret only
@@ -193,17 +204,20 @@ after its reference dependencies are cleared; see [Delete](#delete).
 
 ## Delete
 
-Delete only unreferenced Secrets:
+Delete only unreferenced Secrets. This example uses an authenticated human
+session from [service-key recovery](../../guides/deploy/service-keys.md#sign-in-as-a-human-administrator)
+at the configured `OCC_URL`:
 
 ```bash
 curl -fsS \
-  "http://127.0.0.1:3000/namespaces/$NAMESPACE_ID/secrets/$SECRET_ID" \
+  "$OCC_URL/namespaces/$NAMESPACE_ID/secrets/$SECRET_ID" \
   -X DELETE \
   -b "$OCC_SESSION_COOKIE_JAR"
 ```
 
 Successful deletion returns HTTP `204`. OCC denies deletion while the Secret is
-referenced by any current Configuration, active revision, or pending deployment.
+referenced by any current Configuration, Agent draft, active revision, or pending deployment.
+Inactive historical revisions alone do not prevent deletion.
 Namespace removal is also blocked while owned Secrets remain. Agent removal does
 not own or garbage-collect Namespace Secret storage.
 

@@ -240,7 +240,9 @@
           "path": "tests/integration/postgres-migration-compatibility.test.mjs",
           "expectedTests": [
             "Drizzle generates repository schema migrations without redundant regeneration",
-            "Agent stop migration rejects pre-existing active runtime state",
+            "Migration rejects legacy active_runtime state without changing persisted rows",
+            "Migration rejects legacy harness_revision state without changing persisted rows",
+            "Migration rejects legacy harness_account state without changing persisted rows",
             "Drizzle second migration preserves the applied journal and PostgreSQL schema"
           ]
         },
@@ -289,7 +291,7 @@
         {
           "path": "tests/integration/postgres-service-account-deletion.test.mjs",
           "expectedTests": [
-            "ServiceAccount deletion protects queued, claimed, and active revisions before Driver effects"
+            "ServiceAccount deletion protects draft, queued, claimed, and active references before Driver effects"
           ]
         },
         {
@@ -301,16 +303,23 @@
         {
           "path": "tests/integration/postgres-worker-agent-revision.test.mjs",
           "expectedTests": [
+            "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
+            "Agent stop cleans a terminal candidate without an active revision",
+            "a deployment during active cleanup supersedes the remaining Agent stop effects",
+            "a deployment during candidate cleanup supersedes the remaining Agent stop effects",
             "maintenance retains its real lease across consecutive short predecessor retirements",
             "the revision worker activates admitted candidates, retires predecessors, and rejects revoked, malformed, and wrong-owner effects",
             "the revision worker rejects associated-account access revoked after admission before invoking Compute",
-            "the revision worker rejects managed ServiceAccount provider mismatches before Compute",
+            "the revision worker rejects managed ServiceAccount issuance revoked after admission before Compute",
             "the revision worker retries transient Provider binding read failures without activating",
             "an older revision retry is superseded without preparing or retiring a newer active revision",
             "real PostgreSQL preserves the failure budget while an Agent runtime converges",
             "an overdue Agent runtime fails closed without activating its incomplete revision",
             "one worker reconciles embedded OpenClaw and dedicated Codex but rejects unapproved pinned Harnesses",
-            "a lost retirement claim preserves the activated replacement and cannot complete stolen work"
+            "a lost retirement claim preserves the activated replacement and cannot complete stolen work",
+            "revision dispatch rechecks Configuration and exact harness Secret grants without backend Secret reads",
+            "revision dispatch refuses a different selected Secret Driver before binding or activating the Agent",
+            "revision dispatch never substitutes a later ChatGPT credential or reconfigured Provider for its admitted snapshot"
           ]
         },
         {

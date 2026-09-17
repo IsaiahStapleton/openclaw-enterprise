@@ -38,7 +38,8 @@ import type {
   ServiceAccount,
   ServiceAccountCredential,
   ServiceAccountDriver,
-  ServiceAccountRevision,
+  HarnessAuthBinding,
+  HarnessAuthSnapshot,
 } from "@openclaw-enterprise/contracts";
 import {
   DRIVER_CAPABILITIES,
@@ -47,6 +48,8 @@ import {
   normalizeLoggingLevel,
   normalizePluginDesiredState,
   normalizeSecretBindings,
+  normalizeHarnessAuthBinding,
+  freezeAgentRevision,
 } from "@openclaw-enterprise/contracts";
 import { asRecord, immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
@@ -164,7 +167,7 @@ export interface CreateAgentInput {
   readonly name: string;
   readonly configurationId: string;
   readonly providerId?: string | null;
-  readonly serviceAccountId?: string;
+  readonly harnessAuth?: HarnessAuthBinding | null;
   readonly executionMode?: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
 }
@@ -174,7 +177,7 @@ export interface UpdateAgentInput {
   readonly agentId: string;
   readonly configurationId: string;
   readonly providerId?: string | null;
-  readonly serviceAccountId?: string | null;
+  readonly harnessAuth?: HarnessAuthBinding | null;
   readonly executionMode?: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
 }
@@ -324,21 +327,6 @@ function driverHasValidLifecycleHooks(driver: Driver): boolean {
     keys.length > 0 &&
     keys.every((key) => phases.includes(key) && typeof candidate[key] === "function")
   );
-}
-
-function frozenRevision(revision: AgentRevision): Readonly<AgentRevision> {
-  return Object.freeze({
-    ...revision,
-    configuration: frozenValues(revision.configuration),
-    ...(revision.secretBindings === undefined
-      ? {}
-      : { secretBindings: immutableCopy(revision.secretBindings) }),
-    harness: Object.freeze({ ...revision.harness }),
-    compute: Object.freeze({ ...revision.compute }),
-    ...(revision.serviceAccount === undefined
-      ? {}
-      : { serviceAccount: immutableCopy(revision.serviceAccount) }),
-  });
 }
 
 function frozenValues(value: unknown): Readonly<OpenClawConfigurationDocument> {
@@ -778,23 +766,6 @@ export class OpenClawController {
         namespaceId: namespace.id,
       });
       if (namespace.status !== "ready") throw new NamespaceNotReadyError();
-      const configuration = await state.configurations.lockConfiguration(
-        namespace.id,
-        agent.configurationId,
-      );
-      if (!configuration || configuration.kind !== "agent")
-        throw new ScopeViolationError(
-          "The Agent Configuration must belong to the exact Namespace and configure an Agent.",
-        );
-      if (agent.serviceAccountId !== undefined)
-        throw new ResourceConflictError(
-          "Legacy per-Agent runtime credential provisioning requires an Agent without a ServiceAccount.",
-        );
-      const secretBindings = this.bindings(configuration.secretBindings);
-      if (secretBindings.OPENAI_API_KEY !== undefined)
-        throw new ResourceConflictError(
-          "Legacy per-Agent runtime credential provisioning requires an Agent without a model Secret binding.",
-        );
       if ((await state.revisions.listRevisions(namespace.id, agent.id)).length > 0)
         throw new ResourceConflictError(
           "Runtime credentials can be provisioned only before the Agent has historical revisions.",
@@ -1408,8 +1379,8 @@ export class OpenClawController {
     if (!validName(input.name)) throw new ScopeViolationError("The Agent name is invalid.");
     if (!isNonEmptyString(input.configurationId))
       throw new ScopeViolationError("The exact Agent Configuration identity is missing.");
-    if (input.serviceAccountId !== undefined && !isNonEmptyString(input.serviceAccountId))
-      throw new ScopeViolationError("The exact Agent ServiceAccount identity is missing.");
+    this.rejectLegacyAgentAuth(input);
+    const harnessAuth = this.harnessAuthBinding(input.harnessAuth ?? null);
     const executionMode = input.executionMode ?? "embedded";
     if (!validExecutionMode(executionMode))
       throw new ScopeViolationError("The Agent Harness execution mode is invalid.");
@@ -1438,14 +1409,7 @@ export class OpenClawController {
         throw new ScopeViolationError(
           "The Agent Configuration must belong to the exact Namespace and configure an Agent.",
         );
-      if (input.serviceAccountId !== undefined) {
-        await this.authorize(principalId, "read", {
-          kind: "service_account",
-          id: input.serviceAccountId,
-          namespaceId: namespace.id,
-        });
-        await this.exactServiceAccount(state, namespace.id, input.serviceAccountId);
-      }
+      await this.authorizeHarnessAuthSource(state, principalId, namespace.id, harnessAuth);
       const agentId = this.nextIdentifier("agent");
       await this.authorizeBindings(
         state,
@@ -1460,9 +1424,7 @@ export class OpenClawController {
         name: input.name,
         configurationId: input.configurationId,
         providerId,
-        ...(input.serviceAccountId === undefined
-          ? {}
-          : { serviceAccountId: input.serviceAccountId }),
+        harnessAuth,
         executionMode,
         ...(plugins === undefined ? {} : { plugins }),
         servicePrincipalId: `service-agent-${agentId}`,
@@ -1478,12 +1440,9 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     if (!isNonEmptyString(input.configurationId))
       throw new ScopeViolationError("The exact Agent Configuration identity is missing.");
-    if (
-      input.serviceAccountId !== undefined &&
-      input.serviceAccountId !== null &&
-      !isNonEmptyString(input.serviceAccountId)
-    )
-      throw new ScopeViolationError("The exact Agent ServiceAccount identity is missing.");
+    this.rejectLegacyAgentAuth(input);
+    const requestedAuth =
+      input.harnessAuth === undefined ? undefined : this.harnessAuthBinding(input.harnessAuth);
     if (input.executionMode !== undefined && !validExecutionMode(input.executionMode))
       throw new ScopeViolationError("The Agent Harness execution mode is invalid.");
     const plugins = normalizeAgentPlugins(input.plugins);
@@ -1512,42 +1471,21 @@ export class OpenClawController {
         throw new ScopeViolationError(
           "The Agent Configuration must belong to the exact Namespace and configure an Agent.",
         );
-      if (agent.serviceAccountId !== undefined) {
-        await this.authorize(principalId, "read", {
-          kind: "service_account",
-          id: agent.serviceAccountId,
-          namespaceId: namespace.id,
-        });
-        await this.exactServiceAccount(state, namespace.id, agent.serviceAccountId);
-      }
-      if (
-        input.serviceAccountId !== undefined &&
-        input.serviceAccountId !== null &&
-        input.serviceAccountId !== agent.serviceAccountId
-      ) {
-        await this.authorize(principalId, "read", {
-          kind: "service_account",
-          id: input.serviceAccountId,
-          namespaceId: namespace.id,
-        });
-        await this.exactServiceAccount(state, namespace.id, input.serviceAccountId);
+      this.rejectLegacyAgentAuth(agent);
+      const previousAuth = this.harnessAuthBinding(agent.harnessAuth);
+      await this.authorizeHarnessAuthSource(state, principalId, namespace.id, previousAuth);
+      if (requestedAuth !== undefined) {
+        await this.authorizeHarnessAuthSource(state, principalId, namespace.id, requestedAuth);
       }
       const secretBindings = this.bindings(configuration.secretBindings);
       await this.authorizeBindings(state, principalId, namespace.id, secretBindings);
       const providerId = this.providerId(input.providerId, agent.providerId);
-      this.validateModelBinding(
-        secretBindings,
-        input.executionMode ?? agent.executionMode,
-        input.serviceAccountId === null
-          ? undefined
-          : (input.serviceAccountId ?? agent.serviceAccountId),
-      );
       const updated = await state.agents.updateConfiguration(
         namespace.id,
         agent.id,
         input.configurationId,
         input.executionMode,
-        input.serviceAccountId,
+        requestedAuth,
         input.providerId === undefined ? undefined : providerId,
         plugins,
       );
@@ -1598,40 +1536,8 @@ export class OpenClawController {
         throw new ScopeViolationError(
           "The selected Sandbox Driver supports only dedicated Harness execution.",
         );
-      let serviceAccount: ServiceAccountRevision | undefined;
-      if (lockedAgent.serviceAccountId !== undefined) {
-        await this.authorize(principalId, "read", {
-          kind: "service_account",
-          id: lockedAgent.serviceAccountId,
-          namespaceId: namespace.id,
-        });
-        const account = await state.serviceAccounts.lockServiceAccount(
-          namespace.id,
-          lockedAgent.serviceAccountId,
-        );
-        if (account === undefined)
-          throw new ScopeViolationError(
-            "The ServiceAccount does not belong to the exact Namespace.",
-          );
-        const credential = account.credential;
-        if (credential === undefined)
-          throw new ResourceConflictError("The associated ServiceAccount has no credential.");
-        if (credential.kind !== "api_key" && credential.kind !== "access_token")
-          throw new ResourceConflictError(
-            "OAuth ServiceAccount credentials are not supported for deployment.",
-          );
-        if (credential.kind === "access_token") {
-          validateServiceAccountProviderBinding(
-            this.providerMap,
-            providerId,
-            await state.serviceAccounts.findServiceAccountProviderBinding(namespace.id, account.id),
-          );
-        }
-        serviceAccount = immutableCopy({
-          id: account.id,
-          credential: { kind: credential.kind, secretRef: credential.secretRef },
-        });
-      }
+      this.rejectLegacyAgentAuth(lockedAgent);
+      const harnessAuth = await this.admitHarnessAuth(state, principalId, lockedAgent);
       await this.authorize(principalId, "read", {
         kind: "configuration",
         id: lockedAgent.configurationId,
@@ -1651,11 +1557,6 @@ export class OpenClawController {
         principalId,
         namespace.id,
         secretBindings,
-      );
-      this.validateModelBinding(
-        secretBindings,
-        lockedAgent.executionMode,
-        lockedAgent.serviceAccountId,
       );
       const secretDriver =
         Object.keys(secretBindings).length === 0 ? undefined : this.secretDriver();
@@ -1710,12 +1611,19 @@ export class OpenClawController {
       ) {
         throw new ScopeViolationError("The selected Harness does not support this execution mode.");
       }
-      if (
-        serviceAccount?.credential.kind === "access_token" &&
-        (approvedHarness.id !== "codex" || lockedAgent.executionMode !== "dedicated")
-      ) {
+      if (compute.validateHarnessAuth === undefined)
+        throw new DependencyUnavailableError(
+          "The selected Compute Driver does not support Harness authentication bindings.",
+        );
+      try {
+        compute.validateHarnessAuth(
+          { ...approvedHarness, mode: lockedAgent.executionMode },
+          harnessAuth,
+          admittedConfiguration,
+        );
+      } catch {
         throw new ResourceConflictError(
-          "ServiceAccount access-token credentials require the dedicated Codex Harness.",
+          "The selected Compute Driver cannot deliver this Harness authentication binding to the configured model and topology.",
         );
       }
       const pluginState =
@@ -1730,7 +1638,7 @@ export class OpenClawController {
             })();
       const previous = await state.revisions.listRevisions(namespace.id, lockedAgent.id);
       const revision = await state.revisions.createRevision(
-        frozenRevision({
+        freezeAgentRevision({
           id: this.nextIdentifier("agent_revision"),
           namespaceId: namespace.id,
           agentId: lockedAgent.id,
@@ -1751,7 +1659,7 @@ export class OpenClawController {
             ? {}
             : { secretDriverId: secretDriver.id, secretBindings }),
           ...(pluginState === undefined ? {} : { plugins: pluginState }),
-          ...(serviceAccount === undefined ? {} : { serviceAccount }),
+          harnessAuth,
           servicePrincipalId: lockedAgent.servicePrincipalId,
           createdAt: this.timestamp(),
         }),
@@ -2159,18 +2067,98 @@ export class OpenClawController {
     return Object.freeze([...secrets.values()]);
   }
 
-  private validateModelBinding(
-    bindings: SecretBindings,
-    mode: HarnessExecutionMode,
-    serviceAccountId?: string,
-  ): void {
-    if (
-      bindings.OPENAI_API_KEY !== undefined &&
-      (mode !== "embedded" || serviceAccountId !== undefined)
-    )
+  private rejectLegacyAgentAuth(value: object): void {
+    if (Object.hasOwn(value, "serviceAccountId"))
       throw new ScopeViolationError(
-        "An explicit model Secret requires an embedded Agent without a competing ServiceAccount source.",
+        "Agent.serviceAccountId is no longer supported; select harnessAuth explicitly.",
       );
+  }
+
+  private harnessAuthBinding(value: unknown): HarnessAuthBinding | null {
+    try {
+      return normalizeHarnessAuthBinding(value);
+    } catch {
+      throw new ScopeViolationError("The Agent Harness authentication binding is invalid.");
+    }
+  }
+
+  /** Namespace lock serializes binding, source deletion, and admission. */
+  private async authorizeHarnessAuthSource(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    namespaceId: string,
+    binding: HarnessAuthBinding | null,
+  ): Promise<void> {
+    if (binding === null || binding.method === "runtime") return;
+    if (binding.method === "api_key") {
+      if (binding.source.namespaceId !== namespaceId)
+        throw new ScopeViolationError("Harness authentication sources cannot cross Namespaces.");
+      await this.authorize(principalId, "operate", binding.source);
+      const source = await state.secrets.lockSecret(namespaceId, binding.source.id);
+      if (source === undefined)
+        throw new ScopeViolationError("The Harness Secret does not belong to the exact Namespace.");
+      this.secretDriver(source.driverId);
+    } else {
+      await this.authorize(principalId, "read", {
+        kind: "service_account",
+        namespaceId,
+        id: binding.serviceAccountId,
+      });
+      await this.exactServiceAccount(state, namespaceId, binding.serviceAccountId);
+    }
+  }
+
+  private async admitHarnessAuth(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    agent: Readonly<Agent>,
+  ): Promise<HarnessAuthSnapshot> {
+    const binding = this.harnessAuthBinding(agent.harnessAuth);
+    if (binding === null)
+      throw new ResourceConflictError(
+        "Deployment requires an explicit Harness authentication binding.",
+      );
+    await this.authorizeHarnessAuthSource(state, principalId, agent.namespaceId, binding);
+    if (binding.method === "runtime") return immutableCopy(binding);
+    if (binding.method === "api_key") {
+      await this.authorize(agent.servicePrincipalId, "operate", binding.source);
+      const source = await state.secrets.lockSecret(agent.namespaceId, binding.source.id);
+      if (source === undefined) throw new ScopeViolationError("The Harness Secret is unavailable.");
+      const driver = this.secretDriver(source.driverId);
+      const resolved = await this.secretOperation(() => driver.resolve(source));
+      if (
+        Object.keys(source.backendRef).some(
+          (key) =>
+            resolved[key as keyof typeof resolved] !==
+            source.backendRef[key as keyof typeof source.backendRef],
+        )
+      )
+        throw new DependencyUnavailableError("The Harness Secret backend identity changed.");
+      return immutableCopy({ ...binding, secretDriverId: driver.id });
+    }
+    const account = await state.serviceAccounts.lockServiceAccount(
+      agent.namespaceId,
+      binding.serviceAccountId,
+    );
+    if (account?.credential?.kind !== "access_token")
+      throw new ResourceConflictError(
+        "ChatGPT Harness authentication requires an issued account access-token credential.",
+      );
+    const providerBinding = await state.serviceAccounts.findServiceAccountProviderBinding(
+      agent.namespaceId,
+      binding.serviceAccountId,
+    );
+    validateServiceAccountProviderBinding(this.providerMap, agent.providerId, providerBinding);
+    const driver = this.serviceAccountDriver();
+    if (providerBinding === undefined || driver?.id !== providerBinding.driverId)
+      throw new DependencyUnavailableError(
+        "The Harness ServiceAccount Driver does not match the admitted Provider.",
+      );
+    return immutableCopy({
+      ...binding,
+      credential: { kind: "access_token" as const, secretRef: account.credential.secretRef },
+      providerBinding,
+    });
   }
 
   private validateSecretValue(value: unknown): asserts value is string {
@@ -2206,10 +2194,8 @@ export class OpenClawController {
     if (candidate === undefined)
       throw new ScopeViolationError("Agent runtime credentials must be a JSON object.");
     const keys = Object.keys(candidate);
-    if (!keys.every((key) => key === "modelApiKey" || key === "slack"))
+    if (!keys.every((key) => key === "slack"))
       throw new ScopeViolationError("Agent runtime credentials contain unsupported fields.");
-    if (candidate.modelApiKey !== undefined)
-      this.validateRuntimeCredentialValue(candidate.modelApiKey);
     let slack: AgentRuntimeCredentialsInput["slack"];
     if (candidate.slack !== undefined) {
       const slackCandidate = asRecord(candidate.slack);
@@ -2227,7 +2213,6 @@ export class OpenClawController {
       };
     }
     return Object.freeze({
-      ...(candidate.modelApiKey === undefined ? {} : { modelApiKey: candidate.modelApiKey }),
       ...(slack === undefined ? {} : { slack: Object.freeze(slack) }),
     });
   }
@@ -2238,7 +2223,6 @@ export class OpenClawController {
     if (
       status === undefined ||
       typeof status.transportConfigured !== "boolean" ||
-      typeof status.modelConfigured !== "boolean" ||
       typeof status.slackConfigured !== "boolean"
     )
       throw new DependencyUnavailableError(
@@ -2246,7 +2230,6 @@ export class OpenClawController {
       );
     return Object.freeze({
       transportConfigured: status.transportConfigured,
-      modelConfigured: status.modelConfigured,
       slackConfigured: status.slackConfigured,
     });
   }

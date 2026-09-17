@@ -505,7 +505,16 @@ test(
       };
       const updatedAccount = await request("PATCH", `${accountPath}/credential`, credential);
       assert.equal(updatedAccount.status, 200);
-      assert.deepEqual(updatedAccount.data.credential, credential);
+      assert.deepEqual(updatedAccount.data, {
+        ...createdAccount.data,
+        credential: { kind: credential.kind },
+      });
+      const visibleAccount = await request("GET", accountPath);
+      assert.deepEqual(visibleAccount, updatedAccount);
+      for (const response of [updatedAccount, visibleAccount]) {
+        assert.equal(JSON.stringify(response).includes(credential.secretRef.name), false);
+        assert.equal(JSON.stringify(response).includes(credential.secretRef.key), false);
+      }
       assert.equal((await request("DELETE", accountPath)).status, 204);
       assert.equal((await request("GET", accountPath)).status, 404);
       const serviceNamespace = await fetch(`${endpoint}/namespaces`, {

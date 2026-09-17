@@ -88,7 +88,7 @@ Agent makes no upstream call. Deployment copies `providerId` into an immutable
 AgentRevision; later draft edits cannot change that snapshot. PostgreSQL stores
 the snapshot in the immutable revision row's `provider_id` column.
 
-Native API-key accounts and independently supplied model credentials support
+Secret-backed API-key harness bindings support
 providerless Agents. Managed `access_token` deployment requires dedicated Codex
 execution and an exact same-Namespace binding matching the Provider, member
 Driver, workspace, and recorded issuance. A mismatch returns

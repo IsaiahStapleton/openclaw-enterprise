@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { grantAgentSecretOperate } from "./postgres-harness-auth.mjs";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const requiresPostgres = {
@@ -73,8 +74,15 @@ async function setup(context) {
   const deployRoles = new Set(
     iam.roles
       .filter(({ permissions }) =>
-        permissions.some(
-          ({ action, resourceKind }) => action === "deploy" && resourceKind === "agent",
+        [
+          ["deploy", "agent"],
+          ["read", "configuration"],
+          ["operate", "secret"],
+        ].every(([action, resourceKind]) =>
+          permissions.some(
+            (permission) =>
+              permission.action === action && permission.resourceKind === resourceKind,
+          ),
         ),
       )
       .map(({ id }) => id),
@@ -101,11 +109,31 @@ async function setup(context) {
   };
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = createDevelopmentComputeDriver();
+  const configuration = createInstallationDriverConfiguration();
+  const secretDriver = createTestSecretDriver({ id: configuration.drivers.secret.id });
 
   async function agent() {
     const id = `agt_${randomUUID()}`;
     const configurationId = `cfg_${randomUUID()}`;
-    return state.transact(async (unit) => {
+    const secret = {
+      id: `sec_${randomUUID()}`,
+      namespaceId: namespace.id,
+      name: `model-key-${randomUUID()}`,
+    };
+    // Worker lifecycle proof uses a real persisted source and independent Agent
+    // grant; the passive Secret backend owns only synthetic fixture values.
+    const backendRef = await secretDriver.create(secret, "singleton-worker-fixture-key");
+    const harnessAuth = {
+      method: "api_key",
+      source: { kind: "secret", namespaceId: namespace.id, id: secret.id },
+    };
+    const owner = await state.transact(async (unit) => {
+      await unit.secrets.createSecret({
+        ...secret,
+        driverId: secretDriver.id,
+        backendRef,
+        createdAt: new Date().toISOString(),
+      });
       await unit.configurations.createConfiguration({
         id: configurationId,
         namespaceId: namespace.id,
@@ -119,11 +147,14 @@ async function setup(context) {
         name: `singleton-runtime-${randomUUID()}`,
         configurationId,
         providerId: null,
+        harnessAuth,
         executionMode: "dedicated",
         servicePrincipalId: `service-agent-${id}`,
         createdAt: new Date().toISOString(),
       });
     });
+    await grantAgentSecretOperate(observerPool, owner, secret.id);
+    return owner;
   }
 
   async function revision(owner, number) {
@@ -139,6 +170,7 @@ async function setup(context) {
       providerId: null,
       harness: { ...PRODUCTION_HARNESS_DESCRIPTOR, mode: "dedicated" },
       compute: { id: compute.id, implementation: compute.implementation },
+      harnessAuth: { ...owner.harnessAuth, secretDriverId: secretDriver.id },
       servicePrincipalId: owner.servicePrincipalId,
       createdAt: new Date().toISOString(),
     };
@@ -188,7 +220,6 @@ async function setup(context) {
     convergenceTimeoutMs = 900_000,
     mode = "production",
   ) {
-    const configuration = createInstallationDriverConfiguration();
     configuration.drivers.compute.id = computeDriver.id;
     worker = createControllerWorker({
       pool: workerPool,
@@ -199,9 +230,7 @@ async function setup(context) {
         configurationDriver: createTestConfigurationDriver({
           id: configuration.drivers.configuration.id,
         }),
-        secretDriver: createTestSecretDriver({
-          id: configuration.drivers.secret.id,
-        }),
+        secretDriver,
         createIAMDriver(platformState) {
           return new NativeIAMDriver(platformState, {
             id: configuration.drivers.iam.id,

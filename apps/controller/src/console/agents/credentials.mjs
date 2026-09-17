@@ -24,7 +24,6 @@ export function runtimeCredentialBlockReason(values) {
 export function requiredRuntimeCredentialGroups(values) {
   return [
     { id: "transport", label: "Transport", key: "transportConfigured" },
-    { id: "model", label: "Model", key: "modelConfigured" },
     ...(slackEnabled(values) ? [{ id: "slack", label: "Slack", key: "slackConfigured" }] : []),
   ];
 }
@@ -48,13 +47,11 @@ function normalizedStatus(data) {
     typeof data !== "object" ||
     Array.isArray(data) ||
     typeof data.transportConfigured !== "boolean" ||
-    typeof data.modelConfigured !== "boolean" ||
     typeof data.slackConfigured !== "boolean"
   )
     throw new Error("Invalid credential status response");
   return {
     transportConfigured: data.transportConfigured,
-    modelConfigured: data.modelConfigured,
     slackConfigured: data.slackConfigured,
   };
 }
@@ -128,7 +125,7 @@ export function createRuntimeCredentialsPanel({
     const missing = missingRuntimeCredentialGroups(state.status, values);
     if (missing.length)
       return `Deploy requires stored runtime credential metadata: ${missing.join(", ")}.`;
-    return "Stored runtime credential metadata is present. This does not confirm live model or Slack readiness.";
+    return "Stored runtime credential metadata is present. This does not confirm live Slack readiness.";
   }
 
   async function loadStatus() {
@@ -180,16 +177,7 @@ export function createRuntimeCredentialsPanel({
 
   function renderForm() {
     const formId = "runtime-credentials-form";
-    const modelStored = state.status?.modelConfigured === true;
     const slackStored = state.status?.slackConfigured === true;
-    const modelApiKey = element("input", {
-      id: "runtime-model-api-key",
-      name: "runtime-model-api-key",
-      type: "password",
-      autocomplete: "off",
-      disabled: !canEnterCredentials() || modelStored,
-      "aria-describedby": "runtime-model-api-key-hint",
-    });
     const slackAppToken = element("input", {
       id: "runtime-slack-app-token",
       name: "runtime-slack-app-token",
@@ -219,15 +207,12 @@ export function createRuntimeCredentialsPanel({
     );
     const updateControls = () => {
       const transportMissing = state.status?.transportConfigured !== true;
-      const modelMissing = state.status?.modelConfigured !== true;
       const slackMissing = needsSlack && state.status?.slackConfigured !== true;
-      const modelEntered = modelApiKey.value.length > 0;
       const slackAppEntered = slackAppToken.value.length > 0;
       const slackBotEntered = slackBotToken.value.length > 0;
       const slackPartial = needsSlack && slackAppEntered !== slackBotEntered;
       const slackEntered = needsSlack && slackAppEntered && slackBotEntered;
-      const missingRequiredInput =
-        (modelMissing && !modelEntered) || (slackMissing && !slackEntered);
+      const missingRequiredInput = slackMissing && !slackEntered;
       slackAppToken.setCustomValidity(slackPartial ? "Enter both Slack tokens." : "");
       slackBotToken.setCustomValidity(slackPartial ? "Enter both Slack tokens." : "");
       save.disabled =
@@ -236,9 +221,9 @@ export function createRuntimeCredentialsPanel({
         state.outcomeUnknown ||
         slackPartial ||
         missingRequiredInput ||
-        (!transportMissing && !modelEntered && !slackEntered);
+        (!transportMissing && !slackEntered);
     };
-    for (const input of [modelApiKey, slackAppToken, slackBotToken])
+    for (const input of [slackAppToken, slackBotToken])
       input.addEventListener("input", () => {
         state.saveError = null;
         state.saveMessage = "";
@@ -247,17 +232,6 @@ export function createRuntimeCredentialsPanel({
         updateControls();
       });
     const fields = [
-      element(
-        "div",
-        { className: "form-field" },
-        element("label", { for: modelApiKey.id }, "OpenAI API key"),
-        modelApiKey,
-        element(
-          "p",
-          { id: "runtime-model-api-key-hint", className: "hint" },
-          modelStored ? "Model credential is stored." : "Stored as an Agent-owned Secret.",
-        ),
-      ),
       ...(needsSlack
         ? [
             element(
@@ -302,7 +276,6 @@ export function createRuntimeCredentialsPanel({
       let payload = {};
       const slackApp = slackAppToken.value;
       const slackBot = slackBotToken.value;
-      if (modelApiKey.value.length > 0) payload.modelApiKey = modelApiKey.value;
       if (needsSlack && slackApp.length > 0 && slackBot.length > 0) {
         payload.slack = { appToken: slackApp, botToken: slackBot };
       }
@@ -334,7 +307,6 @@ export function createRuntimeCredentialsPanel({
         status.textContent = "";
         error.textContent = credentialError(cause, true);
       } finally {
-        modelApiKey.value = "";
         slackAppToken.value = "";
         slackBotToken.value = "";
         payload = undefined;
@@ -379,7 +351,7 @@ export function createRuntimeCredentialsPanel({
         element(
           "p",
           { className: "muted" },
-          "Stored means the controller found Agent-owned Secrets. It does not test model or Slack connectivity.",
+          "Stored means the controller found Agent-owned Secrets. It does not test Slack connectivity.",
         ),
         renderStatuses(),
         element(
