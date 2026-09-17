@@ -48,17 +48,36 @@ async function createResources(pool, agentCount = 1) {
       const agentId = `agt_${randomUUID()}`;
       const configurationId = `cfg_${randomUUID()}`;
       const identityId = `service-agent-${randomUUID()}`;
+      const secretId = `sec_${randomUUID()}`;
+      const harnessAuth = {
+        method: "api_key",
+        source: { kind: "secret", namespaceId, id: secretId },
+      };
       await client.query(
         `INSERT INTO occ.configurations (id, namespace_id, kind, generation, created_at)
          VALUES ($1, $2, 'agent', 1, clock_timestamp())`,
         [configurationId, namespaceId],
       );
       await client.query(
+        `INSERT INTO occ.secrets
+           (id, namespace_id, name, driver_id, backend_namespace_name, backend_name,
+            backend_key, backend_uid, created_at)
+         VALUES ($1, $2, $1, 'secret-queue', 'queue-recovery', $3, 'value', $4, clock_timestamp())`,
+        [secretId, namespaceId, `harness-${randomUUID()}`, randomUUID()],
+      );
+      await client.query(
         `INSERT INTO occ.agents
            (id, namespace_id, name, configuration_id, provider_id, execution_mode, service_principal_id,
-            created_at)
-         VALUES ($1, $2, $3, $4, NULL, 'embedded', $5, clock_timestamp())`,
-        [agentId, namespaceId, `Queue agent ${randomUUID()}`, configurationId, identityId],
+            harness_auth, created_at)
+         VALUES ($1, $2, $3, $4, NULL, 'embedded', $5, $6::jsonb, clock_timestamp())`,
+        [
+          agentId,
+          namespaceId,
+          `Queue agent ${randomUUID()}`,
+          configurationId,
+          identityId,
+          JSON.stringify(harnessAuth),
+        ],
       );
       await client.query(
         `INSERT INTO occ.iam_identities (id, namespace_id, agent_id, kind)
@@ -80,12 +99,20 @@ async function createResources(pool, agentCount = 1) {
 async function createQueueRevision(pool, namespaceId, agentId, revisionNumber = 1) {
   const revisionId = `rev_${randomUUID()}`;
   const configuration = await pool.query(
-    `SELECT configuration_id FROM occ.agents WHERE namespace_id = $1 AND id = $2`,
+    `SELECT agent.configuration_id, agent.harness_auth, secret.driver_id
+     FROM occ.agents agent
+     JOIN occ.secrets secret
+       ON secret.namespace_id = agent.namespace_id AND secret.id = agent.harness_auth_secret_id
+     WHERE agent.namespace_id = $1 AND agent.id = $2`,
     [namespaceId, agentId],
   );
   assert.equal(configuration.rowCount, 1, "queued revisions require an exact same-Namespace Agent");
   const admittedSpec = {
     draft_spec: {},
+    harness_auth: {
+      ...configuration.rows[0].harness_auth,
+      secretDriverId: configuration.rows[0].driver_id,
+    },
     configuration_id: configuration.rows[0].configuration_id,
     configuration_kind: "agent",
     configuration_generation: 1,

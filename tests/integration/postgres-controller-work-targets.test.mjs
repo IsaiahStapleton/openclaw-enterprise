@@ -28,6 +28,11 @@ test(
     const agentId = `agt_${randomUUID()}`;
     const configurationId = `cfg_${randomUUID()}`;
     const revisionId = `rev_${randomUUID()}`;
+    const secretId = `sec_${randomUUID()}`;
+    const harnessAuth = {
+      method: "api_key",
+      source: { kind: "secret", namespaceId, id: secretId },
+    };
     // Real owners and an admitted revision ensure failures reach the target CHECK,
     // rather than a foreign-key or snapshot constraint. All fixtures roll back.
     await client.query(
@@ -46,10 +51,23 @@ test(
       [configurationId, namespaceId],
     );
     await client.query(
+      `INSERT INTO occ.secrets
+         (id, namespace_id, name, driver_id, backend_namespace_name, backend_name,
+          backend_key, backend_uid, created_at)
+       VALUES ($1, $2, $1, 'secret-queue', 'queue-target', 'harness-key', 'value', $3, now())`,
+      [secretId, namespaceId, randomUUID()],
+    );
+    await client.query(
       `INSERT INTO occ.agents
-         (id, namespace_id, name, configuration_id, execution_mode, service_principal_id, created_at)
-       VALUES ($1, $2, $1, $3, 'embedded', $4, now())`,
-      [agentId, namespaceId, configurationId, `service-agent-${agentId}`],
+         (id, namespace_id, name, configuration_id, execution_mode, service_principal_id, harness_auth, created_at)
+       VALUES ($1, $2, $1, $3, 'embedded', $4, $5::jsonb, now())`,
+      [
+        agentId,
+        namespaceId,
+        configurationId,
+        `service-agent-${agentId}`,
+        JSON.stringify(harnessAuth),
+      ],
     );
     await client.query(
       `INSERT INTO occ.agent_revisions
@@ -64,6 +82,7 @@ test(
           configuration_kind: "agent",
           configuration_generation: 1,
           draft_spec: {},
+          harness_auth: { ...harnessAuth, secretDriverId: "secret-queue" },
           harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
           compute: {
             id: "compute-local-development",
