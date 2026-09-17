@@ -569,7 +569,7 @@ function probeOpenClawAuthentication() {
     const result = spawnSync("node", [
       "/app/openclaw.mjs", "models", "status", "--json", "--probe",
       "--probe-provider", "openai", "--probe-concurrency", "1",
-      "--probe-timeout", "15000", "--probe-max-tokens", "8",
+      "--probe-timeout", "15000", "--probe-max-tokens", "16",
     ], {
       cwd: directory,
       env: {

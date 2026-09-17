@@ -132,7 +132,8 @@ filesystem policy without approval grants. Tool events fail the probe. Login
 state remains in the bounded ephemeral home.
 
 Embedded OpenClaw consumes its native OpenAI key and runs a bounded native primary
-model probe with tools and fallback disabled before starting its gateway. A
+model probe with tools and fallback disabled before starting its gateway. Its
+16-token output limit meets the provider's minimum request size. A
 replacement first runs that probe in an isolated, unroutable Deployment without
 the serving gateway's credentials or persistent workspace. A failed preflight
 therefore prevents embedded cutover while preserving the predecessor. Successful
