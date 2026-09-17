@@ -101,10 +101,12 @@ run in the mandatory `postgres` lane.
 [ssh-compute-real.test.mjs](../../tests/integration/ssh-compute-real.test.mjs) belongs
 to the `ssh-host` lane, which is excluded from both the `ci` and `full` groups
 and is not a Full Integration dispatch option. No current workflow provisions
-its disposable Linux/systemd SSH host or invokes that lane. It proves real-host
-readiness, revision cutover, state isolation/persistence, and deletion, without a
-model call. Follow [SSH raw hosts](ssh.md#ssh-raw-hosts) for the disposable host,
-required environment settings, and direct test command.
+its disposable Linux/systemd SSH host or invokes that lane. The readiness-only
+selector proves real-host readiness, revision cutover, state isolation/persistence,
+and deletion without a model call. The optional `OCC_TEST_SSH_MODEL=1` selector adds
+[real provider execution and runtime credential proof](ssh.md#runtime-credential-model-proof).
+Follow [SSH raw hosts](ssh.md#ssh-raw-hosts) for the disposable host, required
+environment settings, and direct test command.
 
 Every current `tests/integration/*.test.mjs` file has a suite-map owner. Ownership
 alone does not mean a workflow runs it; keep this list aligned with both the

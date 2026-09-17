@@ -48,14 +48,17 @@ Agent, revision, ServicePrincipal, and immutable harness placement; IAM owns
 authorization. Logical Compute ownership does not require the Gateway and
 Harness to share a Kubernetes cluster or a physical resource writer.
 Bundled Kubernetes supports both embedded OpenClaw and dedicated Codex with
-[Agent harness authentication](../agents.md#harness-authentication). Bundled Docker
-and SSH reject these bindings and cannot admit authenticated Agent deployments.
+[managed Agent harness authentication](../agents.md#harness-authentication).
+Bundled SSH supports embedded OpenClaw with operator-managed `runtime`
+credentials; it rejects managed bindings and dedicated Codex. Bundled Docker
+rejects all harness authentication bindings.
 
 The worker passes `ComputeRevisionContext` to preparation and activation after
 reauthorizing the immutable revision. Its `harnessAuth` contains the admitted
 API-key source with its current authoritative OCC backend reference, or the exact
-managed-account credential and private Provider binding. These are delivery
-references, never credential bytes. Its separate `secretEnvironment` contains
+managed-account credential and private Provider binding. For operator-managed
+credentials, it contains only `{ method: "runtime" }`, with no delivery reference.
+None of these forms contains credential bytes. Its separate `secretEnvironment` contains
 Configuration bindings for gateway credentials. Drivers must preserve this
 separation and project model credentials only into the selected Harness workload;
 see the [credential delivery flow](../../flows/native-service-account-credential-delivery.md).

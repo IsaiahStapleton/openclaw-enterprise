@@ -91,7 +91,7 @@ revision schema. See [SandboxDriver](../drivers/sandbox.md).
 
 An authorized `POST /namespaces/:namespaceId/agents/:agentId/deploy` has no
 request body. It requires a `ready` Namespace, exact-Agent `deploy`, exact
-Configuration `read`, and the selected
+Configuration `read`, and, for managed credentials, the selected
 [harness source permissions](../agents.md#harness-authentication). A
 successful `202` means the immutable revision was admitted and its work queued;
 it does not mean the workload is ready. Later Configuration edits or changes to
@@ -101,8 +101,10 @@ snapshot freezes a Secret reference, not the value stored at that reference.
 The separate PostgreSQL controller worker prepares the exact Agent gateway and
 revision, activates its route, retires its predecessor, and sets
 `activeRevisionId`. Each Agent owns its gateway; sibling Agents never share
-one. The new binding contract currently requires Kubernetes Compute; Docker and
-SSH reject unsupported bindings before deployment. Kubernetes Compute starts either an Agent-owned gateway plus a dedicated
+one. Kubernetes Compute supports managed authentication; SSH Compute supports
+embedded OpenClaw with [operator-managed runtime credentials](../drivers/ssh-compute.md#credentials-and-supported-boundaries).
+Docker rejects authentication bindings. Each Driver rejects unsupported bindings
+and topologies before deployment. Kubernetes Compute starts either an Agent-owned gateway plus a dedicated
 Codex workload with its separate ServiceAccount, or one embedded combined
 gateway/Harness. Without a SandboxDriver, Compute owns the Codex Deployment;
 with one selected, that Driver provisions the dedicated Harness workload.
