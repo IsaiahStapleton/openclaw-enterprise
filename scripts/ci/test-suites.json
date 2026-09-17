@@ -200,6 +200,18 @@
         },
         {
           "path": "tests/conformance/postgres-transaction-commit.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-contracts.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-github.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-config.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-package.test.mjs"
         }
       ]
     },

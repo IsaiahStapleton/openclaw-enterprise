@@ -4,7 +4,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
-const activeApplications = ["controller"];
+const activeApplications = ["controller", "repository-credentials"];
 const activePackages = ["utils", "contracts", "occ", "iam", "audit"];
 const activeGoPackages = ["cmd/occ", "internal/occcli", "internal/occclient", "internal/occdev"];
 const activeSourceRoots = [
@@ -103,7 +103,9 @@ const sources = (
   await Promise.all(activeSourceRoots.map((path) => sourceFiles(join(repositoryRoot, path))))
 ).flat();
 for (const name of activeApplications) {
-  for (const entrypoint of ["index.ts", "server.mjs"]) {
+  const entrypoints =
+    name === "repository-credentials" ? ["check-config.ts"] : ["index.ts", "server.mjs"];
+  for (const entrypoint of entrypoints) {
     assert.ok(
       sources.includes(join(repositoryRoot, "apps", name, "src", entrypoint)),
       `The ${name} application must provide its ${entrypoint} entrypoint.`,

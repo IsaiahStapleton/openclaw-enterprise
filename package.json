@@ -46,7 +46,9 @@
     "docs:check-length": "node scripts/docs-site/word-count.mjs",
     "docs:check": "node scripts/docs-site/word-count.mjs && node --test tests/docs/*.test.mjs",
     "docs:install": "pnpm --dir scripts/docs-site install --frozen-lockfile --ignore-scripts",
-    "test:files": "node scripts/test-files.mjs"
+    "test:files": "node scripts/test-files.mjs",
+    "credentials:build": "tsc --build apps/repository-credentials/tsconfig.json --pretty false",
+    "credentials:check-config": "node apps/repository-credentials/dist/check-config.js --check-config"
   },
   "devDependencies": {
     "@types/node": "26.5.0",

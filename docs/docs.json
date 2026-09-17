@@ -33,7 +33,8 @@
                   "guides/deploy/workspace-routing",
                   "guides/deploy/local-operations",
                   "guides/deploy/service-keys",
-                  "guides/observability"
+                  "guides/observability",
+                  "guides/repository-credentials"
                 ]
               },
               {
@@ -87,7 +88,8 @@
                   "reference/settings/development",
                   "reference/settings/production",
                   "reference/settings/operations",
-                  "reference/settings/programmatic"
+                  "reference/settings/programmatic",
+                  "reference/repository-credentials"
                 ]
               },
               {
@@ -180,6 +182,7 @@
                 "pages": [
                   "testing/slack",
                   "testing/service-accounts",
+                  "testing/repository-credentials",
                   "testing/plugins",
                   "testing/openshell"
                 ]

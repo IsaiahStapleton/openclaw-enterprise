@@ -10,6 +10,7 @@ Start locally, install a production control plane, or look up supported behavior
 - [Deploy](guides/deploy.md): choose a deployment and follow its installation steps.
 - [Production handoff](guides/deploy/production-handoff.md): assign owners and verify a business workflow, alert response, and recovery readiness.
 - [Credential lifecycle](guides/deploy/credential-lifecycle.md): select the supported renewal or revocation path and verify its consumers.
+- [Repository credentials](guides/repository-credentials.md): build and validate protected repository credential configuration.
 - [OCC CLI](guides/cli.md): manage OCC resources through domain commands.
 - [Concepts](guides/concepts.md): understand Namespaces, Agents, revisions, and credentials.
 - [Observability](guides/observability.md): export logs and check Collector health.
@@ -42,6 +43,7 @@ revision startup and runtime configuration.
 ## Contribute
 
 - [Testing](testing/README.md): select a suite and prepare its environment.
+- [Repository credential testing](testing/repository-credentials.md): verify configuration, adapter contracts, and available common owners.
 - [Local preview](local-preview.md): render and validate documentation.
 
 ## Implementation history

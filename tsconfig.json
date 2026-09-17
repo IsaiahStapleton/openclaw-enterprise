@@ -1,12 +1,27 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/utils" },
-    { "path": "./packages/contracts" },
-    { "path": "./packages/occ" },
-    { "path": "./packages/iam" },
-    { "path": "./packages/audit" },
-    { "path": "./apps/controller" }
+    {
+      "path": "./packages/utils"
+    },
+    {
+      "path": "./packages/contracts"
+    },
+    {
+      "path": "./packages/occ"
+    },
+    {
+      "path": "./packages/iam"
+    },
+    {
+      "path": "./packages/audit"
+    },
+    {
+      "path": "./apps/controller"
+    },
+    {
+      "path": "./apps/repository-credentials"
+    }
   ],
   "exclude": ["legacy", "legacy/**", "node_modules", "**/node_modules", "**/dist"]
 }
