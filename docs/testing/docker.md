@@ -20,6 +20,9 @@ integration cases can also be run with:
 node --test tests/integration/dev-up.test.mjs
 ```
 
+On macOS, follow the Podman prerequisite in the
+[startup flow](../flows/docker-compose-development/startup.md).
+
 This verification does not prove an Agent model turn. Follow the exact cleanup
 command printed by `dev-up` to preserve the development database and credentials.
 

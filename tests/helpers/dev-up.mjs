@@ -120,6 +120,9 @@ if (log) {
       OCC_DOCKER_AGENT_IMAGE: process.env.OCC_DOCKER_AGENT_IMAGE || "",
       PODMAN_COMPOSE_PROVIDER: process.env.PODMAN_COMPOSE_PROVIDER || "",
       OCC_CONTAINER_ENGINE_SOCKET: process.env.OCC_CONTAINER_ENGINE_SOCKET || "",
+      OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR:
+        process.env.OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR || "",
+      CONTAINER_CONNECTION: process.env.CONTAINER_CONNECTION || "",
     },
   }) + "\\n");
 }
@@ -194,6 +197,39 @@ if (args[0] === "info") {
   }
   if (engine === "podman") process.stdout.write("unix:///run/user/501/podman/podman.sock\\n");
   else process.stdout.write("29.4.0\\n");
+  exit(0);
+}
+if (
+  engine === "podman" &&
+  args[0] === "system" &&
+  args[1] === "connection" &&
+  args[2] === "list" &&
+  ${JSON.stringify(options.macosPodmanMachine !== undefined)}
+) {
+  process.stdout.write(${JSON.stringify(
+    [
+      `podman-machine-default|${options.macosPodmanMachine === "rootful" ? "false" : "true"}|true|ssh://core@127.0.0.1:54321/run/user/501/podman/podman.sock`,
+      `podman-machine-default-root|${options.macosPodmanMachine === "rootful" ? "true" : "false"}|true|ssh://root@127.0.0.1:54321/run/podman/podman.sock`,
+    ].join("\n") + "\n",
+  )});
+  exit(0);
+}
+if (
+  engine === "podman" &&
+  args[0] === "machine" &&
+  args[1] === "inspect" &&
+  ${JSON.stringify(options.macosPodmanMachine !== undefined)}
+) {
+  process.stdout.write("true\\n");
+  exit(0);
+}
+if (
+  engine === "podman" &&
+  args[0] === "machine" &&
+  args[1] === "ssh" &&
+  ${JSON.stringify(options.macosPodmanMachine !== undefined)}
+) {
+  process.stdout.write("default via 192.168.127.1 dev eth0\\n");
   exit(0);
 }
 if (args[0] === "image" && args[1] === "inspect") {
@@ -288,6 +324,10 @@ exit(99, "unhandled " + engine + " compose command: " + command);
     await symlink("podman", join(bin, "docker"));
   }
   if (engine === "podman") {
+    await writeExecutable(
+      join(bin, "uname"),
+      `#!${nodeExecutable}\nprocess.stdout.write(${JSON.stringify(options.macosPodmanMachine === undefined ? "Linux" : "Darwin")} + "\\n");\n`,
+    );
     await symlink("podman", join(bin, "podman-compose"));
   }
   await writeExecutable(
@@ -347,6 +387,9 @@ process.exit(86);
     OCC_DOCKER_RUNTIME_IMAGE: "",
     OCC_DOCKER_GATEWAY_IMAGE: "",
     OCC_DOCKER_AGENT_IMAGE: "",
+    OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR: "",
+    CONTAINER_CONNECTION: options.containerConnection ?? "",
+    CONTAINER_HOST: options.containerHost ?? "",
     DEV_UP_ENGINE_LOG: engineLog,
     DEV_UP_OCC_LOG: occLog,
     DEV_UP_FAKE_SCENARIO: options.scenario ?? "success",

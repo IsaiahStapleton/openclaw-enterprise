@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-09-17
-last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
+last_updated_session: authoring-run/07150374-b371-440a-92f7-9d53dedb9512
 ---
 
 # Compose development flow
@@ -46,7 +46,7 @@ owns the operator procedure and destructive cleanup boundary.
 ```mermaid
 graph TD
   A["./bin/occ dev up"] --> Profile{"Compute profile"}
-  Profile -->|Docker| B["Preflight host tools and resolved Compose config"]
+  Profile -->|Docker| B["Preflight host tools, resolve Podman machine connection,<br/>and inspect Compose config"]
   Profile -->|Kubernetes| KPre["Pin local engine endpoint<br/>and reject existing resources"]
   KPre --> KConfig["Validate Compose and claim<br/>private state with snapshot"]
   KConfig --> KStart["Bootstrap OCC and create<br/>the owned k3d cluster"]
@@ -107,9 +107,11 @@ import, authenticated readiness, and cleanup through the recorded engine.
 - With `OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes`, startup should instead
   report Kubernetes Compute, a private kubeconfig, and the disposable k3d
   context; it does not mount the engine socket into the Kubernetes worker.
-- Docker Compute on Podman startup verification should show Podman as the selected engine, mount
-  only its reported API socket into the worker, and complete the same
-  authenticated Installation proof without a `docker` alias.
+- Docker Compute on Podman startup verification should show Podman as the
+  selected engine, mount only its reported API socket into the worker, and
+  complete the same authenticated Installation proof without a `docker` alias.
+  The [startup flow](docker-compose-development/startup.md) documents the macOS
+  prerequisite.
 - `<engine> network ls --filter label=org.openclaw.enterprise.compute-driver=docker`
   should show the owned network for a ready development Namespace.
 - Docker Compute Agent deployment must reject a missing or unsupported harness binding before
@@ -135,6 +137,8 @@ import, authenticated readiness, and cleanup through the recorded engine.
 ## Changelog
 
 - 2026-09-17 16:47: Merge current main's Podman dedicated recovery proof and checkout-local CLI requirement while preserving the Kubernetes lifecycle trace. (01a0ae15-3bad-7d92-92b7-f8be208cbb49 - b13b2f479f824891ab3c5bf71e6851d704dba458)
+
+- 2026-09-17 14:32: Resolve the effective macOS Podman machine connection, trust its private gateway only for rootful Compose, and retain bridge-CIDR admission for rootless Compose. (authoring-run/07150374-b371-440a-92f7-9d53dedb9512 - 309c5c38702d026e09df703d7e79c2c9eb2d570c)
 
 - 2026-09-17 06:42: Trace the accompanying Go CLI development lifecycle, Kubernetes startup and cleanup ownership, and retained Docker startup path. (01a0ae15-3bad-7d92-92b7-f8be208cbb49 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 

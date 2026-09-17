@@ -39,6 +39,7 @@ export interface PostgresDevelopmentConfig {
   readonly logger?: OccLogger;
   readonly logging?: LoggingConfiguration;
   readonly trustedDevelopmentBridgeCidr?: string;
+  readonly trustedDevelopmentForwarderCidr?: string;
   readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
   readonly gatewayApiKeyPath?: string;
 }
@@ -196,7 +197,14 @@ export async function composePostgresDevelopment(
         installationId,
         ...(config.trustedDevelopmentBridgeCidr === undefined
           ? {}
-          : { trustedCidrs: [config.trustedDevelopmentBridgeCidr] }),
+          : {
+              trustedCidrs: [
+                config.trustedDevelopmentBridgeCidr,
+                ...(config.trustedDevelopmentForwarderCidr === undefined
+                  ? []
+                  : [config.trustedDevelopmentForwarderCidr]),
+              ],
+            }),
       },
       maxBodyBytes: 64 * 1024,
       ...(workspaceFilesAccess === undefined ? {} : { workspaceFilesAccess }),
