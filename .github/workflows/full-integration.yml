@@ -43,11 +43,6 @@ jobs:
       run_all: ${{ steps.select.outputs.run_all }}
       selected_lane: ${{ steps.select.outputs.selected_lane }}
     steps:
-      - name: Require main source
-        if: github.ref != 'refs/heads/main'
-        run: |
-          echo "Full integration must run from main at the approved github.sha."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}

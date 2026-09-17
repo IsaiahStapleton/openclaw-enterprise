@@ -32,7 +32,8 @@ export function selectLane({ eventName, inputLane }) {
   throw new Error(`Unsupported full integration event: ${eventName}`);
 }
 
-export function assertMainRef(ref) {
+export function assertSourceRef(ref, lane) {
+  if (lane === "k3d-model" && /^refs\/heads\/.+/.test(ref ?? "")) return;
   if (ref !== "refs/heads/main") {
     throw new Error("Full integration must run from main at the approved github.sha.");
   }
@@ -134,7 +135,7 @@ export async function validateFullIntegrationPreflight({
   env = process.env,
   github = fetchGithubJson,
 } = {}) {
-  assertMainRef(env.GITHUB_REF);
+  assertSourceRef(env.GITHUB_REF, env.INPUT_LANE);
   const selected = selectLane({ eventName: env.GITHUB_EVENT_NAME, inputLane: env.INPUT_LANE });
   const required = requiredEnvironmentsForLane(selected);
   for (const environmentName of required) {
@@ -151,6 +152,16 @@ export async function validateFullIntegrationPreflight({
         })
       : undefined;
     validateEnvironmentPolicy(environmentName, environment, policies);
+    if (
+      env.GITHUB_REF !== "refs/heads/main" &&
+      (environment.deployment_branch_policy?.custom_branch_policies !== true ||
+        !branchPolicies(policies).some(
+          (branch) =>
+            branch.type === "branch" && branch.name === env.GITHUB_REF.slice("refs/heads/".length),
+        ))
+    ) {
+      throw new Error(`Protected environment ${environmentName} must allow this exact branch.`);
+    }
   }
   return { selectedLane: selected, runAll: selected === "all" };
 }

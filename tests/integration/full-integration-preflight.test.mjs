@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  assertMainRef,
+  assertSourceRef,
   requiredEnvironmentsForLane,
   selectLane,
   validateEnvironmentPolicy,
@@ -51,8 +51,8 @@ test("full integration preflight selects only manual workflow lanes", async () =
   );
   assert.throws(() => selectLane({ eventName: "push", inputLane: "all" }));
   assert.throws(() => selectLane({ eventName: "pull_request", inputLane: "provider-account" }));
-  assert.doesNotThrow(() => assertMainRef("refs/heads/main"));
-  assert.throws(() => assertMainRef("refs/pull/1/merge"), /must run from main/);
+  assert.doesNotThrow(() => assertSourceRef("refs/heads/main"));
+  assert.throws(() => assertSourceRef("refs/pull/1/merge"), /must run from main/);
   assert.deepEqual(requiredEnvironmentsForLane("provider-account"), [
     "integration-provider-account",
   ]);
@@ -194,4 +194,77 @@ test("preflight rejects non-main sources before fetching environment metadata", 
     /must run from main/,
   );
   assert.deepEqual(fetched, []);
+});
+
+test("manual branch model runs require an exact environment branch grant and independent review", async () => {
+  const env = {
+    GITHUB_REF: "refs/heads/test-model-cutover",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    INPUT_LANE: "k3d-model",
+    GITHUB_REPOSITORY: "openclaw/openclaw-enterprise",
+    GITHUB_TOKEN: "token",
+  };
+  const environment = protectedEnvironment({
+    deployment_branch_policy: { custom_branch_policies: true, protected_branches: false },
+  });
+  const policies = {
+    total_count: 2,
+    branch_policies: [
+      ...mainOnlyPolicies.branch_policies,
+      { name: "test-model-cutover", type: "branch" },
+    ],
+  };
+  const run = (selectedEnv = env, selectedEnvironment = environment, selectedPolicies = policies) =>
+    validateFullIntegrationPreflight({
+      env: selectedEnv,
+      github: async ({ path }) => {
+        if (path === "/environments/integration-model") return selectedEnvironment;
+        if (path === "/environments/integration-model/deployment-branch-policies")
+          return selectedPolicies;
+        throw new Error(`unexpected path ${path}`);
+      },
+    });
+
+  // A branch name alone never grants access to the environment's model credential.
+  await assert.rejects(() => run(env, environment, mainOnlyPolicies), /exact branch/);
+  for (const grant of [
+    { name: "test-*", type: "branch" },
+    { name: "test-model-cutover", type: "tag" },
+  ]) {
+    await assert.rejects(
+      () =>
+        run(env, environment, {
+          ...policies,
+          branch_policies: [...mainOnlyPolicies.branch_policies, grant],
+        }),
+      /exact branch/,
+    );
+  }
+  await assert.rejects(() => run(env, protectedEnvironment()), /exact branch/);
+  await assert.rejects(
+    () => run(env, { ...environment, protection_rules: [] }),
+    /has no required reviewers/,
+  );
+  await assert.rejects(
+    () =>
+      run(env, {
+        ...environment,
+        protection_rules: [{ type: "required_reviewers", prevent_self_review: false }],
+      }),
+    /does not prevent self-review/,
+  );
+  assert.deepEqual(await run(), { selectedLane: "k3d-model", runAll: false });
+
+  // The exception cannot select another credentialed lane, tags, or automatic PR events.
+  for (const INPUT_LANE of ["all", "provider-account", "docker-model", "openshell"]) {
+    await assert.rejects(() => run({ ...env, INPUT_LANE }), /must run from main/);
+  }
+  await assert.rejects(
+    () => run({ ...env, GITHUB_REF: "refs/tags/test-model-cutover" }),
+    /must run from main/,
+  );
+  await assert.rejects(
+    () => run({ ...env, GITHUB_EVENT_NAME: "pull_request" }),
+    /Unsupported full integration event/,
+  );
 });
