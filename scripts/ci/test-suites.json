@@ -303,6 +303,10 @@
         {
           "path": "tests/integration/postgres-worker-agent-revision.test.mjs",
           "expectedTests": [
+            "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
+            "Agent stop cleans a terminal candidate without an active revision",
+            "a deployment during active cleanup supersedes the remaining Agent stop effects",
+            "a deployment during candidate cleanup supersedes the remaining Agent stop effects",
             "maintenance retains its real lease across consecutive short predecessor retirements",
             "the revision worker activates admitted candidates, retires predecessors, and rejects revoked, malformed, and wrong-owner effects",
             "the revision worker rejects associated-account access revoked after admission before invoking Compute",

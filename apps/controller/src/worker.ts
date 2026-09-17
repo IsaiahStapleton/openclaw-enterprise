@@ -600,17 +600,10 @@ export class ControllerWorker {
       // Agent immediately before any provider effect so a later deployment wins.
       const resources = await this.state.read(async (view) => {
         const agent = await view.agents.findAgent(claim.namespaceId, claim.agentId!);
-        const revision =
-          agent?.activeRevisionId === undefined
-            ? undefined
-            : await view.revisions.findRevision(
-                claim.namespaceId,
-                claim.agentId!,
-                agent.activeRevisionId,
-              );
-        return { agent, revision };
+        const revisions = await view.revisions.listRevisions(claim.namespaceId, claim.agentId!);
+        return { agent, revisions };
       });
-      const { agent, revision } = resources;
+      const { agent, revisions } = resources;
       if (agent === undefined || agent.servicePrincipalId !== authorizedAgent.servicePrincipalId) {
         await this.finalizeAgentStop(claim, {
           outcome: "permanent",
@@ -626,20 +619,8 @@ export class ControllerWorker {
         });
         return;
       }
-      if (agent.activeRevisionId === undefined) {
-        await this.finalizeAgentStop(claim, {
-          outcome: "success",
-          code: "AGENT_ALREADY_STOPPED",
-          agent,
-        });
-        return;
-      }
-      if (
-        revision === undefined ||
-        revision.agentId !== agent.id ||
-        revision.namespaceId !== agent.namespaceId ||
-        revision.servicePrincipalId !== agent.servicePrincipalId
-      ) {
+      const active = revisions.find((revision) => revision.id === agent.activeRevisionId);
+      if (agent.activeRevisionId !== undefined && active === undefined) {
         await this.finalizeAgentStop(claim, {
           outcome: "permanent",
           code: "INVALID_ACTIVE_REVISION",
@@ -647,20 +628,67 @@ export class ControllerWorker {
         });
         return;
       }
-      if (
-        revision.compute.id !== this.compute.id ||
-        revision.compute.implementation !== this.compute.implementation
-      ) {
+      const ownedByCompute = (revision: Readonly<AgentRevision>) =>
+        revision.compute.id === this.compute.id &&
+        revision.compute.implementation === this.compute.implementation;
+      if (active !== undefined && !ownedByCompute(active)) {
         await this.finalizeAgentStop(claim, {
           outcome: "permanent",
           code: "COMPUTE_DRIVER_MISMATCH",
           agent,
-          revision,
+          revision: active,
         });
         return;
       }
-      await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
-      result = { outcome: "success", code: "AGENT_STOPPED", agent, revision };
+      // A terminal candidate or a predecessor with failed retirement can still
+      // own resources. Capture this Driver's history once; never include a later
+      // admission, and stop the serving revision before any candidate cleanup.
+      const cleanup = [
+        ...(active === undefined ? [] : [active]),
+        ...revisions.filter((revision) => revision.id !== active?.id && ownedByCompute(revision)),
+      ];
+      if (
+        cleanup.some(
+          (revision) =>
+            revision.agentId !== agent.id ||
+            revision.namespaceId !== agent.namespaceId ||
+            revision.servicePrincipalId !== agent.servicePrincipalId,
+        )
+      ) {
+        await this.finalizeAgentStop(claim, {
+          outcome: "permanent",
+          code: "INVALID_REVISION_OWNER",
+          agent,
+        });
+        return;
+      }
+      for (const revision of cleanup) {
+        const current = await this.state.read((view) =>
+          view.agents.findAgent(claim.namespaceId, claim.agentId!),
+        );
+        if (current === undefined || current.servicePrincipalId !== agent.servicePrincipalId) {
+          await this.finalizeAgentStop(claim, {
+            outcome: "permanent",
+            code: "INVALID_AGENT_OWNER",
+          });
+          return;
+        }
+        if (current.desiredRuntimeState !== "stopped") {
+          await this.finalizeAgentStop(claim, {
+            outcome: "success",
+            code: "STOP_SUPERSEDED",
+            agent: current,
+          });
+          return;
+        }
+        await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
+      }
+      result = {
+        outcome: "success",
+        code: active === undefined ? "AGENT_ALREADY_STOPPED" : "AGENT_STOPPED",
+        agent,
+        ...(active === undefined ? {} : { revision: active }),
+      };
     } catch (error) {
       if (error instanceof WorkClaimLostError) throw error;
       result = { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
@@ -697,12 +725,15 @@ export class ControllerWorker {
   ): Promise<void> {
     await this.state.transactWithQueue(async (unit, queue) => {
       if ((await queue.heartbeat(claim)) === undefined) throw new WorkClaimLostError();
-      const terminalFailure =
-        result.outcome === "permanent" ||
-        (result.outcome === "retry" && claim.attemptCount >= this.maxAttempts);
-      if (result.outcome === "success" && result.revision !== undefined) {
+      if (result.outcome === "success" && result.agent !== undefined) {
         const agent = await unit.agents.lockAgent(claim.namespaceId, claim.agentId!);
-        if (agent?.activeRevisionId === result.revision.id) {
+        if (agent === undefined || agent.servicePrincipalId !== result.agent.servicePrincipalId) {
+          result = { outcome: "permanent", code: "INVALID_AGENT_OWNER" };
+        } else if (agent.desiredRuntimeState !== "stopped") {
+          // A later deployment may retain the old active pointer while preparing.
+          // Never clear it merely because the final exact stop call completed.
+          result = { ...result, code: "STOP_SUPERSEDED" };
+        } else if (result.revision !== undefined && agent.activeRevisionId === result.revision.id) {
           await unit.agents.compareAndClearActiveRevision(
             claim.namespaceId,
             agent.id,
@@ -710,6 +741,9 @@ export class ControllerWorker {
           );
         }
       }
+      const terminalFailure =
+        result.outcome === "permanent" ||
+        (result.outcome === "retry" && claim.attemptCount >= this.maxAttempts);
       if (result.decision !== undefined) await this.appendAgentStopDenial(unit, claim, result);
       else if (result.outcome === "success" || terminalFailure)
         await this.appendAgentStopOutcome(unit, claim, result);

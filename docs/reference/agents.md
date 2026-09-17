@@ -180,7 +180,8 @@ Each Agent has one stable service principal and explicitly selects embedded Open
 An authorized bodyless `POST /namespaces/:namespaceId/agents/:agentId/stop`
 sets desired state to `stopped`. The worker removes execution and routing before
 clearing `activeRevisionId`; revision history, credentials, and persistent state
-remain. Repeating stop is safe. A later deployment admits a new revision and sets
+remain. Cleanup includes failed candidate resources and interrupted predecessor
+retirement owned by the current Compute. Repeating stop is safe. A later deployment admits a new revision and sets
 desired state back to `running`; stop does not restart an old revision directly.
 
 ## Editable configuration

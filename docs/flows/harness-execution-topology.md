@@ -111,7 +111,7 @@ The predecessor's Kubernetes Service selector remains intact while
 bounded native authentication/model probe before its app-server becomes ready.
 For an embedded replacement, an isolated temporary Deployment first verifies the
 candidate's primary model access without mounting the serving gateway's workspace
-or receiving gateway credentials. Authentication failure leaves the predecessor
+or receiving gateway credentials. Preflight failure leaves the predecessor
 serving; readiness polling does not repeat the model request. See the
 [authentication flow](native-service-account-credential-delivery.md#5-authenticate-before-readiness-and-activation).
 The worker then commits the database
@@ -122,7 +122,10 @@ is ready. If activation, readiness, predecessor retirement, or audit completion
 fails, the worker requeues the revision with `REVISION_FINALIZATION_INCOMPLETE`;
 recovery retries activation and retirement for the already-active revision.
 This path does not guarantee the previous route stays serving through every
-failed cutover. Lost claims and foreign/stale workloads fail closed.
+failed cutover. The replacement gateway repeats its authentication probe against
+its own projected Secret; a failure at that point holds it unready until restart
+or a new deployment, including transient provider failures. Worker retries do not
+restart an unchanged gateway Pod. Lost claims and foreign/stale workloads fail closed.
 
 Kubernetes gateways in both modes mount their own persistent SQLite and media
 directories. Embedded gateways also retain their attested default workspace on

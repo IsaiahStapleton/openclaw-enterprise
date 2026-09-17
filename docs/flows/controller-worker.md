@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-08
-last_updated_session: codex/01a07d92-d866-7731-afe5-abab67d8966c
+updated: 2026-09-17
+last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 ---
 
 # Controller Worker Flow
@@ -143,8 +143,8 @@ superseded; an already-active revision enters finalization or maintenance rather
 than changing the active pointer again.
 
 Agent-stop work rechecks current exact-Agent `operate`. Superseded desired state
-completes without shutdown; a stopped Agent with no active revision completes
-idempotently.
+completes without shutdown. An absent active pointer does not prove candidates
+have no runtime resources, so stop still checks the captured revision history.
 
 ### 5. Invoke Compute while renewing the live claim
 
@@ -158,7 +158,15 @@ immutable snapshot. The worker validates the returned observation's owner and
 shape before treating it as ready. A pending observation defers convergence;
 an invalid observation fails permanently.
 
-Agent-stop dispatch calls `stopRevision` for the observed exact active revision.
+Agent-stop dispatch captures the Agent's revisions owned by the current Compute
+and validates their exact owner. It calls `stopRevision` for the active revision
+first, then the remaining captured revisions, including terminal candidates and
+predecessors whose retirement failed. Historical revisions pinned to another
+Compute are excluded; an active revision pinned elsewhere still fails closed.
+Before each shutdown, the worker rechecks the Agent owner and stopped desired
+state. Later admissions are not added to this cleanup set. Partial failure retries
+the idempotent shutdowns without clearing the active pointer or deleting retained
+workspace data.
 Revision preparation and maintenance recheck `desiredRuntimeState`; a candidate
 that overlaps stop is shut down instead of activated.
 
@@ -202,8 +210,10 @@ transaction. This deliberately does not claim that infrastructure effects and
 database state are one atomic transaction. Interrupted finalization is retried;
 the already-active branch finishes activation and retirement safely.
 
-Stop finalization rechecks the live claim and clears `activeRevisionId` only when
-it still equals the revision Compute stopped. It then appends lifecycle-stop
+Stop finalization rechecks the live claim, Agent owner, and stopped desired state.
+After all captured cleanup succeeds, it clears `activeRevisionId` only when
+it still equals the revision Compute stopped. A later deployment supersedes the
+stop even if it retains that active pointer while preparing. It appends lifecycle-stop
 evidence and completes the same work item. Revision rows and persistent runtime
 state are not deleted.
 
@@ -272,6 +282,8 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 01:22: Include failed candidates and interrupted retirement in exact Agent-stop cleanup, preserving later deployments and retained state. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 73c2ef49)
 
 - 2026-09-08 07:53: Include optional development activation and retry in the post-commit handoff. (01a07d92-d866-7731-afe5-abab67d8966c - 4d83087229961f3665b923d2581c0b71b988cc9c)
 

@@ -101,7 +101,7 @@ Embedded OpenClaw performs a bounded native model probe before gateway startup.
 Replacing a serving embedded revision first probes the candidate in a separate,
 unroutable Deployment with temporary state and its exact model Secret projection.
 The serving gateway and its persistent workspace remain untouched until that
-probe succeeds. Probe failure leaves the candidate unready; readiness polls do
+preflight succeeds. Probe failure leaves the candidate unready; readiness polls do
 not retry model calls. An explicit restart or new deployment starts a new attempt.
 
 Both probes check the configured primary model. OpenClaw disables tools and
@@ -114,7 +114,10 @@ A failed Codex probe also holds the process unready until restart.
 Probes incur provider requests and may incur model usage charges. An embedded
 replacement probes both before cutover and during gateway startup. They do not
 verify access to every other configured model or guarantee continued validity
-after upstream revocation. Embedded probe transport configuration must use
+after upstream revocation. If the second probe fails, including on a provider
+timeout or rate limit, the already-active replacement holds unready until restart
+or a new deployment. The existing `Recreate` cutover cannot restore the removed
+predecessor. Embedded probe transport configuration must use
 literal metadata rather than additional environment or Secret references. The
 canonical `OPENAI_API_KEY` authentication alias remains supported, and unrelated
 gateway/channel configuration bindings remain separate.

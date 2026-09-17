@@ -7,6 +7,7 @@ import {
   cleanupProviderFixtures,
   createAccessTokenServiceAccount,
   createProviderWorkerDrivers,
+  createProviderController,
   databaseUrl,
   ensureInstallation,
   poolWithOneProviderBindingReadFault,
@@ -55,6 +56,7 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
   };
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = createDevelopmentComputeDriver();
+  const controller = createProviderController({ installation, state }, { providers: [] });
   const secretDriver = createProviderWorkerDrivers(compute, []).secretDriver;
   const secretRoleId = `role-${randomUUID()}`;
   await observerPool.query(
@@ -203,27 +205,15 @@ async function setup(context, { leaseDurationMs = 30_000 } = {}) {
   }
 
   async function requestStop(owner) {
-    const operationId = randomUUID();
-    const idempotencyKey = `agent:${owner.id}:reconcile:stopped:${operationId}`;
-    await state.transactWithQueue(async (unit, queue) => {
-      const current = await unit.agents.lockAgent(namespace.id, owner.id);
-      assert.ok(current);
-      await unit.agents.transitionAgentDesiredRuntimeState(
-        namespace.id,
-        owner.id,
-        current.desiredRuntimeState,
-        "stopped",
-      );
-      await queue.enqueue({
-        idempotencyKey,
-        namespaceId: namespace.id,
-        agentId: owner.id,
-        agentTarget: "stopped",
-        actorId: actor.id,
-        availableAt: new Date(0),
-      });
-    });
-    return { id: owner.id, idempotencyKey };
+    await controller.stopAgent(actor.id, namespace.id, owner.id);
+    const work = await observerPool.query(
+      `SELECT idempotency_key FROM occ.controller_work
+       WHERE namespace_id = $1 AND agent_id = $2 AND agent_target = 'stopped'
+       ORDER BY created_at DESC LIMIT 1`,
+      [namespace.id, owner.id],
+    );
+    assert.equal(work.rowCount, 1, "OCC.stopAgent must durably enqueue its authorized stop");
+    return { id: owner.id, idempotencyKey: work.rows[0].idempotency_key };
   }
 
   function start(
@@ -284,21 +274,43 @@ test(
     const siblingRevision = await fixture.revision(sibling, 1);
     const stoppedRevisions = [];
     let failStopOnce = true;
-    await fixture.start({
-      ...fixture.compute,
-      async stopRevision(revision) {
-        if (failStopOnce) {
-          failStopOnce = false;
-          throw new Error("transient Compute stop failure");
-        }
-        stoppedRevisions.push(revision.id);
+    let failedCandidate;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          const observation = await fixture.compute.prepareRevision(revision);
+          return revision.revision === 2 ? { ...observation, ready: false } : observation;
+        },
+        async stopRevision(revision) {
+          const current = await fixture.state.read((view) =>
+            view.agents.findAgent(fixture.namespace.id, owner.id),
+          );
+          if (stoppedRevisions.length < 3)
+            assert.equal(
+              current.activeRevisionId,
+              targetRevision.id,
+              "the serving pointer remains until candidate cleanup succeeds",
+            );
+          if (revision.id === failedCandidate.id && failStopOnce) {
+            failStopOnce = false;
+            throw new Error("transient Compute stop failure");
+          }
+          stoppedRevisions.push(revision.id);
+        },
       },
-    });
+      () => {},
+      50,
+    );
     await Promise.all([
       fixture.work(targetRevision, "succeeded"),
       fixture.work(siblingRevision, "succeeded"),
     ]);
 
+    // The replacement owns resources but never becomes ready. Terminal queue
+    // failure must not make it invisible to the real Agent-stop workflow.
+    failedCandidate = await fixture.revision(owner, 2);
+    await fixture.work(failedCandidate, "failed_permanent");
     const firstStop = await fixture.requestStop(owner);
     const completedStop = await fixture.work(firstStop, "succeeded");
     assert.equal(completedStop.attempt_count, 2);
@@ -313,11 +325,17 @@ test(
     assert.equal(stopped.activeRevisionId, undefined);
     assert.equal(unaffected.activeRevisionId, siblingRevision.id);
     assert.equal(retainedRevision.id, targetRevision.id);
-    assert.deepEqual(stoppedRevisions, [targetRevision.id]);
+    assert.deepEqual(stoppedRevisions, [targetRevision.id, targetRevision.id, failedCandidate.id]);
 
     const repeatedStop = await fixture.requestStop(owner);
     await fixture.work(repeatedStop, "succeeded");
-    assert.deepEqual(stoppedRevisions, [targetRevision.id]);
+    assert.deepEqual(stoppedRevisions, [
+      targetRevision.id,
+      targetRevision.id,
+      failedCandidate.id,
+      targetRevision.id,
+      failedCandidate.id,
+    ]);
     const audit = await fixture.observerPool.query(
       `SELECT action, resource_id, details->>'reasonCode' AS reason_code
        FROM occ.audit_events
@@ -422,6 +440,113 @@ test(
 );
 
 test(
+  "Agent stop cleans a terminal candidate without an active revision",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("stop-initial-failure");
+    const candidate = await fixture.revision(owner, 1);
+    const stopped = [];
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          return { ...(await fixture.compute.prepareRevision(revision)), ready: false };
+        },
+        async stopRevision(revision) {
+          stopped.push(revision.id);
+        },
+      },
+      () => {},
+      50,
+    );
+    await fixture.work(candidate, "failed_permanent");
+    // Historical records from another selected Compute are not cleanup inputs
+    // for this worker, even when the Agent has no active pointer.
+    await fixture.state.transact((unit) =>
+      unit.revisions.createRevision({
+        ...candidate,
+        id: `rev_${randomUUID()}`,
+        revision: 2,
+        compute: { id: "retired-compute", implementation: "retired-compute" },
+      }),
+    );
+    const stop = await fixture.requestStop(owner);
+    await fixture.work(stop, "succeeded");
+    assert.deepEqual(stopped, [candidate.id]);
+    const current = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(current.desiredRuntimeState, "stopped");
+    assert.equal(current.activeRevisionId, undefined);
+  },
+);
+
+for (const admissionDuring of ["active", "candidate"]) {
+  test(
+    `a deployment during ${admissionDuring} cleanup supersedes the remaining Agent stop effects`,
+    requiresPostgres,
+    async (context) => {
+      const fixture = await setup(context);
+      const owner = await fixture.agent(`stop-race-${admissionDuring}`);
+      const active = await fixture.revision(owner, 1);
+      const stopped = [];
+      let candidate;
+      let newer;
+      let activeWhenNewerPrepared;
+      await fixture.start(
+        {
+          ...fixture.compute,
+          async prepareRevision(revision) {
+            if (revision.revision === 3) {
+              const current = await fixture.state.read((view) =>
+                view.agents.findAgent(fixture.namespace.id, owner.id),
+              );
+              activeWhenNewerPrepared = current.activeRevisionId;
+            }
+            return {
+              ...(await fixture.compute.prepareRevision(revision)),
+              ready: revision.revision !== 2,
+            };
+          },
+          async stopRevision(revision) {
+            stopped.push(revision.id);
+            if (revision.id === (admissionDuring === "active" ? active.id : candidate.id)) {
+              // Admission changes desired state during an exact cleanup call. The
+              // old pointer must survive both the next-effect and final-CAS fences.
+              newer = await fixture.revision(owner, 3);
+            }
+          },
+        },
+        () => {},
+        50,
+      );
+      await fixture.work(active, "succeeded");
+      candidate = await fixture.revision(owner, 2);
+      await fixture.work(candidate, "failed_permanent");
+      const stop = await fixture.requestStop(owner);
+      await fixture.work(stop, "succeeded");
+      assert.ok(newer);
+      await fixture.work(newer, "succeeded");
+      assert.deepEqual(
+        stopped,
+        admissionDuring === "active" ? [active.id] : [active.id, candidate.id],
+      );
+      assert.equal(
+        activeWhenNewerPrepared,
+        active.id,
+        "stale stop must not clear the serving pointer after a later admission",
+      );
+      const current = await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+      );
+      assert.equal(current.desiredRuntimeState, "running");
+      assert.equal(current.activeRevisionId, newer.id);
+    },
+  );
+}
+
+test(
   "Agent stop reauthorizes the recorded actor before Compute mutation",
   requiresPostgres,
   async (context) => {
@@ -429,22 +554,26 @@ test(
     const owner = await fixture.agent("stop-reauthorization");
     const revision = await fixture.revision(owner, 1);
     const stoppedRevisions = [];
-    await fixture.start({
+    const compute = {
       ...fixture.compute,
       async stopRevision(candidate) {
         stoppedRevisions.push(candidate.id);
       },
-    });
+    };
+    await fixture.start(compute);
     await fixture.work(revision, "succeeded");
 
-    // Permission revoked after deployment must prevent asynchronous stop effects.
+    await fixture.stop();
+    const stop = await fixture.requestStop(owner);
+    // Admission was authorized; revoke before restarting the worker to prove
+    // dispatch independently rechecks the recorded actor's permission.
     await fixture.observerPool.query(
       `INSERT INTO occ.iam_restrictions
          (id, namespace_id, action, resource_kind, resource_id, effect)
        VALUES ($1, $2, 'operate', 'agent', $3, 'deny')`,
       [`restriction-${randomUUID()}`, fixture.namespace.id, owner.id],
     );
-    const stop = await fixture.requestStop(owner);
+    await fixture.start(compute, () => {}, undefined, undefined, fixture.createWorkerPool());
     await fixture.work(stop, "failed_permanent");
 
     assert.deepEqual(stoppedRevisions, []);
@@ -569,34 +698,19 @@ test(
       preparationStarted ? true : undefined,
     );
 
-    const stopKey = `agent:${owner.id}:reconcile:stopped:${randomUUID()}`;
-    await fixture.state.transactWithQueue(async (unit, queue) => {
-      const changed = await unit.agents.transitionAgentDesiredRuntimeState(
-        fixture.namespace.id,
-        owner.id,
-        "running",
-        "stopped",
-      );
-      assert.ok(changed);
-      await queue.enqueue({
-        idempotencyKey: stopKey,
-        namespaceId: fixture.namespace.id,
-        agentId: owner.id,
-        agentTarget: "stopped",
-        actorId: fixture.actor.id,
-        availableAt: new Date(0),
-      });
-    });
+    const stop = await fixture.requestStop(owner);
     releasePreparation();
     await fixture.work(candidate, "succeeded");
-    await fixture.work({ id: owner.id, idempotencyKey: stopKey }, "succeeded");
+    await fixture.work(stop, "succeeded");
 
     const stopped = await fixture.state.read((view) =>
       view.agents.findAgent(fixture.namespace.id, owner.id),
     );
     assert.equal(stopped.activeRevisionId, undefined);
     assert.equal(stopped.desiredRuntimeState, "stopped");
-    assert.deepEqual(stoppedRevisions, [candidate.id]);
+    // Both the interrupted revision and Agent-stop owner perform exact,
+    // idempotent cleanup; neither may activate the candidate.
+    assert.deepEqual(stoppedRevisions, [candidate.id, candidate.id]);
     const activation = await fixture.observerPool.query(
       `SELECT id FROM occ.audit_events
        WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.activate'
@@ -673,7 +787,14 @@ test(
     assert.equal(retainedPredecessor.id, predecessor.id);
     assert.equal(retainedReplacement.id, replacement.id);
     assert.deepEqual(retiredRevisions, [predecessor.id, predecessor.id]);
-    assert.deepEqual(stoppedRevisions, [replacement.id, replacement.id, replacement.id]);
+    // Agent stop also covers the older same-Compute predecessor whose
+    // retirement failed after publication, with serving revision cleanup first.
+    assert.deepEqual(stoppedRevisions, [
+      replacement.id,
+      replacement.id,
+      predecessor.id,
+      replacement.id,
+    ]);
   },
 );
 

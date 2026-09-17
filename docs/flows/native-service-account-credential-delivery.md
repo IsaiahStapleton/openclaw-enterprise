@@ -134,10 +134,13 @@ state remains in the bounded ephemeral home.
 Embedded OpenClaw consumes its native OpenAI key and runs a bounded native primary
 model probe with tools and fallback disabled before starting its gateway. A
 replacement first runs that probe in an isolated, unroutable Deployment without
-the serving gateway's credentials or persistent workspace. Failed authentication
+the serving gateway's credentials or persistent workspace. A failed preflight
 therefore prevents embedded cutover while preserving the predecessor. Successful
-cutover starts the actual gateway, which probes again. Exact revision ownership
-governs temporary probe cleanup.
+cutover starts the actual gateway, which probes again because the referenced
+Secret's bytes can change between processes. Failure of that second probe holds
+the already-active replacement unready until restart or a new deployment; it
+cannot restore the predecessor removed by the existing `Recreate` cutover.
+Exact revision ownership governs temporary probe cleanup.
 
 Both runtimes capture native output and hold failed probes unready with a fixed
 message. Readiness polling does not repeat provider calls; restart or deployment
