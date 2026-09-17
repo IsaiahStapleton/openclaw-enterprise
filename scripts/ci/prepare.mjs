@@ -10,6 +10,10 @@ import { fileURLToPath } from "node:url";
 import { cleanupResourceIds } from "./cleanup.mjs";
 import { prepareGatewayRouting } from "./routing.mjs";
 import { prepareLogging } from "./logging.mjs";
+import {
+  prepareRepositoryCredentials,
+  prepareRepositoryCredentialsFile,
+} from "./repository-credentials.mjs";
 import { prepareCodexSeccompProfile } from "./codex-seccomp.mjs";
 import {
   prepareOpenShell,
@@ -1031,6 +1035,26 @@ async function prepareLane({ lane, statePath }) {
         ).env,
       );
       break;
+    case "repository-credentials-container":
+      Object.assign(
+        env,
+        await prepareRepositoryCredentials({
+          repositoryRoot,
+          imagePrefix: `localhost/${ownedName("openclaw-ci-image", state.prefix, { maxLength: 48 })}`,
+          receiptPath: join(dirname(resolvedStatePath), "repository-credentials-images.json"),
+          execFile,
+          registerImage: async (tag) => {
+            const resource = addResource(state, "image-tag", { name: tag });
+            await writeState(resolvedStatePath, state);
+            return resource;
+          },
+          markImageReady: async (resource, imageId) => {
+            resource.imageId = imageId;
+            await markResourceReady(resolvedStatePath, state, resource);
+          },
+        }),
+      );
+      break;
     case "k3d-fixture-configuration": {
       await ensurePostgresServer(resolvedStatePath, state);
       const cluster = await ensureK3dCluster(resolvedStatePath, state);
@@ -1143,6 +1167,17 @@ async function prepareFile({ lane, file, statePath }) {
   const effectiveState = state ?? baseState(name, resolvedStatePath);
   const env = baseEnv(resolvedStatePath, effectiveState);
   const resourceIds = [];
+
+  if (name === "repository-credentials-container") {
+    if (state?.lane !== name)
+      throw new Error("Repository credential images require their own lane state.");
+    applyLaneEnv(name, env);
+    const prepared = await prepareRepositoryCredentialsFile({
+      clientImage: env.REPOSITORY_CREDENTIALS_NODE_IMAGE,
+      execFile,
+    });
+    return { env: { ...env, ...prepared.env }, cleanup: prepared.cleanup };
+  }
 
   if (prepare.postgres) {
     const dbKind = prepare.k3d ? "k8s" : "ci";

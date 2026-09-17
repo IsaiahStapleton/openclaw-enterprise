@@ -85,6 +85,10 @@ jobs:
             title: Logging Collector
             profile: images
             timeout: 30
+          - lane: repository-credentials-container
+            title: Repository Credentials
+            profile: images
+            timeout: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -96,6 +100,14 @@ jobs:
           profile: ${{ matrix.profile }}
           node-version: ${{ env.NODE_VERSION }}
           artifact-prefix: full-results
+      - name: Upload repository credential image identities
+        if: always() && matrix.lane == 'repository-credentials-container'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: full-repository-credentials-images
+          path: ${{ runner.temp }}/state/repository-credentials-images.json
+          if-no-files-found: error
+          retention-days: 7
 
   docker-model:
     name: Docker Model Runtime
@@ -387,7 +399,7 @@ jobs:
           const lane = process.env.SELECTED_LANE || process.env.LANE;
           const out = { preflight: needs.preflight };
           if (lane === "all") {
-            for (const name of ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector"]) {
+            for (const name of ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector", "repository-credentials-container"]) {
               out[name] = { result: needs["pr-safe-same-sha"]?.result ?? "missing" };
             }
           } else if (lane === "logging-collector") {

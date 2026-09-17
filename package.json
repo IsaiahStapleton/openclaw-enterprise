@@ -48,7 +48,10 @@
     "docs:install": "pnpm --dir scripts/docs-site install --frozen-lockfile --ignore-scripts",
     "test:files": "node scripts/test-files.mjs",
     "credentials:build": "tsc --build apps/repository-credentials/tsconfig.json --pretty false",
-    "credentials:check-config": "node apps/repository-credentials/dist/check-config.js --check-config"
+    "credentials:check-config": "node apps/repository-credentials/dist/check-config.js --check-config",
+    "credentials:start": "node apps/repository-credentials/dist/main.js",
+    "credentials:operator": "node apps/repository-credentials/dist/client/operator.js",
+    "credentials:client": "node apps/repository-credentials/dist/client/launch.js"
   },
   "devDependencies": {
     "@types/node": "26.5.0",

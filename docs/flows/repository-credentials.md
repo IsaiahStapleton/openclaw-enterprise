@@ -1,45 +1,195 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-17"
-last_updated_session: "extraction-preparation"
+last_updated_session: "authoring-run/d1f4d5a2-f493-43f0-8b8f-5471e61bb690"
 ---
 
-# Repository credential lifecycle flow
+# Repository credential service flow
 
 ## Overview
 
-The callable service binds an immutable grant to one ephemeral session and owns credential use and cleanup.
+A trusted operator admits a bounded session over a private Unix socket. The
+client uses its gateway bearer to send Git or selected GitHub API requests over
+HTTPS. One process owns credential acquisition, use and cleanup. This flow ends
+at upstream response delivery or categorized failure, and then local session
+closure with separately tracked cleanup. It describes source composition;
+container and live-provider qualification have separate evidence.
 
 ## Entry Points
 
-`apps/repository-credentials/src/service.ts:createCredentialService` composes admission, reserve, execute, status, close, and shutdown operations.
+- `apps/repository-credentials/src/main.ts:main` loads trusted configuration and composes the service and listeners.
+- `apps/repository-credentials/src/client/operator.ts:callControl` carries operator admission/status/close requests over the private Unix socket.
+- `apps/repository-credentials/src/server.ts:startListeners` accepts HTTPS client traffic after protected startup succeeds.
+
+The service has one configured repository and approved profiles. The operator
+owns the control socket directory and protected files. Clients receive only
+private session files and public connection/trust configuration.
 
 ## Flow
 
 ```mermaid
 graph TD
-  Open["Admit immutable grant"] --> Reserve["Reserve bounded exchange"]
-  Reserve --> Acquire["Reuse or acquire and capture"]
-  Acquire --> Dispatch["Check original use at dispatch"]
-  Dispatch --> Settle["Join I/O and release use"]
-  Close["Close local admission"] --> Cleanup["Settle actions and retire captures"]
-  Cleanup --> Finalize["Finalize auxiliary authority"]
+  Operator["Operator opens session"] --> Admission["Service freezes grant<br/>and creates bearer"]
+  Admission --> Files["CLI publishes private<br/>client directory"]
+  Files --> Client["Git or pinned gh<br/>calls gateway"]
+  Client --> Route["Validate auth, route<br/>and request capacity"]
+  Route -->|Denied| Denial["Bounded local failure"]
+  Route -->|Admitted| Credential["Reuse valid credential<br/>or acquire and capture"]
+  Credential -->|Uncertain issue| Blocked["Block minting<br/>retain cleanup obligation"]
+  Credential -->|Usable| Gate["Synchronous dispatch<br/>rechecks lease and deadline"]
+  Gate --> Upstream["Bounded upstream exchange"]
+  Upstream --> Result["Response or uncertainty<br/>without write replay"]
+  Operator -->|Close| Closed["Deny local use<br/>cancel exchanges"]
+  Closed --> Cleanup["Join original settlement<br/>retire and finalize"]
+  Cleanup -->|Resolved| Disposed["Session disposed"]
+  Cleanup -->|Unresolved| Pending["Bounded pending records"]
 ```
 
 ## Execution Trace
 
-### 1. Admit, execute, and close
+### 1. Load protected startup inputs
 
-`apps/repository-credentials/src/service.ts:createCredentialService` admits the trusted profile and deadline. `sessions.ts` retains bearer digests and immutable bindings. `custody.ts` owns original attempts, captured material, and use leases. `lifecycle.ts` coalesces acquisition, checks sufficient validity, and coordinates replacement and retirement through the bound factory. `provider-queue.ts` bounds provider work; `lifecycle/exchange.ts` joins tracked exchange work before releasing use. Closure prevents new admission before cleanup and original settlement. Uncertainty does not imply successful revocation.
+`apps/repository-credentials/src/check-config.ts:checkConfiguration` and
+`apps/repository-credentials/src/main.ts:main` share the protected configuration
+loader. The standalone check emits a safe summary without importing the session
+or listener owners. Normal startup constructs the system clock, bound driver
+factory, common service, and listeners.
+`apps/repository-credentials/src/backends/github/index.ts` exports the startup
+API; `apps/repository-credentials/src/backends/github/factory.ts:createGitHubDriverFactory`
+resolves grants, parses client authentication and composes session-bound drivers.
+The App signing key belongs to the process, independently of each session's
+installation tokens.
+
+### 2. Admit and publish a client session
+
+`apps/repository-credentials/src/control.ts:handleControl` validates the local
+request method, target, content type and bounded body before invoking the common
+service. `apps/repository-credentials/src/service.ts:createCredentialService`
+checks duration, allowed profile and capacity, then freezes the resolved binding.
+Bearer lookup retains a digest. Only the original admission response contains
+the bearer.
+
+`apps/repository-credentials/src/client/config.ts:writeClientConfiguration`
+creates a private staging directory and private files, synchronizes writes, and
+renames it into the requested new session directory. Normal CLI output contains
+the session status and file location. A failed file write after admission causes
+the CLI to attempt closure and report the session ID for operator follow-up.
+
+### 3. Authenticate the selected client
+
+`apps/repository-credentials/src/client/launch.ts:launchClient` owns the temporary
+home, subprocess, signal forwarding and cleanup. Cleanup retries transient removal
+failures up to three times. An unresolved removal emits the temporary directory
+path separately and preserves the child exit status or original launch error.
+It composes
+`apps/repository-credentials/src/client/environment.ts:createClientEnvironment`
+for the isolated environment and
+`apps/repository-credentials/src/client/commands.ts:prepareClientCommand` for
+command validation and arguments. Git receives an exact destination helper and
+command-level prompt/redirect/auth configuration. Before launch, Git reads its
+effective configuration using the same repository-selection options; the launcher
+resets inherited URL-specific HTTP protections at matching specificity and
+rejects user-agent values containing carriage returns or newlines before starting
+the client, including values from included configuration. Ordinary user-agent
+values remain intact. It also rejects custom trust, client certificates, cookies
+and DNS overrides. It rejects HTTP(S) userinfo in remote fetch/push URLs and
+`insteadOf`/`pushInsteadOf` destinations, as well as direct network-command URLs,
+before Git can transmit URL credentials in place of the session helper. The same
+surfaces reject explicit remote-helper syntax. Clone options are validated before
+inspection; config/template/submodule options, inherited `init.templateDir` and conditional
+includes refuse because they introduce state or transports after preflight. The helper reads the gateway
+bearer only after matching HTTPS host and repository path. API execution checks
+`gh` 2.100.0 and retains canonical GitHub identity while selecting the configured
+gateway API host. Absolute API destinations and unqualified commands refuse.
+
+### 4. Reserve, acquire and dispatch
+
+`apps/repository-credentials/src/server.ts:startListeners` owns listeners and
+sockets. Its `apps/repository-credentials/src/transport/agent.ts:createAgentHandler`
+checks generic framing and delegates authentication to the bound factory. A valid
+Git route with no credentials receives the local Basic challenge. Authenticated
+requests reserve common exchange capacity before body forwarding. The GitHub
+driver plans admitted routes through
+`apps/repository-credentials/src/backends/github/routes.ts:createRoutePolicy`.
+
+`apps/repository-credentials/src/service.ts:createCredentialService` reserves the
+exchange and delegates execution to
+`apps/repository-credentials/src/lifecycle/exchange.ts:executeExchange`, which
+coordinates acquisition and owner-bound use. The lifecycle may reuse sufficient
+remaining validity or acquire replacement material under common custody.
+Concurrent misses share one acquisition in
+`apps/repository-credentials/src/lifecycle.ts:createLifecycle`. When its last
+waiter leaves, the lifecycle cancels the original attempt. While that attempt's
+settlement remains pending, requests needing acquisition return `not-dispatched`
+without attaching new waiters or starting another acquisition. The original
+owner retains capture, settlement and cleanup obligations until they resolve.
+`apps/repository-credentials/src/backends/github/driver.ts:createGitHubDriver`
+owns session credentials and provider actions; it uses the bounded credential
+transport from
+`apps/repository-credentials/src/backends/github/provider-transport.ts:createProviderTransport`.
+An original
+dispatch gate rechecks admission synchronously after authentication preparation,
+registers cancellation and opens the exchange without an intervening await.
+The sender independently checks the fixed upstream origin. Credential bytes stay
+inside private adapter/sender callbacks.
+
+### 5. Deliver an outcome and release ownership
+
+`apps/repository-credentials/src/transport/response-headers.ts:responseHeaders`
+checks upstream header bounds and framing. The GitHub route plan carries the
+policy from `apps/repository-credentials/src/backends/github/response.ts:createResponsePolicy`
+for provider response headers, pagination and explicitly followed resource fields.
+Informational nested labels, milestones, repository metadata and human content
+remain unchanged. Transport applies
+`apps/repository-credentials/src/transport/response-headers.ts:safeResponseHeaders`
+before writing response headers to the client.
+
+`apps/repository-credentials/src/lifecycle/exchange.ts:executeExchange` joins
+tracked I/O before releasing credential use and returning exchange capacity to
+the service owner. Transport returns completed, not-dispatched or
+possibly-dispatched outcomes. The Agent handler ignores the normal response
+`close` event after `writableFinished`; a premature close cancels the exchange,
+whose I/O is joined before its lease and capacity are released. A possibly dispatched
+mutation has no automatic replay. Provider settlement and cleanup retain their
+original ownership even when an outward request ends earlier.
+
+### 6. Close locally and finish cleanup
+
+`apps/repository-credentials/src/service.ts:createCredentialService` closes the
+session before cancelling its exchanges and advancing lifecycle cleanup. A
+session becomes disposed only after exchanges, original actions, captures,
+renewal state and auxiliary finalization are resolved. If the provider queue is
+full before cleanup dispatch, `apps/repository-credentials/src/lifecycle.ts`
+keeps retirement/finalization unattempted and registers one capacity waiter per
+session through `apps/repository-credentials/src/provider-queue.ts`. Available
+capacity wakes cleanup; queue rejection alone does not mark an action uncertain.
+
+`apps/repository-credentials/src/main.ts:main` stops admission on shutdown, asks
+the service to close sessions, and bounds cleanup by an independent process
+timer. A grace expiry reports unresolved status and exits; it does not manufacture
+revocation. The process closes the shared App key after shutdown disposition.
 
 ## Debugging and Verification
 
-Run the available common-owner and adapter cases listed in the [testing guide](../testing/repository-credentials.md). Controlled time advances beyond hour thirteen without changing the admitted bearer. Inspect active uses and pending/uncertain cleanup separately. Listener/client and delivered-container qualification are pending.
+Run `pnpm credentials:build` and `pnpm credentials:check-config CONFIG_FILE` for
+the independent emitted startup path. Run the client configuration and package
+integration tests for private files, actual Git helper behavior and detached
+runtime loading. Inspect session status after close: a closed session can still
+have pending or uncertain cleanup.
+
+A helper failure reports a fixed category without credentials. Diagnose the
+configured HTTPS host/path and private file ownership first. API failures also
+require checking the pinned CLI, canonical host, gateway DNS/SAN and port 443.
+The [test guide](../testing/repository-credentials.md) owns controlled upstream,
+client and alternate-adapter checks. Container packaging and live-provider qualification
+follow in the packaging change.
+A structural flow check does not establish any of those runtime results.
 
 ## Related docs
 
-- [Reference](../reference/repository-credentials.md)
-- [Build and configuration](../guides/repository-credentials.md)
+- [Supported behavior and configuration](../reference/repository-credentials.md)
+- [Operator procedures](../guides/repository-credentials.md)
+- [Qualification and test setup](../testing/repository-credentials.md)
 
 ## Manual Notes
 
@@ -47,4 +197,18 @@ Run the available common-owner and adapter cases listed in the [testing guide](.
 
 ## Changelog
 
-- 2026-09-17 21:49: Document callable common lifecycle ownership. (extraction-preparation - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+- 2026-09-17 22:10: Refuse new waiters after acquisition cancellation while retaining original settlement and cleanup ownership. (authoring-run/d1f4d5a2-f493-43f0-8b8f-5471e61bb690 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+
+- 2026-09-17 21:39: Reject late clone configuration and helper-qualified URLs; preserve child outcomes when temporary-home cleanup fails. (authoring-run/2b8be1d2-818e-45ff-940f-ac9b9ab1997f - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+
+- 2026-09-17 21:19: Reject Git URL userinfo before remote and direct network operations. (authoring-run/56442091-a0e5-47e2-a786-8b84d7c9fc9e - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+
+- 2026-09-17 20:59: Reject inherited user-agent header injection before client launch. (authoring-run/6d7795bc-d3fd-4e6e-ae64-92943e8146b7 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+
+- 2026-09-17 20:40: Enforce repository HTTP settings and selected-session mounts; clarify response completion, URL preservation and cleanup capacity wakeups. (authoring-run/3c3b1dae-322e-4d11-8e7b-de1404dde505 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+
+- 2026-09-17 20:17: Correct source ownership after adapter and transport refactors. (authoring-run/1350f319-5493-4d4d-8d78-4622f8567d79 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+
+- 2026-09-17 20:12: Clarify client composition and exchange ownership source pointers. (authoring-run/18d52c2b-5de9-44a1-99b7-8c2e7f750620 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+
+- 2026-09-17 19:55: Document accompanying standalone service and client implementation. (authoring-run/5bd80749-b95a-4543-a055-0b77329a00ec - 2f8435756d0e82f0cc5205b009f5f1e0df692808)

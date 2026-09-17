@@ -13,6 +13,9 @@
   "scripts": {
     "build": "tsc --build tsconfig.json --pretty false",
     "typecheck": "tsc --build tsconfig.json --pretty false",
-    "check-config": "node dist/check-config.js --check-config"
+    "check-config": "node dist/check-config.js --check-config",
+    "start": "node dist/main.js",
+    "operator": "node dist/client/operator.js",
+    "client": "node dist/client/launch.js"
   }
 }
