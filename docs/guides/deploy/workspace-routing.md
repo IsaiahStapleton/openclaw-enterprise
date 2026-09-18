@@ -4,6 +4,21 @@ Enable private Kubernetes routing so operators can read and replace Agent
 workspace files through OCC. Start with the [production installation](production-installation.md)
 and keep its protected Helm values, Installation YAML, and Kubernetes context.
 
+## Runtime prerequisite for separate storage
+
+Dedicated Harness storage requires Gateway and Harness images containing the
+OpenClaw workspace changes: [document interface](https://github.com/openclaw/openclaw/pull/150584),
+[node adapter](https://github.com/openclaw/openclaw/pull/150734),
+[attachments](https://github.com/openclaw/openclaw/pull/150857), and
+[Memory and Skills](https://github.com/openclaw/openclaw/pull/150946).
+The Codex plugin must include the matching attachment changes.
+
+The runtime Dockerfile's default `2026.9.1` packages do not include this stack.
+Updating the controller alone removes dedicated Gateway workspace mounts without
+supplying the replacement runtime path. Use matching images before deploying
+this change; source merges alone do not update installed images. Native node
+enrollment through Envoy and a complete Enterprise task remain unverified.
+
 ## Agent workspace files
 
 The [Envoy routing reference](../../reference/gateway-routing.md) describes endpoints,

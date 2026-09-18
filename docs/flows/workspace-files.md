@@ -1,7 +1,7 @@
 ---
 created: 2026-08-31
 updated: 2026-09-18
-last_updated_session: authoring-run/245cc03e-4bd3-48b3-ba17-8d5e2768262d
+last_updated_session: 01a082d6-50c7-7953-808f-7e609f6fc7cb
 ---
 
 # Agent Workspace Files Flow
@@ -122,8 +122,11 @@ uses native setup RPCs through
   Readiness requires a connected node with admitted `file.fetch`, `file.stat`,
   `file.write`, `file.create`, and `dir.list` commands; a node missing attachment
   upload support is not ready.
-- A separate RWO claim holds the node's native identity and token. Stop retains
-  it; retirement deletes the exact owned claim and Secret after Pods terminate.
+- The Harness PVC stores node identity in a revision-specific subdirectory,
+  mounted at `/home/node/.openclaw-node`, outside the project workspace. Pod
+  replacement reuses that directory; another revision mounts a different one.
+  Retirement deletes the enrollment Secret. Saved identity files remain until
+  the Agent's Harness PVC is deleted; there is no separate node PVC lifecycle.
 - `AGENT_WITH_NODE_ENTRYPOINT` first runs native `setup --baseline` in the
   Harness workspace. Missing default documents are created without replacing
   existing edits; initialization failure stops startup. Compute passes only the
@@ -265,6 +268,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 13:22: Reused Harness storage for revision-specific node identity; removed the separate node PVC lifecycle. (01a082d6-50c7-7953-808f-7e609f6fc7cb - e257c4d96934895de7d3e06980dddce05ae19725)
 
 - 2026-09-18 00:02: Confirmed that Compute returns the standard private Service endpoint; local routing proof now runs OCC inside Kubernetes instead of adding a host-only port seam. (authoring-run/245cc03e-4bd3-48b3-ba17-8d5e2768262d - 782017d5405e156116bd31e78fa744ef20c540cc)
 - 2026-09-17 20:24: Removed dedicated Gateway workspace/image mounts and made sessions Gateway-private; Harness revision storage remains RWX. (authoring-run/81318408-6a1f-4628-b3f2-04ab723554c8 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)

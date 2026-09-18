@@ -173,7 +173,7 @@ test("Kubernetes namespace names are deterministic, DNS-safe, distinct, and boun
   assert.notEqual(kubernetesNamespaceName("Team A"), kubernetesNamespaceName("Team-A"));
 });
 
-test("retiring node identity deletes only exact revision-owned resources", async () => {
+test("retiring node enrollment deletes only its revision Secret and preserves Harness storage", async () => {
   const driver = new KubernetesComputeDriver(
     routedOptions({
       runtime: {
@@ -186,34 +186,25 @@ test("retiring node identity deletes only exact revision-owned resources", async
   );
   const revision = routedRevision(driver);
   const namespace = kubernetesNamespaceName(revision.namespaceId);
-  const claim = driver.workspaceNodeClaim(revision, namespace);
-  claim.metadata.uid = "node-state-uid";
   const secret = {
     ...driver.manifest(
       "v1",
       "Secret",
-      claim.metadata.name,
+      driver.workspaceNodeName(revision),
       driver.pluginRuntimeOwnership(revision),
       namespace,
     ),
     type: "Opaque",
   };
   secret.metadata.uid = "node-enrollment-uid";
-  let observedClaim = claim;
   let observedSecret = secret;
   const deleted = [];
-  // Kubernetes transport fixture: ownership checks, claim validation and
-  // deletion preconditions execute in the production Compute implementation.
+  // The transport exposes only Secret operations: retiring a revision must
+  // leave the Harness claim (including other revisions' files) intact.
   driver.apiClients = Promise.resolve({
     core: {
       async readNamespacedSecret() {
         return structuredClone(observedSecret);
-      },
-      async readNamespacedPersistentVolumeClaim() {
-        return structuredClone(observedClaim);
-      },
-      async deleteNamespacedPersistentVolumeClaim(request) {
-        deleted.push(["claim", request]);
       },
       async deleteNamespacedSecret(request) {
         deleted.push(["secret", request]);
@@ -222,10 +213,6 @@ test("retiring node identity deletes only exact revision-owned resources", async
   });
   await driver.retireWorkspaceNode(revision, namespace);
   assert.deepEqual(deleted, [
-    [
-      "claim",
-      { name: claim.metadata.name, namespace, body: { preconditions: { uid: "node-state-uid" } } },
-    ],
     [
       "secret",
       {
@@ -254,10 +241,6 @@ test("retiring node identity deletes only exact revision-owned resources", async
     driver.retireWorkspaceNode(revision, namespace),
     /ownership|another|revision|Refusing/i,
   );
-  assert.deepEqual(deleted, []);
-  observedSecret = secret;
-  observedClaim = { ...claim, spec: { ...claim.spec, accessModes: ["ReadWriteMany"] } };
-  await assert.rejects(driver.retireWorkspaceNode(revision, namespace), /PersistentVolumeClaim/);
   assert.deepEqual(deleted, []);
 });
 
@@ -3533,6 +3516,24 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
       readOnly: false,
     },
   ]);
+  // Pod replacement keeps node credentials; a new revision receives a different
+  // directory on the same Harness claim, outside task files and Gateway state.
+  const revision = { agentId: ownership.agentId, id: "revision-node-state", configuration: {} };
+  const withNode = (candidate) => {
+    const workload = structuredClone(harness);
+    driver.addWorkspaceNode(workload, driver.workspaceNodeName(candidate), undefined, candidate);
+    const pod = workload.spec.template.spec;
+    return driver.sandboxWorkspaceMounts(pod.volumes, pod.containers[0].volumeMounts);
+  };
+  const mounts = withNode(revision);
+  const node = mounts.find(({ mountPath }) => mountPath === "/home/node/.openclaw-node");
+  assert.equal(new Set(mounts.map(({ claimName }) => claimName)).size, 1);
+  assert.equal(node.readOnly, false);
+  assert.equal(node.subPath.includes("/"), false);
+  assert.deepEqual(withNode(revision), mounts);
+  const replacement = withNode({ ...revision, id: "replacement-node-state" });
+  assert.notEqual(replacement.at(-1).subPath, node.subPath);
+  assert.deepEqual(replacement.slice(0, -1), mounts.slice(0, -1));
 });
 
 test("runtime node selector schedules gateways and their private-state initialization together", () => {

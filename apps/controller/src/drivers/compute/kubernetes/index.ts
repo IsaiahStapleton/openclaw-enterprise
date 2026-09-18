@@ -3597,30 +3597,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return `workspace-node-${sha256Hex(revision.agentId, 12)}-${sha256Hex(revision.id, 12)}`;
   }
 
-  private workspaceNodeClaim(
-    revision: AgentRevision,
-    namespace: string,
-  ): ManagedKubernetesObject<"PersistentVolumeClaim"> {
-    return {
-      ...this.manifest(
-        "v1",
-        "PersistentVolumeClaim",
-        this.workspaceNodeName(revision),
-        this.pluginRuntimeOwnership(revision),
-        namespace,
-      ),
-      spec: {
-        accessModes: ["ReadWriteOnce"],
-        volumeMode: "Filesystem",
-        storageClassName: required(
-          this.options.runtime?.gatewayStorageClassName,
-          "Node storage class",
-        ),
-        resources: { requests: { storage: "1Gi" } },
-      },
-    };
-  }
-
   private async retireWorkspaceNode(revision: AgentRevision, namespace: string): Promise<void> {
     if (
       this.nodeEnrollment === undefined ||
@@ -3632,13 +3608,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const ownership = this.pluginRuntimeOwnership(revision);
     const name = this.workspaceNodeName(revision);
     const secret = await this.getOwned("Secret", name, namespace, ownership);
-    // Called after revision Pods terminate. Stop deliberately retains identity
-    // so a restart can use the native saved token; retirement removes it.
-    await this.deletePersistentVolumeClaim(
-      this.workspaceNodeClaim(revision, namespace),
-      ownership,
-      namespace,
-    );
+    // The node's saved identity stays on the Harness claim until Agent deletion.
+    // Each revision mounts only its own subdirectory.
     if (secret !== undefined) {
       const uid = required(secret.metadata.uid, "Workspace node Secret UID");
       const clients = await this.clients();
@@ -3671,7 +3642,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       namespaceOwnership,
       namespace,
     );
-    await this.reconcile(this.workspaceNodeClaim(revision, namespace), ownership, namespace);
     const existing = await this.getOwned("Secret", name, namespace, ownership);
     if (existing === undefined) {
       const setup = await enrollment.createSetup(url, `${url}/node`, this.operationSignal());
@@ -3727,14 +3697,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     (pod.volumes as V1Volume[]).push({
       name: NODE_STATE_VOLUME,
-      persistentVolumeClaim: { claimName: name },
+      persistentVolumeClaim: { claimName: this.sharedWorkspaceClaimName(revision.agentId) },
     });
-    // This claim belongs only to this revision's node. Its root already exists;
-    // providers do not need to reproduce Compute's private-home init container.
+    // Reuse Harness storage outside the project directory. Revision-specific
+    // subpaths preserve restart identity without sharing another node's token.
     (container.volumeMounts as V1VolumeMount[]).push({
       name: NODE_STATE_VOLUME,
       mountPath: NODE_STATE_PATH,
-      subPath: ".",
+      subPath: name,
       readOnly: false,
     });
     // Independent restarts can orphan descendants of a failed wrapper. Tini
@@ -3951,17 +3921,21 @@ export class KubernetesComputeDriver implements ComputeDriver {
       );
       const mount = asRecord(nodeMounts[0]);
       if (
+        nodeClaim !== claimName ||
         nodeMounts.length !== 1 ||
         mount?.mountPath !== NODE_STATE_PATH ||
-        mount.subPath !== "." ||
+        typeof mount.subPath !== "string" ||
+        !/^workspace-node-[a-f0-9]{12}-[a-f0-9]{12}$/.test(mount.subPath) ||
         mount.readOnly !== false
       ) {
-        throw new ConfigurationFailure("Harness node state must preserve its private claim mount.");
+        throw new ConfigurationFailure(
+          "Harness node state must preserve its revision directory on the Harness claim.",
+        );
       }
       workspaceMounts.push({
         claimName: nodeClaim,
         mountPath: NODE_STATE_PATH,
-        subPath: ".",
+        subPath: mount.subPath,
         readOnly: false,
       });
     }
