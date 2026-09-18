@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-18"
-last_updated_session: "authoring-run/d809d9cd-cac1-4449-80a0-6e07beaaed49"
+last_updated_session: "authoring-run/0771bac1-5a06-46c9-89bd-9b46b20cd3d4"
 ---
 
 # Repository credential service flow
@@ -162,8 +162,15 @@ gateway API host. Absolute API destinations and unqualified commands refuse.
 ### 4. Reserve, acquire and dispatch
 
 `apps/controller/src/drivers/repository-credentials/server.ts:startListeners` owns listeners and
-sockets. Its `apps/controller/src/drivers/repository-credentials/transport/agent.ts:createAgentHandler`
-checks generic framing and delegates authentication to the bound factory. A valid
+sockets. HTTPS bounds the TLS handshake separately and arms the `headerMs` timer
+on the `TLSSocket` at `secureConnection`; the Unix control listener retains its
+raw-socket header timer. After an authenticated request reserves exchange
+capacity, `apps/controller/src/drivers/repository-credentials/transport/agent.ts:createAgentHandler`
+clears that same TLS socket timer before credential acquisition. The header
+budget therefore cannot truncate an admitted acquisition; the exchange deadline
+remains enforced.
+
+`createAgentHandler` checks generic framing and delegates authentication to the bound factory. A valid
 Git route with no credentials receives the local Basic challenge. Authenticated
 requests reserve common exchange capacity before body forwarding. The GitHub
 driver plans admitted routes through
@@ -298,6 +305,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 06:22: Trace the accompanying HTTPS header-timer handoff to admitted exchange ownership while preserving handshake and control limits. (authoring-run/0771bac1-5a06-46c9-89bd-9b46b20cd3d4 - baada1ad2f288de44ba54ee4cd1e111fcb6bbba8)
 
 - 2026-09-18 05:50: Document accompanying bounded upstream error delivery while preserving cancellation and exchange settlement. (authoring-run/d809d9cd-cac1-4449-80a0-6e07beaaed49 - 6d886fc6017180c215ee61a1247df36a494fa97a)
 

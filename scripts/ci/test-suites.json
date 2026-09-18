@@ -232,6 +232,9 @@
           "path": "tests/integration/repository-credentials-control.test.mjs"
         },
         {
+          "path": "tests/integration/repository-credentials-server-timeout.test.mjs"
+        },
+        {
           "path": "tests/integration/repository-credentials-shutdown.test.mjs"
         },
         {
