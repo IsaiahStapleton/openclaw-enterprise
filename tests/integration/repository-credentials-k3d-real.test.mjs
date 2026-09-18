@@ -31,7 +31,8 @@ const repositoryFailureSummaryScript = String.raw`
     ["command-unavailable", /command not found|spawn.*ENOENT|executable.*not found/i],
     ["repository-authentication", /authentication failed|could not read Username|bad credentials|HTTP Basic: Access denied|returned error: (?:401|403)/i],
     ["repository-unavailable", /repository.*not found|repository.*does not exist|returned error: 404/i],
-    ["tls-validation", /certificate verify failed|SSL certificate problem|unable to get local issuer|self.signed certificate/i],
+    ["tls-validation", /certificate verify failed|server certificate verification failed|SSL certificate problem|SSL_ERROR|unable to get local issuer|self.signed certificate/i],
+    ["git-http-server-error", /returned error: 5[0-9]{2}|HTTP\/[0-9.]+ 5[0-9]{2}|HTTP (?:error |status )?5[0-9]{2}/i],
     ["network-resolution-or-connection", /could not resolve host|ENOTFOUND|ECONNREFUSED|connection refused|failed to connect|connection timed out/i],
     ["filesystem-permission", /EACCES|permission denied|read.only file system/i],
     ["git-worktree", /not a git repository|destination path.*already exists|working tree.*overwritten/i],
@@ -384,6 +385,81 @@ test(
       await f.record("Worker reaches the installed credential service over its private socket", {
         podUid: workerPod.metadata.uid,
       });
+      // Use the service container's actual trust environment before opening any
+      // repository session. These fixed public HEAD requests carry no authority.
+      const publicUpstreamScript = String.raw`
+        const https = require("node:https");
+        const category = error => {
+          const code = typeof error?.code === "string" ? error.code : "";
+          if (["UNABLE_TO_VERIFY_LEAF_SIGNATURE","UNABLE_TO_GET_ISSUER_CERT","UNABLE_TO_GET_ISSUER_CERT_LOCALLY","DEPTH_ZERO_SELF_SIGNED_CERT","SELF_SIGNED_CERT_IN_CHAIN"].includes(code)) return "tls-untrusted-certificate";
+          if (["CERT_HAS_EXPIRED","CERT_NOT_YET_VALID"].includes(code)) return "tls-certificate-validity";
+          if (code === "ERR_TLS_CERT_ALTNAME_INVALID") return "tls-hostname";
+          if (/^ERR_(?:TLS|SSL)_/.test(code)) return "tls-error";
+          if (["ENOTFOUND","EAI_AGAIN"].includes(code)) return "dns";
+          if (code === "ETIMEDOUT") return "timeout";
+          if (["ECONNREFUSED","ECONNRESET","EHOSTUNREACH","ENETUNREACH","EPIPE"].includes(code)) return "connection";
+          return "transport-or-response";
+        };
+        const probe = (target, url) => new Promise(resolve => {
+          let settled = false, deadline;
+          const finish = (status, cause) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(deadline);
+            resolve({target, status, cause});
+          };
+          const request = https.request(url, {
+            method: "HEAD", agent: false, rejectUnauthorized: true, maxHeaderSize: 16384,
+            headers: {"user-agent": "repository-credentials-installed-preflight"},
+          }, response => {
+            const status = Number.isInteger(response.statusCode) ? response.statusCode : null;
+            response.once("error", error => finish(status, category(error)));
+            response.once("aborted", () => finish(status, "response-aborted"));
+            response.once("end", () => finish(status, status >= 200 && status < 400 ? "none" : "http-status"));
+            response.resume();
+          });
+          deadline = setTimeout(() => request.destroy(Object.assign(new Error("timeout"), {code: "ETIMEDOUT"})), 5000);
+          request.once("error", error => finish(null, category(error)));
+          request.end();
+        });
+        (async () => {
+          const results = [];
+          results.push(await probe("api.github.com", "https://api.github.com/meta"));
+          results.push(await probe("github.com", "https://github.com"));
+          process.stdout.write(JSON.stringify(results));
+        })().catch(() => { process.stderr.write("public upstream preflight unavailable\n"); process.exitCode = 1; });
+      `;
+      const publicUpstream = JSON.parse(
+        await f.run(
+          "kubectl",
+          [
+            ...f.kubernetes.kubectlArguments([]),
+            "-n",
+            f.system,
+            "exec",
+            workerPod.metadata.name,
+            "-c",
+            "repository-credentials",
+            "--",
+            "node",
+            "-e",
+            publicUpstreamScript,
+          ],
+          { timeout: 15000 },
+        ),
+      );
+      await f.record("Captured public upstream preflight; repository acceptance pending", {
+        evidenceKind: "diagnostic-only",
+        publicUpstream,
+      });
+      assert.deepEqual(
+        publicUpstream.map(({ target }) => target),
+        ["api.github.com", "github.com"],
+      );
+      for (const result of publicUpstream) {
+        assert.equal(result.cause, "none", `${result.target} public upstream preflight failed`);
+        assert.ok(Number.isInteger(result.status) && result.status >= 200 && result.status < 400);
+      }
       const native = createHarnessConfiguration("openclaw", model);
       native.agents.defaults.skipBootstrap = true;
       native.agents.defaults.workspace = workspace;
