@@ -387,6 +387,7 @@ test(
       });
       // Use the service container's actual trust environment before opening any
       // repository session. These fixed public HEAD requests carry no authority.
+      // Unauthenticated 4xx responses still prove TLS/reachability; App access is tested later.
       const publicUpstreamScript = String.raw`
         const https = require("node:https");
         const category = error => {
@@ -415,7 +416,7 @@ test(
             const status = Number.isInteger(response.statusCode) ? response.statusCode : null;
             response.once("error", error => finish(status, category(error)));
             response.once("aborted", () => finish(status, "response-aborted"));
-            response.once("end", () => finish(status, status >= 200 && status < 400 ? "none" : "http-status"));
+            response.once("end", () => finish(status, status >= 200 && status < 500 ? "none" : "http-status"));
             response.resume();
           });
           deadline = setTimeout(() => request.destroy(Object.assign(new Error("timeout"), {code: "ETIMEDOUT"})), 5000);
@@ -458,7 +459,7 @@ test(
       );
       for (const result of publicUpstream) {
         assert.equal(result.cause, "none", `${result.target} public upstream preflight failed`);
-        assert.ok(Number.isInteger(result.status) && result.status >= 200 && result.status < 400);
+        assert.ok(Number.isInteger(result.status) && result.status >= 200 && result.status < 500);
       }
       const native = createHarnessConfiguration("openclaw", model);
       native.agents.defaults.skipBootstrap = true;

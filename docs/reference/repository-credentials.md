@@ -161,6 +161,10 @@ composition copies the selected projection into service-owned private files
 before validation. API and worker receive registry/public CA inputs; only the
 service receives App and TLS private keys.
 
+The service image must trust GitHub's HTTPS certificate chain. For an approved
+private CA, supply an image with a readable CA bundle and `NODE_EXTRA_CA_CERTS`;
+keep certificate and hostname verification enabled.
+
 ## Sessions and closure
 
 The trusted worker or local operator uses HTTP over a private mode-0600 Unix socket:
