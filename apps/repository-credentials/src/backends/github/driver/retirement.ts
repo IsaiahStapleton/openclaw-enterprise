@@ -1,5 +1,11 @@
-import type { Clock, DriverCustody, RepoDriver, RetireOutcome } from "../../../driver-contracts.ts";
-import type { ProviderTransport } from "../provider-transport.ts";
+import type {
+  AttemptContext,
+  Clock,
+  DriverCustody,
+  RepoDriver,
+  RetireOutcome,
+} from "../../../driver-contracts.ts";
+import type { ProviderResponse, ProviderTransport } from "../provider-transport.ts";
 import type { GitHubDriverState } from "./state.ts";
 import { tokenLifetimeMs } from "./lifetime.ts";
 
@@ -10,12 +16,41 @@ type RetirementDependencies = Readonly<{
   exchange: ProviderTransport;
 }>;
 
+function isRetirableToken(bytes: Uint8Array): boolean {
+  return (
+    bytes.length >= 1 &&
+    bytes.length <= 16384 &&
+    bytes.every((byte) => byte >= 0x21 && byte <= 0x7e)
+  );
+}
+
 export function createCredentialRetirement({
   state,
   custody,
   clock,
   exchange,
 }: RetirementDependencies): RepoDriver["retire"] {
+  async function retireBorrowed(
+    attempt: AttemptContext,
+    bytes: Uint8Array,
+    onDispatch: () => void,
+  ): Promise<RetireOutcome> {
+    const copy = Buffer.from(bytes);
+    let response: ProviderResponse | undefined;
+    try {
+      if (!isRetirableToken(copy)) {
+        return state.outcome(attempt, { kind: "unsupported" });
+      }
+      response = await exchange.revoke(copy.toString("utf8"), attempt, onDispatch);
+      return state.outcome(attempt, {
+        kind: response.status === 204 ? "revoked" : "uncertain",
+      });
+    } finally {
+      response?.body.fill(0);
+      copy.fill(0);
+    }
+  }
+
   return async (attempt, credential): Promise<RetireOutcome> => {
     const record = state.credentials.get(credential);
     if (!record) {
@@ -27,30 +62,11 @@ export function createCredentialRetirement({
       if (clock.monotonicNow() - record.observedMono >= tokenLifetimeMs) {
         return state.outcome(attempt, { kind: "expired" });
       }
-      return await custody.withAccess(credential, "retire", async (bytes) => {
-        const copy = Buffer.from(bytes);
-        try {
-          if (
-            copy.length < 1 ||
-            copy.length > 16384 ||
-            copy.some((byte) => byte < 0x21 || byte > 0x7e)
-          ) {
-            return state.outcome(attempt, { kind: "unsupported" });
-          }
-          const response = await exchange.revoke(copy.toString("utf8"), attempt, () => {
-            dispatched = true;
-          });
-          try {
-            return state.outcome(attempt, {
-              kind: response.status === 204 ? "revoked" : "uncertain",
-            });
-          } finally {
-            response.body.fill(0);
-          }
-        } finally {
-          copy.fill(0);
-        }
-      });
+      return await custody.withAccess(credential, "retire", (bytes) =>
+        retireBorrowed(attempt, bytes, () => {
+          dispatched = true;
+        }),
+      );
     } catch {
       return state.outcome(attempt, { kind: dispatched ? "uncertain" : "not-dispatched" });
     }
