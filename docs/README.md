@@ -21,6 +21,8 @@ Use the [feature and Driver index](reference/README.md) for supported behavior,
 configuration, and limits. The [HTTP API](reference/api.md) describes request and
 response schemas. The [console guide](reference/console.md) covers browser tasks.
 Compare bundled implementations in the [ComputeDriver feature matrix](reference/drivers/compute-matrix.md).
+Use the [PluginDriver feature matrix](reference/drivers/plugin-matrix.md) to
+compare plugin discovery and approval-policy support.
 [Agent plugins](reference/agent-plugins.md) and
 [PluginDriver](reference/drivers/plugin.md) cover curated plugin selection, startup
 validation, and native runtime policy.
@@ -42,6 +44,7 @@ revision startup and runtime configuration.
 
 ## Contribute
 
+- [Repository layout and conventions](layout.md): find code owners and choose where changes belong.
 - [Testing](testing/README.md): select a suite and prepare its environment.
 - [Repository credential testing](testing/repository-credentials.md): verify configuration, adapter contracts, and available common owners.
 - [Local preview](local-preview.md): render and validate documentation.

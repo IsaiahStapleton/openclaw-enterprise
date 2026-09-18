@@ -47,6 +47,7 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
   const policy = (profile: GitHubProfile) =>
     createRoutePolicy({
       repository: config.repository,
+      repositoryId: config.repositoryId,
       profile,
       gatewayOrigin,
       gitOrigin,

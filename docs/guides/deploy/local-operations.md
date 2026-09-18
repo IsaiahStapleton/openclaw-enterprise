@@ -78,8 +78,11 @@ run `KUBECONFIG="$KUBECONFIG_FILE" k3d cluster delete "$CLUSTER"`.
 ## Stop development safely
 
 Run the exact command under `Cleanup` in the `dev-up` output. The Podman form
-includes its detected API socket and `compose.podman.yaml`; the Docker form
-remains `docker compose down` plus any forwarded global options.
+uses `occ dev down` with `compose.podman.yaml` and the forwarded Compose options.
+Keep any `CONTAINER_CONNECTION` or `CONTAINER_HOST` selection used for startup.
+The CLI retains that connection, including macOS machine connections. See the
+[cleanup flow](../../flows/docker-compose-development.md#3-clean-up-docker-or-podman-compose)
+for how the host connection and worker socket are handled.
 
 This preserves PostgreSQL, Configuration, and bootstrap-key volumes. Add
 `--volumes` only when deliberately deleting the local

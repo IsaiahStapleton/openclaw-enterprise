@@ -373,3 +373,51 @@ test("gateway authentication is separate from upstream signing and rejects forei
     /authority-unavailable/,
   );
 });
+
+test("native repository-ID pagination stays bound to the configured repository and issue cursor policy", async (t) => {
+  const { factory, key } = setup();
+  t.after(() => key.close());
+  const bind = (profile = "git-full") => {
+    const bound = driver(factory, profile);
+    const session = {};
+    return {
+      plan: (request) =>
+        bound.driver.plan({
+          authority: bound.authority,
+          session,
+          head: request,
+        }),
+    };
+  };
+  const bound = bind();
+  const target = "/repos/fixture/repository/issues";
+  const cursor = "Y3Vyc29yOnYyOjE=";
+  const plan = bound.plan(head("GET", target));
+  for (const direction of ["after", "before"]) {
+    const query = `state=all&per_page=1&${direction}=${encodeURIComponent(cursor)}&page=2`;
+    const canonical = `${target}?${query}`;
+    const headers = plan.responsePolicy.headers(200, {
+      link: `<https://api.github.com/repositories/73/issues?${query}>; rel="next"`,
+    });
+    assert.equal(headers.link, `<https://credentials.example${canonical}>; rel="next"`);
+    assert.equal(bound.plan(head("GET", canonical)).target, canonical);
+    assert.equal(bound.plan(head("POST", canonical)).kind, "denied");
+    assert.equal(bind("git-write").plan(head("GET", canonical)).kind, "denied");
+  }
+  // A native ID is response metadata, never an additional caller-selected repository route.
+  assert.equal(bound.plan(head("GET", "/repositories/73/issues")).kind, "denied");
+  for (const url of [
+    "https://api.github.com/repositories/74/issues?page=2",
+    "https://api.github.com/repositories/730/issues?page=2",
+    "https://other.example/repositories/73/issues?page=2",
+    "https://api.github.com/repositories/73/actions/runs?page=2",
+    `https://api.github.com/repositories/73/issues/1?after=${cursor}`,
+    `https://api.github.com/repositories/73/pulls?after=${cursor}`,
+    "https://api.github.com/repositories/73/issues?after=bad%20cursor",
+    `https://api.github.com/repositories/73/issues?after=${"a".repeat(1025)}`,
+    `https://api.github.com/repositories/73/issues?after=${cursor}&after=${cursor}`,
+  ])
+    assert.throws(() => plan.responsePolicy.headers(200, { link: `<${url}>; rel="next"` }), {
+      message: "unsafe-upstream-url",
+    });
+});

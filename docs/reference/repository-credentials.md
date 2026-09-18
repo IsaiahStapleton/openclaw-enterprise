@@ -60,3 +60,7 @@ Native repository rules still apply. Administration, workflow changes requiring
 additional permissions, Actions, packages, projects, SSH, LFS, and other
 repositories are outside the supported scope. Missing App permissions cause
 failure rather than a broader grant.
+
+## GitHub credential timing
+
+The adapter allows 60 seconds of provider clock skew and reports an earlier authentication expiry. Captured cleanup retains a separate one-hour bound from local receipt; a forward wall-clock change cannot prove remote expiration. Canonical response links accept casing differences only in the matching repository owner/name while preserving route, origin and profile restrictions.

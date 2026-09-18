@@ -12,6 +12,8 @@ export const nativeGraphqlAccept =
   "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview";
 const queryValues: Readonly<Record<string, RegExp>> = Object.freeze({
   page: /^[1-9][0-9]{0,5}$/,
+  after: /^[A-Za-z0-9+/_-]{1,1024}={0,2}$/,
+  before: /^[A-Za-z0-9+/_-]{1,1024}={0,2}$/,
   per_page: /^(?:[1-9]|[1-9][0-9]|100)$/,
   state: /^(open|closed|all)$/,
   sort: /^(created|updated|popularity|long-running|comments)$/,
@@ -107,6 +109,8 @@ function matchApiRoute(path: string, repository: string): ApiRoutePolicy | undef
           : [
               "page",
               "per_page",
+              "after",
+              "before",
               "state",
               "sort",
               "direction",
