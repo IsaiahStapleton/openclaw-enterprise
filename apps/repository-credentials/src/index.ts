@@ -1,6 +1,5 @@
-export { createCredentialService } from "./service.ts";
-export { startListeners } from "./server.ts";
-export type { BoundListeners, StartListenersOptions } from "./server.ts";
+export { startCredentialService } from "./main.ts";
+export type { RunningService } from "./main.ts";
 export type {
   CredentialService,
   PublicClientConfiguration,
@@ -11,4 +10,3 @@ export type {
   SessionStatus,
   ShutdownSummary,
 } from "./contracts.ts";
-export type { BoundDriverFactory, RepoDriver } from "./driver-contracts.ts";

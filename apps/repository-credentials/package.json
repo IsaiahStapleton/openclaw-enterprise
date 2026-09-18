@@ -4,6 +4,13 @@
   "license": "MIT",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
   "engines": {
     "node": ">=24"
   },
