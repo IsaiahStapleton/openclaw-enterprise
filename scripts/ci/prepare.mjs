@@ -474,6 +474,9 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
   const name = laneName(lane);
   const prepare = lanePrepare(name);
   const effectiveEnv = effectiveLaneEnv(name, env);
+  if (prepare.k3d && name !== "openshell" && effectiveEnv.OPENCLAW_CI_K3S_IMAGE) {
+    assertImmutableImageReference(effectiveEnv.OPENCLAW_CI_K3S_IMAGE, "OPENCLAW_CI_K3S_IMAGE");
+  }
   requireEnv(prepare.requireEnv ?? [], effectiveEnv);
   if (prepare.nodeBaseImage) {
     assertNodeBaseImage(effectiveEnv.NODE_BASE_IMAGE);
@@ -623,7 +626,9 @@ async function ensureK3dCluster(statePath, state) {
     directory,
     kubeconfig,
     context: `k3d-${cluster}`,
-    ...(!openShell ? { nodeImage: "+v1.35" } : {}),
+    // An explicit digest bypasses k3d's online release-channel lookup. The
+    // running API server must still satisfy the ordinary Kubernetes 1.35 gate.
+    ...(!openShell ? { nodeImage: process.env.OPENCLAW_CI_K3S_IMAGE || "+v1.35" } : {}),
   });
   await writeState(statePath, state);
   if (openShell) {
@@ -855,6 +860,13 @@ async function ensureDockerSourceImage(state, image, envName) {
     return dockerImageId(image);
   }
   assertImmutableImageReference(image, envName);
+  try {
+    if (await dockerImageHasRepoDigest(image)) return await dockerImageId(image);
+  } catch (error) {
+    // A locally built immutable image may have no reachable registry. Reuse
+    // only its verified repository digest; other Docker failures stay visible.
+    if (!/No such (?:image|object)/i.test(error.stderr ?? "")) throw error;
+  }
   await execFile(process.env.OCC_DOCKER_BIN ?? "docker", ["pull", image]);
   if (!(await dockerImageHasRepoDigest(image))) {
     throw new Error(`${envName} pull did not materialize the requested registry digest.`);

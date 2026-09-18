@@ -36,7 +36,12 @@ function runPrepare(args, env = {}) {
   });
 }
 
-async function fixtureImageCommands(t, scenario, lane = "k3d-fixture-configuration") {
+async function fixtureImageCommands(
+  t,
+  scenario,
+  lane = "k3d-fixture-configuration",
+  extraEnv = {},
+) {
   const root = await fixture(t);
   const bin = join(root, "bin");
   const home = join(root, "home");
@@ -67,6 +72,24 @@ function finish(stdout = "") {
 
 if (command === "docker") {
   if (equals(args, ["version", "--format", "{{.Server.Version}}"])) finish("29.4.0\n");
+  const sourceImage = process.env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE;
+  if (sourceImage && equals(args, ["image", "inspect", "--format", "{{json .RepoDigests}}", sourceImage])) {
+    if (scenario === "inspect-failed" || (scenario === "image-absent" && !state.pulled)) {
+      process.stderr.write(scenario === "inspect-failed" ? "Cannot connect to the Docker daemon\n" : "Error response from daemon: No such image\n");
+      process.exit(1);
+    }
+    const matching = scenario === "local-digest" || (state.pulled && scenario !== "pull-mismatch");
+    finish(JSON.stringify([matching ? sourceImage : "registry.example/other@sha256:" + "d".repeat(64)]));
+  }
+  if (sourceImage && equals(args, ["pull", sourceImage])) {
+    state.pulled = true;
+    finish();
+  }
+  if (sourceImage && equals(args, ["image", "inspect", "--format", "{{.Id}}", sourceImage])) finish(configId + "\n");
+  if (sourceImage && args[0] === "tag" && args[1] === sourceImage) {
+    state.tag = args[2];
+    finish();
+  }
   if (args[0] === "compose" && args[1] === "-f" && args[3] === "-p") {
     assert.match(args[4], /^openclaw_ci_pg_/);
     if (equals(args.slice(5), ["up", "-d", "--wait"])) finish();
@@ -137,7 +160,7 @@ if (command === "k3d") {
   if (equals(args, ["version"])) finish("k3d version v5.8.3\n");
   if (equals(args.slice(0, 2), ["cluster", "create"]) && args.length === 13) {
     assert.match(args[2], /^openclaw-k8s-/);
-    assert.deepEqual(args.slice(3, 5), ["--image", "+v1.35"]);
+    assert.deepEqual(args.slice(3, 5), ["--image", process.env.OPENCLAW_CI_K3S_IMAGE || "+v1.35"]);
     assert.deepEqual(args.slice(5, 10), ["--servers", "1", "--agents", "0", "--api-port"]);
     assert.match(args[10], /^127\.0\.0\.1:\d+$/);
     assert.deepEqual(args.slice(11), ["--kubeconfig-update-default=false", "--kubeconfig-switch-context=false"]);
@@ -171,7 +194,9 @@ if (command === "kubectl") {
     }
     if (equals(args.slice(4), ["wait", "--for=condition=Ready", "nodes", "--all", "--timeout=120s"])) finish();
     if (equals(args.slice(4), ["version", "-o", "json"])) {
-      finish(JSON.stringify({ serverVersion: { gitVersion: "v1.35.8+k3s1" } }));
+      finish(JSON.stringify({ serverVersion: {
+        gitVersion: scenario === "wrong-server-version" ? "v1.34.11+k3s1" : "v1.35.8+k3s1",
+      } }));
     }
   }
 }
@@ -197,6 +222,7 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
     OCC_DOCKER_BIN: join(bin, "docker.mjs"),
     OPENCLAW_CI_K3D_BIN: join(bin, "k3d.mjs"),
     OCC_KUBECTL_BIN: join(bin, "kubectl.mjs"),
+    ...extraEnv,
   };
   const run = (script, args) =>
     spawnSync(process.execPath, [join(repositoryRoot, "scripts/ci", script), ...args], {
@@ -303,6 +329,94 @@ for (const { scenario, error } of [
 const digest = "a".repeat(64);
 const immutableImage = `registry.example/openclaw/runtime@sha256:${digest}`;
 const mutableImage = "registry.example/openclaw/runtime:latest";
+
+test("k3d preparation reuses only matching local immutable images and verifies fresh pulls", async (t) => {
+  for (const scenario of [
+    "local-digest",
+    "image-absent",
+    "local-mismatch",
+    "pull-mismatch",
+    "inspect-failed",
+  ]) {
+    const commands = await fixtureImageCommands(t, scenario, "k3d-model", {
+      OPENAI_API_KEY: "test-only-key",
+      OCC_TEST_OPENAI_MODEL: "test-model",
+      OCC_TEST_KUBERNETES_GATEWAY_IMAGE: immutableImage,
+      OCC_TEST_KUBERNETES_AGENT_IMAGE: immutableImage,
+      // Stop at the next independent preparation boundary after image import.
+      OCC_TEST_KUBERNETES_CODEX_VERSION: "0.153.0",
+    });
+    const result = commands.prepare();
+    assert.equal(result.status, 1);
+    const calls = await commands.commands();
+    const pulls = calls.filter(({ command, args }) => command === "docker" && args[0] === "pull");
+    assert.equal(
+      pulls.length,
+      ["local-digest", "inspect-failed"].includes(scenario) ? 0 : 1,
+      scenario,
+    );
+    const state = JSON.parse(await readFile(commands.statePath, "utf8"));
+    const imported = state.resources.filter(({ kind }) => kind === "k3d-image");
+    if (scenario === "pull-mismatch") {
+      assert.match(result.stderr, /pull did not materialize the requested registry digest/);
+      assert.equal(imported.length, 0);
+    } else if (scenario === "inspect-failed") {
+      assert.match(result.stderr, /Cannot connect to the Docker daemon/);
+      assert.equal(imported.length, 0);
+    } else {
+      assert.match(result.stderr, /pinned to Codex 0\.152\.1/);
+      assert.equal(imported.length, 1);
+      assert.equal(imported[0].status, "ready");
+      assert.equal(imported[0].sourceImage, immutableImage);
+      assert.equal(imported[0].hostImageId, `sha256:${"b".repeat(64)}`);
+    }
+    const cleanup = commands.cleanup();
+    assert.equal(cleanup.status, 0, cleanup.stderr);
+    assert.ok(
+      !(await commands.commands()).some(
+        ({ args }) => args[0] === "image" && args[1] === "rm" && args.includes(immutableImage),
+      ),
+      "cleanup must preserve the caller's immutable source image",
+    );
+  }
+});
+
+test("ordinary k3d preparation forwards an immutable K3s override and retains the server version gate", async (t) => {
+  const image = `registry.example/k3s:v1.35.8-k3s1@sha256:${digest}`;
+  for (const scenario of ["success", "wrong-server-version"]) {
+    const commands = await fixtureImageCommands(t, scenario, "k3d-fixture-configuration", {
+      OPENCLAW_CI_K3S_IMAGE: image,
+    });
+    const result = commands.prepare();
+    assert.equal(result.status, scenario === "success" ? 0 : 1, result.stderr);
+    const state = JSON.parse(await readFile(commands.statePath, "utf8"));
+    const cluster = state.resources.find(({ kind }) => kind === "k3d-cluster");
+    assert.equal(cluster.nodeImage, image);
+    if (scenario === "success") {
+      assert.equal(cluster.kubernetesVersion, "v1.35.8+k3s1");
+    } else {
+      assert.match(result.stderr, /must resolve to Kubernetes 1\.35\.x/);
+      assert.equal(
+        (await commands.commands()).some(({ args }) => args[0] === "build"),
+        false,
+      );
+    }
+    const cleanup = commands.cleanup();
+    assert.equal(cleanup.status, 0, cleanup.stderr);
+  }
+});
+
+test("ordinary k3d preparation rejects mutable K3s overrides before creating state", async (t) => {
+  const root = await fixture(t);
+  const statePath = join(root, "state.json");
+  const result = runPrepare(["--lane", "repository-credentials-platform", "--state", statePath], {
+    OPENCLAW_CI_K3S_IMAGE: "rancher/k3s:latest",
+    OCC_DOCKER_BIN: join(root, "no-docker-command"),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /OPENCLAW_CI_K3S_IMAGE must be an immutable/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+});
 
 test("repository platform preparation binds runtime clients, an owned gateway and a fresh migrated database", async (t) => {
   const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform");
