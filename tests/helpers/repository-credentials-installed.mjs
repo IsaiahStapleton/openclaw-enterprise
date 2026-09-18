@@ -387,6 +387,10 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
                 body: output ? JSON.parse(output) : null,
               });
             } catch (error) {
+              if (error instanceof SyntaxError && [502, 503, 504].includes(response.statusCode)) {
+                reject(Object.assign(new Error("API is not ready"), { code: "API_NOT_READY" }));
+                return;
+              }
               reject(error);
             }
           });
@@ -433,7 +437,25 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
     assert.ok(result.body && Object.hasOwn(result.body, "data"));
     return result.body.data;
   };
-  await api("GET", "/installation");
+  const waitForInstallation = () =>
+    waitFor(
+      "installation API readiness",
+      async () => {
+        let result;
+        try {
+          result = await externalRequest("GET", "/installation");
+        } catch (error) {
+          if (["API_NOT_READY", "ECONNREFUSED", "ECONNRESET"].includes(error?.code)) return false;
+          throw error;
+        }
+        if ([502, 503, 504].includes(result.status)) return false;
+        assert.equal(result.status, 200, "installation readiness must return HTTP 200");
+        assert.ok(result.body && Object.hasOwn(result.body, "data"));
+        return true;
+      },
+      60000,
+    );
+  await waitForInstallation();
   const namespace = await api("POST", "/namespaces", { name: `repository-${suffix}` }, 201);
   const tenant = await waitFor("backing tenant namespace", async () => {
     const list = JSON.parse(
@@ -524,7 +546,7 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
       ],
       { timeout: 330000 },
     );
-    await api("GET", "/installation");
+    await waitForInstallation();
   };
   return {
     selection,
