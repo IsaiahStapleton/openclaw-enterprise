@@ -37,7 +37,9 @@ export function sendProviderRequest({
 
     // A dispatched request settles only after its actual close event.
     const settle = () => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       cancelDeadline();
       attempt.signal.removeEventListener("abort", fail);
@@ -45,13 +47,17 @@ export function sendProviderRequest({
       if (failed || !result) {
         result?.body.fill(0);
         reject(new Error("provider-unavailable"));
-      } else resolve(result);
+      } else {
+        resolve(result);
+      }
     };
     const fail = () => {
       failed = true;
       response?.destroy();
       request?.destroy();
-      if (!request) settle();
+      if (!request) {
+        settle();
+      }
     };
     const receiveResponse = (incoming: IncomingMessage) => {
       response = incoming;
@@ -65,8 +71,11 @@ export function sendProviderRequest({
         return;
       }
       incoming.on("data", function receiveChunk(chunk: Buffer) {
-        if (failed) chunk.fill(0);
-        else if (!responseBody.append(chunk)) fail();
+        if (failed) {
+          chunk.fill(0);
+        } else if (!responseBody.append(chunk)) {
+          fail();
+        }
       });
       incoming.on("end", function completeResponse() {
         if (!failed) {
@@ -85,7 +94,9 @@ export function sendProviderRequest({
       attempt.assertAdmitted();
       assertMaterialCurrent();
       const remaining = attempt.deadlineMonoMs - clock.monotonicNow();
-      if (attempt.signal.aborted || remaining <= 0) throw new Error("not-admitted");
+      if (attempt.signal.aborted || remaining <= 0) {
+        throw new Error("not-admitted");
+      }
       // No await separates this admission check, dispatch latch and socket creation.
       onDispatch();
       attempt.observeDispatch();

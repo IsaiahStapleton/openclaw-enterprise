@@ -6,6 +6,7 @@ import {
   createGitHubKeyOwner,
 } from "../../apps/repository-credentials/src/backends/github/index.ts";
 import { validateServiceConfig } from "../../apps/repository-credentials/src/config.ts";
+
 const clock = { wallNow: () => 1700000000000, monotonicNow: () => 0, schedule: () => () => {} };
 const config = validateServiceConfig({
   gateway: {
@@ -68,9 +69,9 @@ function driver(factory, profile = "git-full") {
   };
 }
 test("GitHub driver admits exact REST methods, conservative GraphQL writes and configured Git routes", () => {
-  const { factory } = setup(),
-    bound = driver(factory),
-    session = {};
+  const { factory } = setup();
+  const bound = driver(factory);
+  const session = {};
   const routes = [
     ["/repos/fixture/repository", ["GET"]],
     ["/repos/fixture/repository/pulls", ["GET", "POST"]],
@@ -82,7 +83,7 @@ test("GitHub driver admits exact REST methods, conservative GraphQL writes and c
     ["/graphql", ["POST"]],
     ["/meta", ["GET"]],
   ];
-  for (const [path, methods] of routes)
+  for (const [path, methods] of routes) {
     for (const method of ["GET", "POST", "PATCH", "DELETE", "PUT"]) {
       const plan = bound.driver.plan({
         authority: bound.authority,
@@ -90,8 +91,11 @@ test("GitHub driver admits exact REST methods, conservative GraphQL writes and c
         head: head(method, path),
       });
       assert.equal("kind" in plan, !methods.includes(method), `${method} ${path}`);
-      if (!("kind" in plan)) assert.equal(plan.effect, method === "GET" ? "read" : "write");
+      if (!("kind" in plan)) {
+        assert.equal(plan.effect, method === "GET" ? "read" : "write");
+      }
     }
+  }
   const git = driver(factory, "git-write");
   for (const service of ["upload", "receive"]) {
     assert.equal(
@@ -128,15 +132,16 @@ test("GitHub driver admits exact REST methods, conservative GraphQL writes and c
     "/repos/fixture/repository/issues?page=1&page=2",
     "/repos/fixture/repository/issues?per_page=101",
     "https://api.github.com/repos/fixture/repository",
-  ])
+  ]) {
     assert.equal(
       bound.driver.plan({ authority: bound.authority, session, head: head("GET", path) }).kind,
       "denied",
     );
+  }
 });
 test("pinned gh GraphQL media profile is admitted and reconstructed without widening REST media", () => {
-  const { factory } = setup(),
-    bound = driver(factory);
+  const { factory } = setup();
+  const bound = driver(factory);
   const accept =
     "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview";
   const plan = bound.driver.plan({
@@ -158,7 +163,7 @@ test("pinned gh GraphQL media profile is admitted and reconstructed without wide
     ["/graphql", { accept: `${accept}, application/xml` }],
     ["/graphql", { accept: "application/vnd.github.unqualified-preview+json" }],
     ["/graphql", { accept, "graphql-features": "unqualified" }],
-  ])
+  ]) {
     assert.equal(
       bound.driver.plan({
         authority: bound.authority,
@@ -167,13 +172,14 @@ test("pinned gh GraphQL media profile is admitted and reconstructed without wide
       }).kind,
       "denied",
     );
+  }
 });
 test("REST issue and PR responses preserve informational URLs on reads and successful mutations", () => {
-  const { factory } = setup(),
-    bound = driver(factory);
+  const { factory } = setup();
+  const bound = driver(factory);
   const api = "https://api.github.com/repos/fixture/repository";
   const gateway = "https://credentials.example/repos/fixture/repository";
-  for (const resource of ["issues", "pulls"])
+  for (const resource of ["issues", "pulls"]) {
     for (const [method, path, status] of [
       ["GET", `${resource}/1`, 200],
       ["GET", resource, 200],
@@ -229,7 +235,8 @@ test("REST issue and PR responses preserve informational URLs on reads and succe
         plan.responsePolicy.headers(status, { "content-type": "application/json" }),
       );
     }
-  for (const path of ["labels/bug", "milestones/1", "pulls/1/comments", "pulls/1/commits"])
+  }
+  for (const path of ["labels/bug", "milestones/1", "pulls/1/comments", "pulls/1/commits"]) {
     assert.equal(
       bound.driver.plan({
         authority: bound.authority,
@@ -238,10 +245,11 @@ test("REST issue and PR responses preserve informational URLs on reads and succe
       }).kind,
       "denied",
     );
+  }
 });
 test("followed JSON links validate field purpose while GraphQL human URLs remain intact", () => {
-  const { factory } = setup(),
-    bound = driver(factory);
+  const { factory } = setup();
+  const bound = driver(factory);
   const planFor = (method, path) =>
     bound.driver.plan({ authority: bound.authority, session: {}, head: head(method, path) });
   const issue = planFor("GET", "/repos/fixture/repository/issues/1");
@@ -251,8 +259,9 @@ test("followed JSON links validate field purpose while GraphQL human URLs remain
     "https://api.github.com/repos/fixture/repository/labels/bug",
     "https://api.github.com/repos/fixture/repository/issues/1#fragment",
     "https://api.github.com/repos/fixture/repository/pulls/1",
-  ])
+  ]) {
     assert.throws(() => issue.responsePolicy.rewriteJson({ url }), /unsafe-upstream-url/);
+  }
   assert.throws(
     () =>
       issue.responsePolicy.rewriteJson({
@@ -278,8 +287,8 @@ test("followed JSON links validate field purpose while GraphQL human URLs remain
   assert.deepEqual(planFor("POST", "/graphql").responsePolicy.rewriteJson(graphql), graphql);
 });
 test("response policy rewrites admitted machine links without changing human content or forwarding credential headers", () => {
-  const { factory } = setup(),
-    bound = driver(factory);
+  const { factory } = setup();
+  const bound = driver(factory);
   const plan = bound.driver.plan({
     authority: bound.authority,
     session: {},
@@ -320,9 +329,9 @@ test("response policy rewrites admitted machine links without changing human con
   );
 });
 test("gateway authentication is separate from upstream signing and rejects foreign attempt/result/plan objects", async () => {
-  const { factory, key, publicKey } = setup(),
-    bound = driver(factory),
-    bearer = "a".repeat(43);
+  const { factory, key, publicKey } = setup();
+  const bound = driver(factory);
+  const bearer = "a".repeat(43);
   assert.equal(
     factory.parseAuthentication(
       head("GET", "/fixture/repository.git/info/refs?service=git-upload-pack"),
@@ -416,8 +425,9 @@ test("native repository-ID pagination stays bound to the configured repository a
     "https://api.github.com/repositories/73/issues?after=bad%20cursor",
     `https://api.github.com/repositories/73/issues?after=${"a".repeat(1025)}`,
     `https://api.github.com/repositories/73/issues?after=${cursor}&after=${cursor}`,
-  ])
+  ]) {
     assert.throws(() => plan.responsePolicy.headers(200, { link: `<${url}>; rel="next"` }), {
       message: "unsafe-upstream-url",
     });
+  }
 });
