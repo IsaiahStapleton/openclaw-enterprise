@@ -1480,7 +1480,9 @@ test(
           "GET",
           `/namespaces/${embeddedNamespace.id}/agents/${embedded.agent.id}`,
         );
-        if (current.data.activeRevisionId !== undefined) return false;
+        if (current.data.activeRevisionId !== undefined) {
+          return false;
+        }
         const body = await scrape("worker");
         return (
           /occ_agents\{[^\n]*lifecycle_state="stopped"[^\n]*\} 1(?:\n|$)/.test(body) &&

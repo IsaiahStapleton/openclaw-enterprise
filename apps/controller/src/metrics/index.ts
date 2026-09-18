@@ -34,7 +34,9 @@ export function createOccMetrics(
   registry.setDefaultLabels({ service });
   collectDefaultMetrics({ register: registry, prefix: "occ_" });
   for (const metric of registry.getMetricsAsArray()) {
-    if (!processFamilies.has(metric.name.slice(4))) registry.removeSingleMetric(metric.name);
+    if (!processFamilies.has(metric.name.slice(4))) {
+      registry.removeSingleMetric(metric.name);
+    }
   }
   const requests =
     service === "api"
@@ -116,7 +118,9 @@ export function createOccMetrics(
   return {
     contentType: registry.contentType,
     observeHttp(route: string, method: string, status: number, seconds: number) {
-      if (route === "/healthz" || route === "/readyz") return;
+      if (route === "/healthz" || route === "/readyz") {
+        return;
+      }
       const labels = { route, method: methods.has(method) ? method : "OTHER" };
       requests?.inc({
         ...labels,
@@ -132,11 +136,14 @@ export function createOccMetrics(
       operationDuration?.observe({ operation }, seconds);
     },
     exposition(): Promise<string> {
-      if (inFlight !== undefined) return inFlight;
+      if (inFlight !== undefined) {
+        return inFlight;
+      }
       inFlight = (async () => {
         if (service === "worker") {
-          if (snapshot === undefined)
+          if (snapshot === undefined) {
             throw new Error("Worker metrics require a database snapshot.");
+          }
           const values = await snapshot();
           for (const [lifecycle_state, count] of Object.entries(values.agents)) {
             agents!.set({ lifecycle_state }, count);

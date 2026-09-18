@@ -60,8 +60,9 @@ test("metrics settings reject exposed development binds and disabled stray setti
     { OCC_METRICS_ENABLED: "false", OCC_METRICS_PORT: "9464" },
     { OCC_METRICS_ENABLED: "yes" },
     { OCC_METRICS_ENABLED: "true", OCC_METRICS_HOST: "127.0.0.1", OCC_METRICS_PORT: "0" },
-  ])
+  ]) {
     assert.throws(() => metricsConfiguration(environment, "development"));
+  }
   for (const host of ["::", "0:0:0:0:0:0:0:1", "::ffff:127.0.0.1", "127.0.0.2"]) {
     assert.throws(() =>
       metricsConfiguration(
@@ -119,7 +120,9 @@ test(
         async prepareRevision(revision, context) {
           // A transient dependency failure forces a real queue retry. Completion
           // time must include the retry delay without counting the failed pass.
-          if (++preparations === 1) throw new Error("Temporary compute outage");
+          if (++preparations === 1) {
+            throw new Error("Temporary compute outage");
+          }
           return fixture.compute.prepareRevision(revision, context);
         },
         async preflight() {},

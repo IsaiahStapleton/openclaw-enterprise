@@ -424,9 +424,13 @@ export class ControllerWorker {
             throw error;
           } finally {
             let kind: WorkKind = "namespace_ensure";
-            if (claim.agentTarget === "stopped") kind = "agent_stop";
-            else if (claim.revisionId !== undefined) kind = "agent_revision";
-            else if (claim.namespaceTarget === "deleted") kind = "namespace_delete";
+            if (claim.agentTarget === "stopped") {
+              kind = "agent_stop";
+            } else if (claim.revisionId !== undefined) {
+              kind = "agent_revision";
+            } else if (claim.namespaceTarget === "deleted") {
+              kind = "namespace_delete";
+            }
             this.metrics?.observeWork(
               kind,
               this.passOutcome,

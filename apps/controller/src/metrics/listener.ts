@@ -15,15 +15,18 @@ export function metricsConfiguration(
   const enabled = environment.OCC_METRICS_ENABLED ?? "false";
   const host = environment.OCC_METRICS_HOST;
   const rawPort = environment.OCC_METRICS_PORT;
-  if (enabled !== "true" && enabled !== "false")
+  if (enabled !== "true" && enabled !== "false") {
     throw new Error("OCC_METRICS_ENABLED must be true or false.");
+  }
   if (enabled === "false") {
-    if (host !== undefined || rawPort !== undefined)
+    if (host !== undefined || rawPort !== undefined) {
       throw new Error("Disabled metrics cannot have host or port settings.");
+    }
     return undefined;
   }
-  if (mode !== "development" && mode !== "production")
+  if (mode !== "development" && mode !== "production") {
     throw new Error("Metrics require development or production mode.");
+  }
   const port = Number(rawPort);
   if (
     rawPort === undefined ||
@@ -35,12 +38,14 @@ export function metricsConfiguration(
   ) {
     throw new Error("OCC_METRICS_PORT must be a distinct valid TCP port.");
   }
-  if (host === undefined || isIP(host) === 0)
+  if (host === undefined || isIP(host) === 0) {
     throw new Error("OCC_METRICS_HOST must be an explicit IP address.");
+  }
   const canonicalHost =
     isIP(host) === 6 ? new URL(`http://[${host}]/`).hostname.slice(1, -1) : host;
-  if (mode === "development" && host !== "127.0.0.1" && host !== "::1")
+  if (mode === "development" && host !== "127.0.0.1" && host !== "::1") {
     throw new Error("Development metrics require loopback.");
+  }
   if (
     mode === "production" &&
     (canonicalHost === "0.0.0.0" ||
@@ -75,10 +80,13 @@ export async function startMetricsListener(
       }, 5_000);
       try {
         const body = await metrics.exposition();
-        if (!response.writableEnded)
+        if (!response.writableEnded) {
           response.writeHead(200, { "Content-Type": metrics.contentType }).end(body);
+        }
       } catch {
-        if (!response.writableEnded) response.writeHead(503).end();
+        if (!response.writableEnded) {
+          response.writeHead(503).end();
+        }
       } finally {
         clearTimeout(deadline);
       }
@@ -95,8 +103,9 @@ export async function startMetricsListener(
     });
   });
   const address = server.address();
-  if (address === null || typeof address === "string")
+  if (address === null || typeof address === "string") {
     throw new Error("Metrics listener address unavailable.");
+  }
   let closing: Promise<void> | undefined;
   return {
     url: `http://${isIP(configuration.host) === 6 ? `[${configuration.host}]` : configuration.host}:${address.port}`,

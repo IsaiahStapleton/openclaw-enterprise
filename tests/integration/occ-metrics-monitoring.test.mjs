@@ -34,8 +34,12 @@ async function waitFor(read) {
   const end = Date.now() + 60_000;
   while (Date.now() < end) {
     try {
-      if (await read()) return;
-    } catch {}
+      if (await read()) {
+        return;
+      }
+    } catch {
+      // Monitoring services can reject requests while their listeners start.
+    }
     await delay(500);
   }
   assert.fail("Monitoring did not become ready within 60 seconds.");
@@ -177,7 +181,9 @@ test(
     );
     // Every shipped panel must be valid PromQL, even when a quiet/absent worker
     // has no samples. A real server, not a string matcher, checks the queries.
-    for (const panel of dashboard.panels) await query(panel.targets[0].expr);
+    for (const panel of dashboard.panels) {
+      await query(panel.targets[0].expr);
+    }
 
     await container(
       "grafana",

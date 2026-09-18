@@ -299,8 +299,9 @@ async function start() {
   process.once("SIGINT", shutdown);
 
   try {
-    if (metrics !== undefined)
+    if (metrics !== undefined) {
       metricsListener = await startMetricsListener(metrics, metricsSettings);
+    }
     await app.listen({ host: settings.host, port: settings.port });
   } catch (error) {
     await app.close();

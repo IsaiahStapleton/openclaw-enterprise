@@ -79,7 +79,9 @@ export class PostgresMetricsSnapshot {
           FROM occ.controller_work WHERE ${PENDING_WORK_PREDICATE}
         ) pending`);
       const row = result.rows[0] as PlatformMetricsSnapshot | undefined;
-      if (row === undefined) throw new Error("Metrics require the singleton Installation.");
+      if (row === undefined) {
+        throw new Error("Metrics require the singleton Installation.");
+      }
       return row;
     } catch (error) {
       failed = true;
