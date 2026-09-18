@@ -21,6 +21,7 @@ export function createGitHubProtocol({
   beforeIssueResponse,
   issueResponse = (response) => response,
   issueResponseGate,
+  revokeStatus = 204,
 }) {
   const { privateKey, publicKey } = keyPair;
   const authority = createTokenAuthority({
@@ -95,8 +96,14 @@ export function createGitHubProtocol({
         return;
       }
       if (request.method === "DELETE" && url.pathname === "/installation/token") {
+        if (revokeStatus !== 204) {
+          json(revokeStatus, { message: "Revocation not confirmed" });
+          return;
+        }
         authority.revoke(request.headers.authorization);
-        response.writeHead(204).end();
+        if (!disconnect(request, response, url)) {
+          response.writeHead(204).end();
+        }
         return;
       }
       if (!authority.authorize(request.headers.authorization)) {
