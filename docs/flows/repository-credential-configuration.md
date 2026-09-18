@@ -84,7 +84,7 @@ the open file with the named inode and its original metadata. Invalid or replace
 files fail before their contents become configuration. The reader clears its scratch
 buffer and awaits file closure before returning. Success transfers an independent
 buffer to its caller; failure returns no filesystem details. Configuration maps
-that failure to `invalid-configuration`.
+that failure to `invalid-configuration` and clears successfully returned bytes.
 
 ### 3. Validate configuration and construct material owners
 
@@ -140,7 +140,11 @@ startup validation, not live GitHub behavior or platform integration.
 
 ## Changelog
 
+- 2026-09-18 20:32: Reconcile the protected reader with controller startup and retain Kubernetes input ownership. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c426001fc353544f9623ead2e644c7857caa6d82)
+
 - 2026-09-18 19:10: Trace the protected reader result and validated backend selection while preserving file and material ownership. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - 4221fc5591b750cd59b459815a7bc327e98f295c)
+
+- 2026-09-18 18:51: Separate protected-file reading from configuration assembly while preserving validation and disposal. (authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772 - d29fac7d363eb1cfb3dab6306a81cc3b8daf395d)
 
 - 2026-09-18 09:45: Trace the accompanying controller-owned protected loader and Kubernetes private projection snapshots without relaxing ancestor validation. (authoring-run/99b8e474-5c94-4558-bce6-e7d6032f832c - 6fd1516de000bde46d4cd43e0d21ec3f0167d65e)
 

@@ -1,3 +1,5 @@
+import type { JsonObject, JsonValue } from "../../../drivers/repository-credentials/json-value.ts";
+
 type ResourceKind = "repository" | "issue" | "pull" | "comment" | "other";
 type LinkFields = Readonly<Record<string, RegExp>>;
 
@@ -40,14 +42,11 @@ export function classifyResource(repository: string, target: string): ResourceKi
 }
 
 function rewriteRecord(
-  value: unknown,
+  value: JsonObject,
   fields: LinkFields,
   dependencies: ResourceRewriteDependencies,
-): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  const result: Record<string, unknown> = { ...value };
+): JsonObject {
+  const result: JsonObject = { ...value };
   for (const [field, purpose] of Object.entries(fields)) {
     const item = result[field];
     if (typeof item === "string") {
@@ -59,25 +58,31 @@ function rewriteRecord(
 
 function rewriteItem(
   resource: ResourceKind,
-  value: unknown,
+  value: JsonValue,
   dependencies: ResourceRewriteDependencies,
-): unknown {
+): JsonValue {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
   const result = rewriteRecord(value, resourceFields[resource], dependencies);
-  if (resource !== "issue" || !result || typeof result !== "object" || Array.isArray(result)) {
-    return result;
+  const pullRequest = result.pull_request;
+  if (
+    resource === "issue" &&
+    pullRequest !== undefined &&
+    pullRequest !== null &&
+    typeof pullRequest === "object" &&
+    !Array.isArray(pullRequest)
+  ) {
+    result.pull_request = rewriteRecord(pullRequest, { url: pullUrl }, dependencies);
   }
-  const record = result as Record<string, unknown>;
-  if (record.pull_request !== undefined) {
-    record.pull_request = rewriteRecord(record.pull_request, { url: pullUrl }, dependencies);
-  }
-  return record;
+  return result;
 }
 
 /** Only qualified resource links are followed; other nested and human data stays intact. */
 export function createResourceRewriter(
   resource: ResourceKind,
   dependencies: ResourceRewriteDependencies,
-): (value: unknown) => unknown {
+): (value: JsonValue) => JsonValue {
   return (value) =>
     Array.isArray(value)
       ? value.map((item) => rewriteItem(resource, item, dependencies))

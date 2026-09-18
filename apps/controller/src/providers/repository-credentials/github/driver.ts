@@ -9,7 +9,8 @@ import type { ProviderTransport } from "./provider-transport.ts";
 import type { RoutePolicy } from "./routes.ts";
 import type { GitHubConfiguration, GitHubKeyOwner } from "./types.ts";
 import { createCredentialAcquisition } from "./driver/acquisition.ts";
-import { createCredentialAccess } from "./driver/access.ts";
+import { createCredentialAuthentication } from "./driver/access.ts";
+import { createCredentialRetirement } from "./driver/retirement.ts";
 import { createGitHubDriverState } from "./driver/state.ts";
 
 export { sameAuthority } from "./driver/state.ts";
@@ -39,12 +40,13 @@ export function createGitHubDriver(options: GitHubDriverOptions): RepositoryBack
     permissions,
     exchange,
   });
-  const { retire, withAuthentication } = createCredentialAccess({
+  const retire = createCredentialRetirement({
     state,
     custody,
     clock,
     exchange,
   });
+  const withAuthentication = createCredentialAuthentication({ state, custody, clock });
   return Object.freeze<RepositoryBackend>({
     binding,
     replacement: "overlap" as const,

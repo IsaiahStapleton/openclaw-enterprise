@@ -3,29 +3,14 @@ import assert from "node:assert/strict";
 import { createServer as httpServer, request } from "node:http";
 import { createServer as httpsServer } from "node:https";
 import { connect } from "node:net";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { execFileSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
 import { inspectRequestHead } from "../../apps/controller/src/drivers/repository-credentials/transport/request.ts";
 import { createUpstreamSender } from "../../apps/controller/src/drivers/repository-credentials/transport/upstream.ts";
 import { sendError } from "../../apps/controller/src/drivers/repository-credentials/transport/errors.ts";
+import { createSystemClock } from "../../apps/controller/src/drivers/repository-credentials/clock.ts";
+import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
+import { createTlsMaterial, listen } from "../fixtures/repository-credentials/process.mjs";
 
-const clock = {
-  wallNow: Date.now,
-  monotonicNow: () => performance.now(),
-  schedule(ms, callback) {
-    const id = setTimeout(callback, ms);
-    return () => clearTimeout(id);
-  },
-};
-const listen = (server) => new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-const close = (server) =>
-  new Promise((resolve) => {
-    server.closeAllConnections();
-    server.close(resolve);
-  });
 const exchange = (port, path, body = Buffer.alloc(0), headers = {}) =>
   new Promise((resolve, reject) => {
     const outgoing = request(
@@ -60,37 +45,17 @@ test(
   "repository transport framing, bounded streams and dispatch outcomes",
   { timeout: 10000 },
   async (t) => {
-    const directory = await mkdtemp(join(tmpdir(), "repository-transport-"));
-    execFileSync(
-      "openssl",
-      [
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-keyout",
-        join(directory, "key.pem"),
-        "-out",
-        join(directory, "cert.pem"),
-        "-days",
-        "1",
-        "-subj",
-        "/CN=localhost",
-        "-addext",
-        "subjectAltName=IP:127.0.0.1,DNS:localhost",
-      ],
-      { stdio: "ignore" },
-    );
-    const key = await readFile(join(directory, "key.pem"));
-    const cert = await readFile(join(directory, "cert.pem"));
+    const resources = createResourceScope();
+    t.after(() => resources.close());
+    const clock = createSystemClock();
+    const tls = await createTlsMaterial(resources);
     const received = [];
     const outcomes = [];
     const privateCases = new Map();
     let dispatches = 0;
     let gateOpen = true;
     let observeStreamingChunk;
-    const upstream = httpsServer({ key, cert }, async (req, res) => {
+    const upstream = httpsServer(tls, async (req, res) => {
       const chunks = [];
       try {
         for await (const chunk of req) {
@@ -130,8 +95,7 @@ test(
       res.writeHead(200, { "content-type": "application/octet-stream" });
       res.end(Buffer.concat(chunks));
     });
-    await listen(upstream);
-    const origin = `https://127.0.0.1:${upstream.address().port}`;
+    const origin = await listen(resources, upstream);
     const gateway = httpServer(async (req, res) => {
       const parsed = inspectRequestHead(req, {
         authority: "gateway.example",
@@ -182,7 +146,7 @@ test(
         trustedUpstreamOrigins: trustedOrigins,
         headerBytes: privateCase?.headerBytes ?? 32768,
         headerPairs: privateCase?.headerPairs ?? 64,
-        upstreamCa: cert,
+        upstreamCa: tls.ca,
         clock,
       });
       if (privateCase?.addOriginAfterConstruction) {
@@ -220,13 +184,8 @@ test(
       }
     });
     gateway.on("clientError", (_error, socket) => socket.destroy());
-    await listen(gateway);
+    await listen(resources, gateway);
     const port = gateway.address().port;
-    t.after(async () => {
-      await close(gateway);
-      await close(upstream);
-      await rm(directory, { recursive: true, force: true });
-    });
 
     await t.test(
       "gzip input is decoded incrementally and upstream authentication is reconstructed",
@@ -308,7 +267,7 @@ test(
       gateOpen = true;
       assert.equal(received.length, before);
     });
-    await t.test("private headers are canonical and bounded before dispatch", async () => {
+    await t.test("private headers are canonical and bounded before dispatch", async (t) => {
       let getterCalled = false;
       const accessor = Object.defineProperty({}, "authorization", {
         enumerable: true,
@@ -321,31 +280,51 @@ test(
         accept: "*/*",
       });
       const invalid = [
-        { headers: { authorization: "Bearer owner", Authorization: "Bearer shadow" } },
-        { headers: { "accept-encoding": "identity", "Accept-Encoding": "gzip" } },
-        { headers: inherited },
-        { headers: accessor },
-        { headers: { [Symbol("header")]: "ignored" } },
-        { headers: { authorization: 42 } },
-        { headers: { "bad name": "value" } },
-        { headers: { authorization: "Bearer value\r\nx-extra: injected" } },
         {
+          name: "duplicate authorization casing",
+          headers: { authorization: "Bearer owner", Authorization: "Bearer shadow" },
+        },
+        {
+          name: "duplicate transport header casing",
+          headers: { "accept-encoding": "identity", "Accept-Encoding": "gzip" },
+        },
+        { name: "inherited authentication", headers: inherited },
+        { name: "accessor authentication", headers: accessor },
+        { name: "symbol header name", headers: { [Symbol("header")]: "ignored" } },
+        { name: "non-string authentication", headers: { authorization: 42 } },
+        { name: "invalid header name", headers: { "bad name": "value" } },
+        {
+          name: "authentication line injection",
+          headers: { authorization: "Bearer value\r\nx-extra: injected" },
+        },
+        {
+          name: "too many private headers",
           headers: Object.fromEntries(
             Array.from({ length: 65 }, (_, index) => [`x-${index}`, "a"]),
           ),
         },
-        { headers: { "x-large": "a".repeat(32768) } },
-        { headers: { authorization: "Bearer fixture-provider-only" }, headerPairs: 4 },
-        { headers: { authorization: "Bearer fixture-provider-only" }, headerBytes: 100 },
+        { name: "oversized private header", headers: { "x-large": "a".repeat(32768) } },
+        {
+          name: "reconstructed headers exceed pair limit",
+          headers: { authorization: "Bearer fixture-provider-only" },
+          headerPairs: 4,
+        },
+        {
+          name: "reconstructed headers exceed byte limit",
+          headers: { authorization: "Bearer fixture-provider-only" },
+          headerBytes: 100,
+        },
       ];
-      for (const [index, value] of invalid.entries()) {
-        const target = `/private-headers/${index}`;
-        privateCases.set(target, value);
-        const before = dispatches;
-        assert.equal((await exchange(port, target)).status, 502);
-        assert.equal(outcomes.at(-1).outcome.kind, "not-dispatched");
-        assert.equal(dispatches, before);
-        privateCases.delete(target);
+      for (const [index, { name, ...value }] of invalid.entries()) {
+        await t.test(name, async () => {
+          const target = `/private-headers/${index}`;
+          privateCases.set(target, value);
+          const before = dispatches;
+          assert.equal((await exchange(port, target)).status, 502);
+          assert.equal(outcomes.at(-1).outcome.kind, "not-dispatched");
+          assert.equal(dispatches, before);
+          privateCases.delete(target);
+        });
       }
       assert.equal(getterCalled, false);
 
@@ -435,23 +414,35 @@ test(
     );
     await t.test(
       "duplicate authorization, wrong authority and absolute targets deny before forwarding",
-      async () => {
+      async (t) => {
         const before = received.length;
-        for (const head of [
-          "GET /echo HTTP/1.1\r\nHost: gateway.example\r\nAuthorization: Bearer one\r\nAuthorization: Bearer two",
-          "GET /echo HTTP/1.1\r\nHost: wrong.example",
-          "GET https://gateway.example/echo HTTP/1.1\r\nHost: gateway.example",
-          "POST /echo HTTP/1.1\r\nHost: gateway.example\r\nContent-Length: 0\r\nTransfer-Encoding: chunked",
-        ]) {
-          const raw = await new Promise((resolve, reject) => {
-            const socket = connect(port, "127.0.0.1");
-            let output = "";
-            socket.on("connect", () => socket.end(`${head}\r\nConnection: close\r\n\r\n`));
-            socket.on("data", (chunk) => (output += chunk));
-            socket.on("error", reject);
-            socket.on("close", () => resolve(output));
+        const invalidHeads = [
+          {
+            name: "duplicate authorization",
+            head: "GET /echo HTTP/1.1\r\nHost: gateway.example\r\nAuthorization: Bearer one\r\nAuthorization: Bearer two",
+          },
+          { name: "wrong authority", head: "GET /echo HTTP/1.1\r\nHost: wrong.example" },
+          {
+            name: "absolute request target",
+            head: "GET https://gateway.example/echo HTTP/1.1\r\nHost: gateway.example",
+          },
+          {
+            name: "conflicting body framing",
+            head: "POST /echo HTTP/1.1\r\nHost: gateway.example\r\nContent-Length: 0\r\nTransfer-Encoding: chunked",
+          },
+        ];
+        for (const { name, head } of invalidHeads) {
+          await t.test(name, async () => {
+            const raw = await new Promise((resolve, reject) => {
+              const socket = connect(port, "127.0.0.1");
+              let output = "";
+              socket.on("connect", () => socket.end(`${head}\r\nConnection: close\r\n\r\n`));
+              socket.on("data", (chunk) => (output += chunk));
+              socket.on("error", reject);
+              socket.on("close", () => resolve(output));
+            });
+            assert.ok(raw === "" || raw.startsWith("HTTP/1.1 400"));
           });
-          assert.ok(raw === "" || raw.startsWith("HTTP/1.1 400"));
         }
         assert.equal(received.length, before);
       },

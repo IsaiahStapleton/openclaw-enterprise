@@ -26,7 +26,6 @@ import {
 
 test("GitHub driver admits exact REST methods, conservative GraphQL writes and configured Git routes", async (t) => {
   const { factory, bind } = await createGitHubPlanningFixture(t);
-  const bound = bind();
   const routes = [
     ["/repos/fixture/repository", ["GET"]],
     ["/repos/fixture/repository/pulls", ["GET", "POST"]],
@@ -55,8 +54,16 @@ test("GitHub driver admits exact REST methods, conservative GraphQL writes and c
       }
     });
   }
-  for (const profile of ["git-read", "git-write", "git-full"]) {
-    for (const service of ["upload", "receive"]) {
+  const gitScenarios = [
+    { profile: "git-read", service: "upload", admitted: true },
+    { profile: "git-read", service: "receive", admitted: false },
+    { profile: "git-write", service: "upload", admitted: true },
+    { profile: "git-write", service: "receive", admitted: true },
+    { profile: "git-full", service: "upload", admitted: true },
+    { profile: "git-full", service: "receive", admitted: true },
+  ];
+  for (const { profile, service, admitted } of gitScenarios) {
+    await t.test(`${profile} ${service}-pack discovery and RPC`, () => {
       const git = bind(profile);
       assert.equal(
         factory.unauthenticated(
@@ -73,28 +80,34 @@ test("GitHub driver admits exact REST methods, conservative GraphQL writes and c
       ]) {
         assert.equal(
           "kind" in git.plan(request),
-          profile === "git-read" && service === "receive",
+          !admitted,
           `${profile} ${request.method} ${request.rawTarget}`,
         );
       }
-    }
+    });
   }
   for (const profile of ["git-read", "git-write"]) {
-    const git = bind(profile);
     for (const request of [head("GET", "/repos/fixture/repository"), head("POST", "/graphql")]) {
-      assert.equal(git.plan(request).kind, "denied");
+      await t.test(`${profile} denies ${request.method} ${request.rawTarget}`, () => {
+        assert.equal(bind(profile).plan(request).kind, "denied");
+      });
     }
   }
   assert.throws(() => factory.resolve("read-write"), /unsupported-profile/);
-  for (const path of [
-    "/repos/foreign/repo",
-    "/repos/fixture/repository/../repository",
-    "/repos/fixture%2frepository",
-    "/repos/fixture/repository/issues?page=1&page=2",
-    "/repos/fixture/repository/issues?per_page=101",
-    "https://api.github.com/repos/fixture/repository",
+  for (const { name, rawTarget } of [
+    { name: "foreign repository", rawTarget: "/repos/foreign/repo" },
+    { name: "raw parent traversal", rawTarget: "/repos/fixture/repository/../repository" },
+    { name: "encoded repository separator", rawTarget: "/repos/fixture%2frepository" },
+    { name: "duplicate page", rawTarget: "/repos/fixture/repository/issues?page=1&page=2" },
+    { name: "oversized page", rawTarget: "/repos/fixture/repository/issues?per_page=101" },
+    {
+      name: "absolute request target",
+      rawTarget: "https://api.github.com/repos/fixture/repository",
+    },
   ]) {
-    assert.equal(bound.plan(head("GET", path)).kind, "denied");
+    await t.test(`denies ${name}`, () => {
+      assert.equal(bind().plan(head("GET", rawTarget)).kind, "denied");
+    });
   }
 });
 test("pinned gh GraphQL media profile is admitted and reconstructed without widening REST media", async (t) => {
@@ -114,18 +127,35 @@ test("pinned gh GraphQL media profile is admitted and reconstructed without wide
   assert.equal(plan.requestHeaders.accept, accept);
   assert.equal(plan.requestHeaders["content-type"], "application/json");
   assert.equal(plan.requestHeaders["graphql-features"], "merge_queue");
-  for (const [path, headers] of [
-    ["/repos/fixture/repository/issues", { accept }],
-    ["/graphql", { accept: `${accept}, application/xml` }],
-    ["/graphql", { accept: "application/vnd.github.unqualified-preview+json" }],
-    ["/graphql", { accept, "graphql-features": "unqualified" }],
+  for (const { name, path, headers } of [
+    {
+      name: "GraphQL media on REST",
+      path: "/repos/fixture/repository/issues",
+      headers: { accept },
+    },
+    {
+      name: "additional XML media",
+      path: "/graphql",
+      headers: { accept: `${accept}, application/xml` },
+    },
+    {
+      name: "unqualified preview media",
+      path: "/graphql",
+      headers: { accept: "application/vnd.github.unqualified-preview+json" },
+    },
+    {
+      name: "unqualified GraphQL feature",
+      path: "/graphql",
+      headers: { accept, "graphql-features": "unqualified" },
+    },
   ]) {
-    assert.equal(bound.plan(head("POST", path, headers)).kind, "denied");
+    await t.test(`denies ${name}`, () => {
+      assert.equal(bind().plan(head("POST", path, headers)).kind, "denied");
+    });
   }
 });
 test("REST issue and PR responses preserve informational URLs on reads and successful mutations", async (t) => {
   const { bind } = await createGitHubPlanningFixture(t);
-  const bound = bind();
   const gateway = "https://credentials.example/repos/fixture/repository";
   for (const [resource, buildResponse] of [
     ["issues", issueResponse],
@@ -160,7 +190,9 @@ test("REST issue and PR responses preserve informational URLs on reads and succe
     }
   }
   for (const path of ["labels/bug", "milestones/1", "pulls/1/comments", "pulls/1/commits"]) {
-    assert.equal(bound.plan(head("GET", `/repos/fixture/repository/${path}`)).kind, "denied");
+    await t.test(`informational ${path} remains unfollowable`, () => {
+      assert.equal(bind().plan(head("GET", `/repos/fixture/repository/${path}`)).kind, "denied");
+    });
   }
 });
 test("followed JSON links validate field purpose while GraphQL human URLs remain intact", async (t) => {
@@ -168,14 +200,22 @@ test("followed JSON links validate field purpose while GraphQL human URLs remain
   const bound = bind();
   const planFor = (method, path) => bound.plan(head(method, path));
   const issue = planFor("GET", "/repos/fixture/repository/issues/1");
-  for (const url of [
-    "https://other.example/steal",
-    "https://api.github.com/repos/other/repo/issues/1",
-    "https://api.github.com/repos/fixture/repository/labels/bug",
-    "https://api.github.com/repos/fixture/repository/issues/1#fragment",
-    "https://api.github.com/repos/fixture/repository/pulls/1",
+  for (const { name, url } of [
+    { name: "foreign origin", url: "https://other.example/steal" },
+    { name: "foreign repository", url: "https://api.github.com/repos/other/repo/issues/1" },
+    {
+      name: "informational resource",
+      url: "https://api.github.com/repos/fixture/repository/labels/bug",
+    },
+    { name: "fragment", url: "https://api.github.com/repos/fixture/repository/issues/1#fragment" },
+    {
+      name: "pull URL in issue field",
+      url: "https://api.github.com/repos/fixture/repository/pulls/1",
+    },
   ]) {
-    assert.throws(() => issue.responsePolicy.rewriteJson({ url }), /unsafe-upstream-url/);
+    await t.test(`rejects ${name}`, () => {
+      assert.throws(() => issue.responsePolicy.rewriteJson({ url }), /unsafe-upstream-url/);
+    });
   }
   assert.throws(
     () =>
@@ -259,31 +299,53 @@ test("native repository-ID pagination stays bound to the configured repository a
   const cursor = "Y3Vyc29yOnYyOjE=";
   const plan = bound.plan(head("GET", target));
   for (const direction of ["after", "before"]) {
-    const query = `state=all&per_page=1&${direction}=${encodeURIComponent(cursor)}&page=2`;
-    const canonical = `${target}?${query}`;
-    const headers = plan.responsePolicy.headers(200, {
-      link: `<https://api.github.com/repositories/73/issues?${query}>; rel="next"`,
+    await t.test(`${direction} cursor rewrites to the admitted issue route`, () => {
+      const query = `state=all&per_page=1&${direction}=${encodeURIComponent(cursor)}&page=2`;
+      const canonical = `${target}?${query}`;
+      const headers = plan.responsePolicy.headers(200, {
+        link: `<https://api.github.com/repositories/73/issues?${query}>; rel="next"`,
+      });
+      assert.equal(headers.link, `<https://credentials.example${canonical}>; rel="next"`);
+      assert.equal(bound.plan(head("GET", canonical)).target, canonical);
+      assert.equal(bound.plan(head("POST", canonical)).kind, "denied");
+      assert.equal(bind("git-write").plan(head("GET", canonical)).kind, "denied");
     });
-    assert.equal(headers.link, `<https://credentials.example${canonical}>; rel="next"`);
-    assert.equal(bound.plan(head("GET", canonical)).target, canonical);
-    assert.equal(bound.plan(head("POST", canonical)).kind, "denied");
-    assert.equal(bind("git-write").plan(head("GET", canonical)).kind, "denied");
   }
   // A native ID is response metadata, never an additional caller-selected repository route.
   assert.equal(bound.plan(head("GET", "/repositories/73/issues")).kind, "denied");
-  for (const url of [
-    "https://api.github.com/repositories/74/issues?page=2",
-    "https://api.github.com/repositories/730/issues?page=2",
-    "https://other.example/repositories/73/issues?page=2",
-    "https://api.github.com/repositories/73/actions/runs?page=2",
-    `https://api.github.com/repositories/73/issues/1?after=${cursor}`,
-    `https://api.github.com/repositories/73/pulls?after=${cursor}`,
-    "https://api.github.com/repositories/73/issues?after=bad%20cursor",
-    `https://api.github.com/repositories/73/issues?after=${"a".repeat(1025)}`,
-    `https://api.github.com/repositories/73/issues?after=${cursor}&after=${cursor}`,
+  for (const { name, url } of [
+    { name: "foreign repository ID", url: "https://api.github.com/repositories/74/issues?page=2" },
+    { name: "repository ID prefix", url: "https://api.github.com/repositories/730/issues?page=2" },
+    { name: "foreign origin", url: "https://other.example/repositories/73/issues?page=2" },
+    {
+      name: "unsupported resource",
+      url: "https://api.github.com/repositories/73/actions/runs?page=2",
+    },
+    {
+      name: "cursor on issue item",
+      url: `https://api.github.com/repositories/73/issues/1?after=${cursor}`,
+    },
+    {
+      name: "cursor on pull collection",
+      url: `https://api.github.com/repositories/73/pulls?after=${cursor}`,
+    },
+    {
+      name: "cursor with encoded space",
+      url: "https://api.github.com/repositories/73/issues?after=bad%20cursor",
+    },
+    {
+      name: "oversized cursor",
+      url: `https://api.github.com/repositories/73/issues?after=${"a".repeat(1025)}`,
+    },
+    {
+      name: "duplicate cursor",
+      url: `https://api.github.com/repositories/73/issues?after=${cursor}&after=${cursor}`,
+    },
   ]) {
-    assert.throws(() => plan.responsePolicy.headers(200, { link: `<${url}>; rel="next"` }), {
-      message: "unsafe-upstream-url",
+    await t.test(`rejects ${name}`, () => {
+      assert.throws(() => plan.responsePolicy.headers(200, { link: `<${url}>; rel="next"` }), {
+        message: "unsafe-upstream-url",
+      });
     });
   }
 });

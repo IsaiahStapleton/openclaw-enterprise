@@ -1,44 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  credentialDriverModule,
-  githubProviderModule,
-} from "../fixtures/repository-credentials/runtime.mjs";
+import { credentialDriverModule } from "../fixtures/repository-credentials/runtime.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import { createAlternateDriverFactory } from "../fixtures/repository-credentials/alternate.mjs";
 import {
-  fixtureAppId,
-  fixtureInstallationId,
   fixtureRepository,
-  fixtureRepositoryId,
   startGitHubFixture,
 } from "../fixtures/repository-credentials/github.mjs";
+import { requestHead } from "../fixtures/repository-credentials/builders.mjs";
+import { createGitHubServiceFactory } from "../fixtures/repository-credentials/service-resources.mjs";
 import {
   createServiceConfiguration,
   eventually,
 } from "../fixtures/repository-credentials/service.mjs";
 
 const { createCredentialService } = await credentialDriverModule("service");
-const { createGitHubDriverFactory, createGitHubKeyOwner } = await githubProviderModule("index");
 const completed = { kind: "completed", status: 200 };
 const unavailable = { kind: "not-dispatched", code: "exchange-unavailable" };
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-function requestHead(clock, rawTarget = "/team/nested/project") {
-  return {
-    method: "GET",
-    rawTarget,
-    headers: {},
-    receivedMonoMs: clock.monotonicNow(),
-    contentEncoding: "identity",
-    framing: { kind: "none", bytes: undefined },
-  };
-}
-
-function reserve(service, opened, clock, rawTarget) {
+function reserve(service, opened, clock, rawTarget = "/team/nested/project") {
   const ref = service.reserve(
     opened.bearer,
-    requestHead(clock, rawTarget),
+    requestHead("GET", rawTarget, {}, { receivedMonoMs: clock.monotonicNow() }),
     new AbortController().signal,
   );
   assert.notEqual(ref.kind, "denied");
@@ -55,27 +39,11 @@ test(
     try {
       for (const providerInstanceId of ["github-first", "github-second"]) {
         const upstream = await startGitHubFixture(t, { clock });
-        const key = createGitHubKeyOwner({
+        const factory = await createGitHubServiceFactory(t, {
+          config,
           privateKey: upstream.privateKey,
-          appId: fixtureAppId,
           clock,
-        });
-        t.after(() => key.close());
-        const factory = createGitHubDriverFactory({
-          configuration: {
-            kind: "github-app",
-            providerInstanceId,
-            configVersion: "1",
-            appId: fixtureAppId,
-            installationId: fixtureInstallationId,
-            repositoryId: fixtureRepositoryId,
-            repository: fixtureRepository,
-            privateKeyFile: "/unused-fixture-key.pem",
-          },
-          key,
-          gatewayOrigin: config.gateway.publicOrigin,
-          limits: config.limits,
-          clock,
+          providerInstanceId,
           trustedEndpoints: {
             apiOrigin: upstream.origin,
             gitOrigin: upstream.origin,
@@ -149,7 +117,14 @@ test(
           assert.deepEqual(
             target.service.reserve(
               source.opened.bearer,
-              requestHead(clock, `/repos/${fixtureRepository}`),
+              requestHead(
+                "GET",
+                `/repos/${fixtureRepository}`,
+                {},
+                {
+                  receivedMonoMs: clock.monotonicNow(),
+                },
+              ),
               new AbortController().signal,
             ),
             { kind: "denied", status: 401, code: "session-unavailable" },

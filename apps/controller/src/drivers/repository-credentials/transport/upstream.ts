@@ -4,6 +4,7 @@ import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import type { Clock, HeaderFields, RequestHead } from "../backend-contracts.ts";
 import type { ExchangeSender } from "../internal-contracts.ts";
+import type { JsonValue } from "../json-value.ts";
 import { ByteLimit, watchdog } from "./streams.ts";
 import { responseHeaders, safeResponseHeaders } from "./response-headers.ts";
 import { createUpstreamHeaders } from "./request-headers.ts";
@@ -213,9 +214,8 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
         }
         let bytes = Buffer.concat(parts);
         if (plan.responsePolicy.rewriteJson !== undefined) {
-          bytes = Buffer.from(
-            JSON.stringify(plan.responsePolicy.rewriteJson(JSON.parse(bytes.toString("utf8")))),
-          );
+          const value: JsonValue = JSON.parse(bytes.toString("utf8"));
+          bytes = Buffer.from(JSON.stringify(plan.responsePolicy.rewriteJson(value)));
           if (bytes.length > plan.limits.responseBytes) {
             throw new Error("limit-exceeded");
           }

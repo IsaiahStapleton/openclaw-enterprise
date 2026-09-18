@@ -1,6 +1,8 @@
 import { randomBytes, createHash } from "node:crypto";
+import { createAlternatePlan, denied } from "./policy.mjs";
 
-export const denied = Object.freeze({ kind: "denied", status: 403, code: "route-denied" });
+export { denied } from "./policy.mjs";
+
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 export function createAlternateDriver({
@@ -162,41 +164,14 @@ export function createAlternateDriver({
       controls.observe?.({ kind: "settlement-completed", attemptId: original.attemptId });
     },
     plan(request) {
-      if (
-        request.authority.sessionId !== authority.sessionId ||
-        request.head.rawTarget !== "/team/nested/project" ||
-        !["GET", "POST"].includes(request.head.method)
-      ) {
-        return denied;
-      }
-      const plan = Object.freeze({
+      const plan = createAlternatePlan(request, {
+        sessionId: authority.sessionId,
         origin,
-        target: "/v2/projects/team%2Fnested%2Fproject",
-        method: request.head.method,
-        category: request.head.method === "POST" ? "source-write" : "source-read",
-        effect: request.head.method === "POST" ? "write" : "read",
-        requestHeaders: Object.freeze({
-          accept: "application/json",
-          ...(request.head.method === "POST" ? { "content-type": "application/octet-stream" } : {}),
-        }),
-        limits: Object.freeze({
-          inputWireBytes: 1024,
-          inputDecodedBytes: 1024,
-          responseBytes: 8192,
-          totalMs: operationMs,
-          inputMs: operationMs,
-          firstHeaderMs: operationMs,
-          stallMs: operationMs,
-          connectMs: operationMs,
-        }),
-        responsePolicy: Object.freeze({
-          body: "stream",
-          headers: (_status, headers) => ({
-            "content-type": headers["content-type"] ?? "application/json",
-          }),
-          rewriteJson: undefined,
-        }),
+        operationMs,
       });
+      if (plan === denied) {
+        return plan;
+      }
       plans.add(plan);
       controls.observe?.({ kind: "plan", method: plan.method });
       return plan;

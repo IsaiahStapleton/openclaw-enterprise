@@ -121,7 +121,10 @@ export function gatewayRequest(fixture, target, { method = "GET", body, headers 
   });
 }
 
-export async function eventually(check, { timeoutMs = 3000 } = {}) {
+export async function eventually(
+  check,
+  { timeoutMs = 3000, message = "expected fixture state was not observed" } = {},
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = check();
@@ -130,5 +133,5 @@ export async function eventually(check, { timeoutMs = 3000 } = {}) {
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("expected fixture state was not observed");
+  throw new Error(message);
 }

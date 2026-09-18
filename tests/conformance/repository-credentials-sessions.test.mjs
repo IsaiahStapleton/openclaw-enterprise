@@ -3,6 +3,7 @@ import test from "node:test";
 import { createCredentialService } from "../../apps/controller/src/drivers/repository-credentials/service.ts";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import { createAlternateDriverFactory } from "../fixtures/repository-credentials/alternate.mjs";
+import { requestHead } from "../fixtures/repository-credentials/builders.mjs";
 
 const config = () => ({
   sessionPolicy: {
@@ -23,14 +24,8 @@ const config = () => ({
     exchangeMs: 300000,
   },
 });
-const head = (clock) => ({
-  method: "GET",
-  rawTarget: "/team/nested/project",
-  headers: {},
-  receivedMonoMs: clock.monotonicNow(),
-  contentEncoding: "identity",
-  framing: { kind: "none", bytes: undefined },
-});
+const head = (clock) =>
+  requestHead("GET", "/team/nested/project", {}, { receivedMonoMs: clock.monotonicNow() });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const send = async (_request, context) =>
   context.gate.dispatch(

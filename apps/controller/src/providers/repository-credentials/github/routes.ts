@@ -52,8 +52,11 @@ function requestHeaders(head: RequestHead, selected: Route): Readonly<Record<str
     if (head.headers["git-protocol"] === "version=2") {
       headers["git-protocol"] = "version=2";
     }
-    if (head.method === "POST") {
-      headers["content-type"] = head.headers["content-type"]!;
+    if (selected.kind === "git-fetch" || selected.kind === "git-push") {
+      headers["content-type"] =
+        selected.kind === "git-fetch"
+          ? "application/x-git-upload-pack-request"
+          : "application/x-git-receive-pack-request";
     }
     headers.accept = head.headers.accept ?? "*/*";
   } else {
@@ -66,7 +69,7 @@ function requestHeaders(head: RequestHead, selected: Route): Readonly<Record<str
       headers["content-type"] = "application/json";
     }
     if (head.headers["graphql-features"]) {
-      headers["graphql-features"] = head.headers["graphql-features"];
+      headers["graphql-features"] = "merge_queue";
     }
   }
   return Object.freeze(headers);

@@ -1,4 +1,4 @@
-import "../fixtures/repository-credentials/regressions.mjs";
+import { registerCredentialFixtureRegressions } from "../fixtures/repository-credentials/regressions.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { request } from "node:https";
@@ -22,6 +22,9 @@ import { run, temporaryDirectory } from "../fixtures/repository-credentials/proc
 import { removeRemoteBranches } from "../fixtures/repository-credentials/workflows.mjs";
 import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
 import { startServiceListeners } from "../fixtures/repository-credentials/service-resources.mjs";
+import { requestHead } from "../fixtures/repository-credentials/builders.mjs";
+
+registerCredentialFixtureRegressions();
 
 test("controlled Git fixture runs real smart HTTP and records an accepted push before disconnect", async (t) => {
   const upstream = await startGitSmartHttpFixture(t);
@@ -69,14 +72,8 @@ test("second backend retains renewal through expiry and finalizes through the re
   const service = createCredentialService({ config, factory, clock });
   t.after(() => service.shutdown(1000));
   const opened = service.open({ durationSeconds: 86400, profile: "git-write" });
-  const head = () => ({
-    method: "GET",
-    rawTarget: "/team/nested/project",
-    headers: {},
-    receivedMonoMs: clock.monotonicNow(),
-    contentEncoding: "identity",
-    framing: { kind: "none", bytes: undefined },
-  });
+  const head = () =>
+    requestHead("GET", "/team/nested/project", {}, { receivedMonoMs: clock.monotonicNow() });
   const perform = async (sender) => {
     const exchange = service.reserve(opened.bearer, head(), new AbortController().signal);
     assert.notEqual(exchange.kind, "denied");
@@ -127,33 +124,23 @@ test("second backend uses the production HTTPS sender and distinct native authen
   ) {
     return;
   }
+  const resources = createResourceScope();
+  t.after(() => resources.close());
   const clock = createControlledClock();
-  const config = await createServiceConfiguration(t);
-  const upstream = await startAlternateUpstream(t, { clock });
+  const config = await createServiceConfiguration(resources);
+  const upstream = await startAlternateUpstream(resources, { clock });
   const factory = createAlternateDriverFactory({
     origin: upstream.origin,
     gatewayOrigin: config.gateway.publicOrigin,
     clock,
     accepted: upstream.accepted,
   });
-  const [{ createCredentialService }, { startListeners }] = await Promise.all([
-    credentialDriverModule("service"),
-    credentialDriverModule("server"),
-  ]);
-  const service = createCredentialService({ config, factory, clock });
-  const listeners = await startListeners({
+  const { service } = await startServiceListeners(resources, {
     config,
     tls: upstream.tls,
-    service,
     factory,
     clock,
-    trustedUpstreamOrigins: new Set([upstream.origin]),
-    upstreamCa: upstream.tls.ca,
-  });
-  t.after(async () => {
-    listeners.stopAdmission();
-    await service.shutdown(1000);
-    await listeners.close();
+    upstreamOrigins: [upstream.origin],
   });
   const opened = service.open({ durationSeconds: 86400, profile: "git-write" });
   const fixture = { config, opened, tls: upstream.tls };

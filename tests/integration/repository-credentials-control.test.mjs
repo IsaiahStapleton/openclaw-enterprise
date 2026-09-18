@@ -16,10 +16,7 @@ import {
 } from "../fixtures/repository-credentials/alternate.mjs";
 import {
   startGitHubFixture,
-  fixtureAppId,
-  fixtureInstallationId,
   fixtureRepository,
-  fixtureRepositoryId,
 } from "../fixtures/repository-credentials/github.mjs";
 import {
   createTlsMaterial,
@@ -34,6 +31,10 @@ import {
   createServiceConfiguration,
   eventually,
 } from "../fixtures/repository-credentials/service.mjs";
+import {
+  createGitHubServiceFactory,
+  startServiceListeners,
+} from "../fixtures/repository-credentials/service-resources.mjs";
 
 function control(socketPath, method, path, value, extra = {}) {
   const body = value === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(value));
@@ -114,11 +115,7 @@ async function dropControlResponse(t, target) {
 async function admissionFixture(t, onCreate) {
   const resources = createResourceScope();
   t.after(() => resources.close());
-  const [{ createCredentialService }, { startListeners }, { callControl }] = await Promise.all([
-    credentialDriverModule("service"),
-    credentialDriverModule("server"),
-    credentialDriverModule("client/operator"),
-  ]);
+  const { callControl } = await credentialDriverModule("client/operator");
   const clock = createControlledClock();
   const tls = await createTlsMaterial(resources);
   const base = await createServiceConfiguration(resources, { sessions: 1 });
@@ -141,20 +138,12 @@ async function admissionFixture(t, onCreate) {
         },
       }
     : driverFactory;
-  const service = createCredentialService({ config, factory, clock });
-  const listeners = await startListeners({
+  const { service, listeners } = await startServiceListeners(resources, {
     config,
     tls,
-    service,
     factory,
     clock,
-    trustedUpstreamOrigins: new Set([upstream.origin]),
-    upstreamCa: tls.ca,
-  });
-  resources.after(async () => {
-    listeners.stopAdmission();
-    await service.shutdown(1000);
-    await listeners.close();
+    upstreamOrigins: [upstream.origin],
   });
   return {
     resources,
@@ -331,54 +320,26 @@ test(
   "private control socket opens, inspects and closes real sessions with bounded input",
   { timeout: 10000 },
   async (t) => {
-    const [{ createSystemClock }, { createCredentialService }, { startListeners }] =
-      await Promise.all([
-        credentialDriverModule("clock"),
-        credentialDriverModule("service"),
-        credentialDriverModule("server"),
-      ]);
+    const resources = createResourceScope();
+    t.after(() => resources.close());
+    const { createSystemClock } = await credentialDriverModule("clock");
     const clock = createSystemClock();
-    const tls = await createTlsMaterial(t);
-    const base = await createServiceConfiguration(t);
+    const tls = await createTlsMaterial(resources);
+    const base = await createServiceConfiguration(resources);
     const config = { ...base, gateway: { ...base.gateway, listen: "127.0.0.1:0" } };
-    const github = await startGitHubFixture(t, { clock, tls });
-    const [{ createGitHubDriverFactory }, { createGitHubKeyOwner }] = await Promise.all([
-      githubProviderModule("index"),
-      githubProviderModule("material"),
-    ]);
-    const key = createGitHubKeyOwner({ privateKey: github.privateKey, appId: fixtureAppId, clock });
-    const factory = createGitHubDriverFactory({
-      configuration: {
-        kind: "github-app",
-        providerInstanceId: "github-fixture",
-        configVersion: "1",
-        appId: fixtureAppId,
-        installationId: fixtureInstallationId,
-        repositoryId: fixtureRepositoryId,
-        repository: fixtureRepository,
-        privateKeyFile: "/unused-fixture-key.pem",
-      },
-      key,
-      gatewayOrigin: config.gateway.publicOrigin,
-      limits: config.limits,
+    const github = await startGitHubFixture(resources, { clock, tls });
+    const factory = await createGitHubServiceFactory(resources, {
+      config,
       clock,
+      privateKey: github.privateKey,
       trustedEndpoints: { apiOrigin: github.origin, gitOrigin: github.origin, ca: tls.ca },
     });
-    const service = createCredentialService({ config, factory, clock });
-    const listeners = await startListeners({
+    const { listeners } = await startServiceListeners(resources, {
       config,
       tls,
-      service,
       factory,
       clock,
-      trustedUpstreamOrigins: new Set([github.origin]),
-      upstreamCa: tls.ca,
-    });
-    t.after(async () => {
-      listeners.stopAdmission();
-      await service.shutdown(1000);
-      await listeners.close();
-      key.close();
+      upstreamOrigins: [github.origin],
     });
     assert.equal((await lstat(config.gateway.controlSocket)).mode & 0o777, 0o600);
     const opened = await control(config.gateway.controlSocket, "POST", "/v1/sessions", {
@@ -397,39 +358,36 @@ test(
     assert.equal(closed.status, 200);
     assert.notEqual(closed.body.state, "OPEN");
     assert.equal(closed.body.bearer, undefined);
-    for (const profile of ["read-write", "app-full"]) {
-      assert.equal(
-        (
-          await control(config.gateway.controlSocket, "POST", "/v1/sessions", {
-            durationSeconds: 86400,
-            profile,
-          })
-        ).status,
-        400,
-      );
+    const invalidInputs = [
+      {
+        name: "unrecognized read-write profile",
+        input: { durationSeconds: 86400, profile: "read-write" },
+        status: 400,
+      },
+      {
+        name: "unrecognized app-full profile",
+        input: { durationSeconds: 86400, profile: "app-full" },
+        status: 400,
+      },
+      { name: "zero duration", input: { durationSeconds: 0 }, status: 400 },
+      {
+        name: "caller-selected provider",
+        input: { durationSeconds: 86400, provider: "caller-selected" },
+        status: 400,
+      },
+      { name: "oversized control body", input: { padding: "x".repeat(17000) }, status: 413 },
+    ];
+    for (const scenario of invalidInputs) {
+      await t.test(scenario.name, async () => {
+        const response = await control(
+          config.gateway.controlSocket,
+          "POST",
+          "/v1/sessions",
+          scenario.input,
+        );
+        assert.equal(response.status, scenario.status);
+      });
     }
-    assert.equal(
-      (await control(config.gateway.controlSocket, "POST", "/v1/sessions", { durationSeconds: 0 }))
-        .status,
-      400,
-    );
-    assert.equal(
-      (
-        await control(config.gateway.controlSocket, "POST", "/v1/sessions", {
-          durationSeconds: 86400,
-          provider: "caller-selected",
-        })
-      ).status,
-      400,
-    );
-    assert.equal(
-      (
-        await control(config.gateway.controlSocket, "POST", "/v1/sessions", {
-          padding: "x".repeat(17000),
-        })
-      ).status,
-      413,
-    );
     const agentStatus = await new Promise((resolve, reject) => {
       const outgoing = tlsRequest(
         {
@@ -449,10 +407,10 @@ test(
       outgoing.end();
     });
     assert.equal(agentStatus, 401);
-    const clientParent = await temporaryDirectory(t);
+    const clientParent = await temporaryDirectory(resources);
     const clientDirectory = join(clientParent, "session");
     const operator = credentialClientPath("operator");
-    const relay = await dropControlResponse(t, config.gateway.controlSocket);
+    const relay = await dropControlResponse(resources, config.gateway.controlSocket);
     const admissionId = `${Date.now()}-${randomUUID()}`;
     const failed = await run(
       process.execPath,
@@ -574,21 +532,13 @@ test(
   "close after asynchronous authentication prevents actual upstream dispatch",
   { timeout: 10000 },
   async (t) => {
-    const [
-      { createSystemClock },
-      { createCredentialService },
-      { startListeners },
-      { startAlternateUpstream },
-    ] = await Promise.all([
-      credentialDriverModule("clock"),
-      credentialDriverModule("service"),
-      credentialDriverModule("server"),
-      import("../fixtures/repository-credentials/alternate.mjs"),
-    ]);
+    const resources = createResourceScope();
+    t.after(() => resources.close());
+    const { createSystemClock } = await credentialDriverModule("clock");
     const clock = createSystemClock();
-    const tls = await createTlsMaterial(t);
-    const upstream = await startAlternateUpstream(t, { tls });
-    const base = await createServiceConfiguration(t);
+    const tls = await createTlsMaterial(resources);
+    const upstream = await startAlternateUpstream(resources, { tls });
+    const base = await createServiceConfiguration(resources);
     const config = { ...base, gateway: { ...base.gateway, listen: "127.0.0.1:0" } };
     let resume;
     const barrier = new Promise((resolve) => {
@@ -601,22 +551,14 @@ test(
       accepted: upstream.accepted,
       controls: { beforeSend: () => barrier },
     });
-    const service = createCredentialService({ config, factory, clock });
-    const listeners = await startListeners({
+    const { service, listeners } = await startServiceListeners(resources, {
       config,
       tls,
-      service,
       factory,
       clock,
-      trustedUpstreamOrigins: new Set([upstream.origin]),
-      upstreamCa: tls.ca,
+      upstreamOrigins: [upstream.origin],
     });
-    t.after(async () => {
-      resume();
-      listeners.stopAdmission();
-      await service.shutdown(1000);
-      await listeners.close();
-    });
+    resources.after(resume);
     const opened = service.open({ durationSeconds: 86400, profile: "git-write" });
     const result = new Promise((resolve) => {
       const outgoing = tlsRequest(
@@ -656,34 +598,14 @@ test(
   "Agent response completion and premature close preserve lifecycle outcomes",
   { timeout: 10000 },
   async (t) => {
-    const cleanups = [];
-    const resources = { after: (cleanup) => cleanups.push(cleanup) };
-    t.after(async () => {
-      const failures = [];
-      for (const cleanup of cleanups.reverse()) {
-        try {
-          await cleanup();
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length) {
-        throw new AggregateError(failures, "listener fixture cleanup failed");
-      }
-    });
-    const [
-      { createSystemClock },
-      { createCredentialService },
-      { startListeners },
-      { createGitHubDriverFactory },
-      { createGitHubKeyOwner },
-    ] = await Promise.all([
-      credentialDriverModule("clock"),
-      credentialDriverModule("service"),
-      credentialDriverModule("server"),
-      githubProviderModule("index"),
-      githubProviderModule("material"),
-    ]);
+    const resources = createResourceScope();
+    t.after(() => resources.close());
+    const [{ createSystemClock }, { createCredentialService }, { startListeners }] =
+      await Promise.all([
+        credentialDriverModule("clock"),
+        credentialDriverModule("service"),
+        credentialDriverModule("server"),
+      ]);
     const clock = createSystemClock();
     const tls = await createTlsMaterial(resources);
     // A single exchange slot makes leaked ownership observable on the next request.
@@ -718,22 +640,10 @@ test(
       }
     });
     const origin = await listen(resources, upstream);
-    const key = createGitHubKeyOwner({ privateKey: github.privateKey, appId: fixtureAppId, clock });
-    const factory = createGitHubDriverFactory({
-      configuration: {
-        kind: "github-app",
-        providerInstanceId: "github-fixture",
-        configVersion: "1",
-        appId: fixtureAppId,
-        installationId: fixtureInstallationId,
-        repositoryId: fixtureRepositoryId,
-        repository: fixtureRepository,
-        privateKeyFile: "/unused-fixture-key.pem",
-      },
-      key,
-      gatewayOrigin: config.gateway.publicOrigin,
-      limits: config.limits,
+    const factory = await createGitHubServiceFactory(resources, {
+      config,
       clock,
+      privateKey: github.privateKey,
       trustedEndpoints: { apiOrigin: github.origin, gitOrigin: origin, ca: tls.ca },
     });
     const actual = createCredentialService({ config, factory, clock });
@@ -767,7 +677,6 @@ test(
         assert.equal(summary.disposedSessions, summary.closedSessions);
       } finally {
         await listeners.close();
-        key.close();
       }
     });
     const opened = actual.open({ durationSeconds: 86400, profile: "git-write" });
@@ -1095,38 +1004,16 @@ test(
           incoming.pipe(outgoing);
         });
         const origin = await listen(resources, relay);
-        const [
-          { createCredentialService },
-          { startListeners },
-          { createGitHubDriverFactory, createGitHubKeyOwner },
-        ] = await Promise.all([
+        const [{ createCredentialService }, { startListeners }] = await Promise.all([
           credentialDriverModule("service"),
           credentialDriverModule("server"),
-          githubProviderModule("index"),
         ]);
         const base = await createServiceConfiguration(resources);
         const config = { ...base, gateway: { ...base.gateway, listen: "127.0.0.1:0" } };
-        const key = createGitHubKeyOwner({
+        const factory = await createGitHubServiceFactory(resources, {
+          config,
+          clock,
           privateKey: github.privateKey,
-          appId: fixtureAppId,
-          clock,
-        });
-        resources.after(() => key.close());
-        const factory = createGitHubDriverFactory({
-          configuration: {
-            kind: "github-app",
-            providerInstanceId: "github-fixture",
-            configVersion: "1",
-            appId: fixtureAppId,
-            installationId: fixtureInstallationId,
-            repositoryId: fixtureRepositoryId,
-            repository: fixtureRepository,
-            privateKeyFile: "/unused-fixture-key.pem",
-          },
-          key,
-          gatewayOrigin: config.gateway.publicOrigin,
-          limits: config.limits,
-          clock,
           trustedEndpoints: { apiOrigin: origin, gitOrigin: origin, ca: tls.ca },
         });
         const service = createCredentialService({ config, factory, clock });

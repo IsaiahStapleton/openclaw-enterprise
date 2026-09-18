@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:https";
 import { createTlsMaterial, listen } from "./process.mjs";
-import { createAlternateDriver, denied } from "./alternate/driver.mjs";
+import { createAlternateDriver } from "./alternate/driver.mjs";
+import { createAlternateUpstreamHandler } from "./alternate/upstream.mjs";
+import { denied, resolveAlternateProfile } from "./alternate/policy.mjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -12,38 +14,14 @@ export async function startAlternateUpstream(
   tls ??= await createTlsMaterial(t);
   const accepted = new Map();
   const trace = [];
-  const server = createServer(tls, (request, response) => {
-    const key = request.headers["x-repository-key"];
-    if (typeof key !== "string" || (accepted.get(digest(key)) ?? 0) <= clock.wallNow()) {
-      response.writeHead(401).end();
-      return;
-    }
-    const entry = { method: request.method, path: request.url };
-    trace.push(entry);
-    void (async () => {
-      if (request.method === "POST") {
-        const hash = createHash("sha256");
-        entry.bodyBytes = 0;
-        entry.committed = false;
-        for await (const chunk of request) {
-          hash.update(chunk);
-          entry.bodyBytes += chunk.length;
-          await controls.beforeWriteChunk?.();
-        }
-        // This backend invalidates predecessors on rotation. Checking again at
-        // commit detects rotation while a streamed write still owns that key.
-        if ((accepted.get(digest(key)) ?? 0) <= clock.wallNow()) {
-          response.writeHead(401).end();
-          return;
-        }
-        entry.bodyDigest = hash.digest("hex");
-        entry.committed = true;
-      }
-      response
-        .writeHead(200, { "content-type": "application/json" })
-        .end(JSON.stringify({ repository: "team/nested/project", revision: trace.length }));
-    })().catch(() => response.destroy());
+  const handleRequest = createAlternateUpstreamHandler({
+    authorize: (key) =>
+      typeof key === "string" && !((accepted.get(digest(key)) ?? 0) <= clock.wallNow()),
+    observe: (entry) => trace.push(entry),
+    beforeWriteChunk: () => controls.beforeWriteChunk?.(),
+    revision: () => trace.length,
   });
+  const server = createServer(tls, handleRequest);
   return { origin: await listen(t, server), tls, trace, accepted };
 }
 
@@ -70,20 +48,7 @@ export function createAlternateDriverFactory({
     events,
     drivers,
     resolve(profile) {
-      if (profile !== "git-write") {
-        throw new Error("unsupported-profile");
-      }
-      return Object.freeze({
-        binding,
-        client: Object.freeze({
-          gatewayOrigin,
-          gitRemote: `${gatewayOrigin}/team/nested/project`,
-          gitUsername: "session",
-          canonicalApiHost: "forge.example.test",
-          apiHost: new URL(gatewayOrigin).host,
-          repository: "team/nested/project",
-        }),
-      });
+      return resolveAlternateProfile(profile, { binding, gatewayOrigin });
     },
     parseAuthentication(_head, authorization) {
       return authorization.startsWith("Bearer ") ? authorization.slice(7) : denied;

@@ -70,7 +70,11 @@ factory. `apps/controller/src/composition/repository-credentials/service.ts:runS
 then composes the common service and listeners without starting the controller
 API or worker.
 `apps/controller/src/providers/repository-credentials/github/factory.ts:createGitHubDriverFactory`
-resolves grants, parses client authentication and composes session-bound drivers.
+composes session-bound drivers. It delegates grant resolution to
+`apps/controller/src/providers/repository-credentials/github/grants.ts:createGrantResolver`
+and client authentication to
+`apps/controller/src/providers/repository-credentials/github/gateway-authentication.ts:createGatewayAuthentication`.
+A registry-selected factory retains the frozen repository identity and access profile.
 The App signing key belongs to the process, independently of each session's
 installation tokens. Shared grant, client configuration and session status contracts
 live in `packages/contracts/src/repository-credentials.ts` and leave through its
@@ -209,10 +213,17 @@ wall-clock changes cannot shorten custody or restart the use lifetime.
 `apps/controller/src/providers/repository-credentials/github/driver.ts:createGitHubDriver`
 composes acquisition and capture through
 `apps/controller/src/providers/repository-credentials/github/driver/acquisition.ts:createCredentialAcquisition`,
-authentication and retirement through
-`apps/controller/src/providers/repository-credentials/github/driver/access.ts:createCredentialAccess`,
+authentication through
+`apps/controller/src/providers/repository-credentials/github/driver/access.ts:createCredentialAuthentication`,
+retirement through
+`apps/controller/src/providers/repository-credentials/github/driver/retirement.ts:createCredentialRetirement`,
 and session-bound plans, credentials and original outcomes through
 `apps/controller/src/providers/repository-credentials/github/driver/state.ts:createGitHubDriverState`.
+Acquisition observes and captures material inside the transport response callback
+through `apps/controller/src/providers/repository-credentials/github/driver/acquisition-response.ts:observeAcquisitionResponse`.
+Its pure `classifyAcquisitionResponse` checks status, scope and usable lifetime;
+acquisition then rechecks admission synchronously before accepting the original
+credential. Rejected material retains its cleanup owner.
 Its bounded credential transport,
 `apps/controller/src/providers/repository-credentials/github/provider-transport.ts:createProviderTransport`,
 uses `apps/controller/src/providers/repository-credentials/github/provider-transport/request.ts:sendProviderRequest`
@@ -317,7 +328,11 @@ A structural flow check does not establish any of those runtime results.
 
 ## Changelog
 
+- 2026-09-18 20:32: Trace the extracted Provider operations and preserve registry-selected authority through controller composition. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c426001fc353544f9623ead2e644c7857caa6d82)
+
 - 2026-09-18 19:10: Keep internal admission and bearer results with the credential engine and identify the shared session status contract. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - 4221fc5591b750cd59b459815a7bc327e98f295c)
+
+- 2026-09-18 18:51: Refresh operation, authentication and protected-input owners after behavior-preserving extraction. (authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772 - d29fac7d363eb1cfb3dab6306a81cc3b8daf395d)
 
 - 2026-09-18 12:03: Keep admitted TLS exchanges outside the header timeout while bounding incomplete handshakes and headers. (authoring-run/36d61593-c993-48a9-9b32-1bcb6e898a3d - b0b0b8b7ba98d2c8506ba261334aba1e769a87ef)
 
