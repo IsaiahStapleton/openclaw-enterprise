@@ -2,11 +2,10 @@
 
 ## Active workspace boundary
 
-Approved milestones permit the active TypeScript/pnpm workspace, its selected
-controller and Driver implementations, reviewed PostgreSQL persistence, and
-production Kubernetes packaging described in the current implementation specs.
-Do not introduce platform resources or deployment behavior outside those
-approved milestones.
+Stay within approved implementation milestones: the active TypeScript/pnpm
+workspace, selected controller and Drivers, reviewed PostgreSQL persistence, and
+production Kubernetes packaging. Do not add platform resources or deployment
+behavior outside those milestones.
 
 The development API must bind only to loopback, reject nondevelopment
 configuration, admit only explicitly provisioned development identities,
@@ -25,11 +24,10 @@ Do not create a competing architecture specification in this checkout.
 
 ## Repository layout
 
-Read and follow [Repository layout and conventions](docs/layout.md) before
-adding or moving code, tests, tooling, or documentation. Place changes with the
-existing owner and preserve the declared workspace and package boundaries.
-Update that guide and affected navigation in the same change when directories,
-ownership, or placement conventions change.
+Follow [Repository layout and conventions](docs/layout.md) before adding or
+moving files. Preserve existing ownership and workspace/package boundaries.
+Update the guide and navigation when directories, ownership, or placement
+conventions change.
 
 ## Keep agents in their lane
 
@@ -54,26 +52,20 @@ Follow these rules when developing or changing code.
 
 ### Build platform capabilities
 
-We are developing a platform. Every new capability must belong to a platform
-primitive, rather than exist as a one-off implementation. First identify the
-existing primitive that owns the capability. Extend that primitive when its
-contract is insufficient, or introduce a new primitive when none fits, within
-the approved architecture and milestone scope.
+Every new capability must belong to a platform primitive. Identify its existing
+owner, extend that contract when insufficient, or introduce a primitive only
+when none fits and the approved architecture and milestones permit it.
 
-Implement the owning primitive's contract and connect the capability to its
-platform lifecycle and composition. A standalone helper or a class named after
-a primitive does not establish that integration. Internal helpers may support
-the implementation, but must not substitute for the platform capability.
+Implement the primitive's contract and integrate it with platform lifecycle and
+composition. Internal helpers may support this work; a standalone helper or
+suitably named class does not establish platform integration.
 
-In general, do not add a capability without a caller in the regular Agent
-workflow. Deliver the capability with that caller; defer speculative components
-until a real workflow needs them. A test-only caller does not satisfy this rule.
+Deliver capabilities with callers in the regular Agent workflow. Defer
+speculative components; test-only callers do not satisfy this requirement.
 
-For example, GitHub App token issuance should belong to an appropriate platform
-primitive. If implemented as a Provider, it must conform to the
-[Provider contract](docs/reference/providers.md) and participate in Provider
-composition; exposing only token minting and revocation methods is insufficient.
-This is the design concern illustrated by
+For example, GitHub App token issuance implemented as a Provider must follow the
+[Provider contract](docs/reference/providers.md) and participate in composition.
+Token minting and revocation alone are insufficient; see
 [PR #136](https://github.com/openclaw/openclaw-enterprise/pull/136).
 
 ### Require integration tests; reject low-value tests
@@ -162,12 +154,10 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
 - Top-level `specs/` records implementation proposals, milestones, and delivery
   history. Completed specifications do not override current feature reference.
 
-Keep `docs/design.md` and `docs/ARCHITECTURE.md` focused on system-level
-structure, ownership, trust boundaries, and major interactions. Update them only
-when a change alters that architectural understanding. Put feature details,
-configuration, edge cases, and delivery history in their owning reference, guide,
-flow, or specification. Add a concise link when needed; do not append an entry
-for every feature or PR.
+Keep `docs/design.md` and `docs/ARCHITECTURE.md` about system structure, ownership,
+trust boundaries, and major interactions; update them only for architectural
+changes. Put feature details, configuration, edge cases, and delivery history in
+their owning reference, guide, flow, or spec. Link as needed, without per-PR entries.
 
 Document new components under `docs/` in the same change: purpose, setup,
 boundaries, verification, and troubleshooting. Update navigation and affected
