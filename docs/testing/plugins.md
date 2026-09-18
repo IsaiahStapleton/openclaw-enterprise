@@ -36,7 +36,12 @@ Both native scenarios use Kubernetes. Provide
 `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`, and a scenario-specific database such as
 `OCC_TEST_PLUGIN_DRIVER_OPENCLAW_DATABASE_URL` or
 `OCC_TEST_PLUGIN_DRIVER_CODEX_CALENDAR_DATABASE_URL`. The OpenClaw scenario also
-requires `OPENAI_API_KEY` in the process environment.
+requires `OPENAI_API_KEY` in the process environment and a runtime image with
+`plugins install --no-enable` support. The repository still pins OpenClaw
+`2026.9.1`, which lacks that flag; update the pin after the prerequisite release.
+The extended scenario checks explicit tool allowlist composition, preserved
+plugin deny policy on a disabled deployment, and rejection of a later conflicting
+enabled selection before the replacement becomes ready.
 
 The Codex Google Calendar scenario additionally needs a Codex runtime image via
 `OCC_TEST_KUBERNETES_AGENT_IMAGE` or `OCC_TEST_KUBERNETES_CODEX_IMAGE`, an
@@ -56,6 +61,11 @@ a new upstream account. Never print credential values or resolved account
 identifiers.
 
 ## Current proof notes
+
+The policy-composition and installation changes have not been verified in a real
+Kubernetes Agent deployment. The new scenario requires the prerequisite OpenClaw
+release plus the cluster, database, image, and credentials above. Historical proof
+below does not cover these changes.
 
 The target port is based on branch `dev/kevinlin/plugin-driver-port`; the initial
 port commit was `185afba1608260adfa5b1fe9bda9ee700a4d9fee` in

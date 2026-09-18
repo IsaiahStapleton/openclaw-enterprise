@@ -639,6 +639,25 @@ function createNativePluginAssertions({ gatewayUrl, execGateway, proofMode = "op
     return { runtime: execution.label, ...summary };
   }
 
+  async function readOpenClawPluginPolicy(agent, pluginId) {
+    const execution = await execGateway(agent, [
+      "node",
+      "-e",
+      `const { readFileSync } = require("node:fs");
+       const config = JSON.parse(readFileSync("/home/node/.openclaw/openclaw.json", "utf8"));
+       process.stdout.write(JSON.stringify({
+         plugins: {
+           allow: config.plugins?.allow,
+           deny: config.plugins?.deny,
+           enabled: config.plugins?.entries?.[process.argv[1]]?.enabled,
+         },
+         tools: { allow: config.tools?.allow, alsoAllow: config.tools?.alsoAllow, deny: config.tools?.deny },
+       }));`,
+      pluginId,
+    ]);
+    return JSON.parse(execution.stdout);
+  }
+
   async function normalGatewayTurn({
     agent,
     gatewayToken,
@@ -846,7 +865,12 @@ function createNativePluginAssertions({ gatewayUrl, execGateway, proofMode = "op
     );
   }
 
-  return { normalGatewayTurn, assertSessionToolCallEvidence, assertNoSessionToolCallEvidence };
+  return {
+    normalGatewayTurn,
+    assertSessionToolCallEvidence,
+    assertNoSessionToolCallEvidence,
+    readOpenClawPluginPolicy,
+  };
 }
 
 export async function createPluginDriverRealFixture(
@@ -1314,6 +1338,7 @@ export async function createPluginDriverRealFixture(
     normalGatewayTurn: nativeAssertions.normalGatewayTurn,
     assertSessionToolCallEvidence: nativeAssertions.assertSessionToolCallEvidence,
     assertNoSessionToolCallEvidence: nativeAssertions.assertNoSessionToolCallEvidence,
+    readOpenClawPluginPolicy: nativeAssertions.readOpenClawPluginPolicy,
     bindOpenAIModelSecret,
   };
 }

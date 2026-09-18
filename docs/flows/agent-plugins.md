@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
-updated: 2026-09-09
-last_updated_session: codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7
+updated: 2026-09-18
+last_updated_session: codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed
 ---
 
 # Agent Plugin Deployment Flow
@@ -110,9 +110,14 @@ in its container's private temporary home.
 `apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:installOpenClawPlugins`
 
 For embedded OpenClaw, the entrypoint resolves the requested selection against
-the bundled OpenClaw catalog, writes the resulting policy into its private
-writable configuration, installs the supported npm package version with `--pin`
-and `--force`, refreshes the registry, then reapplies and checks the policy overlay.
+the bundled OpenClaw catalog and rejects conflicts with native plugin policy
+before installation. It merges generated tool grants into an existing nonempty
+`tools.allow`, otherwise `tools.alsoAllow`, preserving tool denies and profiles.
+The resulting configuration is private to the revision. Installation uses
+`--pin --force --no-enable` so native installation cannot change enablement or
+plugin allow/deny lists; preparation then refreshes the registry and verifies the
+admitted configuration. The runtime image must first gain the required native
+flag; the pinned release does not support it.
 Native inspection verifies plugin ID, package name, runtime/install version,
 recorded integrity, and the runtime source's containment in the install path.
 Failure stops startup before the replacement gateway becomes ready.
@@ -189,6 +194,8 @@ and Kubernetes gateway state database retain their Agent-owned lifecycle.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 17:38: Documented plugin policy conflict rejection, tool allowlist composition, and installation without enablement changes; runtime release and Kubernetes proof remain pending (codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed - 724dcb5)
 
 - 2026-09-08 16:05: Corrected Codex Linear support to the existing bridge path and kept live local-Kubernetes proof pending (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - 79021fa)
 - 2026-09-08 17:02: Recorded current Codex Linear proof boundary: native install/readiness passed, bridge app batch request passed, force-refresh app state showed Linear enabled/callable, and a normal turn invoked Linear `list_teams` before timing out in native `waitingOnApproval` without a result (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - 79021fa)
