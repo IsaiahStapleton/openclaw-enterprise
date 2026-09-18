@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { join } from "node:path";
-import {
-  createGitHubDriverFactory,
-  createGitHubKeyOwner,
-} from "../../apps/repository-credentials/src/backends/github/index.ts";
 import { validateServiceConfig } from "../../apps/repository-credentials/src/config.ts";
 import { createCredentialService } from "../../apps/repository-credentials/src/service.ts";
 import { createProviderQueue } from "../../apps/repository-credentials/src/provider-queue.ts";
@@ -13,13 +9,17 @@ import { createLifecycle } from "../../apps/repository-credentials/src/lifecycle
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import {
   startGitHubFixture,
-  fixtureAppId,
-  fixtureInstallationId,
   fixtureRepository,
   fixtureRepositoryId,
 } from "../fixtures/repository-credentials/github.mjs";
 import { temporaryDirectory } from "../fixtures/repository-credentials/process.mjs";
 import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
+import {
+  requestHead,
+  serviceConfigurationData,
+} from "../fixtures/repository-credentials/builders.mjs";
+import { createGitHubServiceFactory } from "../fixtures/repository-credentials/service-resources.mjs";
+import { eventually } from "../fixtures/repository-credentials/service.mjs";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -344,17 +344,6 @@ for (const action of ["retire", "finalize"]) {
   });
 }
 
-async function eventually(check) {
-  const deadline = Date.now() + 3000;
-  while (Date.now() < deadline) {
-    if (check()) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("expected lifecycle state was not observed");
-}
-
 for (const [profile, permissions] of [
   ["git-read", { metadata: "read", contents: "read" }],
   ["git-write", { metadata: "read", contents: "write" }],
@@ -369,37 +358,24 @@ for (const [profile, permissions] of [
       clock.wallNow() + (profile === "git-read" ? -5000 : 5000),
     );
     const directory = await temporaryDirectory(resources, "rcs-lifecycle-");
-    const config = validateServiceConfig({
-      limits: profile === "git-full" ? { exchangeMs: 1000, credentialMarginMs: 1 } : {},
-      gateway: {
-        publicOrigin: "https://credentials.example.test",
-        listen: "127.0.0.1:443",
-        controlSocket: join(directory, "control.sock"),
-      },
-      sessionPolicy: {
-        maximumDurationSeconds: 172800,
-        defaultProfile: "git-write",
-        allowedProfiles: ["git-read", "git-write", "git-full"],
-      },
-    });
+    const config = validateServiceConfig(
+      serviceConfigurationData({
+        limits: profile === "git-full" ? { exchangeMs: 1000, credentialMarginMs: 1 } : {},
+        gateway: {
+          publicOrigin: "https://credentials.example.test",
+          listen: "127.0.0.1:443",
+          controlSocket: join(directory, "control.sock"),
+        },
+        sessionPolicy: {
+          maximumDurationSeconds: 172800,
+        },
+      }),
+    );
     const github = await startGitHubFixture(resources, { clock: providerClock });
-    const key = createGitHubKeyOwner({ privateKey: github.privateKey, appId: fixtureAppId, clock });
-    resources.after(() => key.close());
-    const factory = createGitHubDriverFactory({
-      configuration: {
-        kind: "github-app",
-        providerInstanceId: "github-fixture",
-        configVersion: "1",
-        appId: fixtureAppId,
-        installationId: fixtureInstallationId,
-        repositoryId: fixtureRepositoryId,
-        repository: fixtureRepository,
-        privateKeyFile: "/unused-fixture-key.pem",
-      },
-      key,
+    const factory = await createGitHubServiceFactory(resources, {
+      config,
+      privateKey: github.privateKey,
       clock,
-      gatewayOrigin: config.gateway.publicOrigin,
-      limits: config.limits,
       trustedEndpoints: { apiOrigin: github.origin, gitOrigin: github.origin, ca: github.tls.ca },
     });
     const service = createCredentialService({ config, factory, clock });
@@ -408,16 +384,17 @@ for (const [profile, permissions] of [
     const reserve = () =>
       service.reserve(
         opened.bearer,
-        {
-          method: "POST",
-          rawTarget: `/${fixtureRepository}.git/git-${profile === "git-read" ? "upload" : "receive"}-pack`,
-          headers: {
+        requestHead(
+          "POST",
+          `/${fixtureRepository}.git/git-${profile === "git-read" ? "upload" : "receive"}-pack`,
+          {
             "content-type": `application/x-git-${profile === "git-read" ? "upload" : "receive"}-pack-request`,
           },
-          receivedMonoMs: clock.monotonicNow(),
-          contentEncoding: "identity",
-          framing: { kind: "length", bytes: 4 },
-        },
+          {
+            receivedMonoMs: clock.monotonicNow(),
+            framing: { kind: "length", bytes: 4 },
+          },
+        ),
         new AbortController().signal,
       );
     const perform = async () => {
@@ -490,14 +467,18 @@ for (const [profile, permissions] of [
       assert.deepEqual(await perform(), { kind: "completed", status: 200 });
       assert.equal(github.issuesOfTokens.length, 5);
       assert.equal(github.tokenState()[3].attempts, previousAttempts);
-      await eventually(() => github.tokenState()[3].revoked);
+      await eventually(() => github.tokenState()[3].revoked, {
+        message: `${profile}: predecessor was not retired after replacement`,
+      });
     }
     const deletesBefore = github.trace.filter((entry) => entry.method === "DELETE").length;
     await clock.advance(0, 2 * 3600000);
     assert.ok(github.tokenState().at(-1).expires > providerClock.wallNow());
     service.close(opened.session.sessionId);
     assert.equal(reserve().kind, "denied");
-    await eventually(() => service.status(opened.session.sessionId)?.state === "DISPOSED");
+    await eventually(() => service.status(opened.session.sessionId)?.state === "DISPOSED", {
+      message: `${profile}: lifecycle did not dispose after session closure`,
+    });
     assert.equal(github.tokenState().at(-1).revoked, true);
     assert.equal(
       github.trace.filter((entry) => entry.method === "DELETE").length,

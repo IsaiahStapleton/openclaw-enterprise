@@ -1,0 +1,88 @@
+import assert from "node:assert/strict";
+import { randomBytes, verify, createHash } from "node:crypto";
+import { fixtureAppId, fixtureRepositoryId } from "./metadata.mjs";
+
+export function createTokenAuthority({ clock, publicKey, lifetimeMs }) {
+  const tokens = new Map();
+  const issuesOfTokens = [];
+  const authenticationAttempts = [];
+  function tokenFrom(authorization) {
+    if (authorization?.startsWith("Basic ")) {
+      return Buffer.from(authorization.slice(6), "base64").toString().split(":").slice(1).join(":");
+    }
+    return authorization?.replace(/^(Bearer|token) /, "");
+  }
+  function authorize(authorization, boundary = "api") {
+    const token = tokens.get(tokenFrom(authorization));
+    authenticationAttempts.push({ tokenIndex: token?.index, boundary });
+    if (token) {
+      token.attempts++;
+    }
+    if (!token || token.revoked || token.expires <= clock.wallNow()) {
+      return false;
+    }
+    token.uses++;
+    return true;
+  }
+  function issue(authorization, body) {
+    const jwt = tokenFrom(authorization);
+    const [header, payload, signature] = jwt.split(".");
+    assert.equal(JSON.parse(Buffer.from(header, "base64url")).alg, "RS256");
+    assert.equal(
+      verify(
+        "sha256",
+        Buffer.from(`${header}.${payload}`),
+        publicKey,
+        Buffer.from(signature, "base64url"),
+      ),
+      true,
+    );
+    const claims = JSON.parse(Buffer.from(payload, "base64url"));
+    assert.equal(String(claims.iss), fixtureAppId);
+    assert.ok(claims.iat <= clock.wallNow() / 1000);
+    assert.ok(claims.exp > clock.wallNow() / 1000);
+    assert.ok(claims.exp - claims.iat <= 600);
+    assert.deepEqual(body.repository_ids.map(String), [fixtureRepositoryId]);
+    const permissions = body.permissions;
+    const acceptedPermissions = [
+      { metadata: "read", contents: "read" },
+      { metadata: "read", contents: "write" },
+      { metadata: "read", contents: "write", pull_requests: "write", issues: "write" },
+    ];
+    assert.ok(
+      acceptedPermissions.some(
+        (allowed) =>
+          Object.keys(permissions).length === Object.keys(allowed).length &&
+          Object.entries(allowed).every(([name, value]) => permissions[name] === value),
+      ),
+      "issuance requires an exact supported permission map",
+    );
+    const token = `fixture_access_${randomBytes(24).toString("hex")}`;
+    const expires = clock.wallNow() + lifetimeMs;
+    const index = tokens.size + 1;
+    tokens.set(token, { index, expires, revoked: false, uses: 0, attempts: 0 });
+    issuesOfTokens.push({
+      index,
+      jwtDigest: createHash("sha256").update(jwt).digest("hex"),
+      claims,
+      permissions: { ...permissions },
+      repositoryIds: [...body.repository_ids],
+      expires,
+    });
+    return { token, expires, permissions };
+  }
+  function revoke(authorization) {
+    const token = tokens.get(tokenFrom(authorization));
+    assert.ok(token, "retirement uses an owned provider token");
+    token.revoked = true;
+  }
+  return {
+    issue,
+    authorize,
+    revoke,
+    issuesOfTokens,
+    authenticationAttempts,
+    tokenIndex: (authorization) => tokens.get(tokenFrom(authorization))?.index,
+    tokenState: () => [...tokens.values()].map((token) => ({ ...token })),
+  };
+}

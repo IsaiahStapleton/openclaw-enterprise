@@ -119,6 +119,18 @@ test("credential source boundary rejects new raw capabilities in the real source
       'import { writeFile } from "node:fs/promises";',
       /unreviewed runtime import from node:fs\/promises/,
     ],
+    [
+      "configuration assembly cannot read outside the protected owner",
+      'import { open } from "node:fs/promises";',
+      /unreviewed runtime import from node:fs\/promises \(open\)/,
+      "config.ts",
+    ],
+    [
+      "protected input owner cannot become a filesystem sink",
+      'import { writeFile } from "node:fs/promises";',
+      /unreviewed runtime import from node:fs\/promises \(writeFile\)/,
+      "configuration/protected-file.ts",
+    ],
     ["console sink", 'console.log("credential");', /raw global console/],
     ["process output sink", 'process.stdout.write("credential");', /raw process capability stdout/],
     [

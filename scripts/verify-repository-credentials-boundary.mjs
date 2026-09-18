@@ -12,9 +12,11 @@ const reviewedImports = {
   "backends/github/provider-transport/request.ts": { "node:https": ["request"] },
   "config.ts": {
     "node:crypto": ["createPrivateKey"],
+    "node:tls": ["createSecureContext"],
+  },
+  "configuration/protected-file.ts": {
     "node:fs": ["constants"],
     "node:fs/promises": ["lstat", "open"],
-    "node:tls": ["createSecureContext"],
   },
   "lifecycle.ts": { "node:crypto": ["randomUUID"] },
   "sessions.ts": { "node:crypto": ["createHash", "randomBytes", "randomUUID"] },
@@ -48,7 +50,7 @@ const rawGlobals = new Set([
 ]);
 const reviewedProcessMembers = {
   "check-config.ts": ["argv", "exitCode", "stderr", "stdout"],
-  "config.ts": ["getuid"],
+  "configuration/protected-file.ts": ["getuid"],
 };
 const runtimeTypeScript = new Set([
   "TSAsExpression",
