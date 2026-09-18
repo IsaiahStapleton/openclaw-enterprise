@@ -73,6 +73,8 @@ Helm and Compute derive the hostname independently from these same settings;
 Helm does not rewrite the Installation Secret. The
 [Compute reference](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#private-agent-gateway-routes)
 defines the naming rule. It does not require an existing Agent gateway.
+If you override `gatewayRouting.envoyHttpsTargetPort` (default `10443`),
+set the same value in Helm and the Installation Compute configuration.
 
 To use an existing issuer instead of creating a CA, set
 `gatewayRouting.issuerRef.name`, with `kind` (default `ClusterIssuer`) and
@@ -133,22 +135,26 @@ fallback works when OCC and Envoy share a Pod CIDR. Never fabricate an address
 or admit direct workload access to compensate for native attribution failures.
 
 NetworkPolicy must restrict native gateway ingress to those Envoy Pods. The
-chart restricts proxy ingress to the OCC API and permits its required routing
+chart restricts proxy ingress to OCC API/worker Pods and Harness Pods in attached
+tenant namespaces, and permits its required routing
 and control-plane traffic. A trusted source CIDR by itself is not sufficient
 isolation. Restrict Kubernetes writes to the Gateway, attached HTTPRoutes,
 SecurityPolicy, native configuration, and namespace attachment labels to trusted
 operators and the scoped worker. Untrusted tenants must not be able to replace
 route authentication or attach their own routes.
 
-The chart mounts the service key only into the API and sets
+The chart mounts the service key into the API and worker and sets
 `OCC_GATEWAY_API_KEY_PATH`. Automatic CA mode projects only the root Secret's
 public `tls.crt` as `ca.crt` and sets `NODE_EXTRA_CA_CERTS`; the signing key is
 never mounted into OCC. The Pod waits for that Secret before starting. With an
-explicit issuer, the API uses the optional configured CA bundle instead.
-No credential or endpoint map is mounted into the worker,
-Agent, or gateway. The key is an Installation-wide native administrative
+explicit issuer, both use the optional configured CA bundle instead.
+The Harness receives only its node setup code and the public CA bundle.
+The service key is an Installation-wide native administrative
 credential; do not reuse a Better Auth signing key or model-provider token.
 OCC still checks the human caller's exact Agent `read` or `operate` permission.
+Routing-enabled workers also require tenant-local Secret get/create/update/delete
+for node enrollment. Memory and Skills node access and native runtime verification
+remain incomplete; this does not yet establish a deployable storage split.
 
 ### Verify routing and file access
 

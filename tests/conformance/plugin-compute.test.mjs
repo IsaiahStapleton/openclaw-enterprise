@@ -26,7 +26,10 @@ import {
   pluginRuntimeEnvironment,
   pluginRuntimeSpecForRevision,
 } from "../../apps/controller/src/drivers/compute/plugin-runtime.ts";
-import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
+import {
+  admitLoggingConfiguration,
+  WORKSPACE_FILE_NAMES,
+} from "../../packages/contracts/src/index.ts";
 import { DependencyUnavailableError } from "../../packages/occ/src/errors.ts";
 
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
@@ -269,11 +272,19 @@ function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
         OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
         HOME: "/home/node",
         ...(options.env ?? {}),
+        ...(options.workspaceNodeId === undefined
+          ? {}
+          : { OPENCLAW_WORKSPACE_NODE_ID: options.workspaceNodeId }),
       },
+      on() {},
     },
     require(specifier) {
       if (specifier === "node:child_process") {
         return {
+          spawn(command, args) {
+            calls.push({ command, args });
+            return { on() {} };
+          },
           spawnSync(command, args, spawnOptions) {
             options.beforeSpawn?.(command, args, sandbox);
             calls.push({ command, args, options: spawnOptions });
@@ -303,11 +314,16 @@ function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
     result: {},
   };
   try {
-    vm.runInNewContext(
-      `${PLUGIN_RUNTIME_HELPERS}
-result.value = installOpenClawPlugins(${JSON.stringify(runtime)}, ${JSON.stringify(options.failures ?? [])});`,
+    const execution = vm.runInNewContext(
+      options.workspaceNodeId === undefined
+        ? `${PLUGIN_RUNTIME_HELPERS}
+result.value = installOpenClawPlugins(${JSON.stringify(runtime)}, ${JSON.stringify(options.failures ?? [])});`
+        : GATEWAY_RUNTIME_ENTRYPOINT,
       sandbox,
     );
+    if (options.workspaceNodeId !== undefined) {
+      return execution.then(() => ({ calls, files }));
+    }
   } catch (error) {
     if (options.captureError === true) {
       return { calls, files, error };
@@ -316,6 +332,149 @@ result.value = installOpenClawPlugins(${JSON.stringify(runtime)}, ${JSON.stringi
   }
   return { calls, files, value: sandbox.result.value };
 }
+
+test("Gateway launch binds the enrolled node without expanding owner writes or changing its snapshot", async () => {
+  const baseConfig = {
+    gateway: { nodes: { commands: { allow: ["existing.command"] } } },
+    plugins: {
+      allow: ["codex"],
+      entries: {
+        codex: {
+          enabled: true,
+          config: { appServer: { transport: "websocket", url: "wss://harness.example.test" } },
+        },
+      },
+    },
+    hooks: {
+      internal: {
+        entries: {
+          "bootstrap-extra-files": {
+            paths: [" team[1]/AGENTS.md ", "../AGENTS.md", "team/secrets.txt"],
+            patterns: ["ignored/SOUL.md"],
+          },
+        },
+      },
+    },
+  };
+  const original = JSON.stringify(baseConfig);
+  // This exercises launch-time configuration only. Native file RPC execution
+  // remains the real Gateway/node integration test's responsibility.
+  const { files, calls } = await runOpenClawRuntimeHelper(undefined, [], {
+    baseConfig,
+    workspaceNodeId: "enrolled-node",
+  });
+  const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+  assert.equal(files.get("/etc/openclaw/openclaw.json"), original);
+  assert.deepEqual(effective.plugins.entries.codex, {
+    enabled: true,
+    config: {
+      appServer: {
+        ...baseConfig.plugins.entries.codex.config.appServer,
+        remoteWorkspaceRoot: "/home/node/workspace",
+      },
+    },
+  });
+  assert.deepEqual(effective.plugins.allow, ["codex", "file-transfer"]);
+  const transfer = effective.plugins.entries["file-transfer"].config;
+  assert.deepEqual(transfer.workspaces.main, {
+    nodeId: "enrolled-node",
+    remoteRoot: "/home/node/workspace",
+  });
+  assert.deepEqual(transfer.nodes["enrolled-node"].allowWritePaths, [
+    ...WORKSPACE_FILE_NAMES.map((name) => "/home/node/workspace/" + name),
+    ...["MEMORY.md", "memory.md", "DREAMS.md", "dreams.md", "memory", "memory/**"].map(
+      (name) => "/home/node/workspace/" + name,
+    ),
+    "/home/node/workspace/skills",
+    "/home/node/workspace/media/inbound/openclaw-staged-*/**",
+  ]);
+  assert.deepEqual(transfer.nodes["enrolled-node"].allowReadPaths, [
+    "/home/node/workspace",
+    ...[...WORKSPACE_FILE_NAMES, "BOOTSTRAP.md", "MEMORY.md"].map(
+      (name) => "/home/node/workspace/" + name,
+    ),
+    ...["MEMORY.md", "memory.md", "DREAMS.md", "dreams.md", "memory", "memory/**"].map(
+      (name) => "/home/node/workspace/" + name,
+    ),
+    "/home/node/.openclaw",
+    ...[
+      "/home/node/workspace/skills",
+      "/home/node/workspace/.agents/skills",
+      "/home/node/.openclaw/skills",
+      "/home/node/.openclaw/plugin-skills",
+      "/home/node/.agents/skills",
+      "/home/node/openclaw-runtime-assets/bundled-skills",
+      "/home/node/openclaw-runtime-assets/plugin-skills",
+    ].flatMap((root) => [root, root + "/**"]),
+    "/home/node/workspace/media/inbound/openclaw-staged-*",
+    "/home/node/workspace/media/inbound/openclaw-staged-*/**",
+    "/home/node/workspace/media/outbound/**",
+  ]);
+  assert.equal(transfer.nodes["enrolled-node"].followSymlinks, false);
+  // Native bootstrap treats brackets literally. Grant only the configured
+  // document, without admitting sibling files, writes, or out-of-workspace paths.
+  assert.deepEqual(transfer.literalGrants, [
+    {
+      nodeId: "enrolled-node",
+      command: "file.fetch",
+      requestedPath: "/home/node/workspace/team[1]/AGENTS.md",
+      canonicalPath: "/home/node/workspace/team[1]/AGENTS.md",
+    },
+    {
+      nodeId: "enrolled-node",
+      command: "file.stat",
+      requestedPath: "/home/node/workspace/team[1]/AGENTS.md",
+      canonicalPath: "/home/node/workspace/team[1]/AGENTS.md",
+    },
+  ]);
+  assert.equal(effective.gateway.nodes.commands.allow.includes("existing.command"), true);
+  assert.equal(effective.gateway.nodes.commands.allow.includes("dir.list"), true);
+  assert.equal(effective.gateway.nodes.commands.allow.includes("file.create"), true);
+  assert.equal(effective.gateway.nodes.commands.allow.includes("workspace.memory"), true);
+  assert.equal(effective.gateway.nodes.commands.allow.includes("workspace.skills"), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args[1], "gateway");
+  for (const hooks of [
+    { internal: { ...baseConfig.hooks.internal, enabled: false } },
+    {
+      internal: {
+        entries: { "bootstrap-extra-files": { paths: ["team[1]/AGENTS.md"], enabled: false } },
+      },
+    },
+  ]) {
+    const disabled = await runOpenClawRuntimeHelper(undefined, [], {
+      baseConfig: { ...baseConfig, hooks },
+      workspaceNodeId: "enrolled-node",
+    });
+    const config = JSON.parse(disabled.files.get("/home/node/.openclaw/openclaw.json"));
+    assert.equal(config.plugins.entries["file-transfer"].config.literalGrants, undefined);
+  }
+  const explicit = { nodes: { "*": { ask: "off", allowReadPaths: ["/chosen/AGENTS.md"] } } };
+  const configured = await runOpenClawRuntimeHelper(undefined, [], {
+    baseConfig: {
+      ...baseConfig,
+      plugins: { entries: { "file-transfer": { config: explicit } } },
+    },
+    workspaceNodeId: "enrolled-node",
+  });
+  const configuredTransfer = JSON.parse(configured.files.get("/home/node/.openclaw/openclaw.json"))
+    .plugins.entries["file-transfer"].config;
+  assert.deepEqual(configuredTransfer.nodes, explicit.nodes);
+  assert.equal(configuredTransfer.literalGrants, undefined);
+  for (const plugins of [
+    { deny: ["file-transfer"] },
+    { entries: { "file-transfer": { enabled: false } } },
+  ]) {
+    await assert.rejects(
+      () =>
+        runOpenClawRuntimeHelper(undefined, [], {
+          baseConfig: { plugins },
+          workspaceNodeId: "enrolled-node",
+        }),
+      /requires the file-transfer plugin/,
+    );
+  }
+});
 
 function codexListResponse(options = {}) {
   const plugins = options.plugins ?? [

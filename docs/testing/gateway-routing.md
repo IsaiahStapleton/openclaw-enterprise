@@ -21,6 +21,22 @@ and asks a fresh native session for the marker supplied only through
 model consumption. Proxy authentication denials, key rotation, and cert-manager
 leaf renewal under the same CA are separate required assertions.
 
+The same case exercises Compute's dedicated `/node` route with the published
+Gateway client and a temporary Ed25519 identity. It issues a node-only setup
+code through the administrative route, pairs and reconnects without the Envoy
+API key, rejects forged administrative headers and operator-role escalation,
+then stops the Agent through OCC and waits for both routes and the node policy
+to disappear. This verifies routing and native protocol authentication, not
+the Harness's node process, credential persistence, CA delivery or egress.
+The node-route assertions remain pending until this real Envoy case runs;
+conformance and rendered resources do not prove policy override behavior.
+
+The pinned Envoy Gateway v1.6.7
+[SecurityPolicy translator](https://github.com/envoyproxy/gateway/blob/v1.6.7/internal/gatewayapi/securitypolicy.go)
+applies route policies before Gateway policies and skips an already configured
+route. A route policy containing only `targetRefs` therefore replaces inherited
+API-key authentication; it does not merge with the Gateway policy.
+
 For CI-shaped setup, let `prepare.mjs` install the pinned Gateway API,
 cert-manager v1.18.4, and Envoy Gateway v1.6.7 controllers, then create the
 disposable test CA before `run-tests.mjs` invokes the case:

@@ -49,7 +49,7 @@ channel-provider access is denied.
 See [gateway routing with Envoy](../../gateway-routing.md) for shared infrastructure,
 service-key bootstrap, TLS, and network enforcement.
 
-Optional Installation Compute settings enable one stable route per Agent:
+Optional Installation Compute settings enable stable Agent routes:
 
 ```yaml
 gatewayRouting:
@@ -61,7 +61,9 @@ gatewayRouting:
 The Gateway name and namespace must match the Helm-managed Gateway;
 `envoyNamespace` identifies its Envoy data-plane Pods. The chart always creates
 the Gateway in its release namespace. These three settings are required when
-routing is enabled; `hostname` is optional.
+routing is enabled; `hostname` is optional. `envoyHttpsTargetPort` defaults to
+`10443` and must match Helm. Compute grants Harness egress only to this
+installation's Envoy Pods on that port, before waiting for node enrollment.
 
 When `hostname` is omitted or empty, Compute and Helm derive the same Service
 name: `occ-gateway-` followed by the first 12 hexadecimal characters of the
@@ -82,6 +84,10 @@ API access. During preparation and activation, Compute reconciles an owned
 `https` listener. It matches the exact Agent path and hostname, rewrites the
 path to `/`, and targets the existing same-namespace gateway Service.
 Namespaces receive the Gateway membership label used by `allowedRoutes`.
+Runtime-enabled dedicated revisions also receive a `/node` route and a
+route-specific SecurityPolicy for native device authentication. The
+[routing reference](../../gateway-routing.md#native-node-endpoint) owns its
+credential boundary and the remaining Harness lifecycle requirements.
 
 The Service and route remain stable across revision cutover. Retiring an old
 revision preserves a newer gateway's route; final gateway cleanup removes the

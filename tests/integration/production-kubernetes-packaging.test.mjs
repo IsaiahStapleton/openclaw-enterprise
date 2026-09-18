@@ -741,15 +741,6 @@ test(
         ({ name }) => name === "OCC_GATEWAY_API_KEY_PATH",
       );
       const caPath = pod.containers[0].env.find(({ name }) => name === "NODE_EXTRA_CA_CERTS");
-      if (component === "worker") {
-        assert.equal(apiKeyVolume, undefined);
-        assert.equal(caVolume, undefined);
-        assert.equal(apiKeyMount, undefined);
-        assert.equal(caMount, undefined);
-        assert.equal(apiKeyPath, undefined);
-        assert.equal(caPath, undefined);
-        continue;
-      }
       assert.deepEqual(apiKeyVolume.secret, {
         secretName: "occ-gateway-api-key",
         items: [{ key: "occ", path: "key" }],
@@ -845,14 +836,16 @@ test(
     };
     const apiEnvoyEgress = configured.find(
       ({ kind, metadata }) =>
-        kind === "NetworkPolicy" && metadata.name === "openclaw-enterprise-api-envoy-egress",
+        kind === "NetworkPolicy" && metadata.name === "openclaw-enterprise-controller-envoy-egress",
     );
     assert.equal(apiEnvoyEgress.metadata.namespace, gatewayNamespace);
     assert.deepEqual(apiEnvoyEgress.spec.podSelector.matchLabels, {
       "app.kubernetes.io/name": "openclaw-enterprise",
       "app.kubernetes.io/instance": "oce",
-      "app.kubernetes.io/component": "api",
     });
+    assert.deepEqual(apiEnvoyEgress.spec.podSelector.matchExpressions, [
+      { key: "app.kubernetes.io/component", operator: "In", values: ["api", "worker"] },
+    ]);
     assert.deepEqual(apiEnvoyEgress.spec.egress, [
       {
         to: [
@@ -881,9 +874,15 @@ test(
               matchLabels: {
                 "app.kubernetes.io/name": "openclaw-enterprise",
                 "app.kubernetes.io/instance": "oce",
-                "app.kubernetes.io/component": "api",
               },
+              matchExpressions: [
+                { key: "app.kubernetes.io/component", operator: "In", values: ["api", "worker"] },
+              ],
             },
+          },
+          {
+            namespaceSelector: { matchLabels: { "openclaw-enterprise.io/gateway": label } },
+            podSelector: { matchLabels: { "openclaw.dev/workload-role": "agent" } },
           },
         ],
         ports: [{ protocol: "TCP", port: 10443 }],
@@ -934,6 +933,16 @@ test(
       metadata.name.endsWith("-openclaw-tenant-worker"),
     );
     const tenantApi = roles.find(({ metadata }) => metadata.name.endsWith("-openclaw-tenant-api"));
+    assert.deepEqual(
+      tenantWorker.rules.find(({ resources }) => resources.includes("secrets")),
+      { apiGroups: [""], resources: ["secrets"], verbs: ["get", "create", "update", "delete"] },
+    );
+    assert.ok(
+      !configured.some(
+        ({ kind, roleRef }) =>
+          kind === "ClusterRoleBinding" && roleRef.name === tenantWorker.metadata.name,
+      ),
+    );
     assert.deepEqual(
       tenantWorker.rules.find(({ resources }) => resources.includes("httproutes")),
       {
@@ -987,13 +996,13 @@ test(
       apiPod.containers[0].env.find(({ name }) => name === "NODE_EXTRA_CA_CERTS").value,
       "/etc/openclaw/gateway-ca/ca.crt",
     );
-    assert.equal(
-      workerPod.volumes.find(({ name }) => name === "gateway-ca"),
-      undefined,
+    assert.deepEqual(
+      workerPod.volumes.find(({ name }) => name === "gateway-ca").secret,
+      apiPod.volumes.find(({ name }) => name === "gateway-ca").secret,
     );
     assert.equal(
-      workerPod.containers[0].env.find(({ name }) => name === "NODE_EXTRA_CA_CERTS"),
-      undefined,
+      workerPod.containers[0].env.find(({ name }) => name === "NODE_EXTRA_CA_CERTS").value,
+      "/etc/openclaw/gateway-ca/ca.crt",
     );
     assert.equal(
       configured.some(

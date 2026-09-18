@@ -334,6 +334,15 @@ async function createScopedController(context, identifier, platformNamespace, ku
           verbs: ["get", "create", "patch", "delete"],
         },
       },
+      {
+        op: "add",
+        path: "/rules/-",
+        value: {
+          apiGroups: ["gateway.envoyproxy.io"],
+          resources: ["securitypolicies"],
+          verbs: ["get", "create", "patch", "delete"],
+        },
+      },
     ]),
   );
   const identity = await createControllerIdentity({

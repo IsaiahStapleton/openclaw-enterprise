@@ -46,6 +46,10 @@ one Agent auth binding for supplied OpenAI keys and issued ChatGPT account crede
 [Gateway–Harness storage split](28-gateway-harness-storage-split.md) — Proposed;
 #76/#89 draft covering storage ownership, live edits and first-start files.
 
+[Storage split integration](30-storage-split-integration.md) — Draft follow-up;
+revises Memory placement, defines the shared candidate interface, and lists the
+remaining Enterprise integration work.
+
 See the [OpenClaw testing infrastructure report](reports/openclaw-testing-infrastructure.md) for the source audit behind the proposed CI coverage.
 
 | Implementation record                                                            | Recorded status                                                                                                                                                                            | Current reference                                                                                                                                         |

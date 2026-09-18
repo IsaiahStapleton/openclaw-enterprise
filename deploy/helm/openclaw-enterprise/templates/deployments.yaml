@@ -41,7 +41,6 @@ spec:
               - key: {{ $.Values.database.caKey | quote }}
                 path: {{ $.Values.database.caKey | quote }}
         {{- end }}
-        {{- if eq $component "api" }}
         {{- if $.Values.gatewayRouting.enabled }}
         - name: gateway-api-key
           secret:
@@ -58,6 +57,7 @@ spec:
                 path: ca.crt
         {{- end }}
         {{- end }}
+        {{- if eq $component "api" }}
         {{- if $.Values.provider.chatgpt.enabled }}
         {{- $chatgpt := $.Values.provider.chatgpt }}
         {{- if or (not $chatgpt.secretName) (not $chatgpt.key) }}
@@ -93,7 +93,6 @@ spec:
             - name: OCC_CONFIG_PATH
               value: /etc/openclaw/installation/installation.yaml
             {{- include "openclaw.secretEnv" (dict "name" "OCC_DATABASE_URL" "secretName" $.Values.database.secretName "key" $.Values.database.appUrlKey) | nindent 12 }}
-            {{- if eq $component "api" }}
             {{- if $.Values.gatewayRouting.enabled }}
             - name: OCC_GATEWAY_API_KEY_PATH
               value: /etc/openclaw/gateway-api-key/key
@@ -102,6 +101,7 @@ spec:
               value: /etc/openclaw/gateway-ca/ca.crt
             {{- end }}
             {{- end }}
+            {{- if eq $component "api" }}
             - name: OCC_HOST
               valueFrom:
                 fieldRef:
@@ -132,7 +132,6 @@ spec:
               mountPath: {{ $.Values.database.caMountPath | quote }}
               readOnly: true
             {{- end }}
-            {{- if eq $component "api" }}
             {{- if $.Values.gatewayRouting.enabled }}
             - name: gateway-api-key
               mountPath: /etc/openclaw/gateway-api-key
@@ -143,6 +142,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
+            {{- if eq $component "api" }}
             {{- if $.Values.provider.chatgpt.enabled }}
             - name: chatgpt-admin
               mountPath: /etc/openclaw/chatgpt
