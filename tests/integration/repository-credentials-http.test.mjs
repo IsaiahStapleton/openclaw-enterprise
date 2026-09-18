@@ -92,7 +92,9 @@ test(
       const chunks = [];
       try {
         for await (const chunk of req) {
-          if (req.url === "/stream") observeStreamingChunk?.();
+          if (req.url === "/stream") {
+            observeStreamingChunk?.();
+          }
           chunks.push(chunk);
         }
       } catch {
@@ -189,7 +191,9 @@ test(
           deadlineMonoMs: clock.monotonicNow() + 2000,
           gate: {
             dispatch(_cancel, open) {
-              if (!gateOpen) throw new Error("closed");
+              if (!gateOpen) {
+                throw new Error("closed");
+              }
               return open();
             },
             track(io) {
@@ -200,7 +204,9 @@ test(
       );
       await Promise.all(tracked);
       outcomes.push({ path: req.url, outcome });
-      if (outcome.kind !== "completed") sendError(res, 502, "exchange-failed");
+      if (outcome.kind !== "completed") {
+        sendError(res, 502, "exchange-failed");
+      }
     });
     gateway.on("clientError", (_error, socket) => socket.destroy());
     await listen(gateway);
@@ -295,8 +301,9 @@ test(
       const before = received.length;
       await assert.rejects(exchange(port, "/disconnect", Buffer.from("write")));
       const deadline = Date.now() + 1000;
-      while (!outcomes.some((entry) => entry.path === "/disconnect") && Date.now() < deadline)
+      while (!outcomes.some((entry) => entry.path === "/disconnect") && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 5));
+      }
       assert.equal(
         outcomes.find((entry) => entry.path === "/disconnect")?.outcome.kind,
         "possibly-dispatched",

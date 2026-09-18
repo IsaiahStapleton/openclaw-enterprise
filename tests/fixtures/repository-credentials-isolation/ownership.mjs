@@ -6,7 +6,9 @@ export function forwardWork(signal) {
   const pending = new Set();
   const cancel = () => controller.abort();
   signal.addEventListener("abort", cancel, { once: true });
-  if (signal.aborted) cancel();
+  if (signal.aborted) {
+    cancel();
+  }
   const check = () => controller.signal.throwIfAborted();
   return {
     check,
@@ -28,7 +30,9 @@ export function forwardWork(signal) {
         check();
         const value = await checkState();
         check();
-        if (value) return value;
+        if (value) {
+          return value;
+        }
         await delay(100, undefined, { signal: controller.signal });
       } while (Date.now() < deadline);
       throw new Error("isolation fixture did not reach expected state");
@@ -54,7 +58,9 @@ export function ownedNetwork(name, owner, docker) {
       uncertain = false;
     },
     async remove(cleanupDocker, signal = AbortSignal.timeout(60000)) {
-      if (!attempted) return;
+      if (!attempted) {
+        return;
+      }
       // Empty readbacks cannot settle a create whose response was lost: the
       // daemon may still complete it. Observe and remove that owned resource,
       // or report unresolved cleanup when the independent budget expires.
@@ -76,7 +82,9 @@ export function ownedNetwork(name, owner, docker) {
           .map((line) => JSON.parse(line))
           .filter((network) => network.Name === name);
         signal.throwIfAborted();
-        if (!networks.length && !uncertain) return;
+        if (!networks.length && !uncertain) {
+          return;
+        }
         for (const network of networks) {
           const details = JSON.parse(
             (await cleanupDocker(["network", "inspect", network.ID])).stdout,
@@ -85,8 +93,9 @@ export function ownedNetwork(name, owner, docker) {
             details.Name !== name ||
             details.Labels?.[label] !== owner ||
             details.Id !== network.ID
-          )
+          ) {
             throw new Error("owned network identity mismatch");
+          }
           await cleanupDocker(["network", "rm", details.Id]);
           uncertain = false;
         }

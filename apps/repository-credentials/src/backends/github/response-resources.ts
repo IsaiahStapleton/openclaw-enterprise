@@ -20,12 +20,22 @@ const resourceFields: Readonly<Record<ResourceKind, LinkFields>> = {
 export function classifyResource(repository: string, target: string): ResourceKind {
   const prefix = `/repos/${repository}`;
   const path = target.split("?", 1)[0]!;
-  if (!path.startsWith(prefix)) return "other";
+  if (!path.startsWith(prefix)) {
+    return "other";
+  }
   const suffix = path.slice(prefix.length);
-  if (suffix === "") return "repository";
-  if (suffix === "/issues" || issueUrl.test(suffix)) return "issue";
-  if (suffix === "/pulls" || pullUrl.test(suffix)) return "pull";
-  if (commentsUrl.test(suffix) || commentUrl.test(suffix)) return "comment";
+  if (suffix === "") {
+    return "repository";
+  }
+  if (suffix === "/issues" || issueUrl.test(suffix)) {
+    return "issue";
+  }
+  if (suffix === "/pulls" || pullUrl.test(suffix)) {
+    return "pull";
+  }
+  if (commentsUrl.test(suffix) || commentUrl.test(suffix)) {
+    return "comment";
+  }
   return "other";
 }
 
@@ -34,11 +44,15 @@ function rewriteRecord(
   fields: LinkFields,
   dependencies: ResourceRewriteDependencies,
 ): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
   const result: Record<string, unknown> = { ...value };
   for (const [field, purpose] of Object.entries(fields)) {
     const item = result[field];
-    if (typeof item === "string") result[field] = dependencies.rewriteUrl(item, purpose);
+    if (typeof item === "string") {
+      result[field] = dependencies.rewriteUrl(item, purpose);
+    }
   }
   return result;
 }
@@ -49,11 +63,13 @@ function rewriteItem(
   dependencies: ResourceRewriteDependencies,
 ): unknown {
   const result = rewriteRecord(value, resourceFields[resource], dependencies);
-  if (resource !== "issue" || !result || typeof result !== "object" || Array.isArray(result))
+  if (resource !== "issue" || !result || typeof result !== "object" || Array.isArray(result)) {
     return result;
+  }
   const record = result as Record<string, unknown>;
-  if (record.pull_request !== undefined)
+  if (record.pull_request !== undefined) {
     record.pull_request = rewriteRecord(record.pull_request, { url: pullUrl }, dependencies);
+  }
   return record;
 }
 

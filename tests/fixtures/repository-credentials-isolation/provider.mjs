@@ -24,7 +24,9 @@ const github = await startGitHubFixture(context, {
         await lstat("/state/release-issue");
         return;
       } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -54,7 +56,9 @@ const relay = createServer(tls, (incoming, outgoing) => {
   const authorization = incoming.headers.authorization;
   if (authorization) {
     for (const value of [authorization, authorization.slice(authorization.indexOf(" ") + 1)]) {
-      if (!secrets.includes(value)) secrets.push(value);
+      if (!secrets.includes(value)) {
+        secrets.push(value);
+      }
     }
   }
   const upstream = request(
@@ -91,7 +95,9 @@ await new Promise((resolve, reject) => {
 
 let writing = false;
 async function snapshot() {
-  if (writing) return;
+  if (writing) {
+    return;
+  }
   writing = true;
   try {
     const report = {
@@ -126,9 +132,13 @@ const timer = setInterval(
 process.once("SIGTERM", async () => {
   clearInterval(timer);
   const guard = setTimeout(() => process.exit(1), 3000);
-  for (const socket of sockets) socket.destroy();
+  for (const socket of sockets) {
+    socket.destroy();
+  }
   await new Promise((resolve) => relay.close(resolve));
-  for (const callback of cleanup.reverse()) await callback();
+  for (const callback of cleanup.reverse()) {
+    await callback();
+  }
   clearTimeout(guard);
   process.exit(0);
 });

@@ -14,13 +14,19 @@ export function createProviderQueue(maximumQueued: number) {
   let active = false;
   let cleanupStreak = 0;
   function notifyCapacity() {
-    if (waiting.length >= maximumQueued) return;
+    if (waiting.length >= maximumQueued) {
+      return;
+    }
     const ready = [...capacityWaiters];
     capacityWaiters.clear();
-    for (const notify of ready) notify();
+    for (const notify of ready) {
+      notify();
+    }
   }
   function advance() {
-    if (active) return;
+    if (active) {
+      return;
+    }
     const foreground = waiting.findIndex((entry) => entry.priority === "foreground");
     const cleanup = waiting.findIndex((entry) => entry.priority === "cleanup");
     // Give cleanup priority while allowing an admitted request through after
@@ -51,16 +57,20 @@ export function createProviderQueue(maximumQueued: number) {
     },
     // Lifecycle owners register at most once per admitted session.
     whenAvailable(notify: () => void) {
-      if (waiting.length < maximumQueued) notify();
-      else capacityWaiters.add(notify);
+      if (waiting.length < maximumQueued) {
+        notify();
+      } else {
+        capacityWaiters.add(notify);
+      }
     },
     run<T>(
       signal: AbortSignal,
       task: () => Promise<T>,
       priority: "foreground" | "cleanup" = "foreground",
     ): Promise<T> {
-      if (signal.aborted || waiting.length >= maximumQueued)
+      if (signal.aborted || waiting.length >= maximumQueued) {
         return Promise.reject(new Error("PROVIDER_UNAVAILABLE"));
+      }
       return new Promise<T>((resolve, reject) => {
         const abort = () => {
           const index = waiting.indexOf(entry);
@@ -102,7 +112,9 @@ export function waitWithin<T>(
     let ended = false;
     let cancelTimer = () => {};
     const finish = (run: () => void) => {
-      if (ended) return;
+      if (ended) {
+        return;
+      }
       ended = true;
       cancelTimer();
       signal.removeEventListener("abort", abort);
@@ -115,6 +127,8 @@ export function waitWithin<T>(
       (value) => finish(() => resolve(value)),
       () => finish(() => reject(new Error("ACTION_FAILED"))),
     );
-    if (signal.aborted || clock.monotonicNow() >= deadline) abort();
+    if (signal.aborted || clock.monotonicNow() >= deadline) {
+      abort();
+    }
   });
 }

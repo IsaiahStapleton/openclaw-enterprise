@@ -8,8 +8,9 @@ import { exerciseGit, exerciseGh } from "../fixtures/repository-credentials/work
 import { runInFixtureContainer } from "../fixtures/repository-credentials/container.mjs";
 
 test("pinned gh uses canonical GitHub identity for REST, pagination and native PR creation", async (t) => {
-  if (await runInFixtureContainer(t, "tests/integration/repository-credentials-gh.test.mjs"))
+  if (await runInFixtureContainer(t, "tests/integration/repository-credentials-gh.test.mjs")) {
     return;
+  }
   const fixture = await startCredentialServiceFixture(t);
   const { client, checkout } = await exerciseGit(t, fixture);
   await client.git(["push", "origin", "HEAD:refs/heads/native-feature"], { cwd: checkout });

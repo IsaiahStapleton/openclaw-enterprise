@@ -49,7 +49,7 @@ test("runner timeout cancels and joins commands before teardown admits cleanup",
 });
 
 test("accepted network creation with a lost response stays owned until verified absent", async (t) => {
-  for (const completionDelay of [0, 500])
+  for (const completionDelay of [0, 500]) {
     await t.test(`creation completes after ${completionDelay}ms`, async () => {
       const name = "credential-isolation-controlled-network";
       const owner = "controlled-owner";
@@ -73,7 +73,9 @@ test("accepted network creation with a lost response stays owned until verified 
           readbacks++;
           return { stdout: network ? JSON.stringify({ Name: name, ID: id }) : "" };
         }
-        if (args[1] === "inspect") return { stdout: JSON.stringify([network]) };
+        if (args[1] === "inspect") {
+          return { stdout: JSON.stringify([network]) };
+        }
         assert.deepEqual(args, ["network", "rm", id]);
         network = undefined;
         removed++;
@@ -91,6 +93,7 @@ test("accepted network creation with a lost response stays owned until verified 
       assert.equal(removed, 1);
       assert.ok(readbacks >= 2, "removal must be followed by an absence readback");
     });
+  }
 });
 
 test("uncertain network creation remains unresolved when its cleanup budget expires empty", async () => {
@@ -118,9 +121,12 @@ test("network cleanup reports failed readback and refuses foreign ownership", as
   let removed = false;
   await assert.rejects(
     resource.remove(async (args) => {
-      if (args[1] === "ls") return { stdout: JSON.stringify({ Name: "owned-name", ID: "id" }) };
-      if (args[1] === "inspect")
+      if (args[1] === "ls") {
+        return { stdout: JSON.stringify({ Name: "owned-name", ID: "id" }) };
+      }
+      if (args[1] === "inspect") {
         return { stdout: JSON.stringify([{ Name: "owned-name", Id: "id", Labels: {} }]) };
+      }
       removed = true;
       return { stdout: "" };
     }),

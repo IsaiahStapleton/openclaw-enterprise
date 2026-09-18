@@ -21,7 +21,7 @@ test("emitted credential configuration check runs without workspace packages or 
   const compiled = spawnSync(
     process.execPath,
     [
-      join(root, "node_modules/typescript/bin/tsc"),
+      join(root, "node_modules/@typescript/native/bin/tsc"),
       "--build",
       join(build, "apps/repository-credentials/tsconfig.json"),
       "--pretty",

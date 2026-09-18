@@ -29,13 +29,16 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
     (parentInfo.mode & 0o077) !== 0 ||
     parentInfo.uid !== process.getuid?.() ||
     (await realpath(parent)) !== parent
-  )
+  ) {
     throw new Error("unsafe-control-directory");
+  }
   try {
     await lstat(socketPath);
     throw new Error("control-socket-exists");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
   }
   const sockets = new Set<Socket>();
   const active = new WeakSet<Socket>();
@@ -105,7 +108,9 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
   let agentClose: Promise<void> | undefined;
   let controlClose: Promise<void> | undefined;
   const stopAdmission = () => {
-    if (!admitting) return;
+    if (!admitting) {
+      return;
+    }
     admitting = false;
     agentClose = new Promise((done) => agent.close(() => done()));
     controlClose = new Promise((done) => control.close(() => done()));
@@ -113,7 +118,9 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
   const close = async () => {
     stopAdmission();
     admissions.dispose();
-    for (const socket of sockets) socket.destroy();
+    for (const socket of sockets) {
+      socket.destroy();
+    }
     agent.closeAllConnections();
     control.closeAllConnections();
     await Promise.all([agentClose, controlClose]);
@@ -121,16 +128,21 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
     if (socketIdentity) {
       try {
         const current = await lstat(socketPath);
-        if (current.dev === socketIdentity.dev && current.ino === socketIdentity.ino)
+        if (current.dev === socketIdentity.dev && current.ino === socketIdentity.ino) {
           await unlink(socketPath);
+        }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
       }
     }
   };
   try {
     const listen = new URL(`tcp://${config.gateway.listen}`);
-    if (!listen.port || !/^\d+$/.test(listen.port)) throw new Error("invalid-listen");
+    if (!listen.port || !/^\d+$/.test(listen.port)) {
+      throw new Error("invalid-listen");
+    }
     await new Promise<void>((done, reject) => {
       agent.once("error", reject);
       agent.listen(Number(listen.port), listen.hostname.replace(/^\[|\]$/g, ""), () => {

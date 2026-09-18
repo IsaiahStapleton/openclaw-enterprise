@@ -49,7 +49,9 @@ export async function startGitSmartHttpFixture(
       contentLength: request.headers["content-length"],
     });
     const drop = disconnectPush && url.pathname.endsWith("/git-receive-pack");
-    if (drop) disconnectPush = false;
+    if (drop) {
+      disconnectPush = false;
+    }
     const child = spawn("git", ["http-backend"], {
       env: cleanEnvironment({
         GIT_PROJECT_ROOT: directory,
@@ -72,23 +74,34 @@ export async function startGitSmartHttpFixture(
       if (!headersSent) {
         pending = Buffer.concat([pending, chunk]);
         const end = pending.indexOf("\r\n\r\n");
-        if (end < 0) return;
+        if (end < 0) {
+          return;
+        }
         const headers = {};
         let status = 200;
         for (const line of pending.subarray(0, end).toString().split("\r\n")) {
           const colon = line.indexOf(":");
           const key = line.slice(0, colon).toLowerCase();
           const value = line.slice(colon + 1).trim();
-          if (key === "status") status = Number(value.split(" ")[0]);
-          else headers[key] = value;
+          if (key === "status") {
+            status = Number(value.split(" ")[0]);
+          } else {
+            headers[key] = value;
+          }
         }
         response.writeHead(status, headers);
-        if (drop) response.flushHeaders();
+        if (drop) {
+          response.flushHeaders();
+        }
         headersSent = true;
         chunk = pending.subarray(end + 4);
       }
-      if (drop) return;
-      if (!response.write(chunk)) child.stdout.pause();
+      if (drop) {
+        return;
+      }
+      if (!response.write(chunk)) {
+        child.stdout.pause();
+      }
     });
     response.on("drain", () => child.stdout.resume());
     request.pipe(child.stdin);
@@ -96,16 +109,23 @@ export async function startGitSmartHttpFixture(
     child.on("error", () => response.destroy());
     child.once("close", () => {
       children.delete(child);
-      if (drop) response.destroy();
-      else response.end();
+      if (drop) {
+        response.destroy();
+      } else {
+        response.end();
+      }
     });
     response.once("close", () => {
-      if (!drop && child.exitCode === null) child.kill("SIGKILL");
+      if (!drop && child.exitCode === null) {
+        child.kill("SIGKILL");
+      }
     });
   });
   const origin = await listen(t, server);
   t.after(() => {
-    for (const child of children) child.kill("SIGKILL");
+    for (const child of children) {
+      child.kill("SIGKILL");
+    }
   });
   return {
     origin,

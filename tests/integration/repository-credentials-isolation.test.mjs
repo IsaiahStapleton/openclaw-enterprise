@@ -12,8 +12,9 @@ test(
       );
       return;
     }
-    if (!serviceImage || !clientImage)
+    if (!serviceImage || !clientImage) {
       throw new Error("both delivered isolation images are required");
+    }
     const { qualifyIsolation } =
       await import("../fixtures/repository-credentials-isolation/harness.mjs");
     await qualifyIsolation(t, { serviceImage, clientImage });

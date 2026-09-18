@@ -59,7 +59,9 @@ export async function writeClientConfiguration(
     await lstat(target);
     throw new Error("client-directory-exists");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
   }
   const staging = await mkdtemp(join(parent, ".session-"));
   try {
@@ -83,7 +85,9 @@ export async function writeClientConfiguration(
       ],
       ["gh/config.yml", "version: 1\nprompt: disabled\ngit_protocol: https\n"],
     ];
-    if (publicCa) contents.push(["ca.pem", publicCa]);
+    if (publicCa) {
+      contents.push(["ca.pem", publicCa]);
+    }
     for (const [name, content] of contents) {
       const file = await open(join(staging, name), "wx", 0o600);
       try {

@@ -30,7 +30,9 @@ function validateGhArguments(args: string[], repository: string): void {
     for (let index = 1; index < args.length; index++) {
       const argument = args[index]!;
       if (values.has(argument)) {
-        if (!args[++index]) throw new Error("unsupported-client-command");
+        if (!args[++index]) {
+          throw new Error("unsupported-client-command");
+        }
       } else if (!switches.has(argument)) {
         if (
           argument.startsWith("-") ||
@@ -45,10 +47,14 @@ function validateGhArguments(args: string[], repository: string): void {
         endpoint = argument;
       }
     }
-    if (!endpoint) throw new Error("unsupported-client-command");
+    if (!endpoint) {
+      throw new Error("unsupported-client-command");
+    }
     return;
   }
-  if (args[0] !== "pr" || args[1] !== "create") throw new Error("unsupported-client-command");
+  if (args[0] !== "pr" || args[1] !== "create") {
+    throw new Error("unsupported-client-command");
+  }
   let explicitHead = false;
   const values = new Set([
     "--base",
@@ -66,21 +72,34 @@ function validateGhArguments(args: string[], repository: string): void {
   ]);
   for (let index = 2; index < args.length; index++) {
     const argument = args[index]!;
-    if (argument === "--draft" || argument === "-d") continue;
-    if (!values.has(argument) || !args[index + 1]) throw new Error("unsupported-client-command");
-    const value = args[++index]!;
-    if ((argument === "--repo" || argument === "-R") && value !== `github.com/${repository}`)
+    if (argument === "--draft" || argument === "-d") {
+      continue;
+    }
+    if (!values.has(argument) || !args[index + 1]) {
       throw new Error("unsupported-client-command");
-    if (argument === "--head" || argument === "-H") explicitHead = true;
+    }
+    const value = args[++index]!;
+    if ((argument === "--repo" || argument === "-R") && value !== `github.com/${repository}`) {
+      throw new Error("unsupported-client-command");
+    }
+    if (argument === "--head" || argument === "-H") {
+      explicitHead = true;
+    }
   }
-  if (!explicitHead) throw new Error("explicit-head-required");
+  if (!explicitHead) {
+    throw new Error("explicit-head-required");
+  }
 }
 
 function rejectGitUrlCredentials(url: string): void {
   // Explicit remote helpers can reinterpret the URL and bypass ordinary URL checks.
-  if (/^[a-z][a-z0-9+.-]*::/i.test(url)) throw new Error("unsafe-git-configuration");
+  if (/^[a-z][a-z0-9+.-]*::/i.test(url)) {
+    throw new Error("unsafe-git-configuration");
+  }
   // Userinfo wins over the selected helper, even when its contents are percent-encoded.
-  if (/^https?:\/\/[^/?#]*@/i.test(url)) throw new Error("unsafe-git-configuration");
+  if (/^https?:\/\/[^/?#]*@/i.test(url)) {
+    throw new Error("unsafe-git-configuration");
+  }
 }
 
 function validateCloneArguments(args: string[]): void {
@@ -108,10 +127,16 @@ function validateCloneArguments(args: string[]): void {
   ]);
   for (let index = 0; index < args.length; index++) {
     const argument = args[index]!;
-    if (argument === "--") return;
-    if (!argument.startsWith("-") || switches.has(argument) || /^-[qvn]+$/.test(argument)) continue;
+    if (argument === "--") {
+      return;
+    }
+    if (!argument.startsWith("-") || switches.has(argument) || /^-[qvn]+$/.test(argument)) {
+      continue;
+    }
     if (values.has(argument)) {
-      if (args[++index] === undefined) throw new Error("unsupported-client-command");
+      if (args[++index] === undefined) {
+        throw new Error("unsupported-client-command");
+      }
     } else if (!values.has(argument.split("=", 1)[0]!) && !/^-[bo].+/.test(argument)) {
       // Clone config and templates are applied after the preflight inspection.
       throw new Error("unsupported-client-command");
@@ -125,7 +150,9 @@ function prepareGitArguments(args: string[], env: NodeJS.ProcessEnv, policy: str
   while (index < args.length && args[index]!.startsWith("-")) {
     const option = args[index++]!;
     if (["-C", "-c", "--git-dir", "--work-tree", "--namespace"].includes(option)) {
-      if (args[index++] === undefined) throw new Error("unsupported-client-command");
+      if (args[index++] === undefined) {
+        throw new Error("unsupported-client-command");
+      }
     } else if (
       !/^(?:-C.+|-c.+|--(?:git-dir|work-tree|namespace|config-env)=.+|--(?:bare|no-pager|paginate|no-replace-objects|no-optional-locks|literal-pathspecs|no-literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs))$/.test(
         option,
@@ -136,7 +163,9 @@ function prepareGitArguments(args: string[], env: NodeJS.ProcessEnv, policy: str
   }
   const context = args.slice(0, index);
   const cloning = args[index] === "clone";
-  if (cloning) validateCloneArguments(args.slice(index + 1));
+  if (cloning) {
+    validateCloneArguments(args.slice(index + 1));
+  }
   if (["clone", "fetch", "pull", "push", "ls-remote"].includes(args[index] ?? "")) {
     for (const argument of args.slice(index + 1)) {
       rejectGitUrlCredentials(argument.startsWith("--repo=") ? argument.slice(7) : argument);
@@ -164,7 +193,9 @@ function inspectGitConfiguration(
     timeout: 5000,
     maxBuffer: 1024 * 1024,
   });
-  if (inspected.status !== 0) throw new Error("unsafe-git-configuration");
+  if (inspected.status !== 0) {
+    throw new Error("unsafe-git-configuration");
+  }
   const safeHttp = new Map([
     ["followredirects", "false"],
     ["sslverify", "true"],
@@ -179,9 +210,13 @@ function inspectGitConfiguration(
     if (cloning && (key === "init.templatedir" || key.startsWith("includeif."))) {
       throw new Error("unsafe-git-configuration");
     }
-    if (/^remote\..*\.(?:url|pushurl)$/.test(key)) rejectGitUrlCredentials(value);
+    if (/^remote\..*\.(?:url|pushurl)$/.test(key)) {
+      rejectGitUrlCredentials(value);
+    }
     const rewrite = /^url\.(.*)\.(?:insteadof|pushinsteadof)$/.exec(key);
-    if (rewrite) rejectGitUrlCredentials(rewrite[1]!);
+    if (rewrite) {
+      rejectGitUrlCredentials(rewrite[1]!);
+    }
     const http = /^http\.(?:.*\.)?([^.]+)$/.exec(key);
     if (http) {
       const setting = http[1]!;
@@ -190,14 +225,18 @@ function inspectGitConfiguration(
         throw new Error("unsafe-git-configuration");
       }
       const safe = safeHttp.get(setting);
-      if (safe !== undefined) overrides.set(key, safe);
+      if (safe !== undefined) {
+        overrides.set(key, safe);
+      }
       // Repository trust roots, client certificates, cookies and DNS overrides can
       // also redirect or authenticate a request outside the selected session.
       else if (/^(?:ssl|cookie|savecookies|curloptresolve|emptyauth|proactiveauth)/.test(setting)) {
         throw new Error("unsafe-git-configuration");
       }
     }
-    if (/^remote\..*\.proxy$/.test(key)) overrides.set(key, "");
+    if (/^remote\..*\.proxy$/.test(key)) {
+      overrides.set(key, "");
+    }
     if (/^credential\..*\.(?:helper|username|usehttppath)$/.test(key)) {
       throw new Error("unsafe-git-configuration");
     }
@@ -227,8 +266,9 @@ export function prepareClientCommand(
       timeout: 5000,
       maxBuffer: 4096,
     });
-    if (version.status !== 0 || !/^gh version 2\.100\.0(?:\s|$)/.test(version.stdout))
+    if (version.status !== 0 || !/^gh version 2\.100\.0(?:\s|$)/.test(version.stdout)) {
       throw new Error("unsupported-gh-version");
+    }
   } else {
     const helper = join(
       dirname(fileURLToPath(import.meta.url)),
