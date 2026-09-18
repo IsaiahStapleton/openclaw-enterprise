@@ -1,24 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-
-export function repositoryCredentials() {
-  return {
-    driver: { id: "repository-credentials", implementation: "github" },
-    deadlineWallMs: 1_900_000_060_000,
-    bindings: [
-      {
-        repositoryRef: "source",
-        profile: "git-read",
-        providerId: "source-provider",
-        grant: {
-          providerInstanceId: "https://git.example.test",
-          repositoryId: "repository-42",
-          grantId: "read-policy",
-        },
-      },
-    ],
-  };
-}
+import {
+  repositoryBinding,
+  repositoryCredentials,
+  repositoryGrant,
+} from "../fixtures/repository-credentials/session-state.mjs";
 
 export async function seedSessionRevision(store, credentials = repositoryCredentials()) {
   const createdAt = "2030-03-17T17:46:40.000Z";
@@ -201,151 +187,155 @@ export async function verifyRepositorySessions(t, store) {
     },
   );
 
-  await t.test("invalid draft and admitted repository identities cannot be persisted", async () => {
-    const { namespace, configuration, agent, revision } = await seedSessionRevision(store);
-    for (const bindings of [
-      [{ repositoryRef: "bad ref", profile: "read" }],
-      [{ repositoryRef: "source\n", profile: "git-read" }],
-      [{ repositoryRef: "source", profile: "git-read\n" }],
-      [{ repositoryRef: "source", profile: "" }],
-      [{ repositoryRef: "source", profile: "read", bearer: "unexpected-field" }],
-      [
-        { repositoryRef: "source", profile: "read" },
-        { repositoryRef: "source", profile: "write" },
-      ],
-      Array.from({ length: 17 }, (_, index) => ({
-        repositoryRef: `source-${index}`,
-        profile: "read",
-      })),
-    ]) {
-      await assert.rejects(
-        store.transact((unit) =>
-          unit.agents.updateConfiguration(
-            namespace.id,
-            agent.id,
-            configuration.id,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            bindings,
-          ),
-        ),
-        scopeError,
+  await t.test(
+    "invalid draft and admitted repository identities cannot be persisted",
+    async (t) => {
+      const { namespace, configuration, agent, revision } = await seedSessionRevision(store);
+      const invalidDrafts = {
+        "repository reference contains a space": [{ repositoryRef: "bad ref", profile: "read" }],
+        "repository reference ends with a newline": [
+          { repositoryRef: "source\n", profile: "git-read" },
+        ],
+        "profile ends with a newline": [{ repositoryRef: "source", profile: "git-read\n" }],
+        "profile is empty": [{ repositoryRef: "source", profile: "" }],
+        "binding contains an extra field": [
+          { repositoryRef: "source", profile: "read", bearer: "unexpected-field" },
+        ],
+        "repository reference appears twice": [
+          { repositoryRef: "source", profile: "read" },
+          { repositoryRef: "source", profile: "write" },
+        ],
+        "binding count exceeds sixteen": Array.from({ length: 17 }, (_, index) => ({
+          repositoryRef: `source-${index}`,
+          profile: "read",
+        })),
+      };
+      for (const [name, bindings] of Object.entries(invalidDrafts)) {
+        await t.test(`draft: ${name}`, async () => {
+          await assert.rejects(
+            store.transact((unit) =>
+              unit.agents.updateConfiguration(
+                namespace.id,
+                agent.id,
+                configuration.id,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                bindings,
+              ),
+            ),
+            scopeError,
+          );
+        });
+      }
+      const invalidSnapshots = {
+        "bindings are empty": repositoryCredentials({ bindings: [] }),
+        "bindings are an object": repositoryCredentials({ bindings: {} }),
+        "driver contains an extra field": repositoryCredentials({
+          driver: { id: "repository-credentials", implementation: "github", bearer: "unexpected" },
+        }),
+        "binding contains an extra field": repositoryCredentials({
+          bindings: [repositoryBinding({ bearer: "unexpected" })],
+        }),
+        "grant is null": repositoryCredentials({ bindings: [repositoryBinding({ grant: null })] }),
+        "grant contains an extra field": repositoryCredentials({
+          bindings: [repositoryBinding({ grant: repositoryGrant({ bearer: "unexpected" }) })],
+        }),
+        "deadline is zero": repositoryCredentials({ deadlineWallMs: 0 }),
+        "deadline exceeds the safe integer range": repositoryCredentials({
+          deadlineWallMs: Number.MAX_SAFE_INTEGER + 1,
+        }),
+        "driver identity is empty": repositoryCredentials({
+          driver: { id: "", implementation: "native" },
+        }),
+        "driver identity exceeds 512 UTF-8 bytes": repositoryCredentials({
+          driver: { id: `${"é".repeat(256)}x`, implementation: "github" },
+        }),
+        "provider identity contains surrounding spaces": repositoryCredentials({
+          bindings: [repositoryBinding({ providerId: " provider " })],
+        }),
+        "provider identity exceeds 200 UTF-16 code units": repositoryCredentials({
+          bindings: [repositoryBinding({ providerId: "😀".repeat(101) })],
+        }),
+        "provider identity starts with a nonbreaking space": repositoryCredentials({
+          bindings: [repositoryBinding({ providerId: "\u00a0provider" })],
+        }),
+        "grant identity contains DEL": repositoryCredentials({
+          bindings: [
+            repositoryBinding({ grant: repositoryGrant({ grantId: "bad\u007fidentity" }) }),
+          ],
+        }),
+        "grant identity exceeds 512 UTF-8 bytes": repositoryCredentials({
+          bindings: [
+            repositoryBinding({ grant: repositoryGrant({ grantId: `${"é".repeat(256)}x` }) }),
+          ],
+        }),
+        "snapshot contains an extra field": repositoryCredentials({ bearer: "unexpected-field" }),
+      };
+      for (const [name, credentials] of Object.entries(invalidSnapshots)) {
+        await t.test(`snapshot: ${name}`, async () => {
+          await assert.rejects(
+            store.transact((unit) =>
+              unit.revisions.createRevision({
+                ...revision,
+                id: `rev_${randomUUID()}`,
+                revision: 2,
+                repositoryCredentials: credentials,
+              }),
+            ),
+            scopeError,
+          );
+        });
+      }
+      assert.equal(
+        (await store.read((view) => view.revisions.listRevisions(namespace.id, agent.id))).length,
+        1,
       );
-    }
-    const variants = [
-      { ...repositoryCredentials(), bindings: [] },
-      { ...repositoryCredentials(), bindings: {} },
-      {
-        ...repositoryCredentials(),
-        driver: { ...repositoryCredentials().driver, bearer: "unexpected" },
-      },
-      {
-        ...repositoryCredentials(),
-        bindings: [{ ...repositoryCredentials().bindings[0], bearer: "unexpected" }],
-      },
-      {
-        ...repositoryCredentials(),
-        bindings: [{ ...repositoryCredentials().bindings[0], grant: null }],
-      },
-      {
-        ...repositoryCredentials(),
-        bindings: [
-          {
-            ...repositoryCredentials().bindings[0],
-            grant: { ...repositoryCredentials().bindings[0].grant, bearer: "unexpected" },
-          },
-        ],
-      },
-      { ...repositoryCredentials(), deadlineWallMs: 0 },
-      { ...repositoryCredentials(), deadlineWallMs: Number.MAX_SAFE_INTEGER + 1 },
-      { ...repositoryCredentials(), driver: { id: "", implementation: "native" } },
-      {
-        ...repositoryCredentials(),
-        driver: { id: `${"é".repeat(256)}x`, implementation: "github" },
-      },
-      {
-        ...repositoryCredentials(),
-        bindings: [{ ...repositoryCredentials().bindings[0], providerId: " provider " }],
-      },
-      {
-        ...repositoryCredentials(),
-        bindings: [{ ...repositoryCredentials().bindings[0], providerId: "😀".repeat(101) }],
-      },
-      {
-        ...repositoryCredentials(),
-        bindings: [{ ...repositoryCredentials().bindings[0], providerId: "\u00a0provider" }],
-      },
-      {
-        ...repositoryCredentials(),
-        bindings: [
-          {
-            ...repositoryCredentials().bindings[0],
-            grant: { ...repositoryCredentials().bindings[0].grant, grantId: "bad\u007fidentity" },
-          },
-        ],
-      },
-      {
-        ...repositoryCredentials(),
-        bindings: [
-          {
-            ...repositoryCredentials().bindings[0],
-            grant: { ...repositoryCredentials().bindings[0].grant, grantId: `${"é".repeat(256)}x` },
-          },
-        ],
-      },
-      { ...repositoryCredentials(), bearer: "unexpected-field" },
-    ];
-    for (const repositoryCredentials of variants) {
-      await assert.rejects(
-        store.transact((unit) =>
-          unit.revisions.createRevision({
-            ...revision,
-            id: `rev_${randomUUID()}`,
-            revision: 2,
-            repositoryCredentials,
-          }),
-        ),
-        scopeError,
-      );
-    }
-    assert.equal(
-      (await store.read((view) => view.revisions.listRevisions(namespace.id, agent.id))).length,
-      1,
-    );
-  });
+    },
+  );
 
   await t.test(
     "attempts retain exact owners, admitted membership and immutable deadlines",
-    async () => {
+    async (t) => {
       const { revision } = await seedSessionRevision(store);
       const other = await seedSessionRevision(store);
-      for (const override of [
-        { namespaceId: other.namespace.id },
-        { agentId: other.agent.id },
-        { repositoryRef: "unadmitted" },
-        { deadlineWallMs: revision.repositoryCredentials.deadlineWallMs + 1 },
-        { durationSeconds: 0 },
-        { durationSeconds: Number.MAX_SAFE_INTEGER + 1 },
-        { admissionId: "bad admission" },
-        { admissionId: "admission\n" },
-      ]) {
-        await assert.rejects(
-          store.transact((unit) =>
-            unit.repositorySessions.createAttempt(sessionAttempt(revision, override)),
-          ),
-          scopeError,
-        );
+      const invalidAttempts = {
+        "namespace belongs to another revision": { namespaceId: other.namespace.id },
+        "agent belongs to another revision": { agentId: other.agent.id },
+        "repository was not admitted": { repositoryRef: "unadmitted" },
+        "deadline differs from the admitted deadline": {
+          deadlineWallMs: revision.repositoryCredentials.deadlineWallMs + 1,
+        },
+        "duration is zero": { durationSeconds: 0 },
+        "duration exceeds the safe integer range": { durationSeconds: Number.MAX_SAFE_INTEGER + 1 },
+        "admission identity contains a space": { admissionId: "bad admission" },
+        "admission identity ends with a newline": { admissionId: "admission\n" },
+      };
+      for (const [name, override] of Object.entries(invalidAttempts)) {
+        await t.test(name, async () => {
+          await assert.rejects(
+            store.transact((unit) =>
+              unit.repositorySessions.createAttempt(sessionAttempt(revision, override)),
+            ),
+            scopeError,
+          );
+        });
       }
       // PostgreSQL rejects malformed bigint/timestamp representations before CHECK constraints;
       // both adapters must reject the value, regardless of their error classification.
-      for (const override of [{ durationSeconds: 1.5 }, { createdAt: "not-a-timestamp" }]) {
-        await assert.rejects(
-          store.transact((unit) =>
-            unit.repositorySessions.createAttempt(sessionAttempt(revision, override)),
-          ),
-        );
+      const malformedRepresentations = {
+        "duration is fractional": { durationSeconds: 1.5 },
+        "creation time is not a timestamp": { createdAt: "not-a-timestamp" },
+      };
+      for (const [name, override] of Object.entries(malformedRepresentations)) {
+        await t.test(name, async () => {
+          await assert.rejects(
+            store.transact((unit) =>
+              unit.repositorySessions.createAttempt(sessionAttempt(revision, override)),
+            ),
+          );
+        });
       }
       const input = sessionAttempt(revision);
       const opened = await store.transact((unit) => unit.repositorySessions.createAttempt(input));

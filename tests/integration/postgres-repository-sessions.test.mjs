@@ -4,11 +4,15 @@ import test from "node:test";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/state/postgres-state.ts";
 import {
-  repositoryCredentials,
   seedSessionRevision,
   sessionAttempt,
   verifyRepositorySessions,
 } from "../conformance/repository-sessions.contract.mjs";
+import {
+  repositoryBinding,
+  repositoryCredentials,
+  repositoryGrant,
+} from "../fixtures/repository-credentials/session-state.mjs";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 
@@ -56,53 +60,69 @@ test(
 
     await t.test(
       "SQL rejects owner mismatches, unadmitted repositories and altered deadlines",
-      async () => {
+      async (t) => {
         const { revision } = await seedSessionRevision(store);
         const other = await seedSessionRevision(store);
-        for (const override of [
-          { namespaceId: other.namespace.id },
-          { agentId: other.agent.id },
-          { revisionId: `rev_${randomUUID()}` },
-        ]) {
-          await assert.rejects(insertAttempt(pool, sessionAttempt(revision, override)), {
-            code: "23503",
+        const foreignOwners = {
+          "namespace belongs to another revision": { namespaceId: other.namespace.id },
+          "agent belongs to another revision": { agentId: other.agent.id },
+          "revision does not exist": { revisionId: `rev_${randomUUID()}` },
+        };
+        for (const [name, override] of Object.entries(foreignOwners)) {
+          await t.test(name, async () => {
+            await assert.rejects(insertAttempt(pool, sessionAttempt(revision, override)), {
+              code: "23503",
+            });
           });
         }
-        for (const override of [
-          { repositoryRef: "unadmitted" },
-          { deadlineWallMs: revision.repositoryCredentials.deadlineWallMs + 1 },
-          { durationSeconds: 0 },
-          { durationSeconds: -1 },
-          { durationSeconds: "9007199254740992" },
-          { admissionId: "bad admission" },
-          { admissionId: "admission\n" },
-          { admissionId: "a".repeat(129) },
-        ]) {
-          await assert.rejects(insertAttempt(pool, sessionAttempt(revision, override)), {
+        const invalidAttempts = {
+          "repository was not admitted": { repositoryRef: "unadmitted" },
+          "deadline differs from the admitted deadline": {
+            deadlineWallMs: revision.repositoryCredentials.deadlineWallMs + 1,
+          },
+          "duration is zero": { durationSeconds: 0 },
+          "duration is negative": { durationSeconds: -1 },
+          "duration exceeds the safe integer range": { durationSeconds: "9007199254740992" },
+          "admission identity contains a space": { admissionId: "bad admission" },
+          "admission identity ends with a newline": { admissionId: "admission\n" },
+          "admission identity exceeds 128 characters": { admissionId: "a".repeat(129) },
+        };
+        for (const [name, override] of Object.entries(invalidAttempts)) {
+          await t.test(name, async () => {
+            await assert.rejects(insertAttempt(pool, sessionAttempt(revision, override)), {
+              code: "23514",
+            });
+          });
+        }
+        await t.test("phase is unknown", async () => {
+          await assert.rejects(insertAttempt(pool, sessionAttempt(revision), "unknown"), {
             code: "23514",
           });
-        }
-        await assert.rejects(insertAttempt(pool, sessionAttempt(revision), "unknown"), {
-          code: "23514",
         });
-        await assert.rejects(
-          insertAttempt(pool, sessionAttempt(revision), "opening", "session-present"),
-          { code: "23514" },
-        );
-        await assert.rejects(
-          insertAttempt(pool, sessionAttempt(revision, { createdAt: "infinity" })),
-          { code: "23514" },
-        );
-        await assert.rejects(
-          insertAttempt(
-            pool,
-            sessionAttempt(revision),
-            "opening",
-            null,
-            "2030-03-17T17:46:39.000Z",
-          ),
-          { code: "23514" },
-        );
+        await t.test("opening attempt already has a session identity", async () => {
+          await assert.rejects(
+            insertAttempt(pool, sessionAttempt(revision), "opening", "session-present"),
+            { code: "23514" },
+          );
+        });
+        await t.test("creation time is infinite", async () => {
+          await assert.rejects(
+            insertAttempt(pool, sessionAttempt(revision, { createdAt: "infinity" })),
+            { code: "23514" },
+          );
+        });
+        await t.test("update time precedes creation", async () => {
+          await assert.rejects(
+            insertAttempt(
+              pool,
+              sessionAttempt(revision),
+              "opening",
+              null,
+              "2030-03-17T17:46:39.000Z",
+            ),
+            { code: "23514" },
+          );
+        });
         assert.equal(
           (
             await pool.query(
@@ -243,92 +263,88 @@ test(
 
     await t.test(
       "SQL validates canonical draft and immutable revision repository snapshots",
-      async () => {
+      async (t) => {
         const { agent, revision } = await seedSessionRevision(store);
-        for (const bindings of [
-          [],
-          [{ repositoryRef: "source\n", profile: "git-read" }],
-          [{ repositoryRef: "source", profile: "git-read\n" }],
-          [{ repositoryRef: "source", profile: "read", bearer: "extra" }],
-          [
+        const invalidDrafts = {
+          "bindings are empty": [],
+          "repository reference ends with a newline": [
+            { repositoryRef: "source\n", profile: "git-read" },
+          ],
+          "profile ends with a newline": [{ repositoryRef: "source", profile: "git-read\n" }],
+          "binding contains an extra field": [
+            { repositoryRef: "source", profile: "read", bearer: "extra" },
+          ],
+          "repository reference appears twice": [
             { repositoryRef: "source", profile: "read" },
             { repositoryRef: "source", profile: "write" },
           ],
-        ]) {
-          await assert.rejects(
-            pool.query("UPDATE occ.agents SET repository_bindings = $2::jsonb WHERE id = $1", [
-              agent.id,
-              JSON.stringify(bindings),
-            ]),
-            { code: "23514" },
-          );
+        };
+        for (const [name, bindings] of Object.entries(invalidDrafts)) {
+          await t.test(`draft: ${name}`, async () => {
+            await assert.rejects(
+              pool.query("UPDATE occ.agents SET repository_bindings = $2::jsonb WHERE id = $1", [
+                agent.id,
+                JSON.stringify(bindings),
+              ]),
+              { code: "23514" },
+            );
+          });
         }
-        const variants = [
-          null,
-          { ...repositoryCredentials(), bindings: [] },
-          { ...repositoryCredentials(), bindings: {} },
-          {
-            ...repositoryCredentials(),
-            driver: { ...repositoryCredentials().driver, bearer: "unexpected" },
-          },
-          {
-            ...repositoryCredentials(),
-            bindings: [{ ...repositoryCredentials().bindings[0], bearer: "unexpected" }],
-          },
-          {
-            ...repositoryCredentials(),
-            bindings: [{ ...repositoryCredentials().bindings[0], grant: null }],
-          },
-          {
-            ...repositoryCredentials(),
-            bindings: [
-              {
-                ...repositoryCredentials().bindings[0],
-                grant: { ...repositoryCredentials().bindings[0].grant, bearer: "unexpected" },
-              },
-            ],
-          },
-          { ...repositoryCredentials(), deadlineWallMs: 1.5 },
-          { ...repositoryCredentials(), driver: { id: "bad\nidentity", implementation: "native" } },
-          {
-            ...repositoryCredentials(),
+        const invalidSnapshots = {
+          "snapshot is null": null,
+          "bindings are empty": repositoryCredentials({ bindings: [] }),
+          "bindings are an object": repositoryCredentials({ bindings: {} }),
+          "driver contains an extra field": repositoryCredentials({
+            driver: {
+              id: "repository-credentials",
+              implementation: "github",
+              bearer: "unexpected",
+            },
+          }),
+          "binding contains an extra field": repositoryCredentials({
+            bindings: [repositoryBinding({ bearer: "unexpected" })],
+          }),
+          "grant is null": repositoryCredentials({
+            bindings: [repositoryBinding({ grant: null })],
+          }),
+          "grant contains an extra field": repositoryCredentials({
+            bindings: [repositoryBinding({ grant: repositoryGrant({ bearer: "unexpected" }) })],
+          }),
+          "deadline is fractional": repositoryCredentials({ deadlineWallMs: 1.5 }),
+          "driver identity contains a newline": repositoryCredentials({
+            driver: { id: "bad\nidentity", implementation: "native" },
+          }),
+          "driver identity exceeds 512 UTF-8 bytes": repositoryCredentials({
             driver: { id: `${"é".repeat(256)}x`, implementation: "github" },
-          },
-          {
-            ...repositoryCredentials(),
-            bindings: [{ ...repositoryCredentials().bindings[0], providerId: " provider " }],
-          },
-          {
-            ...repositoryCredentials(),
-            bindings: [{ ...repositoryCredentials().bindings[0], providerId: "😀".repeat(101) }],
-          },
-          {
-            ...repositoryCredentials(),
-            bindings: [{ ...repositoryCredentials().bindings[0], providerId: "\u00a0provider" }],
-          },
-          {
-            ...repositoryCredentials(),
-            bindings: [
-              {
-                ...repositoryCredentials().bindings[0],
-                grant: { ...repositoryCredentials().bindings[0].grant, grantId: "" },
-              },
-            ],
-          },
-          { ...repositoryCredentials(), bearer: "extra" },
-        ];
+          }),
+          "provider identity contains surrounding spaces": repositoryCredentials({
+            bindings: [repositoryBinding({ providerId: " provider " })],
+          }),
+          "provider identity exceeds 200 UTF-16 code units": repositoryCredentials({
+            bindings: [repositoryBinding({ providerId: "😀".repeat(101) })],
+          }),
+          "provider identity starts with a nonbreaking space": repositoryCredentials({
+            bindings: [repositoryBinding({ providerId: "\u00a0provider" })],
+          }),
+          "grant identity is empty": repositoryCredentials({
+            bindings: [repositoryBinding({ grant: repositoryGrant({ grantId: "" }) })],
+          }),
+          "snapshot contains an extra field": repositoryCredentials({ bearer: "extra" }),
+        };
         // Insert variants of a real admitted row so the repository snapshot is the only invalid input.
-        for (const credentials of variants) {
-          await assert.rejects(
-            pool.query(
-              `INSERT INTO occ.agent_revisions (id, namespace_id, agent_id, revision_number, admitted_spec, admitted_at)
+        for (const [name, credentials] of Object.entries(invalidSnapshots)) {
+          await t.test(`snapshot: ${name}`, async () => {
+            await assert.rejects(
+              pool.query(
+                `INSERT INTO occ.agent_revisions (id, namespace_id, agent_id, revision_number, admitted_spec, admitted_at)
          SELECT $2, namespace_id, agent_id, 2,
            jsonb_set(admitted_spec, '{repository_credentials}', $3::jsonb), admitted_at
          FROM occ.agent_revisions WHERE id = $1`,
-              [revision.id, `rev_${randomUUID()}`, JSON.stringify(credentials)],
-            ),
-            { code: "23514" },
-          );
+                [revision.id, `rev_${randomUUID()}`, JSON.stringify(credentials)],
+              ),
+              { code: "23514" },
+            );
+          });
         }
         const row = (
           await pool.query(
