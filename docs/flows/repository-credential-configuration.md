@@ -1,7 +1,7 @@
 ---
 created: 2026-09-18
 updated: 2026-09-18
-last_updated_session: codex/01a0b287-be12-7492-8826-a168e5b53103
+last_updated_session: "authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772"
 ---
 
 # Repository credential configuration flow
@@ -46,7 +46,7 @@ graph TD
 
 ### 1. Establish a protected path from the filesystem root
 
-`apps/repository-credentials/src/config.ts:readProtected`
+`apps/repository-credentials/src/configuration/protected-file.ts:readProtectedFile`
 
 The loader requires a normalized absolute path and validates its directory
 ancestors in root-to-leaf order. Each accepted prefix therefore protects the
@@ -58,7 +58,10 @@ parent remains unwritable by those users.
 The loader opens the final basename without following symlinks. It checks the
 file owner, mode, link count, type, and size, performs a bounded read, and compares
 the open file with the named inode and its original metadata. Invalid or replaced
-files fail before their contents become configuration.
+files fail before their contents become configuration. The private reader returns
+either owned bytes or a failure without filesystem details. It clears its read
+buffer and closes the file handle in `finally`; the configuration loader owns
+and clears successfully returned bytes.
 
 ### 2. Validate configuration and construct material owners
 
@@ -103,5 +106,7 @@ startup validation, not live GitHub behavior or platform integration.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 18:51: Separate protected-file reading from configuration assembly while preserving validation and disposal. (authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772 - d29fac7d363eb1cfb3dab6306a81cc3b8daf395d)
 
 - 2026-09-18 03:32: Document protected ancestor validation and configuration ownership with the accompanying security correction (codex/01a0b287-be12-7492-8826-a168e5b53103 - 2d4877aaf438c919a2240109cb2e7067e4d75b4d)

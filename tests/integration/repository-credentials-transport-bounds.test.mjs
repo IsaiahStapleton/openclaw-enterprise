@@ -6,10 +6,7 @@ import { connect as connectTls } from "node:tls";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
 import {
-  fixtureAppId,
-  fixtureInstallationId,
   fixtureRepository,
-  fixtureRepositoryId,
   startGitHubFixture,
 } from "../fixtures/repository-credentials/github.mjs";
 import { createTlsMaterial, listen } from "../fixtures/repository-credentials/process.mjs";
@@ -18,6 +15,11 @@ import {
   createServiceConfiguration,
   eventually,
 } from "../fixtures/repository-credentials/service.mjs";
+import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
+import {
+  createGitHubServiceFactory,
+  startServiceListeners,
+} from "../fixtures/repository-credentials/service-resources.mjs";
 
 const discovery = `/${fixtureRepository}.git/info/refs?service=git-upload-pack`;
 const push = `/${fixtureRepository}.git/git-receive-pack`;
@@ -29,34 +31,9 @@ const responseLimit = 4096;
 // The peer controls only application bytes and when it reads or writes them.
 // The listener, route policy, credential ownership and TLS sender are production code.
 async function startTransport(t, onRequest, limits = {}) {
-  const cleanups = [];
-  const resources = { after: (cleanup) => cleanups.push(cleanup) };
-  t.after(async () => {
-    const failures = [];
-    for (const cleanup of cleanups.reverse()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (failures.length) {
-      throw new AggregateError(failures, "transport cleanup failed");
-    }
-  });
-  const [
-    { createSystemClock },
-    { createCredentialService },
-    { startListeners },
-    { createGitHubDriverFactory },
-    { createGitHubKeyOwner },
-  ] = await Promise.all([
-    appModule("clock"),
-    appModule("service"),
-    appModule("server"),
-    appModule("backends/github/index"),
-    appModule("backends/github/material"),
-  ]);
+  const resources = createResourceScope();
+  t.after(() => resources.close());
+  const { createSystemClock } = await appModule("clock");
   const clock = createSystemClock();
   const tls = await createTlsMaterial(resources);
   // One exchange slot makes leaked reservations visible to the following request.
@@ -81,48 +58,19 @@ async function startTransport(t, onRequest, limits = {}) {
   });
   const origin = await listen(resources, upstream);
   const trustedOrigins = new Set([origin]);
-  const key = createGitHubKeyOwner({ privateKey: github.privateKey, appId: fixtureAppId, clock });
-  resources.after(() => key.close());
-  const factory = createGitHubDriverFactory({
-    configuration: {
-      kind: "github-app",
-      providerInstanceId: "github-fixture",
-      configVersion: "1",
-      appId: fixtureAppId,
-      installationId: fixtureInstallationId,
-      repositoryId: fixtureRepositoryId,
-      repository: fixtureRepository,
-      privateKeyFile: "/unused-fixture-key.pem",
-    },
-    key,
-    gatewayOrigin: config.gateway.publicOrigin,
-    limits: config.limits,
+  const factory = await createGitHubServiceFactory(resources, {
+    config,
     clock,
+    privateKey: github.privateKey,
     trustedEndpoints: { apiOrigin: github.origin, gitOrigin: origin, ca: tls.ca },
   });
-  const service = createCredentialService({ config, factory, clock });
-  let listeners;
-  resources.after(async () => {
-    listeners?.stopAdmission();
-    try {
-      const summary = await service.shutdown(1000);
-      assert.equal(summary.graceExpired, false);
-      assert.equal(summary.disposedSessions, summary.closedSessions);
-      assert.equal(summary.pendingActions, 0);
-      assert.equal(summary.pendingCredentials, 0);
-      assert.equal(summary.pendingAuxiliary, 0);
-    } finally {
-      await listeners?.close();
-    }
-  });
-  listeners = await startListeners({
+  const { service, listeners } = await startServiceListeners(resources, {
     config,
-    tls,
-    service,
     factory,
     clock,
+    tls,
+    // Pass the caller's original set so production owns the security-relevant copy.
     trustedUpstreamOrigins: trustedOrigins,
-    upstreamCa: tls.ca,
   });
   const opened = service.open({ durationSeconds: 300, profile: "git-write" });
   return { config, tls, service, listeners, opened, github, received, resources, trustedOrigins };

@@ -2,11 +2,10 @@
 
 ## Active workspace boundary
 
-Approved milestones permit the active TypeScript/pnpm workspace, its selected
-controller and Driver implementations, reviewed PostgreSQL persistence, and
-production Kubernetes packaging described in the current implementation specs.
-Do not introduce platform resources or deployment behavior outside those
-approved milestones.
+Stay within approved implementation milestones: the active TypeScript/pnpm
+workspace, selected controller and Drivers, reviewed PostgreSQL persistence, and
+production Kubernetes packaging. Do not add platform resources or deployment
+behavior outside those milestones.
 
 The development API must bind only to loopback, reject nondevelopment
 configuration, admit only explicitly provisioned development identities,
@@ -25,9 +24,10 @@ Do not create a competing architecture specification in this checkout.
 
 ## Repository layout
 
-Follow [Repository layout and conventions](docs/layout.md) before adding or moving
-files. Preserve ownership and workspace/package boundaries; update the guide and
-navigation alongside changes to directories, ownership, or placement conventions.
+Follow [Repository layout and conventions](docs/layout.md) before adding or
+moving files. Preserve existing ownership and workspace/package boundaries.
+Update the guide and navigation when directories, ownership, or placement
+conventions change.
 
 ## Keep agents in their lane
 
@@ -48,26 +48,25 @@ stop on unexpected changes.
 
 ## Development style
 
+Follow these rules when developing or changing code.
+
 ### Build platform capabilities
 
-We are developing a platform. Every new capability must belong to a platform
-primitive, rather than exist as a one-off implementation. First identify the
-existing primitive that owns the capability. Extend that primitive when its
-contract is insufficient, or introduce a new primitive when none fits, within
-the approved architecture and milestone scope.
+Every new capability must belong to a platform primitive. Identify its existing
+owner, extend that contract when insufficient, or introduce a primitive only
+when none fits and the approved architecture and milestones permit it.
 
-Implement the owning primitive's contract and connect the capability to its
-platform lifecycle and composition. A standalone helper or a class named after
-a primitive does not establish that integration. Internal helpers may support
-the implementation, but must not substitute for the platform capability.
+Implement the primitive's contract and integrate it with platform lifecycle and
+composition. Internal helpers may support this work; a standalone helper or
+suitably named class does not establish platform integration.
 
-In general, do not add a capability without a caller in the regular Agent
-workflow. Deliver the capability with that caller; defer speculative components
-until a real workflow needs them. A test-only caller does not satisfy this rule.
+Deliver capabilities with callers in the regular Agent workflow. Defer
+speculative components; test-only callers do not satisfy this requirement.
 
-For example, a GitHub App token Provider must satisfy the
-[Provider contract](docs/reference/providers.md) and composition, beyond minting
-and revocation; see [PR #136](https://github.com/openclaw/openclaw-enterprise/pull/136).
+For example, GitHub App token issuance implemented as a Provider must follow the
+[Provider contract](docs/reference/providers.md) and participate in composition.
+Token minting and revocation alone are insufficient; see
+[PR #136](https://github.com/openclaw/openclaw-enterprise/pull/136).
 
 ### Require integration tests; reject low-value tests
 
@@ -108,9 +107,10 @@ accessing an internal module.
 
 ## Developer skills
 
-Use [local-dev](.agents/skills/local-dev/SKILL.md) for repository development,
-including its source-backed flow documentation requirements and trivial-maintenance
-exceptions. Prefer updating the existing behavior owner under `docs/flows/`.
+Use [local-dev](.agents/skills/local-dev/SKILL.md) for repository development
+changes. It requires creating or updating a source-backed flow doc for non-trivial
+runtime changes and defines when trivial maintenance needs no new flow doc.
+Update the existing behavior owner under `docs/flows/` whenever possible.
 
 Use [test-audit](.agents/skills/test-audit/SKILL.md) when authoring or reviewing
 tests, and [enterprise-testing](.agents/skills/enterprise-testing/SKILL.md) to
@@ -154,12 +154,10 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
 - Top-level `specs/` records implementation proposals, milestones, and delivery
   history. Completed specifications do not override current feature reference.
 
-Keep `docs/design.md` and `docs/ARCHITECTURE.md` focused on system-level
-structure, ownership, trust boundaries, and major interactions. Update them only
-when a change alters that architectural understanding. Put feature details,
-configuration, edge cases, and delivery history in their owning reference, guide,
-flow, or specification. Add a concise link when needed; do not append an entry
-for every feature or PR.
+Keep `docs/design.md` and `docs/ARCHITECTURE.md` about system structure, ownership,
+trust boundaries, and major interactions; update them only for architectural
+changes. Put feature details, configuration, edge cases, and delivery history in
+their owning reference, guide, flow, or spec. Link as needed, without per-PR entries.
 
 Document new components under `docs/` in the same change: purpose, setup,
 boundaries, verification, and troubleshooting. Update navigation and affected
@@ -227,9 +225,11 @@ boundaries or intentional architecture as temporary.
 Write implementation and milestone specifications under `specs/`, following the
 authoritative platform design.
 
-Implementation specifications are historical records. Document superseding behavior
-in the later spec and current documentation; preserve earlier specs' original
-design decisions and implementation details.
+Implementation specifications are point-in-time records. When a later spec
+changes or supersedes an implementation described by an earlier spec, document
+the change in the later spec and the affected current documentation. Do not
+retroactively update the earlier spec to match the later implementation;
+preserve its original design decisions and implementation details.
 
 Use stable feature names in `docs/reference/` and retain existing numbered
 implementation-spec paths under `specs/`. A behavior-changing implementation PR
@@ -343,7 +343,8 @@ not verify shared-cluster admission guardrails.
 - Use `ts-pattern` for tagged unions and branches that would otherwise become
   nested ternaries. Prefer `match(value).with(...).exhaustive()` so every case
   is explicit and checked by TypeScript.
-- Use a ternary or `if` for ordinary two-way conditions.
+- Keep ordinary two-way conditions as a simple ternary or `if`; do not wrap
+  them in `match` just to use the library.
 - Format active workspace changes with `pnpm format:fix` and verify them with
   `pnpm format:check` when an installed dependency graph matches the current
   manifests. These checks include authored `docs/**/*.md`; the generated

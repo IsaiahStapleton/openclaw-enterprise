@@ -13,7 +13,7 @@ import {
 
 export async function createGitHubServiceFactory(
   resources,
-  { config, clock, privateKey, trustedEndpoints },
+  { config, clock, privateKey, trustedEndpoints, providerInstanceId = "github-fixture" },
 ) {
   const [{ createGitHubDriverFactory }, { createGitHubKeyOwner }] = await Promise.all([
     appModule("backends/github/index"),
@@ -23,7 +23,7 @@ export async function createGitHubServiceFactory(
   resources.after(() => key.close());
   return createGitHubDriverFactory({
     configuration: githubConfigurationData({
-      providerInstanceId: "github-fixture",
+      providerInstanceId,
       appId: fixtureAppId,
       installationId: fixtureInstallationId,
       repositoryId: fixtureRepositoryId,
@@ -62,7 +62,14 @@ async function shutdownService(service, clock) {
 
 export async function startServiceListeners(
   resources,
-  { config, factory, clock, tls, upstreamOrigins },
+  {
+    config,
+    factory,
+    clock,
+    tls,
+    upstreamOrigins,
+    trustedUpstreamOrigins = new Set(upstreamOrigins),
+  },
 ) {
   const [{ createCredentialService }, { startListeners }] = await Promise.all([
     appModule("service"),
@@ -79,7 +86,7 @@ export async function startServiceListeners(
     tls,
     service,
     factory,
-    trustedUpstreamOrigins: new Set(upstreamOrigins),
+    trustedUpstreamOrigins,
     clock,
     upstreamCa: tls.ca,
   });

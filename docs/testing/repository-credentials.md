@@ -2,6 +2,26 @@
 
 Run from the repository root with Node 24, Git, OpenSSL, and prepared workspace dependencies. Tests generate their own bounded local key/TLS fixtures.
 
+## Reuse fixtures by ownership
+
+Keep scenario setup explicit and share the part that has a common owner:
+
+- `builders.mjs` creates data with visible overrides. `requestHead` preserves raw
+  targets, receipt time and framing so malformed-request tests reach the intended
+  boundary.
+- `resources.mjs` owns cleanup registration and failure reporting.
+  `service-resources.mjs` composes the real key, service and listener owners;
+  scenarios keep their distinct clocks, identities and failure triggers.
+- The GitHub fixture separates token authority, repository resources and HTTP
+  dispatch. The alternate fixture keeps credential identity and renewal state
+  together while separating route policy and its upstream.
+
+Name table cases by the rejected input or expected outcome. Keep expected values
+independent of the helper being exercised. Extract shared setup when multiple
+scenarios need it; keep fault ordering and observable assertions in the test.
+Protocol fixtures model the provider boundary, while production owners remain
+responsible for custody, authorization and cleanup.
+
 ## Check source authority boundaries
 
 Run `node scripts/verify-repository-credentials-boundary.mjs` after changing the
