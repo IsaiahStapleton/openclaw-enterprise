@@ -1227,7 +1227,8 @@ test(
       namespaceIds.push(created.data.id);
       namespaces.push(created.data);
     }
-    namespaces.push(helperNamespace.data);
+    // The CLI emits the Namespace itself; HTTP responses retain the data envelope.
+    namespaces.push(helperNamespace);
     await Promise.all(
       namespaces.map((namespace) =>
         waitFor(`Namespace ${namespace.id} to become ready`, async () => {
@@ -1243,7 +1244,7 @@ test(
     const dedicatedNamespace = namespaces.find((namespace) =>
       namespace.name.startsWith("dedicated-"),
     );
-    const cleanupNamespace = helperNamespace.data;
+    const cleanupNamespace = helperNamespace;
     assert.ok(embeddedNamespace, "embedded Namespace must be provisioned");
     assert.ok(dedicatedNamespace, "dedicated Namespace must be provisioned");
     const embeddedNetwork = await waitForNamespaceNetwork(embeddedNamespace.id);
