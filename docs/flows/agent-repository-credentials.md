@@ -222,8 +222,13 @@ or authoritative absence.
 
 Compute retirement waits for owned Pods to stop before removing their material.
 It preserves Secrets referenced by actual Pods and current Deployments, and
-limits deletion to exact ownership with UID preconditions. Service restart can
-settle missing local-session records but cannot prove remote token revocation.
+limits deletion to exact ownership with UID preconditions. Stop removes only
+the stopped revision's route and preserves a newer gateway Deployment and its
+shared resources. Route deletion and the stopped revision's Deployment deletion
+also require the observed resourceVersion. Under the single-worker topology,
+Deployment deletion precedes shared cleanup, which remains retryable after a
+partial failure. Service restart can settle missing local-session records but
+cannot prove remote token revocation.
 
 ## Debugging and Verification
 

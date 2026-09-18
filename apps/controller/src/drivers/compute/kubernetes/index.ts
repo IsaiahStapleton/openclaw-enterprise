@@ -2255,17 +2255,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async removeStoppedGateway(revision: AgentRevision, namespace: string): Promise<void> {
     const name = `gateway-${sha256Hex(revision.agentId, 12)}`;
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    const gateway = await this.getOwned("Deployment", name, namespace, ownership);
-    const route = await this.gatewayRouteForRevision(name, ownership, namespace, revision.id);
-    if (
-      gateway?.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revision.id &&
-      route === undefined
-    ) {
-      await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
-      return;
-    }
     await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
-    await this.deleteGateway(name, ownership, namespace);
+    await this.deleteGateway(name, ownership, namespace, revision.id);
     await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
   }
 
@@ -2380,9 +2371,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (existing === undefined) {
       return;
     }
-    if (existing.metadata.uid === undefined) {
+    if (
+      !isNonEmptyString(existing.metadata.uid) ||
+      !isNonEmptyString(existing.metadata.resourceVersion)
+    ) {
       throw new OwnershipFailure(
-        `HTTPRoute ${name} UID must be explicitly observed before delete.`,
+        `HTTPRoute ${name} UID and resourceVersion must be explicitly observed before delete.`,
       );
     }
     const clients = await this.clients();
@@ -2399,7 +2393,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
           undefined,
           undefined,
           undefined,
-          { preconditions: { uid: existing.metadata.uid } } as V1DeleteOptions,
+          {
+            preconditions: {
+              uid: existing.metadata.uid,
+              resourceVersion: existing.metadata.resourceVersion,
+            },
+          } as V1DeleteOptions,
         ),
       { mutating: true },
     );
@@ -2427,9 +2426,44 @@ export class KubernetesComputeDriver implements ComputeDriver {
     name: string,
     ownership: Ownership,
     namespace: string,
+    stoppedRevisionId?: string,
   ): Promise<void> {
     const clients = await this.clients();
-    for (const kind of ["Service", "ServiceAccount", "Deployment"] as const) {
+    if (stoppedRevisionId !== undefined) {
+      const gateway = await this.getOwned("Deployment", name, namespace, ownership);
+      if (gateway !== undefined) {
+        if (gateway.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== stoppedRevisionId) {
+          return;
+        }
+        const { uid, resourceVersion } = gateway.metadata;
+        if (!isNonEmptyString(uid) || !isNonEmptyString(resourceVersion)) {
+          throw new OwnershipFailure(
+            `Deployment ${name} UID and resourceVersion must be explicitly observed before delete.`,
+          );
+        }
+        // A cutover can update the same UID. Fence it before deleting shared resources.
+        await this.request(
+          () =>
+            clients.apps.deleteNamespacedDeployment({
+              name,
+              namespace,
+              body: {
+                preconditions: {
+                  uid,
+                  resourceVersion,
+                },
+              },
+            }),
+          { mutating: true },
+        );
+      }
+      // With the single owning worker, absence also permits retrying partial shared cleanup.
+    }
+    const kinds =
+      stoppedRevisionId === undefined
+        ? (["Service", "ServiceAccount", "Deployment"] as const)
+        : (["Service", "ServiceAccount"] as const);
+    for (const kind of kinds) {
       const existing = await this.getOwned(kind, name, namespace, ownership);
       if (existing === undefined) {
         continue;
