@@ -32,6 +32,7 @@ const repositoryFailureSummaryScript = String.raw`
     ["repository-authentication", /authentication failed|could not read Username|bad credentials|HTTP Basic: Access denied|returned error: (?:401|403)/i],
     ["repository-unavailable", /repository.*not found|repository.*does not exist|returned error: 404/i],
     ["tls-validation", /certificate verify failed|server certificate verification failed|SSL certificate problem|SSL_ERROR|unable to get local issuer|self.signed certificate/i],
+    ["tls-transport-closed", /GnuTLS recv error|TLS connection.*terminated/i],
     ["git-http-server-error", /returned error: 5[0-9]{2}|HTTP\/[0-9.]+ 5[0-9]{2}|HTTP (?:error |status )?5[0-9]{2}/i],
     ["network-resolution-or-connection", /could not resolve host|ENOTFOUND|ECONNREFUSED|connection refused|failed to connect|connection timed out/i],
     ["filesystem-permission", /EACCES|permission denied|read.only file system/i],
@@ -430,27 +431,46 @@ test(
           process.stdout.write(JSON.stringify(results));
         })().catch(() => { process.stderr.write("public upstream preflight unavailable\n"); process.exitCode = 1; });
       `;
-      const publicUpstream = JSON.parse(
-        await f.run(
-          "kubectl",
-          [
-            ...f.kubernetes.kubectlArguments([]),
-            "-n",
-            f.system,
-            "exec",
-            workerPod.metadata.name,
-            "-c",
-            "repository-credentials",
-            "--",
-            "node",
-            "-e",
-            publicUpstreamScript,
-          ],
-          { timeout: 15000 },
-        ),
-      );
+      const probePublicUpstream = async () =>
+        JSON.parse(
+          await f.run(
+            "kubectl",
+            [
+              ...f.kubernetes.kubectlArguments([]),
+              "-n",
+              f.system,
+              "exec",
+              workerPod.metadata.name,
+              "-c",
+              "repository-credentials",
+              "--",
+              "node",
+              "-e",
+              publicUpstreamScript,
+            ],
+            { timeout: 15000 },
+          ),
+        );
+      // Pod readiness can precede network-policy propagation. Retry only these
+      // unauthenticated public reads, before creating any Agent or session.
+      const publicPreflightDeadline = Date.now() + 45000;
+      let publicPreflightAttempts = 0;
+      let publicUpstream;
+      do {
+        publicPreflightAttempts++;
+        publicUpstream = await probePublicUpstream();
+        const transient = publicUpstream.some(({ cause }) =>
+          ["dns", "timeout", "connection"].includes(cause),
+        );
+        const permanent = publicUpstream.some(
+          ({ cause }) => !["none", "dns", "timeout", "connection"].includes(cause),
+        );
+        if (!transient || permanent || Date.now() + 5000 >= publicPreflightDeadline) break;
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      } while (Date.now() < publicPreflightDeadline);
       await f.record("Captured public upstream preflight; repository acceptance pending", {
         evidenceKind: "diagnostic-only",
+        publicPreflightAttempts,
         publicUpstream,
       });
       assert.deepEqual(
@@ -709,7 +729,7 @@ test(
         )
         .join("\n");
       const prompt = `Complete this authorized disposable repository task once with your exec tool and normal image-installed git/gh commands. Each Git/gh operation below must be its own standalone exec.command, with the specified exec.workdir. Execute the exact arguments in the listed order. Do not use shell cd, chaining, pipelines, redirection, comments, substitutions or wrappers in those Git/gh commands. Run foreground commands and stop on any failure. If exec nevertheless reports a running process, use process.poll on that exact session until completion before continuing. Do not install tools, read credentials, use alternate tokens, force push, call a provider HTTP API to create the PR, or delegate.
-After clone, its natural destination is ${checkout}. The readBase output must equal ${baseSha}; stop if it differs. Between branch and add, configure local disposable Git identity Repository proof <repository-proof@example.invalid>, then use a separate exec call of your own to write exactly the following JSON-encoded bytes to the new root-level file ${file}: ${JSON.stringify(content)}. Author that file yourself; do not change any other file. Make exactly one commit and exactly one same-repository PR. readCommit prints the full commit SHA and nativePr prints the PR URL; do not substitute echo commands for either operation. Do not close the PR or delete its branch. Finish with ${marker}.
+After clone, its natural destination is ${checkout}. The readBase output must equal ${baseSha}; stop if it differs. Between branch and add, use exec.workdir=${JSON.stringify(checkout)} for every configuration and file-writing exec call. Configure local disposable Git identity Repository proof <repository-proof@example.invalid>, then use a separate exec call of your own to write exactly the following JSON-encoded bytes to the new file at absolute path ${JSON.stringify(`${checkout}/${file}`)}: ${JSON.stringify(content)}. Author that file yourself; do not change any other file. Make exactly one commit and exactly one same-repository PR. readCommit prints the full commit SHA and nativePr prints the PR URL; do not substitute echo commands for either operation. Do not close the PR or delete its branch. Finish with ${marker}.
 ${commands}`;
       taskStarted = true;
       let taskFailure;

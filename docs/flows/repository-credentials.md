@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-18"
-last_updated_session: "authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d"
+last_updated_session: "authoring-run/d809d9cd-cac1-4449-80a0-6e07beaaed49"
 ---
 
 # Repository credential service flow
@@ -234,6 +234,13 @@ remain unchanged. Transport applies
 `apps/controller/src/drivers/repository-credentials/transport/response-headers.ts:safeResponseHeaders`
 before writing response headers to the client.
 
+After the input pipeline completes successfully, an upstream failure before response
+headers stops upstream I/O while preserving the incoming connection. Once that I/O
+settles, the Agent handler sends a fixed `502 exchange-uncertain` error. Cancellation,
+deadlines, input failures and failures after response headers still destroy the
+incoming connection. A later cancellation also destroys a connection retained for
+error delivery while the exchange remains owned.
+
 `apps/controller/src/drivers/repository-credentials/lifecycle/exchange.ts:executeExchange` joins
 tracked I/O before releasing credential use and returning exchange capacity to
 the service owner. Transport returns completed, not-dispatched or
@@ -291,6 +298,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 05:50: Document accompanying bounded upstream error delivery while preserving cancellation and exchange settlement. (authoring-run/d809d9cd-cac1-4449-80a0-6e07beaaed49 - 6d886fc6017180c215ee61a1247df36a494fa97a)
 
 - 2026-09-18 03:04: Describe accompanying bound registry admission, recovery-only fencing and Kubernetes startup; link the platform-owned Agent lifecycle. (authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d - 8500b2da103063b4503b62e5529f3910513e84a9)
 

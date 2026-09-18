@@ -293,7 +293,9 @@ test(
     });
     await t.test("possibly accepted writes are not replayed after disconnect", async () => {
       const before = received.length;
-      await assert.rejects(exchange(port, "/disconnect", Buffer.from("write")));
+      const response = await exchange(port, "/disconnect", Buffer.from("write"));
+      assert.equal(response.status, 502);
+      assert.deepEqual(JSON.parse(response.body), { error: { code: "exchange-failed" } });
       const deadline = Date.now() + 1000;
       while (!outcomes.some((entry) => entry.path === "/disconnect") && Date.now() < deadline)
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -304,14 +306,16 @@ test(
       assert.equal(received.length, before + 1);
     });
     await t.test(
-      "decoded overflow and unexpected upstream encoding abort the exchange",
+      "decoded input overflow aborts while rejected upstream encoding returns a sanitized error",
       async () => {
         await assert.rejects(
           exchange(port, "/echo", gzipSync(Buffer.alloc(70000, 65)), {
             "content-encoding": "gzip",
           }),
         );
-        await assert.rejects(exchange(port, "/encoded-response"));
+        const response = await exchange(port, "/encoded-response");
+        assert.equal(response.status, 502);
+        assert.deepEqual(JSON.parse(response.body), { error: { code: "exchange-failed" } });
       },
     );
     await t.test(
