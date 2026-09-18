@@ -1,4 +1,5 @@
 import type { PublicClientConfiguration, RepositoryGrantIdentity } from "./contracts.ts";
+import type { JsonValue } from "./json-value.ts";
 
 /** Backend extension protocol. Runtime owners also check original object identity. */
 declare const credentialIdentity: unique symbol;
@@ -101,7 +102,7 @@ export interface ExchangeLimits {
 export interface ResponsePolicy {
   readonly body: "stream" | "bounded-json";
   headers(status: number, headers: HeaderFields): HeaderFields;
-  readonly rewriteJson: ((value: unknown) => unknown) | undefined;
+  readonly rewriteJson: ((value: JsonValue) => JsonValue) | undefined;
 }
 export interface RequestPlan {
   readonly [planIdentity]: true;

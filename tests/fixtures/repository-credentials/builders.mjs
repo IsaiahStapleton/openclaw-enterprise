@@ -31,7 +31,16 @@ export function githubConfigurationData(overrides = {}) {
 }
 
 // Keep raw targets byte-for-byte, including deliberately invalid protocol inputs.
-export function requestHead(method, rawTarget, headers = {}) {
+export function requestHead(
+  method,
+  rawTarget,
+  headers = {},
+  {
+    receivedMonoMs = 0,
+    contentEncoding = "identity",
+    framing = { kind: "none", bytes: undefined },
+  } = {},
+) {
   return {
     method,
     rawTarget,
@@ -39,9 +48,9 @@ export function requestHead(method, rawTarget, headers = {}) {
       ...(["POST", "PATCH"].includes(method) ? { "content-type": "application/json" } : {}),
       ...headers,
     },
-    receivedMonoMs: 0,
-    contentEncoding: "identity",
-    framing: { kind: "none", bytes: undefined },
+    receivedMonoMs,
+    contentEncoding,
+    framing,
   };
 }
 

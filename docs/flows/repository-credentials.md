@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-18"
-last_updated_session: "authoring-run/36d61593-c993-48a9-9b32-1bcb6e898a3d"
+last_updated_session: "authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772"
 ---
 
 # Repository credential service flow
@@ -53,13 +53,20 @@ graph TD
 
 `apps/repository-credentials/src/check-config.ts:checkConfiguration` and
 `apps/repository-credentials/src/main.ts:startCredentialService` share the protected configuration
-loader. `apps/repository-credentials/src/configuration/service.ts:validateServiceConfig`
+loader, whose private file owner is
+`apps/repository-credentials/src/configuration/protected-file.ts:readProtectedFile`.
+The [configuration flow](repository-credential-configuration.md) traces its
+path checks and byte disposal.
+`apps/repository-credentials/src/configuration/service.ts:validateServiceConfig`
 validates gateway settings, session policy and service limits. The standalone
 check emits a safe summary without importing the session or listener owners. Normal startup constructs the system clock, bound driver
 factory, common service, and listeners.
 `apps/repository-credentials/src/backends/github/index.ts` exports the startup
 API; `apps/repository-credentials/src/backends/github/factory.ts:createGitHubDriverFactory`
-resolves grants, parses client authentication and composes session-bound drivers.
+composes session-bound drivers. It delegates grant resolution to
+`apps/repository-credentials/src/backends/github/grants.ts:createGrantResolver`
+and client authentication to
+`apps/repository-credentials/src/backends/github/gateway-authentication.ts:createGatewayAuthentication`.
 The App signing key belongs to the process, independently of each session's
 installation tokens. Session-consumer types live in
 `apps/repository-credentials/src/contracts.ts`; backend extension contracts live
@@ -180,10 +187,17 @@ wall-clock changes cannot shorten custody or restart the use lifetime.
 `apps/repository-credentials/src/backends/github/driver.ts:createGitHubDriver`
 composes acquisition and capture through
 `apps/repository-credentials/src/backends/github/driver/acquisition.ts:createCredentialAcquisition`,
-authentication and retirement through
-`apps/repository-credentials/src/backends/github/driver/access.ts:createCredentialAccess`,
+authentication through
+`apps/repository-credentials/src/backends/github/driver/access.ts:createCredentialAuthentication`,
+retirement through
+`apps/repository-credentials/src/backends/github/driver/retirement.ts:createCredentialRetirement`,
 and session-bound plans, credentials and original outcomes through
 `apps/repository-credentials/src/backends/github/driver/state.ts:createGitHubDriverState`.
+Acquisition observes and captures material inside the transport response callback
+through `apps/repository-credentials/src/backends/github/driver/acquisition-response.ts:observeAcquisitionResponse`.
+Its pure `classifyAcquisitionResponse` checks status, scope and usable lifetime;
+acquisition then rechecks admission synchronously before accepting the original
+credential. Rejected material retains its cleanup owner.
 Its bounded credential transport,
 `apps/repository-credentials/src/backends/github/provider-transport.ts:createProviderTransport`,
 uses `apps/repository-credentials/src/backends/github/provider-transport/request.ts:sendProviderRequest`
@@ -276,6 +290,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 18:51: Refresh operation, authentication and protected-input owners after behavior-preserving extraction. (authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772 - d29fac7d363eb1cfb3dab6306a81cc3b8daf395d)
 
 - 2026-09-18 12:03: Keep admitted TLS exchanges outside the header timeout while bounding incomplete handshakes and headers. (authoring-run/36d61593-c993-48a9-9b32-1bcb6e898a3d - b0b0b8b7ba98d2c8506ba261334aba1e769a87ef)
 

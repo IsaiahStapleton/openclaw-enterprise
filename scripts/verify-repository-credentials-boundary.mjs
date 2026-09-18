@@ -29,9 +29,11 @@ const reviewedImports = {
   },
   "config.ts": {
     "node:crypto": ["createPrivateKey"],
+    "node:tls": ["createSecureContext"],
+  },
+  "configuration/protected-file.ts": {
     "node:fs": ["constants"],
     "node:fs/promises": ["lstat", "open"],
-    "node:tls": ["createSecureContext"],
   },
   "lifecycle.ts": { "node:crypto": ["randomUUID"] },
   "server.ts": {
@@ -79,7 +81,7 @@ const reviewedProcessMembers = {
   "client/launch.ts": ["argv", "exitCode", "off", "on", "stderr"],
   "client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
   "client/private-files.ts": ["getuid"],
-  "config.ts": ["getuid"],
+  "configuration/protected-file.ts": ["getuid"],
   "main.ts": ["argv", "exit", "exitCode", "once", "stderr", "stdout"],
   "server.mjs": ["exitCode", "stderr"],
   "server.ts": ["getuid"],
