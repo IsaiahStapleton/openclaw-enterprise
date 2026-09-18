@@ -144,6 +144,7 @@
                   "flows/production-startup",
                   "flows/production-tui",
                   "flows/production-tui/native-client",
+                  "flows/repository-credential-configuration",
                   "flows/secret-storage-and-delivery",
                   "flows/service-account-driver-credential-delivery",
                   "flows/service-api-keys",
