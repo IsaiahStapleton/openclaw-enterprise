@@ -1,5 +1,5 @@
 import type {
-  RepoDriver,
+  RepositoryBackend,
   ResolvedGrant,
 } from "../../../drivers/repository-credentials/backend-contracts.ts";
 import { createGitHubDriver, sameAuthority } from "./driver.ts";
@@ -7,6 +7,7 @@ import { validateGitHubConfiguration } from "./config.ts";
 import { createProviderTransport } from "./provider-transport.ts";
 import { createRoutePolicy } from "./routes.ts";
 import type { GitHubDriverFactory, GitHubFactoryOptions, GitHubProfile } from "./types.ts";
+
 const profiles = Object.freeze({
   "git-read": Object.freeze({ metadata: "read", contents: "read" }),
   "git-write": Object.freeze({ metadata: "read", contents: "write" }),
@@ -19,18 +20,20 @@ const profiles = Object.freeze({
 });
 function endpoint(value: string): string {
   const url = new URL(value);
-  if (url.protocol !== "https:" || url.origin !== value || url.username || url.password)
+  if (url.protocol !== "https:" || url.origin !== value || url.username || url.password) {
     throw new Error("invalid-endpoint");
+  }
   return url.origin;
 }
 export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHubDriverFactory {
   const config = validateGitHubConfiguration(options.configuration);
-  const apiOrigin = endpoint(options.trustedEndpoints?.apiOrigin ?? "https://api.github.com"),
-    gitOrigin = endpoint(options.trustedEndpoints?.gitOrigin ?? "https://github.com");
+  const apiOrigin = endpoint(options.trustedEndpoints?.apiOrigin ?? "https://api.github.com");
+  const gitOrigin = endpoint(options.trustedEndpoints?.gitOrigin ?? "https://github.com");
   const gatewayOrigin = endpoint(options.gatewayOrigin);
   const grant = (profile: string): ResolvedGrant => {
-    if (profile !== "git-read" && profile !== "git-write" && profile !== "git-full")
+    if (profile !== "git-read" && profile !== "git-write" && profile !== "git-full") {
       throw new Error("unsupported-profile");
+    }
     return Object.freeze({
       binding: Object.freeze({
         providerInstanceId: config.providerInstanceId,
@@ -67,17 +70,25 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
         status: 401,
         code: "invalid-credential",
       });
-      if (typeof authorization !== "string" || authorization.length > 4096) return denied;
+      if (typeof authorization !== "string" || authorization.length > 4096) {
+        return denied;
+      }
       const git = unauthenticatedPolicy.route(head) !== undefined;
       if (git) {
         const match = /^Basic ([A-Za-z0-9+/]+={0,2})$/i.exec(authorization);
-        if (!match) return denied;
+        if (!match) {
+          return denied;
+        }
         const bytes = Buffer.from(match[1]!, "base64");
         try {
-          if (bytes.toString("base64") !== match[1]) return denied;
+          if (bytes.toString("base64") !== match[1]) {
+            return denied;
+          }
           const text = bytes.toString("utf8");
           const prefix = "gateway-session:";
-          if (!text.startsWith(prefix)) return denied;
+          if (!text.startsWith(prefix)) {
+            return denied;
+          }
           const token = text.slice(prefix.length);
           return /^[A-Za-z0-9_-]{43,256}$/.test(token) ? token : denied;
         } finally {
@@ -92,15 +103,17 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
         ? Object.freeze({ kind: "challenge" as const, realm: "repository-credential-service" })
         : Object.freeze({ kind: "denied" as const, status: 401, code: "invalid-credential" });
     },
-    create({ authority: input, custody, clock }): RepoDriver {
+    create({ authority: input, custody, clock }): RepositoryBackend {
       const authority = Object.freeze({ ...input });
       const profile = (["git-read", "git-write", "git-full"] as const).find((value) =>
         sameAuthority({ ...grant(value).binding, sessionId: authority.sessionId }, authority),
       );
-      if (!profile || !authority.sessionId) throw new Error("invalid-binding");
-      const binding = grant(profile).binding,
-        permissions = profiles[profile],
-        routes = policy(profile);
+      if (!profile || !authority.sessionId) {
+        throw new Error("invalid-binding");
+      }
+      const binding = grant(profile).binding;
+      const permissions = profiles[profile];
+      const routes = policy(profile);
       const exchange = createProviderTransport(apiOrigin, options.trustedEndpoints?.ca, clock);
       return createGitHubDriver({
         authority,

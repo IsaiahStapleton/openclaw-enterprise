@@ -7,7 +7,7 @@ import type {
   FinalizeOutcome,
   OriginalOutcome,
   RequestPlan,
-  RepoDriver,
+  RepositoryBackend,
   RetireOutcome,
 } from "../../../../drivers/repository-credentials/backend-contracts.ts";
 import type { RoutePolicy } from "../routes.ts";
@@ -37,7 +37,7 @@ interface CredentialRecord {
   accepted: boolean;
 }
 
-export interface GitHubDriverState extends Pick<RepoDriver, "finalize" | "settle" | "plan"> {
+export interface GitHubDriverState extends Pick<RepositoryBackend, "finalize" | "settle" | "plan"> {
   readonly credentials: WeakMap<CredentialRef, CredentialRecord>;
   readonly plans: WeakSet<RequestPlan>;
   readonly finalized: boolean;
@@ -64,8 +64,9 @@ export function createGitHubDriverState({
       !sameAuthority(attempt.authority, authority) ||
       attempt.action !== action ||
       admittedAttempts.has(attempt)
-    )
+    ) {
       throw new Error("foreign-attempt");
+    }
     admittedAttempts.add(attempt);
   }
   function outcome<T extends ProviderOutcomePayload>(
@@ -96,14 +97,19 @@ export function createGitHubDriverState({
       }
     },
     async settle(original) {
-      if (!unsettledOutcomes.has(original)) throw new Error("foreign-outcome");
+      if (!unsettledOutcomes.has(original)) {
+        throw new Error("foreign-outcome");
+      }
       unsettledOutcomes.delete(original);
     },
     plan(request) {
-      if (finalized || !sameAuthority(request.authority, authority))
+      if (finalized || !sameAuthority(request.authority, authority)) {
         return Object.freeze({ kind: "denied" as const, status: 403, code: "invalid-binding" });
+      }
       const plan = routes.plan(request.head);
-      if (!("kind" in plan)) plans.add(plan);
+      if (!("kind" in plan)) {
+        plans.add(plan);
+      }
       return plan;
     },
   };

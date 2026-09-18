@@ -2,7 +2,7 @@ import type {
   AuthorityIdentity,
   Clock,
   DriverCustody,
-  RepoDriver,
+  RepositoryBackend,
 } from "../../../drivers/repository-credentials/backend-contracts.ts";
 import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
 import type { ProviderTransport } from "./provider-transport.ts";
@@ -26,7 +26,7 @@ interface GitHubDriverOptions {
   readonly exchange: ProviderTransport;
 }
 
-export function createGitHubDriver(options: GitHubDriverOptions): RepoDriver {
+export function createGitHubDriver(options: GitHubDriverOptions): RepositoryBackend {
   const { authority, binding, custody, clock, key, config, permissions, routes, exchange } =
     options;
   const state = createGitHubDriverState({ authority, custody, routes });
@@ -45,7 +45,7 @@ export function createGitHubDriver(options: GitHubDriverOptions): RepoDriver {
     clock,
     exchange,
   });
-  return Object.freeze<RepoDriver>({
+  return Object.freeze<RepositoryBackend>({
     binding,
     replacement: "overlap" as const,
     cleanup: "revocable" as const,

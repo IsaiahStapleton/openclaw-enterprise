@@ -122,7 +122,7 @@ export interface PrivateUpstreamRequest {
   readonly headers: HeaderFields;
 }
 export type Denied = Readonly<{ kind: "denied"; status: number; code: string }>;
-export interface RepoDriver {
+export interface RepositoryBackend {
   readonly binding: RepositoryCredentialGrantIdentity;
   readonly replacement: "overlap" | "drain-before";
   readonly cleanup: "revocable" | "expiry-only";
@@ -146,11 +146,11 @@ export interface ResolvedGrant {
   readonly binding: RepositoryCredentialGrantIdentity;
   readonly client: RepositoryCredentialClientConfiguration;
 }
-export interface BoundDriverFactory {
+export interface RepositoryBackendFactory {
   parseAuthentication(head: RequestHead, authorization: string): string | Denied;
   resolve(profile: string): ResolvedGrant;
   create(
     input: Readonly<{ authority: AuthorityIdentity; custody: DriverCustody; clock: Clock }>,
-  ): RepoDriver;
+  ): RepositoryBackend;
   unauthenticated(head: RequestHead): Readonly<{ kind: "challenge"; realm: string }> | Denied;
 }

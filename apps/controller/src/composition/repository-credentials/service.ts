@@ -32,7 +32,9 @@ export async function runService(
   }
   let stopping = false;
   const shutdown = () => {
-    if (stopping) return;
+    if (stopping) {
+      return;
+    }
     stopping = true;
     listeners.stopAdmission();
     const grace = loaded.config.limits.shutdownGraceMs;

@@ -49,8 +49,12 @@ function requestHeaders(head: RequestHead, selected: Route): Readonly<Record<str
     "accept-encoding": "identity",
   };
   if (git) {
-    if (head.headers["git-protocol"] === "version=2") headers["git-protocol"] = "version=2";
-    if (head.method === "POST") headers["content-type"] = head.headers["content-type"]!;
+    if (head.headers["git-protocol"] === "version=2") {
+      headers["git-protocol"] = "version=2";
+    }
+    if (head.method === "POST") {
+      headers["content-type"] = head.headers["content-type"]!;
+    }
     headers.accept = head.headers.accept ?? "*/*";
   } else {
     headers.accept =
@@ -58,9 +62,12 @@ function requestHeaders(head: RequestHead, selected: Route): Readonly<Record<str
         ? nativeGraphqlAccept
         : "application/vnd.github+json";
     headers["x-github-api-version"] = "2026-03-10";
-    if (["POST", "PATCH"].includes(head.method)) headers["content-type"] = "application/json";
-    if (head.headers["graphql-features"])
+    if (["POST", "PATCH"].includes(head.method)) {
+      headers["content-type"] = "application/json";
+    }
+    if (head.headers["graphql-features"]) {
       headers["graphql-features"] = head.headers["graphql-features"];
+    }
   }
   return Object.freeze(headers);
 }
@@ -71,14 +78,20 @@ function planRequest(
   dependencies: PlanDependencies,
 ): RequestPlan | Denied {
   const selected = dependencies.route(head);
-  if (!selected) return deny();
-  if (head.method === "GET" && (head.framing.kind === "chunked" || (head.framing.bytes ?? 0) > 0))
+  if (!selected) {
     return deny();
+  }
+  if (head.method === "GET" && (head.framing.kind === "chunked" || (head.framing.bytes ?? 0) > 0)) {
+    return deny();
+  }
   const git = selected.kind !== "api";
-  if (head.contentEncoding === "gzip" && (!git || head.method !== "POST")) return deny();
+  if (head.contentEncoding === "gzip" && (!git || head.method !== "POST")) {
+    return deny();
+  }
   const input = inputLimit(selected.kind, options.limits);
-  if ((head.framing.bytes ?? 0) > input)
+  if ((head.framing.bytes ?? 0) > input) {
     return Object.freeze({ kind: "denied", status: 413, code: "limit-exceeded" });
+  }
   const headers = requestHeaders(head, selected);
   return Object.freeze({
     origin: git ? options.gitOrigin : options.apiOrigin,

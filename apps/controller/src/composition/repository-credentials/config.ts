@@ -17,20 +17,25 @@ import {
 import { validateGitHubConfiguration } from "../../providers/repository-credentials/github/config.ts";
 
 async function readProtected(path: string, maximum: number, privateFile = true): Promise<Buffer> {
-  if (!isAbsolute(path) || resolve(path) !== path) throw new Error("invalid-protected-file");
+  if (!isAbsolute(path) || resolve(path) !== path) {
+    throw new Error("invalid-protected-file");
+  }
   // Reject symlinked components as well as a symlink at the final basename.
   let parent = dirname(path);
   while (parent !== parse(parent).root) {
     const stat = await lstat(parent);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("invalid-protected-file");
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error("invalid-protected-file");
+    }
     parent = dirname(parent);
   }
   const parentStat = await lstat(dirname(path));
   if (
     (parentStat.mode & 0o022) !== 0 ||
     (process.getuid && parentStat.uid !== process.getuid() && parentStat.uid !== 0)
-  )
+  ) {
     throw new Error("invalid-protected-file");
+  }
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   let data: Buffer | undefined;
   try {
@@ -43,17 +48,20 @@ async function readProtected(path: string, maximum: number, privateFile = true):
       before.size > maximum ||
       (uid !== undefined && before.uid !== uid && before.uid !== 0) ||
       (before.mode & (privateFile ? 0o077 : 0o022)) !== 0
-    )
+    ) {
       throw new Error("invalid-protected-file");
+    }
     data = Buffer.alloc(before.size + 1);
     let position = 0;
     while (position < data.length) {
       const result = await handle.read(data, position, data.length - position, position);
-      if (!result.bytesRead) break;
+      if (!result.bytesRead) {
+        break;
+      }
       position += result.bytesRead;
     }
-    const after = await handle.stat(),
-      named = await lstat(path);
+    const after = await handle.stat();
+    const named = await lstat(path);
     if (
       position !== before.size ||
       after.size !== before.size ||
@@ -62,8 +70,9 @@ async function readProtected(path: string, maximum: number, privateFile = true):
       named.isSymbolicLink() ||
       named.dev !== before.dev ||
       named.ino !== before.ino
-    )
+    ) {
       throw new Error("invalid-protected-file");
+    }
     return Buffer.from(data.subarray(0, position));
   } finally {
     data?.fill(0);
@@ -71,21 +80,23 @@ async function readProtected(path: string, maximum: number, privateFile = true):
   }
 }
 export async function loadConfiguration(path: string, clock: Clock): Promise<LoadedConfiguration> {
-  let raw: Buffer | undefined,
-    pem: Buffer | undefined,
-    cert: Buffer | undefined,
-    tlsKey: Buffer | undefined;
+  let raw: Buffer | undefined;
+  let pem: Buffer | undefined;
+  let cert: Buffer | undefined;
+  let tlsKey: Buffer | undefined;
   let owner: ReturnType<typeof createGitHubKeyOwner> | undefined;
   try {
     raw = await readProtected(path, 262144);
-    const input: unknown = JSON.parse(raw.toString("utf8")),
-      root = record(input);
-    const config = validateServiceConfig(root),
-      backend = validateGitHubConfiguration(root.backend),
-      gateway = record(root.gateway);
-    for (const profile of config.sessionPolicy.allowedProfiles)
-      if (profile !== "git-read" && profile !== "git-write" && profile !== "git-full")
+    const input: unknown = JSON.parse(raw.toString("utf8"));
+    const root = record(input);
+    const config = validateServiceConfig(root);
+    const backend = validateGitHubConfiguration(root.backend);
+    const gateway = record(root.gateway);
+    for (const profile of config.sessionPolicy.allowedProfiles) {
+      if (profile !== "git-read" && profile !== "git-write" && profile !== "git-full") {
         throw new Error("invalid-configuration");
+      }
+    }
     pem = await readProtected(backend.privateKeyFile, config.limits.privateKeyBytes);
     owner = createGitHubKeyOwner({
       privateKey: createPrivateKey(pem),
@@ -102,9 +113,9 @@ export async function loadConfiguration(path: string, clock: Clock): Promise<Loa
       limits: config.limits,
       clock,
     });
-    const ownedCert = cert,
-      ownedTlsKey = tlsKey,
-      ownedKey = owner;
+    const ownedCert = cert;
+    const ownedTlsKey = tlsKey;
+    const ownedKey = owner;
     return Object.freeze({
       config,
       tls: Object.freeze({ cert: ownedCert, key: ownedTlsKey }),

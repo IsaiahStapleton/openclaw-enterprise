@@ -3,7 +3,7 @@ import type {
   Clock,
   CredentialRef,
   DriverCustody,
-  RepoDriver,
+  RepositoryBackend,
 } from "../../../../drivers/repository-credentials/backend-contracts.ts";
 import type { ProviderResponse, ProviderTransport } from "../provider-transport.ts";
 import type { GitHubConfiguration, GitHubKeyOwner } from "../types.ts";
@@ -20,17 +20,23 @@ type AcquisitionDependencies = Readonly<{
   exchange: ProviderTransport;
 }>;
 
-export function createCredentialAcquisition(deps: AcquisitionDependencies): RepoDriver["acquire"] {
+export function createCredentialAcquisition(
+  deps: AcquisitionDependencies,
+): RepositoryBackend["acquire"] {
   const { state, custody, clock, key, config, permissions, exchange } = deps;
   return async function acquire(attempt, previous, minimumValidityMs): Promise<AcquireOutcome> {
-    if (previous !== undefined && !state.credentials.has(previous))
+    if (previous !== undefined && !state.credentials.has(previous)) {
       throw new Error("foreign-credential");
-    if (!Number.isFinite(minimumValidityMs) || minimumValidityMs < 0)
+    }
+    if (!Number.isFinite(minimumValidityMs) || minimumValidityMs < 0) {
       throw new Error("invalid-validity");
+    }
     state.admit(attempt, "acquire");
     let dispatched = false;
     try {
-      if (state.finalized) return state.outcome(attempt, { kind: "not-dispatched" });
+      if (state.finalized) {
+        return state.outcome(attempt, { kind: "not-dispatched" });
+      }
       return await key.withJwt(async (jwt, assertCurrent) => {
         let packet: Record<string, unknown> | undefined;
         let credential: CredentialRef | undefined;
@@ -39,8 +45,9 @@ export function createCredentialAcquisition(deps: AcquisitionDependencies): Repo
         const captureResponseCredential = (response: ProviderResponse) => {
           try {
             const parsed: unknown = JSON.parse(response.body.toString("utf8"));
-            if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
               packet = parsed as Record<string, unknown>;
+            }
           } catch {}
           const token = packet?.token;
           observedWallMs = clock.wallNow();
@@ -85,20 +92,22 @@ export function createCredentialAcquisition(deps: AcquisitionDependencies): Repo
         );
         try {
           const token = packet?.token;
-          if ([401, 403, 404, 422].includes(response.status))
+          if ([401, 403, 404, 422].includes(response.status)) {
             return state.outcome(attempt, {
               kind: "reauthorization-required",
               code: "authority-unavailable",
             });
+          }
           if (
             response.status !== 201 ||
             !credential ||
             typeof token !== "string" ||
             !/^[\x21-\x7e]{1,16384}$/.test(token)
-          )
+          ) {
             return state.outcome(attempt, { kind: "uncertain" });
-          const returned = packet?.permissions,
-            repositories = packet?.repositories;
+          }
+          const returned = packet?.permissions;
+          const repositories = packet?.repositories;
           const validScope =
             returned &&
             typeof returned === "object" &&
@@ -112,20 +121,24 @@ export function createCredentialAcquisition(deps: AcquisitionDependencies): Repo
             repositories[0]?.id === Number(config.repositoryId) &&
             typeof repositories[0]?.full_name === "string" &&
             repositories[0].full_name.toLowerCase() === config.repository.toLowerCase();
-          if (!validScope)
+          if (!validScope) {
             return state.outcome(attempt, { kind: "rejected", code: "scope-mismatch" });
+          }
           if (
             !Number.isFinite(expiry) ||
             expiry <= observedWallMs + providerClockSkewMs ||
             expiry > observedWallMs + tokenLifetimeMs + providerClockSkewMs
-          )
+          ) {
             return state.outcome(attempt, { kind: "rejected", code: "invalid-response" });
-          if (expiry - observedWallMs - providerClockSkewMs < minimumValidityMs)
+          }
+          if (expiry - observedWallMs - providerClockSkewMs < minimumValidityMs) {
             return state.outcome(attempt, { kind: "rejected", code: "insufficient-validity" });
+          }
           attempt.assertAdmitted();
           assertCurrent();
-          if (attempt.signal.aborted || clock.monotonicNow() >= attempt.deadlineMonoMs)
+          if (attempt.signal.aborted || clock.monotonicNow() >= attempt.deadlineMonoMs) {
             return state.outcome(attempt, { kind: "uncertain" });
+          }
           state.credentials.get(credential)!.accepted = true;
           return state.outcome(attempt, {
             kind: "acquired",

@@ -22,7 +22,9 @@ export interface UpstreamSenderOptions {
 export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSender {
   let used = false;
   return async (privateRequest, context) => {
-    if (used) return { kind: "not-dispatched", code: "sender-reused" };
+    if (used) {
+      return { kind: "not-dispatched", code: "sender-reused" };
+    }
     used = true;
     const { plan } = privateRequest;
     let origin: URL;
@@ -37,13 +39,15 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
         !plan.target.startsWith("/") ||
         plan.target.startsWith("//") ||
         /[\x00-\x20\x7f#]/.test(plan.target)
-      )
+      ) {
         throw new Error();
+      }
     } catch {
       return { kind: "not-dispatched", code: "untrusted-upstream" };
     }
-    if ((options.head.framing.bytes ?? 0) > plan.limits.inputWireBytes)
+    if ((options.head.framing.bytes ?? 0) > plan.limits.inputWireBytes) {
       return { kind: "not-dispatched", code: "limit-exceeded" };
+    }
     const headers: Record<string, string> = { ...privateRequest.headers };
     for (const name of Object.keys(headers)) {
       const lower = name.toLowerCase();
@@ -60,14 +64,16 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
           "trailer",
           "upgrade",
         ].includes(lower)
-      )
+      ) {
         delete headers[name];
+      }
     }
     headers.host = origin.host;
     headers.connection = "close";
     headers["accept-encoding"] = "identity";
-    if (options.head.framing.kind === "length" && options.head.contentEncoding === "identity")
+    if (options.head.framing.kind === "length" && options.head.contentEncoding === "identity") {
       headers["content-length"] = String(options.head.framing.bytes);
+    }
     let outbound: ClientRequest | undefined;
     let upstream: IncomingMessage | undefined;
     let dispatched = false;
@@ -98,7 +104,9 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
     let responseStall: ReturnType<typeof watchdog> | undefined;
     context.signal.addEventListener("abort", cancel, { once: true });
     try {
-      if (context.signal.aborted) throw new Error("cancelled");
+      if (context.signal.aborted) {
+        throw new Error("cancelled");
+      }
       const responseReady = new Promise<IncomingMessage>((resolve, reject) => {
         try {
           outbound = context.gate.dispatch(cancel, () => {
@@ -142,7 +150,9 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
       stopConnect = options.clock.schedule(plan.limits.connectMs, cancel);
       stopHeaders = options.clock.schedule(plan.limits.firstHeaderMs, cancel);
       stopInput = options.clock.schedule(plan.limits.inputMs, cancel);
-      if (!outbound) throw new Error("dispatch-denied");
+      if (!outbound) {
+        throw new Error("dispatch-denied");
+      }
       const wire = new ByteLimit(plan.limits.inputWireBytes, inputStall.reset);
       const decoded = new ByteLimit(plan.limits.inputDecodedBytes, inputStall.reset);
       const input =
@@ -166,19 +176,25 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
       stopConnect?.();
       responseStall = watchdog(options.clock, plan.limits.stallMs, cancel);
       const status = upstream.statusCode ?? 502;
-      if (status < 200 || status > 599 || (status >= 300 && status < 400 && status !== 304))
+      if (status < 200 || status > 599 || (status >= 300 && status < 400 && status !== 304)) {
         throw new Error("invalid-upstream");
+      }
       const raw = responseHeaders(
         upstream,
         options.headerBytes ?? 32768,
         options.headerPairs ?? 64,
       );
-      if (Number(raw["content-length"] ?? 0) > plan.limits.responseBytes)
+      if (Number(raw["content-length"] ?? 0) > plan.limits.responseBytes) {
         throw new Error("limit-exceeded");
+      }
       const allowed = safeResponseHeaders(plan.responsePolicy.headers(status, raw));
       const noBody = plan.method === "HEAD" || status === 204 || status === 304;
       if (noBody) {
-        for await (const chunk of upstream) if (chunk.length) throw new Error("invalid-upstream");
+        for await (const chunk of upstream) {
+          if (chunk.length) {
+            throw new Error("invalid-upstream");
+          }
+        }
         await inputDone;
         options.response.writeHead(status, allowed);
         options.response.end();
@@ -187,7 +203,9 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
         let size = 0;
         for await (const chunk of upstream) {
           size += chunk.length;
-          if (size > plan.limits.responseBytes) throw new Error("limit-exceeded");
+          if (size > plan.limits.responseBytes) {
+            throw new Error("limit-exceeded");
+          }
           responseStall.reset();
           parts.push(Buffer.from(chunk));
         }
@@ -196,7 +214,9 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
           bytes = Buffer.from(
             JSON.stringify(plan.responsePolicy.rewriteJson(JSON.parse(bytes.toString("utf8")))),
           );
-          if (bytes.length > plan.limits.responseBytes) throw new Error("limit-exceeded");
+          if (bytes.length > plan.limits.responseBytes) {
+            throw new Error("limit-exceeded");
+          }
           delete allowed.etag;
           delete allowed["content-md5"];
           delete allowed.digest;
@@ -214,7 +234,7 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
         );
         await inputDone;
       }
-      if (!options.response.writableFinished)
+      if (!options.response.writableFinished) {
         await new Promise<void>((resolve, reject) => {
           options.response.once("finish", resolve);
           options.response.once("error", reject);
@@ -222,10 +242,15 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
             options.response.writableFinished ? resolve() : reject(new Error("client-closed")),
           );
         });
-      if (failed) throw new Error("exchange-failed");
+      }
+      if (failed) {
+        throw new Error("exchange-failed");
+      }
       return { kind: "completed", status };
     } catch {
-      if (dispatched) cancel();
+      if (dispatched) {
+        cancel();
+      }
       return {
         kind: dispatched ? "possibly-dispatched" : "not-dispatched",
         code: dispatched ? "exchange-failed" : "dispatch-denied",
@@ -238,7 +263,9 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
       inputStall.close();
       responseStall?.close();
       context.signal.removeEventListener("abort", cancel);
-      if (!outbound) resolveSocket();
+      if (!outbound) {
+        resolveSocket();
+      }
       // A completed response and agent:false close the socket. Failed work is destroyed.
       await Promise.allSettled(pending);
       resolveIo();

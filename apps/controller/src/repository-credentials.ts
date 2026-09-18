@@ -11,8 +11,9 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
     !path ||
     args.length !== permitted ||
     (check && args.filter((arg) => arg === "--check-config").length !== 1)
-  )
+  ) {
     throw new Error("invalid-arguments");
+  }
   if (check) {
     const { checkConfiguration } =
       await import("./composition/repository-credentials/check-config.ts");

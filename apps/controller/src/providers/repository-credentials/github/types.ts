@@ -1,9 +1,10 @@
 import type { KeyObject } from "node:crypto";
 import type {
-  BoundDriverFactory,
+  RepositoryBackendFactory,
   Clock,
 } from "../../../drivers/repository-credentials/backend-contracts.ts";
 import type { ServiceLimits } from "../../../drivers/repository-credentials/service-contracts.ts";
+
 export type GitHubProfile = "git-read" | "git-write" | "git-full";
 export interface GitHubConfiguration {
   readonly kind: "github-app";
@@ -27,7 +28,7 @@ export interface GitHubFactoryOptions {
   readonly clock: Clock;
   readonly trustedEndpoints?: Readonly<{ apiOrigin: string; gitOrigin: string; ca?: Uint8Array }>;
 }
-export interface GitHubDriverFactory extends BoundDriverFactory {
+export interface GitHubDriverFactory extends RepositoryBackendFactory {
   readonly trustedUpstreamOrigins: ReadonlySet<string>;
 }
 export type GitHubKeyOptions = Readonly<{ privateKey: KeyObject; appId: string; clock: Clock }>;

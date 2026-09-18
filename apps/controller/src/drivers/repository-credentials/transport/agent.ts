@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { BoundDriverFactory, Clock } from "../backend-contracts.ts";
+import type { RepositoryBackendFactory, Clock } from "../backend-contracts.ts";
 import type { ServiceConfig } from "../service-contracts.ts";
 import type { ExchangeRef, ExchangeService } from "../internal-contracts.ts";
 import { inspectRequestHead } from "./request.ts";
@@ -9,7 +9,7 @@ import { sendError } from "./errors.ts";
 export interface AgentHandlerOptions {
   readonly config: ServiceConfig;
   readonly service: ExchangeService;
-  readonly factory: BoundDriverFactory;
+  readonly factory: RepositoryBackendFactory;
   readonly trustedUpstreamOrigins: ReadonlySet<string>;
   readonly clock: Clock;
   readonly upstreamCa?: Uint8Array;
@@ -43,7 +43,9 @@ export function createAgentHandler(
         sendError(response, 401, "authentication-required", {
           "www-authenticate": `Basic realm="${result.realm}"`,
         });
-      } else sendError(response, result.status, result.code);
+      } else {
+        sendError(response, result.status, result.code);
+      }
       return;
     }
     const bearer = factory.parseAuthentication(parsed.head, parsed.authorization);
@@ -54,7 +56,9 @@ export function createAgentHandler(
     const abort = new AbortController();
     const cancel = () => abort.abort();
     const onResponseClose = () => {
-      if (!response.writableFinished) cancel();
+      if (!response.writableFinished) {
+        cancel();
+      }
     };
     request.once("aborted", cancel);
     response.once("close", onResponseClose);
@@ -73,7 +77,9 @@ export function createAgentHandler(
         sendError(response, 413, "limit-exceeded");
         return;
       }
-      if (parsed.expectContinue) response.writeContinue();
+      if (parsed.expectContinue) {
+        response.writeContinue();
+      }
       const sender = createUpstreamSender({
         request,
         response,
@@ -85,19 +91,22 @@ export function createAgentHandler(
         ...(options.upstreamCa === undefined ? {} : { upstreamCa: options.upstreamCa }),
       });
       const outcome = await service.execute(exchange, sender);
-      if (outcome.kind !== "completed")
+      if (outcome.kind !== "completed") {
         sendError(
           response,
           outcome.kind === "not-dispatched" ? 503 : 502,
           outcome.kind === "not-dispatched" ? "unavailable" : "exchange-uncertain",
         );
+      }
     } catch {
       sendError(response, 503, "unavailable");
     } finally {
       deadline();
       request.off("aborted", cancel);
       response.off("close", onResponseClose);
-      if (exchange !== undefined) service.cancel(exchange);
+      if (exchange !== undefined) {
+        service.cancel(exchange);
+      }
     }
   };
 }

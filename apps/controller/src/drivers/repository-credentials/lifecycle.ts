@@ -5,7 +5,7 @@ import type {
   AuthorityIdentity,
   Clock,
   CredentialRef,
-  RepoDriver,
+  RepositoryBackend,
 } from "./backend-contracts.ts";
 import type { CapturedCredential, CustodyOwner } from "./custody.ts";
 import { createProviderQueue, waitWithin } from "./provider-queue.ts";
@@ -24,7 +24,7 @@ export function createLifecycle(options: {
   authority: AuthorityIdentity;
   deadlineMonoMs: number;
   custody: CustodyOwner;
-  driver: RepoDriver;
+  driver: RepositoryBackend;
   queue: ReturnType<typeof createProviderQueue>;
   providerActionMs: number;
   safetyMarginMs: number;
@@ -64,8 +64,9 @@ export function createLifecycle(options: {
           controller.signal.aborted ||
           clock.monotonicNow() >= deadline() ||
           (action === "acquire" && !options.admitted())
-        )
+        ) {
           throw new Error("ATTEMPT_CLOSED");
+        }
       },
       observeDispatch() {
         context.assertAdmitted();
@@ -95,7 +96,9 @@ export function createLifecycle(options: {
   }
   function changed() {
     options.changed();
-    for (const notify of [...drainWaiters]) notify();
+    for (const notify of [...drainWaiters]) {
+      notify();
+    }
     maintain();
   }
   function armExpiry() {
@@ -105,18 +108,24 @@ export function createLifecycle(options: {
     const deadlines = [...custody.records]
       .map((record) => record.deadlineMonoMs)
       .filter((value): value is number => value !== undefined && value > now);
-    if (deadlines.length) cancelExpiry = clock.schedule(Math.min(...deadlines) - now, changed);
+    if (deadlines.length) {
+      cancelExpiry = clock.schedule(Math.min(...deadlines) - now, changed);
+    }
   }
   function waitForDrain(
     record: CapturedCredential,
     signal: AbortSignal,
     deadline: number,
   ): Promise<void> {
-    if (record.uses === 0 && record.callbacks === 0) return Promise.resolve();
+    if (record.uses === 0 && record.callbacks === 0) {
+      return Promise.resolve();
+    }
     let notify: () => void;
     const work = new Promise<void>((resolve) => {
       notify = () => {
-        if (record.uses === 0 && record.callbacks === 0) resolve();
+        if (record.uses === 0 && record.callbacks === 0) {
+          resolve();
+        }
       };
       drainWaiters.add(notify);
     });
@@ -195,7 +204,9 @@ export function createLifecycle(options: {
               blocked = true;
               capture.unknown = true;
               reject(new Error("ACQUISITION_UNCERTAIN"));
-            } else if (outcome.kind !== "acquired") reject(new Error("ACQUISITION_REFUSED"));
+            } else if (outcome.kind !== "acquired") {
+              reject(new Error("ACQUISITION_REFUSED"));
+            }
             try {
               await driver.settle(outcome);
               settled = true;
@@ -206,8 +217,9 @@ export function createLifecycle(options: {
               await new Promise<void>(() => {});
               return;
             }
-            if (outcome.kind === "uncertain" && capture.captured.length > 0)
+            if (outcome.kind === "uncertain" && capture.captured.length > 0) {
               capture.unknown = false;
+            }
             if (outcome.kind === "acquired") {
               const accepted = capture.captured.find((record) => record.ref === outcome.credential);
               if (accepted && accepted.deadlineMonoMs !== undefined) {
@@ -235,7 +247,9 @@ export function createLifecycle(options: {
                 reject(new Error("CREDENTIAL_NOT_USABLE"));
               } else {
                 accepted.accepted = true;
-                if (current && current !== accepted) current.accepted = false;
+                if (current && current !== accepted) {
+                  current.accepted = false;
+                }
                 current = accepted;
                 resolve(accepted.ref);
               }
@@ -247,14 +261,18 @@ export function createLifecycle(options: {
       } catch {
         reject(new Error("ACQUISITION_FAILED"));
       } finally {
-        if (!invoked || settled) custody.settle(capture);
+        if (!invoked || settled) {
+          custody.settle(capture);
+        }
         // A driver violating its outcome/settlement contract keeps its reservation.
         if (invoked && !settled) {
           capture.unknown = true;
           blocked = true;
         }
         activeActions--;
-        if (acquiring === acquisition) acquiring = undefined;
+        if (acquiring === acquisition) {
+          acquiring = undefined;
+        }
         changed();
       }
     });
@@ -264,7 +282,9 @@ export function createLifecycle(options: {
   function waitForCleanupCapacity() {
     // Rejected entries never reached the driver. One wake per session avoids
     // repeatedly retrying unchanged queue capacity from maintenance microtasks.
-    if (cleanupWaiting) return;
+    if (cleanupWaiting) {
+      return;
+    }
     cleanupWaiting = true;
     queue.whenAvailable(() => {
       cleanupWaiting = false;
@@ -290,14 +310,18 @@ export function createLifecycle(options: {
             const outcome = await driver.retire(owned.context, record.ref);
             await driver.settle(outcome);
             custody.endAttempt(owned.context);
-            if (outcome.attemptId !== owned.context.id) throw new Error("FOREIGN_OUTCOME");
+            if (outcome.attemptId !== owned.context.id) {
+              throw new Error("FOREIGN_OUTCOME");
+            }
             if (outcome.kind === "revoked") {
               record.disposition = "revoked";
               revoked++;
             } else if (outcome.kind === "expired") {
               record.disposition = "expired";
               expired++;
-            } else record.disposition = outcome.kind === "uncertain" ? "uncertain" : "pending";
+            } else {
+              record.disposition = outcome.kind === "uncertain" ? "uncertain" : "pending";
+            }
           } catch {
             record.disposition = "uncertain";
             await new Promise<void>(() => {});
@@ -308,8 +332,9 @@ export function createLifecycle(options: {
         "cleanup",
       )
       .catch(() => {
-        if (invoked) record.disposition = "uncertain";
-        else {
+        if (invoked) {
+          record.disposition = "uncertain";
+        } else {
           custody.endAttempt(owned.context);
           waitForCleanupCapacity();
         }
@@ -338,7 +363,9 @@ export function createLifecycle(options: {
             const outcome = await driver.finalize(owned.context);
             await driver.settle(outcome);
             custody.endAttempt(owned.context);
-            if (outcome.attemptId !== owned.context.id) throw new Error("FOREIGN_OUTCOME");
+            if (outcome.attemptId !== owned.context.id) {
+              throw new Error("FOREIGN_OUTCOME");
+            }
             if (outcome.kind === "finalized") {
               await custody.disposeAllRenewal();
               finalized = true;
@@ -365,8 +392,9 @@ export function createLifecycle(options: {
   function sweep() {
     const now = clock.monotonicNow();
     for (const record of custody.records) {
-      if (!record.reservation.settled || record.uses || record.callbacks || record.retiring)
+      if (!record.reservation.settled || record.uses || record.callbacks || record.retiring) {
         continue;
+      }
       if (
         record.disposition !== "revoked" &&
         record.disposition !== "expired" &&
@@ -377,13 +405,18 @@ export function createLifecycle(options: {
         expired++;
       }
       if (record.disposition === "revoked" || record.disposition === "expired") {
-        if (current === record) current = undefined;
+        if (current === record) {
+          current = undefined;
+        }
         custody.release(record);
         continue;
       }
-      if (options.admitted() && record === current && record.accepted) continue;
-      if (driver.cleanup === "revocable" && !record.retirementAttempted && !cleanupWaiting)
+      if (options.admitted() && record === current && record.accepted) {
+        continue;
+      }
+      if (driver.cleanup === "revocable" && !record.retirementAttempted && !cleanupWaiting) {
         retire(record);
+      }
     }
     armExpiry();
     if (
@@ -394,12 +427,15 @@ export function createLifecycle(options: {
       custody.renewalCallbacks === 0 &&
       !cleanupWaiting &&
       !finalizeAttempted
-    )
+    ) {
       finalize();
+    }
     options.changed();
   }
   function maintain() {
-    if (maintenanceScheduled) return;
+    if (maintenanceScheduled) {
+      return;
+    }
     maintenanceScheduled = true;
     queueMicrotask(() => {
       maintenanceScheduled = false;
@@ -422,12 +458,15 @@ export function createLifecycle(options: {
     maintain,
     close() {
       acquiring?.controller.abort();
-      if (current) current.accepted = false;
+      if (current) {
+        current.accepted = false;
+      }
       changed();
     },
     async acquire(deadline: number, signal: AbortSignal): Promise<CapturedCredential> {
-      if (!options.admitted() || signal.aborted || clock.monotonicNow() >= deadline || blocked)
+      if (!options.admitted() || signal.aborted || clock.monotonicNow() >= deadline || blocked) {
         throw new Error("SESSION_UNAVAILABLE");
+      }
       if (usable(current, deadline)) {
         current.uses++;
         return current;
@@ -435,19 +474,24 @@ export function createLifecycle(options: {
       sweep();
       const acquisition = acquiring ?? startAcquisition();
       // Retain the original settlement owner without admitting more waiters.
-      if (acquisition.controller.signal.aborted) throw new Error("ACQUISITION_CANCELLED");
+      if (acquisition.controller.signal.aborted) {
+        throw new Error("ACQUISITION_CANCELLED");
+      }
       const waiter: Waiter = { deadline };
       acquisition.waiters.add(waiter);
       try {
         const ref = await waitWithin(acquisition.result, signal, deadline, clock);
         const record = custody.lookup(ref);
-        if (!options.admitted() || signal.aborted || !usable(record, deadline))
+        if (!options.admitted() || signal.aborted || !usable(record, deadline)) {
           throw new Error("CREDENTIAL_NOT_USABLE");
+        }
         record.uses++;
         return record;
       } finally {
         acquisition.waiters.delete(waiter);
-        if (acquisition.waiters.size === 0) acquisition.controller.abort();
+        if (acquisition.waiters.size === 0) {
+          acquisition.controller.abort();
+        }
       }
     },
     assertUse(record: CapturedCredential, deadline: number) {
@@ -458,11 +502,14 @@ export function createLifecycle(options: {
         record.useDeadlineMonoMs === undefined ||
         record.useDeadlineMonoMs < deadline + options.safetyMarginMs ||
         clock.monotonicNow() >= deadline
-      )
+      ) {
         throw new Error("USE_CLOSED");
+      }
     },
     release(record: CapturedCredential) {
-      if (record.uses <= 0) throw new Error("FOREIGN_USE");
+      if (record.uses <= 0) {
+        throw new Error("FOREIGN_USE");
+      }
       record.uses--;
       changed();
     },

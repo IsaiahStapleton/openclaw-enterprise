@@ -7,7 +7,9 @@ export async function assertPrivateDirectory(path: string): Promise<void> {
   let cursor = absolute;
   while (true) {
     const stat = await lstat(cursor);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-client-directory");
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error("unsafe-client-directory");
+    }
     if (cursor === absolute && (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)) {
       throw new Error("unsafe-client-directory");
     }
@@ -16,7 +18,9 @@ export async function assertPrivateDirectory(path: string): Promise<void> {
       throw new Error("unsafe-client-directory");
     }
     const parent = dirname(cursor);
-    if (parent === cursor) break;
+    if (parent === cursor) {
+      break;
+    }
     cursor = parent;
   }
 }
@@ -42,7 +46,9 @@ export async function readPrivateFile(path: string, maximumBytes: number): Promi
     let size = 0;
     while (size <= maximumBytes) {
       const result = await file.read(bytes, size, bytes.length - size, size);
-      if (result.bytesRead === 0) break;
+      if (result.bytesRead === 0) {
+        break;
+      }
       size += result.bytesRead;
     }
     const after = await file.stat();

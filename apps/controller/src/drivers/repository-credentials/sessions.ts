@@ -13,7 +13,9 @@ export interface SessionAdmission {
 }
 
 export function bearerDigest(bearer: string): string | undefined {
-  if (typeof bearer !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(bearer)) return undefined;
+  if (typeof bearer !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(bearer)) {
+    return undefined;
+  }
   return createHash("sha256").update(bearer).digest("hex");
 }
 
@@ -27,8 +29,9 @@ export function snapshotBinding(
       value.length === 0 ||
       Buffer.byteLength(value) > 512 ||
       /[\u0000-\u001f\u007f]/.test(value)
-    )
+    ) {
       throw new Error("INVALID_BINDING");
+    }
   }
   return Object.freeze({ providerInstanceId, repositoryId, grantId });
 }

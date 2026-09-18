@@ -19,24 +19,28 @@ function rewriteUrl(
     url.username ||
     url.password ||
     url.hash
-  )
+  ) {
     throw new Error("unsafe-upstream-url");
+  }
   const prefix = `/repos/${dependencies.repository}`;
   const nativePrefix = `/repositories/${dependencies.repositoryId}`;
-  if (url.pathname === nativePrefix || url.pathname.startsWith(`${nativePrefix}/`))
+  if (url.pathname === nativePrefix || url.pathname.startsWith(`${nativePrefix}/`)) {
     url.pathname = `${prefix}${url.pathname.slice(nativePrefix.length)}`;
+  }
   const namedPrefix = url.pathname.slice(0, prefix.length);
   if (
     url.pathname.startsWith("/repos/") &&
     namedPrefix.slice("/repos/".length).toLowerCase() === dependencies.repository.toLowerCase() &&
     (url.pathname.length === prefix.length || url.pathname[prefix.length] === "/")
-  )
+  ) {
     url.pathname = `${prefix}${url.pathname.slice(prefix.length)}`;
+  }
   if (
     purpose &&
     (!url.pathname.startsWith(prefix) || !purpose.test(url.pathname.slice(prefix.length)))
-  )
+  ) {
     throw new Error("unsafe-upstream-url");
+  }
   const target = `${url.pathname}${url.search}`;
   if (
     !dependencies.allowsRoute({
@@ -47,8 +51,9 @@ function rewriteUrl(
       contentEncoding: "identity",
       framing: { kind: "none", bytes: undefined },
     })
-  )
+  ) {
     throw new Error("unsafe-upstream-url");
+  }
   return `${dependencies.gatewayOrigin}${target}`;
 }
 
@@ -63,7 +68,9 @@ export function rewritePaginationLinks(value: string, rewrite: (url: string) => 
     .split(",")
     .map((part) => {
       const match = /^\s*<([^<>]+)>;\s*rel="(next|prev|first|last)"\s*$/.exec(part);
-      if (!match) throw new Error("unsafe-upstream-url");
+      if (!match) {
+        throw new Error("unsafe-upstream-url");
+      }
       return `<${rewrite(match[1]!)}>; rel="${match[2]}"`;
     })
     .join(", ");

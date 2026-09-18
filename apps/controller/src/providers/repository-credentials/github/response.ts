@@ -19,7 +19,9 @@ function rewriteHeaders(
   headers: HeaderFields,
   rewriteUrl: (value: string) => string,
 ): HeaderFields {
-  if (status >= 300 && status < 400) throw new Error("upstream-redirect");
+  if (status >= 300 && status < 400) {
+    throw new Error("upstream-redirect");
+  }
   const output: Record<string, string> = {};
   for (const name of [
     "content-type",
@@ -33,13 +35,21 @@ function rewriteHeaders(
     "x-ratelimit-resource",
   ]) {
     const value = headers[name];
-    if (value !== undefined && value.length <= 2048 && !/[\r\n]/.test(value)) output[name] = value;
+    if (value !== undefined && value.length <= 2048 && !/[\r\n]/.test(value)) {
+      output[name] = value;
+    }
   }
   const retry = headers["retry-after"];
-  if (retry !== undefined && /^[0-9]{1,10}$/.test(retry)) output["retry-after"] = retry;
+  if (retry !== undefined && /^[0-9]{1,10}$/.test(retry)) {
+    output["retry-after"] = retry;
+  }
   const link = headers.link;
-  if (link === undefined) return Object.freeze(output);
-  if (git || link.length > 8192) throw new Error("unsafe-upstream-url");
+  if (link === undefined) {
+    return Object.freeze(output);
+  }
+  if (git || link.length > 8192) {
+    throw new Error("unsafe-upstream-url");
+  }
   output.link = rewritePaginationLinks(link, rewriteUrl);
   return Object.freeze(output);
 }

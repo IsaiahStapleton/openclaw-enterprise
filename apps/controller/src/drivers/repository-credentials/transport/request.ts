@@ -54,55 +54,85 @@ export function inspectRequestHead(
     url.startsWith("//") ||
     !/^[\x21-\x7e]+$/.test(url) ||
     url.includes("#")
-  )
+  ) {
     return deny();
-  if (url.length > options.targetBytes || rawHeaders.length > options.headerPairs * 2)
+  }
+  if (url.length > options.targetBytes || rawHeaders.length > options.headerPairs * 2) {
     return deny(431);
-  if (rawHeaders.length % 2) return deny();
+  }
+  if (rawHeaders.length % 2) {
+    return deny();
+  }
   const all = new Map<string, string>();
   let bytes = 0;
   for (let i = 0; i < rawHeaders.length; i += 2) {
     const name = rawHeaders[i];
     const value = rawHeaders[i + 1];
-    if (name === undefined || value === undefined || !NAME.test(name) || !VALUE.test(value))
+    if (name === undefined || value === undefined || !NAME.test(name) || !VALUE.test(value)) {
       return deny();
+    }
     bytes += name.length + value.length + 4;
-    if (bytes > options.headerBytes) return deny(431);
+    if (bytes > options.headerBytes) {
+      return deny(431);
+    }
     const key = name.toLowerCase();
-    if (all.has(key)) return deny();
+    if (all.has(key)) {
+      return deny();
+    }
     all.set(key, value);
   }
   const host = all.get("host")?.toLowerCase();
   const authority = options.authority.toLowerCase();
-  if (host !== authority && !(authority.indexOf(":") === -1 && host === `${authority}:443`))
+  if (host !== authority && !(authority.indexOf(":") === -1 && host === `${authority}:443`)) {
     return deny();
+  }
   const connection = all.get("connection")?.toLowerCase();
-  if (connection !== undefined && connection !== "close" && connection !== "keep-alive")
+  if (connection !== undefined && connection !== "close" && connection !== "keep-alive") {
     return deny();
-  if (all.has("upgrade") || all.has("trailer") || all.has("te")) return deny();
+  }
+  if (all.has("upgrade") || all.has("trailer") || all.has("te")) {
+    return deny();
+  }
   const length = all.get("content-length");
   const transfer = all.get("transfer-encoding");
-  if (length !== undefined && transfer !== undefined) return deny();
+  if (length !== undefined && transfer !== undefined) {
+    return deny();
+  }
   let framing: RequestHead["framing"] = Object.freeze({ kind: "none", bytes: undefined });
   if (length !== undefined) {
-    if (!/^(0|[1-9][0-9]*)$/.test(length) || !Number.isSafeInteger(Number(length))) return deny();
+    if (!/^(0|[1-9][0-9]*)$/.test(length) || !Number.isSafeInteger(Number(length))) {
+      return deny();
+    }
     framing = Object.freeze({ kind: "length", bytes: Number(length) });
   } else if (transfer !== undefined) {
-    if (transfer.toLowerCase() !== "chunked") return deny();
+    if (transfer.toLowerCase() !== "chunked") {
+      return deny();
+    }
     framing = Object.freeze({ kind: "chunked", bytes: undefined });
   }
   if (
     (method === "GET" || method === "HEAD") &&
     (framing.kind === "chunked" || (framing.bytes ?? 0) !== 0)
-  )
+  ) {
     return deny();
+  }
   const encoding = all.get("content-encoding") ?? "identity";
-  if (encoding !== "identity" && encoding !== "gzip") return deny(415);
+  if (encoding !== "identity" && encoding !== "gzip") {
+    return deny(415);
+  }
   const expect = all.get("expect");
-  if (expect !== undefined && (expect.toLowerCase() !== "100-continue" || framing.kind === "none"))
+  if (
+    expect !== undefined &&
+    (expect.toLowerCase() !== "100-continue" || framing.kind === "none")
+  ) {
     return deny(417);
+  }
   const headers = Object.create(null) as Record<string, string>;
-  for (const [name, value] of all) if (!REMOVED.has(name)) headers[name] = value;
+  for (const [name, value] of all) {
+    if (!REMOVED.has(name)) {
+      headers[name] = value;
+    }
+  }
   return Object.freeze({
     kind: "parsed",
     authorization: all.get("authorization"),

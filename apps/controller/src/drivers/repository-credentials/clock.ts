@@ -6,13 +6,17 @@ export function createSystemClock(): Clock {
     wallNow: () => Date.now(),
     monotonicNow: () => performance.now(),
     schedule(delayMs: number, callback: () => void) {
-      if (!Number.isFinite(delayMs) || delayMs < 0) throw new Error("invalid-clock-delay");
+      if (!Number.isFinite(delayMs) || delayMs < 0) {
+        throw new Error("invalid-clock-delay");
+      }
       // Long admission deadlines must not overflow Node's signed 32-bit timer delay.
       let active = true;
       const deadline = performance.now() + delayMs;
       let timer: ReturnType<typeof setTimeout>;
       const tick = () => {
-        if (!active) return;
+        if (!active) {
+          return;
+        }
         const remaining = deadline - performance.now();
         if (remaining > 0) {
           timer = setTimeout(tick, Math.min(remaining, 2_147_483_647));

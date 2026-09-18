@@ -49,7 +49,9 @@ export function createCustody(options: {
   const records = new Set<CapturedCredential>();
   function get(ref: CredentialRef) {
     const value = access.get(ref);
-    if (!value || !records.has(value.record)) throw new Error("FOREIGN_CREDENTIAL");
+    if (!value || !records.has(value.record)) {
+      throw new Error("FOREIGN_CREDENTIAL");
+    }
     return value;
   }
   function releaseReservation(reservation: CaptureReservation) {
@@ -57,13 +59,15 @@ export function createCustody(options: {
       reservation.settled &&
       !reservation.unknown &&
       reservation.captured.every((record) => !records.has(record))
-    )
+    ) {
       reservations.delete(reservation);
+    }
   }
   const driver: DriverCustody = Object.freeze({
     assertAttempt(attempt: AttemptContext, action: AttemptContext["action"]): void {
-      if (!admittedAttempts.has(attempt) || attempt.action !== action)
+      if (!admittedAttempts.has(attempt) || attempt.action !== action) {
         throw new Error("FOREIGN_ATTEMPT");
+      }
     },
     capture(
       attempt: AttemptContext,
@@ -71,7 +75,9 @@ export function createCustody(options: {
       observation: CaptureObservation,
     ): CredentialRef {
       const reservation = attempts.get(attempt);
-      if (!reservation || reservation.settled) throw new Error("FOREIGN_ATTEMPT");
+      if (!reservation || reservation.settled) {
+        throw new Error("FOREIGN_ATTEMPT");
+      }
       if (
         !(bytes instanceof Uint8Array) ||
         bytes.byteLength === 0 ||
@@ -121,8 +127,12 @@ export function createCustody(options: {
       consume: (bytes: Uint8Array) => Promise<T>,
     ): Promise<T> {
       const { record, bytes } = get(ref);
-      if (record.callbacks >= options.maximumCallbacks) throw new Error("CALLBACK_CAPACITY");
-      if (purpose !== "authenticate" && purpose !== "retire") throw new Error("INVALID_PURPOSE");
+      if (record.callbacks >= options.maximumCallbacks) {
+        throw new Error("CALLBACK_CAPACITY");
+      }
+      if (purpose !== "authenticate" && purpose !== "retire") {
+        throw new Error("INVALID_PURPOSE");
+      }
       if (
         purpose === "authenticate" &&
         (!options.admitted() ||
@@ -130,8 +140,9 @@ export function createCustody(options: {
           record.uses === 0 ||
           record.useDeadlineMonoMs === undefined ||
           options.clock.monotonicNow() >= record.useDeadlineMonoMs)
-      )
+      ) {
         throw new Error("CREDENTIAL_CLOSED");
+      }
       const scoped = Uint8Array.from(bytes);
       record.callbacks++;
       try {
@@ -149,8 +160,9 @@ export function createCustody(options: {
         bytes.byteLength === 0 ||
         bytes.byteLength + renewalBytes > options.maximumRenewalBytes ||
         renewals.size >= options.maximumSlots
-      )
+      ) {
         throw new Error("RENEWAL_LIMIT");
+      }
       const ref = Object.freeze({}) as RenewalRef;
       renewals.set(ref, { bytes: Uint8Array.from(bytes), callbacks: new Set(), disposing: false });
       renewalBytes += bytes.byteLength;
@@ -158,8 +170,12 @@ export function createCustody(options: {
     },
     async withRenewal<T>(ref: RenewalRef, consume: (bytes: Uint8Array) => Promise<T>): Promise<T> {
       const entry = renewals.get(ref);
-      if (!entry || entry.disposing) throw new Error("FOREIGN_RENEWAL");
-      if (renewalCallbacks >= options.maximumCallbacks) throw new Error("CALLBACK_CAPACITY");
+      if (!entry || entry.disposing) {
+        throw new Error("FOREIGN_RENEWAL");
+      }
+      if (renewalCallbacks >= options.maximumCallbacks) {
+        throw new Error("CALLBACK_CAPACITY");
+      }
       const bytes = Uint8Array.from(entry.bytes);
       renewalCallbacks++;
       const work = Promise.resolve().then(() => consume(bytes));
@@ -175,7 +191,9 @@ export function createCustody(options: {
     },
     async disposeRenewal(ref: RenewalRef): Promise<void> {
       const entry = renewals.get(ref);
-      if (!entry) throw new Error("FOREIGN_RENEWAL");
+      if (!entry) {
+        throw new Error("FOREIGN_RENEWAL");
+      }
       entry.disposing = true;
       await Promise.allSettled([...entry.callbacks]);
       if (renewals.delete(ref)) {
@@ -202,8 +220,9 @@ export function createCustody(options: {
       return renewalCallbacks;
     },
     reserve(attempt: AttemptContext): CaptureReservation {
-      if (attempts.has(attempt) || reservations.size >= options.maximumSlots)
+      if (attempts.has(attempt) || reservations.size >= options.maximumSlots) {
         throw new Error("CREDENTIAL_CAPACITY");
+      }
       const reservation: CaptureReservation = {
         attempt,
         captured: [],
@@ -231,8 +250,9 @@ export function createCustody(options: {
         record.callbacks !== 0 ||
         record.retiring ||
         (record.disposition !== "revoked" && record.disposition !== "expired")
-      )
+      ) {
         throw new Error("CREDENTIAL_BUSY");
+      }
       get(record.ref).bytes.fill(0);
       access.delete(record.ref);
       records.delete(record);

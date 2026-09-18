@@ -14,11 +14,13 @@ const fields = [
 type ConfigurationFields = Record<(typeof fields)[number], string>;
 
 function parseConfigurationFields(value: unknown): ConfigurationFields {
-  if (!value || typeof value !== "object" || Array.isArray(value))
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("invalid-backend");
+  }
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some((key) => !fields.some((field) => field === key)))
+  if (Object.keys(input).some((key) => !fields.some((field) => field === key))) {
     throw new Error("invalid-backend");
+  }
   for (const key of fields) {
     const field = input[key];
     if (
@@ -26,8 +28,9 @@ function parseConfigurationFields(value: unknown): ConfigurationFields {
       field.length < 1 ||
       field.length > 4096 ||
       /[\x00-\x1f\x7f]/.test(field)
-    )
+    ) {
       throw new Error("invalid-backend");
+    }
   }
   return input as ConfigurationFields;
 }
@@ -42,15 +45,18 @@ export function validateGitHubConfiguration(value: unknown): GitHubConfiguration
     input.kind !== "github-app" ||
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.providerInstanceId) ||
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(input.configVersion)
-  )
+  ) {
     throw new Error("invalid-backend");
-  if (![input.appId, input.installationId, input.repositoryId].every(validNumericId))
+  }
+  if (![input.appId, input.installationId, input.repositoryId].every(validNumericId)) {
     throw new Error("invalid-backend");
+  }
   if (
     !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(input.repository) ||
     !isAbsolute(input.privateKeyFile)
-  )
+  ) {
     throw new Error("invalid-backend");
+  }
   return Object.freeze({
     kind: input.kind,
     providerInstanceId: input.providerInstanceId,
