@@ -812,15 +812,21 @@ test(
         sharedWorkspaceIdentities.get(identityKey),
       );
       sharedWorkspaceIdentities.set(identityKey, sharedClaim.metadata.uid);
-      for (const workload of [gateway, deployment]) {
-        assert.deepEqual(
-          workload.spec.template.spec.volumes.find(({ name }) => name === "openclaw-workspace"),
-          {
-            name: "openclaw-workspace",
-            persistentVolumeClaim: { claimName: sharedWorkspaceClaimName(candidate.agentId) },
-          },
-        );
-      }
+      assert.equal(
+        gateway.spec.template.spec.volumes.some(
+          ({ persistentVolumeClaim }) =>
+            persistentVolumeClaim?.claimName === sharedClaim.metadata.name,
+        ),
+        false,
+        "Gateway must not mount the Harness workspace claim",
+      );
+      assert.deepEqual(
+        deployment.spec.template.spec.volumes.find(({ name }) => name === "openclaw-workspace"),
+        {
+          name: "openclaw-workspace",
+          persistentVolumeClaim: { claimName: sharedClaim.metadata.name },
+        },
+      );
       assert.equal(deployment.spec.template.spec.serviceAccountName, agentName(candidate.agentId));
       assert.equal(deployment.spec.template.spec.automountServiceAccountToken, false);
       assert.equal(deployment.spec.template.spec.securityContext.runAsNonRoot, true);
@@ -1450,7 +1456,7 @@ test(
     await configurationDriver.delete(reference);
     assert.equal(await missing("configmap", configurationName, existingName), true);
 
-    // Dedicated workloads and their Agent-owned shared drive must remain inside the exact tenant.
+    // Dedicated workloads and the Harness workspace must remain inside the exact tenant.
     const agentId = `agt_${randomUUID()}`;
     const candidate = revision(driver, readyOwner, agentId, 1);
     await waitFor("discovered Agent gateway and immutable revision to become ready", async () => {
@@ -1461,15 +1467,21 @@ test(
     const gateway = await assertReadyGateway(existingName, agentId, owner.id, candidate);
     const workload = await resource("deployment", revisionName(candidate), existingName);
     const sharedClaim = await assertSharedWorkspaceClaim(existingName, owner.id, agentId);
-    for (const deployment of [gateway, workload]) {
-      assert.deepEqual(
-        deployment.spec.template.spec.volumes.find(({ name }) => name === "openclaw-workspace"),
-        {
-          name: "openclaw-workspace",
-          persistentVolumeClaim: { claimName: sharedClaim.metadata.name },
-        },
-      );
-    }
+    assert.equal(
+      gateway.spec.template.spec.volumes.some(
+        ({ persistentVolumeClaim }) =>
+          persistentVolumeClaim?.claimName === sharedClaim.metadata.name,
+      ),
+      false,
+      "Gateway must not mount the Harness workspace claim",
+    );
+    assert.deepEqual(
+      workload.spec.template.spec.volumes.find(({ name }) => name === "openclaw-workspace"),
+      {
+        name: "openclaw-workspace",
+        persistentVolumeClaim: { claimName: sharedClaim.metadata.name },
+      },
+    );
     await driver.stopRevision(candidate);
     assert.equal(await missing("deployment", revisionName(candidate), existingName), true);
     assert.equal(await missing("deployment", gatewayName(agentId), existingName), true);
