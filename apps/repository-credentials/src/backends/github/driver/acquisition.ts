@@ -66,16 +66,8 @@ export function createCredentialAcquisition(deps: AcquisitionDependencies): Repo
             }
           }
         };
-        const response = await exchange(
-          {
-            method: "POST",
-            path: `/app/installations/${config.installationId}/access_tokens`,
-            authorization: jwt,
-            body: JSON.stringify({
-              repository_ids: [Number(config.repositoryId)],
-              permissions,
-            }),
-          },
+        const response = await exchange.issue(
+          jwt,
           attempt,
           () => {
             dispatched = true;
