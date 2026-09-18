@@ -54,26 +54,20 @@ Follow these rules when developing or changing code.
 
 ### Build platform capabilities
 
-We are developing a platform. Every new capability must belong to a platform
-primitive, rather than exist as a one-off implementation. First identify the
-existing primitive that owns the capability. Extend that primitive when its
-contract is insufficient, or introduce a new primitive when none fits, within
-the approved architecture and milestone scope.
+Every new capability must belong to a platform primitive. Identify its existing
+owner, extend that contract when insufficient, or introduce a primitive only
+when none fits and the approved architecture and milestones permit it.
 
-Implement the owning primitive's contract and connect the capability to its
-platform lifecycle and composition. A standalone helper or a class named after
-a primitive does not establish that integration. Internal helpers may support
-the implementation, but must not substitute for the platform capability.
+Implement the primitive's contract and integrate it with platform lifecycle and
+composition. Internal helpers may support this work; a standalone helper or
+suitably named class does not establish platform integration.
 
-In general, do not add a capability without a caller in the regular Agent
-workflow. Deliver the capability with that caller; defer speculative components
-until a real workflow needs them. A test-only caller does not satisfy this rule.
+Deliver capabilities with callers in the regular Agent workflow. Defer
+speculative components; test-only callers do not satisfy this requirement.
 
-For example, GitHub App token issuance should belong to an appropriate platform
-primitive. If implemented as a Provider, it must conform to the
-[Provider contract](docs/reference/providers.md) and participate in Provider
-composition; exposing only token minting and revocation methods is insufficient.
-This is the design concern illustrated by
+For example, GitHub App token issuance implemented as a Provider must follow the
+[Provider contract](docs/reference/providers.md) and participate in composition.
+Token minting and revocation alone are insufficient; see
 [PR #136](https://github.com/openclaw/openclaw-enterprise/pull/136).
 
 ### Require integration tests; reject low-value tests
