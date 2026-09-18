@@ -44,18 +44,9 @@ export function createCredentialAccess(
             ) {
               return state.outcome(attempt, { kind: "unsupported" });
             }
-            const response = await exchange(
-              {
-                method: "DELETE",
-                path: "/installation/token",
-                authorization: copy.toString("utf8"),
-                body: "",
-              },
-              attempt,
-              () => {
-                dispatched = true;
-              },
-            );
+            const response = await exchange.revoke(copy.toString("utf8"), attempt, () => {
+              dispatched = true;
+            });
             try {
               return state.outcome(attempt, {
                 kind: response.status === 204 ? "revoked" : "uncertain",
