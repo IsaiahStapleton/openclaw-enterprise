@@ -235,6 +235,15 @@ async function fixture() {
     createdAt: revision.createdAt,
   });
   assert.equal(preparedNamespace.namespaceReady, true, JSON.stringify(preparedNamespace));
+  const apiCalls = [];
+  for (const [group, api] of Object.entries(clients)) {
+    for (const [method, invoke] of Object.entries(api)) {
+      api[method] = async (...args) => {
+        apiCalls.push(`${group}.${method}`);
+        return invoke(...args);
+      };
+    }
+  }
   const context = (bindings) => ({
     secretEnvironment: [],
     harnessAuth: {
@@ -266,6 +275,7 @@ async function fixture() {
     namespace,
     objects,
     calls,
+    apiCalls,
     save,
     context,
     deployments,
@@ -279,6 +289,165 @@ async function fixture() {
     },
   };
 }
+
+function preparedNativeDocument(f) {
+  const configurations = [...f.objects.values()].filter(
+    (object) => object.kind === "ConfigMap" && typeof object.data?.["openclaw.json"] === "string",
+  );
+  assert.equal(configurations.length, 1);
+  return configurations[0].data["openclaw.json"];
+}
+
+function deepFreeze(value) {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+test("Kubernetes projects the repository client into native exec paths without changing admitted configuration", async (t) => {
+  for (const roster of ["list", "entries"]) {
+    await t.test(roster, async () => {
+      const f = await fixture();
+      const shim = "/opt/oce/repository-credentials/bin";
+      f.revision.configuration.tools = {
+        allow: ["exec", "process"],
+        exec: {
+          host: "gateway",
+          mode: "full",
+          timeoutSec: 120,
+          pathPrepend: ["/operator/bin", shim, "/shared/bin", shim],
+        },
+      };
+      f.revision.configuration.agents.ownership = "explicit";
+      f.revision.configuration.agents.list = [
+        {
+          id: "custom",
+          tools: {
+            allow: ["exec"],
+            exec: { host: "gateway", mode: "full", pathPrepend: ["/agent/bin", shim] },
+          },
+        },
+        { id: "own-exec", tools: { exec: { mode: "full" } } },
+        { id: "inherits", tools: { allow: ["exec", "process"] } },
+        { id: "plain" },
+      ];
+      if (roster === "entries") {
+        f.revision.configuration.agents.entries = Object.fromEntries(
+          f.revision.configuration.agents.list.map(({ id, ...entry }) => [id, entry]),
+        );
+        delete f.revision.configuration.agents.list;
+      }
+      const original = structuredClone(f.revision.configuration);
+      deepFreeze(f.revision.configuration);
+
+      // The actual runtime document must survive OpenClaw's exec environment
+      // construction; setting only the Kubernetes container PATH is insufficient.
+      await f.driver.prepareRevision(f.revision, f.context([runtimeBinding()]));
+      const expected = structuredClone(original);
+      expected.tools.exec.pathPrepend = [shim, "/operator/bin", "/shared/bin"];
+      const custom = roster === "list" ? expected.agents.list[0] : expected.agents.entries.custom;
+      const ownExec =
+        roster === "list" ? expected.agents.list[1] : expected.agents.entries["own-exec"];
+      custom.tools.exec.pathPrepend = [shim, "/agent/bin"];
+      ownExec.tools.exec.pathPrepend = [shim, "/operator/bin", "/shared/bin"];
+      assert.deepEqual(JSON.parse(preparedNativeDocument(f)), expected);
+      assert.deepEqual(f.revision.configuration, original);
+    });
+  }
+});
+
+test("Kubernetes supplies a native repository exec prefix when no tools configuration exists", async () => {
+  const f = await fixture();
+  const original = structuredClone(f.revision.configuration);
+  deepFreeze(f.revision.configuration);
+  await f.driver.prepareRevision(f.revision, f.context([runtimeBinding()]));
+  assert.deepEqual(JSON.parse(preparedNativeDocument(f)), {
+    ...original,
+    tools: { exec: { pathPrepend: ["/opt/oce/repository-credentials/bin"] } },
+  });
+  assert.deepEqual(f.revision.configuration, original);
+});
+
+test("Kubernetes preserves native configuration bytes without repository bindings", async (t) => {
+  for (const runtimeBindings of [undefined, []]) {
+    await t.test(runtimeBindings === undefined ? "missing" : "empty", async () => {
+      const f = await fixture();
+      delete f.revision.repositoryCredentials;
+      f.revision.configuration.tools = {
+        allow: ["exec"],
+        exec: { host: "gateway", mode: "full", pathPrepend: ["/operator/bin"] },
+      };
+      const document = JSON.stringify(f.revision.configuration);
+      deepFreeze(f.revision.configuration);
+      await f.driver.prepareRevision(f.revision, f.context(runtimeBindings));
+      assert.equal(preparedNativeDocument(f), document);
+      assert.equal(JSON.stringify(f.revision.configuration), document);
+    });
+  }
+});
+
+test("Kubernetes rejects malformed repository exec configuration before any API access", async (t) => {
+  const malformed = [
+    ["tools null", { tools: null }],
+    ["tools array", { tools: [] }],
+    ["exec string", { tools: { exec: "full" } }],
+    ["exec null", { tools: { exec: null } }],
+    ["exec array", { tools: { exec: [] } }],
+    ["prefix scalar", { tools: { exec: { pathPrepend: "/operator/bin" } } }],
+    ["prefix null", { tools: { exec: { pathPrepend: null } } }],
+    ["prefix nonstring", { tools: { exec: { pathPrepend: ["/operator/bin", 1] } } }],
+    ["agents null", { agents: null }],
+    ["agents array", { agents: [] }],
+    ["agent list object", { agents: { list: {} } }],
+    ["agent list null", { agents: { list: null } }],
+    ["agent entries null", { agents: { entries: null } }],
+    ["agent entries array", { agents: { entries: [] } }],
+    ["agent entry null", { agents: { entries: { main: null } } }],
+    ["agent entry exec string", { agents: { entries: { main: { tools: { exec: "full" } } } } }],
+    [
+      "agent entry prefix nonstring",
+      { agents: { entries: { main: { tools: { exec: { pathPrepend: [false] } } } } } },
+    ],
+    ["agent null", { agents: { list: [null] } }],
+    ["agent array", { agents: { list: [[]] } }],
+    ["agent tools null", { agents: { list: [{ id: "main", tools: null }] } }],
+    ["agent tools array", { agents: { list: [{ id: "main", tools: [] }] } }],
+    ["agent exec null", { agents: { list: [{ id: "main", tools: { exec: null } }] } }],
+    ["agent exec array", { agents: { list: [{ id: "main", tools: { exec: [] } }] } }],
+    [
+      "agent prefix scalar",
+      { agents: { list: [{ id: "main", tools: { exec: { pathPrepend: "/agent/bin" } } }] } },
+    ],
+    [
+      "agent prefix nonstring",
+      { agents: { list: [{ id: "main", tools: { exec: { pathPrepend: [false] } } }] } },
+    ],
+  ];
+  for (const [name, configuration] of malformed) {
+    await t.test(name, async () => {
+      const f = await fixture();
+      const agentDefaults = f.revision.configuration.agents.defaults;
+      Object.assign(f.revision.configuration, structuredClone(configuration));
+      if (configuration.agents && !Array.isArray(configuration.agents)) {
+        f.revision.configuration.agents.defaults = agentDefaults;
+      }
+      const before = structuredClone(f.revision.configuration);
+      await assert.rejects(f.driver.prepareRevision(f.revision, f.context([runtimeBinding()])));
+      assert.deepEqual(
+        f.apiCalls,
+        [],
+        "invalid native configuration must fail before Kubernetes reads or writes",
+      );
+      // Activation is a separate reconciliation entrypoint and must not bypass
+      // the same native configuration validation before consulting workloads.
+      await assert.rejects(f.driver.activateRevision(f.revision, f.context([runtimeBinding()])));
+      assert.deepEqual(f.apiCalls, [], "activation must reject before Kubernetes reads or writes");
+      assert.deepEqual(f.revision.configuration, before);
+    });
+  }
+});
 
 test("Kubernetes preparation creates immutable material and mounts only private output in the runtime", async () => {
   const f = await fixture();

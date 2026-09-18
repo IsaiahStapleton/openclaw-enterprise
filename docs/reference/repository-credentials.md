@@ -227,6 +227,12 @@ finish and their material is disposed.
 
 ## Client routing and limits
 
+When repository material is enabled, Compute places
+`/opt/oce/repository-credentials/bin` first in native `tools.exec.pathPrepend`,
+retaining other configured paths in order. It applies the same prefix to
+per-agent exec overrides while preserving their settings and path inheritance.
+Pod PATH alone is insufficient because native exec prepends login-shell paths.
+
 The embedded runtime provides `git` and `gh` shims. Each invocation selects one
 immutable material generation from its actual target or effective Git remotes;
 checkout directory names are not authority. Canonical clone URLs route to the

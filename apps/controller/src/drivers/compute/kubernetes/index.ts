@@ -88,6 +88,10 @@ import {
   completeKubernetesList,
   type RepositoryMaterialOwner,
 } from "./repository-material-store.ts";
+import {
+  REPOSITORY_CLIENT_BIN,
+  repositoryNativeConfiguration,
+} from "./repository-native-configuration.ts";
 
 type KubernetesRecord = Record<string, unknown>;
 type ManagedResourceKind =
@@ -1470,6 +1474,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("AgentRevision Configuration ownership is invalid.");
     }
     const materialInput = this.repositoryMaterialInput(revision, context);
+    const nativeConfiguration =
+      materialInput === undefined
+        ? revision.configuration
+        : repositoryNativeConfiguration(revision.configuration);
     this.verifyGatewayRoutingConfiguration(revision);
     const embedded = revision.harness.mode === "embedded";
     if (
@@ -1510,7 +1518,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       servicePrincipalId: revision.servicePrincipalId,
     };
     const pluginRuntime = this.pluginRuntimeSnapshot(revision);
-    const document = JSON.stringify(revision.configuration);
+    const document = JSON.stringify(nativeConfiguration);
     const configuration = this.gatewayConfiguration(revision);
     const existingGateway = await this.getOwned(
       "Deployment",
@@ -1798,6 +1806,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   async activateRevision(revision: AgentRevision, context?: ComputeRevisionContext): Promise<void> {
     const materialInput = this.repositoryMaterialInput(revision, context);
+    if (materialInput !== undefined) repositoryNativeConfiguration(revision.configuration);
     if (this.options.runtime === undefined) return;
     this.verifyGatewayRoutingConfiguration(revision);
     this.validateHarnessAuth(revision.harness, revision.harnessAuth, revision.configuration);
@@ -4529,8 +4538,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       initContainers.push(delivery.initContainer);
       variables.push({
         name: "PATH",
-        value:
-          "/opt/oce/repository-credentials/bin:/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        value: `${REPOSITORY_CLIENT_BIN}:/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
       });
     }
     if (projected !== undefined) {

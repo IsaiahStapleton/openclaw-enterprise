@@ -21,6 +21,61 @@ const selection = {
 const sqlLiteral = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const workspace = "/home/node/.openclaw/workspace";
 
+// Diagnostic hints only: raw transcript text stays inside the Agent Pod. These
+// bounded, fixed categories never substitute for tool/provider acceptance.
+const repositoryFailureSummaryScript = String.raw`
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync("/home/node/.openclaw/agents/main/agent/openclaw-agent.sqlite", {readOnly: true});
+  const patterns = [
+    ["tool-approval-or-policy", /approval required|exec denied|execution denied|not allowed by|host.*not allowed|security policy/i],
+    ["command-unavailable", /command not found|spawn.*ENOENT|executable.*not found/i],
+    ["repository-authentication", /authentication failed|could not read Username|bad credentials|HTTP Basic: Access denied|returned error: (?:401|403)/i],
+    ["repository-unavailable", /repository.*not found|repository.*does not exist|returned error: 404/i],
+    ["tls-validation", /certificate verify failed|SSL certificate problem|unable to get local issuer|self.signed certificate/i],
+    ["network-resolution-or-connection", /could not resolve host|ENOTFOUND|ECONNREFUSED|connection refused|failed to connect|connection timed out/i],
+    ["filesystem-permission", /EACCES|permission denied|read.only file system/i],
+    ["git-worktree", /not a git repository|destination path.*already exists|working tree.*overwritten/i],
+    ["git-author-identity", /author identity unknown|please tell me who you are|unable to auto.detect email/i],
+    ["git-ref-or-push", /src refspec.*does not match|non.fast.forward|failed to push some refs|couldn.t find remote ref/i],
+    ["model-rate-or-quota", /rate limit|quota exceeded|insufficient_quota|too many requests/i],
+    ["model-authentication", /invalid api key|incorrect api key|authentication_error/i],
+  ];
+  const classify = message => {
+    const content = typeof message.content === "string" ? message.content :
+      Array.isArray(message.content) ? message.content.filter(block => block?.type === "text" && typeof block.text === "string").map(block => block.text).join("\n") : "";
+    const text = Buffer.from([content, message.details?.aggregated, message.errorMessage].filter(value => typeof value === "string").join("\n"), "utf8").subarray(0, 262144).toString("utf8");
+    const categories = patterns.filter(([, pattern]) => pattern.test(text)).map(([category]) => category);
+    const failed = message.isError === true || message.stopReason === "error" || message.details?.status === "error" ||
+      (Number.isInteger(message.details?.exitCode) && message.details.exitCode !== 0);
+    return categories.length === 0 && failed ? ["other-failure"] : categories;
+  };
+  try {
+    db.exec("PRAGMA busy_timeout=2000");
+    const session = db.prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?").get(process.argv[1]);
+    if (!session) { process.stdout.write(JSON.stringify({exists:false})); }
+    else {
+      const rows = db.prepare("SELECT seq, CASE WHEN length(CAST(event_json AS BLOB)) <= 524288 THEN event_json ELSE NULL END AS event_json FROM transcript_events WHERE session_id = ? ORDER BY seq DESC LIMIT 128").all(session.current_session_id).reverse();
+      const toolResults = [];
+      let finalAssistant, skippedOversizeEvents = 0;
+      for (const row of rows) {
+        if (row.event_json === null) { skippedOversizeEvents++; continue; }
+        const event = JSON.parse(row.event_json);
+        if (event.type !== "message" || !event.message) continue;
+        const message = event.message;
+        if (message.role === "toolResult") toolResults.push({seq:row.seq, categories:classify(message)});
+        if (message.role === "assistant") finalAssistant = {
+          seq:row.seq,
+          stopReason:["stop","length","toolUse","error","aborted"].includes(message.stopReason) ? message.stopReason : "other-or-absent",
+          hasToolCalls:Array.isArray(message.content) && message.content.some(block => block?.type === "toolCall"),
+          categories:classify(message),
+        };
+      }
+      process.stdout.write(JSON.stringify({exists:true, scannedEvents:rows.length, eventLimit:128, skippedOversizeEvents, toolResults, finalAssistant}));
+    }
+  } catch { process.stderr.write("repository diagnostic summary unavailable\n"); process.exitCode=1; }
+  finally { db.close(); }
+`;
+
 // This case proves the installed caller path that host-driven Git/gh smoke tests
 // cannot: the model acts using material opened by the production worker.
 test(
@@ -581,6 +636,7 @@ After clone, its natural destination is ${checkout}. The readBase output must eq
 ${commands}`;
       taskStarted = true;
       let taskFailure;
+      let taskTransport = { outcome: "unresolved" };
       try {
         const response = JSON.parse(
           await exec(
@@ -590,10 +646,27 @@ ${commands}`;
             610000,
           ),
         );
+        taskTransport = {
+          outcome: response.status === 200 ? "http-completed" : "http-failed",
+          httpStatus: Number.isSafeInteger(response.status) ? response.status : null,
+        };
         assert.equal(response.status, 200);
       } catch (error) {
         taskFailure = error;
+        if (taskTransport.outcome === "unresolved")
+          taskTransport = {
+            outcome:
+              error instanceof SyntaxError
+                ? "invalid-submit-response"
+                : error instanceof Error && /timeout/i.test(error.message)
+                  ? "transport-timeout"
+                  : "transport-or-submit-failed",
+          };
       }
+      await f.record("Captured task transport diagnostics; repository acceptance pending", {
+        evidenceKind: "diagnostic-only",
+        taskTransport,
+      });
       // A timeout is an unknown mutation outcome. Read actual trace and provider
       // state once; never replay a model task or create the PR in the runner.
       const trace = JSON.parse(
@@ -608,6 +681,84 @@ ${commands}`;
           }),
         ]),
       );
+      // Preserve the normalized call/result evidence before any remote-state
+      // assertion can fail and ordinary cleanup removes the Agent transcript.
+      // Store only fixed labels and numeric associations, not transcript IDs,
+      // arbitrary map keys, output-derived URLs/hashes, or process session IDs.
+      const expectedOperations = new Set(commandSpecs.map(({ operation }) => operation));
+      const diagnosticStatus = (value) =>
+        ["running", "completed", "error"].includes(value) ? value : "other-or-absent";
+      const diagnosticNumber = (value) => (Number.isSafeInteger(value) ? value : null);
+      const traceCalls = trace.calls ?? [];
+      const traceResults = trace.results ?? [];
+      const diagnosticTrace = {
+        exists: trace.exists === true,
+        promptReportFromRun: trace.promptReportSource === "run",
+        promptIncludesExec: trace.promptToolNames?.includes("exec") === true,
+        promptIncludesProcess: trace.promptToolNames?.includes("process") === true,
+        messageCount: diagnosticNumber(trace.messageCount),
+        eventCount: diagnosticNumber(trace.diagnostics?.eventCount),
+        userMarkerSeen: trace.userMarkerSeen === true,
+        assistantMarkerSeen: trace.assistantMarkerSeen === true,
+        terminalAssistantMarkerSeen: trace.terminalAssistantMarkerSeen === true,
+        assistantError: trace.assistantError === true,
+        callCount: traceCalls.length,
+        resultCount: traceResults.length,
+        captureLimit: 256,
+        calls: traceCalls.slice(-256).map((call) => ({
+          seq: diagnosticNumber(call.seq),
+          tool: ["exec", "process"].includes(call.name) ? call.name : "other",
+          processPoll: call.name === "process" && call.processAction === "poll",
+          operations: (call.operations ?? []).filter((operation) =>
+            expectedOperations.has(operation),
+          ),
+        })),
+        results: traceResults.slice(-256).map((result) => ({
+          seq: diagnosticNumber(result.seq),
+          callSeq: diagnosticNumber(traceCalls.find((call) => call.id === result.toolCallId)?.seq),
+          isError: result.isError === true,
+          status: diagnosticStatus(result.status),
+          exitCode: diagnosticNumber(result.exitCode),
+        })),
+      };
+      await f.record("Captured model tool diagnostics; repository acceptance pending", {
+        evidenceKind: "diagnostic-only",
+        taskTransport,
+        trace: diagnosticTrace,
+      });
+      let failureSummary;
+      try {
+        failureSummary = JSON.parse(await exec(repositoryFailureSummaryScript, [sessionKey]));
+      } catch {
+        failureSummary = { available: false, reason: "bounded-summary-unavailable" };
+      }
+      const operationProgress = commandSpecs.map(({ operation }) => ({
+        operation,
+        calls: traceCalls
+          .slice(-256)
+          .filter((call) => call.operations?.includes(operation))
+          .map((call) => ({
+            callSeq: call.seq,
+            results: traceResults
+              .slice(-256)
+              .filter((result) => result.toolCallId === call.id && result.seq > call.seq)
+              .map((result) => ({
+                resultSeq: result.seq,
+                isError: result.isError,
+                status: diagnosticStatus(result.status),
+                exitCode: diagnosticNumber(result.exitCode),
+                categories:
+                  failureSummary.toolResults?.find((entry) => entry.seq === result.seq)
+                    ?.categories ?? [],
+              })),
+          })),
+      }));
+      await f.record("Captured failure classifications; repository acceptance pending", {
+        evidenceKind: "diagnostic-only",
+        classificationMeaning: "text-pattern hints, not verified causes or successful operations",
+        operationProgress,
+        failureSummary,
+      });
       assert.equal(
         (await f.get("pod", gateway.metadata.name, f.tenant)).metadata.uid,
         gateway.metadata.uid,

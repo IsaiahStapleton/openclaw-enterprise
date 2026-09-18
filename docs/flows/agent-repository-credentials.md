@@ -156,9 +156,14 @@ session identifiers; separate files contain gateway bearers.
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.activateRevision`
 compares material generations as well as revision identity. A changed generation
 replaces the actual embedded gateway Pod, even for the same revision. The runtime
-PATH includes the image-owned Git/gh shims while retaining the Harness's model
-environment. App keys, JWTs, installation tokens and the control socket never
-enter this material set.
+Pod PATH includes the image-owned Git/gh shims, but native exec prepends its
+login-shell PATH. For material-enabled revisions, `prepareRevision` therefore
+uses `apps/controller/src/drivers/compute/kubernetes/repository-native-configuration.ts:repositoryNativeConfiguration`
+to put the shim directory first in native `tools.exec.pathPrepend` before writing
+the runtime ConfigMap. It preserves other configured paths and exec settings,
+including per-agent overrides and inherited paths, without changing the stored
+revision. The Harness's model environment remains intact. App keys, JWTs,
+installation tokens and the control socket never enter this material set.
 
 ### 5. Pin each Git or GitHub CLI command
 
@@ -240,4 +245,5 @@ State/worker, real-client, installed/runtime and live-provider checks.
 
 ## Changelog
 
+- 2026-09-18 04:55: Trace the accompanying native exec PATH projection for repository material, including per-agent overrides. (authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d - e3012a8cee0c5ea60bc02943ebed88a1c88eb0d2)
 - 2026-09-18 03:04: Trace the accompanying Agent admission, durable session lifecycle, Kubernetes material generation and concurrent client integration. (authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d - 8500b2da103063b4503b62e5529f3910513e84a9)
