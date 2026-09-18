@@ -173,7 +173,7 @@ spec:
               value: {{ $.Values.auth.baseUrl | quote }}
             {{- else }}
             - name: OCC_WORKER_READINESS_PATH
-              value: /var/run/openclaw/ready
+              value: /run/openclaw-worker/ready
             - name: OCC_WORKER_POLL_INTERVAL_MS
               value: {{ $.Values.worker.pollIntervalMs | quote }}
             - name: OCC_WORKER_LEASE_DURATION_MS
@@ -220,7 +220,7 @@ spec:
             {{- end }}
             {{- else }}
             - name: worker-readiness
-              mountPath: /var/run/openclaw
+              mountPath: /run/openclaw-worker
             {{- end }}
           {{- if eq $component "api" }}
           ports:

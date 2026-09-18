@@ -179,6 +179,29 @@ test(
     const service = workerPod.containers.find(({ name }) => name === "repository-credentials");
     const mounts = (container) => container.volumeMounts.map(({ name }) => name);
 
+    // The controller image aliases /var/run to /run; parent mounts can hide the shared socket.
+    const workerMounts = controller.volumeMounts.map(({ name, mountPath }) => ({
+      name,
+      path: mountPath.replace(/^\/var\/run(?=\/|$)/, "/run").replace(/\/$/, ""),
+    }));
+    for (let index = 0; index < workerMounts.length; index += 1) {
+      const current = workerMounts[index];
+      for (const other of workerMounts.slice(index + 1)) {
+        assert.ok(
+          current.path !== other.path &&
+            !current.path.startsWith(`${other.path}/`) &&
+            !other.path.startsWith(`${current.path}/`),
+          `worker mounts ${current.name} and ${other.name} overlap after /var/run resolution`,
+        );
+      }
+    }
+    const readinessMount = controller.volumeMounts.find(({ name }) => name === "worker-readiness");
+    assert.equal(readinessMount.readOnly, undefined);
+    assert.equal(
+      controller.env.find(({ name }) => name === "OCC_WORKER_READINESS_PATH").value,
+      `${readinessMount.mountPath}/ready`,
+    );
+
     // Kubernetes rejects named container ports longer than 15 characters during admission.
     for (const object of objects) {
       const pod = object.spec?.template?.spec;
@@ -598,6 +621,21 @@ test(
         assert.ok(!container.volumeMounts.some(({ name }) => name === "internal-admission"));
         assert.deepEqual(container.livenessProbe.httpGet, { path: "/healthz", port: "http" });
         assert.deepEqual(container.readinessProbe.httpGet, { path: "/readyz", port: "http" });
+      } else {
+        const readinessMount = container.volumeMounts.find(
+          ({ name }) => name === "worker-readiness",
+        );
+        assert.equal(readinessMount.readOnly, undefined);
+        assert.equal(
+          container.env.find(({ name }) => name === "OCC_WORKER_READINESS_PATH").value,
+          `${readinessMount.mountPath}/ready`,
+        );
+        assert.deepEqual(container.readinessProbe.exec.command, [
+          "node",
+          "scripts/production-healthcheck.mjs",
+          "worker",
+          "ready",
+        ]);
       }
     }
     assert.ok(!stdout.includes("OCC_INTERNAL_API_"));

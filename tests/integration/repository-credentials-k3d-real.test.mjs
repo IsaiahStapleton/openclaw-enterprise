@@ -275,6 +275,60 @@ test(
           );
         }
       }
+      // Sidecar readiness alone cannot prove the worker sees the shared socket:
+      // a parent mount in this container can hide the credential control mount.
+      const workerHealthScript = String.raw`
+        const { request } = require("node:http");
+        const probe = request({
+          socketPath: "/run/openclaw/repository-control/private/control.sock",
+          method: "GET", path: "/healthz", agent: false, maxHeaderSize: 1024,
+        }, response => {
+          const chunks = [];
+          let length = 0;
+          response.on("data", chunk => {
+            length += chunk.length;
+            if (length > 1024) probe.destroy(new Error("invalid-health"));
+            else chunks.push(chunk);
+          });
+          response.once("error", () => { process.exitCode = 1; });
+          response.once("aborted", () => { process.exitCode = 1; });
+          response.once("end", () => {
+            try {
+              const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+              if (response.statusCode !== 200 || value?.ready !== true || value?.protocolVersion !== 1)
+                throw new Error("invalid-health");
+              process.stdout.write(JSON.stringify({ready: true, protocolVersion: 1}));
+            } catch { process.exitCode = 1; }
+          });
+        });
+        const deadline = setTimeout(() => probe.destroy(new Error("health-timeout")), 2000);
+        probe.once("close", () => clearTimeout(deadline));
+        probe.once("error", () => { process.exitCode = 1; });
+        probe.end();
+      `;
+      const workerHealth = JSON.parse(
+        await f.run(
+          "kubectl",
+          [
+            ...f.kubernetes.kubectlArguments([]),
+            "-n",
+            f.system,
+            "exec",
+            workerPod.metadata.name,
+            "-c",
+            "worker",
+            "--",
+            "node",
+            "-e",
+            workerHealthScript,
+          ],
+          { timeout: 10000 },
+        ),
+      );
+      assert.deepEqual(workerHealth, { ready: true, protocolVersion: 1 });
+      await f.record("Worker reaches the installed credential service over its private socket", {
+        podUid: workerPod.metadata.uid,
+      });
       const native = createHarnessConfiguration("openclaw", model);
       native.agents.defaults.skipBootstrap = true;
       native.agents.defaults.workspace = workspace;
