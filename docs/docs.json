@@ -50,7 +50,7 @@
               },
               {
                 "group": "Contributing",
-                "pages": ["local-preview"]
+                "pages": ["layout", "local-preview"]
               }
             ]
           },

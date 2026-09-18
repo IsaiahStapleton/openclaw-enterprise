@@ -43,6 +43,7 @@ revision startup and runtime configuration.
 
 ## Contribute
 
+- [Repository layout and conventions](layout.md): find code owners and choose where changes belong.
 - [Testing](testing/README.md): select a suite and prepare its environment.
 - [Local preview](local-preview.md): render and validate documentation.
 
