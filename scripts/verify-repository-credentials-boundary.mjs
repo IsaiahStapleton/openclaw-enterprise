@@ -10,6 +10,23 @@ const sourceExtensions = new Set([".ts", ".mts", ".cts", ".js", ".mjs", ".cjs", 
 const reviewedImports = {
   "backends/github/material.ts": { "node:crypto": ["KeyObject", "constants", "sign"] },
   "backends/github/provider-transport/request.ts": { "node:https": ["request"] },
+  "client/commands.ts": { "node:child_process": ["spawnSync"] },
+  "client/config.ts": {
+    "node:fs/promises": ["lstat", "mkdir", "mkdtemp", "open", "rename", "rm"],
+  },
+  "client/launch.ts": {
+    "node:child_process": ["spawn"],
+    "node:fs/promises": ["mkdtemp", "rm"],
+  },
+  "client/operator.ts": {
+    "node:crypto": ["randomUUID"],
+    "node:fs/promises": ["readFile"],
+    "node:http": ["request"],
+  },
+  "client/private-files.ts": {
+    "node:fs": ["constants"],
+    "node:fs/promises": ["lstat", "open"],
+  },
   "config.ts": {
     "node:crypto": ["createPrivateKey"],
     "node:fs": ["constants"],
@@ -17,7 +34,14 @@ const reviewedImports = {
     "node:tls": ["createSecureContext"],
   },
   "lifecycle.ts": { "node:crypto": ["randomUUID"] },
+  "server.ts": {
+    "node:fs/promises": ["chmod", "lstat", "realpath", "unlink"],
+    "node:http": ["createServer"],
+    "node:https": ["createServer"],
+  },
   "sessions.ts": { "node:crypto": ["createHash", "randomBytes", "randomUUID"] },
+  "transport/request-headers.ts": { "node:http": ["validateHeaderName", "validateHeaderValue"] },
+  "transport/upstream.ts": { "node:https": ["request"] },
 };
 const ordinaryBuiltins = new Set([
   "node:os",
@@ -32,6 +56,7 @@ const senderConsumers = {
   "backends/github/provider-transport/request.ts": {
     "backends/github/provider-transport.ts": ["sendProviderRequest"],
   },
+  "transport/upstream.ts": { "transport/agent.ts": ["createUpstreamSender"] },
 };
 const rawGlobals = new Set([
   "fetch",
@@ -48,7 +73,16 @@ const rawGlobals = new Set([
 ]);
 const reviewedProcessMembers = {
   "check-config.ts": ["argv", "exitCode", "stderr", "stdout"],
+  "client/commands.ts": ["execPath"],
+  "client/environment.ts": ["env"],
+  "client/git-helper.ts": ["argv", "exit", "exitCode", "stderr", "stdin", "stdout"],
+  "client/launch.ts": ["argv", "exitCode", "off", "on", "stderr"],
+  "client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
+  "client/private-files.ts": ["getuid"],
   "config.ts": ["getuid"],
+  "main.ts": ["argv", "exit", "exitCode", "once", "stderr", "stdout"],
+  "server.mjs": ["exitCode", "stderr"],
+  "server.ts": ["getuid"],
 };
 const runtimeTypeScript = new Set([
   "TSAsExpression",
@@ -126,6 +160,8 @@ function inspectSource(path, root, sources, ast) {
     }
     if (specifier.startsWith(".")) {
       let target = slash(relative(root, resolve(dirname(path), specifier)));
+      if (file === "server.mjs" && specifier === "../dist/main.js" && names.join() === "main")
+        return;
       if (
         target === ".." ||
         target.startsWith("../") ||

@@ -47,6 +47,16 @@ test("credential source boundary rejects new raw capabilities in the real source
       () => verifyRepositoryCredentialBoundary(root),
     ),
   );
+  await t.test("the outgoing header owner can validate names and values", () =>
+    appendSource(
+      root,
+      "transport/request-headers.ts",
+      `import { validateHeaderName as checkName, validateHeaderValue as checkValue } from "node:http";
+       checkName("accept"); checkValue("accept", "application/json");`,
+      () => verifyRepositoryCredentialBoundary(root),
+    ),
+  );
+
   const cases = [
     [
       "direct HTTPS request",
@@ -132,14 +142,36 @@ test("credential source boundary rejects new raw capabilities in the real source
       /raw process capability execve/,
     ],
     [
+      "raw upstream helper",
+      'import { createUpstreamSender } from "./transport/upstream.ts";',
+      /raw sender transport\/upstream.ts/,
+    ],
+    [
       "raw provider helper through emitted extension",
       'import { sendProviderRequest } from "./backends/github/provider-transport/request.js";',
       /raw sender backends\/github\/provider-transport\/request.ts/,
     ],
     [
+      "client command owner",
+      'import { launchClient } from "./client/launch.ts";',
+      /service code cannot load client command owner/,
+    ],
+    [
       "unscanned source",
       'import { send } from "../dist/unchecked.js";',
       /runtime import escapes credential source/,
+    ],
+    [
+      "listener cannot become sender",
+      'import { request as rawRequest } from "node:https";',
+      /unreviewed runtime import from node:https \(request\)/,
+      "server.ts",
+    ],
+    [
+      "header validator cannot become sender",
+      'import { request as rawRequest } from "node:http";',
+      /unreviewed runtime import from node:http \(request\)/,
+      "transport/request-headers.ts",
     ],
     [
       "approved sender cannot re-export raw HTTPS",
