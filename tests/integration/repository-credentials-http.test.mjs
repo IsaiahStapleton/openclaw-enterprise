@@ -86,6 +86,8 @@ test(
     const cert = await readFile(join(directory, "cert.pem"));
     const received = [];
     const outcomes = [];
+    const privateCases = new Map();
+    let dispatches = 0;
     let gateOpen = true;
     let observeStreamingChunk;
     const upstream = httpsServer({ key, cert }, async (req, res) => {
@@ -169,17 +171,23 @@ test(
         },
       };
       const tracked = [];
-      const outcome = await createUpstreamSender({
+      const privateCase = privateCases.get(req.url);
+      const trustedOrigins = new Set(privateCase?.trustedOrigins ?? [origin]);
+      const sender = createUpstreamSender({
         request: req,
         response: res,
         head: parsed.head,
-        trustedUpstreamOrigins: new Set([origin]),
+        trustedUpstreamOrigins: trustedOrigins,
+        headerBytes: privateCase?.headerBytes ?? 32768,
+        headerPairs: privateCase?.headerPairs ?? 64,
         upstreamCa: cert,
         clock,
-      })(
+      });
+      if (privateCase?.addOriginAfterConstruction) trustedOrigins.add(origin);
+      const outcome = await sender(
         {
           plan,
-          headers: {
+          headers: privateCase?.headers ?? {
             authorization: "Bearer fixture-provider-only",
             "content-type": "application/octet-stream",
           },
@@ -190,6 +198,7 @@ test(
           gate: {
             dispatch(_cancel, open) {
               if (!gateOpen) throw new Error("closed");
+              dispatches++;
               return open();
             },
             track(io) {
@@ -290,6 +299,102 @@ test(
       assert.equal((await exchange(port, "/echo")).status, 502);
       gateOpen = true;
       assert.equal(received.length, before);
+    });
+    await t.test("private headers are canonical and bounded before dispatch", async () => {
+      let getterCalled = false;
+      const accessor = Object.defineProperty({}, "authorization", {
+        enumerable: true,
+        get() {
+          getterCalled = true;
+          return "Bearer fixture-provider-only";
+        },
+      });
+      const inherited = Object.assign(Object.create({ authorization: "Bearer inherited" }), {
+        accept: "*/*",
+      });
+      const invalid = [
+        { headers: { authorization: "Bearer owner", Authorization: "Bearer shadow" } },
+        { headers: { "accept-encoding": "identity", "Accept-Encoding": "gzip" } },
+        { headers: inherited },
+        { headers: accessor },
+        { headers: { [Symbol("header")]: "ignored" } },
+        { headers: { authorization: 42 } },
+        { headers: { "bad name": "value" } },
+        { headers: { authorization: "Bearer value\r\nx-extra: injected" } },
+        {
+          headers: Object.fromEntries(
+            Array.from({ length: 65 }, (_, index) => [`x-${index}`, "a"]),
+          ),
+        },
+        { headers: { "x-large": "a".repeat(32768) } },
+        { headers: { authorization: "Bearer fixture-provider-only" }, headerPairs: 4 },
+        { headers: { authorization: "Bearer fixture-provider-only" }, headerBytes: 100 },
+      ];
+      for (const [index, value] of invalid.entries()) {
+        const target = `/private-headers/${index}`;
+        privateCases.set(target, value);
+        const before = dispatches;
+        assert.equal((await exchange(port, target)).status, 502);
+        assert.equal(outcomes.at(-1).outcome.kind, "not-dispatched");
+        assert.equal(dispatches, before);
+        privateCases.delete(target);
+      }
+      assert.equal(getterCalled, false);
+
+      // Adapter authentication remains available while all transport fields
+      // come from the sender's authority and the inspected incoming framing.
+      privateCases.set("/canonical-headers", {
+        headers: {
+          Authorization: "Bearer fixture-provider-only",
+          "X-Repository-Key": "fixture-alternate-only",
+          Host: "other.example",
+          Connection: "keep-alive",
+          "Keep-Alive": "timeout=100",
+          "Proxy-Connection": "keep-alive",
+          "Proxy-Authenticate": "Basic realm=private",
+          "Proxy-Authorization": "Basic private",
+          TE: "trailers",
+          Trailer: "x-late",
+          "Transfer-Encoding": "chunked",
+          Upgrade: "websocket",
+          Expect: "100-continue",
+          Cookie: "private=1",
+          "Content-Length": "900",
+          "Content-Encoding": "gzip",
+          "Accept-Encoding": "gzip",
+        },
+      });
+      assert.equal((await exchange(port, "/canonical-headers", Buffer.from("body"))).status, 200);
+      const headers = received.at(-1).headers;
+      assert.equal(headers.authorization, "Bearer fixture-provider-only");
+      assert.equal(headers["x-repository-key"], "fixture-alternate-only");
+      assert.equal(headers.host, new URL(origin).host);
+      assert.equal(headers.connection, "close");
+      assert.equal(headers["accept-encoding"], "identity");
+      assert.equal(headers["content-length"], "4");
+      for (const name of [
+        "keep-alive",
+        "proxy-connection",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "expect",
+        "cookie",
+        "content-encoding",
+      ])
+        assert.equal(headers[name], undefined);
+    });
+    await t.test("a sender retains its original trusted origins", async () => {
+      const before = dispatches;
+      privateCases.set("/later-trusted", { trustedOrigins: [], addOriginAfterConstruction: true });
+      assert.equal((await exchange(port, "/later-trusted")).status, 502);
+      assert.equal(outcomes.at(-1).outcome.kind, "not-dispatched");
+      assert.equal(dispatches, before);
+      assert.equal((await exchange(port, "/echo")).status, 200);
+      assert.equal(dispatches, before + 1);
     });
     await t.test("possibly accepted writes are not replayed after disconnect", async () => {
       const before = received.length;
