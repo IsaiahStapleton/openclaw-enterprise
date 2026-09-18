@@ -2,18 +2,9 @@ import type { RepoDriver, ResolvedGrant } from "../../driver-contracts.ts";
 import { createGitHubDriver, sameAuthority } from "./driver.ts";
 import { validateGitHubConfiguration } from "./config.ts";
 import { createProviderTransport } from "./provider-transport.ts";
+import { permissionsForProfile } from "./profiles.ts";
 import { createRoutePolicy } from "./routes.ts";
 import type { GitHubDriverFactory, GitHubFactoryOptions, GitHubProfile } from "./types.ts";
-const profiles = Object.freeze({
-  "git-read": Object.freeze({ metadata: "read", contents: "read" }),
-  "git-write": Object.freeze({ metadata: "read", contents: "write" }),
-  "git-full": Object.freeze({
-    metadata: "read",
-    contents: "write",
-    pull_requests: "write",
-    issues: "write",
-  }),
-});
 function endpoint(value: string): string {
   const url = new URL(value);
   if (url.protocol !== "https:" || url.origin !== value || url.username || url.password)
@@ -96,9 +87,13 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
       );
       if (!profile || !authority.sessionId) throw new Error("invalid-binding");
       const binding = grant(profile).binding,
-        permissions = profiles[profile],
+        permissions = permissionsForProfile(profile),
         routes = policy(profile);
-      const exchange = createProviderTransport(apiOrigin, options.trustedEndpoints?.ca, clock);
+      const exchange = createProviderTransport(apiOrigin, options.trustedEndpoints?.ca, clock, {
+        installationId: config.installationId,
+        repositoryId: config.repositoryId,
+        profile,
+      });
       return createGitHubDriver({
         authority,
         binding,

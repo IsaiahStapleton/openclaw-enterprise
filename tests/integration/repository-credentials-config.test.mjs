@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkConfiguration } from "../../apps/repository-credentials/src/check-config.ts";
@@ -54,6 +54,48 @@ test("protected startup accepts RSA/TLS files without provider calls and rejects
   assert.deepEqual(summary.profiles, ["git-read", "git-write", "git-full"]);
   assert.equal(JSON.stringify(summary).includes("PRIVATE KEY"), false);
   assert.equal(JSON.stringify(summary).includes(directory), false);
+  // A writable earlier ancestor can select a different trusted-owned directory
+  // without modifying either private configuration file. Reject that ancestry
+  // before opening material, even when the immediate parent remains private.
+  const shared = join(directory, "shared"),
+    active = join(shared, "active"),
+    previous = join(shared, "previous"),
+    selectedFile = join(active, "config.json");
+  await mkdir(shared, { mode: 0o700 });
+  for (const [selected, profile] of [
+    [active, "git-read"],
+    [previous, "git-full"],
+  ]) {
+    await mkdir(selected, { mode: 0o700 });
+    await writeFile(
+      join(selected, "config.json"),
+      JSON.stringify({
+        ...input,
+        sessionPolicy: {
+          ...input.sessionPolicy,
+          defaultProfile: profile,
+          allowedProfiles: [profile],
+        },
+      }),
+      { mode: 0o600 },
+    );
+  }
+  assert.deepEqual((await checkConfiguration(selectedFile)).profiles, ["git-read"]);
+  await chmod(shared, 0o777);
+  await assert.rejects(checkConfiguration(selectedFile), { message: "invalid-configuration" });
+  // A sticky directory is trusted only when root owns it. The system temporary
+  // ancestor remains supported, but a service-owned writable ancestor cannot
+  // gain that exception merely by setting its sticky bit.
+  if (process.getuid?.() !== 0) {
+    await chmod(shared, 0o1777);
+    await assert.rejects(checkConfiguration(selectedFile), { message: "invalid-configuration" });
+    await chmod(shared, 0o777);
+  }
+  await rename(active, join(shared, "retired"));
+  await rename(previous, active);
+  await assert.rejects(checkConfiguration(selectedFile), { message: "invalid-configuration" });
+  await chmod(shared, 0o700);
+  assert.deepEqual((await checkConfiguration(selectedFile)).profiles, ["git-full"]);
   // Removed and unknown profiles must fail at trusted startup, before serving
   // any sessions, even when they are explicitly named in the operator policy.
   for (const profile of ["read-write", "app-full"]) {
