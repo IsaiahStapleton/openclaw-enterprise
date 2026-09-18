@@ -50,6 +50,6 @@ Run the available common-owner and adapter cases listed in the [testing guide](.
 
 ## Changelog
 
-- 2026-09-18 01:53: Document accompanying capture deadlines and failed-construction cleanup. (01a0b098-e407-7d42-bc53-9bce979ac912 - cce878092910f39770aa27baa64c6d710f9651f8)
+- 2026-09-18 02:02: Document accompanying capture deadlines and failed-construction cleanup. (01a0b098-e407-7d42-bc53-9bce979ac912 - cce878092910f39770aa27baa64c6d710f9651f8)
 
 - 2026-09-17 21:49: Document callable common lifecycle ownership. (extraction-preparation - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
