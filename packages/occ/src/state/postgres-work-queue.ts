@@ -118,7 +118,7 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 const REVISION_ID_PATTERN =
   "rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const REPOSITORY_CLEANUP_KEY = new RegExp(
-  `^agent_revision:(${REVISION_ID_PATTERN}):repository_cleanup:[0-9a-f]{64}$`,
+  `^agent_revision:(${REVISION_ID_PATTERN}):repository_cleanup:(retire:)?[0-9a-f]{64}$`,
 );
 const MAINTENANCE_KEY = new RegExp(
   `^agent_revision:(${REVISION_ID_PATTERN}):maintenance:(0|[1-9][0-9]*)$`,
@@ -142,13 +142,23 @@ export function isRepositoryCleanupWork(
   );
 }
 
+/** Runtime retirement is distinct from session-only repair and rotation cleanup. */
+export function isRepositoryRuntimeRetirementWork(
+  work: Parameters<typeof isRepositoryCleanupWork>[0],
+): boolean {
+  return (
+    isRepositoryCleanupWork(work) &&
+    REPOSITORY_CLEANUP_KEY.exec(work.idempotencyKey)?.[2] === "retire:"
+  );
+}
+
 function repositoryCleanupSql(alias: string): string {
   return `(${alias}.agent_id IS NOT NULL
     AND ${alias}.revision_id IS NOT NULL
     AND ${alias}.namespace_target IS NULL AND ${alias}.agent_target IS NULL
     AND ${alias}.revision_id ~ '^${REVISION_ID_PATTERN}$'
     AND ${alias}.idempotency_key ~
-      ('^agent_revision:' || ${alias}.revision_id || ':repository_cleanup:[0-9a-f]{64}$'))`;
+      ('^agent_revision:' || ${alias}.revision_id || ':repository_cleanup:(retire:)?[0-9a-f]{64}$'))`;
 }
 
 // Only lifecycle columns are writable by occ_app. An identity collision must
@@ -193,6 +203,8 @@ function transferRepositoryCleanupSql(continuingRevision = "false"): string {
     ), cleanup_revisions AS MATERIALIZED (
       SELECT source.idempotency_key AS source_key, source.actor_id,
         revision.namespace_id, revision.agent_id, revision.id AS revision_id,
+        (source.revision_id = revision.id
+          AND revision.admitted_spec->'repository_credentials' IS NOT NULL) AS retire_runtime,
         (source.revision_id IS NOT NULL OR
           (source.agent_target = 'stopped' AND agent.desired_runtime_state = 'stopped'))
           AS close_live
@@ -234,14 +246,15 @@ function transferRepositoryCleanupSql(continuingRevision = "false"): string {
       )
       SELECT DISTINCT
         'agent_revision:' || revision.revision_id || ':repository_cleanup:' ||
+          CASE WHEN revision.retire_runtime THEN 'retire:' ELSE '' END ||
           encode(sha256(convert_to(revision.source_key, 'UTF8')), 'hex'),
         revision.namespace_id, revision.agent_id, revision.revision_id, revision.actor_id,
         NULL, NULL, 'queued', statement_timestamp(), 0, statement_timestamp(), statement_timestamp()
       FROM cleanup_revisions AS revision
-      JOIN cleanup_obligations AS obligation
+      LEFT JOIN cleanup_obligations AS obligation
         ON obligation.namespace_id = revision.namespace_id AND obligation.agent_id = revision.agent_id
         AND obligation.revision_id = revision.revision_id
-      WHERE true
+      WHERE revision.retire_runtime OR obligation.revision_id IS NOT NULL
       ${CLEANUP_CONFLICT_SQL}
       RETURNING idempotency_key
     ),`;
@@ -504,13 +517,20 @@ export class PostgresWorkQueue {
   async enqueueRepositoryCleanup(
     claim: WorkClaim,
     owner: RepositoryRevisionOwner,
+    purpose: "sessions" | "terminal-runtime" = "sessions",
   ): Promise<ControllerWork | undefined> {
     validateClaim(claim);
     const revisionId = nonempty(owner.revisionId, "Repository cleanup revision ID");
     if (revisionId.length !== 40 || !new RegExp(`^${REVISION_ID_PATTERN}$`).test(revisionId)) {
       throw new ScopeViolationError("Repository cleanup requires an exact revision ID.");
     }
-    const key = `agent_revision:${revisionId}:repository_cleanup:${createHash("sha256")
+    if (purpose !== "sessions" && purpose !== "terminal-runtime") {
+      throw new ScopeViolationError("Repository cleanup requires a supported purpose.");
+    }
+    const retireRuntime = purpose === "terminal-runtime";
+    const key = `agent_revision:${revisionId}:repository_cleanup:${retireRuntime ? "retire:" : ""}${createHash(
+      "sha256",
+    )
       .update(claim.idempotencyKey, "utf8")
       .digest("hex")}`;
     const result = await this.client.query(
@@ -531,6 +551,8 @@ export class PostgresWorkQueue {
            AND source_revision.agent_id = source.agent_id AND source_revision.id = source.revision_id
          WHERE revision.namespace_id = $3 AND revision.agent_id = $4 AND revision.id = $5
            AND NOT ${repositoryCleanupSql("source")}
+           AND (NOT $7::boolean OR (source.revision_id = revision.id
+             AND revision.admitted_spec->'repository_credentials' IS NOT NULL))
            AND (
              (source.agent_id = revision.agent_id AND source.revision_id IS NOT NULL
                AND revision.revision_number <= source_revision.revision_number)
@@ -548,11 +570,11 @@ export class PostgresWorkQueue {
          SELECT $6, owner.namespace_id, owner.agent_id, owner.revision_id, source.actor_id,
            NULL, NULL, 'queued', clock_timestamp(), 0, clock_timestamp(), clock_timestamp()
          FROM owner CROSS JOIN source
-         WHERE source.lease_expires_at > clock_timestamp() AND EXISTS (
+         WHERE source.lease_expires_at > clock_timestamp() AND ($7::boolean OR EXISTS (
            SELECT 1 FROM occ.repository_session_attempts AS attempt
            WHERE attempt.namespace_id = owner.namespace_id AND attempt.agent_id = owner.agent_id
              AND attempt.revision_id = owner.revision_id AND attempt.phase = 'closing'
-         )
+         ))
          ${CLEANUP_CONFLICT_SQL}
          RETURNING *
        )
@@ -566,6 +588,7 @@ export class PostgresWorkQueue {
         nonempty(owner.agentId, "Repository cleanup Agent ID"),
         revisionId,
         key,
+        retireRuntime,
       ],
     );
     const row = result.rows[0] as

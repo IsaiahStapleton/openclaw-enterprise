@@ -79,6 +79,9 @@ Follow [PostgreSQL setup](postgresql.md) for a migrated disposable application-r
 database, then select `tests/integration/postgres-repository-sessions.test.mjs`
 with `OCC_TEST_DATABASE_URL`. Its SQL constraints and State operations cover exact
 revision ownership, immutable attempt inputs, phases and safe recovery identity.
+The `postgres-restart-recovery.test.mjs` and `postgres-worker-agent-revision.test.mjs`
+cases cover atomic terminal-retirement transfer, retries after Compute failure
+and restart, and session-only repair that preserves the healthy workload.
 These checks do not prove a running Kubernetes Pod or a model turn.
 
 ## Exercise the controlled platform path

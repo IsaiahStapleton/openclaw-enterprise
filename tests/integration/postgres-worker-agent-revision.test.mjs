@@ -660,10 +660,15 @@ test(
     assert.equal(maintenance.rowCount, 1);
     assert.equal(maintenance.rows[0].actor_id, fixture.actor.id);
     const observed = [];
+    const stopped = [];
     const callsBeforeRestart = repository.calls.length;
     await fixture.start(
       {
         ...fixture.compute,
+        async stopRevision(revision) {
+          stopped.push(revision.id);
+          return fixture.compute.stopRevision(revision);
+        },
         async prepareRevision(revision, deploymentContext) {
           observed.push(deploymentContext.repositoryCredentials);
           const result = await fixture.compute.prepareRevision(revision, deploymentContext);
@@ -720,6 +725,15 @@ test(
       [initial[0].sessionId],
     );
     assert.equal(recoveryCalls.filter(({ operation }) => operation === "open").length, 1);
+    await waitFor("session-only repair cleanup to settle", async () => {
+      const cleanup = await fixture.observerPool.query(
+        `SELECT state FROM occ.controller_work
+         WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+        [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:%`],
+      );
+      return cleanup.rowCount === 1 && cleanup.rows[0].state === "succeeded" ? true : undefined;
+    });
+    assert.deepEqual(stopped, []);
   },
 );
 
@@ -954,19 +968,28 @@ test(
 );
 
 test(
-  "repository grant drift during retained maintenance closes old authority without Compute or replacement",
+  "terminal repository retirement survives repeated Compute failures and restart without reopening authority",
   requiresPostgres,
   async (context) => {
     const repository = repositoryBoundary();
     const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
     const owner = await fixture.agent("repository-grant-drift");
     const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
-    let preparations = 0;
+    const prepared = [];
+    const stopped = [];
+    let unavailable = true;
     const compute = {
       ...fixture.compute,
       async prepareRevision(revision, deploymentContext) {
-        preparations += 1;
+        prepared.push(revision.id);
         return fixture.compute.prepareRevision(revision, deploymentContext);
+      },
+      async stopRevision(revision) {
+        stopped.push(revision.id);
+        if (unavailable) {
+          throw new Error("Compute retirement temporarily unavailable");
+        }
+        return fixture.compute.stopRevision(revision);
       },
     };
     await fixture.start(compute);
@@ -996,7 +1019,53 @@ test(
       const attempts = await repositoryAttempts(fixture, candidate);
       return attempts.length === 1 && attempts[0].phase === "disposed" ? true : undefined;
     });
-    assert.equal(preparations, 1);
+    // The foreground is already terminal and every session is disposed. Compute
+    // must retain a separate durable obligation beyond its ordinary failure budget.
+    await waitFor("retirement to retry beyond the foreground's five attempts", async () =>
+      stopped.length > 5 ? true : undefined,
+    );
+    await fixture.stop();
+    const retirement = await fixture.observerPool.query(
+      `SELECT idempotency_key, state, actor_id FROM occ.controller_work
+       WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+      [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:retire:%`],
+    );
+    assert.equal(retirement.rowCount, 1);
+    assert.equal(retirement.rows[0].state, "queued");
+    assert.equal(retirement.rows[0].actor_id, fixture.actor.id);
+    assert.deepEqual(prepared, [candidate.id]);
+
+    // A restart may retire only the failed revision, even after a newer revision
+    // and another Agent become active. Neither needs this expired repository grant.
+    const sibling = await fixture.agent("repository-retirement-sibling");
+    const newer = await fixture.revision(owner, 2);
+    const siblingRevision = await fixture.revision(sibling, 1);
+    const stopsBeforeRestart = stopped.length;
+    await fixture.start(compute, () => {}, undefined, undefined, fixture.createWorkerPool());
+    await fixture.work(newer, "succeeded");
+    await fixture.work(siblingRevision, "succeeded");
+    await waitFor("the restarted worker to resume exact retirement", async () =>
+      stopped.length > stopsBeforeRestart ? true : undefined,
+    );
+    unavailable = false;
+    await fixture.work(
+      { id: candidate.id, idempotencyKey: retirement.rows[0].idempotency_key },
+      "succeeded",
+    );
+    assert.ok(stopped.every((id) => id === candidate.id));
+    assert.equal(prepared.filter((id) => id === candidate.id).length, 1);
+    const active = await fixture.state.read(async (view) => [
+      await view.agents.findAgent(fixture.namespace.id, owner.id),
+      await view.agents.findAgent(fixture.namespace.id, sibling.id),
+    ]);
+    assert.deepEqual(
+      active.map((agent) => agent.activeRevisionId),
+      [newer.id, siblingRevision.id],
+    );
+    assert.deepEqual(
+      (await repositoryAttempts(fixture, candidate)).map(({ phase }) => phase),
+      ["disposed"],
+    );
     assert.equal(repository.calls.filter(({ operation }) => operation === "open").length, 1);
     assert.ok(
       repository.calls.some(
@@ -1158,6 +1227,7 @@ test(
     let firstSession;
     let cleanupWaiting = false;
     let preparations = 0;
+    const stopped = [];
     repository.driver.open = async (input, signal) => {
       const result = await open(input, signal);
       if (result.kind === "created" && firstSession === undefined) {
@@ -1187,6 +1257,10 @@ test(
     };
     await fixture.start({
       ...fixture.compute,
+      async stopRevision(revision) {
+        stopped.push(revision.id);
+        return fixture.compute.stopRevision(revision);
+      },
       async prepareRevision(revision, deploymentContext) {
         preparations += 1;
         if (preparations > 1) {
@@ -1225,7 +1299,7 @@ test(
       cleanupKey = cleanup.rows[0].idempotency_key;
 
       // A separately configured queue can exhaust the original queued source
-      // while its already-claimed cleanup owns the same deterministic key.
+      // while its already-claimed session cleanup retains its own purpose.
       const recovery = new fixture.PostgresWorkQueue(fixture.observerPool, {
         leaseDurationMs: 30_000,
         maxAttempts: 1,
@@ -1254,7 +1328,16 @@ test(
        WHERE revision_id = $1 AND idempotency_key LIKE $2`,
       [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:%`],
     );
-    assert.equal(cleanup.rowCount, 1);
+    assert.equal(cleanup.rowCount, 2);
+    const retirement = cleanup.rows.find(({ idempotency_key }) =>
+      idempotency_key.includes(":repository_cleanup:retire:"),
+    );
+    assert.ok(retirement);
+    await fixture.work(
+      { id: candidate.id, idempotencyKey: retirement.idempotency_key },
+      "succeeded",
+    );
+    assert.deepEqual(stopped, [candidate.id]);
     assert.equal(preparations, 2);
     assert.equal(repository.calls.filter(({ operation }) => operation === "open").length, 2);
   },
@@ -1805,7 +1888,11 @@ test(
           return { ...(await fixture.compute.prepareRevision(revision)), ready: false };
         },
         async stopRevision(revision) {
-          stopped.push(revision.id);
+          // The shared queue can also dispatch another fixture's durable cleanup.
+          if (revision.namespaceId === fixture.namespace.id) {
+            stopped.push(revision.id);
+          }
+          return fixture.compute.stopRevision(revision);
         },
       },
       () => {},
@@ -2795,6 +2882,79 @@ test(
       [candidate.id],
     );
     assert.deepEqual(evidence.rows, [{ reason: "CONVERGENCE_DEADLINE_EXCEEDED" }]);
+  },
+);
+
+test(
+  "repository convergence exhaustion durably retires a returned incomplete runtime",
+  requiresPostgres,
+  async (context) => {
+    const repository = repositoryBoundary();
+    const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+    const owner = await fixture.agent("repository-convergence-retirement");
+    const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
+    let stops = 0;
+    const close = repository.driver.close;
+    repository.driver.close = async (sessionId, signal) => {
+      if (stops === 0) {
+        throw new Error("repository close temporarily unavailable");
+      }
+      return close(sessionId, signal);
+    };
+    await delay(5);
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision, deploymentContext) {
+          return {
+            ...(await fixture.compute.prepareRevision(revision, deploymentContext)),
+            ready: false,
+          };
+        },
+        async stopRevision(revision) {
+          assert.equal(revision.id, candidate.id);
+          const source = await fixture.observerPool.query(
+            "SELECT state, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
+            [candidate.idempotencyKey],
+          );
+          assert.deepEqual(source.rows, [{ state: "failed_permanent", attempt_count: 1 }]);
+          stops += 1;
+          if (stops === 1) {
+            // A credential-service outage must not delay the independent Compute stop.
+            assert.equal((await repositoryAttempts(fixture, candidate))[0].phase, "closing");
+            throw new Error("Compute termination still pending");
+          }
+          return fixture.compute.stopRevision(revision);
+        },
+      },
+      () => {},
+      1,
+    );
+    await fixture.work(candidate, "failed_permanent");
+    await waitFor("the incomplete runtime's durable retirement to finish", async () => {
+      const cleanup = await fixture.observerPool.query(
+        `SELECT state FROM occ.controller_work
+         WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+        [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:retire:%`],
+      );
+      return cleanup.rowCount === 1 && cleanup.rows[0].state === "succeeded" ? true : undefined;
+    });
+    assert.equal(stops, 2);
+    assert.equal(repository.calls.filter(({ operation }) => operation === "open").length, 1);
+    assert.deepEqual(
+      (await repositoryAttempts(fixture, candidate)).map(({ phase }) => phase),
+      ["disposed"],
+    );
+    const active = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(active.activeRevisionId, undefined);
+    const evidence = await fixture.observerPool.query(
+      `SELECT details->>'reasonCode' AS code FROM occ.audit_events
+       WHERE resource_id = $1 AND action = 'reconcile' AND outcome = 'failure'`,
+      [candidate.id],
+    );
+    assert.ok(evidence.rows.some(({ code }) => code === "CONVERGENCE_DEADLINE_EXCEEDED"));
   },
 );
 

@@ -38,6 +38,7 @@ import {
   PostgresWorkQueue,
   WorkClaimLostError,
   isRepositoryCleanupWork,
+  isRepositoryRuntimeRetirementWork,
   type ClaimedWork,
   type PlatformUnitOfWork,
   type PostgresPool,
@@ -759,12 +760,40 @@ export class ControllerWorker {
         view.revisions.findRevision(claim.namespaceId, claim.agentId!, claim.revisionId!),
       );
       if (revision !== undefined) {
-        complete = await this.repositoryCredentials.cleanup(claim, revision);
+        const retireRuntime = isRepositoryRuntimeRetirementWork(claim);
+        complete = await this.repositoryCredentials.cleanup(claim, revision, { retireRuntime });
+        if (retireRuntime) {
+          if (
+            revision.compute.id !== this.compute.id ||
+            revision.compute.implementation !== this.compute.implementation
+          ) {
+            throw new Error("COMPUTE_DRIVER_MISMATCH");
+          }
+          const resources = await this.state.read(async (view) => ({
+            namespace: await view.namespaces.findNamespace(revision.namespaceId),
+            agent: await view.agents.findAgent(revision.namespaceId, revision.agentId),
+          }));
+          if (
+            resources.namespace !== undefined &&
+            resources.agent !== undefined &&
+            this.compute.bindAgent !== undefined
+          ) {
+            await this.withClaimHeartbeat(claim, async () => {
+              await this.compute.bindAgent!({
+                namespace: resources.namespace!,
+                agent: resources.agent!,
+              });
+            });
+          }
+          // Session service outages cannot delay exact workload/material retirement.
+          await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
+        }
       }
     } catch (error) {
       if (error instanceof WorkClaimLostError) {
         throw error;
       }
+      complete = false;
     }
     await this.state.transactWithQueue(async (unit, queue) => {
       if ((await queue.heartbeat(claim)) === undefined) {
@@ -1792,51 +1821,6 @@ export class ControllerWorker {
             : { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
       }
     }
-    if (
-      resolved.outcome === "permanent" ||
-      (resolved.outcome === "retry" && claim.attemptCount >= this.maxAttempts) ||
-      resolved.supersededBy !== undefined
-    ) {
-      const revision = await this.state.read((view) =>
-        view.revisions.findRevision(claim.namespaceId, claim.agentId!, claim.revisionId!),
-      );
-      if (revision?.repositoryCredentials !== undefined) {
-        await this.closeRevisionCredentials(claim, revision);
-        if (
-          revision.compute.id === this.compute.id &&
-          revision.compute.implementation === this.compute.implementation
-        ) {
-          try {
-            const resources = await this.state.read(async (view) => ({
-              namespace: await view.namespaces.findNamespace(revision.namespaceId),
-              agent: await view.agents.findAgent(revision.namespaceId, revision.agentId),
-            }));
-            if (
-              resources.namespace !== undefined &&
-              resources.agent !== undefined &&
-              this.compute.bindAgent !== undefined
-            ) {
-              await this.withClaimHeartbeat(claim, async () => {
-                await this.compute.bindAgent!({
-                  namespace: resources.namespace!,
-                  agent: resources.agent!,
-                });
-              });
-            }
-            await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
-          } catch (error) {
-            if (error instanceof WorkClaimLostError) {
-              throw error;
-            }
-            this.emit({
-              event: "worker.error",
-              code: "REVISION_STOP_INCOMPLETE",
-              revisionId: revision.id,
-            });
-          }
-        }
-      }
-    }
     let activated: Readonly<AgentRevision> | undefined;
     let stoppedCandidate: Readonly<AgentRevision> | undefined;
     await this.state.transactWithQueue(async (unit, queue) => {
@@ -1844,6 +1828,22 @@ export class ControllerWorker {
         throw new WorkClaimLostError();
       }
       if (resolved.supersededBy !== undefined && resolved.outcome === "success") {
+        const revision = await unit.revisions.findRevision(
+          claim.namespaceId,
+          claim.agentId!,
+          claim.revisionId!,
+        );
+        if (revision?.repositoryCredentials !== undefined) {
+          await queue.enqueueRepositoryCleanup(
+            claim,
+            {
+              namespaceId: revision.namespaceId,
+              agentId: revision.agentId,
+              revisionId: revision.id,
+            },
+            "terminal-runtime",
+          );
+        }
         await this.appendRevisionSuperseded(unit, claim, resolved.supersededBy);
       } else if (resolved.revision !== undefined && resolved.outcome === "success") {
         const current = await unit.agents.lockAgent(claim.namespaceId, claim.agentId!);

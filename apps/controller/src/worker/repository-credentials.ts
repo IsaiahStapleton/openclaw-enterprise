@@ -262,7 +262,22 @@ export class RepositoryCredentialLifecycle {
     return this.cleanup(claim, revision);
   }
 
-  async cleanup(claim: ClaimedWork, revision: Revision): Promise<boolean> {
+  async cleanup(
+    claim: ClaimedWork,
+    revision: Revision,
+    options: { readonly retireRuntime?: boolean } = {},
+  ): Promise<boolean> {
+    if (options.retireRuntime) {
+      await this.dependencies.state.transactWithQueue(async (unit, queue) => {
+        await this.heartbeat(queue, claim);
+        const attempts = await unit.repositorySessions.listRevisionAttempts(owner(revision));
+        for (const attempt of attempts) {
+          if (attempt.phase === "opening" || attempt.phase === "open") {
+            await this.advanceIn(unit, attempt, "closing");
+          }
+        }
+      }, this.dependencies.queueOptions);
+    }
     const attempts = await this.dependencies.state.read((view) =>
       view.repositorySessions.listRevisionAttempts(owner(revision)),
     );

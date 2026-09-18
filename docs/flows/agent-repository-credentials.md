@@ -203,13 +203,22 @@ same active revision remains authorized. Stop, policy drift, expiry and revoked
 authority cannot use that continuation to reopen sessions.
 
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.enqueueRepositoryCleanup`
-and terminal queue transitions transfer exact obligations to durable cleanup.
-`RepositoryCredentialLifecycle.closeRevision` marks attempts closing and records
-cleanup together. `ControllerWorker.processRepositoryCleanup` consumes only
-validated owner-bound work, without policy resolution, new admission or material
-delivery; it remains possible after the original actor loses ordinary permissions.
-`CLOSED` denies local use but stays pending until disposal or authoritative
-absence. Outage defers cleanup and does not prevent workload shutdown.
+and terminal queue transitions persist exact revision-owned obligations. Terminal
+revision work records the `terminal-runtime` purpose with its terminal transition,
+even when sessions are settled or no admission attempt exists.
+`RepositoryCredentialLifecycle.closeRevision` records session-only cleanup with
+the attempts it marks closing.
+
+`ControllerWorker.processRepositoryCleanup` consumes validated owner-bound work
+without policy resolution, new admission or material delivery, including after
+the original actor loses ordinary permissions. Terminal-runtime work fences live
+attempts, closes their sessions and calls the selected Compute Driver's
+`stopRevision` for that exact revision even while session cleanup remains pending.
+A Compute mismatch or stop failure keeps retirement retryable beyond the
+foreground attempt limit. Completion requires settled sessions and successful
+runtime retirement. Session-only repair or rotation cleanup never stops the
+healthy workload. `CLOSED` denies local use but remains pending until disposal
+or authoritative absence.
 
 Compute retirement waits for owned Pods to stop before removing their material.
 It preserves Secrets referenced by actual Pods and current Deployments, and
