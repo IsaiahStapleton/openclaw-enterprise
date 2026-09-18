@@ -122,6 +122,87 @@ function relayPodDiagnostic(value) {
   };
 }
 
+function filesystemCounters(value) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const integer = (field) => (Number.isSafeInteger(field) && field >= 0 ? field : undefined);
+  return {
+    availableBytes: integer(value.availableBytes),
+    capacityBytes: integer(value.capacityBytes),
+    inodesFree: integer(value.inodesFree),
+    inodes: integer(value.inodes),
+  };
+}
+
+function nodeFilesystemDiagnostic(value) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return value.lookup === "found"
+    ? {
+        lookup: "found",
+        nodeFs: filesystemCounters(value.nodeFs),
+        imageFs: filesystemCounters(value.imageFs),
+      }
+    : { lookup: value.lookup === "unavailable" ? "unavailable" : "other" };
+}
+
+function nodeTaintDiagnostics(value) {
+  if (!Array.isArray(value) || value.length > 64) {
+    return [{ category: "other", effect: "other" }];
+  }
+  const categories = [
+    "disk-pressure",
+    "memory-pressure",
+    "pid-pressure",
+    "not-ready",
+    "unreachable",
+    "cordoned",
+    "network-unavailable",
+    "control-plane",
+    "cloud-provider-uninitialized",
+    "out-of-service",
+    "critical-addons",
+    "other",
+  ];
+  const effects = ["NoSchedule", "NoExecute", "PreferNoSchedule", "other"];
+  const taints = new Map();
+  for (const entry of value) {
+    const category = categories.includes(entry?.category) ? entry.category : "other";
+    const effect = effects.includes(entry?.effect) ? entry.effect : "other";
+    taints.set(`${category}/${effect}`, { category, effect });
+  }
+  return [...taints.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, entry]) => entry);
+}
+
+function relayNodeDiagnostic(value) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (value.lookup !== "found") {
+    return { lookup: value.lookup === "unavailable" ? "unavailable" : "other" };
+  }
+  const condition = (field) => (["True", "False", "Unknown"].includes(field) ? field : "other");
+  const count = (field) =>
+    Number.isSafeInteger(field) && field >= 0 && field <= 2 ** 31 - 1 ? field : undefined;
+  return {
+    lookup: "found",
+    conditions: {
+      ready: condition(value.conditions?.ready),
+      diskPressure: condition(value.conditions?.diskPressure),
+      memoryPressure: condition(value.conditions?.memoryPressure),
+      pidPressure: condition(value.conditions?.pidPressure),
+      networkUnavailable: condition(value.conditions?.networkUnavailable),
+    },
+    unschedulable: typeof value.unschedulable === "boolean" ? value.unschedulable : undefined,
+    taints: nodeTaintDiagnostics(value.taints),
+    taintCount: count(value.taintCount),
+    unrecognizedTaintCount: count(value.unrecognizedTaintCount),
+    filesystems: nodeFilesystemDiagnostic(value.filesystems),
+  };
+}
+
 function failureDiagnostic(error) {
   const diagnostic = error?.openclawCiDiagnostic;
   if (!isRecord(diagnostic)) {
@@ -135,6 +216,8 @@ function failureDiagnostic(error) {
           stage,
           relayPod:
             stage === "relay-readiness" ? relayPodDiagnostic(diagnostic.relayPod) : undefined,
+          relayNode:
+            stage === "relay-readiness" ? relayNodeDiagnostic(diagnostic.relayNode) : undefined,
         }
       : undefined;
   }

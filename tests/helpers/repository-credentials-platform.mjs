@@ -165,6 +165,120 @@ function relayPodDiagnostic(pod) {
   };
 }
 
+function filesystemCounters(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const integer = (field) => (Number.isSafeInteger(field) && field >= 0 ? field : undefined);
+  return {
+    availableBytes: integer(value.availableBytes),
+    capacityBytes: integer(value.capacityBytes),
+    inodesFree: integer(value.inodesFree),
+    inodes: integer(value.inodes),
+  };
+}
+
+function relayNodeDiagnostic(node) {
+  const conditions = Array.isArray(node.status?.conditions) ? node.status.conditions : [];
+  const condition = (type) => {
+    const status = conditions.find((entry) => entry?.type === type)?.status;
+    return ["True", "False", "Unknown"].includes(status) ? status : "other";
+  };
+  const categories = new Map([
+    ["node.kubernetes.io/disk-pressure", "disk-pressure"],
+    ["node.kubernetes.io/memory-pressure", "memory-pressure"],
+    ["node.kubernetes.io/pid-pressure", "pid-pressure"],
+    ["node.kubernetes.io/not-ready", "not-ready"],
+    ["node.kubernetes.io/unreachable", "unreachable"],
+    ["node.kubernetes.io/unschedulable", "cordoned"],
+    ["node.kubernetes.io/network-unavailable", "network-unavailable"],
+    ["node-role.kubernetes.io/control-plane", "control-plane"],
+    ["node-role.kubernetes.io/master", "control-plane"],
+    ["node.cloudprovider.kubernetes.io/uninitialized", "cloud-provider-uninitialized"],
+    ["node.kubernetes.io/out-of-service", "out-of-service"],
+    ["CriticalAddonsOnly", "critical-addons"],
+  ]);
+  const rawTaints = Array.isArray(node.spec?.taints) ? node.spec.taints : [];
+  const taints = new Map();
+  let unrecognizedTaintCount = 0;
+  for (const taint of rawTaints) {
+    const category = categories.get(taint?.key) ?? "other";
+    const effect = ["NoSchedule", "NoExecute", "PreferNoSchedule"].includes(taint?.effect)
+      ? taint.effect
+      : "other";
+    if (category === "other") {
+      unrecognizedTaintCount += 1;
+    }
+    taints.set(`${category}/${effect}`, { category, effect });
+  }
+  return {
+    lookup: "found",
+    conditions: {
+      ready: condition("Ready"),
+      diskPressure: condition("DiskPressure"),
+      memoryPressure: condition("MemoryPressure"),
+      pidPressure: condition("PIDPressure"),
+      networkUnavailable: condition("NetworkUnavailable"),
+    },
+    unschedulable: node.spec?.unschedulable === true,
+    taints: [...taints.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value),
+    taintCount: rawTaints.length,
+    unrecognizedTaintCount,
+  };
+}
+
+async function captureRelayNodeDiagnostic(execute, selection) {
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), 9_000);
+  const read = async (path) => {
+    const { stdout } = await execute(
+      "kubectl",
+      kubectlArguments(selection, ["get", `--raw=${path}`, "--request-timeout=3s"]),
+      { timeout: 4_000, signal: deadline.signal },
+    );
+    return JSON.parse(stdout);
+  };
+  try {
+    // One response only: never select a node from a larger or paginated cluster.
+    const list = await read("/api/v1/nodes?limit=2");
+    if (
+      !Array.isArray(list?.items) ||
+      list.items.length !== 1 ||
+      (list.metadata?.continue !== undefined && list.metadata.continue !== "")
+    ) {
+      return { lookup: "unavailable" };
+    }
+    const node = list.items[0];
+    const name = node?.metadata?.name;
+    if (typeof name !== "string" || name.length === 0 || name.length > 253) {
+      return { lookup: "unavailable" };
+    }
+    const diagnostic = relayNodeDiagnostic(node);
+    if (
+      diagnostic.conditions.diskPressure === "True" ||
+      diagnostic.taints.some(({ category }) => category === "disk-pressure")
+    ) {
+      diagnostic.filesystems = { lookup: "unavailable" };
+      try {
+        // The node name and the summary's workload details stay inside this read.
+        const summary = await read(`/api/v1/nodes/${encodeURIComponent(name)}/proxy/stats/summary`);
+        diagnostic.filesystems = {
+          lookup: "found",
+          nodeFs: filesystemCounters(summary?.node?.fs),
+          imageFs: filesystemCounters(summary?.node?.runtime?.imageFs),
+        };
+      } catch {
+        // Retain the node snapshot even when optional filesystem counters fail.
+      }
+    }
+    return diagnostic;
+  } catch {
+    return { lookup: "unavailable" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function createRepositoryPlatformFixture(context) {
   const diagnostic = { kind: "repository-platform-setup", stage: "selection" };
   try {
@@ -568,6 +682,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     } catch {
       // Best-effort diagnostics must preserve the original readiness failure.
     }
+    diagnostic.relayNode = await captureRelayNodeDiagnostic(execute, selection);
     throw error;
   }
   diagnostic.stage = "controller-restart";

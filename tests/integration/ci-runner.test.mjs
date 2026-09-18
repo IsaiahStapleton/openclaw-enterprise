@@ -581,6 +581,177 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     },
   ];
 
+  const relayNodeCases = [
+    {
+      name: "retains closed node pressure evidence without node or workload identities",
+      relayNode: {
+        lookup: "found",
+        conditions: {
+          ready: "True",
+          diskPressure: "True",
+          memoryPressure: "False",
+          pidPressure: "False",
+          networkUnavailable: "Unknown",
+          message: secret,
+        },
+        unschedulable: false,
+        taints: [
+          { category: "disk-pressure", effect: "NoSchedule", key: secret, value: secret },
+          { category: "disk-pressure", effect: "NoSchedule" },
+          { category: secret, effect: secret, message: secret },
+        ],
+        taintCount: 3,
+        unrecognizedTaintCount: 1,
+        name: secret,
+        providerID: secret,
+        filesystems: {
+          lookup: "found",
+          nodeFs: {
+            availableBytes: 0,
+            capacityBytes: 1024,
+            inodesFree: 2,
+            inodes: 4096,
+            mountpoint: secret,
+          },
+          imageFs: {
+            availableBytes: 512,
+            capacityBytes: 2048,
+            inodesFree: 0,
+            inodes: Number.MAX_SAFE_INTEGER,
+          },
+          pods: [{ name: secret, containers: [{ logs: secret }] }],
+        },
+      },
+      expected: {
+        lookup: "found",
+        conditions: {
+          ready: "True",
+          diskPressure: "True",
+          memoryPressure: "False",
+          pidPressure: "False",
+          networkUnavailable: "Unknown",
+        },
+        unschedulable: false,
+        taints: [
+          { category: "disk-pressure", effect: "NoSchedule" },
+          { category: "other", effect: "other" },
+        ],
+        taintCount: 3,
+        unrecognizedTaintCount: 1,
+        filesystems: {
+          lookup: "found",
+          nodeFs: { availableBytes: 0, capacityBytes: 1024, inodesFree: 2, inodes: 4096 },
+          imageFs: {
+            availableBytes: 512,
+            capacityBytes: 2048,
+            inodesFree: 0,
+            inodes: Number.MAX_SAFE_INTEGER,
+          },
+        },
+      },
+    },
+    {
+      name: "rejects malformed node fields and unsafe filesystem counters",
+      relayNode: {
+        lookup: "found",
+        conditions: { ready: secret, diskPressure: [secret] },
+        unschedulable: "true",
+        taints: Array(65).fill({ category: "disk-pressure", effect: "NoSchedule" }),
+        taintCount: -1,
+        unrecognizedTaintCount: 2 ** 31,
+        filesystems: {
+          lookup: "found",
+          nodeFs: {
+            availableBytes: -1,
+            capacityBytes: 1.5,
+            inodesFree: "3",
+            inodes: Number.MAX_SAFE_INTEGER + 1,
+          },
+          imageFs: [secret],
+          message: secret,
+        },
+      },
+      expected: {
+        lookup: "found",
+        conditions: {
+          ready: "other",
+          diskPressure: "other",
+          memoryPressure: "other",
+          pidPressure: "other",
+          networkUnavailable: "other",
+        },
+        taints: [{ category: "other", effect: "other" }],
+        filesystems: { lookup: "found", nodeFs: {} },
+      },
+    },
+    {
+      name: "retains node lookup when optional filesystem lookup fails",
+      relayNode: {
+        lookup: "found",
+        conditions: null,
+        taints: [],
+        taintCount: 0,
+        unrecognizedTaintCount: 0,
+        filesystems: { lookup: "unavailable", error: secret },
+      },
+      expected: {
+        lookup: "found",
+        conditions: {
+          ready: "other",
+          diskPressure: "other",
+          memoryPressure: "other",
+          pidPressure: "other",
+          networkUnavailable: "other",
+        },
+        taints: [],
+        taintCount: 0,
+        unrecognizedTaintCount: 0,
+        filesystems: { lookup: "unavailable" },
+      },
+    },
+    {
+      name: "replaces unknown node and filesystem categories",
+      relayNode: {
+        lookup: "found",
+        taints: secret,
+        filesystems: { lookup: secret, nodeFs: { availableBytes: 3 }, message: secret },
+      },
+      expected: {
+        lookup: "found",
+        conditions: {
+          ready: "other",
+          diskPressure: "other",
+          memoryPressure: "other",
+          pidPressure: "other",
+          networkUnavailable: "other",
+        },
+        taints: [{ category: "other", effect: "other" }],
+        filesystems: { lookup: "other" },
+      },
+    },
+    {
+      name: "retains unavailable node lookup without its error",
+      relayNode: { lookup: "unavailable", error: secret, name: secret },
+      expected: { lookup: "unavailable" },
+    },
+    {
+      name: "replaces unknown node lookup",
+      relayNode: { lookup: secret, conditions: secret },
+      expected: { lookup: "other" },
+    },
+    ...[null, secret, []].map((relayNode, index) => ({
+      name: `rejects malformed relay node diagnostic ${index}`,
+      relayNode,
+      expected: undefined,
+    })),
+    {
+      name: "discards node evidence outside relay readiness",
+      stage: "controller-startup",
+      relayNode: { lookup: "found", name: secret },
+      expected: undefined,
+    },
+  ];
+
   await writeFile(
     join(root, "tests/integration/redacted.test.mjs"),
     [
@@ -662,6 +833,10 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
         ...relayPodCases.map(({ name, stage = "relay-readiness", relayPod }) => ({
           name,
           diagnostic: { kind: "repository-platform-setup", stage, relayPod },
+        })),
+        ...relayNodeCases.map(({ name, stage = "relay-readiness", relayNode }) => ({
+          name,
+          diagnostic: { kind: "repository-platform-setup", stage, relayNode },
         })),
       ])}) {`,
       "  test(name, () => {",
@@ -750,6 +925,12 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     assert.equal(relayFailure.status, "failed");
     assert.equal(relayFailure.error.diagnostic.stage, stage);
     assert.deepEqual(relayFailure.error.diagnostic.relayPod, expected, name);
+  }
+  for (const { name, stage = "relay-readiness", expected } of relayNodeCases) {
+    const nodeFailure = summary.files[0].tests.find((entry) => entry.name === name);
+    assert.equal(nodeFailure.status, "failed");
+    assert.equal(nodeFailure.error.diagnostic.stage, stage);
+    assert.deepEqual(nodeFailure.error.diagnostic.relayNode, expected, name);
   }
   for (const name of [
     "rejects unsafe repository platform setup stage",
