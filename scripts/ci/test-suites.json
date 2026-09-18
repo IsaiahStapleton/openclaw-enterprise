@@ -49,6 +49,9 @@
           "path": "tests/conformance/platform-state-memory.test.mjs"
         },
         {
+          "path": "tests/conformance/repository-credentials-source-boundary.test.mjs"
+        },
+        {
           "path": "tests/conformance/secret-gateway-delivery.test.mjs"
         },
         {

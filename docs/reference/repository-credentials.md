@@ -13,13 +13,26 @@ loses cleanup inventory; upstream tokens can remain valid until GitHub expires
 them. This service does not provide durable recovery, multiple replicas, or OCC
 Work/IAM integration.
 
+The application package exports `startCredentialService(configurationPath)` for
+trusted process launchers. It loads the same protected configuration as the CLI
+and returns the session controls and listener lifecycle. The session object
+contains only `open`, `status`, `close`, and `shutdown`; upstream authorization,
+driver construction, and request-sender callbacks remain inside the service.
+Package-name imports of those internal modules are rejected. Process shutdown
+continues to use `SIGTERM` or `SIGINT` for bounded cleanup and material disposal.
+
 ## Configuration
 
 A protected JSON file supplies `gateway`, `sessionPolicy`, `backend`, and optional
 positive finite `limits`. The service validates configuration before listening.
 Private keys come from protected files, not environment variables or command
-arguments. The configuration file and private keys must be regular owned files
-with private permissions; symlinks and replacement during loading are rejected.
+arguments. The configuration file and private keys must be regular files owned
+by root or the service user, with private permissions. Every directory ancestor
+must have one of those owners and reject group/other writes. A root-owned sticky
+ancestor such as `/tmp` is allowed above the immediate parent; the immediate
+parent must always reject group/other writes. Symlinks and file replacement
+during loading are rejected. See the [configuration flow](../flows/repository-credential-configuration.md)
+for the validation and key-ownership sequence.
 
 ```json
 {
@@ -52,6 +65,12 @@ The identifiers above are examples. The initial production adapter fixes upstrea
 origins to `github.com` and `api.github.com`. An Agent cannot select an upstream,
 repository, profile, or deadline after admission. Configuration changes apply to
 new composition and admission.
+
+The privileged GitHub transport captures the installation, repository and exact
+permission profile when the driver is constructed. Its only operations are issuance
+for that captured scope and revocation of an owned token; callers cannot supply an
+HTTP URL, method, path, request body, or extra headers. Extending those operations
+changes a credential boundary and requires security review.
 
 | Profile               | Exact requested GitHub permissions                                           | Supported work                                                           |
 | --------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
@@ -170,16 +189,20 @@ the configured repository ID and are rewritten to its admitted `/repos/OWNER/REP
 route. Issue collection pagination accepts bounded `after` and `before` cursors;
 direct requests to repository-ID routes remain unsupported.
 Informational labels, milestones, nested repository
-metadata and human-authored content remain unchanged. Routing configuration is
-not network egress confinement.
+metadata and human-authored content remain unchanged. Each listener and sender
+captures its permitted upstream origins at construction. The sender rejects
+ambiguous or malformed adapter headers before dispatch, then supplies canonical
+authority, framing and connection headers within the configured header bounds.
+Routing configuration is not network egress confinement.
 
 Default service bounds are 16 sessions including pending cleanup, two credential
-slots per session, one provider action and 64 queued actions, 64 sockets, 32
-exchanges total and four per session. Headers are limited to 32 KiB/64 pairs;
+slots per session, one provider action and 64 queued actions, 64 sockets per
+listener, and 32 exchanges total and four per session. Headers are limited to 32 KiB/64 pairs;
 request targets to 8 KiB. Git fetch input is 1 MiB; push input and Git output are
 256 MiB. API input is 1 MiB and response data 8 MiB. Git gzip input has independent
 wire and decoded limits. Exchanges have a five-minute total bound and 60-second
-credential margin; provider actions have at most 30 seconds. Shutdown allows
+credential margin. The response-header deadline starts after the upload finishes;
+connection, input and stall deadlines remain independent. Provider actions have at most 30 seconds. Shutdown allows
 60 seconds for cleanup before reporting unresolved obligations and terminating.
 Overrides remain positive and finite.
 

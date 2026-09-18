@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-18"
-last_updated_session: "01a0b098-e407-7d42-bc53-9bce979ac912"
+last_updated_session: "authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115"
 ---
 
 # Repository credential service flow
@@ -17,7 +17,7 @@ container and live-provider qualification have separate evidence.
 
 ## Entry Points
 
-- `apps/repository-credentials/src/main.ts:main` loads trusted configuration and composes the service and listeners.
+- `apps/repository-credentials/src/main.ts:startCredentialService` loads trusted configuration and composes the service and listeners for the CLI or a trusted process launcher.
 - `apps/repository-credentials/src/client/operator.ts:callControl` carries operator admission/status/close requests over the private Unix socket.
 - `apps/repository-credentials/src/server.ts:startListeners` accepts HTTPS client traffic after protected startup succeeds.
 
@@ -52,7 +52,7 @@ graph TD
 ### 1. Load protected startup inputs
 
 `apps/repository-credentials/src/check-config.ts:checkConfiguration` and
-`apps/repository-credentials/src/main.ts:main` share the protected configuration
+`apps/repository-credentials/src/main.ts:startCredentialService` share the protected configuration
 loader. `apps/repository-credentials/src/configuration/service.ts:validateServiceConfig`
 validates gateway settings, session policy and service limits. The standalone
 check emits a safe summary without importing the session or listener owners. Normal startup constructs the system clock, bound driver
@@ -65,7 +65,10 @@ installation tokens. Session-consumer types live in
 `apps/repository-credentials/src/contracts.ts`; backend extension contracts live
 in `apps/repository-credentials/src/driver-contracts.ts`. Service and transport
 collaborators remain in `apps/repository-credentials/src/internal-contracts.ts`.
-The split preserves the original nominal handles and runtime owners.
+The split preserves the original nominal handles and runtime owners. The ordinary
+package entrypoint exposes protected-path startup and session data types. Its
+returned session controls are a separate frozen forwarding object; the listener
+keeps the original exchange owner and its credential-bearing callbacks private.
 
 ### 2. Admit and publish a client session
 
@@ -131,8 +134,9 @@ gateway API host. Absolute API destinations and unqualified commands refuse.
 
 ### 4. Reserve, acquire and dispatch
 
-`apps/repository-credentials/src/server.ts:startListeners` owns listeners and
-sockets. Its `apps/repository-credentials/src/transport/agent.ts:createAgentHandler`
+`apps/repository-credentials/src/server.ts:startListeners` bounds each listener's
+sockets independently, preserving private operator admission when the public
+listener is full. Its `apps/repository-credentials/src/transport/agent.ts:createAgentHandler`
 checks generic framing and delegates authentication to the bound factory. A valid
 Git route with no credentials receives the local Basic challenge. Authenticated
 requests reserve common exchange capacity before body forwarding. The GitHub
@@ -180,8 +184,14 @@ uses `apps/repository-credentials/src/backends/github/provider-transport/request
 to dispatch and join the actual request close event. An original
 dispatch gate rechecks admission synchronously after authentication preparation,
 registers cancellation and opens the exchange without an intervening await.
-The sender independently checks the fixed upstream origin. Credential bytes stay
-inside private adapter/sender callbacks.
+The handler and sender independently capture their allowed upstream origins.
+`apps/repository-credentials/src/transport/request-headers.ts:createUpstreamHeaders`
+validates adapter fields, rejects case-insensitive duplicates and reconstructs
+bounded transport headers before dispatch. Credential bytes stay
+inside private adapter/sender callbacks. The sender's final-response-header wait
+starts after the bounded input pipeline finishes, unless headers have already
+arrived. Connection, upload, stall and total deadlines remain active in their
+respective phases.
 
 ### 5. Deliver an outcome and release ownership
 
@@ -261,6 +271,14 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 03:38: Capture upstream origin authority and construct canonical bounded private request headers before dispatch. (authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115 - 7c26fe8660e0af5d223baa2da83689974df36ebe)
+
+- 2026-09-18 03:33: Start upstream final-response-header deadlines after completed upload and preserve early-response handling. (authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115 - 7f2fd5988dfce4a485db48d33f0480b3f9485b86)
+
+- 2026-09-18 03:29: Preserve private control admission under public socket saturation. (authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115 - 0d34c2159d6a8fbec213cacf6ba42ca66aa9170a)
+
+- 2026-09-18 03:28: Document accompanying protected-path package startup and runtime session-control facade. (authoring-run/3e7c0a60-2298-47e1-8656-9d63bbb7b5ed - 0d34c2159d6a8fbec213cacf6ba42ca66aa9170a)
 
 - 2026-09-18 01:59: Document accompanying admission reconciliation, failed-construction drainage and separate use/cleanup deadlines. (01a0b098-e407-7d42-bc53-9bce979ac912 - 87e5c418d7a6c45688ce3be87c204660b431c703)
 
