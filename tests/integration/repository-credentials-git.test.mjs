@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { startCredentialServiceFixture } from "../fixtures/repository-credentials/service.mjs";
+import {
+  gatewayRequest,
+  startCredentialServiceFixture,
+} from "../fixtures/repository-credentials/service.mjs";
+import { run } from "../fixtures/repository-credentials/process.mjs";
 import { exerciseGit } from "../fixtures/repository-credentials/workflows.mjs";
 import { runInFixtureContainer } from "../fixtures/repository-credentials/container.mjs";
 
@@ -20,8 +24,78 @@ test("real Git clones, fetches, switches and pushes using the cold gateway helpe
   });
 });
 
-// The host case runs this entire file in the container, including this fault case.
+// The host case runs every acceptance and fault case in the container.
 if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD === "1") {
+  test("git-read clones, fetches and checks out while denying pushes and API access", async (t) => {
+    const fixture = await startCredentialServiceFixture(t, { profile: "git-read" });
+    const gitPath = new URL(fixture.opened.client.gitRemote).pathname;
+    const gitAuthorization = `Basic ${Buffer.from(
+      `${fixture.opened.client.gitUsername}:${fixture.opened.bearer}`,
+    ).toString("base64")}`;
+    // Denied routes must not issue a credential or contact either upstream,
+    // including when a client bypasses receive-pack discovery and posts directly.
+    for (const [target, options] of [
+      [
+        `${gitPath}/info/refs?service=git-receive-pack`,
+        { headers: { authorization: gitAuthorization } },
+      ],
+      [
+        `${gitPath}/git-receive-pack`,
+        {
+          method: "POST",
+          headers: {
+            authorization: gitAuthorization,
+            "content-type": "application/x-git-receive-pack-request",
+          },
+        },
+      ],
+      ["/repos/fixture/repository", {}],
+      ["/repos/fixture/repository/issues", { method: "POST", body: { title: "Denied issue" } }],
+      ["/graphql", { method: "POST", body: { query: "query { viewer { login } }" } }],
+    ]) {
+      assert.equal((await gatewayRequest(fixture, target, options)).status, 400);
+      assert.equal(fixture.github.issuesOfTokens.length, 0);
+      assert.equal(fixture.github.trace.length, 0);
+      assert.equal(fixture.github.authenticationAttempts.length, 0);
+      assert.equal(fixture.git.trace.length, 0);
+    }
+    const remoteRefs = () =>
+      run("git", ["for-each-ref", "--format=%(refname) %(objectname)"], { cwd: fixture.git.bare });
+    const beforeRefs = (await remoteRefs()).stdout;
+    const { client, checkout, commit } = await exerciseGit(t, fixture, { push: false });
+    await client.git(["checkout", "main"], { cwd: checkout });
+    assert.equal(
+      (await client.git(["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim(),
+      await fixture.git.ref("refs/heads/main"),
+    );
+    await client.git(["checkout", "existing-branch"], { cwd: checkout });
+    assert.equal(
+      (await client.git(["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim(),
+      commit,
+    );
+    assert.ok(fixture.git.trace.some((entry) => entry.gitProtocol === "version=2"));
+    assert.ok(fixture.git.trace.some((entry) => entry.path.endsWith("/git-upload-pack")));
+    assert.equal(fixture.github.issuesOfTokens.length, 1);
+    assert.deepEqual(fixture.github.issuesOfTokens[0].permissions, {
+      metadata: "read",
+      contents: "read",
+    });
+    const beforeGit = fixture.git.trace.length;
+    const beforeApi = fixture.github.trace.length;
+    const beforeAuthentication = fixture.github.authenticationAttempts.length;
+    const pushed = await client.git(["push", "origin", "HEAD:refs/heads/agent-feature"], {
+      cwd: checkout,
+      allowFailure: true,
+    });
+    assert.notEqual(pushed.code, 0);
+    assert.match(pushed.stderr, /400/);
+    assert.equal(fixture.git.trace.length, beforeGit);
+    assert.equal(fixture.github.trace.length, beforeApi);
+    assert.equal(fixture.github.authenticationAttempts.length, beforeAuthentication);
+    assert.equal(fixture.github.issuesOfTokens.length, 1);
+    assert.equal((await remoteRefs()).stdout, beforeRefs);
+  });
+
   test("accepted push with a lost response is never replayed by the service", async (t) => {
     const fixture = await startCredentialServiceFixture(t);
     const { client, checkout } = await exerciseGit(t, fixture);

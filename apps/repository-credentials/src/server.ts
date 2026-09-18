@@ -4,13 +4,15 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { chmod, lstat, realpath, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { RunningListeners, TlsMaterial } from "./contracts.ts";
+import type { SessionControl } from "./contracts.ts";
+import type { RunningListeners, TlsMaterial } from "./internal-contracts.ts";
 import { handleControl } from "./control.ts";
 import { createAgentHandler } from "./transport/agent.ts";
 import type { AgentHandlerOptions } from "./transport/agent.ts";
 import { sendError } from "./transport/errors.ts";
 
 export interface StartListenersOptions extends AgentHandlerOptions {
+  readonly service: AgentHandlerOptions["service"] & SessionControl;
   readonly tls: TlsMaterial;
 }
 

@@ -1,4 +1,4 @@
-import type { Clock } from "./contracts.ts";
+import type { Clock } from "./driver-contracts.ts";
 
 /** The running task owns this slot through settlement, including after abort. */
 export function createProviderQueue(maximumQueued: number) {

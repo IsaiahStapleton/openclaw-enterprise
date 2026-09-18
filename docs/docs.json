@@ -162,6 +162,7 @@
                   "testing/README",
                   "testing/local",
                   "testing/developer-skills",
+                  "testing/fixtures-and-scenarios",
                   "testing/autoreview",
                   "testing/ci"
                 ]

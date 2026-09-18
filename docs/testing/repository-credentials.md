@@ -9,6 +9,7 @@ node --test tests/conformance/repository-credentials-backend-conformance.test.mj
   tests/conformance/repository-credentials-custody.test.mjs \
   tests/conformance/repository-credentials-github.test.mjs \
   tests/conformance/repository-credentials-lifecycle.test.mjs \
+  tests/conformance/repository-credentials-ownership-boundaries.test.mjs \
   tests/conformance/repository-credentials-sessions.test.mjs \
   tests/integration/repository-credentials-client-config.test.mjs \
   tests/integration/repository-credentials-config.test.mjs \
@@ -17,7 +18,8 @@ node --test tests/conformance/repository-credentials-backend-conformance.test.mj
   tests/integration/repository-credentials-git.test.mjs \
   tests/integration/repository-credentials-http.test.mjs \
   tests/integration/repository-credentials-package.test.mjs \
-  tests/integration/repository-credentials-shutdown.test.mjs
+  tests/integration/repository-credentials-shutdown.test.mjs \
+  tests/integration/repository-credentials-transport-bounds.test.mjs
 ```
 
 Common-owner tests cover custody, immutable admission, controlled-time replacement, closure, and uncertainty. GitHub and the alternate fixture use the same service owners.

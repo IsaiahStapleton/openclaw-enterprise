@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Clock, CredentialService, ServiceConfig } from "./contracts.ts";
+import type { Clock } from "./driver-contracts.ts";
+import type { SessionControl, ServiceConfig } from "./contracts.ts";
 import { inspectRequestHead } from "./transport/request.ts";
 
 function reply(response: ServerResponse, status: number, value: unknown): void {
@@ -17,7 +18,7 @@ function reply(response: ServerResponse, status: number, value: unknown): void {
 export async function handleControl(
   request: IncomingMessage,
   response: ServerResponse,
-  service: CredentialService,
+  service: SessionControl,
   config: ServiceConfig,
   clock: Clock,
 ): Promise<void> {

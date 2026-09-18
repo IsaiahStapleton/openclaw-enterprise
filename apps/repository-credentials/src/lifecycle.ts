@@ -6,7 +6,7 @@ import type {
   Clock,
   CredentialRef,
   RepoDriver,
-} from "./contracts.ts";
+} from "./driver-contracts.ts";
 import type { CapturedCredential, CustodyOwner } from "./custody.ts";
 import { createProviderQueue, waitWithin } from "./provider-queue.ts";
 

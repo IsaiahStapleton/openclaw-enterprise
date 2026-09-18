@@ -1,18 +1,18 @@
-import assert from "node:assert/strict";
 import { join } from "node:path";
 import { appModule } from "./runtime.mjs";
 import { chmod } from "node:fs/promises";
 import { request } from "node:https";
 import { createControlledClock } from "./clock.mjs";
 import { createTlsMaterial, temporaryDirectory } from "./process.mjs";
-import {
-  startGitHubFixture,
-  fixtureAppId,
-  fixtureInstallationId,
-  fixtureRepository,
-  fixtureRepositoryId,
-} from "./github.mjs";
+import { startGitHubFixture } from "./github.mjs";
 import { startGitSmartHttpFixture } from "./git.mjs";
+import { createResourceScope } from "./resources.mjs";
+import { serviceConfigurationData } from "./builders.mjs";
+import {
+  createGitHubServiceFactory,
+  startServiceListeners,
+  writeSessionClientConfiguration,
+} from "./service-resources.mjs";
 
 export { appModule, appRoot, appExtension, repositoryRoot } from "./runtime.mjs";
 
@@ -20,127 +20,65 @@ export async function createServiceConfiguration(t, limits = {}) {
   const { validateServiceConfig } = await appModule("config");
   const directory = await temporaryDirectory(t, "rcs-");
   await chmod(directory, 0o700);
-  return validateServiceConfig({
-    gateway: {
-      publicOrigin: "https://credentials.example.test",
-      listen: "0.0.0.0:443",
-      controlSocket: join(directory, "control.sock"),
-    },
-    sessionPolicy: {
-      maximumDurationSeconds: 172800,
-      defaultProfile: "git-write",
-      allowedProfiles: ["git-write", "read-write"],
-    },
-    limits,
-  });
+  return validateServiceConfig(
+    serviceConfigurationData({
+      gateway: {
+        publicOrigin: "https://credentials.example.test",
+        listen: "0.0.0.0:443",
+        controlSocket: join(directory, "control.sock"),
+      },
+      sessionPolicy: { maximumDurationSeconds: 172800 },
+      limits,
+    }),
+  );
 }
 
 export async function startCredentialServiceFixture(t, options = {}) {
-  const cleanups = [];
-  const resources = { after: (cleanup) => cleanups.push(cleanup) };
-  t.after(async () => {
-    const failures = [];
-    for (const cleanup of cleanups.reverse()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (failures.length) throw new AggregateError(failures, "credential fixture cleanup failed");
-  });
-  const clock = options.clock ?? createControlledClock();
-  const tls = await createTlsMaterial(resources);
-  const config = await createServiceConfiguration(resources, options.limits);
-  const github = await startGitHubFixture(resources, {
-    clock,
-    tls,
-    tokenLifetimeMs: options.tokenLifetimeMs,
-  });
-  const git = await startGitSmartHttpFixture(resources, { authorize: github.authorize, tls });
-  const [
-    { createGitHubDriverFactory },
-    { createGitHubKeyOwner },
-    { createCredentialService },
-    { startListeners },
-    { writeClientConfiguration },
-  ] = await Promise.all([
-    appModule("backends/github/index"),
-    appModule("backends/github/material"),
-    appModule("service"),
-    appModule("server"),
-    appModule("client/config"),
-  ]);
-  const key = createGitHubKeyOwner({ privateKey: github.privateKey, appId: fixtureAppId, clock });
-  let service;
-  let listeners;
-  // Reverse cleanup keeps upstreams alive until session revocation finishes,
-  // including failures partway through composition.
-  resources.after(async () => {
-    listeners?.stopAdmission();
-    try {
-      if (service) {
-        let timer;
-        try {
-          const watchdog = new Promise((_, reject) => {
-            timer = setTimeout(() => {
-              Promise.resolve(clock.advance?.(1000)).then(
-                () => reject(new Error("credential fixture shutdown exceeded its grace")),
-                reject,
-              );
-            }, 1500);
-          });
-          const summary = await Promise.race([service.shutdown(1000), watchdog]);
-          assert.equal(summary.graceExpired, false, "fixture shutdown grace expired");
-          assert.equal(summary.disposedSessions, summary.closedSessions);
-          assert.equal(summary.pendingActions, 0);
-          assert.equal(summary.pendingCredentials, 0);
-          assert.equal(summary.pendingAuxiliary, 0);
-        } finally {
-          clearTimeout(timer);
-        }
-      }
-    } finally {
-      try {
-        await listeners?.close();
-      } finally {
-        key.close();
-      }
-    }
-  });
-  const factory = createGitHubDriverFactory({
-    configuration: {
-      kind: "github-app",
-      providerInstanceId: "github-fixture",
-      configVersion: "1",
-      appId: fixtureAppId,
-      installationId: fixtureInstallationId,
-      repositoryId: fixtureRepositoryId,
-      repository: fixtureRepository,
-      privateKeyFile: "/unused-fixture-key.pem",
-    },
-    key,
-    gatewayOrigin: config.gateway.publicOrigin,
-    limits: config.limits,
-    clock,
-    trustedEndpoints: { apiOrigin: github.origin, gitOrigin: git.origin, ca: tls.ca },
-  });
-  service = createCredentialService({ config, factory, clock });
-  listeners = await startListeners({
-    config,
-    tls,
-    service,
-    factory,
-    trustedUpstreamOrigins: new Set([github.origin, git.origin]),
-    clock,
-    upstreamCa: tls.ca,
-  });
-  const opened = service.open({ durationSeconds: 86400, profile: options.profile ?? "read-write" });
-  const parent = await temporaryDirectory(resources, "rcs-client-");
-  await chmod(parent, 0o700);
-  const clientDirectory = join(parent, "session");
-  await writeClientConfiguration(opened, clientDirectory, tls.ca);
-  return { clock, tls, config, factory, service, listeners, opened, clientDirectory, github, git };
+  const resources = createResourceScope();
+  try {
+    const clock = options.clock ?? createControlledClock();
+    const tls = await createTlsMaterial(resources);
+    const config = await createServiceConfiguration(resources, options.limits);
+    const github = await startGitHubFixture(resources, {
+      clock,
+      tls,
+      tokenLifetimeMs: options.tokenLifetimeMs,
+    });
+    const git = await startGitSmartHttpFixture(resources, { authorize: github.authorize, tls });
+    const factory = await createGitHubServiceFactory(resources, {
+      config,
+      clock,
+      privateKey: github.privateKey,
+      trustedEndpoints: { apiOrigin: github.origin, gitOrigin: git.origin, ca: tls.ca },
+    });
+    const { service, listeners } = await startServiceListeners(resources, {
+      config,
+      factory,
+      clock,
+      tls,
+      upstreamOrigins: [github.origin, git.origin],
+    });
+    const opened = service.open({ durationSeconds: 86400, profile: options.profile ?? "git-full" });
+    const clientDirectory = await writeSessionClientConfiguration(resources, {
+      opened,
+      ca: tls.ca,
+    });
+    t.after(() => resources.close());
+    return {
+      clock,
+      tls,
+      config,
+      factory,
+      service,
+      listeners,
+      opened,
+      clientDirectory,
+      github,
+      git,
+    };
+  } catch (error) {
+    await resources.close(error);
+  }
 }
 
 export function gatewayRequest(fixture, target, { method = "GET", body, headers = {} } = {}) {

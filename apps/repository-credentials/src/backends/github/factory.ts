@@ -1,12 +1,13 @@
-import type { RepoDriver, ResolvedGrant } from "../../contracts.ts";
+import type { RepoDriver, ResolvedGrant } from "../../driver-contracts.ts";
 import { createGitHubDriver, sameAuthority } from "./driver.ts";
 import { validateGitHubConfiguration } from "./config.ts";
 import { createProviderTransport } from "./provider-transport.ts";
 import { createRoutePolicy } from "./routes.ts";
 import type { GitHubDriverFactory, GitHubFactoryOptions, GitHubProfile } from "./types.ts";
 const profiles = Object.freeze({
+  "git-read": Object.freeze({ metadata: "read", contents: "read" }),
   "git-write": Object.freeze({ metadata: "read", contents: "write" }),
-  "read-write": Object.freeze({
+  "git-full": Object.freeze({
     metadata: "read",
     contents: "write",
     pull_requests: "write",
@@ -25,7 +26,8 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
     gitOrigin = endpoint(options.trustedEndpoints?.gitOrigin ?? "https://github.com");
   const gatewayOrigin = endpoint(options.gatewayOrigin);
   const grant = (profile: string): ResolvedGrant => {
-    if (profile !== "git-write" && profile !== "read-write") throw new Error("unsupported-profile");
+    if (profile !== "git-read" && profile !== "git-write" && profile !== "git-full")
+      throw new Error("unsupported-profile");
     return Object.freeze({
       binding: Object.freeze({
         providerInstanceId: config.providerInstanceId,
@@ -88,7 +90,7 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
     },
     create({ authority: input, custody, clock }): RepoDriver {
       const authority = Object.freeze({ ...input });
-      const profile = (["git-write", "read-write"] as const).find((value) =>
+      const profile = (["git-read", "git-write", "git-full"] as const).find((value) =>
         sameAuthority({ ...grant(value).binding, sessionId: authority.sessionId }, authority),
       );
       if (!profile || !authority.sessionId) throw new Error("invalid-binding");

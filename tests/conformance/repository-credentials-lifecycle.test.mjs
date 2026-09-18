@@ -332,8 +332,9 @@ async function eventually(check) {
 }
 
 for (const [profile, permissions] of [
+  ["git-read", { metadata: "read", contents: "read" }],
   ["git-write", { metadata: "read", contents: "write" }],
-  ["read-write", { metadata: "read", contents: "write", pull_requests: "write", issues: "write" }],
+  ["git-full", { metadata: "read", contents: "write", pull_requests: "write", issues: "write" }],
 ]) {
   test(`GitHub ${profile} replaces after hour 13 and disposes through the real common owner`, async (t) => {
     const cleanups = [];
@@ -360,7 +361,7 @@ for (const [profile, permissions] of [
       sessionPolicy: {
         maximumDurationSeconds: 172800,
         defaultProfile: "git-write",
-        allowedProfiles: ["git-write", "read-write"],
+        allowedProfiles: ["git-read", "git-write", "git-full"],
       },
     });
     const github = await startGitHubFixture(resources, { clock });
@@ -391,8 +392,10 @@ for (const [profile, permissions] of [
         opened.bearer,
         {
           method: "POST",
-          rawTarget: `/${fixtureRepository}.git/git-receive-pack`,
-          headers: { "content-type": "application/x-git-receive-pack-request" },
+          rawTarget: `/${fixtureRepository}.git/git-${profile === "git-read" ? "upload" : "receive"}-pack`,
+          headers: {
+            "content-type": `application/x-git-${profile === "git-read" ? "upload" : "receive"}-pack-request`,
+          },
           receivedMonoMs: clock.monotonicNow(),
           contentEncoding: "identity",
           framing: { kind: "length", bytes: 4 },

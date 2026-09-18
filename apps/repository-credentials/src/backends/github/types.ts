@@ -1,6 +1,7 @@
 import type { KeyObject } from "node:crypto";
-import type { BoundDriverFactory, Clock, ServiceLimits } from "../../contracts.ts";
-export type GitHubProfile = "git-write" | "read-write";
+import type { BoundDriverFactory, Clock } from "../../driver-contracts.ts";
+import type { ServiceLimits } from "../../contracts.ts";
+export type GitHubProfile = "git-read" | "git-write" | "git-full";
 export interface GitHubConfiguration {
   readonly kind: "github-app";
   readonly providerInstanceId: string;
