@@ -8,17 +8,13 @@ last_updated_session: "codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a"
 
 ## Overview
 
-A trusted operator or controller worker admits a bounded session over a private
-Unix socket. The
-client uses its gateway bearer to send Git or selected GitHub API requests over
-HTTPS. One process owns credential acquisition, use and cleanup. This flow ends
-at upstream response delivery or categorized failure, and then local session
-closure with separately tracked cleanup. It describes source composition;
-container and live-provider qualification have separate evidence.
-The process remains separate from the controller API and worker. The
-[Agent repository flow](agent-repository-credentials.md) owns ordinary Agent
-admission, durable session records, Compute material delivery and cleanup. This
-page owns the shared in-process credential engine used by both callers.
+An operator or controller worker admits a bounded session over a private Unix
+socket. Clients send Git or selected GitHub API requests over HTTPS using its
+gateway bearer. A separate process owns acquisition, use and cleanup. This flow
+traces the credential engine through response delivery, local closure and
+separately tracked cleanup. Container and live-provider qualification require
+separate evidence. The [Agent flow](agent-repository-credentials.md) owns ordinary
+Agent admission, durable records, Compute delivery and retirement.
 
 ## Entry Points
 
@@ -82,12 +78,10 @@ package's type-only exports. Internal admission and bearer-result contracts live
 in `apps/controller/src/drivers/repository-credentials/service-contracts.ts`.
 The private backend protocol and nominal custody handles live in
 `apps/controller/src/drivers/repository-credentials/backend-contracts.ts`.
-Service, control and transport collaborators remain private to the credential
-engine. The runtime entrypoint returns a frozen forwarding object with only
-`open`, `status`, `close` and `shutdown`; listeners retain the original exchange
-owner. The deployed artifact contains runnable JavaScript, not a new client SDK.
-The platform Driver is the session-control and local policy owner traced in the
-[Agent flow](agent-repository-credentials.md).
+The frozen runtime facade exposes `open`, `status`, `close` and `shutdown`;
+listeners retain the private exchange owner. The artifact contains runnable
+JavaScript. The [Agent flow](agent-repository-credentials.md) traces the platform
+Driver's session-control and local policy ownership.
 
 Registry startup selects
 `apps/controller/src/providers/repository-credentials/github/registry-factory.ts:createGitHubRegistryDriverFactory`
@@ -192,11 +186,10 @@ and GraphQL routes defined in the [reference](../reference/repository-credential
 subject to method, query, framing and media-type checks. GraphQL uses the exact
 installation-token grant without per-field authorization by this route check.
 
-`apps/controller/src/drivers/repository-credentials/service.ts:createCredentialService` reserves the
-exchange and delegates execution to
-`apps/controller/src/drivers/repository-credentials/lifecycle/exchange.ts:executeExchange`, which
-coordinates acquisition and owner-bound use. The lifecycle may reuse sufficient
-remaining validity or acquire replacement material under common custody.
+`apps/controller/src/drivers/repository-credentials/service.ts:createCredentialService`
+reserves the exchange. Its
+`apps/controller/src/drivers/repository-credentials/lifecycle/exchange.ts:executeExchange`
+reuses sufficient credential validity or acquires replacement under common custody.
 Concurrent misses share one acquisition in
 `apps/controller/src/drivers/repository-credentials/lifecycle.ts:createLifecycle`. When its last
 waiter leaves, the lifecycle cancels the original attempt. While that attempt's
@@ -301,19 +294,15 @@ published or disposed session; disposal wakes the shutdown waiters.
 
 ## Debugging and Verification
 
-Run `pnpm credentials:build` and `pnpm credentials:check-config CONFIG_FILE` for
-the independent emitted startup path. Run the client configuration and package
-integration tests for private files, actual Git helper behavior and detached
-runtime loading. Inspect session status after close: a closed session can still
-have pending or uncertain cleanup.
+Build with `pnpm credentials:build`; validate startup with
+`pnpm credentials:check-config CONFIG_FILE`. The [test guide](../testing/repository-credentials.md)
+covers private files, Git helpers, detached loading, alternate adapters, long
+sessions and live providers. A structural flow check proves none of these.
 
-A helper failure reports a fixed category without credentials. Diagnose the
-configured HTTPS host/path and private file ownership first. API failures also
-require checking that the session uses `git-full`, then the pinned CLI, canonical
-host, gateway DNS/SAN and port 443.
-The [test guide](../testing/repository-credentials.md) owns controlled upstream,
-long-session, alternate-adapter, packaged and authorized live-provider checks.
-A structural flow check does not establish any of those runtime results.
+After closure, inspect status for pending or uncertain cleanup. Fixed helper
+errors omit credentials: first check HTTPS host/path and private-file ownership.
+For API failures, check `git-full`, pinned CLI, canonical host, gateway DNS/SAN
+and port 443.
 
 ## Related docs
 
@@ -327,6 +316,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 20:40: Tighten the combined flow while retaining ownership and failure semantics. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - 328943ef9e56e6450df4b07368e905c286abf10c)
 
 - 2026-09-18 20:32: Trace the extracted Provider operations and preserve registry-selected authority through controller composition. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c426001fc353544f9623ead2e644c7857caa6d82)
 
