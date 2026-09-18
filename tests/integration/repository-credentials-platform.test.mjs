@@ -88,15 +88,20 @@ test(
         assert.equal(file.mode, 0o600);
       }
     }
+    // This same service instance may prune a DISPOSED session while admitting
+    // its replacement. Recovery then records the exact old session as
+    // invalidated after authoritative absence; either terminal phase is valid.
     await kube.waitFor("lost-response admission cleanup", async () =>
       (await fixture.attempts(revision)).some(
-        ({ session_id, phase }) => session_id === withheld.sessionId && phase === "disposed",
+        ({ session_id, phase }) =>
+          session_id === withheld.sessionId && ["disposed", "invalidated"].includes(phase),
       ),
     );
     const recovered = await fixture.attempts(revision);
     assert.ok(
       recovered.some(
-        ({ session_id, phase }) => session_id === withheld.sessionId && phase === "disposed",
+        ({ session_id, phase }) =>
+          session_id === withheld.sessionId && ["disposed", "invalidated"].includes(phase),
       ),
     );
     assert.notEqual(credentials.service.status(withheld.sessionId)?.state, "OPEN");
@@ -106,8 +111,12 @@ test(
       const attempt = owned.find((row) => row.repository_ref === binding.repositoryRef);
       assert.equal(attempt.phase, "open");
       assert.equal(attempt.session_id, binding.sessionId);
-      assert.equal(Number(attempt.deadline_wall_ms), binding.deadlineWallMs);
-      assert.equal(credentials.service.status(binding.sessionId).state, "OPEN");
+      const status = credentials.service.status(binding.sessionId);
+      assert.equal(status.state, "OPEN");
+      assert.equal(status.deadlineWallMs, binding.deadlineWallMs);
+      // Whole-second session duration may shorten the immutable ceiling.
+      assert.ok(binding.deadlineWallMs > 0);
+      assert.ok(binding.deadlineWallMs <= Number(attempt.deadline_wall_ms));
     }
     context.diagnostic(
       "Actual HTTP admission and PostgreSQL-owned sessions reached private regular files in the Agent Pod.",
@@ -139,7 +148,7 @@ test(
     await fixture.tool(pod, "git", ["-C", firstCheckout, "switch", "-c", "native-feature"]);
     await fixture.podNode(
       pod,
-      `require('node:fs').writeFileSync(${JSON.stringify(`${firstCheckout}/platform-proof.txt`)}, 'repository platform proof\n');`,
+      `require('node:fs').writeFileSync(${JSON.stringify(`${firstCheckout}/platform-proof.txt`)}, ${JSON.stringify("repository platform proof\n")});`,
     );
     await fixture.tool(pod, "git", ["-C", firstCheckout, "add", "platform-proof.txt"]);
     await fixture.tool(pod, "git", [

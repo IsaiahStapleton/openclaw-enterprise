@@ -80,11 +80,12 @@ async function gatewayTls(directory, host, execute) {
     "-days",
     "2",
     "-subj",
-    `/CN=${host}`,
+    "/CN=repository-credentials",
     "-addext",
     `subjectAltName=DNS:${host},DNS:localhost,IP:127.0.0.1`,
   ]);
   await chmod(keyFile, 0o600);
+  await chmod(certFile, 0o644);
   const [key, cert] = await Promise.all([readFile(keyFile), readFile(certFile)]);
   return { key, cert, ca: cert, keyFile, certFile };
 }
@@ -338,10 +339,10 @@ export async function createRepositoryPlatformFixture(context) {
   async function request(method, path, payload, expected = 200) {
     const response = await fetch(`${endpoint}${path}`, {
       method,
-      headers: authenticatedHeaders(
-        session,
-        payload === undefined ? {} : { "content-type": "application/json" },
-      ),
+      headers: authenticatedHeaders(session, {
+        origin: authBaseURL,
+        ...(payload === undefined ? {} : { "content-type": "application/json" }),
+      }),
       ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
       signal: AbortSignal.timeout(30_000),
     });

@@ -79,6 +79,10 @@ Agent ownership, and creates missing whole Secrets without replacing existing
 values. Provider-managed credentials and Configuration Secret bindings retain
 their separate provisioning paths.
 
+The controller API service account needs `list` permission for Deployments in
+that exact tenant namespace so it can reject an existing runtime before
+creating initial Secrets.
+
 Before deploying an Agent, provision its Agent-specific transport Secret using
 the configured `runtime.transportSecretPrefix`. The Secret name appends the
 first 12 hexadecimal characters of `sha256(agentId)`. Token-mode gateways use

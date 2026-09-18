@@ -179,6 +179,21 @@ test(
     const service = workerPod.containers.find(({ name }) => name === "repository-credentials");
     const mounts = (container) => container.volumeMounts.map(({ name }) => name);
 
+    // Kubernetes rejects named container ports longer than 15 characters during admission.
+    for (const object of objects) {
+      const pod = object.spec?.template?.spec;
+      for (const container of [...(pod?.initContainers ?? []), ...(pod?.containers ?? [])]) {
+        for (const port of container.ports ?? []) {
+          if (port.name !== undefined) {
+            assert.ok(
+              port.name.length <= 15,
+              `${object.metadata.name}/${container.name} port name exceeds 15 characters`,
+            );
+          }
+        }
+      }
+    }
+
     // The only Kubernetes token in the shared Pod is explicitly mounted by the trusted worker.
     assert.equal(worker.spec.replicas, 1);
     assert.deepEqual(worker.spec.strategy, { type: "Recreate" });
@@ -511,11 +526,18 @@ test(
     assert.ok(!bindings.has(tenant.metadata.name));
     assert.ok(!bindings.has(tenantApiRole.metadata.name));
     assert.ok(tenant.rules.some(({ resources }) => resources.includes("configmaps")));
+    // Initial runtime credential provisioning must refuse Agents with an existing workload.
+    // Its API-side preflight lists Deployments without granting workload mutations.
     assert.deepEqual(tenantApiRole.rules, [
       {
         apiGroups: [""],
         resources: ["secrets"],
         verbs: ["get", "create", "update", "patch", "delete"],
+      },
+      {
+        apiGroups: ["apps"],
+        resources: ["deployments"],
+        verbs: ["list"],
       },
     ]);
     // Only the unbound tenant-worker role can reconcile and remove an Agent-owned claim.
@@ -630,6 +652,11 @@ test(
         apiGroups: [""],
         resources: ["secrets"],
         verbs: ["get", "create", "update", "patch", "delete"],
+      },
+      {
+        apiGroups: ["apps"],
+        resources: ["deployments"],
+        verbs: ["list"],
       },
     ]);
     assert.ok(

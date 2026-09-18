@@ -256,7 +256,7 @@ spec:
           resources:
             {{- toYaml $.Values.resources | nindent 12 }}
           ports:
-            - name: repository-https
+            - name: repository-tls
               containerPort: 8443
           volumeMounts:
             - name: repository-registry

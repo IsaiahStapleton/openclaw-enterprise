@@ -51,17 +51,26 @@ private: the internal immutable auth snapshot retains verified Provider/workspac
 ownership, while public responses expose only safe references. The runtime
 Secret retains the credential material required for authentication.
 
-The API's dedicated controller identity receives only the tenant-local Secret
-operations needed to create, verify, and delete account-owned Secrets. Its
-operator-provisioned RoleBindings grant no cluster-wide Secret access, `list`,
-or `watch`. Kubernetes RBAC cannot constrain dynamic Secret creation by
-`resourceNames`, so compromise of that API identity can affect Secrets across
-each granted tenant namespace. Worker and workload identities receive no
-direct Secret API permissions. However, a compromised worker with existing
-tenant Deployment write permissions can indirectly project and expose any
-Secret in that namespace. Distinct identities and exact ownership checks bound
-normal operation but do not eliminate the worker's namespace-level trust;
-independently enforced workload admission is required for stronger isolation.
+The API's dedicated controller identity receives tenant-local Secret `get`,
+`create`, `update`, `patch`, and `delete` permissions for credential provisioning
+and account-credential lifecycle operations. It also receives Deployment `list`
+to reject initial credential provisioning when an Agent runtime already exists.
+Its operator-provisioned RoleBindings grant no cluster-wide Secret access or
+Secret `list` or `watch` permissions.
+
+By default, the Helm worker role grants no direct Secret API permissions.
+Enabling [repository credentials](../repository-credentials.md) adds tenant-local
+Secret `get`, `list`, `create`, and `delete` for session material delivery and
+cleanup. These RBAC grants cover each bound namespace; the Compute Driver's
+ownership checks restrict normal operations to the exact session material.
+Agent workload identities receive no direct Secret API permissions.
+Kubernetes RBAC cannot constrain dynamic Secret creation by `resourceNames`, so
+compromise of the API or repository-enabled worker identity can affect Secrets
+across each granted tenant namespace. Even without direct Secret permissions,
+a compromised worker with tenant Deployment write permissions can indirectly
+project and expose any Secret in that namespace. Distinct identities and exact
+ownership checks do not eliminate this namespace-level trust; independently
+enforced workload admission is required for stronger isolation.
 
 The upstream ChatGPT admin key is read only by the API-side `ChatGPTClient`
 owned by its configured [Provider](../providers.md); it
