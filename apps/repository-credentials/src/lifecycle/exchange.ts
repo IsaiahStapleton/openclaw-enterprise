@@ -27,7 +27,9 @@ export async function executeExchange(
   send: ExchangeSender,
   owner: ExchangeOwner,
 ): Promise<ExchangeOutcome> {
-  if (exchange.executing) throw new Error("EXCHANGE_ALREADY_EXECUTED");
+  if (exchange.executing) {
+    throw new Error("EXCHANGE_ALREADY_EXECUTED");
+  }
   exchange.executing = true;
   let record: CapturedCredential | undefined;
   let senderEntered = false;
@@ -47,16 +49,18 @@ export async function executeExchange(
       const lease = record;
       const gate: DispatchGate = Object.freeze({
         dispatch<T>(stop: () => void, open: () => T): T {
-          if (exchange.dispatched || exchange.finished || exchange.controller.signal.aborted)
+          if (exchange.dispatched || exchange.finished || exchange.controller.signal.aborted) {
             throw new Error("DISPATCH_CLOSED");
+          }
           exchange.session.lifecycle.assertUse(lease, exchange.deadline);
           exchange.cancellations.add(stop);
           exchange.dispatched = true;
           return open();
         },
         track(io: Promise<void>) {
-          if (!acceptingIO || exchange.finished || exchange.io.size >= 16)
+          if (!acceptingIO || exchange.finished || exchange.io.size >= 16) {
             throw new Error("IO_CAPACITY");
+          }
           const joined = Promise.resolve(io).then(
             () => undefined,
             () => undefined,
@@ -68,8 +72,13 @@ export async function executeExchange(
         lease.ref,
         exchange.plan,
         (request) => {
-          if (senderEntered || exchange.controller.signal.aborted || request.plan !== exchange.plan)
+          if (
+            senderEntered ||
+            exchange.controller.signal.aborted ||
+            request.plan !== exchange.plan
+          ) {
             throw new Error("SENDER_CLOSED");
+          }
           senderEntered = true;
           senderWork = Promise.resolve().then(() =>
             send(
@@ -86,7 +95,9 @@ export async function executeExchange(
         },
       );
       const sent = await senderWork;
-      if (!senderEntered || outcome !== sent) return failure();
+      if (!senderEntered || outcome !== sent) {
+        return failure();
+      }
       return outcome.kind === "completed" && !exchange.dispatched ? failure() : outcome;
     } catch {
       return failure();
@@ -94,7 +105,9 @@ export async function executeExchange(
       await senderWork?.catch(() => {});
       acceptingIO = false;
       await Promise.allSettled([...exchange.io]);
-      if (record) exchange.session.lifecycle.release(record);
+      if (record) {
+        exchange.session.lifecycle.release(record);
+      }
       owner.finish();
     }
   })();

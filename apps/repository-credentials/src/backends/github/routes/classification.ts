@@ -38,18 +38,20 @@ function parseTarget(raw: string, limit: number): ParsedTarget | undefined {
     !/^\/[\x21-\x7e]*$/.test(raw) ||
     /[\\#]/.test(raw) ||
     raw.startsWith("//")
-  )
+  ) {
     return;
-  const split = raw.indexOf("?"),
-    path = split < 0 ? raw : raw.slice(0, split),
-    query = split < 0 ? "" : raw.slice(split + 1);
+  }
+  const split = raw.indexOf("?");
+  const path = split < 0 ? raw : raw.slice(0, split);
+  const query = split < 0 ? "" : raw.slice(split + 1);
   if (
     path.includes("%") ||
     path.split("/").some((piece) => piece === "." || piece === "..") ||
     query.includes("?") ||
     /%(?![0-9A-Fa-f]{2})/.test(query)
-  )
+  ) {
     return;
+  }
   return { raw, path, query };
 }
 
@@ -61,31 +63,37 @@ function classifyGitRoute(
 ): Route | undefined {
   const { raw, path, query } = target;
   const git = `/${repository}.git/`;
-  if (head.headers["git-protocol"] !== undefined && head.headers["git-protocol"] !== "version=2")
+  if (head.headers["git-protocol"] !== undefined && head.headers["git-protocol"] !== "version=2") {
     return;
+  }
   if (
     path === `${git}info/refs` &&
     head.method === "GET" &&
     (query === "service=git-upload-pack" ||
       (profile !== "git-read" && query === "service=git-receive-pack"))
-  )
+  ) {
     return {
       kind: "git-discovery",
       effect: query.includes("receive") ? "write" : "read",
       target: raw,
     };
-  if (query || head.method !== "POST") return;
+  }
+  if (query || head.method !== "POST") {
+    return;
+  }
   if (
     path === `${git}git-upload-pack` &&
     head.headers["content-type"] === "application/x-git-upload-pack-request"
-  )
+  ) {
     return { kind: "git-fetch", effect: "read", target: raw };
+  }
   if (
     profile !== "git-read" &&
     path === `${git}git-receive-pack` &&
     head.headers["content-type"] === "application/x-git-receive-pack-request"
-  )
+  ) {
     return { kind: "git-push", effect: "write", target: raw };
+  }
   return;
 }
 
@@ -96,11 +104,17 @@ interface ApiRoutePolicy {
 
 function matchApiRoute(path: string, repository: string): ApiRoutePolicy | undefined {
   const prefix = `/repos/${repository}`;
-  if (path === prefix || path === "/meta") return { methods: ["GET"], queryParameters: [] };
-  if (path === "/graphql") return { methods: ["POST"], queryParameters: [] };
-  if (!path.startsWith(`${prefix}/`)) return;
+  if (path === prefix || path === "/meta") {
+    return { methods: ["GET"], queryParameters: [] };
+  }
+  if (path === "/graphql") {
+    return { methods: ["POST"], queryParameters: [] };
+  }
+  if (!path.startsWith(`${prefix}/`)) {
+    return;
+  }
   const parts = path.slice(prefix.length + 1).split("/");
-  if (parts.length === 1 && (parts[0] === "pulls" || parts[0] === "issues"))
+  if (parts.length === 1 && (parts[0] === "pulls" || parts[0] === "issues")) {
     return {
       methods: ["GET", "POST"],
       queryParameters:
@@ -121,40 +135,49 @@ function matchApiRoute(path: string, repository: string): ApiRoutePolicy | undef
               "assignee",
             ],
     };
+  }
   if (
     parts.length === 2 &&
     (parts[0] === "pulls" || parts[0] === "issues") &&
     resourceNumber.test(parts[1]!)
-  )
+  ) {
     return { methods: ["GET", "PATCH"], queryParameters: [] };
+  }
   if (
     parts.length === 3 &&
     parts[0] === "issues" &&
     resourceNumber.test(parts[1]!) &&
     parts[2] === "comments"
-  )
+  ) {
     return { methods: ["GET", "POST"], queryParameters: ["page", "per_page", "since"] };
+  }
   if (
     parts.length === 3 &&
     parts[0] === "issues" &&
     parts[1] === "comments" &&
     resourceNumber.test(parts[2]!)
-  )
+  ) {
     return { methods: ["GET", "PATCH", "DELETE"], queryParameters: [] };
+  }
   return;
 }
 
 function allowsQuery(method: string, query: string, parameters: readonly string[]): boolean {
   if (query) {
-    if (method !== "GET") return false;
-    const params = new URLSearchParams(query),
-      seen = new Set<string>();
+    if (method !== "GET") {
+      return false;
+    }
+    const params = new URLSearchParams(query);
+    const seen = new Set<string>();
     for (const [name, value] of params) {
-      if (seen.has(name) || !parameters.includes(name) || !queryValues[name]?.test(value))
+      if (seen.has(name) || !parameters.includes(name) || !queryValues[name]?.test(value)) {
         return false;
+      }
       seen.add(name);
     }
-    if (!seen.size) return false;
+    if (!seen.size) {
+      return false;
+    }
   }
   return true;
 }
@@ -166,24 +189,32 @@ function classifyApiRoute(
 ): Route | undefined {
   const { raw, path, query } = target;
   const policy = matchApiRoute(path, repository);
-  if (!policy || !policy.methods.includes(head.method)) return;
-  if (!allowsQuery(head.method, query, policy.queryParameters)) return;
+  if (!policy || !policy.methods.includes(head.method)) {
+    return;
+  }
+  if (!allowsQuery(head.method, query, policy.queryParameters)) {
+    return;
+  }
   if (
     ["POST", "PATCH"].includes(head.method) &&
     !/^application\/(?:json|vnd\.github\+json)(?:;\s*charset=utf-8)?$/i.test(
       head.headers["content-type"] ?? "",
     )
-  )
+  ) {
     return;
+  }
   const accept = head.headers.accept;
   if (
     accept !== undefined &&
     !["*/*", "application/json", "application/vnd.github+json"].includes(accept) &&
     !(path === "/graphql" && accept === nativeGraphqlAccept)
-  )
+  ) {
     return;
+  }
   const feature = head.headers["graphql-features"];
-  if (feature !== undefined && (path !== "/graphql" || feature !== "merge_queue")) return;
+  if (feature !== undefined && (path !== "/graphql" || feature !== "merge_queue")) {
+    return;
+  }
   return { kind: "api", effect: head.method === "GET" ? "read" : "write", target: raw };
 }
 
@@ -192,9 +223,14 @@ export function classifyRoute(
   policy: Readonly<{ repository: string; profile: GitHubProfile; targetBytes: number }>,
 ): Route | undefined {
   const target = parseTarget(head.rawTarget, policy.targetBytes);
-  if (!target) return;
-  if (target.path.startsWith(`/${policy.repository}.git/`))
+  if (!target) {
+    return;
+  }
+  if (target.path.startsWith(`/${policy.repository}.git/`)) {
     return classifyGitRoute(head, target, policy.repository, policy.profile);
-  if (policy.profile !== "git-full" || head.contentEncoding !== "identity") return;
+  }
+  if (policy.profile !== "git-full" || head.contentEncoding !== "identity") {
+    return;
+  }
   return classifyApiRoute(head, target, policy.repository);
 }

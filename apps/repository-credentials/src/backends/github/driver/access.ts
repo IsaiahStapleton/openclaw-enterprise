@@ -25,12 +25,15 @@ export function createCredentialAccess(
   return {
     async retire(attempt, credential): Promise<RetireOutcome> {
       const record = state.credentials.get(credential);
-      if (!record) throw new Error("foreign-credential");
+      if (!record) {
+        throw new Error("foreign-credential");
+      }
       state.admit(attempt, "retire");
       let dispatched = false;
       try {
-        if (clock.monotonicNow() - record.observedMono >= tokenLifetimeMs)
+        if (clock.monotonicNow() - record.observedMono >= tokenLifetimeMs) {
           return state.outcome(attempt, { kind: "expired" });
+        }
         return await custody.withAccess(credential, "retire", async (bytes) => {
           const copy = Buffer.from(bytes);
           try {
@@ -38,8 +41,9 @@ export function createCredentialAccess(
               copy.length < 1 ||
               copy.length > 16384 ||
               copy.some((byte) => byte < 0x21 || byte > 0x7e)
-            )
+            ) {
               return state.outcome(attempt, { kind: "unsupported" });
+            }
             const response = await exchange(
               {
                 method: "DELETE",
@@ -80,8 +84,9 @@ export function createCredentialAccess(
         record.expiresAt === undefined ||
         clock.wallNow() >= record.expiresAt ||
         clock.monotonicNow() - record.observedMono >= record.expiresAt - record.observedWall
-      )
+      ) {
         throw new Error("invalid-credential");
+      }
       return custody.withAccess(credential, "authenticate", async (bytes) => {
         const copy = Buffer.from(bytes);
         const basic = plan.category.startsWith("git-")
