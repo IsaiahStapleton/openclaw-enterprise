@@ -82,6 +82,12 @@ runs:
     - name: Prepare lane
       shell: bash
       run: node scripts/ci/prepare.mjs --lane "${{ inputs.lane }}" --state "$RUNNER_TEMP/state/${{ inputs.lane }}.json" --github-env "$GITHUB_ENV"
+    - name: Reclaim hosted platform build cache
+      if: inputs.lane == 'repository-credentials-platform' && runner.environment == 'github-hosted'
+      shell: bash
+      env:
+        OPENCLAW_CI_HEADROOM_LANE: ${{ inputs.lane }}
+      run: node scripts/ci/repository-platform-headroom.mjs --state "$RUNNER_TEMP/state/${{ inputs.lane }}.json"
     - name: Run lane
       shell: bash
       env:
