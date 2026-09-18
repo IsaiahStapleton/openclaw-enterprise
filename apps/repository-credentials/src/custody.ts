@@ -10,7 +10,9 @@ import type {
 export interface CapturedCredential {
   readonly ref: CredentialRef;
   readonly reservation: CaptureReservation;
+  readonly capturedMonoMs: number;
   readonly deadlineMonoMs: number | undefined;
+  useDeadlineMonoMs: number | undefined;
   uses: number;
   callbacks: number;
   accepted: boolean;
@@ -82,6 +84,7 @@ export function createCustody(options: {
       }
       const observed = observation.observedWallMs;
       const expiry = observation.expiresAtWallMs;
+      const capturedMonoMs = options.clock.monotonicNow();
       let deadlineMonoMs: number | undefined;
       if (
         Number.isFinite(observed) &&
@@ -89,15 +92,16 @@ export function createCustody(options: {
         Number.isFinite(expiry) &&
         expiry >= observed
       ) {
-        deadlineMonoMs =
-          options.clock.monotonicNow() +
-          Math.max(0, expiry - Math.max(observed, options.clock.wallNow()));
+        // Local wall movement cannot certify remote expiry or shorten custody.
+        deadlineMonoMs = capturedMonoMs + (expiry - observed);
       }
       const ref = Object.freeze({}) as CredentialRef;
       const record: CapturedCredential = {
         ref,
         reservation,
+        capturedMonoMs,
         deadlineMonoMs,
+        useDeadlineMonoMs: undefined,
         uses: 0,
         callbacks: 0,
         accepted: false,
@@ -124,8 +128,8 @@ export function createCustody(options: {
         (!options.admitted() ||
           !record.accepted ||
           record.uses === 0 ||
-          record.deadlineMonoMs === undefined ||
-          options.clock.monotonicNow() >= record.deadlineMonoMs)
+          record.useDeadlineMonoMs === undefined ||
+          options.clock.monotonicNow() >= record.useDeadlineMonoMs)
       )
         throw new Error("CREDENTIAL_CLOSED");
       const scoped = Uint8Array.from(bytes);
@@ -236,7 +240,8 @@ export function createCustody(options: {
       options.changed();
     },
     async disposeAllRenewal() {
-      for (const ref of [...renewals.keys()]) await driver.disposeRenewal(ref);
+      // Seal all handles before waiting for any callback to release its copy.
+      await Promise.all([...renewals.keys()].map((ref) => driver.disposeRenewal(ref)));
     },
   });
 }

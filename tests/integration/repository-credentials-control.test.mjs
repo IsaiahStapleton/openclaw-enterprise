@@ -1,10 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
+import { createServer as createNetServer, connect } from "node:net";
+import { randomUUID } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
+import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
+import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
 import { createServer as createTlsServer, request as tlsRequest } from "node:https";
 import { chmod, lstat, symlink, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createAlternateDriverFactory } from "../fixtures/repository-credentials/alternate.mjs";
+import {
+  createAlternateDriverFactory,
+  startAlternateUpstream,
+} from "../fixtures/repository-credentials/alternate.mjs";
 import {
   startGitHubFixture,
   fixtureAppId,
@@ -36,6 +44,7 @@ function control(socketPath, method, path, value, extra = {}) {
         path,
         headers: {
           host: "localhost",
+          ...(path === "/v1/sessions" ? { "x-admission-id": `${Date.now()}-${randomUUID()}` } : {}),
           "content-type": "application/json",
           "content-length": body.length,
           ...extra,
@@ -58,6 +67,260 @@ function control(socketPath, method, path, value, extra = {}) {
     outgoing.end(body);
   });
 }
+
+// The relay consumes the real listener's response but disconnects its caller,
+// reproducing ambiguous loss after admission without replacing control behavior.
+async function dropControlResponse(t, target) {
+  const directory = await temporaryDirectory(t, "rcs-loss-");
+  const socketPath = join(directory, "relay.sock");
+  const sockets = new Set();
+  let admitted;
+  const receipt = new Promise((resolve) => {
+    admitted = resolve;
+  });
+  const relay = createNetServer((caller) => {
+    const upstream = connect(target);
+    for (const socket of [caller, upstream]) {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      socket.on("error", () => socket.destroy());
+    }
+    const chunks = [];
+    upstream.on("data", (chunk) => {
+      chunks.push(chunk);
+      caller.destroy();
+    });
+    upstream.once("end", () => {
+      const response = Buffer.concat(chunks).toString();
+      admitted(JSON.parse(response.slice(response.indexOf("\r\n\r\n") + 4)));
+    });
+    caller.pipe(upstream);
+  });
+  await new Promise((resolve, reject) => {
+    relay.once("error", reject);
+    relay.listen(socketPath, resolve);
+  });
+  await chmod(socketPath, 0o600);
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => relay.close(resolve));
+  });
+  return { socketPath, receipt };
+}
+
+async function admissionFixture(t, onCreate) {
+  const resources = createResourceScope();
+  t.after(() => resources.close());
+  const [{ createCredentialService }, { startListeners }, { callControl }] = await Promise.all([
+    appModule("service"),
+    appModule("server"),
+    appModule("client/operator"),
+  ]);
+  const clock = createControlledClock();
+  const tls = await createTlsMaterial(resources);
+  const base = await createServiceConfiguration(resources, { sessions: 1 });
+  const config = { ...base, gateway: { ...base.gateway, listen: "127.0.0.1:0" } };
+  const upstream = await startAlternateUpstream(resources, { clock, tls });
+  const driverFactory = createAlternateDriverFactory({
+    origin: upstream.origin,
+    gatewayOrigin: config.gateway.publicOrigin,
+    clock,
+    accepted: upstream.accepted,
+    lifetimeMs: 600_000,
+  });
+  const factory = onCreate
+    ? {
+        ...driverFactory,
+        create(input) {
+          const driver = driverFactory.create(input);
+          onCreate(input.authority.sessionId);
+          return driver;
+        },
+      }
+    : driverFactory;
+  const service = createCredentialService({ config, factory, clock });
+  const listeners = await startListeners({
+    config,
+    tls,
+    service,
+    factory,
+    clock,
+    trustedUpstreamOrigins: new Set([upstream.origin]),
+    upstreamCa: tls.ca,
+  });
+  resources.after(async () => {
+    listeners.stopAdmission();
+    await service.shutdown(1000);
+    await listeners.close();
+  });
+  return {
+    resources,
+    clock,
+    tls,
+    config,
+    upstream,
+    driverFactory,
+    service,
+    listeners,
+    callControl,
+  };
+}
+
+test(
+  "lost control admission response recovers one session and never replays provider writes",
+  { timeout: 15000 },
+  async (t) => {
+    const fixture = await admissionFixture(t);
+    const { clock, config, service, callControl, driverFactory, upstream } = fixture;
+    const relay = await dropControlResponse(fixture.resources, config.gateway.controlSocket);
+    const admissionId = `${clock.wallNow()}-${randomUUID()}`;
+    const input = {
+      method: "POST",
+      path: "/v1/sessions",
+      body: { durationSeconds: 3600, profile: "git-write" },
+    };
+    await assert.rejects(
+      callControl(relay.socketPath, input, admissionId),
+      /control-request-failed/,
+    );
+    const original = await relay.receipt;
+    assert.equal(service.status(original.session.sessionId).state, "OPEN");
+    const recover = () => callControl(config.gateway.controlSocket, input, admissionId);
+    const [recovered, again] = await Promise.all([recover(), recover()]);
+    assert.deepEqual(recovered, original.session);
+    assert.deepEqual(again, original.session);
+    assert.equal(recovered.bearer, undefined);
+    assert.equal(driverFactory.drivers.length, 1);
+    assert.deepEqual(
+      await callControl(
+        config.gateway.controlSocket,
+        {
+          ...input,
+          body: { ...input.body, durationSeconds: 7200 },
+        },
+        admissionId,
+      ),
+      { error: "invalid-request" },
+    );
+    const freshId = () => `${clock.wallNow()}-${randomUUID()}`;
+    assert.deepEqual(await callControl(config.gateway.controlSocket, input, freshId()), {
+      error: "overloaded",
+    });
+    await callControl(config.gateway.controlSocket, {
+      method: "POST",
+      path: `/v1/sessions/${recovered.sessionId}/close`,
+    });
+    await clock.advance(0);
+    await eventually(() => service.status(recovered.sessionId).state === "DISPOSED");
+    assert.equal((await recover()).state, "DISPOSED");
+    // Reconciliation does not reissue a bearer. The operator explicitly replaces
+    // the closed session, and the service recovers its capacity immediately.
+    const replacementId = freshId();
+    const replacement = await callControl(config.gateway.controlSocket, input, replacementId);
+    assert.notEqual(replacement.session.sessionId, recovered.sessionId);
+
+    // The replacement performs one actual upstream mutation through the HTTPS owner.
+    const status = await new Promise((resolve, reject) => {
+      const outgoing = tlsRequest(
+        {
+          hostname: "127.0.0.1",
+          port: fixture.listeners.address.port,
+          path: "/team/nested/project",
+          method: "POST",
+          ca: fixture.tls.ca,
+          agent: false,
+          headers: {
+            host: "credentials.example.test",
+            authorization: `Bearer ${replacement.bearer}`,
+            "content-type": "application/json",
+            "content-length": "2",
+          },
+        },
+        (incoming) => {
+          incoming.resume();
+          incoming.once("end", () => resolve(incoming.statusCode));
+        },
+      );
+      outgoing.once("error", reject);
+      outgoing.end("{}");
+    });
+    assert.equal(status, 200);
+    assert.equal(upstream.trace.length, 1);
+    assert.equal(upstream.trace[0].committed, true);
+    assert.deepEqual(await recover(), { error: "not-found" });
+    assert.equal(
+      (await callControl(config.gateway.controlSocket, input, replacementId)).sessionId,
+      replacement.session.sessionId,
+    );
+    assert.equal(upstream.trace.length, 1, "admission recovery must never replay a provider write");
+    await callControl(config.gateway.controlSocket, {
+      method: "POST",
+      path: `/v1/sessions/${replacement.session.sessionId}/close`,
+    });
+    await clock.advance(0);
+    await eventually(() => service.status(replacement.session.sessionId).state === "DISPOSED");
+    assert.equal(upstream.accepted.size, 0);
+    // The registry has one active allowance and one tombstone allowance per session.
+    assert.deepEqual(await callControl(config.gateway.controlSocket, input, freshId()), {
+      error: "overloaded",
+    });
+    await clock.advance(60_001);
+    assert.deepEqual(await recover(), { error: "invalid-request" });
+    const nextId = freshId();
+    const next = await callControl(config.gateway.controlSocket, input, nextId);
+    assert.equal(next.session.state, "OPEN");
+    await clock.advance(3_600_001);
+    assert.deepEqual(await callControl(config.gateway.controlSocket, input, nextId), {
+      error: "invalid-request",
+    });
+    const afterExpiry = await callControl(config.gateway.controlSocket, input, freshId());
+    assert.equal(afterExpiry.session.state, "OPEN");
+    assert.equal(driverFactory.drivers.length, 4);
+  },
+);
+
+test(
+  "known control nondelivery closes the actual admitted session",
+  { timeout: 10000 },
+  async (t) => {
+    const requests = channel("http.server.request.start");
+    let socket;
+    let sessionId;
+    const observe = (event) => {
+      if (event.request.url === "/v1/sessions") socket = event.socket;
+    };
+    requests.subscribe(observe);
+    t.after(() => requests.unsubscribe(observe));
+    const fixture = await admissionFixture(t, (id) => {
+      sessionId = id;
+      // Destroy the actual protected-listener socket during real driver construction,
+      // before the handler can hand any admission response bytes to the transport.
+      socket.destroy();
+    });
+    const input = {
+      method: "POST",
+      path: "/v1/sessions",
+      body: { durationSeconds: 3600, profile: "git-write" },
+    };
+    const admissionId = `${fixture.clock.wallNow()}-${randomUUID()}`;
+    await assert.rejects(
+      fixture.callControl(fixture.config.gateway.controlSocket, input, admissionId),
+      /control-request-failed/,
+    );
+    await fixture.clock.advance(0);
+    await eventually(() => fixture.service.status(sessionId).state === "DISPOSED");
+    const recovered = await fixture.callControl(
+      fixture.config.gateway.controlSocket,
+      input,
+      admissionId,
+    );
+    assert.equal(recovered.state, "DISPOSED");
+    assert.equal(recovered.sessionId, sessionId);
+    assert.equal(recovered.bearer, undefined);
+    assert.equal(fixture.driverFactory.drivers.length, 1);
+    assert.equal(fixture.upstream.trace.length, 0);
+  },
+);
 
 test(
   "private control socket opens, inspects and closes real sessions with bounded input",
@@ -179,6 +442,55 @@ test(
     const clientParent = await temporaryDirectory(t);
     const clientDirectory = join(clientParent, "session");
     const operator = join(appRoot, "client", `operator.${appExtension}`);
+    const relay = await dropControlResponse(t, config.gateway.controlSocket);
+    const admissionId = `${Date.now()}-${randomUUID()}`;
+    const failed = await run(
+      process.execPath,
+      [
+        operator,
+        "open",
+        "--socket",
+        relay.socketPath,
+        "--duration-seconds",
+        "86400",
+        "--profile",
+        "git-write",
+        "--output",
+        clientDirectory,
+        "--admission-id",
+        admissionId,
+      ],
+      { allowFailure: true },
+    );
+    assert.equal(failed.code, 1);
+    assert.ok(failed.stderr.includes(admissionId));
+    const admitted = await relay.receipt;
+    const cliRecovered = await run(process.execPath, [
+      operator,
+      "open",
+      "--socket",
+      config.gateway.controlSocket,
+      "--duration-seconds",
+      "86400",
+      "--profile",
+      "git-write",
+      "--output",
+      clientDirectory,
+      "--admission-id",
+      admissionId,
+    ]);
+    const recovered = JSON.parse(cliRecovered.stdout);
+    assert.equal(recovered.sessionId, admitted.session.sessionId);
+    assert.equal(recovered.recovered, true);
+    assert.equal(recovered.bearer, undefined);
+    await run(process.execPath, [
+      operator,
+      "close",
+      "--socket",
+      config.gateway.controlSocket,
+      "--session",
+      recovered.sessionId,
+    ]);
     const cliOpened = await run(process.execPath, [
       operator,
       "open",
@@ -196,6 +508,8 @@ test(
     const cliSession = JSON.parse(cliOpened.stdout);
     const clientBearer = (await readFile(join(clientDirectory, "bearer"), "utf8")).trim();
     assert.equal(cliSession.state, "OPEN");
+    assert.notEqual(cliSession.sessionId, admitted.session.sessionId);
+    assert.notEqual(clientBearer, admitted.bearer);
     assert.ok(!cliOpened.stdout.includes(clientBearer) && !cliOpened.stderr.includes(clientBearer));
     const cliClosed = await run(process.execPath, [
       operator,

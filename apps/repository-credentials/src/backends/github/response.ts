@@ -4,6 +4,7 @@ import { createUrlRewriter, rewritePaginationLinks } from "./response-urls.ts";
 
 interface ResponsePolicyOptions {
   readonly repository: string;
+  readonly repositoryId: string;
   readonly apiOrigin: string;
   readonly gatewayOrigin: string;
 }

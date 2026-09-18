@@ -13,7 +13,48 @@ test("pinned gh uses canonical GitHub identity for REST, pagination and native P
   const fixture = await startCredentialServiceFixture(t);
   const { client, checkout } = await exerciseGit(t, fixture);
   await client.git(["push", "origin", "HEAD:refs/heads/native-feature"], { cwd: checkout });
-  await exerciseGh(t, fixture, client);
+  const { issue } = await exerciseGh(t, fixture, client);
+  // GitHub returns repository-ID links, and issue collections also carry opaque cursors.
+  // The actual CLI must follow those links through the canonical gateway route.
+  const issueInput = await client.json("pagination-issue.json", { title: "Second issue" });
+  const secondIssue = JSON.parse(
+    (
+      await client.gh([
+        "api",
+        "--method",
+        "POST",
+        "repos/fixture/repository/issues",
+        "--input",
+        issueInput,
+      ])
+    ).stdout,
+  );
+  const pages = JSON.parse(
+    (
+      await client.gh([
+        "api",
+        "--paginate",
+        "--slurp",
+        "repos/fixture/repository/issues?state=all&per_page=1",
+      ])
+    ).stdout,
+  );
+  assert.deepEqual(
+    pages.map((page) => page.map(({ number }) => number)),
+    [[issue.number], [secondIssue.number]],
+  );
+  assert.ok(
+    fixture.github.trace.some((entry) => {
+      const target = new URL(entry.target, "https://api.github.com");
+      return (
+        target.pathname === "/repos/fixture/repository/issues" && target.searchParams.has("after")
+      );
+    }),
+  );
+  assert.equal(
+    fixture.github.trace.some((entry) => entry.target.startsWith("/repositories/")),
+    false,
+  );
   assert.ok(
     fixture.github.trace.filter((entry) => entry.tokenIndex).every((entry) => entry.userAgent),
   );
@@ -23,6 +64,7 @@ test("pinned gh uses canonical GitHub identity for REST, pagination and native P
     "/repos/other/repository",
     "/fixture/other.git/info/refs?service=git-upload-pack",
     "/repos/fixture/repository/actions/runs",
+    "/repositories/73/issues",
   ]) {
     const denied = await gatewayRequest(fixture, target);
     assert.ok(denied.status >= 400);

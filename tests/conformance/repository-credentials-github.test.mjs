@@ -64,8 +64,9 @@ function owner(factory, clock, profile, id, captured = () => {}) {
   };
 }
 test("real HTTPS issuance preserves exact profiles after hour 13 and revokes with owned token after key closure", async (t) => {
-  const clock = createControlledClock(),
-    fixture = await startGitHubFixture(t, { clock });
+  const clock = createControlledClock();
+  const providerClock = createControlledClock(clock.wallNow());
+  const fixture = await startGitHubFixture(t, { clock: providerClock });
   const key = createGitHubKeyOwner({ privateKey: fixture.privateKey, appId: "12345", clock });
   const factory = createGitHubDriverFactory({
     configuration: {
@@ -75,7 +76,7 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
       appId: "12345",
       installationId: "41",
       repositoryId: "73",
-      repository: "fixture/repository",
+      repository: "Fixture/Repository",
       privateKeyFile: "/protected/app.pem",
     },
     key,
@@ -98,6 +99,7 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
   const b = await second.driver.acquire(second.attempt("acquire"), undefined, 360000);
   assert.equal(b.kind, "acquired");
   await second.driver.settle(b);
+  await providerClock.advance(13 * 3600000 + 1);
   await clock.advance(13 * 3600000 + 1);
   const c = await second.driver.acquire(second.attempt("acquire"), b.credential, 360000);
   assert.equal(c.kind, "acquired");
@@ -117,19 +119,65 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
   );
   const head = {
       method: "GET",
-      rawTarget: "/repos/fixture/repository",
+      rawTarget: "/repos/Fixture/Repository",
       headers: {},
       receivedMonoMs: clock.monotonicNow(),
       contentEncoding: "identity",
       framing: { kind: "none", bytes: undefined },
     },
     plan = second.driver.plan({ authority: second.authority, session: {}, head });
+  // GitHub returns canonical identity casing even when configuration retains capitals.
+  const issuePlan = second.driver.plan({
+    authority: second.authority,
+    session: {},
+    head: {
+      ...head,
+      method: "POST",
+      rawTarget: "/repos/Fixture/Repository/issues",
+      headers: { "content-type": "application/json" },
+    },
+  });
+  const canonicalIssue = "https://api.github.com/repos/fixture/repository/issues/1";
+  assert.deepEqual(
+    issuePlan.responsePolicy.rewriteJson({ url: canonicalIssue, body: canonicalIssue }),
+    {
+      url: "https://credentials.example/repos/Fixture/Repository/issues/1",
+      body: canonicalIssue,
+    },
+  );
+  for (const prefix of ["repos/fixture/repository", "repositories/73"])
+    assert.equal(
+      issuePlan.responsePolicy.headers(200, {
+        link: `<https://api.github.com/${prefix}/issues?after=Y3Vyc29yOnYyOjE%3D&page=2>; rel="next"`,
+      }).link,
+      '<https://credentials.example/repos/Fixture/Repository/issues?after=Y3Vyc29yOnYyOjE%3D&page=2>; rel="next"',
+    );
+  for (const target of [
+    "repos/fixture/repository-other/issues/1",
+    "repos/fixture-other/repository/issues/1",
+    "repos/fixture/repository/Issues/1",
+    "REPOS/fixture/repository/issues/1",
+    "repos/fixture/repository/issues/1?after=cursor",
+    "repositories/730/issues/1",
+  ])
+    assert.throws(
+      () => issuePlan.responsePolicy.rewriteJson({ url: `https://api.github.com/${target}` }),
+      /unsafe-upstream-url/,
+    );
   await assert.rejects(
     second.driver.withAuthentication(c.credential, { ...plan }, async () => {}),
     /invalid-credential/,
   );
   await second.driver.withAuthentication(c.credential, plan, async (request) =>
     assert.equal(fixture.authorize(request.headers.authorization), true),
+  );
+  // A local wall jump denies authentication but does not expire the provider token.
+  await clock.advance(0, 2 * 3600000);
+  await assert.rejects(
+    second.driver.withAuthentication(c.credential, plan, async () =>
+      assert.fail("a forward wall jump must deny authentication"),
+    ),
+    /invalid-credential/,
   );
   key.close();
   const retired = await second.driver.retire(second.attempt("retire"), c.credential);
@@ -142,9 +190,10 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
 });
 test("refused and cancelled observations remain independently captured and token-owned cleanup succeeds", async (t) => {
   const clock = createControlledClock();
+  const providerClock = createControlledClock(clock.wallNow() + 5000);
   let mode = "surplus";
   const fixture = await startGitHubFixture(t, {
-    clock,
+    clock: providerClock,
     issueResponse({ status, body }) {
       if (mode === "surplus")
         return {
@@ -152,6 +201,11 @@ test("refused and cancelled observations remain independently captured and token
           body: { ...body, permissions: { ...body.permissions, administration: "write" } },
         };
       if (mode === "refused") return { status: 403, body };
+      if (mode === "excess-skew")
+        return {
+          status,
+          body: { ...body, expires_at: new Date(clock.wallNow() + 3660001).toISOString() },
+        };
       if (mode === "short")
         return {
           status,
@@ -184,6 +238,8 @@ test("refused and cancelled observations remain independently captured and token
     ["refused", "reauthorization-required"],
     ["short", "rejected"],
     ["cancel", "uncertain"],
+    ["excess-skew", "rejected"],
+    ["valid-skew", "acquired"],
   ]) {
     mode = selected;
     const abort = new AbortController();
@@ -212,6 +268,16 @@ test("refused and cancelled observations remain independently captured and token
         framing: { kind: "none", bytes: undefined },
       },
     });
+    if (selected === "valid-skew") {
+      await owned.driver.withAuthentication(credential, plan, async ({ headers }) =>
+        assert.equal(fixture.authorize(headers.authorization), true),
+      );
+      // Service wall time stays behind while independent provider time advances.
+      // Authentication must stop conservatively; the still-live token needs DELETE.
+      await providerClock.advance(3595000);
+      await clock.advance(3595000, 0);
+      assert.ok(fixture.tokenState().at(-1).expires > providerClock.wallNow());
+    }
     await assert.rejects(
       owned.driver.withAuthentication(credential, plan, async () =>
         assert.fail("refused material cannot authenticate"),

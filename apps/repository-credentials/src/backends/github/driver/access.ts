@@ -9,6 +9,7 @@ import type {
 } from "../../../driver-contracts.ts";
 import type { ProviderTransport } from "../provider-transport.ts";
 import type { GitHubDriverState } from "./state.ts";
+import { tokenLifetimeMs } from "./lifetime.ts";
 
 type CredentialAccessDependencies = Readonly<{
   state: GitHubDriverState;
@@ -28,11 +29,7 @@ export function createCredentialAccess(
       state.admit(attempt, "retire");
       let dispatched = false;
       try {
-        if (
-          record.expiresAt !== undefined &&
-          (clock.wallNow() >= record.expiresAt ||
-            clock.monotonicNow() - record.observedMono >= record.expiresAt - record.observedWall)
-        )
+        if (clock.monotonicNow() - record.observedMono >= tokenLifetimeMs)
           return state.outcome(attempt, { kind: "expired" });
         return await custody.withAccess(credential, "retire", async (bytes) => {
           const copy = Buffer.from(bytes);

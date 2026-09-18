@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import { createServer, request } from "node:https";
+import { connect as connectTls } from "node:tls";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
 import {
@@ -126,7 +127,14 @@ async function startTransport(t, onRequest, limits = {}) {
 
 function startRequest(
   fixture,
-  { method = "GET", path = discovery, headers = {}, onResponse } = {},
+  {
+    method = "GET",
+    path = discovery,
+    headers = {},
+    opened = fixture.opened,
+    socket,
+    onResponse,
+  } = {},
 ) {
   let incoming;
   let bytes = 0;
@@ -144,11 +152,11 @@ function startRequest(
       path,
       method,
       ca: fixture.tls.ca,
-      agent: false,
+      ...(socket ? { createConnection: () => socket } : { agent: false }),
       headers: {
         host: new URL(fixture.config.gateway.publicOrigin).host,
         authorization: `Basic ${Buffer.from(
-          `${fixture.opened.client.gitUsername}:${fixture.opened.bearer}`,
+          `${opened.client.gitUsername}:${opened.bearer}`,
         ).toString("base64")}`,
         ...headers,
       },
@@ -182,11 +190,177 @@ function startRequest(
   return { outgoing, result, digest: () => hash.digest("hex") };
 }
 
-async function readDiscovery(fixture) {
-  const client = startRequest(fixture);
+async function readDiscovery(fixture, options) {
+  const client = startRequest(fixture, options);
   client.outgoing.end();
   return client.result;
 }
+
+function connectTlsClient(fixture) {
+  const socket = connectTls({
+    host: "127.0.0.1",
+    port: fixture.listeners.address.port,
+    ca: fixture.tls.ca,
+  });
+  const state = { socket, secure: false, closed: false };
+  socket.once("secureConnect", () => (state.secure = true));
+  // Capacity rejection can surface as either an error or a clean close.
+  socket.on("error", () => {});
+  const closed = new Promise((resolve) =>
+    socket.once("close", () => {
+      state.closed = true;
+      resolve();
+    }),
+  );
+  fixture.resources.after(async () => {
+    socket.destroy();
+    await closed;
+  });
+  return state;
+}
+
+test(
+  "occupied per-session and total exchange limits refuse excess traffic and recover",
+  { timeout: 15000 },
+  async (t) => {
+    const heldResponses = [];
+    const fixture = await startTransport(
+      t,
+      (incoming, outgoing) => {
+        incoming.resume();
+        outgoing.writeHead(200, replyHeaders);
+        if (heldResponses.length < 2) {
+          heldResponses.push(outgoing);
+          outgoing.write("0000");
+        } else outgoing.end("0000");
+      },
+      { exchanges: 2, exchangesPerSession: 1, sockets: 8 },
+    );
+    const first = fixture.opened;
+    const second = fixture.service.open({ durationSeconds: 300, profile: "git-write" });
+    const third = fixture.service.open({ durationSeconds: 300, profile: "git-write" });
+    const delivered = [0, 0];
+    const heldClients = [first, second].map((opened, index) =>
+      startRequest(fixture, {
+        opened,
+        onResponse: (incoming) =>
+          incoming.on("data", (chunk) => (delivered[index] += chunk.length)),
+      }),
+    );
+    heldClients[0].outgoing.end();
+    await eventually(() => delivered[0] === 4);
+
+    // One total slot is still free: this refusal belongs to the session bound.
+    const perSessionDenied = await readDiscovery(fixture, { opened: first });
+    assert.equal(perSessionDenied.kind, "completed");
+    assert.equal(perSessionDenied.status, 503);
+    assert.equal(perSessionDenied.complete, true);
+    assert.ok(perSessionDenied.bytes > 0 && perSessionDenied.bytes <= 256);
+    assert.equal(fixture.service.status(first.session.sessionId).activeUses, 1);
+    assert.equal(fixture.github.issuesOfTokens.length, 1);
+    assert.equal(fixture.received.length, 1);
+
+    // An independent session can occupy the other slot while the first stays live.
+    heldClients[1].outgoing.end();
+    await eventually(() => delivered[1] === 4);
+    assert.equal(fixture.service.status(second.session.sessionId).activeUses, 1);
+    assert.equal(fixture.github.issuesOfTokens.length, 2);
+    assert.equal(fixture.received.length, 2);
+
+    const totalDenied = await readDiscovery(fixture, { opened: third });
+    assert.equal(totalDenied.kind, "completed");
+    assert.equal(totalDenied.status, 503);
+    assert.equal(totalDenied.complete, true);
+    assert.ok(totalDenied.bytes > 0 && totalDenied.bytes <= 256);
+    assert.equal(fixture.service.status(third.session.sessionId).activeUses, 0);
+    assert.equal(fixture.github.issuesOfTokens.length, 2);
+    assert.equal(fixture.received.length, 2);
+
+    // Denial cannot cancel either admitted stream or replace its credential.
+    for (const response of heldResponses) response.write("0000");
+    await eventually(() => delivered.every((bytes) => bytes === 8));
+    for (const opened of [first, second])
+      assert.equal(fixture.service.status(opened.session.sessionId).activeUses, 1);
+    heldResponses[0].end();
+    assert.deepEqual(await heldClients[0].result, {
+      kind: "completed",
+      status: 200,
+      bytes: 8,
+      complete: true,
+    });
+    assert.equal(heldClients[0].digest(), createHash("sha256").update("00000000").digest("hex"));
+    await eventually(() => fixture.service.status(first.session.sessionId).activeUses === 0);
+
+    // Both previously denied callers recover while the second stream still owns a slot.
+    for (const opened of [first, third]) {
+      assert.deepEqual(await readDiscovery(fixture, { opened }), {
+        kind: "completed",
+        status: 200,
+        bytes: 4,
+        complete: true,
+      });
+      await eventually(() => fixture.service.status(opened.session.sessionId).activeUses === 0);
+    }
+    assert.equal(fixture.github.issuesOfTokens.length, 3);
+    assert.equal(fixture.received.length, 4);
+    assert.equal(fixture.service.status(second.session.sessionId).activeUses, 1);
+    heldResponses[1].end();
+    assert.deepEqual(await heldClients[1].result, {
+      kind: "completed",
+      status: 200,
+      bytes: 8,
+      complete: true,
+    });
+    assert.equal(heldClients[1].digest(), createHash("sha256").update("00000000").digest("hex"));
+    await eventually(() => fixture.service.status(second.session.sessionId).activeUses === 0);
+  },
+);
+
+test(
+  "pre-authentication socket capacity rejects excess TLS connections and recovers",
+  { timeout: 15000 },
+  async (t) => {
+    const fixture = await startTransport(
+      t,
+      (incoming, outgoing) => {
+        incoming.resume();
+        outgoing.writeHead(200, { ...replyHeaders, "content-length": 4 }).end("0000");
+      },
+      { sockets: 1 },
+    );
+    // Completing TLS without sending HTTP consumes a socket, but no exchange or credential.
+    const admitted = connectTlsClient(fixture);
+    await eventually(() => admitted.secure);
+    const excess = connectTlsClient(fixture);
+    // Refusal must precede the independent five-second header/stall deadlines.
+    await eventually(() => excess.closed, { timeoutMs: 1000 });
+    assert.equal(excess.secure, false);
+    assert.equal(admitted.closed, false);
+    assert.equal(fixture.service.status(fixture.opened.session.sessionId).activeUses, 0);
+    assert.equal(fixture.github.issuesOfTokens.length, 0);
+    assert.equal(fixture.received.length, 0);
+
+    // The admitted socket remains usable after overload, including authentication.
+    assert.deepEqual(await readDiscovery(fixture, { socket: admitted.socket }), {
+      kind: "completed",
+      status: 200,
+      bytes: 4,
+      complete: true,
+    });
+    await eventually(() => admitted.closed);
+    await eventually(
+      () => fixture.service.status(fixture.opened.session.sessionId).activeUses === 0,
+    );
+    assert.deepEqual(await readDiscovery(fixture), {
+      kind: "completed",
+      status: 200,
+      bytes: 4,
+      complete: true,
+    });
+    assert.equal(fixture.received.length, 2);
+    assert.equal(fixture.github.issuesOfTokens.length, 1);
+  },
+);
 
 const declaredInputCases = [
   {

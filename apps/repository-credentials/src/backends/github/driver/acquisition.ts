@@ -8,6 +8,7 @@ import type {
 import type { ProviderResponse, ProviderTransport } from "../provider-transport.ts";
 import type { GitHubConfiguration, GitHubKeyOwner } from "../types.ts";
 import type { GitHubDriverState } from "./state.ts";
+import { providerClockSkewMs, tokenLifetimeMs } from "./lifetime.ts";
 
 type AcquisitionDependencies = Readonly<{
   state: GitHubDriverState;
@@ -50,10 +51,12 @@ export function createCredentialAcquisition(deps: AcquisitionDependencies): Repo
               // Capture in the response callback, before timeout or close can discard its body.
               credential = custody.capture(attempt, bytes, {
                 observedWallMs,
-                expiresAtWallMs: Number.isFinite(expiry) ? expiry : undefined,
+                // Custody may release material at this bound. Provider wall time
+                // is only an authentication limit, not proof of remote expiry.
+                expiresAtWallMs: observedWallMs + tokenLifetimeMs,
               });
               state.credentials.set(credential, {
-                expiresAt: Number.isFinite(expiry) ? expiry : undefined,
+                expiresAt: Number.isFinite(expiry) ? expiry - providerClockSkewMs : undefined,
                 observedWall: observedWallMs,
                 observedMono: clock.monotonicNow(),
                 accepted: false,
@@ -113,11 +116,11 @@ export function createCredentialAcquisition(deps: AcquisitionDependencies): Repo
             return state.outcome(attempt, { kind: "rejected", code: "scope-mismatch" });
           if (
             !Number.isFinite(expiry) ||
-            expiry <= observedWallMs ||
-            expiry > observedWallMs + 3600000
+            expiry <= observedWallMs + providerClockSkewMs ||
+            expiry > observedWallMs + tokenLifetimeMs + providerClockSkewMs
           )
             return state.outcome(attempt, { kind: "rejected", code: "invalid-response" });
-          if (expiry - observedWallMs < minimumValidityMs)
+          if (expiry - observedWallMs - providerClockSkewMs < minimumValidityMs)
             return state.outcome(attempt, { kind: "rejected", code: "insufficient-validity" });
           attempt.assertAdmitted();
           assertCurrent();
@@ -128,7 +131,7 @@ export function createCredentialAcquisition(deps: AcquisitionDependencies): Repo
             kind: "acquired",
             credential,
             observedWallMs,
-            expiresAtWallMs: expiry,
+            expiresAtWallMs: expiry - providerClockSkewMs,
           });
         } finally {
           response.body.fill(0);

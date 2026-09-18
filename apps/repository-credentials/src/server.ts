@@ -6,7 +6,7 @@ import { chmod, lstat, realpath, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { SessionControl } from "./contracts.ts";
 import type { RunningListeners, TlsMaterial } from "./internal-contracts.ts";
-import { handleControl } from "./control.ts";
+import { createControlAdmission, handleControl } from "./control.ts";
 import { createAgentHandler } from "./transport/agent.ts";
 import type { AgentHandlerOptions } from "./transport/agent.ts";
 import { sendError } from "./transport/errors.ts";
@@ -59,6 +59,7 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
   });
   const control = createHttpServer(serverOptions);
   const onAgent = createAgentHandler(options);
+  const admissions = createControlAdmission(service, config, clock);
   const route =
     (kind: "agent" | "control") =>
     (request: IncomingMessage, response: ServerResponse): void => {
@@ -72,7 +73,7 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
       void (
         kind === "agent"
           ? onAgent(request, response)
-          : handleControl(request, response, service, config, clock)
+          : handleControl(request, response, service, config, clock, admissions)
       ).catch(() => sendError(response, 503, "unavailable"));
     };
   for (const [server, handler] of [
@@ -111,6 +112,7 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
   };
   const close = async () => {
     stopAdmission();
+    admissions.dispose();
     for (const socket of sockets) socket.destroy();
     agent.closeAllConnections();
     control.closeAllConnections();

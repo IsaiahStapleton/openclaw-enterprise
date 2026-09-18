@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-09-17
-last_updated_session: authoring-run/07150374-b371-440a-92f7-9d53dedb9512
+last_updated_session: authoring-run/566921ff-3342-4dec-aa19-110acc8aa1e4
 ---
 
 # Compose development flow
@@ -70,6 +70,11 @@ graph TD
   F --> K["Operator requests Agent deployment on Docker Compute"]
   K --> L["Admission rejects missing or unsupported harness binding"]
   J --> M["Authorized deletion removes owned Namespace resources"]
+  D -->|operator cleanup| CDown["occ dev down keeps<br/>selected engine connection"]
+  M --> CDown
+  CDown --> CVolumes{"--volumes?"}
+  CVolumes -->|No| CKeep["Remove Compose containers and network;<br/>retain named volumes"]
+  CVolumes -->|Yes| CDelete["Remove Compose containers,<br/>network and named volumes"]
 ```
 
 ## Execution Trace
@@ -89,7 +94,22 @@ engine selection, database initialization, local API admission and worker startu
 traces API authorization, durable work, tenant network ownership, unsupported
 Agent authentication and exact resource removal.
 
-### 3. Start and clean up Kubernetes development
+### 3. Clean up Docker or Podman Compose
+
+`internal/occdev/down.go:Down`, `internal/occdev/down.go:podmanComposeArgs`
+
+`occ dev down` uses the selected engine and forwarded Compose project and file
+options, including after partial startup. Podman retains the caller's selected
+connection. Its reported API socket supplies `OCC_CONTAINER_ENGINE_SOCKET` only
+to resolve the worker mount; a socket inside a macOS VM is not substituted for
+the host connection. An unavailable engine or invalid socket fails cleanup.
+
+Compose removes its project containers and network. Named database,
+Configuration, and bootstrap volumes remain unless `--volumes` is explicit.
+Agent-owned containers and Namespace networks remain the responsibility of
+their platform deletion workflows; follow [safe development shutdown](../guides/deploy/local-operations.md#stop-development-safely).
+
+### 4. Start and clean up Kubernetes development
 
 `internal/occdev/up.go:Up`, `internal/occdev/down.go:Down`.
 
@@ -120,6 +140,9 @@ import, authenticated readiness, and cleanup through the recorded engine.
   boundary. See [Docker test status](../testing/docker.md); old model-turn evidence
   does not establish current support.
 - Namespace deletion removes its owned resources while preserving unrelated ones.
+- The [real Compose cleanup case](../testing/docker.md#verify-compose-cleanup)
+  verifies the compiled CLI against a partially started project, including volume
+  retention and explicit deletion on the selected engine connection.
 
 ## Related docs
 
@@ -135,6 +158,8 @@ import, authenticated readiness, and cleanup through the recorded engine.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 16:21: Preserve Podman's host connection during Compose cleanup and verify explicit volume deletion with the real CLI and engine. (authoring-run/566921ff-3342-4dec-aa19-110acc8aa1e4 - 58ead9943ee6b2560eea2c327967b50a30f7644e)
 
 - 2026-09-17 16:47: Merge current main's Podman dedicated recovery proof and checkout-local CLI requirement while preserving the Kubernetes lifecycle trace. (01a0ae15-3bad-7d92-92b7-f8be208cbb49 - b13b2f479f824891ab3c5bf71e6851d704dba458)
 

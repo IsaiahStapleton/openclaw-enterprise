@@ -271,7 +271,24 @@ export function createGitHubProtocol({
         return;
       }
       if (suffix === "/issues" && request.method === "GET") {
-        json(200, pageOf([...issues.values()], url));
+        const values = [...issues.values()];
+        const size = Number(url.searchParams.get("per_page") ?? 100);
+        const page = Number(url.searchParams.get("page") ?? 1);
+        const cursor = (issue) => Buffer.from(`cursor:v2:${issue.id}`).toString("base64");
+        const after = url.searchParams.get("after");
+        const index = after ? values.findIndex((issue) => cursor(issue) === after) : -1;
+        assert.ok(!after || index >= 0, "pagination must preserve the issued cursor");
+        const offset = after ? index + 1 : (page - 1) * size;
+        const selected = values.slice(offset, offset + size);
+        const headers = {};
+        if (offset + size < values.length) {
+          const next = new URL(url);
+          next.pathname = `/repositories/${fixtureRepositoryId}/issues`;
+          next.searchParams.set("after", cursor(selected.at(-1)));
+          next.searchParams.set("page", String(page + 1));
+          headers.link = `<${next}>; rel="next"`;
+        }
+        json(200, selected, headers);
         return;
       }
       const issueMatch = /^\/issues\/(\d+)$/.exec(suffix);
@@ -307,7 +324,7 @@ export function createGitHubProtocol({
         const headers =
           values.length > page * size
             ? {
-                link: `<https://api.github.com${url.pathname}?page=${page + 1}&per_page=${size}>; rel="next"`,
+                link: `<https://api.github.com/repositories/${fixtureRepositoryId}${suffix}?page=${page + 1}&per_page=${size}>; rel="next"`,
               }
             : {};
         json(200, pageOf(values, url, 1), headers);

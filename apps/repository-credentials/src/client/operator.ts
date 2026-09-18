@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -8,6 +9,7 @@ import { writeClientConfiguration } from "./config.ts";
 export async function callControl(
   socket: string,
   request: ControlRequest,
+  admissionId = `${Date.now()}-${randomUUID()}`,
 ): Promise<ControlResponse> {
   if (
     !socket.startsWith("/") ||
@@ -15,10 +17,11 @@ export async function callControl(
     !/^\/v1\/sessions(?:\/[A-Za-z0-9_-]{1,128}(?:\/close)?)?$/.test(request.path)
   )
     throw new Error("invalid-control-request");
+  if (!/^[0-9]{13}-[0-9a-f-]{36}$/.test(admissionId)) throw new Error("invalid-admission-id");
   const body = "body" in request ? JSON.stringify(request.body) : "";
   if (Buffer.byteLength(body) > 16 * 1024) throw new Error("invalid-control-request");
   return new Promise((resolveResponse, reject) => {
-    const fail = (): void => reject(new Error("control-request-failed"));
+    const fail = (): void => reject(new Error(`control-request-failed admission=${admissionId}`));
     const outgoing = httpRequest(
       {
         socketPath: socket,
@@ -27,6 +30,7 @@ export async function callControl(
         agent: false,
         headers: {
           Host: "localhost",
+          ...(request.path === "/v1/sessions" ? { "X-Admission-Id": admissionId } : {}),
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(body),
           Connection: "close",
@@ -87,7 +91,7 @@ async function main(): Promise<void> {
   }
   const allowed =
     operation === "open"
-      ? ["--socket", "--duration-seconds", "--profile", "--output", "--ca"]
+      ? ["--socket", "--duration-seconds", "--profile", "--output", "--ca", "--admission-id"]
       : ["--socket", "--session"];
   if ([...options.keys()].some((key) => !allowed.includes(key)))
     throw new Error("invalid-arguments");
@@ -101,17 +105,33 @@ async function main(): Promise<void> {
     const caPath = options.get("--ca");
     const ca = caPath ? await readFile(caPath) : undefined;
     if (ca && ca.length > 64 * 1024) throw new Error("invalid-ca");
-    const result = await callControl(socket, {
-      method: "POST",
-      path: "/v1/sessions",
-      body: { durationSeconds, profile: options.get("--profile") },
-    });
+    const admissionId = options.get("--admission-id") ?? `${Date.now()}-${randomUUID()}`;
+    if (!/^[0-9]{13}-[0-9a-f-]{36}$/.test(admissionId)) throw new Error("invalid-admission-id");
+    process.stderr.write(
+      `credential-admission ${admissionId}; recover with open --admission-id and the same inputs\n`,
+    );
+    const result = await callControl(
+      socket,
+      {
+        method: "POST",
+        path: "/v1/sessions",
+        body: { durationSeconds, profile: options.get("--profile") },
+      },
+      admissionId,
+    );
     if ("error" in result) {
       process.stderr.write(`credential-operator-${result.error}\n`);
       process.exitCode = 1;
       return;
     }
-    if (!("bearer" in result)) throw new Error("invalid-control-response");
+    if (!("bearer" in result)) {
+      if (!("state" in result)) throw new Error("invalid-control-response");
+      process.stdout.write(JSON.stringify({ ...result, recovered: true }) + "\n");
+      process.stderr.write(
+        `credential-admission-recovered session=${result.sessionId}; close this session, then open with a new admission ID\n`,
+      );
+      return;
+    }
     try {
       await writeClientConfiguration(result, directory, ca);
     } catch {
