@@ -64,3 +64,9 @@ failure rather than a broader grant.
 ## Common lifecycle
 
 The callable service owns session admission, bearer lookup, immutable grants, bounded custody, credential replacement, and close/status operations. Closing denies new use immediately; upstream cleanup remains separately pending or uncertain until original actions settle. Demand-driven replacement retains the same session after hour thirteen. The GitHub and alternate fixture factories use these same owners. See the [lifecycle flow](../flows/repository-credentials.md).
+
+## GitHub credential timing
+
+The adapter allows 60 seconds of provider clock skew and reports an earlier authentication expiry. Captured cleanup retains a separate one-hour bound from local receipt; a forward wall-clock change cannot prove remote expiration. Canonical response links accept casing differences only in the matching repository owner/name while preserving route, origin and profile restrictions.
+
+Use deadlines stay anchored to original capture, even when acquisition settlement is delayed. Failed session construction seals renewal access and retains pending custody against session capacity and shutdown cleanup until callbacks drain and material is disposed.

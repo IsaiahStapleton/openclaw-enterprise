@@ -52,11 +52,16 @@ export function createCredentialService(
   });
   const queue = createProviderQueue(limits.providerQueue);
   const sessions = new Map<string, Session>();
+  const failedConstructions = new Set<CustodyOwner>();
   const bearers = new Map<string, Session>();
   const exchanges = new WeakMap<ExchangeRef, Exchange>();
   const shutdownWaiters = new Set<() => void>();
   let exchangeCount = 0;
   let shuttingDown = false;
+
+  function notifyShutdown() {
+    for (const notify of [...shutdownWaiters]) notify();
+  }
 
   function isOpen(session: Session) {
     if (session.state === "OPEN" && clock.monotonicNow() >= session.admission.deadlineMonoMs)
@@ -75,7 +80,7 @@ export function createCredentialService(
       session.custody.renewalCallbacks === 0
     )
       session.state = "DISPOSED";
-    for (const notify of [...shutdownWaiters]) notify();
+    notifyShutdown();
   }
   function snapshot(session: Session): SessionStatus {
     isOpen(session);
@@ -149,17 +154,19 @@ export function createCredentialService(
         isOpen(existing);
         if (existing.state === "DISPOSED") sessions.delete(id);
       }
-      if (sessions.size >= limits.sessions) throw new Error("SESSION_CAPACITY");
+      if (sessions.size + failedConstructions.size >= limits.sessions)
+        throw new Error("SESSION_CAPACITY");
       const resolved = factory.resolve(profile);
       const { bearer, ...admission } = admitSession(resolved.binding, input.durationSeconds, clock);
       let session: Session;
+      let constructing = true;
       const custody = createCustody({
         clock,
         maximumSlots: limits.credentialSlotsPerSession,
         maximumAccessBytes: limits.accessTokenBytes,
         maximumRenewalBytes: limits.renewalBytesPerSession,
         maximumCallbacks: limits.exchangesPerSession + 1,
-        admitted: () => !session || isOpen(session),
+        admitted: () => constructing || (!!session && isOpen(session)),
         changed: () => {
           if (session) {
             session.lifecycle.maintain();
@@ -167,18 +174,32 @@ export function createCredentialService(
           }
         },
       });
-      const driver = factory.create({
-        authority: admission.authority,
-        custody: custody.driver,
-        clock,
-      });
-      const binding = snapshotBinding(driver.binding);
-      if (
-        binding.providerInstanceId !== admission.binding.providerInstanceId ||
-        binding.repositoryId !== admission.binding.repositoryId ||
-        binding.grantId !== admission.binding.grantId
-      )
-        throw new Error("DRIVER_BINDING_MISMATCH");
+      let driver: ReturnType<BoundDriverFactory["create"]>;
+      try {
+        driver = factory.create({
+          authority: admission.authority,
+          custody: custody.driver,
+          clock,
+        });
+        const binding = snapshotBinding(driver.binding);
+        if (
+          binding.providerInstanceId !== admission.binding.providerInstanceId ||
+          binding.repositoryId !== admission.binding.repositoryId ||
+          binding.grantId !== admission.binding.grantId
+        )
+          throw new Error("DRIVER_BINDING_MISMATCH");
+      } catch (error) {
+        constructing = false;
+        // No valid driver exists to finalize this custody. Retain its capacity
+        // and shutdown obligation until every admitted renewal callback drains.
+        failedConstructions.add(custody);
+        void custody.disposeAllRenewal().then(() => {
+          failedConstructions.delete(custody);
+          notifyShutdown();
+        });
+        throw error;
+      }
+      constructing = false;
       const lifecycle = createLifecycle({
         clock,
         authority: admission.authority,
@@ -304,7 +325,11 @@ export function createCredentialService(
       let notify: () => void = () => {};
       const drained = new Promise<void>((resolve) => {
         notify = () => {
-          if ([...sessions.values()].every((session) => session.state === "DISPOSED")) resolve();
+          if (
+            failedConstructions.size === 0 &&
+            [...sessions.values()].every((session) => session.state === "DISPOSED")
+          )
+            resolve();
         };
         shutdownWaiters.add(notify);
         notify();
@@ -331,7 +356,8 @@ export function createCredentialService(
           (sum, session) => sum + session.custody.reservations.size,
           0,
         ),
-        pendingAuxiliary: all.filter((session) => !session.lifecycle.finalized).length,
+        pendingAuxiliary:
+          all.filter((session) => !session.lifecycle.finalized).length + failedConstructions.size,
         graceExpired,
       });
     },

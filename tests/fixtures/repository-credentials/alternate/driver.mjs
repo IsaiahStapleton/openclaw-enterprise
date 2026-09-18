@@ -56,6 +56,7 @@ export function createAlternateDriver({
         dispatched = true;
         events.push({
           kind: "rotate",
+          attemptId: attempt.id,
           sessionId: authority.sessionId,
           generation: ++generation,
           permission: "source:update",
@@ -75,12 +76,18 @@ export function createAlternateDriver({
           });
           accepted.set(digest(bytes), observation.expiresAtWallMs);
           current = credential;
+          controls.observe?.({ kind: "capture", attemptId: attempt.id });
           return { kind: "acquired", credential, ...observation };
         };
         if (controls.lateCapture) {
           const settled = controls.lateCapture.then(() => {
             capture();
           });
+          if (controls.waitForAcquisitionAbort)
+            await new Promise((resolve) => {
+              if (attempt.signal.aborted) resolve();
+              else attempt.signal.addEventListener("abort", resolve, { once: true });
+            });
           return result(attempt, { kind: "uncertain" }, settled);
         }
         const acquired = capture();
@@ -128,22 +135,27 @@ export function createAlternateDriver({
     },
     async settle(original) {
       if (!outcomes.has(original)) throw new Error("foreign-outcome");
+      controls.observe?.({ kind: "settlement-started", attemptId: original.attemptId });
       await outcomes.get(original);
+      controls.observe?.({ kind: "settlement-completed", attemptId: original.attemptId });
     },
     plan(request) {
       if (
         request.authority.sessionId !== authority.sessionId ||
         request.head.rawTarget !== "/team/nested/project" ||
-        request.head.method !== "GET"
+        !["GET", "POST"].includes(request.head.method)
       )
         return denied;
       const plan = Object.freeze({
         origin,
         target: "/v2/projects/team%2Fnested%2Fproject",
-        method: "GET",
-        category: "source-read",
-        effect: "read",
-        requestHeaders: Object.freeze({ accept: "application/json" }),
+        method: request.head.method,
+        category: request.head.method === "POST" ? "source-write" : "source-read",
+        effect: request.head.method === "POST" ? "write" : "read",
+        requestHeaders: Object.freeze({
+          accept: "application/json",
+          ...(request.head.method === "POST" ? { "content-type": "application/octet-stream" } : {}),
+        }),
         limits: Object.freeze({
           inputWireBytes: 1024,
           inputDecodedBytes: 1024,
@@ -163,6 +175,7 @@ export function createAlternateDriver({
         }),
       });
       plans.add(plan);
+      controls.observe?.({ kind: "plan", method: plan.method });
       return plan;
     },
     async withAuthentication(credential, plan, send) {

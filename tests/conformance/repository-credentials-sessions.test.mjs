@@ -60,6 +60,148 @@ function setup(options = {}) {
   };
 }
 
+function constructionFailure(kind) {
+  const clock = createControlledClock(1700000000000);
+  const factory = createAlternateDriverFactory({
+    origin: "https://upstream.example.test",
+    gatewayOrigin: "https://gateway.example.test",
+    clock,
+  });
+  const release = Promise.withResolvers();
+  const entered = Promise.withResolvers();
+  const configuration = config();
+  configuration.limits.sessions = 1;
+  configuration.limits.credentialSlotsPerSession = 3;
+  let fail = true;
+  let retained;
+  const service = createCredentialService({
+    config: configuration,
+    clock,
+    factory: {
+      ...factory,
+      create(options) {
+        if (!fail) return factory.create(options);
+        const { custody } = options;
+        const first = custody.retainRenewal(Buffer.from("construction-renewal"));
+        const second = custody.retainRenewal(Buffer.from("second-renewal"));
+        const read = custody.withRenewal(first, async (bytes) => {
+          retained.bytes = bytes;
+          entered.resolve();
+          await release.promise;
+          if (kind === "invalid binding") throw new Error("callback-failed");
+        });
+        retained = {
+          custody,
+          first,
+          second,
+          renewals: [first, second],
+          read: read.then(
+            () => "read",
+            () => "failed",
+          ),
+        };
+        if (kind === "factory throw") throw new Error("factory-failed");
+        const binding = factory.resolve("git-write").binding;
+        return {
+          binding: { ...binding, grantId: kind === "invalid binding" ? "" : "different-grant" },
+        };
+      },
+    },
+  });
+  return {
+    clock,
+    service,
+    entered: entered.promise,
+    release: () => release.resolve(),
+    retained: () => retained,
+    admitNext: () => {
+      fail = false;
+    },
+    async cleanup() {
+      release.resolve();
+      await retained?.read;
+      if (retained)
+        await Promise.allSettled(
+          retained.renewals.map((ref) => retained.custody.disposeRenewal(ref)),
+        );
+      await tick();
+    },
+  };
+}
+
+for (const [kind, error] of [
+  ["factory throw", /factory-failed/],
+  ["invalid binding", /INVALID_BINDING/],
+  ["binding mismatch", /DRIVER_BINDING_MISMATCH/],
+]) {
+  test(`failed construction owns renewal cleanup through shutdown after ${kind}`, async (t) => {
+    const fixture = constructionFailure(kind);
+    const { service, clock } = fixture;
+    t.after(fixture.cleanup);
+    assert.throws(() => service.open({ durationSeconds: 3600 }), error);
+    const { custody, first, second, read } = fixture.retained();
+    // Failure seals every handle before open returns, including handles behind
+    // a blocked callback. The already admitted callback keeps its scoped copy.
+    assert.throws(() => {
+      fixture.retained().renewals.push(custody.retainRenewal(Buffer.from("late-renewal")));
+    }, /RENEWAL_LIMIT/);
+    const refusedReads = [first, second].map((ref) =>
+      assert.rejects(
+        custody.withRenewal(ref, async () => {}),
+        /FOREIGN_RENEWAL/,
+      ),
+    );
+    await Promise.all(refusedReads);
+    await fixture.entered;
+    assert.equal(Buffer.from(fixture.retained().bytes).toString(), "construction-renewal");
+    assert.throws(() => service.open({ durationSeconds: 3600 }), /SESSION_CAPACITY/);
+
+    const shutdown = service.shutdown(50);
+    await clock.advance(50);
+    const pending = await shutdown;
+    assert.equal(pending.graceExpired, true);
+    assert.equal(pending.pendingAuxiliary, 1);
+    assert.equal(Buffer.from(fixture.retained().bytes).toString(), "construction-renewal");
+
+    const draining = service.shutdown(50);
+    fixture.release();
+    assert.equal(await read, kind === "invalid binding" ? "failed" : "read");
+    await tick();
+    assert.ok(fixture.retained().bytes.every((value) => value === 0));
+    await assert.rejects(custody.disposeRenewal(first), /FOREIGN_RENEWAL/);
+    await assert.rejects(custody.disposeRenewal(second), /FOREIGN_RENEWAL/);
+    const drained = await draining;
+    assert.equal(drained.graceExpired, false);
+    assert.equal(drained.pendingAuxiliary, 0);
+    assert.equal(drained.pendingActions, 0);
+    assert.equal(drained.pendingCredentials, 0);
+    assert.equal(clock.pendingTimers(), 0);
+  });
+}
+
+test("failed construction releases session capacity only after renewal callbacks drain", async (t) => {
+  const fixture = constructionFailure("factory throw");
+  const { service, clock } = fixture;
+  t.after(async () => {
+    await fixture.cleanup();
+    await service.shutdown(50);
+  });
+  assert.throws(() => service.open({ durationSeconds: 3600 }), /factory-failed/);
+  await fixture.entered;
+  fixture.admitNext();
+  assert.throws(() => service.open({ durationSeconds: 3600 }), /SESSION_CAPACITY/);
+  fixture.release();
+  await fixture.retained().read;
+  await tick();
+  const opened = service.open({ durationSeconds: 3600 });
+  const exchange = service.reserve(opened.bearer, head(clock), new AbortController().signal);
+  assert.equal((await service.execute(exchange, send)).kind, "completed");
+  service.close(opened.session.sessionId);
+  await tick();
+  assert.equal(service.status(opened.session.sessionId).state, "DISPOSED");
+  assert.equal(clock.pendingTimers(), 0);
+});
+
 test("immutable session binding, digest-only public status and original exchange identity", async () => {
   const { clock, service, opened, configuration, exchange } = setup();
   assert.equal(opened.bearer.length, 43);
@@ -227,20 +369,77 @@ test("final dispatch rejects closure after asynchronous authentication and joins
   assert.equal(service.status(opened.session.sessionId).state, "DISPOSED");
 });
 
-test("late captured refusal retains its slot through original settlement and is cleaned after close", async () => {
+test("acquisition timeout retains late capture and original settlement until cleanup after close", async (t) => {
   let release;
   const lateCapture = new Promise((resolve) => {
     release = resolve;
   });
-  const { service, opened, factory, exchange } = setup({ controls: { lateCapture } });
-  assert.equal((await service.execute(exchange(), send)).kind, "not-dispatched");
-  assert.equal(service.status(opened.session.sessionId).cleanup.uncertain, 1);
+  const observations = [];
+  const { clock, service, opened, factory, exchange, configuration } = setup({
+    operationMs: 60000,
+    controls: {
+      lateCapture,
+      waitForAcquisitionAbort: true,
+      observe: (event) => observations.push(event),
+    },
+  });
+  t.after(async () => {
+    service.close(opened.session.sessionId);
+    release();
+    await tick();
+  });
+  let sends = 0;
+  const sender = async (...args) => {
+    sends++;
+    return send(...args);
+  };
+  let completed = false;
+  const work = service.execute(exchange(), sender).then((outcome) => {
+    completed = true;
+    return outcome;
+  });
+  await tick();
+  const acquisition = factory.events.find((event) => event.kind === "rotate");
+  assert.ok(acquisition);
+  // The provider remains outstanding until the production action timer fires;
+  // the exchange budget is longer, so its own deadline cannot cause this refusal.
+  await clock.advance(configuration.limits.providerActionMs - 1);
+  assert.equal(completed, false);
+  assert.equal(
+    observations.some((event) => event.kind === "settlement-started"),
+    false,
+  );
+  await clock.advance(1);
+  assert.equal((await work).kind, "not-dispatched");
+  const pending = service.status(opened.session.sessionId);
+  assert.equal(pending.cleanup.pending, 1);
+  assert.equal(pending.cleanup.uncertain, 1);
+  assert.equal(pending.activeUses, 0);
+  assert.deepEqual(
+    observations.filter((event) => event.kind === "settlement-started"),
+    [{ kind: "settlement-started", attemptId: acquisition.attemptId }],
+  );
+  assert.equal(
+    observations.some((event) => event.kind === "settlement-completed"),
+    false,
+  );
   assert.equal((await service.execute(exchange(), send)).kind, "not-dispatched");
   assert.equal(factory.events.filter((event) => event.kind === "rotate").length, 1);
   service.close(opened.session.sessionId);
   assert.equal(service.status(opened.session.sessionId).state, "CLOSED");
   release();
   await tick();
+  assert.deepEqual(
+    observations.filter((event) => event.kind === "capture"),
+    [{ kind: "capture", attemptId: acquisition.attemptId }],
+  );
+  assert.ok(
+    observations.some(
+      (event) => event.kind === "settlement-completed" && event.attemptId === acquisition.attemptId,
+    ),
+  );
+  assert.equal(sends, 0, "late material is cleanup-only and never reaches the sender");
+  assert.equal(factory.events.filter((event) => event.kind === "rotate").length, 1);
   assert.equal(factory.events.filter((event) => event.kind === "retire").length, 1);
   assert.equal(service.status(opened.session.sessionId).state, "DISPOSED");
 });

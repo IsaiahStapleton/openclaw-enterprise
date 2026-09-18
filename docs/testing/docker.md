@@ -26,6 +26,28 @@ On macOS, follow the Podman prerequisite in the
 This verification does not prove an Agent model turn. Follow the exact cleanup
 command printed by `dev-up` to preserve the development database and credentials.
 
+## Verify Compose cleanup
+
+Run the cleanup case against a real engine and the shipped PostgreSQL image:
+
+```sh
+OCC_TEST_PODMAN_COMPUTE_REAL=1 \
+  node --test --test-name-pattern='Compose cleanup preserves' \
+  tests/integration/docker-compute-real.test.mjs
+```
+
+Requires Go, Podman, and `podman-compose`. On macOS, select a rootless or rootful
+machine connection through `CONTAINER_CONNECTION` for this invocation; the test
+does not change the default connection. For Docker Engine with Compose, replace
+the selector with `OCC_TEST_DOCKER_COMPUTE_REAL=1`.
+
+This case starts only the development PostgreSQL service to exercise cleanup
+after partial startup. The compiled `occ dev down` must remove project containers
+and networks while preserving the database volume, then delete the volume only
+with `--volumes`. It uses disposable project resources and no model credentials
+or Agent runtime image. Failure cleanup uses Compose directly without masking
+the CLI failure. This proves the cleanup lifecycle, not Agent execution.
+
 ## Docker Compose development test environment
 
 `tests/integration/docker-compute-real.test.mjs` retains the Docker and Podman

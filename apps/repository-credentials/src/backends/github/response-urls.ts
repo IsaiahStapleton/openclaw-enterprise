@@ -2,6 +2,7 @@ import type { RequestHead } from "../../driver-contracts.ts";
 
 interface UrlRewriteDependencies {
   readonly repository: string;
+  readonly repositoryId: string;
   readonly apiOrigin: string;
   readonly gatewayOrigin: string;
   readonly allowsRoute: (head: RequestHead) => boolean;
@@ -21,6 +22,16 @@ function rewriteUrl(
   )
     throw new Error("unsafe-upstream-url");
   const prefix = `/repos/${dependencies.repository}`;
+  const nativePrefix = `/repositories/${dependencies.repositoryId}`;
+  if (url.pathname === nativePrefix || url.pathname.startsWith(`${nativePrefix}/`))
+    url.pathname = `${prefix}${url.pathname.slice(nativePrefix.length)}`;
+  const namedPrefix = url.pathname.slice(0, prefix.length);
+  if (
+    url.pathname.startsWith("/repos/") &&
+    namedPrefix.slice("/repos/".length).toLowerCase() === dependencies.repository.toLowerCase() &&
+    (url.pathname.length === prefix.length || url.pathname[prefix.length] === "/")
+  )
+    url.pathname = `${prefix}${url.pathname.slice(prefix.length)}`;
   if (
     purpose &&
     (!url.pathname.startsWith(prefix) || !purpose.test(url.pathname.slice(prefix.length)))

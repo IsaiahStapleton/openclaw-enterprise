@@ -23,6 +23,12 @@ Read its [implementation status](docs/design.md#implementation-status) before
 treating a target-design capability as implemented; verify current code and tests.
 Do not create a competing architecture specification in this checkout.
 
+## Repository layout
+
+Follow [Repository layout and conventions](docs/layout.md) before adding or moving
+files. Preserve ownership and workspace/package boundaries; update the guide and
+navigation alongside changes to directories, ownership, or placement conventions.
+
 ## Keep agents in their lane
 
 "Our PRs" and "my PRs" mean PRs authored by the requesting user's GitHub
@@ -61,20 +67,17 @@ In general, do not add a capability without a caller in the regular Agent
 workflow. Deliver the capability with that caller; defer speculative components
 until a real workflow needs them. A test-only caller does not satisfy this rule.
 
-For example, GitHub App token issuance should belong to an appropriate platform
-primitive. If implemented as a Provider, it must conform to the
-[Provider contract](docs/reference/providers.md) and participate in Provider
-composition; exposing only token minting and revocation methods is insufficient.
-This is the design concern illustrated by
-[PR #136](https://github.com/openclaw/openclaw-enterprise/pull/136).
+For example, a GitHub App token Provider must satisfy the
+[Provider contract](docs/reference/providers.md) and composition, beyond minting
+and revocation; see [PR #136](https://github.com/openclaw/openclaw-enterprise/pull/136).
 
 ### Require integration tests; reject low-value tests
 
-**Do not add low-value tests.** We place low value on unit tests in general.
-Prefer tests that prove new functionality works through real platform boundaries
-and produces observable results.
+**Do not add or run tests for documentation changes, including docs-site
+presentation.** Use builds, formatting, link checks, and visual inspection.
+**Do not add low-value tests** that restate implementation or duplicate coverage.
 
-**New functionality requires integration tests. Omitting them requires an
+**New platform functionality requires integration tests. Omitting them requires an
 explicit human override.** Record the approved scope and reason in the PR.
 Missing infrastructure, passing unit tests, or an agent's judgment cannot grant
 that override.

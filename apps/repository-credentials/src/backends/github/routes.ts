@@ -15,6 +15,7 @@ export interface RoutePolicy {
 
 interface RoutePolicyOptions {
   readonly repository: string;
+  readonly repositoryId: string;
   readonly profile: GitHubProfile;
   readonly gatewayOrigin: string;
   readonly gitOrigin: string;
