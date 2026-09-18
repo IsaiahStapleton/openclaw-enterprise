@@ -31,7 +31,7 @@ function registryInput() {
   };
 }
 
-test("canonical registry fingerprints bind exact authority and the selected Namespace policy", () => {
+test("canonical registry fingerprints bind exact authority and the selected Namespace policy", async (t) => {
   const input = registryInput();
   const registry = validateGitHubRepositoryRegistry(input, "github-primary");
   const request = { namespaceId: "namespace-a", repositoryRef: "application" };
@@ -58,39 +58,41 @@ test("canonical registry fingerprints bind exact authority and the selected Name
     binding,
   );
 
-  for (const mutate of [
-    (value) => {
+  for (const [name, mutate] of Object.entries({
+    "provider identity": (value) => {
       value.providerId = "another-provider";
     },
-    (value) => {
+    "provider instance": (value) => {
       value.providerInstanceId = "another-instance";
     },
-    (value) => {
+    "application identity": (value) => {
       value.appId = "12346";
     },
-    (value) => {
+    "installation identity": (value) => {
       value.githubInstallationId = "67891";
     },
-    (value) => {
+    "maximum duration": (value) => {
       value.maximumDurationSeconds = 3600;
     },
-    (value) => {
+    "repository identity": (value) => {
       value.repositories[0].repositoryId = "34568";
     },
-    (value) => {
+    "repository name": (value) => {
       value.repositories[0].repository = "example/renamed";
     },
-    (value) => {
+    "selected Namespace profiles": (value) => {
       value.repositories[0].namespaces[0].profiles = ["git-write"];
     },
-  ]) {
-    const changed = registryInput();
-    mutate(changed);
-    assert.notEqual(
-      resolveGitHubRepositoryBinding(validateGitHubRepositoryRegistry(changed), request).grant
-        .grantId,
-      binding.grant.grantId,
-    );
+  })) {
+    await t.test(name, () => {
+      const changed = registryInput();
+      mutate(changed);
+      assert.notEqual(
+        resolveGitHubRepositoryBinding(validateGitHubRepositoryRegistry(changed), request).grant
+          .grantId,
+        binding.grant.grantId,
+      );
+    });
   }
   assert.notEqual(
     resolveGitHubRepositoryBinding(registry, { ...request, profile: "git-read" }).grant.grantId,
@@ -109,66 +111,85 @@ test("canonical registry fingerprints bind exact authority and the selected Name
   }, TypeError);
 });
 
-test("registry refuses ambiguous repositories, wildcard policy, unsupported profiles and noncanonical IDs", () => {
-  for (const mutate of [
-    (value) => {
+test("registry refuses ambiguous repositories, wildcard policy, unsupported profiles and noncanonical IDs", async (t) => {
+  for (const [name, mutate] of Object.entries({
+    "leading-zero application ID": (value) => {
       value.appId = "01";
     },
-    (value) => {
+    "unsafe installation ID": (value) => {
       value.githubInstallationId = "9007199254740992";
     },
-    (value) => {
+    "zero repository ID": (value) => {
       value.repositories[0].repositoryId = "0";
     },
-    (value) => {
+    "ambiguous repository path": (value) => {
       value.repositories[0].repository = "example/release..archive";
     },
-    (value) => {
+    "wildcard Namespace": (value) => {
       value.repositories[0].namespaces[0].namespaceId = "*";
     },
-    (value) => {
+    "unsupported profile": (value) => {
       value.repositories[0].namespaces[0].profiles = ["app-full"];
     },
-    (value) => {
+    "duplicate profile": (value) => {
       value.repositories[0].namespaces[0].profiles = ["git-read", "git-read"];
     },
-    (value) => {
+    "duplicate Namespace policy": (value) => {
       value.repositories[0].namespaces.push(value.repositories[0].namespaces[0]);
     },
-    (value) => {
+    "aliased repository identity": (value) => {
       value.repositories.push({ ...value.repositories[0], repositoryRef: "alias" });
     },
-    (value) => {
+    "duplicate repository reference": (value) => {
       value.repositories.push({
         ...value.repositories[0],
         repositoryId: "44",
         repository: "example/other",
       });
     },
-    (value) => {
+    "unexpected policy field": (value) => {
       value.repositories[0].namespaces[0].token = "unexpected";
     },
-    (value) => {
+    "infinite maximum duration": (value) => {
       value.maximumDurationSeconds = Infinity;
     },
-  ]) {
-    const input = registryInput();
-    mutate(input);
-    assert.throws(() => validateGitHubRepositoryRegistry(input), /invalid-repository-registry/);
+  })) {
+    await t.test(name, () => {
+      const input = registryInput();
+      mutate(input);
+      assert.throws(() => validateGitHubRepositoryRegistry(input), /invalid-repository-registry/);
+    });
   }
   assert.throws(
     () => validateGitHubRepositoryRegistry(registryInput(), "another-provider"),
     /invalid-repository-registry/,
   );
   const registry = validateGitHubRepositoryRegistry(registryInput());
-  for (const request of [
-    { namespaceId: "namespace-b", repositoryRef: "application" },
-    { namespaceId: "namespace-a", repositoryRef: "missing" },
-    { namespaceId: "namespace-c", repositoryRef: "application", profile: "git-read" },
-    { namespaceId: "namespace-a", repositoryRef: "application", profile: "app-full" },
-    { namespaceId: "namespace-a", repositoryRef: "application", profile: null },
-  ]) {
-    assert.throws(() => resolveGitHubRepositoryBinding(registry, request));
+  for (const [name, request] of Object.entries({
+    "default write profile outside Namespace policy": {
+      namespaceId: "namespace-b",
+      repositoryRef: "application",
+    },
+    "unknown repository reference": { namespaceId: "namespace-a", repositoryRef: "missing" },
+    "Namespace without a policy": {
+      namespaceId: "namespace-c",
+      repositoryRef: "application",
+      profile: "git-read",
+    },
+    "unsupported selected profile": {
+      namespaceId: "namespace-a",
+      repositoryRef: "application",
+      profile: "app-full",
+    },
+    "explicit null profile": {
+      namespaceId: "namespace-a",
+      repositoryRef: "application",
+      profile: null,
+    },
+  })) {
+    await t.test(name, () => {
+      assert.throws(() => resolveGitHubRepositoryBinding(registry, request));
+    });
   }
 });
 
