@@ -98,6 +98,24 @@ test("credential source boundary rejects new raw capabilities in the real source
 
   const cases = [
     [
+      "configuration composition cannot open files outside the protected reader",
+      'import { open } from "node:fs/promises";',
+      /unreviewed runtime import from node:fs\/promises/,
+      "composition/repository-credentials/config.ts",
+    ],
+    [
+      "configuration composition cannot inspect the process user directly",
+      "process.getuid?.();",
+      /raw process capability/,
+      "composition/repository-credentials/config.ts",
+    ],
+    [
+      "the protected reader cannot write files",
+      'import { writeFile } from "node:fs/promises";',
+      /unreviewed runtime import from node:fs\/promises/,
+      "composition/repository-credentials/protected-file.ts",
+    ],
+    [
       "new composition source is scanned",
       'import { request } from "node:http";',
       /unreviewed runtime import from node:http/,

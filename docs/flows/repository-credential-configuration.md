@@ -1,7 +1,7 @@
 ---
 created: 2026-09-18
 updated: 2026-09-18
-last_updated_session: authoring-run/99b8e474-5c94-4558-bce6-e7d6032f832c
+last_updated_session: "codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a"
 ---
 
 # Repository credential configuration flow
@@ -69,7 +69,7 @@ cleared on success or failure. Standalone configuration skips this phase.
 
 ### 2. Establish a protected path from the filesystem root
 
-`apps/controller/src/composition/repository-credentials/config.ts:readProtected`
+`apps/controller/src/composition/repository-credentials/protected-file.ts:readProtectedFile`
 
 The loader requires a normalized absolute path and validates its directory
 ancestors in root-to-leaf order. Each accepted prefix therefore protects the
@@ -81,17 +81,21 @@ parent remains unwritable by those users.
 The loader opens the final basename without following symlinks. It checks the
 file owner, mode, link count, type, and size, performs a bounded read, and compares
 the open file with the named inode and its original metadata. Invalid or replaced
-files fail before their contents become configuration.
+files fail before their contents become configuration. The reader clears its scratch
+buffer and awaits file closure before returning. Success transfers an independent
+buffer to its caller; failure returns no filesystem details. Configuration maps
+that failure to `invalid-configuration`.
 
 ### 3. Validate configuration and construct material owners
 
 `apps/controller/src/composition/repository-credentials/config.ts:loadConfiguration`
 
-Composition validates the service policy and either one GitHub repository or the
-canonical registry, then repeats protected reads for the App key, certificate and
-TLS key. Registry policy remains bounded to its installation, repository and
-Namespace/profile grants. The GitHub key
-owner accepts the configured RSA signing key; TLS context creation validates
+Composition validates the service policy and selects either one GitHub repository
+or the canonical registry, together with its App identity and key path. That
+validated selection determines the factory after protected reads load the App
+key, certificate and TLS key. Registry policy remains bounded to its installation,
+repository and Namespace/profile grants. The GitHub key owner accepts the
+configured RSA signing key; TLS context creation validates
 the certificate and private-key pair. The frozen result owns the selected
 factory and TLS buffers. Failure closes any constructed owner and clears loaded
 buffers before returning `invalid-configuration`.
@@ -135,6 +139,8 @@ startup validation, not live GitHub behavior or platform integration.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 19:10: Trace the protected reader result and validated backend selection while preserving file and material ownership. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - 4221fc5591b750cd59b459815a7bc327e98f295c)
 
 - 2026-09-18 09:45: Trace the accompanying controller-owned protected loader and Kubernetes private projection snapshots without relaxing ancestor validation. (authoring-run/99b8e474-5c94-4558-bce6-e7d6032f832c - 6fd1516de000bde46d4cd43e0d21ec3f0167d65e)
 

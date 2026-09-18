@@ -1,6 +1,3 @@
-import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
-import { dirname, isAbsolute, parse, resolve } from "node:path";
 import { createPrivateKey } from "node:crypto";
 import { createSecureContext } from "node:tls";
 import type { Clock } from "../../drivers/repository-credentials/backend-contracts.ts";
@@ -20,82 +17,31 @@ import {
   validateGitHubRepositoryRegistry,
 } from "../../providers/repository-credentials/github/registry.ts";
 import type { GitHubRepositoryRegistry } from "../../providers/repository-credentials/github/registry.ts";
-import type { GitHubConfiguration } from "../../providers/repository-credentials/github/types.ts";
+import type {
+  GitHubConfiguration,
+  GitHubDriverFactory,
+} from "../../providers/repository-credentials/github/types.ts";
 import { createGitHubRegistryDriverFactory } from "../../providers/repository-credentials/github/registry-factory.ts";
+import { readProtectedFile } from "./protected-file.ts";
+
+type SelectedBackend = {
+  readonly key: {
+    readonly appId: string;
+    readonly privateKeyFile: string;
+  };
+} & (
+  | { readonly kind: "github-app-registry"; readonly registry: GitHubRepositoryRegistry }
+  | { readonly kind: "github-app"; readonly configuration: GitHubConfiguration }
+);
 
 async function readProtected(path: string, maximum: number, privateFile = true): Promise<Buffer> {
-  if (!isAbsolute(path) || resolve(path) !== path) {
-    throw new Error("invalid-protected-file");
+  const result = await readProtectedFile(path, maximum, privateFile);
+  if (!result.ok) {
+    throw new Error("invalid-configuration");
   }
-  const uid = process.getuid?.();
-  const immediateParent = dirname(path);
-  const ancestors: string[] = [];
-  let parent = immediateParent;
-  for (;;) {
-    ancestors.push(parent);
-    if (parent === parse(parent).root) {
-      break;
-    }
-    parent = dirname(parent);
-  }
-  // Validate from the root so each trusted prefix protects the next component
-  // against replacement by another user. Root-owned sticky ancestors permit
-  // private directories beneath /tmp; the immediate parent must stay unwritable.
-  for (const ancestor of ancestors.reverse()) {
-    const stat = await lstat(ancestor);
-    const rootStickyAncestor =
-      ancestor !== immediateParent && stat.uid === 0 && (stat.mode & 0o1000) !== 0;
-    if (
-      !stat.isDirectory() ||
-      stat.isSymbolicLink() ||
-      (uid !== undefined && stat.uid !== uid && stat.uid !== 0) ||
-      ((stat.mode & 0o022) !== 0 && !rootStickyAncestor)
-    ) {
-      throw new Error("invalid-protected-file");
-    }
-  }
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  let data: Buffer | undefined;
-  try {
-    const before = await handle.stat();
-    if (
-      !before.isFile() ||
-      before.nlink !== 1 ||
-      before.size < 1 ||
-      before.size > maximum ||
-      (uid !== undefined && before.uid !== uid && before.uid !== 0) ||
-      (before.mode & (privateFile ? 0o077 : 0o022)) !== 0
-    ) {
-      throw new Error("invalid-protected-file");
-    }
-    data = Buffer.alloc(before.size + 1);
-    let position = 0;
-    while (position < data.length) {
-      const result = await handle.read(data, position, data.length - position, position);
-      if (!result.bytesRead) {
-        break;
-      }
-      position += result.bytesRead;
-    }
-    const after = await handle.stat();
-    const named = await lstat(path);
-    if (
-      position !== before.size ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      after.ctimeMs !== before.ctimeMs ||
-      named.isSymbolicLink() ||
-      named.dev !== before.dev ||
-      named.ino !== before.ino
-    ) {
-      throw new Error("invalid-protected-file");
-    }
-    return Buffer.from(data.subarray(0, position));
-  } finally {
-    data?.fill(0);
-    await handle.close();
-  }
+  return result.bytes;
 }
+
 export async function loadConfiguration(path: string, clock: Clock): Promise<LoadedConfiguration> {
   let raw: Buffer | undefined;
   let pem: Buffer | undefined;
@@ -109,10 +55,7 @@ export async function loadConfiguration(path: string, clock: Clock): Promise<Loa
     const root = record(input);
     const config = validateServiceConfig(root);
     const backendInput = record(root.backend);
-    let backend: GitHubConfiguration | undefined;
-    let registry: GitHubRepositoryRegistry | undefined;
-    let privateKeyFile: string;
-    let appId: string;
+    let selected: SelectedBackend;
     if (backendInput.kind === "github-app-registry") {
       if (
         Object.keys(backendInput).some(
@@ -126,19 +69,31 @@ export async function loadConfiguration(path: string, clock: Clock): Promise<Loa
         GITHUB_REPOSITORY_REGISTRY_MAX_BYTES,
         false,
       );
-      registry = validateGitHubRepositoryRegistry(
+      const registry = validateGitHubRepositoryRegistry(
         JSON.parse(registryBytes.toString("utf8")),
         string(backendInput.providerId),
       );
       if (config.sessionPolicy.maximumDurationSeconds > registry.maximumDurationSeconds) {
         throw new Error("invalid-configuration");
       }
-      privateKeyFile = string(backendInput.privateKeyFile);
-      appId = registry.appId;
+      selected = {
+        kind: "github-app-registry",
+        registry,
+        key: {
+          privateKeyFile: string(backendInput.privateKeyFile),
+          appId: registry.appId,
+        },
+      };
     } else {
-      backend = validateGitHubConfiguration(backendInput);
-      privateKeyFile = backend.privateKeyFile;
-      appId = backend.appId;
+      const configuration = validateGitHubConfiguration(backendInput);
+      selected = {
+        kind: "github-app",
+        configuration,
+        key: {
+          privateKeyFile: configuration.privateKeyFile,
+          appId: configuration.appId,
+        },
+      };
     }
     const gateway = record(root.gateway);
     for (const profile of config.sessionPolicy.allowedProfiles) {
@@ -146,10 +101,10 @@ export async function loadConfiguration(path: string, clock: Clock): Promise<Loa
         throw new Error("invalid-configuration");
       }
     }
-    pem = await readProtected(privateKeyFile, config.limits.privateKeyBytes);
+    pem = await readProtected(selected.key.privateKeyFile, config.limits.privateKeyBytes);
     owner = createGitHubKeyOwner({
       privateKey: createPrivateKey(pem),
-      appId,
+      appId: selected.key.appId,
       clock,
     });
     cert = await readProtected(string(gateway.tlsCertFile), 131072, false);
@@ -161,9 +116,22 @@ export async function loadConfiguration(path: string, clock: Clock): Promise<Loa
       limits: config.limits,
       clock,
     };
-    const factory = registry
-      ? createGitHubRegistryDriverFactory({ ...factoryOptions, registry, privateKeyFile })
-      : createGitHubDriverFactory({ ...factoryOptions, configuration: backend! });
+    let factory: GitHubDriverFactory;
+    switch (selected.kind) {
+      case "github-app-registry":
+        factory = createGitHubRegistryDriverFactory({
+          ...factoryOptions,
+          registry: selected.registry,
+          privateKeyFile: selected.key.privateKeyFile,
+        });
+        break;
+      case "github-app":
+        factory = createGitHubDriverFactory({
+          ...factoryOptions,
+          configuration: selected.configuration,
+        });
+        break;
+    }
     const ownedCert = cert;
     const ownedTlsKey = tlsKey;
     const ownedKey = owner;

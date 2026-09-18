@@ -40,9 +40,11 @@ const reviewedImports = {
   },
   "composition/repository-credentials/config.ts": {
     "node:crypto": ["createPrivateKey"],
+    "node:tls": ["createSecureContext"],
+  },
+  "composition/repository-credentials/protected-file.ts": {
     "node:fs": ["constants"],
     "node:fs/promises": ["lstat", "open"],
-    "node:tls": ["createSecureContext"],
   },
   "composition/repository-credentials/platform.ts": {
     "node:fs": ["constants"],
@@ -134,7 +136,7 @@ const reviewedProcessMembers = {
   "drivers/repository-credentials/client/launch.ts": ["argv", "exitCode", "off", "on", "stderr"],
   "drivers/repository-credentials/client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
   "drivers/repository-credentials/client/private-files.ts": ["getuid"],
-  "composition/repository-credentials/config.ts": ["getuid"],
+  "composition/repository-credentials/protected-file.ts": ["getuid"],
   "composition/repository-credentials/service.ts": ["exit", "once", "stderr", "stdout"],
   "composition/repository-credentials/projected-inputs.ts": [
     "argv",
