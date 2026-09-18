@@ -11,7 +11,7 @@ export async function runInFixtureContainer(t, testFile, { packaged = false } = 
   if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD === "1") {
     if (packaged)
       assert.equal(
-        process.env.REPOSITORY_CREDENTIALS_APP_ROOT,
+        process.env.REPOSITORY_CREDENTIALS_EMITTED_ROOT,
         "/app/dist",
         "packaged qualification must use emitted application modules",
       );
@@ -55,7 +55,7 @@ export async function runInFixtureContainer(t, testFile, { packaged = false } = 
       "node",
     ];
     if (!packaged) args.push("--mount", `type=bind,src=${gh},dst=/usr/local/bin/gh,readonly`);
-    if (packaged) args.push("--env", "REPOSITORY_CREDENTIALS_APP_ROOT=/app/dist");
+    if (packaged) args.push("--env", "REPOSITORY_CREDENTIALS_EMITTED_ROOT=/app/dist");
     args.push(image, "--test", testFile);
     const result = await run("docker", args, { timeout: 120000, allowFailure: true });
     // Child diagnostics are safe test names/statuses. Never copy command stdout

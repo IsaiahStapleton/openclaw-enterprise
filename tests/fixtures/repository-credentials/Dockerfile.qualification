@@ -5,5 +5,8 @@ FROM ${CLIENT_IMAGE}
 # Qualify the emitted service closure and delivered client toolchain together.
 # This image is test-only; it exposes no test clock in either delivered image.
 USER root
-COPY --from=service-artifacts /app/dist /app/dist
+COPY --from=service-artifacts /app/dist/repository-credentials.js /app/dist/repository-credentials.js
+COPY --from=service-artifacts /app/dist/composition /app/dist/composition
+COPY --from=service-artifacts /app/dist/providers /app/dist/providers
+COPY --from=service-artifacts /app/dist/drivers /app/dist/drivers
 ENTRYPOINT ["node"]

@@ -2,13 +2,18 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, lstat, mkdir, readFile, rm, symlink, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
 import { createServer } from "node:https";
 import { once } from "node:events";
-import { writeClientConfiguration } from "../../apps/repository-credentials/src/client/config.ts";
+import {
+  credentialDriverModule,
+  credentialClientPath,
+} from "../fixtures/repository-credentials/runtime.mjs";
 
-const launcher = resolve("apps/repository-credentials/src/client/launch.ts");
+const { writeClientConfiguration } = await credentialDriverModule("client/config");
+
+const launcher = credentialClientPath("launch");
 const opened = {
   session: { sessionId: "session-test", deadlineWallMs: Date.now() + 86400000 },
   bearer: "controlled_gateway_bearer_0000000000000000000000",

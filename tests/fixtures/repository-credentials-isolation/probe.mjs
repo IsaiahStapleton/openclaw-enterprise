@@ -37,8 +37,11 @@ const forbidden = [
   "/session-parent",
   "/sessions",
   "/sibling",
-  "/app/dist/main.js",
-  "/app/dist/backends",
+  "/app/dist/repository-credentials.js",
+  "/app/dist/providers",
+  "/app/dist/composition",
+  "/app/dist/drivers/repository-credentials/custody.js",
+  "/app/dist/drivers/repository-credentials/control.js",
 ];
 const present = [];
 for (const path of forbidden) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile, chmod } from "node:fs/promises";
+import { access, cp, mkdtemp, readFile, rm, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -10,32 +10,34 @@ const root = resolve(".");
 test("emitted credential configuration check runs without workspace packages or node_modules", async (t) => {
   const temporary = await mkdtemp(join(tmpdir(), "credential-package-"));
   t.after(() => rm(temporary, { recursive: true, force: true }));
-  const build = join(temporary, "build");
-  await mkdir(join(build, "apps"), { recursive: true });
-  await cp(join(root, "apps/repository-credentials"), join(build, "apps/repository-credentials"), {
-    recursive: true,
-    filter: (source) => !source.includes("/dist") && !source.includes("/node_modules"),
-  });
-  await cp(join(root, "tsconfig.base.json"), join(build, "tsconfig.base.json"));
-  await symlink(join(root, "node_modules"), join(build, "node_modules"));
   const compiled = spawnSync(
     process.execPath,
     [
       join(root, "node_modules/typescript/bin/tsc"),
       "--build",
-      join(build, "apps/repository-credentials/tsconfig.json"),
+      join(root, "apps/controller/tsconfig.json"),
       "--pretty",
       "false",
     ],
-    { encoding: "utf8", timeout: 30000 },
+    { encoding: "utf8", timeout: 120000 },
   );
   assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+  const staged = spawnSync(
+    process.execPath,
+    [join(root, "scripts/build-repository-credentials.mjs")],
+    {
+      encoding: "utf8",
+      timeout: 30000,
+    },
+  );
+  assert.equal(staged.status, 0, staged.stdout + staged.stderr);
   const runtime = join(temporary, "runtime");
-  await mkdir(runtime);
-  await cp(join(build, "apps/repository-credentials/dist"), join(runtime, "dist"), {
-    recursive: true,
+  await cp(join(root, ".build/repository-credentials/service"), runtime, { recursive: true });
+  await assert.rejects(access(join(runtime, "node_modules")), { code: "ENOENT" });
+  await assert.rejects(access(join(runtime, "src")), { code: "ENOENT" });
+  await assert.rejects(access(join(runtime, "dist/drivers/repository-credentials/client")), {
+    code: "ENOENT",
   });
-  await cp(join(root, "apps/repository-credentials/package.json"), join(runtime, "package.json"));
   // The detached runtime has no dependency graph or workspace source. Real PEM loading
   // and TLS validation still run before the non-network configuration check succeeds.
   const key = join(temporary, "key.pem");
@@ -95,7 +97,11 @@ test("emitted credential configuration check runs without workspace packages or 
   );
   const checked = spawnSync(
     process.execPath,
-    [join(runtime, "dist/check-config.js"), "--check-config", configuration],
+    [
+      join(runtime, "dist/composition/repository-credentials/check-config.js"),
+      "--check-config",
+      configuration,
+    ],
     { cwd: runtime, env: { PATH: process.env.PATH }, encoding: "utf8", timeout: 10000 },
   );
   assert.equal(checked.status, 0, checked.stderr);

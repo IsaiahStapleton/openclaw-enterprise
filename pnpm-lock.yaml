@@ -30,8 +30,6 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
-  apps/repository-credentials: {}
-
   apps/controller:
     dependencies:
       '@better-auth/api-key':

@@ -5,7 +5,7 @@ import { request } from "node:https";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
-import { appModule } from "../fixtures/repository-credentials/runtime.mjs";
+import { credentialDriverModule } from "../fixtures/repository-credentials/runtime.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import {
   createAlternateDriverFactory,
@@ -65,7 +65,7 @@ test("second backend retains renewal through expiry and finalizes through the re
     gatewayOrigin: config.gateway.publicOrigin,
     clock,
   });
-  const { createCredentialService } = await appModule("service");
+  const { createCredentialService } = await credentialDriverModule("service");
   const service = createCredentialService({ config, factory, clock });
   t.after(() => service.shutdown(1000));
   const opened = service.open({ durationSeconds: 86400, profile: "git-write" });
@@ -136,8 +136,8 @@ test("second backend uses the production HTTPS sender and distinct native authen
     accepted: upstream.accepted,
   });
   const [{ createCredentialService }, { startListeners }] = await Promise.all([
-    appModule("service"),
-    appModule("server"),
+    credentialDriverModule("service"),
+    credentialDriverModule("server"),
   ]);
   const service = createCredentialService({ config, factory, clock });
   const listeners = await startListeners({

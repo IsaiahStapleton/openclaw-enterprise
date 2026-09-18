@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { appModule } from "./runtime.mjs";
+import { credentialDriverModule } from "./runtime.mjs";
 import { chmod } from "node:fs/promises";
 import { request } from "node:https";
 import { createControlledClock } from "./clock.mjs";
@@ -14,10 +14,15 @@ import {
   writeSessionClientConfiguration,
 } from "./service-resources.mjs";
 
-export { appModule, appRoot, appExtension, repositoryRoot } from "./runtime.mjs";
+export {
+  credentialDriverModule,
+  githubProviderModule,
+  credentialClientPath,
+  repositoryRoot,
+} from "./runtime.mjs";
 
 export async function createServiceConfiguration(t, limits = {}) {
-  const { validateServiceConfig } = await appModule("config");
+  const { validateServiceConfig } = await credentialDriverModule("configuration");
   const directory = await temporaryDirectory(t, "rcs-");
   await chmod(directory, 0o700);
   return validateServiceConfig(

@@ -86,8 +86,11 @@ REPOSITORY_CREDENTIALS_TEST_IMAGE=repository-credentials-qualification:test \
 ```
 
 Record both input image identities and the qualification image ID with results.
-The first case imports `/app/dist`, exercises the emitted production service and
-client entrypoints, and uses the same long-session acceptance sequence. The
+The qualification image combines the separately staged service and client
+closures under `/app/dist`. Its loader selects that emitted root explicitly
+with `REPOSITORY_CREDENTIALS_EMITTED_ROOT`; missing emitted modules fail without
+falling back to checkout source. The first case exercises the emitted production
+service and client entrypoints and uses the same long-session acceptance sequence. The
 second runs alternate-backend conformance through those emitted common owners,
 including renewal, private authentication, and streamed callback drainage. The
 qualification image is a test driver; it is not a separate supported deployment.
@@ -100,7 +103,17 @@ isolation of a separate Agent container. The third case checks the rendered
 Compose mount configuration only. Runtime isolation requires separate delivered
 service and client containers, with only the session files, public trust and
 workspace mounted into the client, plus inspection of the running client surfaces.
-Keep that result separate from the combined fixture and Compose configuration checks.
+Select the existing isolation case with both delivered image identities:
+
+```sh
+REPOSITORY_CREDENTIALS_SERVICE_IMAGE=repository-credentials:local \
+REPOSITORY_CREDENTIALS_CLIENT_IMAGE=repository-credentials-client:local \
+  node --test tests/integration/repository-credentials-isolation.test.mjs
+```
+
+Without either selector, the isolation case skips; supplying only one fails.
+Keep its result separate from the combined fixture, Compose configuration
+checks and live-provider qualification.
 
 ## Run an authorized live smoke
 

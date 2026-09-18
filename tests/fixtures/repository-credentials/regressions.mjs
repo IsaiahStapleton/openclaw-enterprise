@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { run, temporaryDirectory } from "./process.mjs";
 import { registerResourceCleanup, closeAndDispose } from "./cleanup.mjs";
-import { appModule } from "./runtime.mjs";
+import { credentialDriverModule } from "./runtime.mjs";
 import { startCredentialServiceFixture, gatewayRequest } from "./service.mjs";
 import { runInFixtureContainer } from "./container.mjs";
 
@@ -150,7 +150,7 @@ test("pre-registered cleanup reconciles accepted creations with lost responses w
 });
 
 test("control cleanup rejects unavailable and pending disposal through the actual operator client", async (t) => {
-  const { callControl } = await appModule("client/operator");
+  const { callControl } = await credentialDriverModule("client/operator");
   const directory = await temporaryDirectory(t, "cleanup-control-");
   const socket = join(directory, "control.sock");
   const sessionId = "cleanup-session";

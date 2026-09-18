@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import {
   createGitHubDriverFactory,
   createGitHubKeyOwner,
-} from "../../apps/repository-credentials/src/backends/github/index.ts";
-import { validateServiceConfig } from "../../apps/repository-credentials/src/config.ts";
+} from "../../apps/controller/src/providers/repository-credentials/github/index.ts";
+import { validateServiceConfig } from "../../apps/controller/src/drivers/repository-credentials/configuration.ts";
 import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 const config = validateServiceConfig({

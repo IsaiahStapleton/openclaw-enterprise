@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import { appModule } from "./runtime.mjs";
+import { credentialDriverModule, githubProviderModule } from "./runtime.mjs";
 import { createControlledClock } from "./clock.mjs";
 import { createResourceScope } from "./resources.mjs";
 import { githubConfigurationData, serviceConfigurationData } from "./builders.mjs";
@@ -13,10 +13,10 @@ export async function createGitHubPlanningFixture(t) {
       { admitSession },
       { createCustody },
     ] = await Promise.all([
-      appModule("backends/github/index"),
-      appModule("config"),
-      appModule("sessions"),
-      appModule("custody"),
+      githubProviderModule("index"),
+      credentialDriverModule("configuration"),
+      credentialDriverModule("sessions"),
+      credentialDriverModule("custody"),
     ]);
     const clock = createControlledClock(1700000000000);
     const config = validateServiceConfig(serviceConfigurationData());

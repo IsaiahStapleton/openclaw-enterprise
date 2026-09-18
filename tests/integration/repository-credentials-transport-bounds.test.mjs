@@ -14,7 +14,8 @@ import {
 } from "../fixtures/repository-credentials/github.mjs";
 import { createTlsMaterial, listen } from "../fixtures/repository-credentials/process.mjs";
 import {
-  appModule,
+  credentialDriverModule,
+  githubProviderModule,
   createServiceConfiguration,
   eventually,
 } from "../fixtures/repository-credentials/service.mjs";
@@ -49,11 +50,11 @@ async function startTransport(t, onRequest, limits = {}) {
     { createGitHubDriverFactory },
     { createGitHubKeyOwner },
   ] = await Promise.all([
-    appModule("clock"),
-    appModule("service"),
-    appModule("server"),
-    appModule("backends/github/index"),
-    appModule("backends/github/material"),
+    credentialDriverModule("clock"),
+    credentialDriverModule("service"),
+    credentialDriverModule("server"),
+    githubProviderModule("index"),
+    githubProviderModule("material"),
   ]);
   const clock = createSystemClock();
   const tls = await createTlsMaterial(resources);
@@ -674,7 +675,7 @@ test(
     await eventually(() => delivered === 4);
     const sessionId = fixture.opened.session.sessionId;
     assert.equal(fixture.service.status(sessionId).activeUses, 1);
-    const { callControl } = await appModule("client/operator");
+    const { callControl } = await credentialDriverModule("client/operator");
     const closed = await callControl(fixture.config.gateway.controlSocket, {
       method: "POST",
       path: `/v1/sessions/${sessionId}/close`,

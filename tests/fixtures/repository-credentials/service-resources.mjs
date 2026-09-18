@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
-import { appModule } from "./runtime.mjs";
+import { credentialDriverModule, githubProviderModule } from "./runtime.mjs";
 import { temporaryDirectory } from "./process.mjs";
 import { githubConfigurationData } from "./builders.mjs";
 import {
@@ -16,8 +16,8 @@ export async function createGitHubServiceFactory(
   { config, clock, privateKey, trustedEndpoints },
 ) {
   const [{ createGitHubDriverFactory }, { createGitHubKeyOwner }] = await Promise.all([
-    appModule("backends/github/index"),
-    appModule("backends/github/material"),
+    githubProviderModule("index"),
+    githubProviderModule("material"),
   ]);
   const key = createGitHubKeyOwner({ privateKey, appId: fixtureAppId, clock });
   resources.after(() => key.close());
@@ -65,8 +65,8 @@ export async function startServiceListeners(
   { config, factory, clock, tls, upstreamOrigins },
 ) {
   const [{ createCredentialService }, { startListeners }] = await Promise.all([
-    appModule("service"),
-    appModule("server"),
+    credentialDriverModule("service"),
+    credentialDriverModule("server"),
   ]);
   const service = createCredentialService({ config, factory, clock });
   let listeners;
@@ -87,7 +87,7 @@ export async function startServiceListeners(
 }
 
 export async function writeSessionClientConfiguration(resources, { opened, ca }) {
-  const { writeClientConfiguration } = await appModule("client/config");
+  const { writeClientConfiguration } = await credentialDriverModule("client/config");
   const parent = await temporaryDirectory(resources, "rcs-client-");
   await chmod(parent, 0o700);
   const clientDirectory = join(parent, "session");

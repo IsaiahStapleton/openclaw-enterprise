@@ -8,18 +8,23 @@ bearer; GitHub App keys and installation tokens stay in the service. Review the
 
 ## Build and validate
 
-From a checkout with the repository's Node 24 and pinned pnpm dependencies
-prepared, build only this application:
+Prepare the repository's Node 24 and pinned pnpm dependencies. Run the `pnpm`
+and Docker examples from the checkout root; the client commands below run from
+your working repository. Build the controller project and stage the separate
+credential service and client artifacts:
 
 ```sh
 pnpm credentials:build
 pnpm credentials:check-config /absolute/path/service.json
 ```
 
+The build stages `.build/repository-credentials/service` and
+`.build/repository-credentials/client`. Each contains a minimal manifest and its
+selected emitted modules, using Node built-ins without runtime `node_modules`.
 The check reads protected configuration, validates the RSA key and TLS inputs,
 and prints a safe configuration summary. It does not start listeners or call
-GitHub. The emitted app uses Node built-ins and needs no controller packages or
-runtime `node_modules`.
+GitHub. Starting the credential service does not start the controller API or
+worker.
 
 Create the protected configuration shown in the
 [reference](../reference/repository-credentials.md#configuration). Use a GitHub
@@ -68,18 +73,17 @@ mode 0700. Bind-mount only the selected session directory, never its host parent
 or sibling sessions. The client validates that directory beneath the protected
 container root.
 
-Use the launcher for each supported command:
+Use an absolute launcher path so commands continue to work after entering the
+cloned repository. Replace `/absolute/path/checkout` with the OCE checkout:
 
 ```sh
-pnpm credentials:client /absolute/path/sessions/task git clone \
+credential_client=/absolute/path/checkout/apps/controller/dist/drivers/repository-credentials/client/launch.js
+node "$credential_client" /absolute/path/sessions/task git clone \
   https://credentials.example.internal/example/project.git
 cd project
-node /absolute/path/checkout/apps/repository-credentials/dist/client/launch.js \
-  /absolute/path/sessions/task git fetch origin
-node /absolute/path/checkout/apps/repository-credentials/dist/client/launch.js \
-  /absolute/path/sessions/task git switch an-existing-branch
-node /absolute/path/checkout/apps/repository-credentials/dist/client/launch.js \
-  /absolute/path/sessions/task git push origin HEAD:refs/heads/agent-feature
+node "$credential_client" /absolute/path/sessions/task git fetch origin
+node "$credential_client" /absolute/path/sessions/task git switch an-existing-branch
+node "$credential_client" /absolute/path/sessions/task git push origin HEAD:refs/heads/agent-feature
 ```
 
 Use credential-free HTTPS URLs. If the launcher refuses inherited URL credentials,
@@ -91,24 +95,24 @@ executable is exactly `gh` 2.100.0. Create a
 request body file in the working directory, then use relative API paths:
 
 ```sh
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method POST repos/example/project/pulls --input create-pr.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   repos/example/project/pulls/1
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method PATCH repos/example/project/pulls/1 --input update-pr.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method POST repos/example/project/issues --input create-issue.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method POST repos/example/project/issues/1/comments --input comment.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --paginate repos/example/project/issues/1/comments
 ```
 
 Native PR creation uses an explicit already-pushed head branch:
 
 ```sh
-pnpm credentials:client /absolute/path/sessions/task gh pr create \
+node "$credential_client" /absolute/path/sessions/task gh pr create \
   -R github.com/example/project --base main --head agent-feature \
   --title "Example change" --body-file body.md
 ```
@@ -119,6 +123,7 @@ exact App permissions define supported access.
 
 ## Recover an admission
 
+Return to the OCE checkout root for operator commands.
 If `open` loses its response, use the `credential-admission` ID printed to
 stderr before dispatch. Repeat the command with the same duration and profile,
 adding `--admission-id`:
@@ -142,7 +147,7 @@ see the [ephemeral-session limits](../reference/repository-credentials.md#sessio
 
 ## Container images
 
-Build after emitting the application:
+Build from the staged artifacts produced by `pnpm credentials:build`:
 
 ```sh
 pnpm credentials:image
@@ -154,21 +159,22 @@ a PEM CA bundle through a BuildKit secret:
 
 ```sh
 docker build --secret id=build-ca,src=/absolute/path/build-ca-bundle.pem \
-  -f apps/repository-credentials/Dockerfile.client \
-  -t repository-credentials-client:local apps/repository-credentials
+  -f deploy/runtime/repository-credentials/Dockerfile.client \
+  -t repository-credentials-client:local .build/repository-credentials/client
 ```
 
 The secret supplies curl trust for that download step and is not stored in the
 image. Without it, curl uses the image's default CA trust. Runtime gateway trust
 still comes from the selected session configuration.
 
-Both Dockerfiles use the dedicated app context and copy only its manifest and
-emitted code. The client image installs Git and checksum-verifies pinned `gh`
-2.100.0. Neither image includes service configuration, private keys, session
-files or a control socket. The client entrypoint takes `SESSION_DIRECTORY
- git|gh ARGS...`.
+The Dockerfiles under `deploy/runtime/repository-credentials/` use separate
+staged service and client contexts. The client image includes only the client
+modules, installs Git and checksum-verifies pinned `gh` 2.100.0; it excludes the
+service and GitHub provider implementation. Neither image includes service
+configuration, private keys, session files or a control socket. The client
+entrypoint takes `SESSION_DIRECTORY git|gh ARGS...`.
 
-The optional `apps/repository-credentials/compose.yaml` publishes service port
+The optional `deploy/examples/repository-credentials/compose.yaml` publishes service port
 8443 at host port 443 and keeps service/control mounts separate from client
 mounts. Supply its required `CREDENTIAL_SERVICE_UID`, `CREDENTIAL_SERVICE_GID`,
 `CREDENTIAL_SERVICE_INPUTS`, `CREDENTIAL_SERVICE_CONTROL`,
@@ -180,11 +186,13 @@ container mounts. Arrange gateway DNS and certificate trust before running the
 client; Compose does not provision public DNS or a CA. For example:
 
 ```sh
-docker compose -f apps/repository-credentials/compose.yaml run --rm client \
+docker compose -f deploy/examples/repository-credentials/compose.yaml run --rm client \
   /session git clone https://credentials.example.internal/example/project.git
 ```
 
 ## Inspect and close
+
+From the OCE checkout root:
 
 ```sh
 pnpm credentials:operator status --socket /absolute/path/control/control.sock \

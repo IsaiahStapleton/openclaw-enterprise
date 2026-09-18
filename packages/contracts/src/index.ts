@@ -15,6 +15,14 @@ export {
   type LoggingLevel,
 } from "./logging.ts";
 
+export type {
+  RepositoryCredentialGrantIdentity,
+  RepositoryCredentialClientConfiguration,
+  RepositoryCredentialSessionInput,
+  RepositoryCredentialSessionStatus,
+  RepositoryCredentialSessionResult,
+} from "./repository-credentials.ts";
+
 export const DRIVER_CAPABILITIES = Object.freeze([
   "iam",
   "compute",

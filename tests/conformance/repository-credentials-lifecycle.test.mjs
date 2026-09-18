@@ -4,12 +4,12 @@ import { join } from "node:path";
 import {
   createGitHubDriverFactory,
   createGitHubKeyOwner,
-} from "../../apps/repository-credentials/src/backends/github/index.ts";
-import { validateServiceConfig } from "../../apps/repository-credentials/src/config.ts";
-import { createCredentialService } from "../../apps/repository-credentials/src/service.ts";
-import { createProviderQueue } from "../../apps/repository-credentials/src/provider-queue.ts";
-import { createCustody } from "../../apps/repository-credentials/src/custody.ts";
-import { createLifecycle } from "../../apps/repository-credentials/src/lifecycle.ts";
+} from "../../apps/controller/src/providers/repository-credentials/github/index.ts";
+import { validateServiceConfig } from "../../apps/controller/src/drivers/repository-credentials/configuration.ts";
+import { createCredentialService } from "../../apps/controller/src/drivers/repository-credentials/service.ts";
+import { createProviderQueue } from "../../apps/controller/src/drivers/repository-credentials/provider-queue.ts";
+import { createCustody } from "../../apps/controller/src/drivers/repository-credentials/custody.ts";
+import { createLifecycle } from "../../apps/controller/src/drivers/repository-credentials/lifecycle.ts";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import {
   startGitHubFixture,

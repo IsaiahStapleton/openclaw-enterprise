@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { appRoot, appExtension } from "./runtime.mjs";
+import { credentialClientPath } from "./runtime.mjs";
 import { cleanEnvironment, run, temporaryDirectory } from "./process.mjs";
 
 /**
@@ -11,7 +11,7 @@ import { cleanEnvironment, run, temporaryDirectory } from "./process.mjs";
  */
 export async function runPinnedClients(t, fixture, { signal = t.signal } = {}) {
   const directory = await temporaryDirectory(t, "repository-credentials-client-work-");
-  const launcher = join(appRoot, `client/launch.${appExtension}`);
+  const launcher = credentialClientPath("launch");
   const env = cleanEnvironment({ HOME: directory });
   const invoke = (client, args, options = {}) =>
     run(process.execPath, [launcher, fixture.clientDirectory, client, ...args], {

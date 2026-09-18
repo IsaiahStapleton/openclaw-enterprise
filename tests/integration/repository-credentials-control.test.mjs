@@ -27,9 +27,9 @@ import {
   run,
 } from "../fixtures/repository-credentials/process.mjs";
 import {
-  appModule,
-  appRoot,
-  appExtension,
+  credentialDriverModule,
+  githubProviderModule,
+  credentialClientPath,
   createServiceConfiguration,
   eventually,
 } from "../fixtures/repository-credentials/service.mjs";
@@ -112,9 +112,9 @@ async function admissionFixture(t, onCreate) {
   const resources = createResourceScope();
   t.after(() => resources.close());
   const [{ createCredentialService }, { startListeners }, { callControl }] = await Promise.all([
-    appModule("service"),
-    appModule("server"),
-    appModule("client/operator"),
+    credentialDriverModule("service"),
+    credentialDriverModule("server"),
+    credentialDriverModule("client/operator"),
   ]);
   const clock = createControlledClock();
   const tls = await createTlsMaterial(resources);
@@ -327,15 +327,19 @@ test(
   { timeout: 10000 },
   async (t) => {
     const [{ createSystemClock }, { createCredentialService }, { startListeners }] =
-      await Promise.all([appModule("clock"), appModule("service"), appModule("server")]);
+      await Promise.all([
+        credentialDriverModule("clock"),
+        credentialDriverModule("service"),
+        credentialDriverModule("server"),
+      ]);
     const clock = createSystemClock();
     const tls = await createTlsMaterial(t);
     const base = await createServiceConfiguration(t);
     const config = { ...base, gateway: { ...base.gateway, listen: "127.0.0.1:0" } };
     const github = await startGitHubFixture(t, { clock, tls });
     const [{ createGitHubDriverFactory }, { createGitHubKeyOwner }] = await Promise.all([
-      appModule("backends/github/index"),
-      appModule("backends/github/material"),
+      githubProviderModule("index"),
+      githubProviderModule("material"),
     ]);
     const key = createGitHubKeyOwner({ privateKey: github.privateKey, appId: fixtureAppId, clock });
     const factory = createGitHubDriverFactory({
@@ -441,7 +445,7 @@ test(
     assert.equal(agentStatus, 401);
     const clientParent = await temporaryDirectory(t);
     const clientDirectory = join(clientParent, "session");
-    const operator = join(appRoot, "client", `operator.${appExtension}`);
+    const operator = credentialClientPath("operator");
     const relay = await dropControlResponse(t, config.gateway.controlSocket);
     const admissionId = `${Date.now()}-${randomUUID()}`;
     const failed = await run(
@@ -529,7 +533,11 @@ test(
   { timeout: 10000 },
   async (t) => {
     const [{ createSystemClock }, { createCredentialService }, { startListeners }] =
-      await Promise.all([appModule("clock"), appModule("service"), appModule("server")]);
+      await Promise.all([
+        credentialDriverModule("clock"),
+        credentialDriverModule("service"),
+        credentialDriverModule("server"),
+      ]);
     const clock = createSystemClock();
     const tls = await createTlsMaterial(t);
     const base = await createServiceConfiguration(t);
@@ -566,9 +574,9 @@ test(
       { startListeners },
       { startAlternateUpstream },
     ] = await Promise.all([
-      appModule("clock"),
-      appModule("service"),
-      appModule("server"),
+      credentialDriverModule("clock"),
+      credentialDriverModule("service"),
+      credentialDriverModule("server"),
       import("../fixtures/repository-credentials/alternate.mjs"),
     ]);
     const clock = createSystemClock();
@@ -661,11 +669,11 @@ test(
       { createGitHubDriverFactory },
       { createGitHubKeyOwner },
     ] = await Promise.all([
-      appModule("clock"),
-      appModule("service"),
-      appModule("server"),
-      appModule("backends/github/index"),
-      appModule("backends/github/material"),
+      credentialDriverModule("clock"),
+      credentialDriverModule("service"),
+      credentialDriverModule("server"),
+      githubProviderModule("index"),
+      githubProviderModule("material"),
     ]);
     const clock = createSystemClock();
     const tls = await createTlsMaterial(resources);

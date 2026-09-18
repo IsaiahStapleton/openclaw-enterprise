@@ -8,9 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
-import { inspectRequestHead } from "../../apps/repository-credentials/src/transport/request.ts";
-import { createUpstreamSender } from "../../apps/repository-credentials/src/transport/upstream.ts";
-import { sendError } from "../../apps/repository-credentials/src/transport/errors.ts";
+import { inspectRequestHead } from "../../apps/controller/src/drivers/repository-credentials/transport/request.ts";
+import { createUpstreamSender } from "../../apps/controller/src/drivers/repository-credentials/transport/upstream.ts";
+import { sendError } from "../../apps/controller/src/drivers/repository-credentials/transport/errors.ts";
 
 const clock = {
   wallNow: Date.now,

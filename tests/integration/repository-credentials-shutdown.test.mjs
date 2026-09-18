@@ -2,12 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { credentialEmittedRoot } from "../fixtures/repository-credentials/runtime.mjs";
 import { createTlsMaterial } from "../fixtures/repository-credentials/process.mjs";
-import {
-  appRoot,
-  appExtension,
-  createServiceConfiguration,
-} from "../fixtures/repository-credentials/service.mjs";
+import { createServiceConfiguration } from "../fixtures/repository-credentials/service.mjs";
 
 // The child uses the real process composition and common settlement owner. An
 // unresolved alternate-provider callback must never defeat finite process exit.
@@ -20,12 +17,10 @@ test(
     const config = { ...original, gateway: { ...original.gateway, listen: "127.0.0.1:0" } };
     const program = `
     import { readFile } from 'node:fs/promises';
-    import { pathToFileURL } from 'node:url';
-    import { join } from 'node:path';
     const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString());
-    const load = (name) => import(pathToFileURL(join(input.appRoot, name + '.' + input.extension)).href);
-    const [{runService}, {createSystemClock}, {createAlternateDriverFactory}] = await Promise.all([load('main'), load('clock'), import(input.adapter)]);
+    const { credentialCompositionModule, credentialDriverModule } = await import(input.runtime);
+    const [{runService}, {createSystemClock}, {createAlternateDriverFactory}] = await Promise.all([credentialCompositionModule('service'), credentialDriverModule('clock'), import(input.adapter)]);
     const clock = createSystemClock();
     const factory = createAlternateDriverFactory({origin:'https://upstream.example.test',gatewayOrigin:input.config.gateway.publicOrigin,clock,controls:{lateCapture:new Promise(() => {})}});
     const tls = {key:await readFile(input.key),cert:await readFile(input.cert)};
@@ -38,7 +33,12 @@ test(
     process.stdout.write('ready\\n');
   `;
     const child = spawn(process.execPath, ["--input-type=module", "--eval", program], {
-      env: { PATH: process.env.PATH },
+      env: {
+        PATH: process.env.PATH,
+        ...(credentialEmittedRoot === undefined
+          ? {}
+          : { REPOSITORY_CREDENTIALS_EMITTED_ROOT: credentialEmittedRoot }),
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
     t.after(() => {
@@ -51,8 +51,7 @@ test(
     child.stdin.end(
       JSON.stringify({
         config,
-        appRoot,
-        extension: appExtension,
+        runtime: new URL("../fixtures/repository-credentials/runtime.mjs", import.meta.url).href,
         key: tls.keyFile,
         cert: tls.certFile,
         adapter: pathToFileURL(

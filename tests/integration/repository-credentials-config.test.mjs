@@ -4,8 +4,8 @@ import { generateKeyPairSync } from "node:crypto";
 import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkConfiguration } from "../../apps/repository-credentials/src/check-config.ts";
-import { validateServiceConfig } from "../../apps/repository-credentials/src/config.ts";
+import { checkConfiguration } from "../../apps/controller/src/composition/repository-credentials/check-config.ts";
+import { validateServiceConfig } from "../../apps/controller/src/drivers/repository-credentials/configuration.ts";
 import { createTlsMaterial } from "../fixtures/repository-credentials/process.mjs";
 test("protected startup accepts RSA/TLS files without provider calls and rejects unsafe material", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "repository-configuration-"));

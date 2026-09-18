@@ -4,6 +4,8 @@ The repository credential service forwards Git HTTPS and selected GitHub API
 operations for one configured repository. It runs as a separate Node process
 with ephemeral sessions and no database. Use the [operator guide](../guides/repository-credentials.md)
 to build it, configure protected inputs, and admit a client.
+Controller Drivers, Providers and composition own its source; deployment still
+requires starting its dedicated process separately from the API and worker.
 
 The client receives a gateway session bearer. The service retains the GitHub App
 private key and installation tokens. Possession of the bearer authorizes its
@@ -16,7 +18,7 @@ Work/IAM integration.
 ## Configuration
 
 A protected JSON file supplies `gateway`, `sessionPolicy`, `backend`, and optional
-positive finite `limits`. The service validates configuration before listening.
+positive safe-integer `limits`. The service validates configuration before listening.
 Private keys come from protected files, not environment variables or command
 arguments. The configuration file and private keys must be regular owned files
 with private permissions; symlinks and replacement during loading are rejected.
@@ -181,7 +183,10 @@ request targets to 8 KiB. Git fetch input is 1 MiB; push input and Git output ar
 wire and decoded limits. Exchanges have a five-minute total bound and 60-second
 credential margin; provider actions have at most 30 seconds. Shutdown allows
 60 seconds for cleanup before reporting unresolved obligations and terminating.
-Overrides remain positive and finite.
+Overrides must be positive safe integers. `providerActions` must remain `1`,
+`credentialSlotsPerSession` must be at least `2`, `accessTokenBytes` cannot exceed
+16,384, `privateKeyBytes` cannot exceed 65,536, and `providerActionMs` cannot
+exceed 30,000. Unknown limit names are rejected.
 
 Controlled tests, container tests and authorized live-provider smoke establish
 different evidence. See the [testing guide](../testing/repository-credentials.md)
