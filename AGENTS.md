@@ -2,11 +2,10 @@
 
 ## Active workspace boundary
 
-Approved milestones permit the active TypeScript/pnpm workspace, its selected
-controller and Driver implementations, reviewed PostgreSQL persistence, and
-production Kubernetes packaging described in the current implementation specs.
-Do not introduce platform resources or deployment behavior outside those
-approved milestones.
+Stay within approved implementation milestones: the active TypeScript/pnpm
+workspace, selected controller and Drivers, reviewed PostgreSQL persistence, and
+production Kubernetes packaging. Do not add platform resources or deployment
+behavior outside those milestones.
 
 The development API must bind only to loopback, reject nondevelopment
 configuration, admit only explicitly provisioned development identities,
@@ -25,11 +24,10 @@ Do not create a competing architecture specification in this checkout.
 
 ## Repository layout
 
-Read and follow [Repository layout and conventions](docs/layout.md) before
-adding or moving code, tests, tooling, or documentation. Place changes with the
-existing owner and preserve the declared workspace and package boundaries.
-Update that guide and affected navigation in the same change when directories,
-ownership, or placement conventions change.
+Follow [Repository layout and conventions](docs/layout.md) before adding or
+moving files. Preserve existing ownership and workspace/package boundaries.
+Update the guide and navigation when directories, ownership, or placement
+conventions change.
 
 ## Keep agents in their lane
 
@@ -156,12 +154,10 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
 - Top-level `specs/` records implementation proposals, milestones, and delivery
   history. Completed specifications do not override current feature reference.
 
-Keep `docs/design.md` and `docs/ARCHITECTURE.md` focused on system-level
-structure, ownership, trust boundaries, and major interactions. Update them only
-when a change alters that architectural understanding. Put feature details,
-configuration, edge cases, and delivery history in their owning reference, guide,
-flow, or specification. Add a concise link when needed; do not append an entry
-for every feature or PR.
+Keep `docs/design.md` and `docs/ARCHITECTURE.md` about system structure, ownership,
+trust boundaries, and major interactions; update them only for architectural
+changes. Put feature details, configuration, edge cases, and delivery history in
+their owning reference, guide, flow, or spec. Link as needed, without per-PR entries.
 
 Document new components under `docs/` in the same change: purpose, setup,
 boundaries, verification, and troubleshooting. Update navigation and affected
