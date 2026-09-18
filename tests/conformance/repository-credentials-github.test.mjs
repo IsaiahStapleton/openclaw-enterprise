@@ -5,6 +5,7 @@ import {
   createGitHubKeyOwner,
 } from "../../apps/repository-credentials/src/backends/github/index.ts";
 import { validateServiceConfig } from "../../apps/repository-credentials/src/config.ts";
+import { createCustody } from "../../apps/repository-credentials/src/custody.ts";
 import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import { createProviderTransport } from "../../apps/repository-credentials/src/backends/github/provider-transport.ts";
@@ -392,4 +393,100 @@ test("refused and cancelled observations remain independently captured and token
   }
   assert.ok(fixture.tokenState().every((token) => token.revoked));
   assert.deepEqual(fixture.errors, []);
+});
+
+test("retirement uncertainty retains real custody after non-204 replies and lost responses", async (t) => {
+  for (const { name, revokeStatus, disconnect, revoked } of [
+    { name: "accepted without confirmation", revokeStatus: 202, disconnect: false, revoked: false },
+    { name: "provider unavailable", revokeStatus: 503, disconnect: false, revoked: false },
+    { name: "response lost after revocation", revokeStatus: 204, disconnect: true, revoked: true },
+  ]) {
+    await t.test(name, async (t) => {
+      const clock = createControlledClock();
+      const fixture = await startGitHubFixture(t, { clock, revokeStatus });
+      const key = createGitHubKeyOwner({ privateKey: fixture.privateKey, appId: "12345", clock });
+      t.after(() => key.close());
+      const factory = createGitHubDriverFactory({
+        configuration: githubConfigurationData({ providerInstanceId: "fixture-instance" }),
+        key,
+        clock,
+        gatewayOrigin: config.gateway.publicOrigin,
+        limits: config.limits,
+        trustedEndpoints: {
+          apiOrigin: fixture.origin,
+          gitOrigin: fixture.origin,
+          ca: fixture.tls.ca,
+        },
+      });
+      const authority = { sessionId: name, ...factory.resolve("git-read").binding };
+      const custody = createCustody({
+        clock,
+        maximumSlots: 1,
+        maximumAccessBytes: 16384,
+        maximumRenewalBytes: 16384,
+        maximumCallbacks: 1,
+        admitted: () => true,
+        changed() {},
+      });
+      const driver = factory.create({ authority, custody: custody.driver, clock });
+      let sequence = 0;
+      let dispatches = 0;
+      const attempt = (action) => {
+        const value = Object.freeze({
+          id: `${name}-${++sequence}`,
+          authority,
+          action,
+          deadlineMonoMs: clock.monotonicNow() + 30000,
+          signal: new AbortController().signal,
+          assertAdmitted() {
+            assert.ok(clock.monotonicNow() < this.deadlineMonoMs);
+          },
+          observeDispatch() {
+            dispatches++;
+          },
+        });
+        custody.register(value);
+        return value;
+      };
+      const acquisition = attempt("acquire");
+      const reservation = custody.reserve(acquisition);
+      const acquired = await driver.acquire(acquisition, undefined, 360000);
+      assert.equal(acquired.kind, "acquired");
+      await driver.settle(acquired);
+      custody.settle(reservation);
+      const record = custody.lookup(acquired.credential);
+      if (disconnect) {
+        // The provider commits revocation before dropping the reply; the driver cannot confirm it.
+        fixture.disconnectAfterMutation("DELETE", "/installation/token");
+      }
+      const retirement = attempt("retire");
+      const result = await driver.retire(retirement, acquired.credential);
+      assert.equal(result.kind, "uncertain");
+      await assert.rejects(driver.settle({ ...result }), /foreign-outcome/);
+      await driver.settle(result);
+      custody.endAttempt(retirement);
+      assert.equal(dispatches, 2);
+      assert.equal(fixture.trace.filter((entry) => entry.method === "DELETE").length, 1);
+      assert.equal(fixture.tokenState()[0].revoked, revoked);
+      assert.equal(record.callbacks, 0);
+      assert.ok(custody.records.has(record));
+      assert.throws(() => custody.release(record), /CREDENTIAL_BUSY/);
+      // Uncertainty retains the original token; only the conservative expiry bound ends custody.
+      await custody.driver.withAccess(acquired.credential, "retire", async (bytes) => {
+        assert.equal(fixture.authorize(`Bearer ${Buffer.from(bytes).toString("utf8")}`), !revoked);
+      });
+      await clock.advance(3600000);
+      const expiration = attempt("retire");
+      const expired = await driver.retire(expiration, acquired.credential);
+      assert.equal(expired.kind, "expired");
+      await driver.settle(expired);
+      custody.endAttempt(expiration);
+      record.disposition = "expired";
+      custody.release(record);
+      assert.equal(dispatches, 2);
+      assert.equal(custody.records.size, 0);
+      assert.equal(custody.reservations.size, 0);
+      assert.deepEqual(fixture.errors, []);
+    });
+  }
 });

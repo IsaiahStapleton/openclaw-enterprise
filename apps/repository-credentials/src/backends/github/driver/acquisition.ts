@@ -1,5 +1,6 @@
 import type {
   AcquireOutcome,
+  AttemptContext,
   Clock,
   DriverCustody,
   RepoDriver,
@@ -21,6 +22,39 @@ type AcquisitionDependencies = Readonly<{
 
 export function createCredentialAcquisition(deps: AcquisitionDependencies): RepoDriver["acquire"] {
   const { state, custody, clock, key, config, permissions, exchange } = deps;
+  async function acquireWithJwt(
+    attempt: AttemptContext,
+    minimumValidityMs: number,
+    onDispatch: () => void,
+    jwt: string,
+    assertCurrent: () => void,
+  ): Promise<AcquireOutcome> {
+    let observation: ReturnType<typeof observeAcquisitionResponse> | undefined;
+    const response = await exchange.issue(jwt, attempt, onDispatch, assertCurrent, (response) => {
+      observation = observeAcquisitionResponse({ state, custody, clock, attempt, response });
+    });
+    try {
+      const decision = classifyAcquisitionResponse(response.status, observation, {
+        repositoryId: config.repositoryId,
+        repository: config.repository,
+        permissions,
+        minimumValidityMs,
+      });
+      if (decision.kind !== "acquired") {
+        return state.outcome(attempt, decision);
+      }
+      attempt.assertAdmitted();
+      assertCurrent();
+      if (attempt.signal.aborted || clock.monotonicNow() >= attempt.deadlineMonoMs) {
+        return state.outcome(attempt, { kind: "uncertain" });
+      }
+      state.credentials.get(decision.credential)!.accepted = true;
+      return state.outcome(attempt, decision);
+    } finally {
+      response.body.fill(0);
+    }
+  }
+
   return async function acquire(attempt, previous, minimumValidityMs): Promise<AcquireOutcome> {
     if (previous !== undefined && !state.credentials.has(previous)) {
       throw new Error("foreign-credential");
@@ -34,40 +68,17 @@ export function createCredentialAcquisition(deps: AcquisitionDependencies): Repo
       if (state.finalized) {
         return state.outcome(attempt, { kind: "not-dispatched" });
       }
-      return await key.withJwt(async (jwt, assertCurrent) => {
-        let observation: ReturnType<typeof observeAcquisitionResponse> | undefined;
-        const response = await exchange.issue(
-          jwt,
+      return await key.withJwt((jwt, assertCurrent) =>
+        acquireWithJwt(
           attempt,
+          minimumValidityMs,
           () => {
             dispatched = true;
           },
+          jwt,
           assertCurrent,
-          (response) => {
-            observation = observeAcquisitionResponse({ state, custody, clock, attempt, response });
-          },
-        );
-        try {
-          const decision = classifyAcquisitionResponse(response.status, observation, {
-            repositoryId: config.repositoryId,
-            repository: config.repository,
-            permissions,
-            minimumValidityMs,
-          });
-          if (decision.kind !== "acquired") {
-            return state.outcome(attempt, decision);
-          }
-          attempt.assertAdmitted();
-          assertCurrent();
-          if (attempt.signal.aborted || clock.monotonicNow() >= attempt.deadlineMonoMs) {
-            return state.outcome(attempt, { kind: "uncertain" });
-          }
-          state.credentials.get(decision.credential)!.accepted = true;
-          return state.outcome(attempt, decision);
-        } finally {
-          response.body.fill(0);
-        }
-      });
+        ),
+      );
     } catch {
       return state.outcome(attempt, { kind: dispatched ? "uncertain" : "not-dispatched" });
     }
