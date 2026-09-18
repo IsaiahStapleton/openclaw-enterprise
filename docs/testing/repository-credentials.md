@@ -31,7 +31,7 @@ adds forbidden capabilities to a disposable copy of the real source tree.
 This is an accidental-regression guard for reviewed source. It does not perform
 whole-program dataflow analysis, prove that allowed owners handle secrets
 correctly, or sandbox malicious code. It does not replace capability design,
-runtime isolation, or the controlled tests below and separate live-provider qualification.
+runtime isolation, or the controlled and live tests below.
 
 ## Run controlled tests
 
