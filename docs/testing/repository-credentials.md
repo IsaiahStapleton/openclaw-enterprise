@@ -1,4 +1,4 @@
-# Repository credential service tests
+# Repository credential tests
 
 Run these tests from the repository root with Node.js 24, Git, OpenSSL, Docker,
 and the prepared workspace dependencies. The fixtures generate fresh RSA and
@@ -28,7 +28,72 @@ generated public CA. The gateway listens on HTTPS port 443 and `gh` retains
 own authentication, clean environment setup and the Git helper. No insecure
 TLS switch or localhost `GH_HOST` substitute is used.
 
-## What the controlled tests prove
+## Verify Agent admission and durable ownership
+
+The admission suite uses the actual HTTP application and checks authorized
+selection, defaults, immutable public revision output and unsupported runtime
+rejection. The Driver suite exercises the concrete registry, Unix control and
+provider engine. Runtime-material suites check the closed file set, generation
+identity and actual init-file publication. Run the relevant source checks with
+prepared dependencies:
+
+```sh
+node --test tests/integration/repository-credentials-admission.test.mjs
+node --test tests/integration/repository-credentials-driver.test.mjs
+node --test tests/integration/repository-runtime-materialization.test.mjs
+node --test tests/integration/repository-credentials-router.test.mjs
+```
+
+Follow [PostgreSQL setup](postgresql.md) for a migrated disposable application-role
+database, then select `tests/integration/postgres-repository-sessions.test.mjs`
+with `OCC_TEST_DATABASE_URL`. Its SQL constraints and State operations cover exact
+revision ownership, immutable attempt inputs, phases and safe recovery identity.
+These checks do not prove a running Kubernetes Pod or a model turn.
+
+## Exercise the controlled platform path
+
+Use the `repository-credentials-platform` CI lane for the complete prepared
+fixture. It creates an owned loopback k3d cluster, a fresh migrated
+`openclaw_k8s_*` database without an Installation, and a fixture-Harness image
+derived from the current full Agent runtime with real Git/gh. The suite runs the
+actual HTTP API, PostgreSQL queue, credential engine and Kubernetes material
+delivery against two controlled repositories. It does not use a model or live
+GitHub. With the [CI runner prerequisites](ci.md) prepared, run:
+
+```bash
+(
+  set -e
+  CREDENTIAL_TEST_RUN="$(mktemp -d)"
+  printf 'Evidence directory: %s\n' "$CREDENTIAL_TEST_RUN"
+  trap 'node scripts/ci/cleanup.mjs --state "$CREDENTIAL_TEST_RUN/state.json"' EXIT
+  node scripts/ci/prepare.mjs --lane repository-credentials-platform \
+    --state "$CREDENTIAL_TEST_RUN/state.json"
+  node scripts/ci/run-tests.mjs run repository-credentials-platform \
+    --state "$CREDENTIAL_TEST_RUN/state.json" \
+    --results "$CREDENTIAL_TEST_RUN/results.json"
+)
+```
+
+Preparation supplies the explicit kubeconfig/context, database URL, immutable
+`OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE`, and private fixture relay
+`OCC_TEST_REPOSITORY_CREDENTIALS_HOST_ADDRESS` through prepared state. The runner
+selects `tests/integration/repository-credentials-platform.test.mjs` with
+`OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM=1`. The lane belongs to the normal `ci`
+and `full` groups. The fixture image contains a substituted Harness and makes no
+model-execution claim.
+
+The assertions cover independently scoped bindings in one Agent, natural clone
+destinations, concurrent real clients, native PR creation and read-only denial.
+They also withhold a created admission response until the real PostgreSQL claim
+expires, then check recovery without bearer replay. Additional assertions inspect
+private regular-file modes, retained material after worker replacement, exact
+missing-Secret repair, service-restart Pod replacement, Git-only API denial and
+ordinary stop cleanup without closing a sibling Agent's sessions. Controlled service/provider clocks advance past hour
+thirteen to check fresh tokens with unchanged material. This is a simulated
+elapsed-time test, not a thirteen-hour wait or provider soak. The case skips
+without its selector and fails on missing selected prerequisites.
+
+## What the controlled service tests prove
 
 The Git upstream runs the actual `git-http-backend` against a disposable bare
 repository. The `git-write` case proves clone, fetch, branch checkout and push,
@@ -154,3 +219,55 @@ evidence. If selected, missing authorization, socket, CA, routing or credentials
 fails. Controlled upstream success proves service behavior against those
 protocol fixtures; it does not establish live GitHub compatibility or a real
 thirteen-hour provider soak.
+
+## Qualify an installed Agent against GitHub
+
+The standalone live smoke above does not exercise OCC admission or a model.
+Use `repository-credentials-k3d-real.test.mjs` for the joined installed path:
+fresh Helm controller/PostgreSQL, API-created Namespace and Agent, worker-opened
+session, private Kubernetes runtime material and the embedded model's own
+clone/edit/commit/push/native-PR task. One explicitly authorized disposable
+repository is sufficient; two-repository deterministic coverage remains in the
+controlled platform case.
+
+Prepare the [real Kubernetes runtime prerequisites](kubernetes.md#kubernetes-model-turns-and-secrets).
+Select the `repository-credentials-installed` lane with the same prepare/run/cleanup
+sequence above. This lane is CLI-only and excluded from normal `ci`/`full` groups
+and hosted workflow dispatch. It requires explicit live authorization and never
+falls back to controlled evidence.
+
+Supply existing authorized `OPENAI_API_KEY`, `OCC_TEST_OPENAI_MODEL`, and immutable
+`NODE_BASE_IMAGE` (approved Node 24), `OCC_TEST_PRODUCTION_POSTGRES_IMAGE` and
+`OCC_TEST_PRODUCTION_NODE_IMAGE`. Preparation builds controller and runtime from
+current source, imports immutable references and supplies kubeconfig/context.
+The Helm fixture creates its own PostgreSQL; no external test database is needed.
+The installed case additionally uses these variables with prefix
+`OCC_TEST_REPOSITORY_CREDENTIALS_`:
+
+| Suffix            | Required value                                                                                        |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| `AUTHORIZED`      | `1`, explicitly permitting temporary branch/PR writes and cleanup                                     |
+| `REPOSITORY`      | Exact authorized `owner/repository`                                                                   |
+| `APP_CONFIG_FILE` | Protected mode-0600 JSON with only string `appId`, `githubInstallationId`, `repositoryId`             |
+| `APP_KEY_FILE`    | Protected mode-0600 App PEM key                                                                       |
+| `IMAGE`           | Immutable credential-service image reference                                                          |
+| `UPSTREAM_CIDRS`  | Comma-separated approved public IPv4 `/32` destinations; no broad fallback                            |
+| `GH_BINARY`       | Optional absolute managed host `gh` path for independently authenticated readback and guarded cleanup |
+
+The runner sets `OCC_TEST_REPOSITORY_CREDENTIALS_REAL=1` and runs
+`tests/integration/repository-credentials-k3d-real.test.mjs` from prepared state.
+
+The fixture installs OCC before constructing the registry, because its exact
+Namespace ID comes from the API. It then enables the optional sidecar and
+verifies the installed containers' credential boundaries. Only the model executes
+the working clone/edit/commit/push/PR sequence; host `gh` observes the authorized
+repository and reconciles owned temporary resources during cleanup. Missing
+live selection skips; selected missing authorization, protected inputs, images,
+networking or model credentials fails.
+
+Record source and image identities, the admitted revision, model completion,
+remote commit/PR identity and cleanup outcome together. Ordinary Agent stop,
+session disposition and runtime Secret deletion are distinct from remote PR/branch
+cleanup. The case is complete only when required cleanup succeeds. Test source,
+rendered Helm or a ready Pod alone does not establish an installed model/live
+provider result, and this case does not establish a real thirteen-hour soak.

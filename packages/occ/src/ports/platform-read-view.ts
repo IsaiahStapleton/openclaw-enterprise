@@ -26,5 +26,10 @@ export function createPlatformReadView(
     ]),
     agents: bindRepository(repositories.agents, lifetime, ["findAgent", "listAgents"]),
     revisions: bindRepository(repositories.revisions, lifetime, ["findRevision", "listRevisions"]),
+    repositorySessions: bindRepository(repositories.repositorySessions, lifetime, [
+      "findAttempt",
+      "listRevisionAttempts",
+      "listNamespaceAttempts",
+    ]),
   });
 }

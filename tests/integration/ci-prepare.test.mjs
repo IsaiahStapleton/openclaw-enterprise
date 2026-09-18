@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -36,7 +36,7 @@ function runPrepare(args, env = {}) {
   });
 }
 
-async function fixtureImageCommands(t, scenario) {
+async function fixtureImageCommands(t, scenario, lane = "k3d-fixture-configuration") {
   const root = await fixture(t);
   const bin = join(root, "bin");
   const home = join(root, "home");
@@ -71,6 +71,24 @@ if (command === "docker") {
     assert.match(args[4], /^openclaw_ci_pg_/);
     if (equals(args.slice(5), ["up", "-d", "--wait"])) finish();
     if (equals(args.slice(5), ["down", "--volumes", "--remove-orphans"])) finish();
+    if (args[5] === "exec" && args[8] === "psql") finish();
+  }
+  if (equals(args.slice(0, 3), ["inspect", "--format", "{{json .NetworkSettings.Networks}}"]) &&
+      args[3] === "k3d-" + state.cluster + "-server-0") {
+    finish(JSON.stringify({ ["k3d-" + state.cluster]: {
+      Gateway: scenario === "public-gateway" ? "203.0.113.1" : "172.19.0.1",
+    } }));
+  }
+  if (args[0] === "build" && args.includes("--build-arg")) {
+    assert.equal(args[args.indexOf("--build-arg") + 1], "RUNTIME_IMAGE=" + state.runtime);
+    assert.ok(args[args.indexOf("-f") + 1].endsWith("/Dockerfile.platform-fixture"));
+    state.tag = args[args.indexOf("-t") + 1];
+    finish();
+  }
+  if (args[0] === "build" && args.includes("-f")) {
+    assert.ok(args[args.indexOf("-f") + 1].endsWith("/deploy/runtime/Dockerfile"));
+    state.runtime = args[args.indexOf("-t") + 1];
+    finish();
   }
   if (equals(args.slice(0, 3), ["build", "--pull=false", "-t"]) && args.length === 5) {
     assert.equal(args[3], "localhost/" + state.cluster + "/fixture:local");
@@ -87,6 +105,7 @@ if (command === "docker") {
     finish();
   }
   if (equals(args, ["image", "rm", "-f", state.tag])) finish();
+  if (state.runtime && equals(args, ["image", "rm", "-f", state.runtime])) finish();
   if (args[0] === "exec" && args[1] === "k3d-" + state.cluster + "-server-0") {
     const ctr = ["ctr", "-n", "k8s.io", "images"];
     if (equals(args.slice(2), [...ctr, "list"])) {
@@ -109,6 +128,10 @@ if (command === "docker") {
       finish(JSON.stringify({ status: { id: configId, repoDigests: [state.alias] } }));
     }
   }
+}
+if (command === "corepack" && equals(args, ["pnpm", "db:migrate"])) {
+  assert.match(process.env.OCC_MIGRATION_DATABASE_URL, /^postgresql:\/\/occ_migrator:.*\/openclaw_k8s_/);
+  finish();
 }
 if (command === "k3d") {
   if (equals(args, ["version"])) finish("k3d version v5.8.3\n");
@@ -154,8 +177,10 @@ if (command === "kubectl") {
 }
 throw new Error("Unexpected external command: " + command + " " + JSON.stringify(args));
 `}`;
-  for (const command of ["docker", "k3d", "kubectl"]) {
-    await writeFile(join(bin, `${command}.mjs`), commandSource, { mode: 0o700 });
+  for (const command of ["docker", "k3d", "kubectl", "corepack"]) {
+    await writeFile(join(bin, command === "corepack" ? command : `${command}.mjs`), commandSource, {
+      mode: 0o700,
+    });
   }
   const statePath = join(root, "state.json");
   const githubEnv = join(root, "github.env");
@@ -184,14 +209,9 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
     statePath,
     githubEnv,
     prepare: () =>
-      run("prepare.mjs", [
-        "--lane",
-        "k3d-fixture-configuration",
-        "--state",
-        statePath,
-        "--github-env",
-        githubEnv,
-      ]),
+      run("prepare.mjs", ["--lane", lane, "--state", statePath, "--github-env", githubEnv]),
+    prepareFile: (file) =>
+      run("prepare.mjs", ["--lane", lane, "--file", file, "--state", statePath]),
     cleanup: () => run("cleanup.mjs", ["--state", statePath]),
     commands: async () =>
       (await readFile(join(root, "commands.jsonl"), "utf8")).trim().split("\n").map(JSON.parse),
@@ -283,6 +303,127 @@ for (const { scenario, error } of [
 const digest = "a".repeat(64);
 const immutableImage = `registry.example/openclaw/runtime@sha256:${digest}`;
 const mutableImage = "registry.example/openclaw/runtime:latest";
+
+test("repository platform preparation binds runtime clients, an owned gateway and a fresh migrated database", async (t) => {
+  const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform");
+  const prepared = commands.prepare();
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const state = JSON.parse(await readFile(commands.statePath, "utf8"));
+  const cluster = state.resources.find(({ kind }) => kind === "k3d-cluster");
+  assert.equal(state.env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM, "1");
+  assert.equal(state.env.OCC_TEST_REPOSITORY_CREDENTIALS_HOST_ADDRESS, "172.19.0.1");
+  assert.equal(
+    state.env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE,
+    `localhost/${cluster.name}/repository-platform@sha256:${"c".repeat(64)}`,
+  );
+  assert.equal(state.env.OPENAI_API_KEY, undefined);
+
+  const file = commands.prepareFile("tests/integration/repository-credentials-platform.test.mjs");
+  assert.equal(file.status, 0, file.stderr);
+  const migrated = JSON.parse(await readFile(commands.statePath, "utf8"));
+  const database = migrated.resources.find(({ kind }) => kind === "postgres-database");
+  assert.match(database.name, /^openclaw_k8s_/);
+  assert.equal(database.status, "ready");
+  const calls = await commands.commands();
+  assert.ok(calls.some(({ command, args }) => command === "corepack" && args[1] === "db:migrate"));
+  const builds = calls.filter(({ command, args }) => command === "docker" && args[0] === "build");
+  assert.equal(builds.length, 2);
+  for (const { args } of builds) {
+    assert.equal(args[args.indexOf("--builder") + 1], "default");
+    assert.ok(args.includes("--load"));
+  }
+  assert.ok(
+    builds[1].args.includes(`RUNTIME_IMAGE=${builds[0].args[builds[0].args.indexOf("-t") + 1]}`),
+  );
+  const cleaned = commands.cleanup();
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+  await assert.rejects(() => stat(commands.statePath), { code: "ENOENT" });
+});
+
+test("repository platform preparation refuses a public relay gateway before building images", async (t) => {
+  const commands = await fixtureImageCommands(
+    t,
+    "public-gateway",
+    "repository-credentials-platform",
+  );
+  const prepared = commands.prepare();
+  assert.equal(prepared.status, 1);
+  assert.match(prepared.stderr, /private IPv4 Docker host gateway/);
+  assert.equal(
+    (await commands.commands()).some(({ args }) => args[0] === "build"),
+    false,
+  );
+  const cleaned = commands.cleanup();
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
+test("installed repository preparation requires explicit authorization and protected inputs before side effects", async (t) => {
+  const root = await fixture(t);
+  const statePath = join(root, "installed-state.json");
+  const configPath = join(root, "app.json");
+  const keyPath = join(root, "app.pem");
+  await writeFile(configPath, "{}", { mode: 0o600 });
+  await writeFile(keyPath, "test-only key", { mode: 0o600 });
+  const env = {
+    OPENAI_API_KEY: "test-only-model-key",
+    OCC_TEST_OPENAI_MODEL: "test-model",
+    NODE_BASE_IMAGE: `docker.io/library/node:24-bookworm@sha256:${digest}`,
+    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "0",
+    OCC_TEST_REPOSITORY_CREDENTIALS_REPOSITORY: "fixture/repository",
+    OCC_TEST_REPOSITORY_CREDENTIALS_APP_CONFIG_FILE: configPath,
+    OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE: keyPath,
+    OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE: immutableImage,
+    OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS: "203.0.113.1/32",
+    OCC_TEST_PRODUCTION_POSTGRES_IMAGE: immutableImage,
+    OCC_TEST_PRODUCTION_NODE_IMAGE: immutableImage,
+  };
+  const args = ["--lane", "repository-credentials-installed", "--state", statePath];
+  const unauthorized = runPrepare(args, env);
+  assert.equal(unauthorized.status, 1);
+  assert.match(unauthorized.stderr, /explicit write and cleanup authorization/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+
+  await chmod(keyPath, 0o644);
+  const unprotected = runPrepare(args, { ...env, OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1" });
+  assert.equal(unprotected.status, 1);
+  assert.match(unprotected.stderr, /must have mode 0600/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+
+  await chmod(keyPath, 0o600);
+  const linkedKey = join(root, "linked-key.pem");
+  await symlink(keyPath, linkedKey);
+  const linked = runPrepare(args, {
+    ...env,
+    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1",
+    OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE: linkedKey,
+  });
+  assert.equal(linked.status, 1);
+  assert.match(linked.stderr, /bounded regular private file/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+
+  const invalidScope = runPrepare(args, {
+    ...env,
+    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1",
+    OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS: "10.0.0.1/32",
+  });
+  assert.equal(invalidScope.status, 1);
+  assert.match(invalidScope.stderr, /approved public IPv4/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+});
+
+test("ordinary CI groups require platform proof and exclude installed live repository writes", async () => {
+  const manifest = JSON.parse(
+    await readFile(join(repositoryRoot, "scripts/ci/test-suites.json"), "utf8"),
+  );
+  for (const name of ["ci", "full"]) {
+    assert.ok(manifest.groups[name].includes("repository-credentials-platform"));
+    assert.ok(!manifest.groups[name].includes("repository-credentials-installed"));
+    for (const lane of manifest.groups[name]) {
+      assert.notEqual(manifest.lanes[lane].env?.OCC_TEST_REPOSITORY_CREDENTIALS_REAL, "1");
+    }
+  }
+});
+
 const runtimeDefaultBaseline = Object.freeze({
   architectures: ["SCMP_ARCH_X86_64"],
   defaultAction: "SCMP_ACT_ERRNO",

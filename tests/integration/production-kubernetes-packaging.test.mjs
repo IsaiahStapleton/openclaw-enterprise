@@ -6,7 +6,6 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
 
 const execute = promisify(execFile);
 const repository = fileURLToPath(new URL("../../", import.meta.url));
@@ -31,6 +30,17 @@ const values = {
 const chatgptValues = {
   "provider.chatgpt.enabled": "true",
   "provider.chatgpt.providerCidr": "198.51.100.25/32",
+};
+const repositoryCredentialValues = {
+  "repositoryCredentials.enabled": "true",
+  "repositoryCredentials.image": `registry.example.invalid/repository-credentials@sha256:${"b".repeat(64)}`,
+  "repositoryCredentials.providerId": "github-primary",
+  "repositoryCredentials.registryConfigMapName": "repository-registry-v1",
+  "repositoryCredentials.serviceConfigSecretName": "repository-config",
+  "repositoryCredentials.appKeySecretName": "repository-app-key",
+  "repositoryCredentials.tlsSecretName": "repository-tls",
+  "repositoryCredentials.publicCaSecretName": "repository-public-ca",
+  "repositoryCredentials.upstreamCidrs[0]": "198.51.100.0/24",
 };
 const gatewayRoutingValues = {
   "gatewayRouting.enabled": "true",
@@ -105,6 +115,8 @@ function rootSecretName(namespace, gatewayName) {
 }
 
 test("production native examples satisfy the current Helm, Installation, and PVC schemas", async () => {
+  const { loadInstallationConfiguration } =
+    await import("../../apps/controller/src/composition/installation-config.ts");
   const installationPath = fileURLToPath(new URL("installation.yaml", productionExamples));
   const drivers = await loadInstallationConfiguration({
     mode: "production",
@@ -153,6 +165,207 @@ test("production Helm values example renders the providerless default chart", to
 });
 
 test(
+  "repository credential Helm packaging keeps private inputs in its service",
+  tooling,
+  async () => {
+    const { stdout } = await render(repositoryCredentialValues);
+    const objects = await resources(stdout);
+    const named = (kind, name) =>
+      objects.find((object) => object.kind === kind && object.metadata.name === name);
+    const api = named("Deployment", "openclaw-enterprise-api");
+    const worker = named("Deployment", "openclaw-enterprise-worker");
+    const workerPod = worker.spec.template.spec;
+    const controller = workerPod.containers.find(({ name }) => name === "worker");
+    const service = workerPod.containers.find(({ name }) => name === "repository-credentials");
+    const mounts = (container) => container.volumeMounts.map(({ name }) => name);
+
+    // The only Kubernetes token in the shared Pod is explicitly mounted by the trusted worker.
+    assert.equal(worker.spec.replicas, 1);
+    assert.deepEqual(worker.spec.strategy, { type: "Recreate" });
+    assert.equal(workerPod.automountServiceAccountToken, false);
+    assert.equal(workerPod.terminationGracePeriodSeconds, 75);
+    assert.equal(workerPod.securityContext.runAsUser, 1000);
+    assert.equal(workerPod.securityContext.runAsGroup, 1000);
+    assert.equal(workerPod.securityContext.fsGroup, 1000);
+    assert.equal(workerPod.initContainers, undefined);
+    const apiAccess = workerPod.volumes.find(({ name }) => name === "worker-api-access");
+    assert.equal(apiAccess.projected.defaultMode, 0o440);
+    assert.deepEqual(apiAccess.projected.sources, [
+      { serviceAccountToken: { path: "token", expirationSeconds: 3600 } },
+      { configMap: { name: "kube-root-ca.crt", items: [{ key: "ca.crt", path: "ca.crt" }] } },
+      {
+        downwardAPI: {
+          items: [
+            { path: "namespace", fieldRef: { apiVersion: "v1", fieldPath: "metadata.namespace" } },
+          ],
+        },
+      },
+    ]);
+    assert.deepEqual(
+      controller.volumeMounts.find(({ name }) => name === "worker-api-access"),
+      {
+        name: "worker-api-access",
+        mountPath: "/var/run/secrets/kubernetes.io/serviceaccount",
+        readOnly: true,
+      },
+    );
+
+    // All consumers share the operator's one registry; public trust is separate from private TLS.
+    for (const deployment of [api, worker]) {
+      const pod = deployment.spec.template.spec;
+      assert.deepEqual(pod.volumes.find(({ name }) => name === "repository-registry").configMap, {
+        name: "repository-registry-v1",
+        items: [{ key: "registry.json", path: "registry.json" }],
+      });
+      assert.deepEqual(pod.volumes.find(({ name }) => name === "repository-public-ca").secret, {
+        secretName: "repository-public-ca",
+        items: [{ key: "ca.crt", path: "ca.crt" }],
+      });
+      for (const container of pod.containers) {
+        assert.deepEqual(
+          container.volumeMounts.find(({ name }) => name === "repository-registry"),
+          {
+            name: "repository-registry",
+            mountPath: "/etc/openclaw/repository-registry",
+            readOnly: true,
+          },
+        );
+      }
+      const main = pod.containers[0];
+      assert.deepEqual(
+        main.volumeMounts.find(({ name }) => name === "repository-public-ca"),
+        {
+          name: "repository-public-ca",
+          mountPath: "/etc/openclaw/repository-ca",
+          readOnly: true,
+        },
+      );
+      assert.ok(!mounts(main).includes("repository-inputs"));
+      assert.ok(!mounts(main).includes("repository-private"));
+    }
+    assert.ok(!mounts(api.spec.template.spec.containers[0]).includes("repository-control"));
+    assert.ok(mounts(controller).includes("repository-control"));
+    assert.deepEqual(mounts(service).sort(), [
+      "repository-control",
+      "repository-inputs",
+      "repository-private",
+      "repository-registry",
+    ]);
+    assert.equal(service.env, undefined);
+    assert.equal(service.securityContext.allowPrivilegeEscalation, false);
+    assert.equal(service.securityContext.readOnlyRootFilesystem, true);
+    assert.deepEqual(service.securityContext.capabilities.drop, ["ALL"]);
+    const inputs = workerPod.volumes.find(({ name }) => name === "repository-inputs").projected;
+    assert.equal(inputs.defaultMode, 0o440);
+    assert.deepEqual(inputs.sources, [
+      {
+        secret: { name: "repository-config", items: [{ key: "config.json", path: "config.json" }] },
+      },
+      {
+        secret: {
+          name: "repository-app-key",
+          items: [{ key: "private-key.pem", path: "private-key.pem" }],
+        },
+      },
+      {
+        secret: {
+          name: "repository-tls",
+          items: [
+            { key: "tls.crt", path: "tls.crt" },
+            { key: "tls.key", path: "tls.key" },
+          ],
+        },
+      },
+    ]);
+    for (const name of ["repository-private", "repository-control"]) {
+      const volume = workerPod.volumes.find((volume) => volume.name === name);
+      assert.equal(volume.emptyDir.medium, "Memory");
+      assert.ok(volume.emptyDir.sizeLimit);
+    }
+    assert.deepEqual(service.command, [
+      "node",
+      "/app/dist/composition/repository-credentials/projected-inputs.js",
+    ]);
+    assert.deepEqual(service.args, [
+      "--public-origin",
+      "https://openclaw-enterprise-repository-credentials.openclaw-system.svc",
+      "--provider-id",
+      "github-primary",
+    ]);
+    assert.deepEqual(service.readinessProbe.exec.command, [
+      "node",
+      "/app/dist/composition/repository-credentials/probe.js",
+    ]);
+
+    // Service and CNI policy use different ports: authorization traffic reaches endpoint TCP 8443.
+    const endpoint = named("Service", "openclaw-enterprise-repository-credentials");
+    assert.equal(endpoint.spec.type, "ClusterIP");
+    assert.deepEqual(endpoint.spec.selector, worker.spec.selector.matchLabels);
+    assert.deepEqual(endpoint.spec.ports, [
+      { name: "https", port: 443, targetPort: 8443, protocol: "TCP" },
+    ]);
+    const ingress = named("NetworkPolicy", "openclaw-enterprise-repository-credentials-ingress");
+    assert.deepEqual(ingress.spec.podSelector.matchLabels, endpoint.spec.selector);
+    assert.deepEqual(ingress.spec.ingress, [
+      {
+        from: [
+          {
+            namespaceSelector: {
+              matchExpressions: [{ key: "openclaw.dev/namespace", operator: "Exists" }],
+            },
+            podSelector: {
+              matchLabels: {
+                "app.kubernetes.io/managed-by": "openclaw-enterprise",
+                "openclaw.dev/workload-role": "gateway",
+              },
+              matchExpressions: [{ key: "openclaw.dev/agent", operator: "Exists" }],
+            },
+          },
+        ],
+        ports: [{ protocol: "TCP", port: 8443 }],
+      },
+    ]);
+    const egress = named("NetworkPolicy", "openclaw-enterprise-repository-provider-egress");
+    assert.deepEqual(egress.spec.podSelector.matchLabels, endpoint.spec.selector);
+    assert.deepEqual(egress.spec.egress, [
+      { to: [{ ipBlock: { cidr: "198.51.100.0/24" } }], ports: [{ protocol: "TCP", port: 443 }] },
+    ]);
+    const tenantWorker = named("ClusterRole", "oce-openclaw-tenant-worker");
+    assert.deepEqual(
+      tenantWorker.rules.filter(({ resources }) => resources.includes("secrets")),
+      [{ apiGroups: [""], resources: ["secrets"], verbs: ["get", "list", "create", "delete"] }],
+    );
+    // Tenant role binding remains an operator action; no Agent identity receives Secret access here.
+    assert.ok(
+      !objects.some(
+        ({ kind, roleRef }) =>
+          ["RoleBinding", "ClusterRoleBinding"].includes(kind) &&
+          roleRef.name === tenantWorker.metadata.name,
+      ),
+    );
+  },
+);
+
+test(
+  "repository credential Helm packaging rejects incomplete or shared private inputs",
+  tooling,
+  async () => {
+    for (const [overrides, message] of [
+      [{ "repositoryCredentials.image": "repository-credentials:latest" }, /immutable SHA-256/],
+      [{ "repositoryCredentials.providerId": "" }, /providerId is required/],
+      [{ "repositoryCredentials.registryConfigMapName": "" }, /registryConfigMapName is required/],
+      [{ "repositoryCredentials.publicCaSecretName": "repository-tls" }, /dedicated Secret/],
+      [{ "repositoryCredentials.appKeySecretName": "occ-auth" }, /dedicated Secret/],
+      [{ "repositoryCredentials.tlsSecretName": "repository-config" }, /dedicated Secret/],
+      [{ "repositoryCredentials.upstreamCidrs[0]": "0.0.0.0/0" }, /explicit IPv4 CIDRs/],
+      [{ "repositoryCredentials.upstreamCidrs[0]": "999.1.1.1/32" }, /invalid IPv4 address/],
+    ]) {
+      await assert.rejects(render({ ...repositoryCredentialValues, ...overrides }), message);
+    }
+  },
+);
+
+test(
   "the production Helm chart renders private least-privilege runtime and ordered bootstrap",
   tooling,
   async () => {
@@ -169,6 +382,19 @@ test(
     const services = objects.filter(({ kind }) => kind === "Service");
     assert.equal(services.length, 1);
     assert.equal(services[0].spec.type, "ClusterIP");
+    assert.ok(!objects.some(({ metadata }) => metadata.name.includes("repository-credentials")));
+    for (const deployment of objects.filter(({ kind }) => kind === "Deployment")) {
+      assert.equal(deployment.spec.template.spec.containers.length, 1);
+      assert.ok(
+        !deployment.spec.template.spec.volumes.some(({ name }) => name.startsWith("repository-")),
+      );
+    }
+    const tenantWorker = objects.find(
+      ({ kind, metadata }) =>
+        kind === "ClusterRole" && metadata.name === "oce-openclaw-tenant-worker",
+    );
+    assert.ok(!tenantWorker.rules.some(({ resources }) => resources.includes("secrets")));
+
     assert.ok(!objects.some(({ kind }) => ["Ingress", "Gateway"].includes(kind)));
 
     // Initialization, API, and worker use distinct identities; database credentials remain isolated.

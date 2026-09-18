@@ -34,7 +34,8 @@
                   "guides/deploy/local-operations",
                   "guides/deploy/service-keys",
                   "guides/observability",
-                  "guides/repository-credentials"
+                  "guides/repository-credentials",
+                  "guides/repository-credentials/installation"
                 ]
               },
               {
@@ -149,7 +150,8 @@
                   "flows/service-api-keys",
                   "flows/workspace-files",
                   "flows/pr-24-ssh-compute",
-                  "flows/repository-credentials"
+                  "flows/repository-credentials",
+                  "flows/agent-repository-credentials"
                 ]
               }
             ]

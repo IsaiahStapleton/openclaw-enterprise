@@ -3,6 +3,7 @@ import type {
   ResolvedGrant,
 } from "../../../drivers/repository-credentials/backend-contracts.ts";
 import { createGitHubDriver, sameAuthority } from "./driver.ts";
+import { snapshotBinding } from "../../../drivers/repository-credentials/sessions.ts";
 import { validateGitHubConfiguration } from "./config.ts";
 import { createProviderTransport } from "./provider-transport.ts";
 import { createRoutePolicy } from "./routes.ts";
@@ -27,6 +28,19 @@ function endpoint(value: string): string {
 }
 export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHubDriverFactory {
   const config = validateGitHubConfiguration(options.configuration);
+  const selectedBinding =
+    options.binding &&
+    Object.freeze({
+      profile: options.binding.profile,
+      identity: snapshotBinding(options.binding.identity),
+    });
+  if (
+    selectedBinding &&
+    (!Object.hasOwn(profiles, selectedBinding.profile) ||
+      selectedBinding.identity.providerInstanceId !== config.providerInstanceId ||
+      selectedBinding.identity.repositoryId !== config.repositoryId)
+  )
+    throw new Error("invalid-binding");
   const apiOrigin = endpoint(options.trustedEndpoints?.apiOrigin ?? "https://api.github.com");
   const gitOrigin = endpoint(options.trustedEndpoints?.gitOrigin ?? "https://github.com");
   const gatewayOrigin = endpoint(options.gatewayOrigin);
@@ -34,12 +48,16 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
     if (profile !== "git-read" && profile !== "git-write" && profile !== "git-full") {
       throw new Error("unsupported-profile");
     }
+    if (selectedBinding && profile !== selectedBinding.profile)
+      throw new Error("unsupported-profile");
     return Object.freeze({
-      binding: Object.freeze({
-        providerInstanceId: config.providerInstanceId,
-        repositoryId: config.repositoryId,
-        grantId: `${config.configVersion}:${profile}`,
-      }),
+      binding:
+        selectedBinding?.identity ??
+        Object.freeze({
+          providerInstanceId: config.providerInstanceId,
+          repositoryId: config.repositoryId,
+          grantId: `${config.configVersion}:${profile}`,
+        }),
       client: Object.freeze({
         gatewayOrigin,
         gitRemote: `${gatewayOrigin}/${config.repository}.git`,
@@ -105,7 +123,11 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
     },
     create({ authority: input, custody, clock }): RepositoryBackend {
       const authority = Object.freeze({ ...input });
-      const profile = (["git-read", "git-write", "git-full"] as const).find((value) =>
+      const profile = (
+        selectedBinding
+          ? [selectedBinding.profile]
+          : (["git-read", "git-write", "git-full"] as const)
+      ).find((value) =>
         sameAuthority({ ...grant(value).binding, sessionId: authority.sessionId }, authority),
       );
       if (!profile || !authority.sessionId) {

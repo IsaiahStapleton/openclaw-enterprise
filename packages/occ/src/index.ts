@@ -27,7 +27,12 @@ import type {
   PluginRevisionState,
   ProviderDefinition,
   ProviderRef,
+  RepositoryBindingRequest,
+  RepositoryBindingSelection,
   RepositoryCredentialDriver,
+  RepositoryCredentialResolution,
+  RepositoryRevisionState,
+  RevisionHarnessDescriptor,
   ResourceKind,
   ResourceRef,
   SandboxDriver,
@@ -78,6 +83,10 @@ import {
   type PlatformUnitOfWork,
 } from "./state/platform-state.ts";
 import { PostgresCommitOutcomeUnknownError } from "./state/postgres-state.ts";
+import {
+  validAdmittedRepositoryBindings,
+  validRepositoryRevisionState,
+} from "./state/repository-credential-state.ts";
 
 export {
   AuthorizationDeniedError,
@@ -136,6 +145,7 @@ export {
 export {
   PostgresWorkQueue,
   WorkClaimLostError,
+  isRepositoryCleanupWork,
   type ClaimedWork,
   type ClaimRequest,
   type ControllerWork,
@@ -178,6 +188,7 @@ export interface CreateAgentInput {
   readonly harnessAuth?: HarnessAuthBinding | null;
   readonly executionMode?: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
+  readonly repositoryBindings?: readonly RepositoryBindingRequest[];
 }
 
 export interface UpdateAgentInput {
@@ -188,6 +199,7 @@ export interface UpdateAgentInput {
   readonly harnessAuth?: HarnessAuthBinding | null;
   readonly executionMode?: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
+  readonly repositoryBindings?: readonly RepositoryBindingRequest[];
 }
 
 export interface CreateServiceAccountInput {
@@ -643,7 +655,11 @@ export class OpenClawController {
   }
 
   async validateProviderConfiguration(): Promise<void> {
-    validateSelectedProviderDrivers(this.providers, this.selections.get("service_account")?.driver);
+    validateSelectedProviderDrivers(
+      this.providers,
+      this.selections.get("service_account")?.driver,
+      this.selections.get("repository_credentials")?.driver,
+    );
   }
 
   async getInstallation(principalId: string): Promise<Readonly<Installation>> {
@@ -1436,6 +1452,10 @@ export class OpenClawController {
         namespace.id,
         this.bindings(configuration.secretBindings),
       );
+      const repositoryBindings = this.repositoryBindingSelections(
+        namespace.id,
+        input.repositoryBindings,
+      );
 
       const agent = await state.agents.createAgent({
         id: agentId,
@@ -1446,6 +1466,7 @@ export class OpenClawController {
         harnessAuth,
         executionMode,
         ...(plugins === undefined ? {} : { plugins }),
+        ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
         servicePrincipalId: `service-agent-${agentId}`,
         desiredRuntimeState: "stopped",
         createdAt: this.timestamp(),
@@ -1499,6 +1520,10 @@ export class OpenClawController {
       const secretBindings = this.bindings(configuration.secretBindings);
       await this.authorizeBindings(state, principalId, namespace.id, secretBindings);
       const providerId = this.providerId(input.providerId, agent.providerId);
+      const repositoryBindings =
+        input.repositoryBindings === undefined
+          ? undefined
+          : (this.repositoryBindingSelections(namespace.id, input.repositoryBindings) ?? []);
       const updated = await state.agents.updateConfiguration(
         namespace.id,
         agent.id,
@@ -1507,6 +1532,7 @@ export class OpenClawController {
         requestedAuth,
         input.providerId === undefined ? undefined : providerId,
         plugins,
+        repositoryBindings,
       );
       if (!updated)
         throw new ResourceConflictError("The Agent Configuration changed during its update.");
@@ -1658,6 +1684,14 @@ export class OpenClawController {
               } satisfies PluginRevisionState);
             })();
       const previous = await state.revisions.listRevisions(namespace.id, lockedAgent.id);
+      const createdAt = this.timestamp();
+      const repositoryCredentials = this.admitRepositoryCredentials(
+        lockedAgent,
+        compute,
+        { ...approvedHarness, mode: lockedAgent.executionMode },
+        sandbox?.id,
+        Date.parse(createdAt),
+      );
       const revision = await state.revisions.createRevision(
         freezeAgentRevision({
           id: this.nextIdentifier("agent_revision"),
@@ -1680,9 +1714,10 @@ export class OpenClawController {
             ? {}
             : { secretDriverId: secretDriver.id, secretBindings }),
           ...(pluginState === undefined ? {} : { plugins: pluginState }),
+          ...(repositoryCredentials === undefined ? {} : { repositoryCredentials }),
           harnessAuth,
           servicePrincipalId: lockedAgent.servicePrincipalId,
-          createdAt: this.timestamp(),
+          createdAt,
         }),
       );
       const running = await state.agents.transitionAgentDesiredRuntimeState(
@@ -2385,6 +2420,131 @@ export class OpenClawController {
     }
   }
 
+  private resolveRepositoryBindings(
+    namespaceId: string,
+    bindings: readonly RepositoryBindingRequest[] | undefined,
+  ):
+    | {
+        readonly driver: RepositoryCredentialDriver;
+        readonly resolution: RepositoryCredentialResolution;
+      }
+    | undefined {
+    if (bindings === undefined) {
+      return undefined;
+    }
+    if (!Array.isArray(bindings)) {
+      throw new ScopeViolationError(
+        "Repository bindings must be an array of repository selections.",
+      );
+    }
+    if (bindings.length === 0) {
+      return undefined;
+    }
+    let driver: RepositoryCredentialDriver;
+    try {
+      driver = this.selectedDriver("repository_credentials");
+    } catch {
+      throw new DependencyUnavailableError(
+        "The selected repository credential Driver is unavailable.",
+      );
+    }
+    let resolution: RepositoryCredentialResolution;
+    try {
+      resolution = driver.resolve(immutableCopy({ namespaceId, bindings }));
+    } catch {
+      throw new ScopeViolationError(
+        "The requested repository selections are not approved for this Namespace.",
+      );
+    }
+    const selected = this.selections.get("repository_credentials");
+    if (
+      !resolution ||
+      !validAdmittedRepositoryBindings(resolution.bindings) ||
+      !Number.isSafeInteger(resolution.sessionDurationSeconds) ||
+      resolution.sessionDurationSeconds <= 0 ||
+      selected?.driver !== driver ||
+      !this.unchangedDriver(selected)
+    ) {
+      throw new DependencyUnavailableError(
+        "The selected repository credential Driver returned an invalid resolution.",
+      );
+    }
+    const requested = new Map(
+      bindings.map((binding) => [binding?.repositoryRef, binding?.profile]),
+    );
+    if (
+      requested.size !== bindings.length ||
+      resolution.bindings.length !== bindings.length ||
+      resolution.bindings.some((binding) => {
+        const provider = this.providerMap.get(binding.providerId);
+        return (
+          !requested.has(binding.repositoryRef) ||
+          (requested.get(binding.repositoryRef) !== undefined &&
+            requested.get(binding.repositoryRef) !== binding.profile) ||
+          provider === undefined ||
+          !("repository_credentials" in provider.drivers) ||
+          provider.drivers.repository_credentials !== driver.id
+        );
+      })
+    ) {
+      throw new DependencyUnavailableError(
+        "The repository credential resolution does not match the selected authority.",
+      );
+    }
+    return { driver, resolution: immutableCopy(resolution) };
+  }
+
+  private repositoryBindingSelections(
+    namespaceId: string,
+    bindings: readonly RepositoryBindingRequest[] | undefined,
+  ): readonly RepositoryBindingSelection[] | undefined {
+    const resolved = this.resolveRepositoryBindings(namespaceId, bindings);
+    return resolved === undefined
+      ? undefined
+      : immutableCopy(
+          resolved.resolution.bindings.map(({ repositoryRef, profile }) => ({
+            repositoryRef,
+            profile,
+          })),
+        );
+  }
+
+  private admitRepositoryCredentials(
+    agent: Readonly<Agent>,
+    compute: ComputeDriver,
+    harness: RevisionHarnessDescriptor,
+    sandboxDriverId: string | undefined,
+    admittedAtWallMs: number,
+  ): RepositoryRevisionState | undefined {
+    const resolved = this.resolveRepositoryBindings(agent.namespaceId, agent.repositoryBindings);
+    if (resolved === undefined) {
+      return undefined;
+    }
+    if (compute.validateRepositoryCredentials === undefined) {
+      throw new DependencyUnavailableError(
+        "The selected Compute Driver does not support repository credentials.",
+      );
+    }
+    try {
+      compute.validateRepositoryCredentials(harness, sandboxDriverId);
+    } catch {
+      throw new ResourceConflictError(
+        "The selected Compute Driver cannot deliver repository credentials to this Harness topology.",
+      );
+    }
+    const snapshot: RepositoryRevisionState = {
+      driver: { id: resolved.driver.id, implementation: resolved.driver.implementation },
+      deadlineWallMs: admittedAtWallMs + resolved.resolution.sessionDurationSeconds * 1000,
+      bindings: resolved.resolution.bindings,
+    };
+    if (!validRepositoryRevisionState(snapshot)) {
+      throw new DependencyUnavailableError(
+        "The selected repository credential Driver returned an invalid admission snapshot.",
+      );
+    }
+    return immutableCopy(snapshot);
+  }
+
   private currentHarness(
     configuration: Readonly<OpenClawConfigurationDocument>,
     agent: Readonly<Agent>,
@@ -2502,7 +2662,10 @@ export class OpenClawController {
 
   private providerId(value: ProviderRef | undefined, preserve?: ProviderRef): ProviderRef {
     const providerId = value === undefined ? (preserve ?? null) : value;
-    assertConfiguredProvider(this.providerMap, providerId, "Provider");
+    const provider = assertConfiguredProvider(this.providerMap, providerId, "Provider");
+    if (provider !== undefined && provider.type !== "chatgpt") {
+      throw new ScopeViolationError("The Agent Provider must support its Harness association.");
+    }
     return providerId;
   }
 

@@ -71,6 +71,10 @@ jobs:
             title: Repository Credentials
             profile: images
             timeout: 40
+          - lane: repository-credentials-platform
+            title: Repository Credentials Platform
+            profile: k3d
+            timeout: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -116,7 +120,7 @@ jobs:
           node <<'NODE'
           const fs = require("fs");
           const needs = JSON.parse(process.env.NEEDS_JSON);
-          const lanes = ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector", "repository-credentials-container"];
+          const lanes = ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector", "repository-credentials-container", "repository-credentials-platform"];
           const expanded = { audit: needs.audit };
           for (const lane of lanes) {
             expanded[lane] = { result: needs["pr-safe"]?.result ?? "missing" };

@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: 2026-09-17
-last_updated_session: authoring-run/a6571e7c-996e-4f11-9c4c-f61418a8d109
+updated: 2026-09-18
+last_updated_session: authoring-run/977f7873-bde4-4525-887a-02943094938e
 ---
 
 # Production Startup Flow
@@ -48,6 +48,9 @@ graph TD
         F --> G["Bootstrap administrators and write protected key output"]
         G --> H["Start private API Deployment"]
         G --> I["Start independent worker Deployment"]
+        I --> O{"Repository credentials enabled?"}
+        O -->|Yes| P["Sidecar copies protected inputs and starts private control"]
+        P --> Q["Sidecar probe gates worker Pod readiness"]
         H --> L["Run Kubernetes Compute preflight"]
         I --> L
         L --> M{"Kubernetes older than 1.35?"}
@@ -151,6 +154,30 @@ server, emits `worker.started`, and polls durable Namespace and AgentRevision
 work. Worker readiness depends on fresh queue-health observations. Neither
 process mounts the bootstrap PVC.
 
+`apps/controller/src/composition/repository-credentials/platform.ts:composeRepositoryCredentialDriver`
+
+When selected, both processes load the same canonical registry and public CA,
+construct the repository Provider with a lazy Unix client, and register its
+Driver. API startup performs no control operation and loads no App key or
+session engine. The worker owns subsequent session lifecycle calls through the
+selected Driver; API readiness remains database-backed.
+
+`apps/controller/src/composition/repository-credentials/projected-inputs.ts:prepareProjectedInputs`
+
+The optional service runs beside the single worker. Its own process pins a
+projection generation, copies the known config/key/TLS/registry files into owned
+private regular files, validates the selected Provider and exact Service origin,
+then uses the protected loader and starts both listeners. App/TLS private
+material stays in that container. Only the worker receives an explicitly
+projected Kubernetes API token. The service's private health probe checks the
+Unix listener; it performs no provider operation. The service and worker share
+only the private control volume, and the Pod uses `Recreate` with a 75-second
+termination grace period. Both containers must pass readiness for the Pod to be
+ready; the worker keeps its queue-health probe and retries unavailable session
+operations through its ordinary Driver contract. This is one service owner,
+without independent worker/service high availability. Repository runtime reconciliation continues in the
+[Agent repository credential flow](agent-repository-credentials.md).
+
 ### 5. Retrieve the key and prove authenticated access
 
 `internal/occclient/client.go:Client.GetInstallation`
@@ -198,6 +225,7 @@ tenant deployment and TUI procedures run.
 - [Settings reference](../reference/settings.md)
 - [Kubernetes Compute Driver](../reference/drivers/kubernetes-compute.md)
 - [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
+- [Repository credential setup](../guides/repository-credentials.md)
 - [Controller worker execution flow](controller-worker.md)
 - [Production TUI flow](production-tui.md)
 - [Local password authentication flow](local-password-authentication.md)
@@ -208,6 +236,8 @@ tenant deployment and TUI procedures run.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 03:03: Trace optional repository Driver composition and service-only projected input startup. (authoring-run/977f7873-bde4-4525-887a-02943094938e - 8500b2da103063b4503b62e5529f3910513e84a9)
 
 - 2026-09-17 12:56: Trace the advisory Kubernetes 1.35 startup preflight and warning handoff. (authoring-run/a6571e7c-996e-4f11-9c4c-f61418a8d109 - 324fe2d17f3856cd1602a57e4d8aa99a34d6514c)
 - 2026-09-01 19:09: Document initial default Namespace creation and unchanged repeat-bootstrap behavior. (codex/01a05ef1-ee29-7941-80f2-448bb0789969 - 872fa544c98bb7ad11b2d92d777e49229ececbf5) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)

@@ -1,21 +1,24 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-18"
-last_updated_session: "authoring-run/491fae6a-a220-4c92-880e-f438a7bb6480"
+last_updated_session: "authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d"
 ---
 
 # Repository credential service flow
 
 ## Overview
 
-A trusted operator admits a bounded session over a private Unix socket. The
+A trusted operator or controller worker admits a bounded session over a private
+Unix socket. The
 client uses its gateway bearer to send Git or selected GitHub API requests over
 HTTPS. One process owns credential acquisition, use and cleanup. This flow ends
 at upstream response delivery or categorized failure, and then local session
 closure with separately tracked cleanup. It describes source composition;
 container and live-provider qualification have separate evidence.
-The controller source tree owns the implementation, but its API and worker do
-not start this process or admit sessions for ordinary Agents.
+The process remains separate from the controller API and worker. The
+[Agent repository flow](agent-repository-credentials.md) owns ordinary Agent
+admission, durable session records, Compute material delivery and cleanup. This
+page owns the shared in-process credential engine used by both callers.
 
 ## Entry Points
 
@@ -23,7 +26,9 @@ not start this process or admit sessions for ordinary Agents.
 - `apps/controller/src/drivers/repository-credentials/client/operator.ts:callControl` carries operator admission/status/close requests over the private Unix socket.
 - `apps/controller/src/drivers/repository-credentials/server.ts:startListeners` accepts HTTPS client traffic after protected startup succeeds.
 
-The service has one configured repository and approved profiles. The operator
+Standalone configuration selects one repository; registry configuration selects
+one App installation with multiple approved repositories and Namespace/profile
+policies. Each session remains bound to exactly one repository. The operator
 owns the control socket directory and protected files. Clients receive only
 private session files and public connection/trust configuration.
 
@@ -31,10 +36,10 @@ private session files and public connection/trust configuration.
 
 ```mermaid
 graph TD
-  Operator["Operator opens session"] --> Admission["Service freezes grant<br/>and creates bearer"]
+  Operator["Worker or operator<br/>opens session"] --> Admission["Service freezes grant<br/>and creates bearer"]
   Admission -->|Construction failed| ConstructionCleanup["Seal renewal access<br/>drain unpublished custody"]
   Operator -->|Repeat admission ID| Recovery["Return public status<br/>close and reopen explicitly"]
-  Admission --> Files["CLI publishes private<br/>client directory"]
+  Admission --> Files["Deliver private material<br/>through CLI or Compute"]
   Files --> Client["Git or pinned gh<br/>calls gateway"]
   Client --> Route["Validate auth, profile route<br/>and request capacity"]
   Route -->|Denied| Denial["Bounded local failure"]
@@ -71,7 +76,17 @@ installation tokens. Shared grant, client configuration and session DTOs live in
 type-only exports. The private backend protocol and nominal custody handles live
 in `apps/controller/src/drivers/repository-credentials/backend-contracts.ts`.
 Service, control and transport collaborators remain private to the credential
-driver; they are not a platform Driver contract or an OCC integration.
+engine. The public platform Driver is the thin session-control and local policy
+owner traced in the [Agent flow](agent-repository-credentials.md).
+
+Registry startup selects
+`apps/controller/src/providers/repository-credentials/github/registry-factory.ts:createGitHubRegistryDriverFactory`
+from the same canonical authority loaded by API and worker. Kubernetes startup
+first uses `apps/controller/src/composition/repository-credentials/projected-inputs.ts:prepareProjectedInputs`
+to snapshot projected inputs into protected private files. The App key and TLS
+private key remain service-only. `startListeners` can reclaim only an owned,
+private, refused stale Unix socket after checking that its identity is unchanged;
+a live or ambiguously owned socket fails startup.
 
 ### 2. Admit and publish a client session
 
@@ -90,10 +105,17 @@ the bearer.
 `apps/controller/src/drivers/repository-credentials/server.ts:startListeners` owns and disposes the
 bounded correlation registry from
 `apps/controller/src/drivers/repository-credentials/control.ts:createControlAdmission`. Before
-opening a session, it binds the admission ID to the effective profile and duration.
+opening a session, it binds the admission ID to the complete effective request.
+Platform requests include Namespace, repository reference, normalized profile,
+expected grant and absolute deadline. Registry mode requires that bound form and
+independently resolves its fingerprint before creating authority. A
+`recoverOnly` lookup returns status or absence without creation; a fresh missing
+ID is fenced against a delayed first request until its admission window closes.
 Known nondelivery before response transmission closes the new session. Ambiguous
 response loss permits public-status reconciliation with the same ID; it does
-not recover the bearer or replay provider operations.
+not recover the bearer or replay provider operations. Correlation remains while
+a closed session owns unresolved cleanup, even after its deadline; reclamation
+requires disposal or absence.
 
 If the factory throws or returns an invalid binding, the service closes
 construction admission before starting
@@ -259,6 +281,7 @@ A structural flow check does not establish any of those runtime results.
 
 ## Related docs
 
+- [Ordinary Agent admission and runtime delivery](agent-repository-credentials.md)
 - [Supported behavior and configuration](../reference/repository-credentials.md)
 - [Operator procedures](../guides/repository-credentials.md)
 - [Qualification and test setup](../testing/repository-credentials.md)
@@ -268,6 +291,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 03:04: Describe accompanying bound registry admission, recovery-only fencing and Kubernetes startup; link the platform-owned Agent lifecycle. (authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d - 8500b2da103063b4503b62e5529f3910513e84a9)
 
 - 2026-09-18 02:21: Update source ownership and emitted delivery pointers for the accompanying controller/contracts refactor; preserve the separate credential process and current lifecycle. (authoring-run/491fae6a-a220-4c92-880e-f438a7bb6480 - cce878092910f39770aa27baa64c6d710f9651f8)
 

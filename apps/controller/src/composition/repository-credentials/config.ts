@@ -15,6 +15,13 @@ import {
   validateServiceConfig,
 } from "../../drivers/repository-credentials/configuration.ts";
 import { validateGitHubConfiguration } from "../../providers/repository-credentials/github/config.ts";
+import {
+  GITHUB_REPOSITORY_REGISTRY_MAX_BYTES,
+  validateGitHubRepositoryRegistry,
+} from "../../providers/repository-credentials/github/registry.ts";
+import type { GitHubRepositoryRegistry } from "../../providers/repository-credentials/github/registry.ts";
+import type { GitHubConfiguration } from "../../providers/repository-credentials/github/types.ts";
+import { createGitHubRegistryDriverFactory } from "../../providers/repository-credentials/github/registry-factory.ts";
 
 async function readProtected(path: string, maximum: number, privateFile = true): Promise<Buffer> {
   if (!isAbsolute(path) || resolve(path) !== path) {
@@ -82,6 +89,7 @@ async function readProtected(path: string, maximum: number, privateFile = true):
 export async function loadConfiguration(path: string, clock: Clock): Promise<LoadedConfiguration> {
   let raw: Buffer | undefined;
   let pem: Buffer | undefined;
+  let registryBytes: Buffer | undefined;
   let cert: Buffer | undefined;
   let tlsKey: Buffer | undefined;
   let owner: ReturnType<typeof createGitHubKeyOwner> | undefined;
@@ -90,29 +98,62 @@ export async function loadConfiguration(path: string, clock: Clock): Promise<Loa
     const input: unknown = JSON.parse(raw.toString("utf8"));
     const root = record(input);
     const config = validateServiceConfig(root);
-    const backend = validateGitHubConfiguration(root.backend);
+    const backendInput = record(root.backend);
+    let backend: GitHubConfiguration | undefined;
+    let registry: GitHubRepositoryRegistry | undefined;
+    let privateKeyFile: string;
+    let appId: string;
+    if (backendInput.kind === "github-app-registry") {
+      if (
+        Object.keys(backendInput).some(
+          (key) => !["kind", "providerId", "registryFile", "privateKeyFile"].includes(key),
+        )
+      ) {
+        throw new Error("invalid-configuration");
+      }
+      registryBytes = await readProtected(
+        string(backendInput.registryFile),
+        GITHUB_REPOSITORY_REGISTRY_MAX_BYTES,
+        false,
+      );
+      registry = validateGitHubRepositoryRegistry(
+        JSON.parse(registryBytes.toString("utf8")),
+        string(backendInput.providerId),
+      );
+      if (config.sessionPolicy.maximumDurationSeconds > registry.maximumDurationSeconds) {
+        throw new Error("invalid-configuration");
+      }
+      privateKeyFile = string(backendInput.privateKeyFile);
+      appId = registry.appId;
+    } else {
+      backend = validateGitHubConfiguration(backendInput);
+      privateKeyFile = backend.privateKeyFile;
+      appId = backend.appId;
+    }
     const gateway = record(root.gateway);
     for (const profile of config.sessionPolicy.allowedProfiles) {
       if (profile !== "git-read" && profile !== "git-write" && profile !== "git-full") {
         throw new Error("invalid-configuration");
       }
     }
-    pem = await readProtected(backend.privateKeyFile, config.limits.privateKeyBytes);
+    pem = await readProtected(privateKeyFile, config.limits.privateKeyBytes);
     owner = createGitHubKeyOwner({
       privateKey: createPrivateKey(pem),
-      appId: backend.appId,
+      appId,
       clock,
     });
     cert = await readProtected(string(gateway.tlsCertFile), 131072, false);
     tlsKey = await readProtected(string(gateway.tlsKeyFile), 65536);
     createSecureContext({ cert, key: tlsKey, minVersion: "TLSv1.2" });
-    const factory = createGitHubDriverFactory({
-      configuration: backend,
+    const factoryOptions = {
       key: owner,
       gatewayOrigin: config.gateway.publicOrigin,
       limits: config.limits,
       clock,
-    });
+    };
+    const factory = registry
+      ? createGitHubRegistryDriverFactory({ ...factoryOptions, registry, privateKeyFile })
+      : createGitHubDriverFactory({ ...factoryOptions, configuration: backend! });
     const ownedCert = cert;
     const ownedTlsKey = tlsKey;
     const ownedKey = owner;
@@ -134,6 +175,7 @@ export async function loadConfiguration(path: string, clock: Clock): Promise<Loa
     throw new Error("invalid-configuration");
   } finally {
     raw?.fill(0);
+    registryBytes?.fill(0);
     pem?.fill(0);
   }
 }

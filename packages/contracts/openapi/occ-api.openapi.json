@@ -2129,6 +2129,30 @@
                               },
                               { "type": "null" }
                             ]
+                          },
+                          "repositoryBindings": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "profile": {
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "repositoryRef": {
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["repositoryRef", "profile"],
+                              "type": "object"
+                            },
+                            "maxItems": 16,
+                            "minItems": 1,
+                            "type": "array"
                           }
                         },
                         "required": [
@@ -2308,6 +2332,30 @@
                       },
                       { "type": "null" }
                     ]
+                  },
+                  "repositoryBindings": {
+                    "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "profile": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                          "type": "string"
+                        },
+                        "repositoryRef": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["repositoryRef"],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
+                    "type": "array"
                   }
                 },
                 "required": ["name", "configurationId"],
@@ -2434,6 +2482,30 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "repositoryBindings": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "profile": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                "type": "string"
+                              },
+                              "repositoryRef": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["repositoryRef", "profile"],
+                            "type": "object"
+                          },
+                          "maxItems": 16,
+                          "minItems": 1,
+                          "type": "array"
                         }
                       },
                       "required": [
@@ -2684,6 +2756,30 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "repositoryBindings": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "profile": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                "type": "string"
+                              },
+                              "repositoryRef": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["repositoryRef", "profile"],
+                            "type": "object"
+                          },
+                          "maxItems": 16,
+                          "minItems": 1,
+                          "type": "array"
                         }
                       },
                       "required": [
@@ -2863,6 +2959,30 @@
                       },
                       { "type": "null" }
                     ]
+                  },
+                  "repositoryBindings": {
+                    "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "profile": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                          "type": "string"
+                        },
+                        "repositoryRef": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["repositoryRef"],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
+                    "type": "array"
                   }
                 },
                 "required": ["configurationId"],
@@ -2989,6 +3109,30 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "repositoryBindings": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "profile": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                "type": "string"
+                              },
+                              "repositoryRef": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["repositoryRef", "profile"],
+                            "type": "object"
+                          },
+                          "maxItems": 16,
+                          "minItems": 1,
+                          "type": "array"
                         }
                       },
                       "required": [
@@ -3255,6 +3399,51 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "repositoryCredentials": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "bindings": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "profile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositoryRef": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["repositoryRef", "profile"],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "deadlineWallMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "driver": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": { "minLength": 1, "type": "string" },
+                                "implementation": { "minLength": 1, "type": "string" }
+                              },
+                              "required": ["id", "implementation"],
+                              "type": "object"
+                            }
+                          },
+                          "required": ["driver", "deadlineWallMs", "bindings"],
+                          "type": "object"
                         },
                         "revision": { "minimum": 1, "type": "integer" },
                         "secretBindings": {
@@ -3559,6 +3748,51 @@
                               { "type": "null" }
                             ]
                           },
+                          "repositoryCredentials": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "bindings": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "profile": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                      "type": "string"
+                                    },
+                                    "repositoryRef": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["repositoryRef", "profile"],
+                                  "type": "object"
+                                },
+                                "maxItems": 16,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "deadlineWallMs": {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              "driver": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "id": { "minLength": 1, "type": "string" },
+                                  "implementation": { "minLength": 1, "type": "string" }
+                                },
+                                "required": ["id", "implementation"],
+                                "type": "object"
+                              }
+                            },
+                            "required": ["driver", "deadlineWallMs", "bindings"],
+                            "type": "object"
+                          },
                           "revision": { "minimum": 1, "type": "integer" },
                           "secretBindings": {
                             "additionalProperties": {
@@ -3848,6 +4082,51 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "repositoryCredentials": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "bindings": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "profile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositoryRef": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["repositoryRef", "profile"],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "deadlineWallMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "driver": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": { "minLength": 1, "type": "string" },
+                                "implementation": { "minLength": 1, "type": "string" }
+                              },
+                              "required": ["id", "implementation"],
+                              "type": "object"
+                            }
+                          },
+                          "required": ["driver", "deadlineWallMs", "bindings"],
+                          "type": "object"
                         },
                         "revision": { "minimum": 1, "type": "integer" },
                         "secretBindings": {
@@ -4367,6 +4646,30 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "repositoryBindings": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "profile": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                "type": "string"
+                              },
+                              "repositoryRef": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["repositoryRef", "profile"],
+                            "type": "object"
+                          },
+                          "maxItems": 16,
+                          "minItems": 1,
+                          "type": "array"
                         }
                       },
                       "required": [
@@ -6660,7 +6963,12 @@
                             "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
                             "type": "string"
                           },
-                          "type": { "const": "chatgpt", "type": "string" }
+                          "type": {
+                            "anyOf": [
+                              { "const": "chatgpt", "type": "string" },
+                              { "const": "github", "type": "string" }
+                            ]
+                          }
                         },
                         "required": ["id", "type"],
                         "type": "object"

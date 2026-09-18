@@ -45,7 +45,7 @@ docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" --target runtime \
 docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" \
   --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
   -f deploy/runtime/Dockerfile \
-  -t "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" deploy/runtime
+  -t "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" .
 
 CONTROLLER_DIGEST="$(docker buildx imagetools inspect \
   "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" \
@@ -216,6 +216,41 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
 
 These commands provision operator-owned inputs; they are not a recurring Secret
 synchronizer.
+
+### Optional repository credential service
+
+Enable repository credentials only after preparing the
+[repository service inputs](../repository-credentials/installation.md) and the matching
+[GitHub Provider selection](../../reference/providers.md#github-repository-credentials).
+The feature defaults disabled. It requires a separately built, immutable service
+image, an immutable registry ConfigMap, private service configuration, App key,
+TLS certificate/key for the exact internal Service hostname, and a separate
+public-CA Secret. Mount the same registry version into API, worker, and service.
+The Installation's Compute network peer must select this release's worker Pod on
+port `8443`; the Service exposes HTTPS port `443`.
+
+When enabled, the chart keeps one worker Pod with `Recreate` and a credential
+sidecar. The sidecar alone mounts App and TLS private inputs and copies them into
+private regular files before loading them. It receives no Kubernetes API token;
+the worker's token is explicitly projected only into the worker container. API
+and worker receive the registry and public CA. Only worker and service share the
+private Unix control socket.
+
+The service's `limits.shutdownGraceMs` must be at most `60000` (the default).
+Projected startup rejects longer drains so the service can report unresolved
+cleanup before the Pod's fixed 75-second termination grace expires.
+
+Tenant-worker RoleBindings grant Secret `get/list/create/delete` for owned
+runtime material. Kubernetes RBAC does not restrict those verbs by the labels
+used by Compute, so the worker remains trusted within each bound tenant
+namespace. Agent service accounts receive no Secret API permission.
+NetworkPolicies allow managed Agent gateways to reach the service and allow
+the worker Pod to reach approved provider CIDRs. These policies apply to the
+whole Pod; registry/session checks enforce exact Namespace and repository scope.
+
+Restart API and worker together after replacing a registry version or service
+inputs. Readiness checks private control availability but does not prove token
+minting, provider reachability, or an Agent's Git workflow.
 
 ### Azure PostgreSQL workload identity
 

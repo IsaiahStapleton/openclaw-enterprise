@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-17
-last_updated_session: codex/01a03526-12b3-7f50-b599-e8414052909d
+updated: 2026-09-18
+last_updated_session: "authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d"
 ---
 
 # Controller Worker Flow
@@ -276,6 +276,7 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 
 ## Related docs
 
+- [Agent repository session preparation and durable cleanup](agent-repository-credentials.md)
 - [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
 
 - [Controller reference](../reference/controller.md)
@@ -293,6 +294,8 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 03:04: Link the accompanying repository-session preparation, maintenance and cleanup flow. (authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d - 8500b2da103063b4503b62e5529f3910513e84a9)
 
 - 2026-09-17 12:09: Separate health reporting from claim renewal, preserve lease-loss fencing, and restore admitted Agent bindings before stop effects. (01a03526-12b3-7f50-b599-e8414052909d - 683d0e253ad827af7c6098650097fa6a8ad61f57)
 - 2026-09-17 01:22: Include failed candidates and interrupted retirement in exact Agent-stop cleanup, preserving later deployments and retained state. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 73c2ef49)

@@ -1,10 +1,174 @@
-# Use the repository credential service
+# Give an Agent repository access
 
-Build the service and admit a session to give an ordinary container Git and
-selected GitHub CLI access to one repository. The container receives a gateway
-bearer; GitHub App keys and installation tokens stay in the service. Review the
-[profiles and lifecycle](../reference/repository-credentials.md) before selecting
-`git-full`.
+Select approved repository references when creating an Agent, deploy it, and ask
+it to use ordinary `git` and `gh` commands. The worker delivers gateway session
+material to the runtime; GitHub App keys and installation tokens remain in the
+credential service. Review the [profiles and lifecycle](../reference/repository-credentials.md)
+before selecting `git-full`.
+
+## Prepare the platform installation
+
+Use Kubernetes Compute-owned **embedded OpenClaw**, `api_key` Harness
+authentication and no Sandbox Driver. Enable the optional credential sidecar
+through the [repository installation procedure](repository-credentials/installation.md).
+It requires one immutable registry ConfigMap shared by API, worker and service,
+a separate public CA Secret, and service-only configuration, App-key and TLS
+Secrets. The [registry reference](../reference/repository-credentials.md#canonical-platform-registry)
+defines repository and Namespace policy. Set `sessionDurationSeconds: 86400` for
+a 24-hour revision; keep it within the registry's maximum.
+
+The chart's `repositoryCredentials.enabled` defaults to `false`. Enabling it
+requires the selected Provider/Driver, sidecar image, registry and Secret names,
+and explicit upstream network ranges. Follow the installation guide for exact
+values, certificate names and tenant RBAC. Use one worker/service owner with
+`Recreate`; replicas cannot share in-memory sessions. This protects credential
+custody and supplies routing, without establishing strong network isolation.
+
+Build the full Agent runtime from the checkout root and select its immutable
+image reference in Compute configuration:
+
+```sh
+docker build -f deploy/runtime/Dockerfile \
+  -t openclaw-enterprise-runtime:repository-credentials .
+```
+
+The build context is the repository root. This image contains the delivered
+client router, Git and pinned `gh` 2.100.0. Publishing or importing the image,
+selecting its digest and configuring model authentication follow the production
+installation and Agent guides.
+
+## Create and deploy an Agent
+
+Complete [Namespace and embedded Agent preparation](deploy/production-agents.md)
+to prepare the embedded `configuration.json` and Namespace-owned model Secret
+`HARNESS_SECRET_ID`. Enable native command tools before creating the Configuration;
+merge these fields into its `values` while preserving the model and gateway settings:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/node/.openclaw/workspace",
+      "sandbox": { "mode": "off" }
+    }
+  },
+  "tools": {
+    "allow": ["exec", "process"],
+    "exec": { "host": "gateway", "mode": "full" }
+  }
+}
+```
+
+This gives the embedded Agent command execution in its gateway container. It is
+not an additional sandbox. Create the Configuration as that guide describes and
+capture `CONFIGURATION_ID`. Keep its
+operator environment, including `OCC_URL`, protected `OCC_SERVICE_KEY_FILE`,
+`NAMESPACE_ID` and Kubernetes context. The registry must authorize the actual
+platform Namespace ID. The example uses its `application` reference:
+
+```bash
+export OCC_NAMESPACE="$NAMESPACE_ID"
+export CONFIGURATION_ID HARNESS_SECRET_ID NAMESPACE_ID
+python3 - <<'PYTHON'
+import json, os
+body = {
+    "name": "repository-agent",
+    "configurationId": os.environ["CONFIGURATION_ID"],
+    "executionMode": "embedded",
+    "harnessAuth": {
+        "method": "api_key",
+        "source": {
+            "kind": "secret",
+            "namespaceId": os.environ["NAMESPACE_ID"],
+            "id": os.environ["HARNESS_SECRET_ID"],
+        },
+    },
+    "repositoryBindings": [{"repositoryRef": "application", "profile": "git-full"}],
+}
+with open("agent.json", "w") as output:
+    json.dump(body, output)
+PYTHON
+AGENT_RESPONSE="$(occ agent create --file agent.json --output json)"
+AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+export AGENT_ID
+```
+
+Select `git-read` for read-only work, or omit `profile` for default `git-write`.
+Add distinct approved references to the array for more repositories. API
+creation uses `POST /namespaces/$NAMESPACE_ID/agents`; the CLI returns the
+unwrapped Agent. Bindings confer no model access: before deploying, complete the
+production guide's exact Agent-principal Secret grant and initial transport
+credential provisioning. Ordinary API-only operators need the administrator's
+help with that private principal grant.
+
+```bash
+REVISION_RESPONSE="$(occ agent deploy "$AGENT_ID" --output json)"
+REVISION_ID="$(printf '%s' "$REVISION_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+export REVISION_ID
+occ agent get "$AGENT_ID" --output json
+```
+
+Wait until `activeRevisionId` equals `REVISION_ID`. The admitted revision exposes
+repository references, profiles and its fixed deadline. Deployment readiness
+alone does not prove a model task or GitHub operation. Failed policy checks,
+unsupported topology, missing material or expired authority must be corrected
+before proceeding; do not add a PAT as a fallback.
+
+## Ask the Agent to work in the repository
+
+Select the Ready active `GATEWAY_POD` using the
+[production TUI procedure](deploy/production-agents.md#attach-with-the-openclaw-tui),
+then send a normal model task. Use a repository and temporary branch explicitly
+approved for writes; replace `example/project` with the registry's canonical
+name:
+
+```bash
+REPOSITORY_TASK_SESSION="repository-task-$(date +%Y%m%d%H%M%S)"
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
+  -n "$TENANT_NAMESPACE" exec -it "$GATEWAY_POD" -c gateway -- \
+  env -u OPENAI_API_KEY OPENCLAW_STATE_DIR=/tmp/occ-tui-client \
+  node /app/openclaw.mjs tui --session "$REPOSITORY_TASK_SESSION" --message \
+  'Clone https://github.com/example/project.git into your workspace using the default destination. Create a new branch, configure repository-local Git author name Repository Agent and email agent@example.invalid, add a short repository-access-check.md, commit it, push the new branch, and open a draft PR with gh pr create using an explicit head and body text. Report the commit and PR URL.'
+```
+
+The model-executing gateway keeps its model credential; the TUI client unsets
+its copy. The runtime workspace is `/home/node/.openclaw/workspace`. No operator
+session-opening or pre-clone step is required. The Agent can use:
+
+```sh
+git clone https://github.com/example/project.git
+cd project
+git fetch origin
+git switch -c agent-example
+git config user.name "Repository Agent"
+git config user.email "agent@example.invalid"
+# Edit files, then git add and git commit.
+git push origin HEAD:refs/heads/agent-example
+gh pr create -R github.com/example/project --base main --head agent-example \
+  --draft --title "Repository access check" --body "Verify the Agent repository workflow."
+```
+
+Commands select the admitted binding from their target or effective remotes;
+renaming a checkout or choosing a different clone destination does not change
+authority. When remotes point to different repositories, name the remote or URL,
+for example `git fetch upstream`. `OCE_REPOSITORY_REF=application` pins the admitted
+binding and must agree with the destination; it does not resolve ambiguous
+implicit remotes. Concurrent commands may use different bindings;
+no global repository switch is required. `gh api` accepts supported relative
+paths such as `repos/example/project/pulls/1`; absolute API URLs are refused.
+API operations require `git-full`.
+
+Inspect the actual remote commit and PR to confirm completion. If a push or
+mutation has an uncertain response, inspect remote state before repeating it.
+Stop the Agent through the normal lifecycle when finished; inspect pending
+cleanup separately. A service restart can replace private runtime material and
+restart the embedded gateway, but cannot renew the revision's absolute deadline.
+After expiry, a new authorized deployment is required.
+
+## Use the standalone service
+
+The remaining steps are for independently launched clients. They do not create
+an OCC Agent or connect a client container to the platform lifecycle.
 
 ## Build and validate
 
@@ -21,10 +185,8 @@ pnpm credentials:check-config /absolute/path/service.json
 The build stages `.build/repository-credentials/service` and
 `.build/repository-credentials/client`. Each contains a minimal manifest and its
 selected emitted modules, using Node built-ins without runtime `node_modules`.
-The check reads protected configuration, validates the RSA key and TLS inputs,
-and prints a safe configuration summary. It does not start listeners or call
-GitHub. Starting the credential service does not start the controller API or
-worker.
+The check validates protected configuration, RSA and TLS inputs, and prints a
+safe summary without starting listeners or calling GitHub.
 
 Create the protected configuration shown in the
 [reference](../reference/repository-credentials.md#configuration). Use a GitHub
@@ -90,36 +252,11 @@ Use credential-free HTTPS URLs. If the launcher refuses inherited URL credential
 remove userinfo from remote fetch/push URLs and `url.*.insteadOf` or
 `url.*.pushInsteadOf` destinations; the selected session helper supplies authentication.
 
-API commands require a `git-full` session. The launcher checks that the
-executable is exactly `gh` 2.100.0. Create a
-request body file in the working directory, then use relative API paths:
-
-```sh
-node "$credential_client" /absolute/path/sessions/task gh api \
-  --method POST repos/example/project/pulls --input create-pr.json
-node "$credential_client" /absolute/path/sessions/task gh api \
-  repos/example/project/pulls/1
-node "$credential_client" /absolute/path/sessions/task gh api \
-  --method PATCH repos/example/project/pulls/1 --input update-pr.json
-node "$credential_client" /absolute/path/sessions/task gh api \
-  --method POST repos/example/project/issues --input create-issue.json
-node "$credential_client" /absolute/path/sessions/task gh api \
-  --method POST repos/example/project/issues/1/comments --input comment.json
-node "$credential_client" /absolute/path/sessions/task gh api \
-  --paginate repos/example/project/issues/1/comments
-```
-
-Native PR creation uses an explicit already-pushed head branch:
-
-```sh
-node "$credential_client" /absolute/path/sessions/task gh pr create \
-  -R github.com/example/project --base main --head agent-feature \
-  --title "Example change" --body-file body.md
-```
-
-Select a separate branch when trying both REST and native PR creation. Do not
-run `gh auth login` or inject a PAT when a command fails. The gateway routes and
-exact App permissions define supported access.
+For API work, use the same absolute launcher with `gh api` and relative paths,
+or `gh pr create` with an explicit already-pushed head, as shown above. The
+launcher checks for `gh` 2.100.0. It does not support `gh auth login`, browser
+flows, extensions or arbitrary CLI commands. Never inject a PAT to bypass a
+route or permission failure.
 
 ## Recover an admission
 
@@ -174,16 +311,12 @@ service and GitHub provider implementation. Neither image includes service
 configuration, private keys, session files or a control socket. The client
 entrypoint takes `SESSION_DIRECTORY git|gh ARGS...`.
 
-The optional `deploy/examples/repository-credentials/compose.yaml` publishes service port
-8443 at host port 443 and keeps service/control mounts separate from client
-mounts. Supply its required `CREDENTIAL_SERVICE_UID`, `CREDENTIAL_SERVICE_GID`,
-`CREDENTIAL_SERVICE_INPUTS`, `CREDENTIAL_SERVICE_CONTROL`,
-`CREDENTIAL_CLIENT_SESSION`, and `CREDENTIAL_CLIENT_WORKSPACE` variables. Set
-`CREDENTIAL_CLIENT_SESSION` to the selected directory, such as
-`/absolute/path/sessions/task`; it appears as `/session` in the client. Match the
-UID/GID to the protected files. The example configuration's paths match these
-container mounts. Arrange gateway DNS and certificate trust before running the
-client; Compose does not provision public DNS or a CA. For example:
+The optional [Compose example](../../deploy/examples/repository-credentials/compose.yaml)
+publishes service port 8443 at host port 443. Supply its required service UID/GID,
+protected input/control paths, selected client-session directory and workspace.
+`CREDENTIAL_CLIENT_SESSION` must name only the selected directory, mounted at
+`/session`. Match ownership and arrange gateway DNS/certificate trust first;
+Compose does not provision them:
 
 ```sh
 docker compose -f deploy/examples/repository-credentials/compose.yaml run --rm client \

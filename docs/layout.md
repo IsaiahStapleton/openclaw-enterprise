@@ -29,6 +29,7 @@ keep its dependency installation separate from the root workspace.
 | `apps/controller/src/composition/` | Runtime assembly and wiring of selected implementations.                                                                                             |
 | `apps/controller/src/drivers/`     | Bundled infrastructure Driver implementations, organized by capability.                                                                              |
 | `apps/controller/src/providers/`   | Provider implementations.                                                                                                                            |
+| `apps/controller/src/worker/`      | Internal worker lifecycle helpers, including durable repository-session preparation and cleanup.                                                     |
 | `apps/controller/src/gateway/`     | Agent gateway transport and workspace access.                                                                                                        |
 | `apps/controller/src/console/`     | Browser console modules, styles, and assets.                                                                                                         |
 | `packages/contracts/src/`          | Shared resource models, Driver interfaces, and API schemas under `api/`.                                                                             |
@@ -51,10 +52,12 @@ The [repository credential service](reference/repository-credentials.md) follows
 those same owners: `drivers/repository-credentials/` contains its private session,
 transport and client implementation; `providers/repository-credentials/github/`
 contains its GitHub implementation; and `composition/repository-credentials/`
-loads protected inputs and assembles the dedicated process. Shared session/client
-DTOs live in `packages/contracts/src/repository-credentials.ts`. Keeping source
-under the controller does not start the credential process inside the API or
-worker, or make its private backend protocol a public Driver interface.
+loads protected inputs and assembles the dedicated process. Shared platform
+Driver, admission and runtime material contracts live in
+`packages/contracts/src/repository-credentials.ts`. OCC owns immutable Agent
+bindings and safe session State; controller worker helpers connect those records
+to Compute delivery. The public Driver remains separate from the engine's private
+backend protocol. See the [Agent repository flow](flows/agent-repository-credentials.md).
 
 ## Deployment, tooling, and checks
 
@@ -78,7 +81,9 @@ Repository credential Dockerfiles live under
 under `deploy/examples/repository-credentials/`. The build stages only the
 selected emitted modules and minimal manifests in
 `.build/repository-credentials/service` and `.build/repository-credentials/client`;
-the runtime images do not include the controller dependency graph.
+the standalone service/client images do not include the controller dependency
+graph. The full `deploy/runtime/Dockerfile` uses the repository root as its build
+context to include the emitted client router in the Agent image.
 
 Select checks using the [testing guide](testing/README.md). Follow AGENTS.md's
 integration requirements for runtime changes. For documentation-only changes,

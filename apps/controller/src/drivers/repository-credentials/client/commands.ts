@@ -2,15 +2,34 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ClientFiles } from "./config.ts";
+import { parseGitInvocation } from "./git-context.ts";
+import type { ParsedGitInvocation } from "./git-context.ts";
 
 export interface ClientCommand {
-  readonly executable: "git" | "gh";
+  readonly executable: "/usr/bin/git" | "/usr/local/bin/gh";
   readonly arguments: readonly string[];
+}
+
+export interface ParsedGhInvocation {
+  readonly args: readonly string[];
+  readonly target?: {
+    readonly kind: "repository" | "endpoint";
+    readonly value: string;
+    readonly index: number;
+  };
+}
+
+interface CommandOptions {
+  readonly git?: ParsedGitInvocation;
+  readonly gh?: ParsedGhInvocation;
+  readonly overrides?: ReadonlyMap<string, string>;
+  readonly routing?: readonly string[];
 }
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
-function validateGhArguments(args: string[], repository: string): void {
+export function parseGhInvocation(input: readonly string[]): ParsedGhInvocation {
+  const args = Object.freeze([...input]);
   if (args[0] === "api") {
     const values = new Set([
       "--method",
@@ -26,13 +45,11 @@ function validateGhArguments(args: string[], repository: string): void {
       "-t",
     ]);
     const switches = new Set(["--paginate", "--slurp", "--include", "-i", "--silent"]);
-    let endpoint: string | undefined;
+    let endpoint: { value: string; index: number } | undefined;
     for (let index = 1; index < args.length; index++) {
       const argument = args[index]!;
       if (values.has(argument)) {
-        if (!args[++index]) {
-          throw new Error("unsupported-client-command");
-        }
+        if (!args[++index]) throw new Error("unsupported-client-command");
       } else if (!switches.has(argument)) {
         if (
           argument.startsWith("-") ||
@@ -41,21 +58,35 @@ function validateGhArguments(args: string[], repository: string): void {
           argument.startsWith("/") ||
           argument.includes(":") ||
           argument.includes("..")
-        ) {
+        )
           throw new Error("unsupported-client-command");
-        }
-        endpoint = argument;
+        endpoint = { value: argument, index };
       }
     }
-    if (!endpoint) {
+    if (!endpoint) throw new Error("unsupported-client-command");
+    const repository = /^repos\/([^/?]+)\/([^/?]+)(?:[/?]|$)/.exec(endpoint.value);
+    if (
+      repository &&
+      (!/^[A-Za-z0-9_.-]+$/.test(repository[1]!) || !/^[A-Za-z0-9_.-]+$/.test(repository[2]!))
+    ) {
       throw new Error("unsupported-client-command");
     }
-    return;
+    return Object.freeze({
+      args,
+      ...(repository
+        ? {
+            target: Object.freeze({
+              kind: "endpoint" as const,
+              value: `${repository[1]}/${repository[2]}`,
+              index: endpoint.index,
+            }),
+          }
+        : {}),
+    });
   }
-  if (args[0] !== "pr" || args[1] !== "create") {
-    throw new Error("unsupported-client-command");
-  }
+  if (args[0] !== "pr" || args[1] !== "create") throw new Error("unsupported-client-command");
   let explicitHead = false;
+  let target: ParsedGhInvocation["target"];
   const values = new Set([
     "--base",
     "-B",
@@ -72,127 +103,87 @@ function validateGhArguments(args: string[], repository: string): void {
   ]);
   for (let index = 2; index < args.length; index++) {
     const argument = args[index]!;
-    if (argument === "--draft" || argument === "-d") {
-      continue;
-    }
-    if (!values.has(argument) || !args[index + 1]) {
-      throw new Error("unsupported-client-command");
-    }
+    if (argument === "--draft" || argument === "-d") continue;
+    if (!values.has(argument) || !args[index + 1]) throw new Error("unsupported-client-command");
     const value = args[++index]!;
-    if ((argument === "--repo" || argument === "-R") && value !== `github.com/${repository}`) {
-      throw new Error("unsupported-client-command");
+    if (argument === "--repo" || argument === "-R") {
+      if (
+        target ||
+        !/^(?:github\.com\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value) ||
+        value.includes("..")
+      ) {
+        throw new Error("unsupported-client-command");
+      }
+      target = Object.freeze({ kind: "repository", value, index });
     }
-    if (argument === "--head" || argument === "-H") {
-      explicitHead = true;
-    }
+    if (argument === "--head" || argument === "-H") explicitHead = true;
   }
-  if (!explicitHead) {
-    throw new Error("explicit-head-required");
-  }
+  if (!explicitHead) throw new Error("explicit-head-required");
+  return Object.freeze({ args, ...(target ? { target } : {}) });
 }
 
 function rejectGitUrlCredentials(url: string): void {
-  // Explicit remote helpers can reinterpret the URL and bypass ordinary URL checks.
-  if (/^[a-z][a-z0-9+.-]*::/i.test(url)) {
-    throw new Error("unsafe-git-configuration");
-  }
-  // Userinfo wins over the selected helper, even when its contents are percent-encoded.
-  if (/^https?:\/\/[^/?#]*@/i.test(url)) {
+  // Explicit helpers and URL userinfo can bypass the selected credential helper.
+  if (/^[a-z][a-z0-9+.-]*::/i.test(url) || /^https?:\/\/[^/?#]*@/i.test(url)) {
     throw new Error("unsafe-git-configuration");
   }
 }
 
-function validateCloneArguments(args: string[]): void {
-  const values = new Set([
-    "-b",
-    "--branch",
-    "-o",
-    "--origin",
-    "--depth",
-    "--shallow-since",
-    "--shallow-exclude",
-    "--filter",
-  ]);
-  const switches = new Set([
-    "--quiet",
-    "--verbose",
-    "--progress",
-    "--no-checkout",
-    "--bare",
-    "--mirror",
-    "--single-branch",
-    "--no-single-branch",
-    "--no-tags",
-    "--sparse",
-  ]);
-  for (let index = 0; index < args.length; index++) {
-    const argument = args[index]!;
-    if (argument === "--") {
-      return;
-    }
-    if (!argument.startsWith("-") || switches.has(argument) || /^-[qvn]+$/.test(argument)) {
-      continue;
-    }
-    if (values.has(argument)) {
-      if (args[++index] === undefined) {
-        throw new Error("unsupported-client-command");
-      }
-    } else if (!values.has(argument.split("=", 1)[0]!) && !/^-[bo].+/.test(argument)) {
-      // Clone config and templates are applied after the preflight inspection.
-      throw new Error("unsupported-client-command");
-    }
-  }
-}
+const safeGitPolicy = [
+  "-c",
+  "credential.helper=",
+  "-c",
+  "credential.useHttpPath=true",
+  "-c",
+  "http.followRedirects=false",
+  "-c",
+  "http.sslVerify=true",
+  "-c",
+  "http.extraHeader=",
+  "-c",
+  "http.proxy=",
+  "-c",
+  "submodule.recurse=false",
+  "-c",
+  "fetch.recurseSubmodules=false",
+  "-c",
+  "push.recurseSubmodules=no",
+];
 
-function prepareGitArguments(args: string[], env: NodeJS.ProcessEnv, policy: string[]): string[] {
-  // Use the same repository selection and command configuration for inspection and execution.
-  let index = 0;
-  while (index < args.length && args[index]!.startsWith("-")) {
-    const option = args[index++]!;
-    if (["-C", "-c", "--git-dir", "--work-tree", "--namespace"].includes(option)) {
-      if (args[index++] === undefined) {
-        throw new Error("unsupported-client-command");
-      }
-    } else if (
-      !/^(?:-C.+|-c.+|--(?:git-dir|work-tree|namespace|config-env)=.+|--(?:bare|no-pager|paginate|no-replace-objects|no-optional-locks|literal-pathspecs|no-literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs))$/.test(
-        option,
-      )
-    ) {
-      throw new Error("unsupported-client-command");
-    }
-  }
-  const context = args.slice(0, index);
-  const cloning = args[index] === "clone";
-  if (cloning) {
-    validateCloneArguments(args.slice(index + 1));
-  }
-  if (["clone", "fetch", "pull", "push", "ls-remote"].includes(args[index] ?? "")) {
-    for (const argument of args.slice(index + 1)) {
-      rejectGitUrlCredentials(argument.startsWith("--repo=") ? argument.slice(7) : argument);
-    }
-  }
-  const overrides = inspectGitConfiguration(context, env, cloning);
-  // Equal-specificity command entries win URL matching; empty entries reset
-  // multi-valued headers/helpers. Generic entries alone cannot enforce this.
+function prepareGitArguments(
+  git: ParsedGitInvocation,
+  overrides: ReadonlyMap<string, string>,
+  policy: readonly string[],
+  routing: readonly string[] = [],
+): string[] {
+  if (git.target) rejectGitUrlCredentials(git.target.value);
+  // Equal-specificity entries win URL matching; empty headers/helpers reset
+  // inherited multi-valued configuration. Preserve the inspected context exactly.
   return [
-    ...context,
+    ...git.context,
     ...[...overrides].flatMap(([key, value]) => ["-c", `${key}=${value}`]),
+    ...routing,
+    ...safeGitPolicy,
     ...policy,
-    ...args.slice(index),
+    ...git.args.slice(git.commandIndex),
   ];
 }
 
-function inspectGitConfiguration(
-  context: string[],
+export function inspectGitConfiguration(
+  context: readonly string[],
   env: NodeJS.ProcessEnv,
   cloning: boolean,
 ): ReadonlyMap<string, string> {
-  const inspected = spawnSync("git", [...context, "config", "--null", "--list", "--includes"], {
-    env,
-    encoding: "utf8",
-    timeout: 5000,
-    maxBuffer: 1024 * 1024,
-  });
+  const inspected = spawnSync(
+    "/usr/bin/git",
+    [...context, "config", "--null", "--list", "--includes"],
+    {
+      env,
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+    },
+  );
   if (inspected.status !== 0) {
     throw new Error("unsafe-git-configuration");
   }
@@ -244,14 +235,31 @@ function inspectGitConfiguration(
   return overrides;
 }
 
+export function prepareLocalGitCommand(
+  git: ParsedGitInvocation,
+  env: NodeJS.ProcessEnv,
+  overrides?: ReadonlyMap<string, string>,
+): ClientCommand {
+  if (git.kind !== "local" || git.command === "credential")
+    throw new Error("unsupported-client-command");
+  return {
+    executable: "/usr/bin/git",
+    arguments: prepareGitArguments(
+      git,
+      overrides ?? inspectGitConfiguration(git.context, env, false),
+      ["-c", "protocol.allow=never"],
+    ),
+  };
+}
+
 export function prepareClientCommand(
-  command: ClientCommand["executable"],
-  args: string[],
+  command: "git" | "gh",
+  args: readonly string[],
   configuration: ClientFiles,
   sessionDirectory: string,
   env: NodeJS.ProcessEnv,
+  options: CommandOptions = {},
 ): ClientCommand {
-  let arguments_ = args;
   if (command === "gh") {
     if (
       configuration.client.canonicalApiHost !== "github.com" ||
@@ -259,38 +267,37 @@ export function prepareClientCommand(
     ) {
       throw new Error("gh-requires-canonical-host-and-port-443");
     }
-    validateGhArguments(args, configuration.client.repository);
-    const version = spawnSync("gh", ["--version"], {
+    const gh = options.gh ?? parseGhInvocation(args);
+    if (gh.target) {
+      const selected = configuration.client.repository.toLowerCase();
+      const requested = gh.target.value.replace(/^github\.com\//, "").toLowerCase();
+      if (requested !== selected) throw new Error("unsupported-client-command");
+    }
+    const version = spawnSync("/usr/local/bin/gh", ["--version"], {
       env,
       encoding: "utf8",
       timeout: 5000,
       maxBuffer: 4096,
     });
-    if (version.status !== 0 || !/^gh version 2\.100\.0(?:\s|$)/.test(version.stdout)) {
+    if (version.status !== 0 || !/^gh version 2\.100\.0(?:\s|$)/.test(version.stdout))
       throw new Error("unsupported-gh-version");
-    }
-  } else {
-    const helper = join(
-      dirname(fileURLToPath(import.meta.url)),
-      `git-helper${import.meta.url.endsWith(".ts") ? ".ts" : ".js"}`,
-    );
-    // Reset inherited helpers and HTTP defaults, including URL-specific configuration.
-    arguments_ = prepareGitArguments(args, env, [
-      "-c",
-      "credential.helper=",
-      "-c",
-      `credential.helper=!${shellQuote(process.execPath)} ${shellQuote(helper)} ${shellQuote(sessionDirectory)}`,
-      "-c",
-      "credential.useHttpPath=true",
-      "-c",
-      "http.followRedirects=false",
-      "-c",
-      "http.sslVerify=true",
-      "-c",
-      "http.extraHeader=",
-      "-c",
-      "http.proxy=",
-    ]);
+    return { executable: "/usr/local/bin/gh", arguments: gh.args };
   }
-  return { executable: command, arguments: arguments_ };
+  const git = options.git ?? parseGitInvocation(args);
+  const helper = join(
+    dirname(fileURLToPath(import.meta.url)),
+    `git-helper${import.meta.url.endsWith(".ts") ? ".ts" : ".js"}`,
+  );
+  return {
+    executable: "/usr/bin/git",
+    arguments: prepareGitArguments(
+      git,
+      options.overrides ?? inspectGitConfiguration(git.context, env, git.command === "clone"),
+      [
+        "-c",
+        `credential.helper=!${shellQuote(process.execPath)} ${shellQuote(helper)} ${shellQuote(sessionDirectory)}`,
+      ],
+      options.routing,
+    ),
+  };
 }

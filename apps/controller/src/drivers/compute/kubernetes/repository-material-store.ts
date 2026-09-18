@@ -1,0 +1,301 @@
+import type { CoreV1Api, V1ObjectMeta, V1Secret } from "@kubernetes/client-node";
+import type {
+  AgentRevision,
+  RepositoryCredentialMaterialRef,
+} from "@openclaw-enterprise/contracts";
+import { numericErrorStatus } from "@openclaw-enterprise/utils";
+import {
+  REPOSITORY_MATERIAL_KEYS,
+  REPOSITORY_MATERIAL_LABEL,
+  repositoryMaterialFromSecret,
+  repositoryMaterialSecretName,
+  type RepositoryMaterialBinding,
+  type RepositoryMaterialSpec,
+} from "./repository-material.ts";
+
+export interface RepositoryMaterialOwner {
+  readonly namespaceId: string;
+  readonly agentId?: string;
+  readonly revisionId?: string;
+}
+
+type Request = <T>(
+  operation: () => Promise<T>,
+  options?: { readonly mutating?: boolean },
+) => Promise<T>;
+const fields = {
+  namespaceId: ["openclaw.dev/namespace", "openclaw.dev/namespace-id"],
+  agentId: ["openclaw.dev/agent", "openclaw.dev/agent-id"],
+  revisionId: ["openclaw.dev/revision", "openclaw.dev/revision-id"],
+} as const;
+
+function invalid(): never {
+  throw new Error("Repository credential Kubernetes material ownership is invalid.");
+}
+
+function labels(owner: RepositoryMaterialOwner): Record<string, string> {
+  const result: Record<string, string> = {
+    "app.kubernetes.io/managed-by": "openclaw-enterprise",
+    [REPOSITORY_MATERIAL_LABEL]: "session",
+  };
+  for (const key of Object.keys(fields) as (keyof typeof fields)[]) {
+    if (owner[key] !== undefined) {
+      result[fields[key][0]] = owner[key];
+    }
+  }
+  return result;
+}
+
+function annotations(owner: RepositoryMaterialOwner): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const key of Object.keys(fields) as (keyof typeof fields)[]) {
+    if (owner[key] !== undefined) {
+      result[fields[key][1]] = owner[key];
+    }
+  }
+  return result;
+}
+
+function selector(owner: RepositoryMaterialOwner): string {
+  return Object.entries(labels(owner))
+    .map(([key, value]) => `${key}=${value}`)
+    .join(",");
+}
+
+export function completeKubernetesList<T>(value: {
+  readonly items?: readonly T[];
+  readonly metadata?: {
+    readonly _continue?: string;
+    readonly continue?: string;
+    readonly remainingItemCount?: number;
+  };
+}): readonly T[] {
+  if (
+    !Array.isArray(value?.items) ||
+    (value.metadata?._continue !== undefined && value.metadata._continue !== "") ||
+    (value.metadata?.continue !== undefined && value.metadata.continue !== "") ||
+    (value.metadata?.remainingItemCount !== undefined && value.metadata.remainingItemCount !== 0)
+  ) {
+    throw new Error("The Kubernetes material resource list is incomplete.");
+  }
+  return value.items;
+}
+
+export class RepositoryMaterialStore {
+  private readonly namespace: string;
+  private readonly core: CoreV1Api;
+  private readonly request: Request;
+
+  constructor(namespace: string, core: CoreV1Api, request: Request) {
+    this.namespace = namespace;
+    this.core = core;
+    this.request = request;
+  }
+
+  private verify(
+    secret: V1Secret,
+    owner: RepositoryMaterialOwner,
+    binding?: RepositoryMaterialBinding,
+  ): void {
+    const metadata = secret.metadata;
+    if (
+      metadata?.namespace !== this.namespace ||
+      (secret.kind !== undefined && secret.kind !== "Secret") ||
+      (secret.apiVersion !== undefined && secret.apiVersion !== "v1") ||
+      typeof metadata.name !== "string" ||
+      Object.entries(labels(owner)).some(([key, value]) => metadata.labels?.[key] !== value) ||
+      Object.entries(annotations(owner)).some(
+        ([key, value]) => metadata.annotations?.[key] !== value,
+      )
+    ) {
+      return invalid();
+    }
+    const namespaceId = metadata.annotations?.["openclaw.dev/namespace-id"];
+    const agentId = metadata.annotations?.["openclaw.dev/agent-id"];
+    const revisionId = metadata.annotations?.["openclaw.dev/revision-id"];
+    const repositoryRef = metadata.annotations?.["openclaw.dev/repository-ref"];
+    const sessionId = metadata.annotations?.["openclaw.dev/repository-session-id"];
+    const deadline = metadata.annotations?.["openclaw.dev/repository-deadline"];
+    if (
+      !namespaceId ||
+      !agentId ||
+      !revisionId ||
+      !repositoryRef ||
+      !sessionId ||
+      !deadline ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(repositoryRef) ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId) ||
+      !Number.isSafeInteger(Number(deadline)) ||
+      Number(deadline) <= 0 ||
+      String(Number(deadline)) !== deadline ||
+      Object.entries(labels({ namespaceId, agentId, revisionId })).some(
+        ([key, value]) => metadata.labels?.[key] !== value,
+      ) ||
+      metadata.name !==
+        repositoryMaterialSecretName(
+          { namespaceId, agentId, id: revisionId },
+          { repositoryRef, sessionId },
+        ) ||
+      (binding !== undefined &&
+        (repositoryRef !== binding.repositoryRef ||
+          sessionId !== binding.sessionId ||
+          deadline !== String(binding.deadlineWallMs)))
+    ) {
+      return invalid();
+    }
+  }
+
+  private async read(name: string): Promise<V1Secret | undefined> {
+    try {
+      return await this.request(() =>
+        this.core.readNamespacedSecret({ namespace: this.namespace, name }),
+      );
+    } catch (error) {
+      if (numericErrorStatus(error) === 404) {
+        return undefined;
+      }
+      throw new Error("Repository credential material could not be read.");
+    }
+  }
+
+  async prepare(
+    revision: AgentRevision,
+    spec: RepositoryMaterialSpec,
+  ): Promise<{
+    readonly spec: RepositoryMaterialSpec;
+    readonly missing: readonly RepositoryCredentialMaterialRef[];
+  }> {
+    const owner = {
+      namespaceId: revision.namespaceId,
+      agentId: revision.agentId,
+      revisionId: revision.id,
+    };
+    const resolved: RepositoryMaterialBinding[] = [];
+    const pending: RepositoryMaterialBinding[] = [];
+    const missing: RepositoryCredentialMaterialRef[] = [];
+    // Read and validate the complete set before creating any Secret or workload.
+    for (const binding of spec.bindings) {
+      const existing = await this.read(binding.secretName);
+      if (existing === undefined) {
+        if (binding.kind === "new") {
+          pending.push(binding);
+          resolved.push(binding);
+        } else {
+          missing.push({ repositoryRef: binding.repositoryRef, sessionId: binding.sessionId });
+        }
+        continue;
+      }
+      try {
+        this.verify(existing, owner, binding);
+        resolved.push(repositoryMaterialFromSecret(binding, existing));
+      } catch {
+        missing.push({ repositoryRef: binding.repositoryRef, sessionId: binding.sessionId });
+      }
+    }
+    if (missing.length !== 0) {
+      return { spec, missing };
+    }
+    for (const binding of pending) {
+      const data = Object.fromEntries(
+        Object.entries(binding.files!).map(([file, content]) => [
+          REPOSITORY_MATERIAL_KEYS[file as keyof typeof REPOSITORY_MATERIAL_KEYS],
+          Buffer.from(content, "utf8").toString("base64"),
+        ]),
+      );
+      const body: V1Secret = {
+        apiVersion: "v1",
+        kind: "Secret",
+        metadata: {
+          name: binding.secretName,
+          namespace: this.namespace,
+          labels: labels(owner),
+          annotations: {
+            ...annotations(owner),
+            "openclaw.dev/repository-ref": binding.repositoryRef,
+            "openclaw.dev/repository-session-id": binding.sessionId,
+            "openclaw.dev/repository-deadline": String(binding.deadlineWallMs),
+          },
+        },
+        immutable: true,
+        type: "Opaque",
+        data,
+      };
+      let observed: V1Secret | undefined;
+      try {
+        observed = await this.request(
+          () => this.core.createNamespacedSecret({ namespace: this.namespace, body }),
+          { mutating: true },
+        );
+      } catch (error) {
+        if (numericErrorStatus(error) !== 409) {
+          throw new Error("Repository credential material could not be created.");
+        }
+        observed = await this.read(binding.secretName);
+      }
+      if (observed === undefined) {
+        throw new Error("Repository credential material creation could not be confirmed.");
+      }
+      try {
+        this.verify(observed, owner, binding);
+        repositoryMaterialFromSecret(binding, observed);
+      } catch {
+        return {
+          spec,
+          missing: [{ repositoryRef: binding.repositoryRef, sessionId: binding.sessionId }],
+        };
+      }
+    }
+    return { spec: { ...spec, bindings: resolved }, missing: [] };
+  }
+
+  async cleanup(owner: RepositoryMaterialOwner, keep: ReadonlySet<string>): Promise<boolean> {
+    let listed;
+    try {
+      listed = await this.request(() =>
+        this.core.listNamespacedSecret({
+          namespace: this.namespace,
+          labelSelector: selector(owner),
+        }),
+      );
+    } catch {
+      throw new Error("Repository credential material cleanup could not list owned objects.");
+    }
+    const candidates = completeKubernetesList(listed);
+    // Validate every object before deleting one; a partial or foreign response fails closed.
+    for (const candidate of candidates) {
+      this.verify(candidate, owner);
+      if (!candidate.metadata?.uid) {
+        return invalid();
+      }
+    }
+    let complete = true;
+    for (const candidate of candidates) {
+      const metadata = candidate.metadata as V1ObjectMeta & { name: string; uid: string };
+      if (keep.has(metadata.name)) {
+        complete = false;
+        continue;
+      }
+      try {
+        await this.request(
+          () =>
+            this.core.deleteNamespacedSecret({
+              namespace: this.namespace,
+              name: metadata.name,
+              body: { preconditions: { uid: metadata.uid } },
+            }),
+          { mutating: true },
+        );
+      } catch (error) {
+        if (numericErrorStatus(error) !== 404) {
+          throw new Error("Repository credential material could not be removed.");
+        }
+      }
+      const remaining = await this.read(metadata.name);
+      if (remaining !== undefined) {
+        this.verify(remaining, owner);
+        complete = false;
+      }
+    }
+    return complete;
+  }
+}

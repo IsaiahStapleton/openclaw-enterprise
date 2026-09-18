@@ -56,7 +56,7 @@ test("dev-up builds the default runtime only when real Compose leaves runtime im
     dockerLogs.some(
       (entry) =>
         entry.args.join(" ") ===
-        `build -f deploy/runtime/Dockerfile --tag ${defaultRuntimeImage} deploy/runtime`,
+        `build -f deploy/runtime/Dockerfile --tag ${defaultRuntimeImage} .`,
     ),
   );
   assert.ok(

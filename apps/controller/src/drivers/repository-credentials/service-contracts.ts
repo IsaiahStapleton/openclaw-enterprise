@@ -1,5 +1,6 @@
 import type {
   RepositoryCredentialSessionInput,
+  RepositoryCredentialBoundSessionInput,
   RepositoryCredentialSessionResult,
   RepositoryCredentialSessionStatus,
 } from "@openclaw-enterprise/contracts";
@@ -58,7 +59,9 @@ export interface SafeConfigurationSummary {
   readonly maximumDurationSeconds: number;
 }
 export interface SessionControl {
-  open(input: RepositoryCredentialSessionInput): RepositoryCredentialSessionResult;
+  open(
+    input: RepositoryCredentialSessionInput | RepositoryCredentialBoundSessionInput,
+  ): RepositoryCredentialSessionResult;
   status(sessionId: string): RepositoryCredentialSessionStatus | undefined;
   close(sessionId: string): RepositoryCredentialSessionStatus;
 }

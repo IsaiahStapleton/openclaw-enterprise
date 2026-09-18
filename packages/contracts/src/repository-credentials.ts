@@ -1,6 +1,6 @@
 import type { Driver } from "./index.ts";
 
-/** Exact resolved provider, repository, and policy identity. */
+/** Opaque, nonempty identities: at most 512 UTF-8 bytes each, without ASCII controls. */
 export type RepositoryCredentialGrantIdentity = Readonly<{
   providerInstanceId: string;
   repositoryId: string;
@@ -76,6 +76,7 @@ export interface RepositoryCredentialResolution {
 }
 
 export interface RepositoryRevisionState {
+  /** Nonempty opaque values use the same 512-byte, no-control bound as grant identities. */
   readonly driver: { readonly id: string; readonly implementation: string };
   readonly deadlineWallMs: number;
   readonly bindings: readonly AdmittedRepositoryBinding[];
@@ -92,7 +93,11 @@ export interface OpenRepositorySessionInput {
 }
 
 export type OpenRepositorySessionResult =
-  | { readonly kind: "created"; readonly result: RepositoryCredentialSessionResult }
+  | {
+      readonly kind: "created";
+      readonly session: RepositoryCredentialSessionStatus;
+      readonly files: RepositoryCredentialSessionFiles;
+    }
   | { readonly kind: "recovered"; readonly status: RepositoryCredentialSessionStatus }
   | { readonly kind: "missing" };
 

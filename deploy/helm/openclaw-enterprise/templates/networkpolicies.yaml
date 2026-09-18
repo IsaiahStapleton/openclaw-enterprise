@@ -92,3 +92,55 @@ spec:
         - protocol: TCP
           port: 443
 {{- end }}
+
+{{- if .Values.repositoryCredentials.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openclaw-enterprise-repository-credentials-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: openclaw.dev/namespace
+                operator: Exists
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: openclaw-enterprise
+              openclaw.dev/workload-role: gateway
+            matchExpressions:
+              - key: openclaw.dev/agent
+                operator: Exists
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openclaw-enterprise-repository-provider-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- range .Values.repositoryCredentials.upstreamCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}

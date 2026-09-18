@@ -45,6 +45,7 @@ export async function composeProduction(config: ProductionConfig) {
     secretDriver,
     sandboxDriver,
     pluginDriver,
+    repositoryCredentialDriver,
     createIAMDriver,
   } = config.drivers;
   if (
@@ -155,6 +156,15 @@ export async function composeProduction(config: ProductionConfig) {
       controller.registerDriver(pluginDriver);
       if (controller.selectDriver("plugin", pluginDriver.id) !== pluginDriver) {
         throw new Error("The configured Plugin Driver was not selected correctly.");
+      }
+    }
+    if (repositoryCredentialDriver !== undefined) {
+      controller.registerDriver(repositoryCredentialDriver);
+      if (
+        controller.selectDriver("repository_credentials", repositoryCredentialDriver.id) !==
+        repositoryCredentialDriver
+      ) {
+        throw new Error("The configured repository credential Driver was not selected correctly.");
       }
     }
     await controller.validateProviderConfiguration();

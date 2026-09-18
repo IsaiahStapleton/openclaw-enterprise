@@ -1,3 +1,4 @@
+import type { RepositoryCredentialBoundSessionInput } from "@openclaw-enterprise/contracts";
 import type {
   RepositoryCredentialClientConfiguration,
   RepositoryCredentialGrantIdentity,
@@ -149,6 +150,8 @@ export interface ResolvedGrant {
 export interface RepositoryBackendFactory {
   parseAuthentication(head: RequestHead, authorization: string): string | Denied;
   resolve(profile: string): ResolvedGrant;
+  /** Presence selects registry-bound admission; it never falls back to resolve. */
+  resolveBound?(input: RepositoryCredentialBoundSessionInput): ResolvedGrant;
   create(
     input: Readonly<{ authority: AuthorityIdentity; custody: DriverCustody; clock: Clock }>,
   ): RepositoryBackend;

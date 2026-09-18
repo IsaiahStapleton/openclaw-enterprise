@@ -3,6 +3,8 @@ import { request as httpRequest } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { RepositoryCredentialBoundSessionInput } from "@openclaw-enterprise/contracts";
+import { readPrivateFile } from "./private-files.ts";
 import type { ControlRequest, ControlResponse } from "../control-contracts.ts";
 import { writeClientConfiguration } from "./config.ts";
 
@@ -65,7 +67,13 @@ export async function callControl(
             }
             if ("error" in value) {
               if (
-                !["invalid-request", "not-found", "unavailable", "overloaded"].includes(value.error)
+                ![
+                  "invalid-request",
+                  "not-found",
+                  "admission-missing",
+                  "unavailable",
+                  "overloaded",
+                ].includes(value.error)
               ) {
                 throw new Error("control-request-failed");
               }
@@ -89,6 +97,54 @@ export async function callControl(
   });
 }
 
+async function readBoundRequest(path: string): Promise<RepositoryCredentialBoundSessionInput> {
+  const value: unknown = JSON.parse(
+    (await readPrivateFile(resolve(path), 16 * 1024)).toString("utf8"),
+  );
+  const isRecord = (input: unknown): input is Record<string, unknown> =>
+    input !== null && typeof input === "object" && !Array.isArray(input);
+  const isString = (input: unknown): input is string =>
+    typeof input === "string" &&
+    input.length > 0 &&
+    input.length <= 512 &&
+    !/[\x00-\x1f\x7f]/.test(input);
+  if (!isRecord(value) || !isRecord(value.expectedBinding)) {
+    throw new Error("invalid-arguments");
+  }
+  const binding = value.expectedBinding;
+  if (
+    Object.keys(value).some(
+      (key) =>
+        ![
+          "durationSeconds",
+          "profile",
+          "namespaceId",
+          "repositoryRef",
+          "expectedBinding",
+          "deadlineWallMs",
+          "recoverOnly",
+        ].includes(key),
+    ) ||
+    Object.keys(binding).some(
+      (key) => !["providerInstanceId", "repositoryId", "grantId"].includes(key),
+    ) ||
+    !Number.isSafeInteger(value.durationSeconds) ||
+    Number(value.durationSeconds) <= 0 ||
+    !Number.isSafeInteger(value.deadlineWallMs) ||
+    Number(value.deadlineWallMs) <= 0 ||
+    !isString(value.profile) ||
+    !isString(value.namespaceId) ||
+    !isString(value.repositoryRef) ||
+    !isString(binding.providerInstanceId) ||
+    !isString(binding.repositoryId) ||
+    !isString(binding.grantId) ||
+    (Object.hasOwn(value, "recoverOnly") && value.recoverOnly !== true)
+  ) {
+    throw new Error("invalid-arguments");
+  }
+  return value as unknown as RepositoryCredentialBoundSessionInput;
+}
+
 async function main(): Promise<void> {
   const [operation, ...args] = process.argv.slice(2);
   const options = new Map<string, string>();
@@ -102,7 +158,15 @@ async function main(): Promise<void> {
   }
   const allowed =
     operation === "open"
-      ? ["--socket", "--duration-seconds", "--profile", "--output", "--ca", "--admission-id"]
+      ? [
+          "--socket",
+          "--duration-seconds",
+          "--profile",
+          "--request-json",
+          "--output",
+          "--ca",
+          "--admission-id",
+        ]
       : ["--socket", "--session"];
   if ([...options.keys()].some((key) => !allowed.includes(key))) {
     throw new Error("invalid-arguments");
@@ -112,9 +176,21 @@ async function main(): Promise<void> {
     throw new Error("invalid-arguments");
   }
   if (operation === "open") {
-    const durationSeconds = Number(options.get("--duration-seconds"));
+    const requestPath = options.get("--request-json");
     const directory = options.get("--output");
-    if (!directory || !Number.isSafeInteger(durationSeconds) || durationSeconds <= 0) {
+    if (
+      !directory ||
+      (requestPath && (options.has("--duration-seconds") || options.has("--profile")))
+    ) {
+      throw new Error("invalid-arguments");
+    }
+    const body = requestPath
+      ? await readBoundRequest(requestPath)
+      : {
+          durationSeconds: Number(options.get("--duration-seconds")),
+          profile: options.get("--profile"),
+        };
+    if (!Number.isSafeInteger(body.durationSeconds) || body.durationSeconds <= 0) {
       throw new Error("invalid-arguments");
     }
     const caPath = options.get("--ca");
@@ -134,7 +210,7 @@ async function main(): Promise<void> {
       {
         method: "POST",
         path: "/v1/sessions",
-        body: { durationSeconds, profile: options.get("--profile") },
+        body,
       },
       admissionId,
     );

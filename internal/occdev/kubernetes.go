@@ -91,7 +91,7 @@ func (r *runner) importRuntime(ctx context.Context, s *developmentState) (string
 		if r.env["OCC_KUBERNETES_RUNTIME_IMAGE"] != "" {
 			return "", fmt.Errorf("explicitly selected runtime image must already exist locally: %s", image)
 		}
-		if err := r.run(ctx, r.engine, "build", "-f", "deploy/runtime/Dockerfile", "--tag", image, "deploy/runtime"); err != nil {
+		if err := r.run(ctx, r.engine, "build", "-f", "deploy/runtime/Dockerfile", "--tag", image, "."); err != nil {
 			return "", err
 		}
 	}

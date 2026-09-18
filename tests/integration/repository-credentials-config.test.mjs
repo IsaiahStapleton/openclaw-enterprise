@@ -54,6 +54,55 @@ test("protected startup accepts RSA/TLS files without provider calls and rejects
   assert.deepEqual(summary.profiles, ["git-read", "git-write", "git-full"]);
   assert.equal(JSON.stringify(summary).includes("PRIVATE KEY"), false);
   assert.equal(JSON.stringify(summary).includes(directory), false);
+  // Registry mode has a separate discriminator and binds its protected App key
+  // to the same provider and duration policy consumed by controller composition.
+  const registryFile = join(directory, "registry.json");
+  const registry = {
+    version: 1,
+    providerId: "github-provider",
+    providerInstanceId: "production",
+    appId: "12345",
+    githubInstallationId: "41",
+    maximumDurationSeconds: 172800,
+    repositories: [
+      {
+        repositoryRef: "source",
+        repositoryId: "73",
+        repository: "fixture/repository",
+        namespaces: [{ namespaceId: "namespace-a", profiles: ["git-read", "git-write"] }],
+      },
+    ],
+  };
+  await writeFile(registryFile, JSON.stringify(registry), { mode: 0o600 });
+  const bound = {
+    ...input,
+    backend: {
+      kind: "github-app-registry",
+      providerId: "github-provider",
+      registryFile,
+      privateKeyFile: key,
+    },
+  };
+  await save(bound);
+  assert.deepEqual(await checkConfiguration(file), summary);
+  for (const invalid of [
+    { ...bound, backend: { ...bound.backend, providerId: "another-provider" } },
+    { ...bound, backend: { ...bound.backend, appId: "12345" } },
+    { ...bound, sessionPolicy: { ...bound.sessionPolicy, maximumDurationSeconds: 172801 } },
+    { ...bound, backend: { ...bound.backend, registryFile: key } },
+  ]) {
+    await save(invalid);
+    await assert.rejects(checkConfiguration(file), { message: "invalid-configuration" });
+  }
+  await writeFile(registryFile, JSON.stringify({ ...registry, privateKey: pem }));
+  await save(bound);
+  await assert.rejects(checkConfiguration(file), { message: "invalid-configuration" });
+  await writeFile(registryFile, JSON.stringify(registry));
+  const registryLink = join(directory, "registry-link.json");
+  await symlink(registryFile, registryLink);
+  await save({ ...bound, backend: { ...bound.backend, registryFile: registryLink } });
+  await assert.rejects(checkConfiguration(file), { message: "invalid-configuration" });
+
   // Removed and unknown profiles must fail at trusted startup, before serving
   // any sessions, even when they are explicitly named in the operator policy.
   for (const profile of ["read-write", "app-full"]) {

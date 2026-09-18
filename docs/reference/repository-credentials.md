@@ -1,27 +1,127 @@
-# Repository credential service
+# Repository credentials
 
-The repository credential service forwards Git HTTPS and selected GitHub API
-operations for one configured repository. It runs as a separate Node process
-with ephemeral sessions and no database. Use the [operator guide](../guides/repository-credentials.md)
-to build it, configure protected inputs, and admit a client.
-Controller Drivers, Providers and composition own its source; deployment still
-requires starting its dedicated process separately from the API and worker.
+Give an Agent bounded Git HTTPS and selected GitHub API access through optional
+repository bindings. OCC authorizes the Agent operation, freezes approved
+repository grants into its revision, and lets the worker prepare private runtime
+material. The separately running credential service retains GitHub App signing
+keys, App JWTs and installation tokens. The Agent receives gateway session
+bearers, client configuration and public CA trust. Start with the
+[operator guide](../guides/repository-credentials.md).
 
-The client receives a gateway session bearer. The service retains the GitHub App
-private key and installation tokens. Possession of the bearer authorizes its
-session; ordinary filesystem and container separation protect it. A bearer does
-not establish workload identity. Restart invalidates every gateway session and
-loses cleanup inventory; upstream tokens can remain valid until GitHub expires
-them. This service does not provide durable recovery, multiple replicas, or OCC
-Work/IAM integration.
+The bundled platform path supports Kubernetes Compute-owned embedded OpenClaw
+with `api_key` Harness authentication and no Sandbox Driver. It requires one
+worker/credential-service owner; Helm uses `Recreate` to avoid overlapping
+owners. Dedicated Harnesses and other Compute topologies reject repository-bearing
+revisions. Agents without bindings retain their existing lifecycle.
+
+Bearer possession authorizes a session; it does not establish workload identity.
+Private files and scoped Kubernetes Secrets protect custody. Client routing and
+this topology do not establish strong network isolation. A service restart
+invalidates its in-memory sessions and loses provider cleanup inventory; existing
+GitHub tokens can remain valid until expiry. Platform State retains safe session
+identifiers and cleanup work, allowing the worker to replace runtime material
+within the original revision deadline. It cannot reconstruct lost provider tokens
+or prove their revocation.
+
+## Agent bindings
+
+Agent creation and update accept up to 16 `repositoryBindings`:
+
+```json
+{
+  "repositoryBindings": [
+    { "repositoryRef": "application", "profile": "git-full" },
+    { "repositoryRef": "library", "profile": "git-read" }
+  ]
+}
+```
+
+References and profiles are 1–128-character ASCII selectors beginning with a
+letter or digit and then containing letters, digits, `.`, `_` or `-`. References
+must be distinct. The GitHub Driver defaults an omitted profile to `git-write`.
+The existing Agent/configuration permissions apply; a reference is selectable
+only when the registry authorizes that exact Namespace and profile. Omission on
+update preserves selections; `[]` clears them for future deployments.
+
+Deployment resolves the selections again and freezes the Driver identity, exact
+grants and absolute deadline into the immutable revision. Registry drift fails
+closed; changing an Agent draft cannot retarget its active revision. The configured
+`sessionDurationSeconds` determines the deadline; use `86400` for a 24-hour
+revision. Reconciliation, token renewal and service recovery cannot extend it.
+A new deployment admits a new revision and deadline. Public Agent responses expose selections; revision responses also expose the
+deadline. Neither exposes grant internals, bearer material or session files.
 
 ## Configuration
 
-A protected JSON file supplies `gateway`, `sessionPolicy`, `backend`, and optional
-positive safe-integer `limits`. The service validates configuration before listening.
-Private keys come from protected files, not environment variables or command
-arguments. The configuration file and private keys must be regular owned files
-with private permissions; symlinks and replacement during loading are rejected.
+### Canonical platform registry
+
+The GitHub Provider selects one registry through `configuration.registryPath`;
+its `drivers.repository_credentials` names the selected Driver. API, worker and
+service load the same immutable, versioned ConfigMap. The registry contains
+nonsecret identity and Namespace policy for one App installation and multiple
+repositories:
+
+```json
+{
+  "version": 1,
+  "providerId": "repository-provider",
+  "providerInstanceId": "github-production",
+  "appId": "123456",
+  "githubInstallationId": "789012",
+  "maximumDurationSeconds": 86400,
+  "repositories": [
+    {
+      "repositoryRef": "application",
+      "repositoryId": "345678",
+      "repository": "example/project",
+      "namespaces": [{ "namespaceId": "team", "profiles": ["git-read", "git-write", "git-full"] }]
+    }
+  ]
+}
+```
+
+Use actual platform Namespace IDs. App, installation and repository IDs are
+positive decimal safe integers represented as strings. Repository names are
+canonicalized to lowercase. The registry admits at most 128 repositories, 128
+Namespace policies per repository and 4,096 policies overall. References, numeric
+repository IDs and canonical names must be unique.
+
+The resolved grant fingerprint covers provider/App/installation identity,
+repository identity, maximum duration, Namespace, its complete allowed-profile
+set and the selected profile. The service independently resolves and compares
+that fingerprint before admission. A changed policy cannot preserve an older
+grant merely by keeping the same reference.
+
+The selected Driver configuration supplies `controlSocket`,
+`sessionDurationSeconds` and `publicCaPath`; it contains no App key. See
+[Provider configuration](providers.md) and the
+[installation procedure](../guides/deploy/production-installation.md) for wiring.
+
+### Profiles
+
+| Profile               | Exact requested GitHub permissions                                           | Supported work                                                      |
+| --------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `git-read`            | `metadata: read`, `contents: read`                                           | Clone, fetch and checkout; no push or API calls                     |
+| `git-write` (default) | `metadata: read`, `contents: write`                                          | Git clone, fetch, checkout and push; no API calls                   |
+| `git-full`            | `metadata: read`, `contents: write`, `pull_requests: write`, `issues: write` | Git plus selected REST, GraphQL and PR, issue and comment workflows |
+
+Every session selects exactly one repository, even when one Agent has several
+bindings. Both Git-only profiles deny all REST and GraphQL calls. `git-read`
+denies push discovery and execution. `git-full` admits selected repository
+metadata, PR, issue and issue-comment routes, `GET /meta` and `POST /graphql`,
+subject to method, query, framing and media-type restrictions. GraphQL uses the
+exact installation-token grant; the service does not provide per-field GraphQL
+authorization. The former `read-write` profile has no compatibility alias.
+
+Native repository rules still apply. Administration, workflow changes requiring
+additional permissions, Actions, packages, projects, SSH, LFS and unselected
+repositories are outside scope. Missing App permissions fail without widening
+the grant.
+
+### Standalone service inputs
+
+A protected JSON file supplies `gateway`, `sessionPolicy`, `backend` and optional
+positive safe-integer `limits`. For standalone single-repository operation:
 
 ```json
 {
@@ -50,33 +150,20 @@ with private permissions; symlinks and replacement during loading are rejected.
 }
 ```
 
-The identifiers above are examples. The initial production adapter fixes upstream
-origins to `github.com` and `api.github.com`. An Agent cannot select an upstream,
-repository, profile, or deadline after admission. Configuration changes apply to
-new composition and admission.
+The identifiers are examples. Production upstream origins are fixed to
+`github.com` and `api.github.com`. Registry mode instead uses backend fields
+`kind: "github-app-registry"`, `providerId`, `registryFile` and `privateKeyFile`;
+all repository policy comes from that registry, and unbound admission is refused.
 
-| Profile               | Exact requested GitHub permissions                                           | Supported work                                                           |
-| --------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `git-read`            | `metadata: read`, `contents: read`                                           | Clone, fetch and branch checkout; no push or API calls                   |
-| `git-write` (default) | `metadata: read`, `contents: write`                                          | Git clone, fetch, branch checkout and push; no API calls                 |
-| `git-full`            | `metadata: read`, `contents: write`, `pull_requests: write`, `issues: write` | Git plus selected REST, GraphQL and `gh` PR, issue and comment workflows |
-
-`git-read` and `git-full` require explicit selection with the configuration above.
-All three profiles select exactly the configured repository. `git-read` denies
-both push discovery and push execution. Both Git-only profiles deny every REST
-and GraphQL request, including API reads. `git-full` admits only the supported
-API routes and methods; it does not grant every permission held by the App or
-import PAT permissions. The former `read-write` name is unsupported, with no
-compatibility alias.
-
-Native repository rules still apply. Administration, workflow changes requiring
-additional permissions, Actions, packages, projects, SSH, LFS, and other
-repositories are outside the supported scope. Missing App permissions cause
-failure rather than a broader grant.
+Private configuration and keys must be regular, owned files with private
+permissions; symlinks or replacement during loading are rejected. Kubernetes
+composition copies the selected projection into service-owned private files
+before validation. API and worker receive registry/public CA inputs; only the
+service receives App and TLS private keys.
 
 ## Sessions and closure
 
-A trusted local operator uses HTTP over a private mode-0600 Unix socket:
+The trusted worker or local operator uses HTTP over a private mode-0600 Unix socket:
 
 | Request                                                           | Response                                                    |
 | ----------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -96,12 +183,21 @@ public status only; conflicting inputs fail. Follow the
 [lost-response recovery procedure](../guides/repository-credentials.md#recover-an-admission)
 to close that session and explicitly request replacement client material.
 
+Platform admission additionally requires `namespaceId`, `repositoryRef`,
+normalized `profile`, `expectedBinding` and `deadlineWallMs`. Replays must match
+all original fields. `recoverOnly: true` may return public status or
+`admission-missing`, never create a session. A missing lookup fences a delayed
+first-open using that still-fresh ID. Capacity or transport failure remains an
+error, not evidence of absence.
+
 Unseen IDs must be less than 60 seconds old and cannot be future-dated.
 Correlations are process-local and bounded to twice the session limit, including
 short-lived tombstones; rapid churn can temporarily return `overloaded`.
-Existing correlations can recover status after the initial window, until
-expiration or reclamation. Unknown stale IDs cannot create sessions, and an
-evicted session returns `not-found`. Correlations never retain a recoverable
+Existing correlations recover status after the initial window and remain while
+a closed session has unresolved cleanup, including after its deadline. They may
+be reclaimed after disposal or authoritative absence. Unknown stale IDs cannot
+create sessions: admission lookup returns `admission-missing`, while status for
+an absent session returns `not-found`. Correlations never retain a recoverable
 bearer and do not survive restart.
 
 Session duration is independent of token lifetime. Credentials are replaced on
@@ -131,23 +227,26 @@ finish and their material is disposed.
 
 ## Client routing and limits
 
-The client launcher uses a private home and configuration, disables prompts,
-redirects and inherited global helpers, and removes ambient token, proxy and
-debug settings. Before running Git, it inspects configuration in the selected
-repository context and overrides URL-specific TLS verification, redirect, proxy
-and header settings. User-agent values containing carriage returns or newlines
-are rejected, including inherited URL-specific values; ordinary user-agent
-values remain supported. Repository trust-root, client-certificate, cookie and DNS
-overrides and URL-specific credential helper/identity settings are rejected. Git's helper answers only the exact configured HTTPS host and
-repository path with `credential.useHttpPath=true`. HTTP(S) usernames and passwords
-in command URLs, remote fetch/push URLs, and URL rewrite destinations are rejected
-before network commands run, including percent-encoded userinfo. Explicit remote
-helper forms such as `https::https://...` are unsupported on those same surfaces.
-Clone admits ordinary destination, branch/origin, shallow/filter, verbosity,
-checkout, bare/mirror and tag-selection options. It rejects additional options,
-including clone-specific `-c`/`--config`, templates and submodule recursion, and
-rejects inherited `init.templateDir` and conditional includes; these can add uninspected configuration
-or launch additional transports after preflight.
+The embedded runtime provides `git` and `gh` shims. Each invocation selects one
+immutable material generation from its actual target or effective Git remotes;
+checkout directory names are not authority. Canonical clone URLs route to the
+selected gateway and retain Git's ordinary destination behavior. Explicit
+`OCE_REPOSITORY_REF` pins an admitted reference and must agree with the target.
+Without an explicit target, all effective remotes must match that binding.
+Remotes for different repositories require an explicit remote or URL even with
+a pinned reference; multi-destination commands fail. No shared selected-repository
+file or global routing state is
+mutated, so concurrent commands can use different bindings.
+
+Each command owns a private HOME and sanitized environment. Network operations
+require valid material and never fall back to ambient authentication or another
+profile. Known local Git operations can run without a binding. The launcher
+inspects the same Git context it executes, disables prompts/redirects and
+inherited global helpers, and enforces exact HTTPS host/path matching. It rejects
+URL userinfo, explicit remote-helper syntax, unsafe TLS/proxy/header overrides,
+custom trust/client certificates/cookies/DNS, newline-containing user agents,
+and clone options that introduce uninspected configuration or transports.
+Git's helper uses `credential.useHttpPath=true`. Routing does not confine egress.
 
 The launcher preserves the child command's exit status while retrying temporary
 home removal up to three times. If removal still fails, stderr reports
@@ -162,12 +261,8 @@ experimental `api_host` routing option and stores only the gateway bearer in
 `oauth_token`. Supported API calls use relative endpoint paths. The launcher
 admits `gh api` and explicit-head `gh pr create`; browser flows, extensions,
 absolute API destinations and arbitrary command compatibility are excluded.
-GraphQL uses the exactly scoped installation token and can return public data
-GitHub permits; the service does not claim per-field GraphQL authorization.
 Response rewriting is limited to validated pagination links and explicitly
-followed resource fields. Matching owner/repository names may differ in casing;
-route casing, origin, purpose, profile and query restrictions still apply.
-Native `/repositories/<id>` response URLs must match
+followed resource fields. Native `/repositories/<id>` response URLs must match
 the configured repository ID and are rewritten to its admitted `/repos/OWNER/REPO`
 route. Issue collection pagination accepts bounded `after` and `before` cursors;
 direct requests to repository-ID routes remain unsupported.
@@ -191,5 +286,6 @@ exceed 30,000. Unknown limit names are rejected.
 Controlled tests, container tests and authorized live-provider smoke establish
 different evidence. See the [testing guide](../testing/repository-credentials.md)
 for current selection and prerequisites, and the [runtime flow](../flows/repository-credentials.md)
-for source ownership. A local fixture success does not establish live GitHub
+for service internals and the [Agent flow](../flows/agent-repository-credentials.md)
+for platform ownership. A local fixture success does not establish live GitHub
 App compatibility or release readiness.

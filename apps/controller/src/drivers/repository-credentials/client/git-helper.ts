@@ -58,6 +58,9 @@ async function run(): Promise<void> {
     fields.set(key, line.slice(offset + 1));
   }
   const configuration = await readClientConfiguration(directory);
+  if (configuration.deadlineWallMs <= Date.now()) {
+    throw new Error("repository-session-expired");
+  }
   const remote = new URL(configuration.client.gitRemote);
   if (
     fields.get("protocol") !== "https" ||

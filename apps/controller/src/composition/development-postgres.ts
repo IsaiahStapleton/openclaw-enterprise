@@ -166,6 +166,13 @@ export async function composePostgresDevelopment(
         throw new Error("The configured Plugin Driver was not selected correctly.");
       }
     }
+    if (drivers?.repositoryCredentialDriver !== undefined) {
+      const driver = drivers.repositoryCredentialDriver;
+      controller.registerDriver(driver);
+      if (controller.selectDriver("repository_credentials", driver.id) !== driver) {
+        throw new Error("The configured repository credential Driver was not selected correctly.");
+      }
+    }
     serviceAccountDriverFactory?.(controller, state);
     await controller.validateProviderConfiguration();
 

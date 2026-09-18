@@ -6,12 +6,14 @@ import { join } from "node:path";
 import test from "node:test";
 import { createServer } from "node:https";
 import { once } from "node:events";
+import { run as runProcess } from "../fixtures/repository-credentials/process.mjs";
 import {
   credentialDriverModule,
   credentialClientPath,
 } from "../fixtures/repository-credentials/runtime.mjs";
 
-const { writeClientConfiguration } = await credentialDriverModule("client/config");
+const { writeClientConfiguration, encodeRepositoryCredentialSessionFiles } =
+  await credentialDriverModule("client/config");
 
 const launcher = credentialClientPath("launch");
 const opened = {
@@ -97,6 +99,85 @@ test("private client configuration drives the actual Git helper with exact host 
   }
   const redirects = await run([session, "git", "config", "--get", "http.followRedirects"]);
   assert.equal(redirects.stdout.trim(), "false");
+});
+
+test("encoded session files support the actual client without the operator writer", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "credential-material-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  await mkdir(join(parent, "gh"), { mode: 0o700 });
+  const files = encodeRepositoryCredentialSessionFiles(opened);
+  for (const [name, value] of Object.entries(files)) {
+    await writeFile(join(parent, name), value, { mode: 0o600 });
+  }
+  const result = await run(
+    [parent, "git", "credential", "fill"],
+    "protocol=https\nhost=credentials.example.test\npath=example/project.git\n\n",
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout.includes(`password=${opened.bearer}\n`));
+  assert.equal(result.stderr.includes(opened.bearer), false);
+  assert.equal(JSON.parse(files["client.json"]).hasPublicCa, false);
+});
+
+test("operator rejects unsafe or conflicting bound request files before admission", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "credential-request-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const requestPath = join(parent, "request.json");
+  const request = {
+    namespaceId: "namespace-test",
+    repositoryRef: "project",
+    durationSeconds: 60,
+    profile: "git-read",
+    deadlineWallMs: Date.now() + 60_000,
+    expectedBinding: {
+      providerInstanceId: "provider-test",
+      repositoryId: "repository-test",
+      grantId: "grant-test",
+    },
+  };
+  const invoke = (path, extra = []) =>
+    runProcess(
+      process.execPath,
+      [
+        credentialClientPath("operator"),
+        "open",
+        "--socket",
+        join(parent, "absent.sock"),
+        "--output",
+        join(parent, "session"),
+        "--request-json",
+        path,
+        ...extra,
+      ],
+      { allowFailure: true },
+    );
+  const refused = (result) => {
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "credential-operator-failed\n");
+  };
+  for (const value of [
+    { ...request, bearer: "unexpected-secret-field" },
+    { ...request, recoverOnly: false },
+    { ...request, expectedBinding: { ...request.expectedBinding, token: "unexpected" } },
+    { ...request, deadlineWallMs: "60000" },
+  ]) {
+    await writeFile(requestPath, JSON.stringify(value), { mode: 0o600 });
+    refused(await invoke(requestPath));
+  }
+  await writeFile(requestPath, JSON.stringify(request), { mode: 0o600 });
+  for (const extra of [
+    ["--duration-seconds", "60"],
+    ["--profile", "git-read"],
+  ]) {
+    refused(await invoke(requestPath, extra));
+  }
+  await chmod(requestPath, 0o644);
+  refused(await invoke(requestPath));
+  await chmod(requestPath, 0o600);
+  const alias = join(parent, "alias.json");
+  await symlink(requestPath, alias);
+  refused(await invoke(alias));
 });
 
 test("client files reject unsafe targets and the launcher refuses absolute API destinations", async (t) => {
@@ -432,47 +513,42 @@ test(
     await writeClientConfiguration(opened, session, undefined);
     const repository = join(parent, "repository");
     assert.equal(spawnSync("/usr/bin/git", ["init", repository]).status, 0);
-    const bin = join(parent, "bin");
-    await mkdir(bin);
-    // A synchronous wrapper leaves an unreadable directory after native Git exits.
-    // No background writer or mocked filesystem operation is needed to fail cleanup.
-    await writeFile(
-      join(bin, "git"),
-      `#!${process.execPath}
-const { spawnSync } = require("node:child_process");
+    const hooks = join(repository, ".git", "hooks");
+    // Real Git hooks leave an unreadable child in the launcher's private home.
+    // Git still owns the mutation outcome; cleanup exercises the real filesystem.
+    for (const [hook, expected] of [
+      ["post-commit", 0],
+      ["pre-commit", 1],
+    ]) {
+      const hookPath = join(hooks, hook);
+      await writeFile(
+        hookPath,
+        `#!${process.execPath}
 const { mkdirSync, writeFileSync, chmodSync } = require("node:fs");
 const { join } = require("node:path");
-const args = process.argv.slice(2);
-const result = spawnSync("/usr/bin/git", args, { stdio: "inherit" });
-if (!args.includes("--list")) {
-  const blocked = join(process.env.HOME, "blocked");
-  mkdirSync(blocked);
-  writeFileSync(join(blocked, "state"), "fixture");
-  writeFileSync(${JSON.stringify(marker)}, process.env.HOME);
-  chmodSync(blocked, 0);
-}
-process.exit(result.status ?? 1);
+const blocked = join(process.env.HOME, "blocked");
+mkdirSync(blocked);
+writeFileSync(join(blocked, "state"), "fixture");
+writeFileSync(${JSON.stringify(marker)}, process.env.HOME);
+chmodSync(blocked, 0);
+process.exit(${expected});
 `,
-      { mode: 0o700 },
-    );
-    const env = { PATH: `${bin}:/usr/bin:/bin` };
-    for (const [args, expected] of [
-      [
-        [
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.test",
-          "commit",
-          "--allow-empty",
-          "-m",
-          "cleanup result",
-        ],
-        0,
-      ],
-      [["show", "nonexistent-ref"], 128],
-    ]) {
-      const result = await run([session, "git", "-C", repository, ...args], "", env);
+        { mode: 0o700 },
+      );
+      const result = await run([
+        session,
+        "git",
+        "-C",
+        repository,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.test",
+        "commit",
+        "--allow-empty",
+        "-m",
+        expected === 0 ? "cleanup result" : "refused commit",
+      ]);
       assert.equal(result.status, expected, result.stderr);
       const home = await readFile(marker, "utf8");
       assert.ok(
@@ -483,6 +559,7 @@ process.exit(result.status ?? 1);
       await chmod(join(home, "blocked"), 0o700);
       await rm(home, { recursive: true, force: true });
       await rm(marker);
+      await rm(hookPath);
     }
     assert.equal(
       spawnSync("/usr/bin/git", ["-C", repository, "log", "-1", "--format=%s"], {

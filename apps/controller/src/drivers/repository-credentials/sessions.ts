@@ -1,6 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AuthorityIdentity, Clock, SessionRef } from "./backend-contracts.ts";
-import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
+import type {
+  RepositoryCredentialGrantIdentity,
+  RepositoryCredentialSessionInput,
+  RepositoryCredentialBoundSessionInput,
+} from "@openclaw-enterprise/contracts";
 
 export interface SessionAdmission {
   readonly ref: SessionRef;
@@ -36,11 +40,111 @@ export function snapshotBinding(
   return Object.freeze({ providerInstanceId, repositoryId, grantId });
 }
 
+export type SessionInput = RepositoryCredentialSessionInput | RepositoryCredentialBoundSessionInput;
+
+export function isBoundInput(input: SessionInput): input is RepositoryCredentialBoundSessionInput {
+  return "namespaceId" in input;
+}
+
+/** Copy semantic admission inputs; lookup-only is a control operation, not authority. */
+export function snapshotSessionInput(value: unknown): SessionInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("INVALID_ADMISSION");
+  }
+  const input = value as Record<string, unknown>;
+  const boundFields = [
+    "namespaceId",
+    "repositoryRef",
+    "expectedBinding",
+    "deadlineWallMs",
+    "recoverOnly",
+  ];
+  const bound = boundFields.some((field) => Object.hasOwn(input, field));
+  const allowed = bound
+    ? ["durationSeconds", "profile", ...boundFields]
+    : ["durationSeconds", "profile"];
+  if (
+    Object.keys(input).some((key) => !allowed.includes(key)) ||
+    !Number.isSafeInteger(input.durationSeconds) ||
+    typeof input.durationSeconds !== "number" ||
+    input.durationSeconds <= 0 ||
+    (input.profile !== undefined &&
+      (typeof input.profile !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.profile)))
+  ) {
+    throw new Error("INVALID_ADMISSION");
+  }
+  if (!bound) {
+    return Object.freeze({
+      durationSeconds: input.durationSeconds,
+      profile: input.profile as string | undefined,
+    });
+  }
+  if (
+    typeof input.namespaceId !== "string" ||
+    input.namespaceId.length === 0 ||
+    Buffer.byteLength(input.namespaceId) > 512 ||
+    /[\u0000-\u001f\u007f]/.test(input.namespaceId) ||
+    typeof input.repositoryRef !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.repositoryRef) ||
+    typeof input.profile !== "string" ||
+    typeof input.deadlineWallMs !== "number" ||
+    !Number.isSafeInteger(input.deadlineWallMs) ||
+    input.deadlineWallMs <= 0 ||
+    (input.recoverOnly !== undefined && input.recoverOnly !== true) ||
+    !input.expectedBinding ||
+    typeof input.expectedBinding !== "object" ||
+    Array.isArray(input.expectedBinding) ||
+    Object.keys(input.expectedBinding).some(
+      (key) => !["providerInstanceId", "repositoryId", "grantId"].includes(key),
+    )
+  ) {
+    throw new Error("INVALID_ADMISSION");
+  }
+  return Object.freeze({
+    durationSeconds: input.durationSeconds,
+    profile: input.profile,
+    namespaceId: input.namespaceId,
+    repositoryRef: input.repositoryRef,
+    expectedBinding: snapshotBinding(input.expectedBinding as RepositoryCredentialGrantIdentity),
+    deadlineWallMs: input.deadlineWallMs,
+  });
+}
+
+export function sameBinding(
+  left: RepositoryCredentialGrantIdentity,
+  right: RepositoryCredentialGrantIdentity,
+): boolean {
+  return (
+    left.providerInstanceId === right.providerInstanceId &&
+    left.repositoryId === right.repositoryId &&
+    left.grantId === right.grantId
+  );
+}
+
+export function sameSessionInput(left: SessionInput, right: SessionInput): boolean {
+  if (left.durationSeconds !== right.durationSeconds || left.profile !== right.profile)
+    return false;
+  if (!isBoundInput(left)) return !isBoundInput(right);
+  return (
+    isBoundInput(right) &&
+    left.namespaceId === right.namespaceId &&
+    left.repositoryRef === right.repositoryRef &&
+    left.deadlineWallMs === right.deadlineWallMs &&
+    sameBinding(left.expectedBinding, right.expectedBinding)
+  );
+}
+
 export function admitSession(
   binding: RepositoryCredentialGrantIdentity,
-  durationSeconds: number,
+  deadlineWallMs: number,
   clock: Clock,
 ): SessionAdmission {
+  const remainingMs = deadlineWallMs - clock.wallNow();
+  if (!Number.isSafeInteger(deadlineWallMs) || remainingMs <= 0) {
+    throw new Error("INVALID_DEADLINE");
+  }
+  const deadlineMonoMs = clock.monotonicNow() + remainingMs;
   const bearer = randomBytes(32).toString("base64url");
   const sessionId = randomUUID();
   const immutableBinding = snapshotBinding(binding);
@@ -52,7 +156,7 @@ export function admitSession(
     bearer,
     digest: bearerDigest(bearer)!,
     binding: immutableBinding,
-    deadlineWallMs: clock.wallNow() + durationSeconds * 1000,
-    deadlineMonoMs: clock.monotonicNow() + durationSeconds * 1000,
+    deadlineWallMs,
+    deadlineMonoMs,
   };
 }

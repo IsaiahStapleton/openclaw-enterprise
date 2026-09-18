@@ -2,6 +2,16 @@ import { RepositoryTransactionLifetime } from "../ports/transaction.ts";
 import { bindPlatformUnitOfWork } from "../ports/platform-unit-of-work.ts";
 import { createPlatformReadView } from "../ports/platform-read-view.ts";
 import type {
+  RepositorySessionAttempt,
+  RepositorySessionReadRepository,
+  RepositorySessionRepository,
+} from "../ports/repository-sessions.ts";
+import { memoryRepositorySessions } from "./memory-repository-sessions.ts";
+import {
+  normalizedRepositoryBindings,
+  validRepositoryRevisionState,
+} from "./repository-credential-state.ts";
+import type {
   Agent,
   AgentDesiredRuntimeState,
   AgentRevision,
@@ -13,6 +23,7 @@ import type {
   Namespace,
   NamespaceStatus,
   PluginDesiredState,
+  RepositoryBindingSelection,
   Secret,
   SecretBindings,
   ServiceAccount,
@@ -87,6 +98,7 @@ export interface AgentRepository extends AgentReadRepository {
     harnessAuth?: HarnessAuthBinding | null,
     providerId?: string | null,
     plugins?: PluginDesiredState,
+    repositoryBindings?: readonly RepositoryBindingSelection[],
   ): Promise<Readonly<Agent> | undefined>;
   compareAndSetActiveRevision(
     namespaceId: string,
@@ -387,7 +399,9 @@ function assertAdmittedAgentRevision(revision: AgentRevision): void {
     (revision.secretDriverId !== undefined && !isNonEmptyString(revision.secretDriverId)) ||
     Object.hasOwn(revision, "serviceAccount") ||
     !validHarnessAuthSnapshot(revision.harnessAuth, revision.namespaceId) ||
-    !validPluginRevisionState(revision.plugins)
+    !validPluginRevisionState(revision.plugins) ||
+    (revision.repositoryCredentials !== undefined &&
+      !validRepositoryRevisionState(revision.repositoryCredentials))
   ) {
     throw new ScopeViolationError(
       "An AgentRevision requires valid Configuration metadata, a native document, and pinned Harness and Compute descriptors.",
@@ -438,6 +452,7 @@ export interface PlatformReadView {
   readonly serviceAccounts: ServiceAccountReadRepository;
   readonly agents: AgentReadRepository;
   readonly revisions: AgentRevisionReadRepository;
+  readonly repositorySessions: RepositorySessionReadRepository;
   readonly operations: PlatformOperationReadRepository;
 }
 
@@ -449,6 +464,7 @@ export interface PlatformUnitOfWork extends PlatformReadView {
   readonly serviceAccounts: ServiceAccountRepository;
   readonly agents: AgentRepository;
   readonly revisions: AgentRevisionRepository;
+  readonly repositorySessions: RepositorySessionRepository;
   readonly audit: PlatformAuditRepository;
   readonly operations: PlatformOperationRepository;
 }
@@ -483,6 +499,7 @@ interface PlatformSnapshot {
   readonly serviceAccounts: Map<string, Readonly<ServiceAccount>>;
   readonly agents: Map<string, Readonly<Agent>>;
   readonly revisions: Map<string, readonly Readonly<AgentRevision>[]>;
+  readonly repositorySessions: Map<string, Readonly<RepositorySessionAttempt>>;
   readonly audit: Readonly<AuditEvent>[];
   readonly operations: Readonly<PlatformOperation>[];
 }
@@ -514,6 +531,9 @@ function cloneSnapshot(snapshot: PlatformSnapshot): PlatformSnapshot {
         key,
         Object.freeze(revisions.map((revision) => immutableCopy(revision))),
       ]),
+    ),
+    repositorySessions: new Map(
+      Array.from(snapshot.repositorySessions, ([key, attempt]) => [key, immutableCopy(attempt)]),
     ),
     audit: snapshot.audit.map((event) => immutableCopy(event)),
     operations: snapshot.operations.map((operation) => immutableCopy(operation)),
@@ -1054,6 +1074,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       )
         throw new ScopeViolationError("The Agent Provider identity is invalid.");
       const plugins = normalizedPlugins(agent.plugins);
+      const repositoryBindings = normalizedRepositoryBindings(agent.repositoryBindings);
       const namespace = await namespaces.lockNamespace(agent.namespaceId);
       if (
         namespace === undefined ||
@@ -1090,10 +1111,15 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         throw new ResourceConflictError(
           "An Agent service principal already belongs to another Agent.",
         );
-      const { plugins: _providedPlugins, ...withoutPlugins } = agent;
+      const {
+        plugins: _providedPlugins,
+        repositoryBindings: _providedRepositoryBindings,
+        ...withoutPlugins
+      } = agent;
       const saved = immutableCopy({
         ...withoutPlugins,
         ...(plugins === undefined ? {} : { plugins }),
+        ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
         desiredRuntimeState: "stopped" as const,
       });
       snapshot.agents.set(key, saved);
@@ -1122,6 +1148,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       harnessAuth,
       providerId,
       nextPlugins,
+      nextRepositoryBindings,
     ) => {
       const current = await agents.findAgent(namespaceId, agentId);
       if (!current) return undefined;
@@ -1140,7 +1167,15 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       await assertHarnessAuthAvailable({ secrets, serviceAccounts }, namespaceId, association);
       const nextProviderId = providerId === undefined ? current.providerId : providerId;
       const plugins = nextPlugins === undefined ? current.plugins : normalizedPlugins(nextPlugins);
-      const { plugins: _currentPlugins, ...withoutPlugins } = current;
+      const repositoryBindings =
+        nextRepositoryBindings === undefined
+          ? current.repositoryBindings
+          : normalizedRepositoryBindings(nextRepositoryBindings);
+      const {
+        plugins: _currentPlugins,
+        repositoryBindings: _currentRepositoryBindings,
+        ...withoutPlugins
+      } = current;
       const updated = immutableCopy({
         ...withoutPlugins,
         configurationId,
@@ -1148,6 +1183,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         executionMode: executionMode ?? current.executionMode,
         harnessAuth: association,
         ...(plugins === undefined ? {} : { plugins }),
+        ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
       });
       snapshot.agents.set(agentKey(namespaceId, agentId), updated);
       return immutableCopy(updated);
@@ -1235,6 +1271,12 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     },
   };
 
+  const repositorySessions = memoryRepositorySessions(snapshot.repositorySessions, (owner) =>
+    snapshot.revisions
+      .get(agentKey(owner.namespaceId, owner.agentId))
+      ?.find((revision) => revision.id === owner.revisionId),
+  );
+
   return {
     installations,
     namespaces,
@@ -1243,6 +1285,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     serviceAccounts,
     agents,
     revisions,
+    repositorySessions,
     audit: {
       async append(event) {
         if (event.installationId !== snapshot.installation?.id)
@@ -1318,6 +1361,7 @@ export class InMemoryPlatformState implements PlatformStateStore {
     serviceAccounts: new Map(),
     agents: new Map(),
     revisions: new Map(),
+    repositorySessions: new Map(),
     audit: [],
     operations: [],
   };
