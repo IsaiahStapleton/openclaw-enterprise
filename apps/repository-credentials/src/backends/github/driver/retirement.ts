@@ -46,8 +46,8 @@ export function createCredentialRetirement({
         kind: response.status === 204 ? "revoked" : "uncertain",
       });
     } finally {
-      response?.body.fill(0);
       copy.fill(0);
+      response?.body.fill(0);
     }
   }
 
