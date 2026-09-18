@@ -35,20 +35,43 @@ const gitconfig =
   "[credential]\n\thelper =\n\tuseHttpPath = true\n[http]\n\tfollowRedirects = false\n\tsslVerify = true\n";
 const ghConfiguration = "version: 1\nprompt: disabled\ngit_protocol: https\n";
 
-export interface RepositoryMaterialBinding {
+interface RepositoryMaterialIdentity {
   readonly repositoryRef: string;
   readonly sessionId: string;
   readonly deadlineWallMs: number;
   readonly secretName: string;
   readonly directory: string;
+}
+
+export interface NewRepositoryMaterialBinding extends RepositoryMaterialIdentity {
+  readonly kind: "new";
+  readonly files: RepositoryCredentialSessionFiles;
+  readonly client: RepositoryCredentialClientConfiguration;
+}
+
+interface RetainedRepositoryMaterialBinding extends RepositoryMaterialIdentity {
+  readonly kind: "retained";
+  readonly files?: never;
+  readonly client?: never;
+}
+
+export type RepositoryMaterialBinding =
+  NewRepositoryMaterialBinding | RetainedRepositoryMaterialBinding;
+
+export interface ResolvedRepositoryMaterialBinding extends RepositoryMaterialIdentity {
   readonly kind: "new" | "retained";
-  readonly files?: RepositoryCredentialSessionFiles;
-  readonly client?: RepositoryCredentialClientConfiguration;
+  readonly files: RepositoryCredentialSessionFiles;
+  readonly client: RepositoryCredentialClientConfiguration;
 }
 
 export interface RepositoryMaterialSpec {
   readonly generation: string;
   readonly bindings: readonly RepositoryMaterialBinding[];
+}
+
+export interface ResolvedRepositoryMaterialSpec {
+  readonly generation: string;
+  readonly bindings: readonly ResolvedRepositoryMaterialBinding[];
 }
 
 function invalid(): never {
@@ -73,35 +96,38 @@ export function repositoryMaterialSecretName(
   return `oce-repository-${digest([revision.namespaceId, revision.agentId, revision.id, binding.repositoryRef, binding.sessionId]).slice(0, 48)}`;
 }
 
-function validateClient(value: unknown): RepositoryCredentialClientConfiguration {
-  const client = record(value);
-  const keys = [
-    "gatewayOrigin",
-    "gitRemote",
-    "gitUsername",
-    "canonicalApiHost",
-    "apiHost",
-    "repository",
-  ];
+function clientField(value: unknown): string {
   if (
-    Object.keys(client).length !== keys.length ||
-    keys.some(
-      (key) =>
-        typeof client[key] !== "string" ||
-        Buffer.byteLength(client[key] as string, "utf8") > 4096 ||
-        [...(client[key] as string)].some((character) => {
-          const code = character.charCodeAt(0);
-          return code <= 0x1f || code === 0x7f;
-        }),
-    )
+    typeof value !== "string" ||
+    Buffer.byteLength(value, "utf8") > 4096 ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    })
   ) {
     return invalid();
   }
+  return value;
+}
+
+function validateClient(value: unknown): RepositoryCredentialClientConfiguration {
+  const input = record(value);
+  if (Object.keys(input).length !== 6) {
+    return invalid();
+  }
+  const client: RepositoryCredentialClientConfiguration = {
+    gatewayOrigin: clientField(input.gatewayOrigin),
+    gitRemote: clientField(input.gitRemote),
+    gitUsername: clientField(input.gitUsername),
+    canonicalApiHost: clientField(input.canonicalApiHost),
+    apiHost: clientField(input.apiHost),
+    repository: clientField(input.repository),
+  };
   let origin: URL;
   let remote: URL;
   try {
-    origin = new URL(client.gatewayOrigin as string);
-    remote = new URL(client.gitRemote as string);
+    origin = new URL(client.gatewayOrigin);
+    remote = new URL(client.gitRemote);
   } catch {
     return invalid();
   }
@@ -119,15 +145,15 @@ function validateClient(value: unknown): RepositoryCredentialClientConfiguration
     remote.hash ||
     !/^\/[A-Za-z0-9._/-]+\.git$/.test(remote.pathname) ||
     remote.pathname.includes("..") ||
-    !/^[A-Za-z0-9._-]{1,128}$/.test(client.gitUsername as string) ||
-    !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(client.apiHost as string) ||
-    !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(client.canonicalApiHost as string) ||
+    !/^[A-Za-z0-9._-]{1,128}$/.test(client.gitUsername) ||
+    !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(client.apiHost) ||
+    !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(client.canonicalApiHost) ||
     client.apiHost !== origin.hostname ||
-    !/^[A-Za-z0-9._/-]{1,512}$/.test(client.repository as string)
+    !/^[A-Za-z0-9._/-]{1,512}$/.test(client.repository)
   ) {
     return invalid();
   }
-  return Object.freeze({ ...client }) as unknown as RepositoryCredentialClientConfiguration;
+  return Object.freeze(client);
 }
 
 export function repositorySessionFiles(
@@ -219,7 +245,7 @@ export function repositoryMaterialSpec(
   if (references.size !== bindings.length) {
     return invalid();
   }
-  const resolved = bindings
+  const materialBindings = bindings
     .map((binding): RepositoryMaterialBinding => {
       const input = record(binding);
       const expectedKeys =
@@ -243,16 +269,21 @@ export function repositoryMaterialSpec(
         return invalid();
       }
       sessions.add(binding.sessionId);
-      const material = binding.kind === "new" ? repositorySessionFiles(binding, binding.files) : {};
-      return Object.freeze({
-        kind: binding.kind,
+      const identity = {
         repositoryRef: binding.repositoryRef,
         sessionId: binding.sessionId,
         deadlineWallMs: binding.deadlineWallMs,
         secretName: repositoryMaterialSecretName(revision, binding),
         directory: `${REPOSITORY_MATERIAL_ROOT}/sessions/${digest([binding.repositoryRef, binding.sessionId])}`,
-        ...material,
-      });
+      };
+      if (binding.kind === "new") {
+        return Object.freeze({
+          ...identity,
+          kind: "new",
+          ...repositorySessionFiles(binding, binding.files),
+        });
+      }
+      return Object.freeze({ ...identity, kind: "retained" });
     })
     .sort((left, right) =>
       left.repositoryRef < right.repositoryRef
@@ -262,15 +293,17 @@ export function repositoryMaterialSpec(
           : 0,
     );
   return Object.freeze({
-    generation: digest(resolved.map(({ repositoryRef, sessionId }) => [repositoryRef, sessionId])),
-    bindings: Object.freeze(resolved),
+    generation: digest(
+      materialBindings.map(({ repositoryRef, sessionId }) => [repositoryRef, sessionId]),
+    ),
+    bindings: Object.freeze(materialBindings),
   });
 }
 
 export function repositoryMaterialFromSecret(
   binding: RepositoryMaterialBinding,
   secret: unknown,
-): RepositoryMaterialBinding {
+): ResolvedRepositoryMaterialBinding {
   const object = record(secret);
   if (object.immutable !== true || object.type !== "Opaque") {
     return invalid();
@@ -306,7 +339,7 @@ export function repositoryMaterialFromSecret(
   return Object.freeze({ ...binding, ...validated });
 }
 
-export function repositoryMaterialDeployment(spec: RepositoryMaterialSpec, image: string) {
+export function repositoryMaterialDeployment(spec: ResolvedRepositoryMaterialSpec, image: string) {
   const manifest = {
     version: 1,
     generation: spec.generation,
@@ -332,9 +365,9 @@ export function repositoryMaterialDeployment(spec: RepositoryMaterialSpec, image
           secret: {
             name: binding.secretName,
             optional: false,
-            items: Object.keys(binding.files!).map((file) => ({
+            items: Object.keys(binding.files).map((file) => ({
               key: REPOSITORY_MATERIAL_KEYS[file as keyof typeof REPOSITORY_MATERIAL_KEYS],
-              path: `${binding.directory.split("/").at(-1)!}/${file}`,
+              path: `${binding.directory.slice(binding.directory.lastIndexOf("/") + 1)}/${file}`,
             })),
           },
         })),

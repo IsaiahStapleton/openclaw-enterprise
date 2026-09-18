@@ -82,6 +82,7 @@ import {
   repositoryMaterialSpec,
   repositoryMaterialDeployment,
   type RepositoryMaterialSpec,
+  type ResolvedRepositoryMaterialSpec,
 } from "./repository-material.ts";
 import {
   RepositoryMaterialStore,
@@ -1617,7 +1618,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       materialInput === undefined
         ? undefined
         : await (await this.repositoryMaterialStore(namespace)).prepare(revision, materialInput);
-    if (material !== undefined && material.missing.length > 0) {
+    if (material?.kind === "missing") {
       return { ...result, repositoryCredentialMaterialMissing: material.missing };
     }
     const repositoryMaterial = material?.spec;
@@ -1915,7 +1916,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         materialInput === undefined
           ? undefined
           : await (await this.repositoryMaterialStore(namespace)).prepare(revision, materialInput);
-      if (material !== undefined && material.missing.length > 0) {
+      if (material?.kind === "missing") {
         throw new DependencyUnavailableError(
           "Repository credential material is unavailable for activation.",
         );
@@ -2577,7 +2578,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async repositoryMaterialReady(
     revision: AgentRevision,
     namespace: string,
-    material: RepositoryMaterialSpec,
+    material: ResolvedRepositoryMaterialSpec,
   ): Promise<boolean> {
     const owner = { namespaceId: revision.namespaceId, agentId: revision.agentId };
     const gateway = await this.getOwned(
@@ -2631,7 +2632,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async cleanupRepositoryMaterial(
     revision: AgentRevision,
     namespace: string,
-    material: RepositoryMaterialSpec,
+    material: ResolvedRepositoryMaterialSpec,
   ): Promise<void> {
     const owner = {
       namespaceId: revision.namespaceId,
@@ -4626,7 +4627,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     enabledChannels: readonly ChannelRequirements[] = [],
     secretEnvironment: readonly SecretEnvironmentProjection[] = [],
     pluginRuntime?: PluginRuntimeSnapshot,
-    repositoryMaterial?: RepositoryMaterialSpec,
+    repositoryMaterial?: ResolvedRepositoryMaterialSpec,
   ): ManagedKubernetesObject {
     const metadata = this.ownershipMetadata(ownership);
     const workloadMetadata =

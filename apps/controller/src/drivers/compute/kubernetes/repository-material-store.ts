@@ -9,8 +9,11 @@ import {
   REPOSITORY_MATERIAL_LABEL,
   repositoryMaterialFromSecret,
   repositoryMaterialSecretName,
+  type NewRepositoryMaterialBinding,
   type RepositoryMaterialBinding,
   type RepositoryMaterialSpec,
+  type ResolvedRepositoryMaterialBinding,
+  type ResolvedRepositoryMaterialSpec,
 } from "./repository-material.ts";
 
 export interface RepositoryMaterialOwner {
@@ -23,6 +26,11 @@ type Request = <T>(
   operation: () => Promise<T>,
   options?: { readonly mutating?: boolean },
 ) => Promise<T>;
+
+type RepositoryMaterialPreparation =
+  | { readonly kind: "ready"; readonly spec: ResolvedRepositoryMaterialSpec }
+  | { readonly kind: "missing"; readonly missing: readonly RepositoryCredentialMaterialRef[] };
+
 const fields = {
   namespaceId: ["openclaw.dev/namespace", "openclaw.dev/namespace-id"],
   agentId: ["openclaw.dev/agent", "openclaw.dev/agent-id"],
@@ -162,17 +170,14 @@ export class RepositoryMaterialStore {
   async prepare(
     revision: AgentRevision,
     spec: RepositoryMaterialSpec,
-  ): Promise<{
-    readonly spec: RepositoryMaterialSpec;
-    readonly missing: readonly RepositoryCredentialMaterialRef[];
-  }> {
+  ): Promise<RepositoryMaterialPreparation> {
     const owner = {
       namespaceId: revision.namespaceId,
       agentId: revision.agentId,
       revisionId: revision.id,
     };
-    const resolved: RepositoryMaterialBinding[] = [];
-    const pending: RepositoryMaterialBinding[] = [];
+    const resolved: ResolvedRepositoryMaterialBinding[] = [];
+    const pending: NewRepositoryMaterialBinding[] = [];
     const missing: RepositoryCredentialMaterialRef[] = [];
     // Read and validate the complete set before creating any Secret or workload.
     for (const binding of spec.bindings) {
@@ -194,11 +199,11 @@ export class RepositoryMaterialStore {
       }
     }
     if (missing.length !== 0) {
-      return { spec, missing };
+      return { kind: "missing", missing };
     }
     for (const binding of pending) {
       const data = Object.fromEntries(
-        Object.entries(binding.files!).map(([file, content]) => [
+        Object.entries(binding.files).map(([file, content]) => [
           REPOSITORY_MATERIAL_KEYS[file as keyof typeof REPOSITORY_MATERIAL_KEYS],
           Buffer.from(content, "utf8").toString("base64"),
         ]),
@@ -242,12 +247,12 @@ export class RepositoryMaterialStore {
         repositoryMaterialFromSecret(binding, observed);
       } catch {
         return {
-          spec,
+          kind: "missing",
           missing: [{ repositoryRef: binding.repositoryRef, sessionId: binding.sessionId }],
         };
       }
     }
-    return { spec: { ...spec, bindings: resolved }, missing: [] };
+    return { kind: "ready", spec: { ...spec, bindings: resolved } };
   }
 
   async cleanup(owner: RepositoryMaterialOwner, keep: ReadonlySet<string>): Promise<boolean> {

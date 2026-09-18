@@ -500,8 +500,15 @@ test("Kubernetes preparation creates immutable material and mounts only private 
 
 test("Kubernetes reports exact missing retained material without silently creating new custody", async () => {
   const f = await fixture();
+  // The new binding is visited first; a later missing reference must prevent
+  // the entire set from publishing any new Secret or workload.
+  const pending = { ...runtimeBinding(), repositoryRef: "earlier-project" };
+  f.revision.repositoryCredentials.bindings.push({
+    ...f.revision.repositoryCredentials.bindings[0],
+    repositoryRef: pending.repositoryRef,
+  });
   const missing = { repositoryRef: "project", sessionId: "session-missing" };
-  const context = f.context([{ kind: "retained", ...missing, deadlineWallMs }]);
+  const context = f.context([pending, { kind: "retained", ...missing, deadlineWallMs }]);
   assert.deepEqual(await f.driver.prepareRevision(f.revision, context), {
     namespaceId: f.revision.namespaceId,
     agentId: f.revision.agentId,
@@ -510,6 +517,10 @@ test("Kubernetes reports exact missing retained material without silently creati
     repositoryCredentialMaterialMissing: [missing],
   });
   await assert.rejects(f.driver.activateRevision(f.revision, context));
+  assert.equal(
+    f.calls.filter((call) => call.operation === "write" && call.kind === "Secret").length,
+    0,
+  );
   assert.equal(f.secrets().length, 0);
   assert.equal(f.deployments().length, 0);
 });
