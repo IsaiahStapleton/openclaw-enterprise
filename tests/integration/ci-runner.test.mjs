@@ -445,6 +445,101 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
   const root = await fixture(t);
   const resultsPath = join(root, "results/redacted.json");
   const secret = "secretauthvalue";
+  const relayPodCases = [
+    {
+      name: "retains closed relay Pod status without payloads",
+      relayPod: {
+        lookup: "found",
+        phase: "Running",
+        scheduled: "True",
+        ready: "False",
+        containerState: "waiting",
+        waitingReason: "CrashLoopBackOff",
+        terminationReason: "OOMKilled",
+        exitCode: 137,
+        restartCount: 3,
+        nodeAssigned: true,
+        imageIdPresent: true,
+        containerIdPresent: false,
+        message: secret,
+        pod: { spec: { containers: [{ env: [{ value: secret }] }] } },
+      },
+      expected: {
+        lookup: "found",
+        phase: "Running",
+        scheduled: "True",
+        ready: "False",
+        containerState: "waiting",
+        waitingReason: "CrashLoopBackOff",
+        terminationReason: "OOMKilled",
+        exitCode: 137,
+        restartCount: 3,
+        nodeAssigned: true,
+        imageIdPresent: true,
+        containerIdPresent: false,
+      },
+    },
+    {
+      name: "replaces unknown relay Pod fields and omits invalid scalars",
+      relayPod: {
+        lookup: "found",
+        phase: secret,
+        scheduled: { value: secret },
+        ready: [secret],
+        containerState: secret,
+        waitingReason: secret,
+        terminationReason: { message: secret },
+        exitCode: 1.5,
+        restartCount: -1,
+        nodeAssigned: "true",
+        imageIdPresent: 1,
+        containerIdPresent: { value: secret },
+      },
+      expected: {
+        lookup: "found",
+        phase: "other",
+        scheduled: "other",
+        ready: "other",
+        containerState: "other",
+        waitingReason: "other",
+        terminationReason: "other",
+      },
+    },
+    {
+      name: "rejects out-of-range relay Pod counters",
+      relayPod: { lookup: "found", exitCode: 256, restartCount: 2 ** 31 },
+      expected: {
+        lookup: "found",
+        phase: "other",
+        scheduled: "other",
+        ready: "other",
+        containerState: "other",
+        waitingReason: "other",
+        terminationReason: "other",
+      },
+    },
+    {
+      name: "retains unavailable relay Pod lookup without its error",
+      relayPod: { lookup: "unavailable", error: { message: secret }, exitCode: 137 },
+      expected: { lookup: "unavailable" },
+    },
+    {
+      name: "replaces unknown relay Pod lookup",
+      relayPod: { lookup: secret, phase: secret },
+      expected: { lookup: "other" },
+    },
+    ...[null, "invalid", []].map((relayPod, index) => ({
+      name: `rejects malformed relay Pod diagnostic ${index}`,
+      relayPod,
+      expected: undefined,
+    })),
+    {
+      name: "discards relay Pod status outside relay readiness",
+      stage: "controller-startup",
+      relayPod: { lookup: "found", phase: "Running", message: secret },
+      expected: undefined,
+    },
+  ];
 
   await writeFile(
     join(root, "tests/integration/redacted.test.mjs"),
@@ -524,6 +619,10 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
           name: "rejects unknown setup diagnostic kind",
           diagnostic: { kind: `${secret}-kind`, stage: "relay-readiness" },
         },
+        ...relayPodCases.map(({ name, stage = "relay-readiness", relayPod }) => ({
+          name,
+          diagnostic: { kind: "repository-platform-setup", stage, relayPod },
+        })),
       ])}) {`,
       "  test(name, () => {",
       `    const cause = new Error("${secret}-source-message");`,
@@ -606,6 +705,12 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     kind: "repository-platform-setup",
     stage: "relay-readiness",
   });
+  for (const { name, stage = "relay-readiness", expected } of relayPodCases) {
+    const relayFailure = summary.files[0].tests.find((entry) => entry.name === name);
+    assert.equal(relayFailure.status, "failed");
+    assert.equal(relayFailure.error.diagnostic.stage, stage);
+    assert.deepEqual(relayFailure.error.diagnostic.relayPod, expected, name);
+  }
   for (const name of [
     "rejects unsafe repository platform setup stage",
     "rejects nonstring repository platform setup stage",

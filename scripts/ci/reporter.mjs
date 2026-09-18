@@ -46,6 +46,48 @@ function safeStatus(value) {
   return Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined;
 }
 
+function relayPodDiagnostic(value) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (value.lookup !== "found") {
+    return { lookup: value.lookup === "unavailable" ? "unavailable" : "other" };
+  }
+  const closed = (field, allowed) => (allowed.includes(field) ? field : "other");
+  const integer = (field, maximum) =>
+    Number.isSafeInteger(field) && field >= 0 && field <= maximum ? field : undefined;
+  const boolean = (field) => (typeof field === "boolean" ? field : undefined);
+  return {
+    lookup: "found",
+    phase: closed(value.phase, ["Pending", "Running", "Succeeded", "Failed", "Unknown"]),
+    scheduled: closed(value.scheduled, ["True", "False", "Unknown"]),
+    ready: closed(value.ready, ["True", "False", "Unknown"]),
+    containerState: closed(value.containerState, ["waiting", "running", "terminated"]),
+    waitingReason: closed(value.waitingReason, [
+      "ContainerCreating",
+      "PodInitializing",
+      "ImagePullBackOff",
+      "ErrImagePull",
+      "InvalidImageName",
+      "CreateContainerConfigError",
+      "CreateContainerError",
+      "RunContainerError",
+      "CrashLoopBackOff",
+    ]),
+    terminationReason: closed(value.terminationReason, [
+      "Completed",
+      "Error",
+      "OOMKilled",
+      "ContainerCannotRun",
+    ]),
+    exitCode: integer(value.exitCode, 255),
+    restartCount: integer(value.restartCount, 2 ** 31 - 1),
+    nodeAssigned: boolean(value.nodeAssigned),
+    imageIdPresent: boolean(value.imageIdPresent),
+    containerIdPresent: boolean(value.containerIdPresent),
+  };
+}
+
 function failureDiagnostic(error) {
   const diagnostic = error?.openclawCiDiagnostic;
   if (!isRecord(diagnostic)) {
@@ -54,7 +96,12 @@ function failureDiagnostic(error) {
   if (diagnostic.kind === "repository-platform-setup") {
     const stage = diagnostic.stage;
     return typeof stage === "string" && safeRepositoryPlatformSetupStages.has(stage)
-      ? { kind: "repository-platform-setup", stage }
+      ? {
+          kind: "repository-platform-setup",
+          stage,
+          relayPod:
+            stage === "relay-readiness" ? relayPodDiagnostic(diagnostic.relayPod) : undefined,
+        }
       : undefined;
   }
   if (diagnostic.kind !== "controller-http") {

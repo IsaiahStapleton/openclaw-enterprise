@@ -90,6 +90,56 @@ async function gatewayTls(directory, host, execute) {
   return { key, cert, ca: cert, keyFile, certFile };
 }
 
+function relayPodDiagnostic(pod) {
+  const status = pod?.status;
+  const conditions = Array.isArray(status?.conditions) ? status.conditions : [];
+  const containers = Array.isArray(status?.containerStatuses) ? status.containerStatuses : [];
+  const relay = containers.find((container) => container?.name === "relay");
+  const state = relay?.state;
+  const terminated = state?.terminated ?? relay?.lastState?.terminated;
+  const closed = (value, allowed) => (allowed.includes(value) ? value : "other");
+  const integer = (value, maximum) =>
+    Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : undefined;
+  const present = (value) => typeof value === "string" && value.length > 0;
+  return {
+    lookup: "found",
+    phase: closed(status?.phase, ["Pending", "Running", "Succeeded", "Failed", "Unknown"]),
+    scheduled: closed(conditions.find(({ type }) => type === "PodScheduled")?.status, [
+      "True",
+      "False",
+      "Unknown",
+    ]),
+    ready: closed(conditions.find(({ type }) => type === "Ready")?.status, [
+      "True",
+      "False",
+      "Unknown",
+    ]),
+    containerState: ["waiting", "running", "terminated"].find((name) => state?.[name]) ?? "other",
+    waitingReason: closed(state?.waiting?.reason, [
+      "ContainerCreating",
+      "PodInitializing",
+      "ImagePullBackOff",
+      "ErrImagePull",
+      "InvalidImageName",
+      "CreateContainerConfigError",
+      "CreateContainerError",
+      "RunContainerError",
+      "CrashLoopBackOff",
+    ]),
+    terminationReason: closed(terminated?.reason, [
+      "Completed",
+      "Error",
+      "OOMKilled",
+      "ContainerCannotRun",
+    ]),
+    exitCode: integer(terminated?.exitCode, 255),
+    restartCount: integer(relay?.restartCount, 2 ** 31 - 1),
+    nodeAssigned: present(pod?.spec?.nodeName),
+    imageIdPresent: present(relay?.imageID),
+    containerIdPresent: present(relay?.containerID),
+  };
+}
+
 export async function createRepositoryPlatformFixture(context) {
   const diagnostic = { kind: "repository-platform-setup", stage: "selection" };
   try {
@@ -462,14 +512,39 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     spec: { selector: relayLabels, ports: [{ port: 443, targetPort: 8443 }] },
   });
   diagnostic.stage = "relay-readiness";
-  await kubectl(
-    "wait",
-    "--for=condition=Ready",
-    "pod/repository-relay",
-    "-n",
-    system,
-    "--timeout=120s",
-  );
+  try {
+    await kubectl(
+      "wait",
+      "--for=condition=Ready",
+      "pod/repository-relay",
+      "-n",
+      system,
+      "--timeout=120s",
+    );
+  } catch (error) {
+    diagnostic.relayPod = { lookup: "unavailable" };
+    try {
+      // Capture only closed status fields before teardown removes this owned Pod.
+      const { stdout } = await execute(
+        "kubectl",
+        kubectlArguments(selection, [
+          "get",
+          "pod",
+          "repository-relay",
+          "-n",
+          system,
+          "-o",
+          "json",
+          "--request-timeout=5s",
+        ]),
+        { timeout: 6_000 },
+      );
+      diagnostic.relayPod = relayPodDiagnostic(JSON.parse(stdout));
+    } catch {
+      // Best-effort diagnostics must preserve the original readiness failure.
+    }
+    throw error;
+  }
   diagnostic.stage = "controller-restart";
   configuration.provider = [
     {

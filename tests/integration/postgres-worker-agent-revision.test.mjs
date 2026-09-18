@@ -1948,6 +1948,10 @@ for (const admissionDuring of ["active", "candidate"]) {
             };
           },
           async stopRevision(revision) {
+            // The shared queue can also dispatch another fixture's durable cleanup.
+            if (revision.namespaceId !== fixture.namespace.id) {
+              return fixture.compute.stopRevision(revision);
+            }
             stopped.push(revision.id);
             if (revision.id === (admissionDuring === "active" ? active.id : candidate.id)) {
               // Admission changes desired state during an exact cleanup call. The
