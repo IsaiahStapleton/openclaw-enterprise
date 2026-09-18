@@ -90,9 +90,36 @@ async function gatewayTls(directory, host, execute) {
   return { key, cert, ca: cert, keyFile, certFile };
 }
 
+function schedulingFailureClasses(message) {
+  if (typeof message !== "string") {
+    return ["other"];
+  }
+  // Classify scheduler text without retaining node names, taint values, or messages.
+  const patterns = [
+    ["disk-pressure", /\bnode\.kubernetes\.io\/disk-pressure(?:[:\s},]|$)/i],
+    ["memory-pressure", /\bnode\.kubernetes\.io\/memory-pressure(?:[:\s},]|$)/i],
+    ["pid-pressure", /\bnode\.kubernetes\.io\/pid-pressure(?:[:\s},]|$)/i],
+    ["not-ready", /\bnode\.kubernetes\.io\/not-ready(?:[:\s},]|$)/i],
+    ["unreachable", /\bnode\.kubernetes\.io\/unreachable(?:[:\s},]|$)/i],
+    [
+      "cordoned",
+      /\bnode\.kubernetes\.io\/unschedulable(?:[:\s},]|$)|\bnode\(s\) were unschedulable\b/i,
+    ],
+    ["control-plane", /\bnode-role\.kubernetes\.io\/(?:control-plane|master)(?:[:\s},]|$)/i],
+    ["insufficient-cpu", /\bInsufficient cpu\b/i],
+    ["insufficient-memory", /\bInsufficient memory\b/i],
+    ["insufficient-ephemeral-storage", /\bInsufficient ephemeral-storage\b/i],
+    ["insufficient-pods", /\b(?:Too many pods|Insufficient pods)\b/i],
+    ["untolerated-taint", /\buntolerated taint\b/i],
+  ];
+  const classes = patterns.filter(([, pattern]) => pattern.test(message)).map(([name]) => name);
+  return classes.length > 0 ? classes : ["other"];
+}
+
 function relayPodDiagnostic(pod) {
   const status = pod?.status;
   const conditions = Array.isArray(status?.conditions) ? status.conditions : [];
+  const scheduled = conditions.find((condition) => condition?.type === "PodScheduled");
   const containers = Array.isArray(status?.containerStatuses) ? status.containerStatuses : [];
   const relay = containers.find((container) => container?.name === "relay");
   const state = relay?.state;
@@ -104,11 +131,9 @@ function relayPodDiagnostic(pod) {
   return {
     lookup: "found",
     phase: closed(status?.phase, ["Pending", "Running", "Succeeded", "Failed", "Unknown"]),
-    scheduled: closed(conditions.find(({ type }) => type === "PodScheduled")?.status, [
-      "True",
-      "False",
-      "Unknown",
-    ]),
+    scheduled: closed(scheduled?.status, ["True", "False", "Unknown"]),
+    scheduledReason: closed(scheduled?.reason, ["Unschedulable", "SchedulingGated"]),
+    schedulingFailures: schedulingFailureClasses(scheduled?.message),
     ready: closed(conditions.find(({ type }) => type === "Ready")?.status, [
       "True",
       "False",

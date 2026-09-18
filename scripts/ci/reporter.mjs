@@ -46,6 +46,35 @@ function safeStatus(value) {
   return Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined;
 }
 
+function schedulingFailureClasses(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  const allowed = [
+    "disk-pressure",
+    "memory-pressure",
+    "pid-pressure",
+    "not-ready",
+    "unreachable",
+    "cordoned",
+    "control-plane",
+    "insufficient-cpu",
+    "insufficient-memory",
+    "insufficient-ephemeral-storage",
+    "insufficient-pods",
+    "untolerated-taint",
+    "other",
+  ];
+  if (!Array.isArray(value) || value.length > allowed.length) {
+    return ["other"];
+  }
+  const unknown = value.some((entry) => !allowed.includes(entry));
+  const classes = allowed.filter(
+    (entry) => value.includes(entry) || (entry === "other" && unknown),
+  );
+  return classes.length > 0 ? classes : ["other"];
+}
+
 function relayPodDiagnostic(value) {
   if (!isRecord(value)) {
     return undefined;
@@ -61,6 +90,11 @@ function relayPodDiagnostic(value) {
     lookup: "found",
     phase: closed(value.phase, ["Pending", "Running", "Succeeded", "Failed", "Unknown"]),
     scheduled: closed(value.scheduled, ["True", "False", "Unknown"]),
+    scheduledReason:
+      value.scheduledReason === undefined
+        ? undefined
+        : closed(value.scheduledReason, ["Unschedulable", "SchedulingGated"]),
+    schedulingFailures: schedulingFailureClasses(value.schedulingFailures),
     ready: closed(value.ready, ["True", "False", "Unknown"]),
     containerState: closed(value.containerState, ["waiting", "running", "terminated"]),
     waitingReason: closed(value.waitingReason, [
