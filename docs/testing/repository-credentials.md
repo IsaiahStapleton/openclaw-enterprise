@@ -42,7 +42,8 @@ service sends the push once while the remote ref records the accepted commit.
 The API upstream verifies RSA signatures, App identity, current JWT time,
 repository selection and complete permission maps. It maintains independent
 PR, issue and comment state. The pinned CLI runs REST creation/read/update,
-paginated comments, individual comment operations and native GraphQL PR
+paginated comments and issues using native repository-ID links and opaque issue
+cursors, individual comment operations and native GraphQL PR
 creation. It checks bodyless deletion and unchanged human text. Unknown routes
 and lost mutation responses exercise denial and no-replay behavior.
 
@@ -61,6 +62,13 @@ at the Git and API boundaries, and token B has a fresh JWT with the same
 repository and profile. It then checks local closure and provider retirement
 separately. There is no long sleep and no Agent-facing clock control.
 
+The control integration suite loses an admission response through an actual Unix
+socket relay, then reconciles public status with the original admission ID.
+It also destroys the listener socket during construction to distinguish known
+nondelivery from ambiguous response loss. Owner regressions cover delayed
+settlement, frozen or adjusted wall clocks, short configured safety margins,
+and cleanup retaining credential material after authentication becomes ineligible.
+
 ## Qualify emitted artifacts
 
 Build the service and client images using the
@@ -69,8 +77,8 @@ service closure with the delivered client toolchain in an owned test-only image:
 
 ```sh
 docker build \
-  --build-arg SERVICE_IMAGE=repository-credentials-service:test \
-  --build-arg CLIENT_IMAGE=repository-credentials-client:test \
+  --build-arg SERVICE_IMAGE=repository-credentials:local \
+  --build-arg CLIENT_IMAGE=repository-credentials-client:local \
   -f tests/fixtures/repository-credentials/Dockerfile.qualification \
   -t repository-credentials-qualification:test .
 REPOSITORY_CREDENTIALS_TEST_IMAGE=repository-credentials-qualification:test \
@@ -78,15 +86,17 @@ REPOSITORY_CREDENTIALS_TEST_IMAGE=repository-credentials-qualification:test \
 ```
 
 Record both input image identities and the qualification image ID with results.
-This case imports `/app/dist`, exercises the emitted production service and
+The first case imports `/app/dist`, exercises the emitted production service and
 client entrypoints, and uses the same long-session acceptance sequence. The
+second runs alternate-backend conformance through those emitted common owners,
+including renewal, private authentication, and streamed callback drainage. The
 qualification image is a test driver; it is not a separate supported deployment.
-Without an explicit image selector, this case reports a skip. Source test
+Without an explicit image selector, these cases report a skip. Source test
 success alone does not establish this artifact result.
 
 The service, upstream fixtures and clients run together inside that test driver.
 Passing it proves emitted-artifact composition and forwarding, not credential
-isolation of a separate Agent container. The second case checks the rendered
+isolation of a separate Agent container. The third case checks the rendered
 Compose mount configuration only. Runtime isolation requires separate delivered
 service and client containers, with only the session files, public trust and
 workspace mounted into the client, plus inspection of the running client surfaces.

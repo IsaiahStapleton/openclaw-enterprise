@@ -2,7 +2,7 @@ import "../fixtures/repository-credentials/regressions.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { request } from "node:https";
-import { sign } from "node:crypto";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 import { appModule } from "../fixtures/repository-credentials/runtime.mjs";
@@ -11,7 +11,6 @@ import {
   createAlternateDriverFactory,
   startAlternateUpstream,
 } from "../fixtures/repository-credentials/alternate.mjs";
-import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
 import {
   createServiceConfiguration,
   eventually,
@@ -21,6 +20,8 @@ import { runInFixtureContainer } from "../fixtures/repository-credentials/contai
 import { startGitSmartHttpFixture } from "../fixtures/repository-credentials/git.mjs";
 import { run, temporaryDirectory } from "../fixtures/repository-credentials/process.mjs";
 import { removeRemoteBranches } from "../fixtures/repository-credentials/workflows.mjs";
+import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
+import { startServiceListeners } from "../fixtures/repository-credentials/service-resources.mjs";
 
 test("controlled Git fixture runs real smart HTTP and records an accepted push before disconnect", async (t) => {
   const upstream = await startGitSmartHttpFixture(t);
@@ -54,46 +55,6 @@ test("controlled Git fixture runs real smart HTTP and records an accepted push b
       .stdout,
     "",
   );
-});
-
-test("controlled provider fixture verifies RSA signatures and refuses gateway credentials", async (t) => {
-  const fixture = await startGitHubFixture(t);
-  const now = Math.floor(fixture.clock.wallNow() / 1000);
-  const unsigned = [
-    Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url"),
-    Buffer.from(JSON.stringify({ iss: "12345", iat: now - 60, exp: now + 540 })).toString(
-      "base64url",
-    ),
-  ].join(".");
-  const jwt = `${unsigned}.${sign("sha256", Buffer.from(unsigned), fixture.privateKey).toString("base64url")}`;
-  const body = JSON.stringify({
-    repository_ids: [73],
-    permissions: { metadata: "read", contents: "write" },
-  });
-  const response = await new Promise((resolve, reject) => {
-    const outgoing = request(
-      `${fixture.origin}/app/installations/41/access_tokens`,
-      {
-        method: "POST",
-        ca: fixture.tls.ca,
-        headers: {
-          authorization: `Bearer ${jwt}`,
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body),
-        },
-      },
-      (incoming) => {
-        incoming.resume();
-        incoming.once("end", () => resolve(incoming.statusCode));
-      },
-    );
-    outgoing.once("error", reject);
-    outgoing.end(body);
-  });
-  assert.equal(response, 201);
-  assert.equal(fixture.authorize("Bearer gateway-session-is-not-a-provider-token"), false);
-  assert.equal(fixture.issuesOfTokens.length, 1);
-  assert.deepEqual(fixture.errors, []);
 });
 
 test("second backend retains renewal through expiry and finalizes through the real common owner", async (t) => {
@@ -202,73 +163,129 @@ test("second backend uses the production HTTPS sender and distinct native authen
   assert.equal(upstream.trace[1].path, "/v2/projects/team%2Fnested%2Fproject");
 });
 
-test("drain-before rotation waits for active uses and preserves the replacement", async (t) => {
+test("drain-before rotation waits for a streamed upstream write and preserves the replacement", async (t) => {
+  if (
+    await runInFixtureContainer(
+      t,
+      "tests/conformance/repository-credentials-backend-conformance.test.mjs",
+    )
+  )
+    return;
+  const resources = createResourceScope();
+  t.after(() => resources.close());
   const clock = createControlledClock();
-  const config = await createServiceConfiguration(t, { credentialMarginMs: 100 });
-  const factory = createAlternateDriverFactory({
-    origin: "https://forge.example.test",
-    gatewayOrigin: config.gateway.publicOrigin,
-    clock,
-    lifetimeMs: 90000,
-    operationMs: 60000,
-  });
-  const { createCredentialService } = await appModule("service");
-  const service = createCredentialService({ config, factory, clock });
-  t.after(() => service.shutdown(1000));
-  const opened = service.open({ durationSeconds: 86400, profile: "git-write" });
-  const reserve = () =>
-    service.reserve(
-      opened.bearer,
-      {
-        method: "GET",
-        rawTarget: "/team/nested/project",
-        headers: {},
-        receivedMonoMs: clock.monotonicNow(),
-        contentEncoding: "identity",
-        framing: { kind: "none", bytes: undefined },
-      },
-      new AbortController().signal,
-    );
+  const config = await createServiceConfiguration(resources, { credentialMarginMs: 100 });
   let release;
   const held = new Promise((resolve) => {
     release = resolve;
   });
-  let dispatched = false;
-  const first = service.execute(reserve(), async (_request, { gate }) => {
-    gate.dispatch(release, () => {
-      dispatched = true;
-    });
-    gate.track(held);
-    await held;
-    return { kind: "completed", status: 200 };
+  const upstream = await startAlternateUpstream(resources, {
+    clock,
+    controls: { beforeWriteChunk: () => held },
   });
-  await eventually(() => dispatched);
+  const observations = [];
+  const factory = createAlternateDriverFactory({
+    origin: upstream.origin,
+    gatewayOrigin: config.gateway.publicOrigin,
+    clock,
+    accepted: upstream.accepted,
+    lifetimeMs: 90000,
+    operationMs: 60000,
+    controls: { observe: (event) => observations.push(event) },
+  });
+  const { service } = await startServiceListeners(resources, {
+    config,
+    tls: upstream.tls,
+    factory,
+    clock,
+    upstreamOrigins: [upstream.origin],
+  });
+  resources.after(release);
+  const opened = service.open({ durationSeconds: 86400, profile: "git-write" });
+  const fixture = { config, opened, tls: upstream.tls };
+  const body = Buffer.concat([Buffer.alloc(256, "a"), Buffer.alloc(256, "b")]);
+  let outgoing;
+  let completed = false;
+  const write = new Promise((resolve, reject) => {
+    outgoing = request(
+      `${config.gateway.publicOrigin}/team/nested/project`,
+      {
+        method: "POST",
+        ca: upstream.tls.ca,
+        headers: {
+          authorization: `Bearer ${opened.bearer}`,
+          "content-type": "application/octet-stream",
+          "content-length": body.length,
+        },
+      },
+      (incoming) => {
+        incoming.resume();
+        incoming.once("error", reject);
+        incoming.once("end", () => {
+          completed = true;
+          resolve(incoming.statusCode);
+        });
+      },
+    );
+    outgoing.once("error", reject);
+    outgoing.setTimeout(5000, () => outgoing.destroy(new Error("streamed write timed out")));
+    outgoing.write(body.subarray(0, 256));
+  });
+  void write.catch(() => {});
+  resources.after(async () => {
+    release();
+    outgoing.destroy();
+    await write.catch(() => {});
+  });
+  await eventually(() => upstream.trace[0]?.bodyBytes === 256);
+  const predecessor = [...upstream.accepted.keys()];
+  assert.equal(predecessor.length, 1);
+  assert.equal(service.status(opened.session.sessionId).activeUses, 1);
+
+  // The first body is incomplete at the upstream. A new exchange now needs
+  // longer validity than this key has left, forcing drain-before replacement.
   await clock.advance(40000);
-  const second = service.execute(reserve(), async (_request, { gate }) =>
-    gate.dispatch(
-      () => {},
-      () => ({ kind: "completed", status: 200 }),
-    ),
+  const replacementRead = gatewayRequest(fixture, "/team/nested/project");
+  void replacementRead.catch(() => {});
+  resources.after(async () => {
+    release();
+    outgoing.destroy();
+    await replacementRead.catch(() => {});
+  });
+  await eventually(() =>
+    observations.some((event) => event.kind === "plan" && event.method === "GET"),
   );
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(
-    factory.events.filter((event) => event.kind === "rotate").length,
-    1,
-    "active first use prevents invalidating rotation",
-  );
+  assert.equal(completed, false);
+  assert.equal(upstream.trace[0].committed, false);
+  assert.equal(upstream.trace.length, 1, "replacement request remains undispatched during drain");
+  assert.deepEqual([...upstream.accepted.keys()], predecessor);
+  assert.equal(factory.events.filter((event) => event.kind === "rotate").length, 1);
+  assert.equal(factory.events.filter((event) => event.kind === "retire").length, 0);
+
+  outgoing.end(body.subarray(256));
   release();
-  assert.equal((await first).kind, "completed");
-  assert.equal((await second).kind, "completed");
-  const third = await service.execute(reserve(), async (_request, { gate }) =>
-    gate.dispatch(
-      () => {},
-      () => ({ kind: "completed", status: 200 }),
-    ),
+  assert.equal(await write, 200, "the predecessor stays valid until the write commits");
+  assert.equal((await replacementRead).status, 200);
+  assert.equal((await gatewayRequest(fixture, "/team/nested/project")).status, 200);
+  assert.equal(factory.events.filter((event) => event.kind === "rotate").length, 2);
+  assert.equal(upstream.accepted.has(predecessor[0]), false);
+  assert.equal(upstream.accepted.size, 1);
+  assert.deepEqual(
+    upstream.trace.filter((entry) => entry.method === "POST"),
+    [
+      {
+        method: "POST",
+        path: "/v2/projects/team%2Fnested%2Fproject",
+        bodyBytes: body.length,
+        committed: true,
+        bodyDigest: createHash("sha256").update(body).digest("hex"),
+      },
+    ],
+    "the complete streamed write commits once without replay",
   );
-  assert.equal(third.kind, "completed");
-  assert.equal(
-    factory.events.filter((event) => event.kind === "rotate").length,
-    2,
-    "predecessor retirement leaves accepted replacement usable",
-  );
+  assert.equal(upstream.trace.length, 3);
+  service.close(opened.session.sessionId);
+  await eventually(() => service.status(opened.session.sessionId).state === "DISPOSED");
+  assert.equal(upstream.accepted.size, 0);
+  assert.equal(factory.events.filter((event) => event.kind === "finalize").length, 1);
 });

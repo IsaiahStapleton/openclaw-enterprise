@@ -86,11 +86,34 @@ The socket's parent is private to the service/operator. It is never mounted into
 the client. Control bodies are limited to 16 KiB. The HTTPS client listener has
 no admission or close endpoint.
 
+Admission requires `X-Admission-Id`: a 13-digit Unix-millisecond timestamp,
+a hyphen, and a lowercase UUIDv4. The operator CLI generates and prints this
+nonsecret ID before dispatch. The first response is HTTP 201 with the bearer.
+Repeating the same ID and effective duration/profile returns HTTP 200 with
+public status only; conflicting inputs fail. Follow the
+[lost-response recovery procedure](../guides/repository-credentials.md#recover-an-admission)
+to close that session and explicitly request replacement client material.
+
+Unseen IDs must be less than 60 seconds old and cannot be future-dated.
+Correlations are process-local and bounded to twice the session limit, including
+short-lived tombstones; rapid churn can temporarily return `overloaded`.
+Existing correlations can recover status after the initial window, until
+expiration or reclamation. Unknown stale IDs cannot create sessions, and an
+evicted session returns `not-found`. Correlations never retain a recoverable
+bearer and do not survive restart.
+
 Session duration is independent of token lifetime. Credentials are replaced on
 demand using the original immutable repository grant. A credential must cover
 the full remaining exchange budget plus a safety margin before dispatch. An idle
 session needs no periodic mint. A 24-hour session can use its original bearer
 after hour 13, provided the process and upstream authorization remain available.
+
+Authentication eligibility and terminal cleanup expiry are separate deadlines.
+Both use elapsed monotonic time from the original capture; delayed acquisition
+settlement cannot extend either. The GitHub adapter allows 60 seconds of provider
+clock skew and conservatively stops authentication before the reported expiry.
+Cleanup retains the one-hour bound from local receipt. A forward wall-clock
+change can deny authentication but cannot establish remote expiration.
 
 Closing or expiring a session prevents new use immediately and cancels owned
 exchanges. `CLOSED` does not imply confirmed revocation. Status distinguishes
@@ -98,6 +121,11 @@ pending, revoked, expired and uncertain credentials, plus auxiliary cleanup.
 `DISPOSED` requires settled actions, resolved access-token obligations and
 completed auxiliary finalization. An uncertain issuance blocks automatic minting.
 An uncertain push or API mutation is never automatically replayed.
+
+Failed admission can also retain cleanup work. If session construction fails,
+renewal access closes immediately; retained material remains counted against
+session capacity and shutdown's `pendingAuxiliary` until admitted callbacks
+finish and their material is disposed.
 
 ## Client routing and limits
 
@@ -135,7 +163,13 @@ absolute API destinations and arbitrary command compatibility are excluded.
 GraphQL uses the exactly scoped installation token and can return public data
 GitHub permits; the service does not claim per-field GraphQL authorization.
 Response rewriting is limited to validated pagination links and explicitly
-followed resource fields. Informational labels, milestones, nested repository
+followed resource fields. Matching owner/repository names may differ in casing;
+route casing, origin, purpose, profile and query restrictions still apply.
+Native `/repositories/<id>` response URLs must match
+the configured repository ID and are rewritten to its admitted `/repos/OWNER/REPO`
+route. Issue collection pagination accepts bounded `after` and `before` cursors;
+direct requests to repository-ID routes remain unsupported.
+Informational labels, milestones, nested repository
 metadata and human-authored content remain unchanged. Routing configuration is
 not network egress confinement.
 

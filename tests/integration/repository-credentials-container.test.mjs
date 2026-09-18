@@ -20,8 +20,16 @@ test("emitted service and client artifacts qualify the same-session thirteen-hou
   await qualifyLongSession(t);
 });
 
-// Compose inspects host mounts; the child runs only the emitted-artifact workflow.
+// Each host case launches its own selected artifact workflow or inspects host mounts.
 if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD !== "1") {
+  test("emitted common owners qualify alternate-backend renewal, authentication and streamed drain", async (t) => {
+    await runInFixtureContainer(
+      t,
+      "tests/conformance/repository-credentials-backend-conformance.test.mjs",
+      { packaged: true },
+    );
+  });
+
   test("delivered Compose client mounts exclude provider inputs and the control socket", async (t) => {
     const directory = await temporaryDirectory(t);
     const paths = {

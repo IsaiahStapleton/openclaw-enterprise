@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { request } from "node:https";
 import { createServer } from "node:http";
-import { sign } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { run, temporaryDirectory } from "./process.mjs";
-import { startGitHubFixture } from "./github.mjs";
-import { startGitSmartHttpFixture } from "./git.mjs";
 import { registerResourceCleanup, closeAndDispose } from "./cleanup.mjs";
 import { appModule } from "./runtime.mjs";
+import { startCredentialServiceFixture, gatewayRequest } from "./service.mjs";
+import { runInFixtureContainer } from "./container.mjs";
 
 for (const reason of ["timeout", "output overflow", "cancelled"]) {
   test(`owned command tree stops on ${reason} without leaking diagnostics`, async (t) => {
@@ -21,8 +20,13 @@ for (const reason of ["timeout", "output overflow", "cancelled"]) {
     const launcher = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], {stdio:'inherit'});`;
     const controller = new AbortController();
     let timer;
-    if (reason === "cancelled")
-      timer = setTimeout(() => controller.abort("sensitive-fixture-value"), 250);
+    if (reason === "cancelled") {
+      // Cancel only after the descendant exists, so this proves tree cleanup
+      // rather than racing process startup on a busy container host.
+      timer = setInterval(() => {
+        if (existsSync(pidFile)) controller.abort("sensitive-fixture-value");
+      }, 10);
+    }
     const start = performance.now();
     try {
       await assert.rejects(
@@ -48,128 +52,22 @@ for (const reason of ["timeout", "output overflow", "cancelled"]) {
       }
       assert.equal(running, false, "owned descendant remains running");
     } finally {
-      clearTimeout(timer);
+      clearInterval(timer);
     }
   });
 }
 
-function httpsJson(origin, ca, path, { method = "GET", body, authorization } = {}) {
-  return new Promise((resolve, reject) => {
-    const data = body === undefined ? undefined : JSON.stringify(body);
-    const outgoing = request(
-      `${origin}${path}`,
-      {
-        method,
-        ca,
-        agent: false,
-        headers: {
-          ...(authorization ? { authorization } : {}),
-          ...(data
-            ? {
-                "content-type": "application/json",
-                "content-length": Buffer.byteLength(data),
-              }
-            : {}),
-        },
-      },
-      (response) => {
-        const chunks = [];
-        response.on("data", (chunk) => chunks.push(chunk));
-        response.once("error", reject);
-        response.once("end", () => {
-          try {
-            const text = Buffer.concat(chunks).toString();
-            resolve({ status: response.statusCode, value: text ? JSON.parse(text) : undefined });
-          } catch {
-            reject(new Error("fixture response invalid"));
-          }
-        });
-      },
-    );
-    const timer = setTimeout(() => outgoing.destroy(new Error("fixture request timed out")), 3000);
-    outgoing.once("close", () => clearTimeout(timer));
-    outgoing.once("error", reject);
-    outgoing.end(data);
-  });
-}
-
-async function issueToken(fixture) {
-  const now = Math.floor(fixture.clock.wallNow() / 1000);
-  const unsigned = [
-    Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url"),
-    Buffer.from(JSON.stringify({ iss: "12345", iat: now - 60, exp: now + 540 })).toString(
-      "base64url",
-    ),
-  ].join(".");
-  const jwt = `${unsigned}.${sign("sha256", Buffer.from(unsigned), fixture.privateKey).toString("base64url")}`;
-  const response = await httpsJson(
-    fixture.origin,
-    fixture.tls.ca,
-    "/app/installations/41/access_tokens",
-    {
-      method: "POST",
-      authorization: `Bearer ${jwt}`,
-      body: {
-        repository_ids: [73],
-        permissions: {
-          metadata: "read",
-          contents: "write",
-          pull_requests: "write",
-          issues: "write",
-        },
-      },
-    },
-  );
-  assert.equal(response.status, 201);
-  return response.value.token;
-}
-
-test("expired credential attempts are detected at both API and real Git authentication boundaries", async (t) => {
-  const fixture = await startGitHubFixture(t);
-  const token = await issueToken(fixture);
-  const authorization = `Bearer ${token}`;
-  await httpsJson(fixture.origin, fixture.tls.ca, "/repos/fixture/repository", { authorization });
-  const before = fixture.tokenState()[0];
-  await fixture.clock.advance(13 * 3600000 + 1000);
-  assert.equal(
-    (
-      await httpsJson(fixture.origin, fixture.tls.ca, "/repos/fixture/repository", {
-        authorization,
-      })
-    ).status,
-    401,
-  );
-  const git = await startGitSmartHttpFixture(t, { tls: fixture.tls, authorize: fixture.authorize });
-  assert.equal(
-    (
-      await httpsJson(
-        git.origin,
-        fixture.tls.ca,
-        "/fixture/repository.git/info/refs?service=git-upload-pack",
-        { authorization },
-      )
-    ).status,
-    401,
-  );
-  assert.equal(fixture.tokenState()[0].uses, before.uses);
-  assert.equal(fixture.tokenState()[0].attempts - before.attempts, 2);
-  assert.deepEqual(fixture.authenticationAttempts.slice(-2), [
-    { tokenIndex: 1, boundary: "api" },
-    { tokenIndex: 1, boundary: "git" },
-  ]);
-});
-
 test("pre-registered cleanup reconciles accepted creations with lost responses without replay", async (t) => {
-  const fixture = await startGitHubFixture(t);
-  const authorization = `Bearer ${await issueToken(fixture)}`;
+  if (await runInFixtureContainer(t, "tests/fixtures/repository-credentials/regressions.mjs"))
+    return;
+  // Reconciliation uses the same admitted session and production sender as the
+  // original write, including when the provider accepted it but lost its reply.
+  const serviceFixture = await startCredentialServiceFixture(t);
+  const fixture = serviceFixture.github;
   const send = async ({ method, path, body }) => {
-    const response = await httpsJson(fixture.origin, fixture.tls.ca, `/${path}`, {
-      method,
-      body,
-      authorization,
-    });
+    const response = await gatewayRequest(serviceFixture, `/${path}`, { method, body });
     assert.ok(response.status < 400);
-    return response.value;
+    return response.body ? JSON.parse(response.body) : undefined;
   };
   const repository = "fixture/repository";
   const prefix = `repos/${repository}`;

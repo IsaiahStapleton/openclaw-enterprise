@@ -8,7 +8,15 @@ import { run } from "./process.mjs";
 // routing; a separate service/Agent runtime is required to prove isolation.
 /** @returns {Promise<boolean>} Whether the host handled or skipped the child run. */
 export async function runInFixtureContainer(t, testFile, { packaged = false } = {}) {
-  if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD === "1") return false;
+  if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD === "1") {
+    if (packaged)
+      assert.equal(
+        process.env.REPOSITORY_CREDENTIALS_APP_ROOT,
+        "/app/dist",
+        "packaged qualification must use emitted application modules",
+      );
+    return false;
+  }
   const image = packaged
     ? process.env.REPOSITORY_CREDENTIALS_TEST_IMAGE
     : (process.env.REPOSITORY_CREDENTIALS_NODE_IMAGE ?? "node:24-bookworm");

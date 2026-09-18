@@ -117,6 +117,29 @@ Select a separate branch when trying both REST and native PR creation. Do not
 run `gh auth login` or inject a PAT when a command fails. The gateway routes and
 exact App permissions define supported access.
 
+## Recover an admission
+
+If `open` loses its response, use the `credential-admission` ID printed to
+stderr before dispatch. Repeat the command with the same duration and profile,
+adding `--admission-id`:
+
+```sh
+pnpm credentials:operator open \
+  --socket /absolute/path/control/control.sock \
+  --duration-seconds 86400 --profile git-full \
+  --output /absolute/path/sessions/task \
+  --ca /absolute/path/gateway-ca.pem \
+  --admission-id ADMISSION_ID
+```
+
+A recovered response contains `recovered: true` and public session status,
+without creating client files or returning the bearer again. Close that session
+using its reported ID and inspect cleanup status. Then explicitly run `open`
+without `--admission-id`, choosing a new output directory if needed.
+Do not generate replacement admissions blindly after an ambiguous response.
+An unknown stale ID or a service restart cannot recover the original session;
+see the [ephemeral-session limits](../reference/repository-credentials.md#sessions-and-closure).
+
 ## Container images
 
 Build after emitting the application:

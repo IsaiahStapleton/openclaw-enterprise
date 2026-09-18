@@ -89,8 +89,8 @@ export function createLifecycle(options: {
       custody.records.has(record) &&
       record.accepted &&
       !record.retiring &&
-      record.deadlineMonoMs !== undefined &&
-      record.deadlineMonoMs >= deadline + options.safetyMarginMs
+      record.useDeadlineMonoMs !== undefined &&
+      record.useDeadlineMonoMs >= deadline + options.safetyMarginMs
     );
   }
   function changed() {
@@ -210,6 +210,13 @@ export function createLifecycle(options: {
               capture.unknown = false;
             if (outcome.kind === "acquired") {
               const accepted = capture.captured.find((record) => record.ref === outcome.credential);
+              if (accepted && accepted.deadlineMonoMs !== undefined) {
+                // Settlement may be delayed; use lifetime starts at original capture.
+                accepted.useDeadlineMonoMs = Math.min(
+                  accepted.deadlineMonoMs,
+                  accepted.capturedMonoMs + (outcome.expiresAtWallMs - outcome.observedWallMs),
+                );
+              }
               const neededUntil = Math.max(
                 clock.monotonicNow(),
                 ...[...waiters].map((waiter) => waiter.deadline),
@@ -219,8 +226,9 @@ export function createLifecycle(options: {
                 !accepted ||
                 !Number.isFinite(outcome.observedWallMs) ||
                 !Number.isFinite(outcome.expiresAtWallMs) ||
-                accepted.deadlineMonoMs === undefined ||
-                accepted.deadlineMonoMs < neededUntil + options.safetyMarginMs ||
+                accepted.useDeadlineMonoMs === undefined ||
+                !Number.isFinite(accepted.useDeadlineMonoMs) ||
+                accepted.useDeadlineMonoMs < neededUntil + options.safetyMarginMs ||
                 !options.admitted() ||
                 controller.signal.aborted
               ) {
@@ -447,8 +455,8 @@ export function createLifecycle(options: {
         !options.admitted() ||
         record.uses === 0 ||
         !custody.records.has(record) ||
-        record.deadlineMonoMs === undefined ||
-        record.deadlineMonoMs < deadline + options.safetyMarginMs ||
+        record.useDeadlineMonoMs === undefined ||
+        record.useDeadlineMonoMs < deadline + options.safetyMarginMs ||
         clock.monotonicNow() >= deadline
       )
         throw new Error("USE_CLOSED");

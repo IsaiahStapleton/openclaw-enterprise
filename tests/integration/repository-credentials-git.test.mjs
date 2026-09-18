@@ -7,6 +7,7 @@ import {
   startCredentialServiceFixture,
 } from "../fixtures/repository-credentials/service.mjs";
 import { run } from "../fixtures/repository-credentials/process.mjs";
+import { fixtureRepositoryId } from "../fixtures/repository-credentials/github.mjs";
 import { exerciseGit } from "../fixtures/repository-credentials/workflows.mjs";
 import { runInFixtureContainer } from "../fixtures/repository-credentials/container.mjs";
 
@@ -94,6 +95,41 @@ if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD === "1") {
     assert.equal(fixture.github.authenticationAttempts.length, beforeAuthentication);
     assert.equal(fixture.github.issuesOfTokens.length, 1);
     assert.equal((await remoteRefs()).stdout, beforeRefs);
+  });
+
+  test("git-write preserves native repository deletion policy without widening or replay", async (t) => {
+    const fixture = await startCredentialServiceFixture(t, { profile: "git-write" });
+    // The same repository policy allows branch creation but forbids deletion;
+    // real receive-pack must enforce it after the gateway admits the write.
+    await run("git", ["config", "receive.denyDeletes", "true"], { cwd: fixture.git.bare });
+    const { client, checkout } = await exerciseGit(t, fixture);
+    const remoteRefs = () =>
+      run("git", ["for-each-ref", "--format=%(refname) %(objectname)"], { cwd: fixture.git.bare });
+    const beforeRefs = (await remoteRefs()).stdout;
+    const beforeGit = fixture.git.trace.length;
+
+    const pushed = await client.git(["push", "origin", "--delete", "agent-feature"], {
+      cwd: checkout,
+      allowFailure: true,
+    });
+
+    assert.notEqual(pushed.code, 0);
+    assert.match(pushed.stderr, /\[remote rejected\].*agent-feature.*\(deletion prohibited\)/);
+    assert.equal((await remoteRefs()).stdout, beforeRefs);
+    assert.deepEqual(
+      fixture.git.trace
+        .slice(beforeGit)
+        .filter((entry) => entry.path.endsWith("/git-receive-pack"))
+        .map(({ method, path }) => ({ method, path })),
+      [{ method: "POST", path: "/fixture/repository.git/git-receive-pack" }],
+    );
+    // Refusal must reuse the original exact grant, with no broader remint.
+    assert.equal(fixture.github.issuesOfTokens.length, 1);
+    assert.deepEqual(fixture.github.issuesOfTokens[0].repositoryIds, [Number(fixtureRepositoryId)]);
+    assert.deepEqual(fixture.github.issuesOfTokens[0].permissions, {
+      metadata: "read",
+      contents: "write",
+    });
   });
 
   test("accepted push with a lost response is never replayed by the service", async (t) => {

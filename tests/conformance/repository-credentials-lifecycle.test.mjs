@@ -19,6 +19,7 @@ import {
   fixtureRepositoryId,
 } from "../fixtures/repository-credentials/github.mjs";
 import { temporaryDirectory } from "../fixtures/repository-credentials/process.mjs";
+import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -267,7 +268,10 @@ for (const action of ["retire", "finalize"]) {
           observedWallMs: clock.wallNow(),
           expiresAtWallMs: clock.wallNow() + 90000,
         };
-        const credential = custody.driver.capture(attempt, Buffer.from("access"), observation);
+        const credential = custody.driver.capture(attempt, Buffer.from("access"), {
+          ...observation,
+          expiresAtWallMs: observation.observedWallMs + 120000,
+        });
         return originals(attempt, { kind: "acquired", credential, ...observation });
       },
       async [action](attempt) {
@@ -283,6 +287,8 @@ for (const action of ["retire", "finalize"]) {
       },
       async settle(original) {
         assert.ok(originalOutcomes.has(original));
+        // Settlement must not restart the lifetime observed at capture.
+        if (original.kind === "acquired") await clock.advance(500, 0);
       },
     };
     lifecycle = createLifecycle({
@@ -298,12 +304,26 @@ for (const action of ["retire", "finalize"]) {
       driver,
       queue,
       providerActionMs: 30000,
-      safetyMarginMs: 60000,
+      safetyMarginMs: 1,
       admitted: () => open,
       changed() {},
     });
-    if (action === "retire")
-      lifecycle.release(await lifecycle.acquire(1000, new AbortController().signal));
+    if (action === "retire") {
+      const record = await lifecycle.acquire(1000, new AbortController().signal);
+      lifecycle.assertUse(record, 89999);
+      assert.throws(() => lifecycle.assertUse(record, 90000), /USE_CLOSED/);
+      // Frozen wall time cannot extend authentication, while retirement still
+      // owns the original bytes beyond the earlier use deadline.
+      await clock.advance(89500, 0);
+      await assert.rejects(
+        custody.driver.withAccess(record.ref, "authenticate", async () => {}),
+        /CREDENTIAL_CLOSED/,
+      );
+      await custody.driver.withAccess(record.ref, "retire", async (bytes) => {
+        assert.equal(Buffer.from(bytes).toString(), "access");
+      });
+      lifecycle.release(record);
+    }
     open = false;
     lifecycle.close();
     await tick();
@@ -336,23 +356,17 @@ for (const [profile, permissions] of [
   ["git-write", { metadata: "read", contents: "write" }],
   ["git-full", { metadata: "read", contents: "write", pull_requests: "write", issues: "write" }],
 ]) {
-  test(`GitHub ${profile} replaces after hour 13 and disposes through the real common owner`, async (t) => {
-    const cleanups = [];
-    const resources = { after: (cleanup) => cleanups.push(cleanup) };
-    t.after(async () => {
-      const failures = [];
-      for (const cleanup of cleanups.reverse()) {
-        try {
-          await cleanup();
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length) throw new AggregateError(failures, "lifecycle fixture cleanup failed");
-    });
+  test(`GitHub ${profile} replaces after hour 13 and repeatedly each hour through the real common owner`, async (t) => {
+    const resources = createResourceScope();
+    t.after(() => resources.close());
     const clock = createControlledClock();
+    // Independent provider clocks cover both signs of bounded skew.
+    const providerClock = createControlledClock(
+      clock.wallNow() + (profile === "git-read" ? -5000 : 5000),
+    );
     const directory = await temporaryDirectory(resources, "rcs-lifecycle-");
     const config = validateServiceConfig({
+      limits: profile === "git-full" ? { exchangeMs: 1000, credentialMarginMs: 1 } : {},
       gateway: {
         publicOrigin: "https://credentials.example.test",
         listen: "127.0.0.1:443",
@@ -364,7 +378,7 @@ for (const [profile, permissions] of [
         allowedProfiles: ["git-read", "git-write", "git-full"],
       },
     });
-    const github = await startGitHubFixture(resources, { clock });
+    const github = await startGitHubFixture(resources, { clock: providerClock });
     const key = createGitHubKeyOwner({ privateKey: github.privateKey, appId: fixtureAppId, clock });
     resources.after(() => key.close());
     const factory = createGitHubDriverFactory({
@@ -423,6 +437,7 @@ for (const [profile, permissions] of [
     const first = github.tokenState()[0];
     // Idle expiry requires a fresh credential while preserving the admitted
     // session and grant; even a rejected dispatch of expired A would fail here.
+    await providerClock.advance(13 * 3600000 + 1000);
     await clock.advance(13 * 3600000 + 1000);
     assert.deepEqual(await perform(), { kind: "completed", status: 200 });
     assert.deepEqual(service.status(opened.session.sessionId).binding, opened.session.binding);
@@ -432,14 +447,58 @@ for (const [profile, permissions] of [
     const [initial, replacement] = github.issuesOfTokens;
     assert.ok(replacement.claims.iat > initial.claims.exp);
     assert.notEqual(replacement.jwtDigest, initial.jwtDigest);
-    for (const issued of [initial, replacement]) {
+    // Four generations exceed the two-slot capacity. Every expired predecessor
+    // must be reclaimed without a rejected authentication attempt or grant change.
+    assert.equal(config.limits.credentialSlotsPerSession, 2);
+    for (let generation = 3; generation <= 4; generation++) {
+      const previousAttempts = github.tokenState().map((token) => token.attempts);
+      const previousIssue = github.issuesOfTokens.at(-1);
+      await providerClock.advance(3600000);
+      await clock.advance(3600000);
+      assert.deepEqual(await perform(), { kind: "completed", status: 200 });
+      assert.equal(github.issuesOfTokens.length, generation);
+      assert.deepEqual(
+        github
+          .tokenState()
+          .slice(0, -1)
+          .map((token) => token.attempts),
+        previousAttempts,
+      );
+      assert.equal(github.tokenState().at(-1).uses, 1);
+      assert.ok(github.issuesOfTokens.at(-1).claims.iat > previousIssue.claims.exp);
+      assert.deepEqual(service.status(opened.session.sessionId).binding, opened.session.binding);
+    }
+    assert.equal(new Set(github.issuesOfTokens.map((issued) => issued.jwtDigest)).size, 4);
+    for (const issued of github.issuesOfTokens) {
       assert.deepEqual(issued.permissions, permissions);
       assert.deepEqual(issued.repositoryIds, [Number(fixtureRepositoryId)]);
     }
+    // The provider token remains live when only the service wall clock jumps.
+    // Closure must retire remotely before the common owner discards custody.
+    // Reach the service's raw expiry for a provider five seconds behind. Its
+    // token is still live: the common owner must not sweep this as terminal.
+    await providerClock.advance(3595000);
+    await clock.advance(3595000, profile === "git-full" ? 3595000 : 0);
+    if (profile === "git-full") {
+      // Small supported budgets must renew at the conservative use deadline,
+      // while the previous token stays owned until confirmed retirement.
+      const previousAttempts = github.tokenState().at(-1).attempts;
+      assert.deepEqual(await perform(), { kind: "completed", status: 200 });
+      assert.equal(github.issuesOfTokens.length, 5);
+      assert.equal(github.tokenState()[3].attempts, previousAttempts);
+      await eventually(() => github.tokenState()[3].revoked);
+    }
+    const deletesBefore = github.trace.filter((entry) => entry.method === "DELETE").length;
+    await clock.advance(0, 2 * 3600000);
+    assert.ok(github.tokenState().at(-1).expires > providerClock.wallNow());
     service.close(opened.session.sessionId);
     assert.equal(reserve().kind, "denied");
     await eventually(() => service.status(opened.session.sessionId)?.state === "DISPOSED");
-    assert.equal(github.tokenState()[1].revoked, true);
+    assert.equal(github.tokenState().at(-1).revoked, true);
+    assert.equal(
+      github.trace.filter((entry) => entry.method === "DELETE").length,
+      deletesBefore + 1,
+    );
     const disposed = service.status(opened.session.sessionId);
     assert.equal(disposed.activeUses, 0);
     assert.equal(disposed.cleanup.pending, 0);

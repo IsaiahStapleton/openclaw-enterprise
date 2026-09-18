@@ -379,7 +379,8 @@
             "failed singleton activation retries without publishing or retiring the previous revision",
             "production Drivers without an activation preference retain after-commit Kubernetes ordering",
             "an opted-in active runtime continuously repairs under its original authorized actor",
-            "active maintenance recovers after its convergence deadline and stops when its actor is denied"
+            "active maintenance recovers from observation failures beyond its retry budget and stops when its actor is denied",
+            "active maintenance recovers from binding failures beyond its retry budget and stops when its actor is denied"
           ]
         },
         {
@@ -524,6 +525,7 @@
         {
           "path": "tests/integration/docker-compute-real.test.mjs",
           "expectedTests": [
+            "Docker Compose cleanup preserves the selected engine and removes volumes only when requested",
             "Docker Compose development drives Docker Compute networks, containers, auth, cleanup, and real model turns"
           ]
         }

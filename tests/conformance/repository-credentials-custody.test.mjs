@@ -31,11 +31,12 @@ function setup() {
   });
   custody.register(attempt);
   const reservation = custody.reserve(attempt);
-  const capture = () =>
-    custody.driver.capture(attempt, Buffer.from("owned-material"), {
+  const capture = (
+    observation = {
       observedWallMs: clock.wallNow(),
       expiresAtWallMs: clock.wallNow() + 90000,
-    });
+    },
+  ) => custody.driver.capture(attempt, Buffer.from("owned-material"), observation);
   return {
     clock,
     custody,
@@ -55,6 +56,7 @@ test("custody rejects copied attempts and handles and wipes callback-scoped byte
   assert.throws(() => custody.lookup({ ...ref }), /FOREIGN_CREDENTIAL/);
   const record = custody.lookup(ref);
   record.accepted = true;
+  record.useDeadlineMonoMs = 90000;
   record.uses++;
   let retained;
   await custody.driver.withAccess(ref, "authenticate", async (bytes) => {
@@ -73,10 +75,18 @@ test("custody rejects copied attempts and handles and wipes callback-scoped byte
   );
 });
 
-test("late capture survives local closure while original settlement ends capture authority", () => {
+test("late capture survives local closure while original settlement ends capture authority", async () => {
   const { custody, attempt, close, capture, reservation, clock } = setup();
+  const observation = {
+    observedWallMs: clock.wallNow(),
+    expiresAtWallMs: clock.wallNow() + 90000,
+  };
+  // A wall adjustment between provider observation and capture is not proof
+  // that the provider credential expired and must not release cleanup custody.
+  await clock.advance(0, 120000);
   close();
-  const ref = capture();
+  const ref = capture(observation);
+  assert.equal(custody.lookup(ref).deadlineMonoMs, 90000);
   assert.equal(custody.records.size, 1);
   custody.settle(reservation);
   assert.throws(

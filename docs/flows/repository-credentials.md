@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
-updated: "2026-09-17"
-last_updated_session: "authoring-run/17d63f83-3b86-4bfa-950d-89c50a927b0d"
+updated: "2026-09-18"
+last_updated_session: "01a0b098-e407-7d42-bc53-9bce979ac912"
 ---
 
 # Repository credential service flow
@@ -30,6 +30,8 @@ private session files and public connection/trust configuration.
 ```mermaid
 graph TD
   Operator["Operator opens session"] --> Admission["Service freezes grant<br/>and creates bearer"]
+  Admission -->|Construction failed| ConstructionCleanup["Seal renewal access<br/>drain unpublished custody"]
+  Operator -->|Repeat admission ID| Recovery["Return public status<br/>close and reopen explicitly"]
   Admission --> Files["CLI publishes private<br/>client directory"]
   Files --> Client["Git or pinned gh<br/>calls gateway"]
   Client --> Route["Validate auth, profile route<br/>and request capacity"]
@@ -78,6 +80,21 @@ including the profile in the grant identity. Protected startup validation reject
 unknown names, including `read-write`; the example default remains `git-write`.
 Bearer lookup retains a digest. Only the original admission response contains
 the bearer.
+
+`apps/repository-credentials/src/server.ts:startListeners` owns and disposes the
+bounded correlation registry from
+`apps/repository-credentials/src/control.ts:createControlAdmission`. Before
+opening a session, it binds the admission ID to the effective profile and duration.
+Known nondelivery before response transmission closes the new session. Ambiguous
+response loss permits public-status reconciliation with the same ID; it does
+not recover the bearer or replay provider operations.
+
+If the factory throws or returns an invalid binding, the service closes
+construction admission before starting
+`apps/repository-credentials/src/custody.ts:disposeAllRenewal`.
+Every retained handle is sealed before any callback is awaited. The service
+retains this unpublished custody until callbacks settle and byte disposal
+completes; failed construction continues occupying bounded session capacity.
 
 `apps/repository-credentials/src/client/config.ts:writeClientConfiguration`
 creates a private staging directory and private files, synchronizes writes, and
@@ -145,6 +162,13 @@ waiter leaves, the lifecycle cancels the original attempt. While that attempt's
 settlement remains pending, requests needing acquisition return `not-dispatched`
 without attaching new waiters or starting another acquisition. The original
 owner retains capture, settlement and cleanup obligations until they resolve.
+Custody captures the original monotonic timestamp and a cleanup deadline from
+the declared lifetime. After settlement, the lifecycle anchors the acquired
+use lifetime to that same capture timestamp, capped by the cleanup deadline.
+Acceptance, cached reuse, dispatch and authentication use this earlier deadline;
+cleanup retains its separate expiry and callback-drainage requirements. Later
+wall-clock changes cannot shorten custody or restart the use lifetime.
+
 `apps/repository-credentials/src/backends/github/driver.ts:createGitHubDriver`
 composes acquisition and capture through
 `apps/repository-credentials/src/backends/github/driver/acquisition.ts:createCredentialAcquisition`,
@@ -171,6 +195,12 @@ It composes URL validation and pagination rewriting from
 `apps/repository-credentials/src/backends/github/response-urls.ts:createUrlRewriter`
 and `rewritePaginationLinks`, and resource-field rewriting from
 `apps/repository-credentials/src/backends/github/response-resources.ts:createResourceRewriter`.
+The URL owner maps response links using the configured GitHub repository ID
+to the admitted `/repos/owner/repository` path before checking the route and
+resource purpose. A different repository ID remains refused. Issue-list
+pagination accepts bounded `after` and `before` cursors; rewritten links retain
+the gateway origin, so subsequent client requests pass through the same session
+and profile checks.
 Informational nested labels, milestones, repository metadata and human content
 remain unchanged. Transport applies
 `apps/repository-credentials/src/transport/response-headers.ts:safeResponseHeaders`
@@ -201,6 +231,10 @@ the service to close sessions, and bounds cleanup by an independent process
 timer. A grace expiry reports unresolved status and exits; it does not manufacture
 revocation. The process closes the shared App key after shutdown disposition.
 
+Failed construction custody also participates in shutdown drainage. Its
+pending obligation contributes to `pendingAuxiliary` without inventing a
+published or disposed session; disposal wakes the shutdown waiters.
+
 ## Debugging and Verification
 
 Run `pnpm credentials:build` and `pnpm credentials:check-config CONFIG_FILE` for
@@ -228,6 +262,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 01:59: Document accompanying admission reconciliation, failed-construction drainage and separate use/cleanup deadlines. (01a0b098-e407-7d42-bc53-9bce979ac912 - 87e5c418d7a6c45688ce3be87c204660b431c703)
 
 - 2026-09-17 23:47: Refresh configuration, route classification, driver composition and provider request source pointers from the accompanying adapter extraction. (authoring-run/17d63f83-3b86-4bfa-950d-89c50a927b0d - 251bf5662df1fd61e132ca57a36008409add1996)
 
