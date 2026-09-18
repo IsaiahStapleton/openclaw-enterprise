@@ -62,6 +62,11 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
     handshakeTimeout: limits.headerMs,
   });
   const control = createHttpServer(serverOptions);
+  // The request owns a TLSSocket, distinct from the raw connection socket.
+  // Arm the header timeout here so admission can clear that same timer.
+  agent.on("secureConnection", (socket) => {
+    socket.setTimeout(limits.headerMs, () => socket.destroy());
+  });
   const onAgent = createAgentHandler(options);
   const admissions = createControlAdmission(service, config, clock);
   const route =
@@ -95,7 +100,9 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
       }
       sockets.add(socket);
       socket.once("close", () => sockets.delete(socket));
-      socket.setTimeout(limits.headerMs, () => socket.destroy());
+      if (server === control) {
+        socket.setTimeout(limits.headerMs, () => socket.destroy());
+      }
     });
     server.on("request", handler);
     server.on("checkContinue", handler);

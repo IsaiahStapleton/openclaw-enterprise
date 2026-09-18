@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-18"
-last_updated_session: "authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115"
+last_updated_session: "authoring-run/36d61593-c993-48a9-9b32-1bcb6e898a3d"
 ---
 
 # Repository credential service flow
@@ -138,8 +138,12 @@ gateway API host. Absolute API destinations and unqualified commands refuse.
 
 `apps/repository-credentials/src/server.ts:startListeners` bounds each listener's
 sockets independently, preserving private operator admission when the public
-listener is full. Its `apps/repository-credentials/src/transport/agent.ts:createAgentHandler`
-checks generic framing and delegates authentication to the bound factory. A valid
+listener is full. TLS handshakes and incomplete HTTP headers each have a bounded
+wait. The HTTPS header timer belongs to the secured socket; after authentication
+and exchange reservation, `apps/repository-credentials/src/transport/agent.ts:createAgentHandler`
+clears that timer so credential acquisition can continue under the exchange
+deadline. The control listener retains its raw-socket header timer. The Agent
+handler checks generic framing and delegates authentication to the bound factory. A valid
 Git route with no credentials receives the local Basic challenge. Authenticated
 requests reserve common exchange capacity before body forwarding. The GitHub
 driver plans admitted routes through
@@ -272,6 +276,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 12:03: Keep admitted TLS exchanges outside the header timeout while bounding incomplete handshakes and headers. (authoring-run/36d61593-c993-48a9-9b32-1bcb6e898a3d - b0b0b8b7ba98d2c8506ba261334aba1e769a87ef)
 
 - 2026-09-18 03:38: Capture upstream origin authority and construct canonical bounded private request headers before dispatch. (authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115 - 7c26fe8660e0af5d223baa2da83689974df36ebe)
 
