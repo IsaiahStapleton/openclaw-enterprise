@@ -10,8 +10,8 @@ parses every credential-service source file using the workspace's pinned
 Prettier TypeScript parser. Runtime imports and re-exports must stay within the
 scanned source or use reviewed external modules and named members. Erased
 `import type` and `export type` declarations remain available; inline type
-specifiers can preserve a runtime module load. The GitHub provider's raw HTTPS sender has an explicit
-consumer list; the protected-file, signing, and configuration-check owners
+specifiers can preserve a runtime module load. The two raw HTTPS sender helpers have explicit
+consumer lists; the listener, private-file, signing, and client-command owners
 have separate I/O allowances. New network packages, raw global network or loader
 access, and new process-output owners fail the check.
 
