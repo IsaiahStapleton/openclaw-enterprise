@@ -22,7 +22,7 @@ with private permissions; symlinks and replacement during loading are rejected.
   "sessionPolicy": {
     "maximumDurationSeconds": 172800,
     "defaultProfile": "git-write",
-    "allowedProfiles": ["git-write", "read-write"]
+    "allowedProfiles": ["git-read", "git-write", "git-full"]
   },
   "backend": {
     "kind": "github-app",
@@ -42,13 +42,21 @@ origins to `github.com` and `api.github.com`. An Agent cannot select an upstream
 repository, profile, or deadline after admission. Configuration changes apply to
 new composition and admission.
 
-| Profile      | Exact requested GitHub permissions                                           | Supported work                           |
-| ------------ | ---------------------------------------------------------------------------- | ---------------------------------------- |
-| `git-write`  | `metadata: read`, `contents: write`                                          | Clone, fetch, branch checkout, push      |
-| `read-write` | `metadata: read`, `contents: write`, `pull_requests: write`, `issues: write` | Git plus PR, issue and comment workflows |
+| Profile               | Exact requested GitHub permissions                                           | Supported work                                                           |
+| --------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `git-read`            | `metadata: read`, `contents: read`                                           | Clone, fetch and branch checkout; no push or API calls                   |
+| `git-write` (default) | `metadata: read`, `contents: write`                                          | Git clone, fetch, branch checkout and push; no API calls                 |
+| `git-full`            | `metadata: read`, `contents: write`, `pull_requests: write`, `issues: write` | Git plus selected REST, GraphQL and `gh` PR, issue and comment workflows |
 
-`read-write` requires explicit selection. Both profiles select exactly the
-configured repository. Native repository rules still apply. Administration,
-workflow changes requiring additional permissions, Actions, packages, projects,
-SSH, LFS, and other repositories are outside the supported scope. Missing App
-permissions cause failure rather than a broader grant.
+`git-read` and `git-full` require explicit selection with the configuration above.
+All three profiles select exactly the configured repository. `git-read` denies
+both push discovery and push execution. Both Git-only profiles deny every REST
+and GraphQL request, including API reads. `git-full` admits only the supported
+API routes and methods; it does not grant every permission held by the App or
+import PAT permissions. The former `read-write` name is unsupported, with no
+compatibility alias.
+
+Native repository rules still apply. Administration, workflow changes requiring
+additional permissions, Actions, packages, projects, SSH, LFS, and other
+repositories are outside the supported scope. Missing App permissions cause
+failure rather than a broader grant.

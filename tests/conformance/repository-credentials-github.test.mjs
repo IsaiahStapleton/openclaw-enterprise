@@ -16,7 +16,7 @@ const config = validateServiceConfig({
   sessionPolicy: {
     maximumDurationSeconds: 86400,
     defaultProfile: "git-write",
-    allowedProfiles: ["git-write", "read-write"],
+    allowedProfiles: ["git-read", "git-write", "git-full"],
   },
 });
 function owner(factory, clock, profile, id, captured = () => {}) {
@@ -85,7 +85,7 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
     trustedEndpoints: { apiOrigin: fixture.origin, gitOrigin: fixture.origin, ca: fixture.tls.ca },
   });
   const first = owner(factory, clock, "git-write", "one"),
-    second = owner(factory, clock, "read-write", "two");
+    second = owner(factory, clock, "git-full", "two");
   const originalAttempt = first.attempt("acquire");
   await assert.rejects(first.driver.acquire({ ...originalAttempt }, undefined, 360000));
   const a = await first.driver.acquire(originalAttempt, undefined, 360000);
@@ -188,7 +188,7 @@ test("refused and cancelled observations remain independently captured and token
     mode = selected;
     const abort = new AbortController();
     // Closure during the original material callback cannot remove the cleanup obligation.
-    const owned = owner(factory, clock, "read-write", selected, () => {
+    const owned = owner(factory, clock, "git-full", selected, () => {
       if (selected === "cancel") abort.abort();
     });
     const result = await owned.driver.acquire(
