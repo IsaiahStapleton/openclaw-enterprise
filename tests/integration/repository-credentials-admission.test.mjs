@@ -146,7 +146,9 @@ async function fixture(
       controller.registerDriver(driver);
       controller.selectDriver(driver.capability, driver.id);
     }
-    if (registry !== undefined || !repositories) await controller.validateProviderConfiguration();
+    if (registry !== undefined || !repositories) {
+      await controller.validateProviderConfiguration();
+    }
     const app = createFastifyApp({
       controller,
       iamDriver: iam,
@@ -190,7 +192,9 @@ async function fixture(
     await state.transact((unit) =>
       unit.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
     );
-    if (agent.harnessAuth?.method === "runtime") return;
+    if (agent.harnessAuth?.method === "runtime") {
+      return;
+    }
     const secret = await composed.request("POST", `/namespaces/${namespace.id}/secrets`, {
       name: `model-${agent.id}`,
       value: "synthetic-admission-model-key",

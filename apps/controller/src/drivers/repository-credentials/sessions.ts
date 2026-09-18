@@ -32,7 +32,10 @@ export function snapshotBinding(
       typeof value !== "string" ||
       value.length === 0 ||
       Buffer.byteLength(value) > 512 ||
-      /[\u0000-\u001f\u007f]/.test(value)
+      [...value].some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 0x1f || code === 0x7f;
+      })
     ) {
       throw new Error("INVALID_BINDING");
     }
@@ -84,7 +87,10 @@ export function snapshotSessionInput(value: unknown): SessionInput {
     typeof input.namespaceId !== "string" ||
     input.namespaceId.length === 0 ||
     Buffer.byteLength(input.namespaceId) > 512 ||
-    /[\u0000-\u001f\u007f]/.test(input.namespaceId) ||
+    [...input.namespaceId].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    }) ||
     typeof input.repositoryRef !== "string" ||
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.repositoryRef) ||
     typeof input.profile !== "string" ||
@@ -123,9 +129,12 @@ export function sameBinding(
 }
 
 export function sameSessionInput(left: SessionInput, right: SessionInput): boolean {
-  if (left.durationSeconds !== right.durationSeconds || left.profile !== right.profile)
+  if (left.durationSeconds !== right.durationSeconds || left.profile !== right.profile) {
     return false;
-  if (!isBoundInput(left)) return !isBoundInput(right);
+  }
+  if (!isBoundInput(left)) {
+    return !isBoundInput(right);
+  }
   return (
     isBoundInput(right) &&
     left.namespaceId === right.namespaceId &&

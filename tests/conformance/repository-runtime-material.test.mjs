@@ -152,7 +152,9 @@ async function fixture() {
   };
   clients.core.listNamespacedPod = async ({ labelSelector }) => {
     calls.push({ operation: "listPods" });
-    if (observePods) await observePods();
+    if (observePods) {
+      await observePods();
+    }
     return { items: structuredClone(pods.filter((pod) => matching(pod, labelSelector))) };
   };
   for (const [api, kinds] of [
@@ -174,7 +176,9 @@ async function fixture() {
     for (const kind of kinds) {
       api[`readNamespaced${kind}`] = async ({ name }) => {
         const object = objects.get(key(kind, name));
-        if (!object) throw failure(404);
+        if (!object) {
+          throw failure(404);
+        }
         return structuredClone(object);
       };
       api[`listNamespaced${kind}`] = async ({ labelSelector }) => ({
@@ -192,21 +196,28 @@ async function fixture() {
         object.metadata.generation =
           (previous?.metadata.generation ?? 0) +
           (previous && isDeepStrictEqual(previous.spec, object.spec) ? 0 : 1);
-        if (previous?.status) object.status = structuredClone(previous.status);
+        if (previous?.status) {
+          object.status = structuredClone(previous.status);
+        }
         object.metadata.resourceVersion = String(object.metadata.generation);
         save(object);
         return structuredClone(object);
       };
       api[`patchNamespaced${kind}`] = write;
       api[`createNamespaced${kind}`] = async (request) => {
-        if (objects.has(key(kind, request.body.metadata.name))) throw failure(409);
+        if (objects.has(key(kind, request.body.metadata.name))) {
+          throw failure(409);
+        }
         return write(request);
       };
       api[`deleteNamespaced${kind}`] = async ({ name, body }) => {
         const object = objects.get(key(kind, name));
-        if (!object) throw failure(404);
-        if (body?.preconditions?.uid && body.preconditions.uid !== object.metadata.uid)
+        if (!object) {
+          throw failure(404);
+        }
+        if (body?.preconditions?.uid && body.preconditions.uid !== object.metadata.uid) {
           throw failure(409);
+        }
         calls.push({ operation: "delete", kind, name });
         objects.delete(key(kind, name));
       };
@@ -300,7 +311,9 @@ function preparedNativeDocument(f) {
 
 function deepFreeze(value) {
   if (value && typeof value === "object") {
-    for (const child of Object.values(value)) deepFreeze(child);
+    for (const child of Object.values(value)) {
+      deepFreeze(child);
+    }
     Object.freeze(value);
   }
   return value;
@@ -525,7 +538,9 @@ test("Kubernetes stop recovers material left by an interrupted multi-Secret crea
   f.clients.core.createNamespacedSecret = async (request) => {
     // The API accepts one material object before the next request loses service.
     // No Pod exists, so recovery must discover material independently of Pods.
-    if (++creations === 2) throw Object.assign(new Error("API unavailable"), { statusCode: 503 });
+    if (++creations === 2) {
+      throw Object.assign(new Error("API unavailable"), { statusCode: 503 });
+    }
     return create(request);
   };
   await assert.rejects(f.driver.prepareRevision(f.revision, f.context([first, second])));
@@ -555,7 +570,9 @@ test("Kubernetes stop keeps material until the exact revision Pods disappear", a
   let observed = 0;
   f.observePods(() => {
     assert.equal(f.secrets().length, 1, "material must survive every termination observation");
-    if (++observed === 2) f.setPods([]);
+    if (++observed === 2) {
+      f.setPods([]);
+    }
   });
   await f.driver.stopRevision(f.revision);
   assert.ok(observed >= 2);
@@ -650,7 +667,9 @@ test("Kubernetes retirement finds material after its Deployment was already remo
   let observations = 0;
   f.observePods(() => {
     assert.equal(f.secrets().length, 1);
-    if (++observations === 2) f.setPods([]);
+    if (++observations === 2) {
+      f.setPods([]);
+    }
   });
   await f.driver.retireRevision(f.revision);
   assert.ok(observations >= 2);
@@ -663,8 +682,9 @@ test("external namespace cleanup removes owned repository material and preserves
   const tenant = f.objects.get(`Namespace:${f.namespace}`);
   tenant.metadata.annotations["openclaw.dev/namespace-lifecycle"] = "external";
   f.save(tenant);
-  for (const deployment of f.deployments())
+  for (const deployment of f.deployments()) {
     f.objects.delete(`Deployment:${deployment.metadata.name}`);
+  }
   f.save({
     apiVersion: "v1",
     kind: "Secret",

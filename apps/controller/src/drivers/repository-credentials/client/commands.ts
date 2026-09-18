@@ -49,7 +49,9 @@ export function parseGhInvocation(input: readonly string[]): ParsedGhInvocation 
     for (let index = 1; index < args.length; index++) {
       const argument = args[index]!;
       if (values.has(argument)) {
-        if (!args[++index]) throw new Error("unsupported-client-command");
+        if (!args[++index]) {
+          throw new Error("unsupported-client-command");
+        }
       } else if (!switches.has(argument)) {
         if (
           argument.startsWith("-") ||
@@ -58,12 +60,15 @@ export function parseGhInvocation(input: readonly string[]): ParsedGhInvocation 
           argument.startsWith("/") ||
           argument.includes(":") ||
           argument.includes("..")
-        )
+        ) {
           throw new Error("unsupported-client-command");
+        }
         endpoint = { value: argument, index };
       }
     }
-    if (!endpoint) throw new Error("unsupported-client-command");
+    if (!endpoint) {
+      throw new Error("unsupported-client-command");
+    }
     const repository = /^repos\/([^/?]+)\/([^/?]+)(?:[/?]|$)/.exec(endpoint.value);
     if (
       repository &&
@@ -84,7 +89,9 @@ export function parseGhInvocation(input: readonly string[]): ParsedGhInvocation 
         : {}),
     });
   }
-  if (args[0] !== "pr" || args[1] !== "create") throw new Error("unsupported-client-command");
+  if (args[0] !== "pr" || args[1] !== "create") {
+    throw new Error("unsupported-client-command");
+  }
   let explicitHead = false;
   let target: ParsedGhInvocation["target"];
   const values = new Set([
@@ -103,8 +110,12 @@ export function parseGhInvocation(input: readonly string[]): ParsedGhInvocation 
   ]);
   for (let index = 2; index < args.length; index++) {
     const argument = args[index]!;
-    if (argument === "--draft" || argument === "-d") continue;
-    if (!values.has(argument) || !args[index + 1]) throw new Error("unsupported-client-command");
+    if (argument === "--draft" || argument === "-d") {
+      continue;
+    }
+    if (!values.has(argument) || !args[index + 1]) {
+      throw new Error("unsupported-client-command");
+    }
     const value = args[++index]!;
     if (argument === "--repo" || argument === "-R") {
       if (
@@ -116,9 +127,13 @@ export function parseGhInvocation(input: readonly string[]): ParsedGhInvocation 
       }
       target = Object.freeze({ kind: "repository", value, index });
     }
-    if (argument === "--head" || argument === "-H") explicitHead = true;
+    if (argument === "--head" || argument === "-H") {
+      explicitHead = true;
+    }
   }
-  if (!explicitHead) throw new Error("explicit-head-required");
+  if (!explicitHead) {
+    throw new Error("explicit-head-required");
+  }
   return Object.freeze({ args, ...(target ? { target } : {}) });
 }
 
@@ -156,7 +171,9 @@ function prepareGitArguments(
   policy: readonly string[],
   routing: readonly string[] = [],
 ): string[] {
-  if (git.target) rejectGitUrlCredentials(git.target.value);
+  if (git.target) {
+    rejectGitUrlCredentials(git.target.value);
+  }
   // Equal-specificity entries win URL matching; empty headers/helpers reset
   // inherited multi-valued configuration. Preserve the inspected context exactly.
   return [
@@ -240,8 +257,9 @@ export function prepareLocalGitCommand(
   env: NodeJS.ProcessEnv,
   overrides?: ReadonlyMap<string, string>,
 ): ClientCommand {
-  if (git.kind !== "local" || git.command === "credential")
+  if (git.kind !== "local" || git.command === "credential") {
     throw new Error("unsupported-client-command");
+  }
   return {
     executable: "/usr/bin/git",
     arguments: prepareGitArguments(
@@ -271,7 +289,9 @@ export function prepareClientCommand(
     if (gh.target) {
       const selected = configuration.client.repository.toLowerCase();
       const requested = gh.target.value.replace(/^github\.com\//, "").toLowerCase();
-      if (requested !== selected) throw new Error("unsupported-client-command");
+      if (requested !== selected) {
+        throw new Error("unsupported-client-command");
+      }
     }
     const version = spawnSync("/usr/local/bin/gh", ["--version"], {
       env,
@@ -279,8 +299,9 @@ export function prepareClientCommand(
       timeout: 5000,
       maxBuffer: 4096,
     });
-    if (version.status !== 0 || !/^gh version 2\.100\.0(?:\s|$)/.test(version.stdout))
+    if (version.status !== 0 || !/^gh version 2\.100\.0(?:\s|$)/.test(version.stdout)) {
       throw new Error("unsupported-gh-version");
+    }
     return { executable: "/usr/local/bin/gh", arguments: gh.args };
   }
   const git = options.git ?? parseGitInvocation(args);

@@ -83,7 +83,8 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
     throw new Error("unsafe-control-directory");
   }
   await prepareControlSocket(socketPath, config.limits.headerMs);
-  const sockets = new Set<Socket>();
+  const agentSockets = new Set<Socket>();
+  const controlSockets = new Set<Socket>();
   const active = new WeakSet<Socket>();
   let admitting = true;
   let socketIdentity: Readonly<{ dev: number; ino: number }> | undefined;
@@ -127,9 +128,9 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
           : handleControl(request, response, service, config, clock, admissions)
       ).catch(() => sendError(response, 503, "unavailable"));
     };
-  for (const [server, handler] of [
-    [agent, route("agent")],
-    [control, route("control")],
+  for (const [server, handler, sockets] of [
+    [agent, route("agent"), agentSockets],
+    [control, route("control"), controlSockets],
   ] as const) {
     // Retain one excess pair so the inspector can reject instead of silently truncating.
     server.maxHeadersCount = limits.headerPairs + 1;
@@ -168,8 +169,10 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
   const close = async () => {
     stopAdmission();
     admissions.dispose();
-    for (const socket of sockets) {
-      socket.destroy();
+    for (const sockets of [agentSockets, controlSockets]) {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
     }
     agent.closeAllConnections();
     control.closeAllConnections();

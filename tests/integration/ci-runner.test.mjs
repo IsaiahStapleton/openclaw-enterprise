@@ -502,6 +502,38 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
       "    throw error;",
       "  }",
       "});",
+      `for (const { name, diagnostic } of ${JSON.stringify([
+        {
+          name: "allowlisted repository platform setup diagnostic",
+          diagnostic: {
+            kind: "repository-platform-setup",
+            stage: "relay-readiness",
+            args: [secret],
+            configuration: { credential: secret },
+          },
+        },
+        {
+          name: "rejects unsafe repository platform setup stage",
+          diagnostic: { kind: "repository-platform-setup", stage: `${secret}-stage` },
+        },
+        {
+          name: "rejects nonstring repository platform setup stage",
+          diagnostic: { kind: "repository-platform-setup", stage: { value: secret } },
+        },
+        {
+          name: "rejects unknown setup diagnostic kind",
+          diagnostic: { kind: `${secret}-kind`, stage: "relay-readiness" },
+        },
+      ])}) {`,
+      "  test(name, () => {",
+      `    const cause = new Error("${secret}-source-message");`,
+      `    cause.args = ["${secret}-argument"];`,
+      `    cause.configuration = { credential: "${secret}-credential" };`,
+      `    const error = new Error("${secret}-setup-message", { cause });`,
+      "    error.openclawCiDiagnostic = diagnostic;",
+      "    throw error;",
+      "  });",
+      "}",
       "",
     ].join("\n"),
   );
@@ -567,6 +599,22 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     (entry) => entry.name === "rejects unsafe controller HTTP diagnostic",
   );
   assert.equal(unsafeFailure.error.diagnostic, undefined);
+  const setupFailure = summary.files[0].tests.find(
+    (entry) => entry.name === "allowlisted repository platform setup diagnostic",
+  );
+  assert.deepEqual(setupFailure.error.diagnostic, {
+    kind: "repository-platform-setup",
+    stage: "relay-readiness",
+  });
+  for (const name of [
+    "rejects unsafe repository platform setup stage",
+    "rejects nonstring repository platform setup stage",
+    "rejects unknown setup diagnostic kind",
+  ]) {
+    const rejected = summary.files[0].tests.find((entry) => entry.name === name);
+    assert.equal(rejected.status, "failed");
+    assert.equal(rejected.error.diagnostic, undefined);
+  }
 });
 
 test("audit rejects obsolete manifest selectors", async (t) => {

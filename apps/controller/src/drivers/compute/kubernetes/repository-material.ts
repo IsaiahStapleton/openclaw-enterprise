@@ -89,7 +89,10 @@ function validateClient(value: unknown): RepositoryCredentialClientConfiguration
       (key) =>
         typeof client[key] !== "string" ||
         Buffer.byteLength(client[key] as string, "utf8") > 4096 ||
-        /[\x00-\x1f\x7f]/.test(client[key] as string),
+        [...(client[key] as string)].some((character) => {
+          const code = character.charCodeAt(0);
+          return code <= 0x1f || code === 0x7f;
+        }),
     )
   ) {
     return invalid();

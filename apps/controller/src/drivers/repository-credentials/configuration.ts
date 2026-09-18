@@ -42,7 +42,10 @@ export function string(value: unknown, maximum = 4096): string {
     typeof value !== "string" ||
     value.length < 1 ||
     value.length > maximum ||
-    /[\x00-\x1f\x7f]/.test(value)
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    })
   ) {
     throw new Error("invalid-configuration");
   }

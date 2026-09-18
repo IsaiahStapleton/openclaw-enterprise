@@ -44,7 +44,9 @@ export function createGitHubRegistryDriverFactory(
   const factoryFor = (identity: RepositoryCredentialGrantIdentity) => {
     const key = identityKey(identity);
     const grant = grants.get(key);
-    if (!grant) throw new Error("INVALID_BINDING");
+    if (!grant) {
+      throw new Error("INVALID_BINDING");
+    }
     let factory = factories.get(key);
     if (!factory) {
       factory = createGitHubDriverFactory({
@@ -101,9 +103,12 @@ export function createGitHubRegistryDriverFactory(
       } catch {
         throw new Error("INVALID_BINDING");
       }
-      if (!sameBinding(binding.grant, input.expectedBinding)) throw new Error("INVALID_BINDING");
-      if (input.durationSeconds > registry.maximumDurationSeconds)
+      if (!sameBinding(binding.grant, input.expectedBinding)) {
+        throw new Error("INVALID_BINDING");
+      }
+      if (input.durationSeconds > registry.maximumDurationSeconds) {
         throw new Error("INVALID_DURATION");
+      }
       return factoryFor(binding.grant).resolve(binding.profile);
     },
     create(input) {
@@ -118,7 +123,9 @@ export function createGitHubRegistryDriverFactory(
     unauthenticated(head) {
       for (const factory of authentication) {
         const result = factory.unauthenticated(head);
-        if (result.kind === "challenge") return result;
+        if (result.kind === "challenge") {
+          return result;
+        }
       }
       return denied;
     },

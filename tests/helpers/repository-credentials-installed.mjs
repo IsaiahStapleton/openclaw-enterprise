@@ -78,18 +78,23 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
       const childEnv = { ...process.env, ...env };
       delete childEnv.OPENAI_API_KEY;
       const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: childEnv });
-      let stdout = "",
-        stderr = "",
-        timedOut = false;
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill("SIGTERM");
       }, timeout);
       const killTimer = setTimeout(() => child.kill("SIGKILL"), timeout + 2000);
       const append = (field, chunk) => {
-        if (field === "stdout") stdout += chunk;
-        else stderr += chunk;
-        if (stdout.length + stderr.length > 4 * 1024 * 1024) child.kill("SIGKILL");
+        if (field === "stdout") {
+          stdout += chunk;
+        } else {
+          stderr += chunk;
+        }
+        if (stdout.length + stderr.length > 4 * 1024 * 1024) {
+          child.kill("SIGKILL");
+        }
       };
       child.stdout.on("data", (data) => append("stdout", data));
       child.stderr.on("data", (data) => append("stderr", data));
@@ -102,13 +107,15 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
         clearTimeout(timer);
         clearTimeout(killTimer);
         // Subprocesses can include protected stdin in diagnostics; never return it on failure.
-        if (allowExitCodes.includes(code) && !timedOut) resolve(stdout);
-        else
+        if (allowExitCodes.includes(code) && !timedOut) {
+          resolve(stdout);
+        } else {
           reject(
             new Error(
               `${command} failed (${timedOut ? "timeout" : code}); protected subprocess output withheld`,
             ),
           );
+        }
       });
       child.stdin.on("error", () => {});
       child.stdin.end(input);
@@ -150,10 +157,14 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
     kubectl("-n", namespace, "wait", "--for=condition=Ready", `pod/${name}`, "--timeout=180s");
   const protectedBootstrapFiles = ["initial-admin-password", "initial-admin-service-key.json"];
   const assertProtectedBootstrapFileModes = (stats) => {
-    for (const file of protectedBootstrapFiles) assert.equal(stats[file]?.mode, 0o600);
+    for (const file of protectedBootstrapFiles) {
+      assert.equal(stats[file]?.mode, 0o600);
+    }
   };
   const close = async () => {
-    if (closed) return;
+    if (closed) {
+      return;
+    }
     closed = true;
     forwarding?.kill("SIGTERM");
     const failures = [];
@@ -182,8 +193,9 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
       ).catch(() => failures.push("owned namespace removal"));
       try {
         const remaining = JSON.parse(await kubectl("get", "namespaces", "-o", "json"));
-        if (remaining.items.some((item) => item.metadata.name === name))
+        if (remaining.items.some((item) => item.metadata.name === name)) {
           failures.push("namespace remains");
+        }
       } catch {
         failures.push("namespace removal readback unavailable");
       }
@@ -194,10 +206,11 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
       "repository-tls.key",
       "repository-tls.crt",
       "occ-service-key.json",
-    ])
+    ]) {
       await rm(join(directory, file), { force: true }).catch(() =>
         failures.push("protected local file removal"),
       );
+    }
     assert.deepEqual(failures, [], "installed fixture cleanup must complete");
   };
   context.after(close);
@@ -372,15 +385,17 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
           let output = "";
           response.on("data", (chunk) => {
             output += chunk;
-            if (output.length > 4 * 1024 * 1024)
+            if (output.length > 4 * 1024 * 1024) {
               response.destroy(new Error("API response exceeded bound"));
+            }
           });
           response.on("error", reject);
           response.on("aborted", () => reject(new Error("API response aborted")));
           response.on("end", () => {
             try {
-              for (const value of secrets)
+              for (const value of secrets) {
                 assert.ok(!output.includes(value), "API response leaked a protected credential");
+              }
               resolve({
                 status: response.statusCode,
                 headers: response.headers,
@@ -445,10 +460,14 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
         try {
           result = await externalRequest("GET", "/installation");
         } catch (error) {
-          if (["API_NOT_READY", "ECONNREFUSED", "ECONNRESET"].includes(error?.code)) return false;
+          if (["API_NOT_READY", "ECONNREFUSED", "ECONNRESET"].includes(error?.code)) {
+            return false;
+          }
           throw error;
         }
-        if ([502, 503, 504].includes(result.status)) return false;
+        if ([502, 503, 504].includes(result.status)) {
+          return false;
+        }
         assert.equal(result.status, 200, "installation readiness must return HTTP 200");
         assert.ok(result.body && Object.hasOwn(result.body, "data"));
         return true;
@@ -578,7 +597,9 @@ export async function createInstalledRepositoryFixture(context, { selection, ima
 
 export function createRepositoryObserver({ run, repository, binary = "gh" }) {
   assert.match(repository, /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/);
-  if (binary !== "gh") assert.ok(isAbsolute(binary), "the managed gh binary must be absolute");
+  if (binary !== "gh") {
+    assert.ok(isAbsolute(binary), "the managed gh binary must be absolute");
+  }
   const prefix = `repos/${repository}`;
   return async (method, suffix = "", body, expected = 200) => {
     assert.ok(!suffix.includes("..") && !suffix.startsWith("/"));
@@ -591,7 +612,9 @@ export function createRepositoryObserver({ run, repository, binary = "gh" }) {
       method,
       `${prefix}${suffix ? `/${suffix}` : ""}`,
     ];
-    if (body !== undefined) args.push("--input", "-");
+    if (body !== undefined) {
+      args.push("--input", "-");
+    }
     const response = await run(binary, args, {
       input: body === undefined ? undefined : JSON.stringify(body),
       timeout: 30000,

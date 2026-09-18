@@ -68,7 +68,9 @@ function startProcess({ resources, config, tls }) {
     }, reject);
   });
   resources.after(async () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
     await closed;
   });
   child.stdin.end(

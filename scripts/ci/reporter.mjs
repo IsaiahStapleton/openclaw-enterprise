@@ -22,6 +22,22 @@ const safeChatGptOperations = new Set([
   "delete-credential",
 ]);
 
+const safeRepositoryPlatformSetupStages = new Set([
+  "selection",
+  "kubernetes-setup",
+  "database-bootstrap",
+  "controller-startup",
+  "namespace-create",
+  "namespace-provisioning",
+  "namespace-reconciliation",
+  "controller-stop",
+  "credential-service-startup",
+  "control-relay-startup",
+  "relay-creation",
+  "relay-readiness",
+  "controller-restart",
+]);
+
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -32,7 +48,18 @@ function safeStatus(value) {
 
 function failureDiagnostic(error) {
   const diagnostic = error?.openclawCiDiagnostic;
-  if (!isRecord(diagnostic) || diagnostic.kind !== "controller-http") return undefined;
+  if (!isRecord(diagnostic)) {
+    return undefined;
+  }
+  if (diagnostic.kind === "repository-platform-setup") {
+    const stage = diagnostic.stage;
+    return typeof stage === "string" && safeRepositoryPlatformSetupStages.has(stage)
+      ? { kind: "repository-platform-setup", stage }
+      : undefined;
+  }
+  if (diagnostic.kind !== "controller-http") {
+    return undefined;
+  }
   const status = safeStatus(diagnostic.status);
   const expectedStatus = safeStatus(diagnostic.expectedStatus);
   const occErrorCode = diagnostic.occErrorCode;
@@ -54,7 +81,9 @@ function failureDiagnostic(error) {
 }
 
 function upstreamDiagnostic(value) {
-  if (!isRecord(value) || value.kind !== "chatgpt-admin-http") return undefined;
+  if (!isRecord(value) || value.kind !== "chatgpt-admin-http") {
+    return undefined;
+  }
   const status = safeStatus(value.status);
   const operation = value.operation;
   if (

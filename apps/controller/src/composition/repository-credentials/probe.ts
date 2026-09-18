@@ -14,8 +14,11 @@ const probe = request(
     let length = 0;
     response.on("data", (chunk: Buffer) => {
       length += chunk.length;
-      if (length > 1024) probe.destroy(new Error("invalid-health"));
-      else chunks.push(chunk);
+      if (length > 1024) {
+        probe.destroy(new Error("invalid-health"));
+      } else {
+        chunks.push(chunk);
+      }
     });
     response.once("error", () => {
       process.exitCode = 1;
@@ -31,8 +34,9 @@ const probe = request(
           value.ready !== true ||
           !("protocolVersion" in value) ||
           value.protocolVersion !== 1
-        )
+        ) {
           throw new Error("invalid-health");
+        }
       } catch {
         process.exitCode = 1;
       }

@@ -48,8 +48,6 @@ stop on unexpected changes.
 
 ## Development style
 
-Follow these rules when developing or changing code.
-
 ### Build platform capabilities
 
 We are developing a platform. Every new capability must belong to a platform
@@ -110,10 +108,9 @@ accessing an internal module.
 
 ## Developer skills
 
-Use [local-dev](.agents/skills/local-dev/SKILL.md) for repository development
-changes. It requires creating or updating a source-backed flow doc for non-trivial
-runtime changes and defines when trivial maintenance needs no new flow doc.
-Update the existing behavior owner under `docs/flows/` whenever possible.
+Use [local-dev](.agents/skills/local-dev/SKILL.md) for repository development,
+including its source-backed flow documentation requirements and trivial-maintenance
+exceptions. Prefer updating the existing behavior owner under `docs/flows/`.
 
 Use [test-audit](.agents/skills/test-audit/SKILL.md) when authoring or reviewing
 tests, and [enterprise-testing](.agents/skills/enterprise-testing/SKILL.md) to
@@ -230,11 +227,9 @@ boundaries or intentional architecture as temporary.
 Write implementation and milestone specifications under `specs/`, following the
 authoritative platform design.
 
-Implementation specifications are point-in-time records. When a later spec
-changes or supersedes an implementation described by an earlier spec, document
-the change in the later spec and the affected current documentation. Do not
-retroactively update the earlier spec to match the later implementation;
-preserve its original design decisions and implementation details.
+Implementation specifications are historical records. Document superseding behavior
+in the later spec and current documentation; preserve earlier specs' original
+design decisions and implementation details.
 
 Use stable feature names in `docs/reference/` and retain existing numbered
 implementation-spec paths under `specs/`. A behavior-changing implementation PR
@@ -337,11 +332,18 @@ not verify shared-cluster admission guardrails.
 
 ## TypeScript style and verification
 
+- Separate imports from following code with a blank line, declare one variable
+  per declaration, and use braces for control-flow bodies. Apply these rules with
+  `pnpm lint:fix`, then run `pnpm format:fix` for Prettier layout.
+- Run `pnpm lint` for JavaScript and TypeScript changes; `pnpm lint:fix` applies
+  supported automatic fixes. Follow `eslint.config.mjs` and the
+  [linting guide](docs/testing/local.md#linting-and-formatting). Do not expand
+  `eslint-suppressions.json` to admit new findings; prune entries as they are fixed.
+
 - Use `ts-pattern` for tagged unions and branches that would otherwise become
   nested ternaries. Prefer `match(value).with(...).exhaustive()` so every case
   is explicit and checked by TypeScript.
-- Keep ordinary two-way conditions as a simple ternary or `if`; do not wrap
-  them in `match` just to use the library.
+- Use a ternary or `if` for ordinary two-way conditions.
 - Format active workspace changes with `pnpm format:fix` and verify them with
   `pnpm format:check` when an installed dependency graph matches the current
   manifests. These checks include authored `docs/**/*.md`; the generated

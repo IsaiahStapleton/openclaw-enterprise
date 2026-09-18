@@ -134,7 +134,9 @@ export async function prepareRepositoryCredentialsFile({ clientImage, execFile }
       );
     } finally {
       await execFile(docker, ["rm", "-f", container], { timeoutMs: 30_000 }).catch((error) => {
-        if (!/No such container/i.test(error.message)) throw error;
+        if (!/No such container/i.test(error.message)) {
+          throw error;
+        }
       });
     }
     await chmod(binary, 0o755);

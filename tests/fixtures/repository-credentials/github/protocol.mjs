@@ -44,15 +44,20 @@ export function createGitHubProtocol({
     clone_url: `https://github.com/${repository}.git`,
   };
   function tokenFrom(authorization) {
-    if (authorization?.startsWith("Basic "))
+    if (authorization?.startsWith("Basic ")) {
       return Buffer.from(authorization.slice(6), "base64").toString().split(":").slice(1).join(":");
+    }
     return authorization?.replace(/^(Bearer|token) /, "");
   }
   function authorize(authorization, boundary = "api") {
     const token = tokens.get(tokenFrom(authorization));
     authenticationAttempts.push({ tokenIndex: token?.index, boundary });
-    if (token) token.attempts++;
-    if (!token || token.revoked || token.expires <= clock.wallNow()) return false;
+    if (token) {
+      token.attempts++;
+    }
+    if (!token || token.revoked || token.expires <= clock.wallNow()) {
+      return false;
+    }
     token.uses++;
     return true;
   }
@@ -85,7 +90,9 @@ export function createGitHubProtocol({
       let size = 0;
       for await (const chunk of request) {
         size += chunk.length;
-        if (size > 1024 * 1024) throw new Error("fixture request limit");
+        if (size > 1024 * 1024) {
+          throw new Error("fixture request limit");
+        }
         chunks.push(chunk);
       }
       const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
@@ -260,7 +267,9 @@ export function createGitHubProtocol({
           json(404, {});
           return;
         }
-        if (request.method === "PATCH") Object.assign(pull, body);
+        if (request.method === "PATCH") {
+          Object.assign(pull, body);
+        }
         json(200, pull);
         return;
       }
@@ -306,7 +315,9 @@ export function createGitHubProtocol({
           json(404, {});
           return;
         }
-        if (request.method === "PATCH") Object.assign(issue, body);
+        if (request.method === "PATCH") {
+          Object.assign(issue, body);
+        }
         json(200, issue);
         return;
       }
@@ -356,7 +367,9 @@ export function createGitHubProtocol({
           response.writeHead(204).end();
           return;
         }
-        if (request.method === "PATCH") comment.body = body.body;
+        if (request.method === "PATCH") {
+          comment.body = body.body;
+        }
         json(200, comment);
         return;
       }

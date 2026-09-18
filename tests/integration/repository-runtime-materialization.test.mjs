@@ -126,8 +126,9 @@ test("repository init validates the complete projection before publishing any se
   const result = fixture.run();
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, "");
-  for (const binding of fixture.bindings)
+  for (const binding of fixture.bindings) {
     assert.equal(result.stderr.includes(binding.files.bearer), false);
+  }
   await assert.rejects(lstat(join(fixture.targetRoot, "sessions")), { code: "ENOENT" });
 });
 

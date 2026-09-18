@@ -28,7 +28,7 @@ export interface GitHubRepositoryRegistry {
 }
 
 const selectorPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const providerPattern = /^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).{1,200}$/;
+const providerPattern = /^(?!\s)(?!.*\s$).{1,200}$/;
 const repositoryPattern = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 
 function invalid(): never {
@@ -46,7 +46,14 @@ function object(value: unknown, fields: readonly string[]): Record<string, unkno
 }
 
 function text(value: unknown, pattern = selectorPattern): string {
-  if (typeof value !== "string" || !pattern.test(value)) {
+  if (
+    typeof value !== "string" ||
+    !pattern.test(value) ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    })
+  ) {
     return invalid();
   }
   return value;

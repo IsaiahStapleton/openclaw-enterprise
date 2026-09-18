@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import { createServer, request } from "node:https";
+import { connect } from "node:net";
 import { connect as connectTls } from "node:tls";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
@@ -41,7 +42,9 @@ async function startTransport(t, onRequest, limits = {}) {
         failures.push(error);
       }
     }
-    if (failures.length) throw new AggregateError(failures, "transport cleanup failed");
+    if (failures.length) {
+      throw new AggregateError(failures, "transport cleanup failed");
+    }
   });
   const [
     { createSystemClock },
@@ -79,6 +82,7 @@ async function startTransport(t, onRequest, limits = {}) {
     onRequest(incoming, outgoing);
   });
   const origin = await listen(resources, upstream);
+  const trustedOrigins = new Set([origin]);
   const key = createGitHubKeyOwner({ privateKey: github.privateKey, appId: fixtureAppId, clock });
   resources.after(() => key.close());
   const factory = createGitHubDriverFactory({
@@ -119,11 +123,11 @@ async function startTransport(t, onRequest, limits = {}) {
     service,
     factory,
     clock,
-    trustedUpstreamOrigins: new Set([origin, github.origin]),
+    trustedUpstreamOrigins: trustedOrigins,
     upstreamCa: tls.ca,
   });
   const opened = service.open({ durationSeconds: 300, profile: "git-write" });
-  return { config, tls, service, listeners, opened, github, received, resources };
+  return { config, tls, service, listeners, opened, github, received, resources, trustedOrigins };
 }
 
 function startRequest(
@@ -171,7 +175,9 @@ function startRequest(
       response.once("end", () => finish("completed"));
       response.once("error", () => finish("closed"));
       response.once("close", () => {
-        if (!response.complete) finish("closed");
+        if (!response.complete) {
+          finish("closed");
+        }
       });
       onResponse?.(response);
     },
@@ -220,6 +226,89 @@ function connectTlsClient(fixture) {
   return state;
 }
 
+test("listener header deadlines stop unauthenticated peers", { timeout: 15000 }, async (t) => {
+  const fixture = await startTransport(
+    t,
+    (incoming, outgoing) => {
+      incoming.resume();
+      outgoing.writeHead(200, replyHeaders).end("0000");
+    },
+    { headerMs: 150, stallMs: 3000 },
+  );
+  for (const scenario of [
+    {
+      name: "an incomplete TLS handshake",
+      open: () => connect({ host: "127.0.0.1", port: fixture.listeners.address.port }),
+      ready: "connect",
+    },
+    {
+      name: "a TLS peer without HTTP headers",
+      open: () =>
+        connectTls({
+          host: "127.0.0.1",
+          port: fixture.listeners.address.port,
+          ca: fixture.tls.ca,
+        }),
+      ready: "secureConnect",
+    },
+    {
+      name: "a control peer without HTTP headers",
+      open: () => connect(fixture.config.gateway.controlSocket),
+      ready: "connect",
+    },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const socket = scenario.open();
+      let closed = false;
+      socket.on("error", () => {});
+      const close = new Promise((resolve) =>
+        socket.once("close", () => {
+          closed = true;
+          resolve();
+        }),
+      );
+      fixture.resources.after(async () => {
+        socket.destroy();
+        await close;
+      });
+      await new Promise((resolve, reject) => {
+        socket.once(scenario.ready, resolve);
+        socket.once("error", reject);
+      });
+      // No request is admitted: handshake/header bounds must close the peer
+      // before the independent three-second stall timeout could do so.
+      await eventually(() => closed, { timeoutMs: 1000 });
+    });
+  }
+  assert.equal(fixture.github.issuesOfTokens.length, 0);
+  assert.equal(fixture.received.length, 0);
+  assert.equal((await readDiscovery(fixture)).status, 200);
+});
+
+test("an admitted TLS request clears its header deadline", { timeout: 15000 }, async (t) => {
+  const fixture = await startTransport(
+    t,
+    (incoming, outgoing) => {
+      incoming.resume();
+      incoming.once("end", () => {
+        // The response deliberately outlives header admission while remaining
+        // inside the separate response-header, stall and exchange budgets.
+        const timer = setTimeout(() => outgoing.writeHead(200, replyHeaders).end("0000"), 400);
+        outgoing.once("close", () => clearTimeout(timer));
+      });
+    },
+    { headerMs: 150, firstHeaderMs: 2000, stallMs: 2000 },
+  );
+  assert.deepEqual(await readDiscovery(fixture), {
+    kind: "completed",
+    status: 200,
+    bytes: 4,
+    complete: true,
+  });
+  assert.deepEqual(fixture.received, [{ method: "GET", path: discovery }]);
+  await eventually(() => fixture.service.status(fixture.opened.session.sessionId).activeUses === 0);
+});
+
 test(
   "occupied per-session and total exchange limits refuse excess traffic and recover",
   { timeout: 15000 },
@@ -233,7 +322,9 @@ test(
         if (heldResponses.length < 2) {
           heldResponses.push(outgoing);
           outgoing.write("0000");
-        } else outgoing.end("0000");
+        } else {
+          outgoing.end("0000");
+        }
       },
       { exchanges: 2, exchangesPerSession: 1, sockets: 8 },
     );
@@ -278,10 +369,13 @@ test(
     assert.equal(fixture.received.length, 2);
 
     // Denial cannot cancel either admitted stream or replace its credential.
-    for (const response of heldResponses) response.write("0000");
+    for (const response of heldResponses) {
+      response.write("0000");
+    }
     await eventually(() => delivered.every((bytes) => bytes === 8));
-    for (const opened of [first, second])
+    for (const opened of [first, second]) {
       assert.equal(fixture.service.status(opened.session.sessionId).activeUses, 1);
+    }
     heldResponses[0].end();
     assert.deepEqual(await heldClients[0].result, {
       kind: "completed",
@@ -318,7 +412,7 @@ test(
 );
 
 test(
-  "pre-authentication socket capacity rejects excess TLS connections and recovers",
+  "pre-authentication socket capacity preserves private control admission and recovers",
   { timeout: 15000 },
   async (t) => {
     const fixture = await startTransport(
@@ -341,6 +435,17 @@ test(
     assert.equal(fixture.github.issuesOfTokens.length, 0);
     assert.equal(fixture.received.length, 0);
 
+    // A full public listener cannot prevent the operator from closing authority
+    // through the production Unix-socket client and control handler.
+    const { callControl } = await credentialDriverModule("client/operator");
+    const other = fixture.service.open({ durationSeconds: 300, profile: "git-write" });
+    const closed = await callControl(fixture.config.gateway.controlSocket, {
+      method: "POST",
+      path: `/v1/sessions/${other.session.sessionId}/close`,
+    });
+    assert.notEqual(closed.state, "OPEN");
+    assert.equal(admitted.closed, false);
+
     // The admitted socket remains usable after overload, including authentication.
     assert.deepEqual(await readDiscovery(fixture, { socket: admitted.socket }), {
       kind: "completed",
@@ -362,6 +467,28 @@ test(
     assert.equal(fixture.github.issuesOfTokens.length, 1);
   },
 );
+
+test("an Agent listener retains its original upstream origins", { timeout: 15000 }, async (t) => {
+  const fixture = await startTransport(t, (incoming, outgoing) => {
+    incoming.resume();
+    outgoing.writeHead(200, replyHeaders).end("0000");
+  });
+  const api = fixture.service.open({ durationSeconds: 300, profile: "git-full" });
+  // The listener was admitted with only the Git peer. Mutating its caller's
+  // configuration afterward must not authorize the separate API destination.
+  fixture.trustedOrigins.add(fixture.github.origin);
+  const target = `/repos/${fixtureRepository}`;
+  const client = startRequest(fixture, {
+    path: target,
+    opened: api,
+    headers: { authorization: `Bearer ${api.bearer}` },
+  });
+  client.outgoing.end();
+  assert.equal((await client.result).status, 503);
+  assert.equal(fixture.github.trace.filter((entry) => entry.target === target).length, 0);
+  assert.equal((await readDiscovery(fixture)).status, 200);
+  assert.deepEqual(fixture.received, [{ method: "GET", path: discovery }]);
+});
 
 const declaredInputCases = [
   {
@@ -417,7 +544,9 @@ test(
       (incoming, outgoing) => {
         incoming.on("data", (chunk) => (receivedBytes += chunk.length));
         incoming.once("close", () => {
-          if (!incoming.complete) incompleteRequestClosed = true;
+          if (!incoming.complete) {
+            incompleteRequestClosed = true;
+          }
         });
         incoming.once("end", () =>
           outgoing
@@ -472,8 +601,11 @@ test(
       incoming.once("end", () => {
         // The peer received the complete request but supplied no response. The
         // gateway may report uncertainty; it must not replay the operation.
-        if (++requests === 1) outgoing.destroy();
-        else outgoing.writeHead(200, replyHeaders).end("0000");
+        if (++requests === 1) {
+          outgoing.destroy();
+        } else {
+          outgoing.writeHead(200, replyHeaders).end("0000");
+        }
       });
     });
     const chunks = [];
@@ -615,7 +747,9 @@ function writePayload(outgoing) {
 
 function payloadDigest() {
   const hash = createHash("sha256");
-  for (let offset = 0; offset < streamBytes; offset += streamChunk.length) hash.update(streamChunk);
+  for (let offset = 0; offset < streamBytes; offset += streamChunk.length) {
+    hash.update(streamChunk);
+  }
   return hash.digest("hex");
 }
 
@@ -632,6 +766,129 @@ async function assertProducerBlocked(producedBytes) {
   assert.equal(producedBytes(), before, "producer kept advancing while consumer was paused");
   return before;
 }
+
+test("upstream response timing follows completed upload", { timeout: 15000 }, async (t) => {
+  await t.test("a progressing push may outlast the first-header budget", async (t) => {
+    let receivedBytes = 0;
+    const fixture = await startTransport(
+      t,
+      (incoming, outgoing) => {
+        incoming.on("data", (chunk) => (receivedBytes += chunk.length));
+        incoming.once("end", () => outgoing.writeHead(200, pushReplyHeaders).end("0000"));
+      },
+      { exchangeMs: 3000, headerMs: 1000, firstHeaderMs: 200, stallMs: 1000 },
+    );
+    const chunk = Buffer.alloc(64, 42);
+    const client = startRequest(fixture, {
+      method: "POST",
+      path: push,
+      headers: {
+        "content-type": "application/x-git-receive-pack-request",
+        "content-length": 8 * chunk.length,
+      },
+    });
+    client.outgoing.write(chunk);
+    await eventually(() => receivedBytes === chunk.length);
+    // Keep the upload progressing beyond the response-header budget while
+    // staying inside its independent input, stall and total deadlines.
+    for (let index = 1; index < 8; index++) {
+      await delay(60);
+      client.outgoing.write(chunk);
+    }
+    client.outgoing.end();
+    assert.deepEqual(await client.result, {
+      kind: "completed",
+      status: 200,
+      bytes: 4,
+      complete: true,
+    });
+    assert.equal(receivedBytes, 8 * chunk.length);
+    assert.deepEqual(fixture.received, [{ method: "POST", path: push }]);
+    await eventually(
+      () => fixture.service.status(fixture.opened.session.sessionId).activeUses === 0,
+    );
+  });
+
+  await t.test("missing final headers release the completed upload", async (t) => {
+    let inputFinishedAt;
+    const fixture = await startTransport(
+      t,
+      (incoming, outgoing) => {
+        incoming.resume();
+        if (incoming.url === push) {
+          incoming.once("end", () => (inputFinishedAt = performance.now()));
+        } else {
+          incoming.once("end", () => outgoing.writeHead(200, replyHeaders).end("0000"));
+        }
+      },
+      { exchangeMs: 5000, firstHeaderMs: 200, stallMs: 2000 },
+    );
+    const client = startRequest(fixture, {
+      method: "POST",
+      path: push,
+      headers: {
+        "content-type": "application/x-git-receive-pack-request",
+        "content-length": 4,
+      },
+    });
+    client.outgoing.end("0000");
+    await eventually(() => inputFinishedAt !== undefined);
+    assert.equal((await client.result).kind, "closed");
+    // This must be the first-header deadline, before the longer stall/total bounds.
+    assert.ok(performance.now() - inputFinishedAt < 1500);
+    await eventually(
+      () => fixture.service.status(fixture.opened.session.sessionId).activeUses === 0,
+    );
+    assert.equal((await readDiscovery(fixture)).status, 200);
+    assert.deepEqual(fixture.received, [
+      { method: "POST", path: push },
+      { method: "GET", path: discovery },
+    ]);
+  });
+
+  await t.test("early final headers cannot restart the header deadline", async (t) => {
+    let receivedHeaders = false;
+    const fixture = await startTransport(
+      t,
+      (incoming, outgoing) => {
+        incoming.resume();
+        outgoing.writeHead(200, pushReplyHeaders);
+        outgoing.write("0000");
+        incoming.once("end", () => {
+          let writes = 0;
+          const timer = setInterval(() => {
+            outgoing.write("0000");
+            if (++writes === 6) {
+              clearInterval(timer);
+              outgoing.end();
+            }
+          }, 60);
+          outgoing.once("close", () => clearInterval(timer));
+        });
+      },
+      { exchangeMs: 3000, headerMs: 1000, firstHeaderMs: 150, stallMs: 1000 },
+    );
+    const client = startRequest(fixture, {
+      method: "POST",
+      path: push,
+      headers: {
+        "content-type": "application/x-git-receive-pack-request",
+        "content-length": 8,
+      },
+      onResponse: () => (receivedHeaders = true),
+    });
+    client.outgoing.write("0000");
+    await eventually(() => receivedHeaders);
+    client.outgoing.end("0000");
+    assert.deepEqual(await client.result, {
+      kind: "completed",
+      status: 200,
+      bytes: 28,
+      complete: true,
+    });
+    assert.deepEqual(fixture.received, [{ method: "POST", path: push }]);
+  });
+});
 
 test(
   "a paused upstream bounds upload producer progress and resumes without data loss",
@@ -727,8 +984,12 @@ for (const responseStarted of [false, true]) {
           inputReceived = true;
           if (++requests === 1) {
             outgoing.once("close", () => (upstreamCancelled = !outgoing.writableFinished));
-            if (responseStarted) outgoing.writeHead(200, replyHeaders).write("0000");
-          } else outgoing.writeHead(200, replyHeaders).end("0000");
+            if (responseStarted) {
+              outgoing.writeHead(200, replyHeaders).write("0000");
+            }
+          } else {
+            outgoing.writeHead(200, replyHeaders).end("0000");
+          }
         });
         incoming.resume();
       });

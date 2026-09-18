@@ -27,27 +27,37 @@ async function readProtected(path: string, maximum: number, privateFile = true):
   if (!isAbsolute(path) || resolve(path) !== path) {
     throw new Error("invalid-protected-file");
   }
-  // Reject symlinked components as well as a symlink at the final basename.
-  let parent = dirname(path);
-  while (parent !== parse(parent).root) {
-    const stat = await lstat(parent);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      throw new Error("invalid-protected-file");
+  const uid = process.getuid?.();
+  const immediateParent = dirname(path);
+  const ancestors: string[] = [];
+  let parent = immediateParent;
+  for (;;) {
+    ancestors.push(parent);
+    if (parent === parse(parent).root) {
+      break;
     }
     parent = dirname(parent);
   }
-  const parentStat = await lstat(dirname(path));
-  if (
-    (parentStat.mode & 0o022) !== 0 ||
-    (process.getuid && parentStat.uid !== process.getuid() && parentStat.uid !== 0)
-  ) {
-    throw new Error("invalid-protected-file");
+  // Validate from the root so each trusted prefix protects the next component
+  // against replacement by another user. Root-owned sticky ancestors permit
+  // private directories beneath /tmp; the immediate parent must stay unwritable.
+  for (const ancestor of ancestors.reverse()) {
+    const stat = await lstat(ancestor);
+    const rootStickyAncestor =
+      ancestor !== immediateParent && stat.uid === 0 && (stat.mode & 0o1000) !== 0;
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      (uid !== undefined && stat.uid !== uid && stat.uid !== 0) ||
+      ((stat.mode & 0o022) !== 0 && !rootStickyAncestor)
+    ) {
+      throw new Error("invalid-protected-file");
+    }
   }
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   let data: Buffer | undefined;
   try {
     const before = await handle.stat();
-    const uid = process.getuid?.();
     if (
       !before.isFile() ||
       before.nlink !== 1 ||

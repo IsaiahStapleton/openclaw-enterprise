@@ -36,7 +36,9 @@ export async function startControlResponseRelay(scope, { directory, target }) {
         response.on("end", () => {
           const body = Buffer.concat(chunks);
           const forward = () => {
-            if (outgoing.destroyed) return;
+            if (outgoing.destroyed) {
+              return;
+            }
             outgoing.writeHead(response.statusCode, response.headers);
             outgoing.end(body);
           };
@@ -70,9 +72,15 @@ export async function startControlResponseRelay(scope, { directory, target }) {
     socket.once("close", () => sockets.delete(socket));
   });
   scope.after(async () => {
-    for (const upstream of requests) upstream.destroy();
-    for (const socket of sockets) socket.destroy();
-    if (!server.listening) return;
+    for (const upstream of requests) {
+      upstream.destroy();
+    }
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    if (!server.listening) {
+      return;
+    }
     await new Promise((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );

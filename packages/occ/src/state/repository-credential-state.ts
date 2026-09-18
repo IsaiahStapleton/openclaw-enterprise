@@ -7,7 +7,14 @@ import { immutableCopy } from "@openclaw-enterprise/utils";
 import { ScopeViolationError } from "../errors.ts";
 
 const token = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const providerIdentifier = /^(?!\s)(?!.*\s$)(?!.*[\x00-\x1f\x7f]).{1,200}$/;
+const providerIdentifier = /^(?!\s)(?!.*\s$).{1,200}$/;
+
+function hasControlCharacters(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f;
+  });
+}
 
 function boundedToken(value: unknown): value is string {
   return typeof value === "string" && token.exec(value)?.[0] === value;
@@ -29,7 +36,7 @@ function opaqueIdentity(value: unknown): value is string {
     value.length > 0 &&
     Buffer.byteLength(value, "utf8") <= 512 &&
     Buffer.from(value, "utf8").toString("utf8") === value &&
-    !/[\x00-\x1f\x7f]/.test(value)
+    !hasControlCharacters(value)
   );
 }
 
@@ -48,6 +55,7 @@ function selection(value: unknown, admitted: boolean): boolean {
     !admitted ||
     (typeof value.providerId === "string" &&
       providerIdentifier.test(value.providerId) &&
+      !hasControlCharacters(value.providerId) &&
       Buffer.from(value.providerId, "utf8").toString("utf8") === value.providerId &&
       exactObject(value.grant, ["providerInstanceId", "repositoryId", "grantId"]) &&
       opaqueIdentity(value.grant.providerInstanceId) &&

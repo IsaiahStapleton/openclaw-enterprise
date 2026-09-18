@@ -9,12 +9,13 @@ import { run } from "./process.mjs";
 /** @returns {Promise<boolean>} Whether the host handled or skipped the child run. */
 export async function runInFixtureContainer(t, testFile, { packaged = false } = {}) {
   if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD === "1") {
-    if (packaged)
+    if (packaged) {
       assert.equal(
         process.env.REPOSITORY_CREDENTIALS_EMITTED_ROOT,
         "/app/dist",
         "packaged qualification must use emitted application modules",
       );
+    }
     return false;
   }
   const image = packaged
@@ -54,14 +55,19 @@ export async function runInFixtureContainer(t, testFile, { packaged = false } = 
       "--entrypoint",
       "node",
     ];
-    if (!packaged) args.push("--mount", `type=bind,src=${gh},dst=/usr/local/bin/gh,readonly`);
-    if (packaged) args.push("--env", "REPOSITORY_CREDENTIALS_EMITTED_ROOT=/app/dist");
+    if (!packaged) {
+      args.push("--mount", `type=bind,src=${gh},dst=/usr/local/bin/gh,readonly`);
+    }
+    if (packaged) {
+      args.push("--env", "REPOSITORY_CREDENTIALS_EMITTED_ROOT=/app/dist");
+    }
     args.push(image, "--test", testFile);
     const result = await run("docker", args, { timeout: 120000, allowFailure: true });
     // Child diagnostics are safe test names/statuses. Never copy command stdout
     // or provider response bodies into test failure messages.
-    if (result.code !== 0)
+    if (result.code !== 0) {
       t.diagnostic(result.stdout.replace(/(Bearer|token)\s+\S+/g, "$1 [redacted]"));
+    }
     assert.equal(result.code, 0, "credential container acceptance failed");
   } finally {
     await run("docker", ["rm", "-f", name], { allowFailure: true });

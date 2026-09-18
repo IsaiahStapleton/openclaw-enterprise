@@ -188,6 +188,13 @@ selected emitted modules, using Node built-ins without runtime `node_modules`.
 The check validates protected configuration, RSA and TLS inputs, and prints a
 safe summary without starting listeners or calling GitHub.
 
+For `invalid-configuration`, inspect the file and every directory in its absolute
+path. Use root or service-user ownership, private configuration/key files, and
+directories that other users cannot modify. A root-owned sticky temporary
+directory is allowed above the protected immediate parent. Move files out of
+shared writable deployment directories before retrying; the complete policy is
+in the [reference](../reference/repository-credentials.md#configuration).
+
 Create the protected configuration shown in the
 [reference](../reference/repository-credentials.md#configuration). Use a GitHub
 App installed on the selected repository with the permissions for your chosen

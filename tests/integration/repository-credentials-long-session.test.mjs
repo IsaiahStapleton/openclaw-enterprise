@@ -5,7 +5,8 @@ import { qualifyLongSession } from "../fixtures/repository-credentials/long-sess
 test("same session pushes and completes API workflows after controlled hour thirteen", async (t) => {
   if (
     await runInFixtureContainer(t, "tests/integration/repository-credentials-long-session.test.mjs")
-  )
+  ) {
     return;
+  }
   await qualifyLongSession(t);
 });

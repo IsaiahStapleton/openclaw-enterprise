@@ -45,6 +45,8 @@ admission, durable worker ownership and private Compute delivery; the
 forwarding and cleanup.
 The [Agent plugin flow](flows/agent-plugins.md) traces desired state through
 revision startup and runtime configuration.
+The [repository credential configuration flow](flows/repository-credential-configuration.md)
+traces protected-file validation and GitHub key ownership.
 
 ## Contribute
 

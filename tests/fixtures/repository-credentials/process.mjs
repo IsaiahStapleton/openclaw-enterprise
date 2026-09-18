@@ -18,8 +18,12 @@ export async function run(
   args,
   { cwd, env = cleanEnvironment(), input, timeout = 30000, allowFailure = false, signal } = {},
 ) {
-  if (process.platform === "win32") throw new Error("fixture requires POSIX process groups");
-  if (signal?.aborted) throw new Error("command cancelled");
+  if (process.platform === "win32") {
+    throw new Error("fixture requires POSIX process groups");
+  }
+  if (signal?.aborted) {
+    throw new Error("command cancelled");
+  }
   const child = spawn(command, args, {
     cwd,
     env,
@@ -35,11 +39,15 @@ export async function run(
   // The launcher and its Git/gh children inherit this private process group.
   // Killing only the launcher leaves descendants holding the output pipes.
   const killGroup = () => {
-    if (!child.pid) return;
+    if (!child.pid) {
+      return;
+    }
     try {
       process.kill(-child.pid, "SIGKILL");
     } catch (error) {
-      if (error.code !== "ESRCH") failure ??= "termination failed";
+      if (error.code !== "ESRCH") {
+        failure ??= "termination failed";
+      }
     }
   };
   const stop = (reason) => {
@@ -54,11 +62,17 @@ export async function run(
     }, 1000);
   };
   const collect = (kind, chunk) => {
-    if (failure) return;
+    if (failure) {
+      return;
+    }
     bytes += chunk.length;
-    if (bytes > 2 * 1024 * 1024) stop("output overflow");
-    else if (kind === "stdout") stdout += chunk;
-    else stderr += chunk;
+    if (bytes > 2 * 1024 * 1024) {
+      stop("output overflow");
+    } else if (kind === "stdout") {
+      stdout += chunk;
+    } else {
+      stderr += chunk;
+    }
   };
   child.stdout.on("data", (chunk) => collect("stdout", chunk));
   child.stderr.on("data", (chunk) => collect("stderr", chunk));
@@ -71,14 +85,17 @@ export async function run(
   const cancelled = () => stop("cancelled");
   signal?.addEventListener("abort", cancelled, { once: true });
   const timer = setTimeout(() => stop("timeout"), timeout);
-  if (signal?.aborted) cancelled();
+  if (signal?.aborted) {
+    cancelled();
+  }
   child.stdin.end(input);
   try {
     const code = await closed;
     // Do not serialize command arguments, output, or cancellation reasons:
     // any of them can contain credentials supplied by the client.
-    if (failure || (code !== 0 && !allowFailure))
+    if (failure || (code !== 0 && !allowFailure)) {
       throw new Error(`command failed (${failure ?? `exit ${code}`})`);
+    }
     return { code, stdout, stderr };
   } finally {
     clearTimeout(timer);
@@ -135,7 +152,9 @@ export async function listen(t, server, port = 0, host = "127.0.0.1") {
     server.listen(port, host, resolve);
   });
   t.after(async () => {
-    for (const socket of sockets) socket.destroy();
+    for (const socket of sockets) {
+      socket.destroy();
+    }
     await new Promise((resolve) => server.close(resolve));
   });
   return `https://127.0.0.1:${server.address().port}`;

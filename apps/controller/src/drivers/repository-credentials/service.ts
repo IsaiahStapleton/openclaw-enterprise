@@ -138,7 +138,10 @@ export function createCredentialService(
     for (const stop of exchange.cancellations) {
       try {
         stop();
-      } catch {}
+      } catch {
+        // One failing cancellation must not prevent the remaining stops.
+        // Executing exchanges retain ownership of draining I/O and finishing.
+      }
     }
     exchange.cancellations.clear();
     if (!exchange.executing) {
@@ -212,7 +215,7 @@ export function createCredentialService(
         ? Math.min(durationDeadline, admittedInput.deadlineWallMs)
         : durationDeadline;
       const { bearer, ...admission } = admitSession(resolved.binding, deadlineWallMs, clock);
-      let session: Session;
+      let session: Session | undefined = undefined;
       let constructing = true;
       const custody = createCustody({
         clock,
@@ -271,7 +274,7 @@ export function createCredentialService(
           }
         },
       });
-      session = {
+      const openedSession: Session = {
         admission,
         custody,
         driver,
@@ -280,9 +283,10 @@ export function createCredentialService(
         exchanges: new Set(),
         cancelDeadline: () => {},
       };
+      session = openedSession;
       session.cancelDeadline = clock.schedule(
         Math.max(0, admission.deadlineMonoMs - clock.monotonicNow()),
-        () => close(session),
+        () => close(openedSession),
       );
       sessions.set(admission.authority.sessionId, session);
       bearers.set(admission.digest, session);

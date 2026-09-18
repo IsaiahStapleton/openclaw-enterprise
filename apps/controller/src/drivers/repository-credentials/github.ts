@@ -22,6 +22,13 @@ import {
 } from "../../providers/repository-credentials/github/registry.ts";
 import { encodeRepositoryCredentialSessionFiles } from "./client/config.ts";
 
+function hasControlCharacters(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f;
+  });
+}
+
 function sameBinding(
   left: RepositoryCredentialGrantIdentity,
   right: RepositoryCredentialGrantIdentity,
@@ -75,7 +82,7 @@ export class GitHubRepositoryCredentialDriver implements RepositoryCredentialDri
         typeof path !== "string" ||
         !isAbsolute(path) ||
         resolve(path) !== path ||
-        /[\u0000-\u001f\u007f]/.test(path) ||
+        hasControlCharacters(path) ||
         (field === "controlSocket" && Buffer.byteLength(path) > 103)
       ) {
         throw new Error("Repository credential Driver paths must be absolute.");
@@ -103,7 +110,7 @@ export class GitHubRepositoryCredentialDriver implements RepositoryCredentialDri
       typeof id !== "string" ||
       Buffer.byteLength(id) < 1 ||
       Buffer.byteLength(id) > 512 ||
-      /[\u0000-\u001f\u007f]/.test(id)
+      hasControlCharacters(id)
     ) {
       throw new Error("The GitHub Provider must declare its repository credential Driver.");
     }

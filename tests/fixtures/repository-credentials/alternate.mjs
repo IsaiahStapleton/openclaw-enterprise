@@ -70,7 +70,9 @@ export function createAlternateDriverFactory({
     events,
     drivers,
     resolve(profile) {
-      if (profile !== "git-write") throw new Error("unsupported-profile");
+      if (profile !== "git-write") {
+        throw new Error("unsupported-profile");
+      }
       return Object.freeze({
         binding,
         client: Object.freeze({

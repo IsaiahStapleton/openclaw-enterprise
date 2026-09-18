@@ -23,7 +23,9 @@ export const realPluginProofSelected = process.env.OCC_TEST_PLUGIN_DRIVER_REAL =
 
 export function pluginProofSkipReason(scenario) {
   const key = `OCC_TEST_PLUGIN_DRIVER_${scenario.toUpperCase()}_REAL`;
-  if (realPluginProofSelected || process.env[key] === "1") return false;
+  if (realPluginProofSelected || process.env[key] === "1") {
+    return false;
+  }
   return `Set ${key}=1 or OCC_TEST_PLUGIN_DRIVER_REAL=1 with disposable k3d/PostgreSQL, immutable real runtime images, model credentials, injected CODEX_ACCESS_TOKEN for Codex proofs, curated plugin proof prompts.`;
 }
 
@@ -61,7 +63,9 @@ function selectPluginProofDatabaseUrl({ scenario, databaseUrl }) {
 export function assertNoSecretMaterial(value, secrets, description) {
   const serialized = typeof value === "string" ? value : JSON.stringify(value);
   for (const secret of secrets) {
-    if (secret === undefined || secret.length === 0) continue;
+    if (secret === undefined || secret.length === 0) {
+      continue;
+    }
     assert.equal(serialized.includes(secret), false, description);
   }
 }
@@ -185,7 +189,9 @@ function createAgentPluginApi({ request, namespaceId }) {
     assert.ok(current.plugins?.[pluginId], `Plugin ${pluginId} must already be selected.`);
     const nextPolicy = { ...current.plugins[pluginId], ...payload };
     for (const [key, value] of Object.entries(nextPolicy)) {
-      if (value === null || value === undefined) delete nextPolicy[key];
+      if (value === null || value === undefined) {
+        delete nextPolicy[key];
+      }
     }
     const updated = await replaceAgentPlugins(agentId, {
       ...current.plugins,
@@ -385,7 +391,9 @@ function sanitizedPluginProofWorkerEvents(events, revisionId) {
 }
 
 function codexToolTurnPrefix(identity, suffix) {
-  if (typeof identity !== "string" || !identity.endsWith(suffix)) return undefined;
+  if (typeof identity !== "string" || !identity.endsWith(suffix)) {
+    return undefined;
+  }
   const withoutSuffix = identity.slice(0, -suffix.length);
   const marker = ":tool:";
   const index = withoutSuffix.lastIndexOf(marker);
@@ -420,7 +428,9 @@ function httpErrorSummary(status, body, secrets) {
   try {
     const parsed = JSON.parse(body);
     const error = parsed?.error ?? parsed;
-    if (typeof error?.code === "string") summary.code = error.code;
+    if (typeof error?.code === "string") {
+      summary.code = error.code;
+    }
     if (typeof error?.message === "string") {
       summary.message = assertDiagnosticText(error.message, secrets);
     }
@@ -433,7 +443,9 @@ function httpErrorSummary(status, body, secrets) {
 function assertDiagnosticText(value, secrets) {
   let text = String(value).slice(0, 240);
   for (const secret of secrets) {
-    if (secret) text = text.replaceAll(secret, "[REDACTED]");
+    if (secret) {
+      text = text.replaceAll(secret, "[REDACTED]");
+    }
   }
   text = text.replaceAll(/https?:\/\/[^\s"']*\/__openclaw__\/cap\/[^\s"']+/g, "[CAPABILITY_URL]");
   text = text.replaceAll(/\/__openclaw__\/cap\/[A-Za-z0-9._~-]+/g, "[CAPABILITY_URL]");
@@ -728,14 +740,23 @@ export async function createPluginDriverRealFixture(
         failures.push(error);
       }
     }
-    for (const forwarder of forwarders.splice(0)) forwarder.stop();
-    if (worker !== undefined) await cleanup(() => worker.stop());
-    if (app !== undefined) await cleanup(() => app.close());
-    if (pool !== undefined) await cleanup(() => pool.end());
-    if (tenantNamespace !== undefined)
+    for (const forwarder of forwarders.splice(0)) {
+      forwarder.stop();
+    }
+    if (worker !== undefined) {
+      await cleanup(() => worker.stop());
+    }
+    if (app !== undefined) {
+      await cleanup(() => app.close());
+    }
+    if (pool !== undefined) {
+      await cleanup(() => pool.end());
+    }
+    if (tenantNamespace !== undefined) {
       await cleanup(() =>
         kubectl("delete", "namespace", tenantNamespace, "--ignore-not-found=true"),
       );
+    }
     for (const role of ["api", "worker"]) {
       await cleanup(() =>
         kubectl(
@@ -760,8 +781,9 @@ export async function createPluginDriverRealFixture(
       kubectl("delete", "namespace", platformNamespace, "--ignore-not-found=true"),
     );
     await cleanup(() => rm(directory, { recursive: true, force: true }));
-    if (failures.length !== 0)
+    if (failures.length !== 0) {
       throw new AggregateError(failures, "Plugin real proof cleanup failed.");
+    }
   });
 
   await kubectl("create", "namespace", platformNamespace);
@@ -949,7 +971,9 @@ export async function createPluginDriverRealFixture(
     try {
       return await resource("namespace", tenantNamespace);
     } catch (error) {
-      if (/NotFound|not found/i.test(error.stderr ?? error.message)) return undefined;
+      if (/NotFound|not found/i.test(error.stderr ?? error.message)) {
+        return undefined;
+      }
       throw error;
     }
   });

@@ -48,7 +48,10 @@ export function createCredentialAcquisition(
             if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
               packet = parsed as Record<string, unknown>;
             }
-          } catch {}
+          } catch {
+            // Preserve status-based failure handling; the response finally wipes bytes,
+            // while the lifecycle retains cleanup ownership for uncertain issuance.
+          }
           const token = packet?.token;
           observedWallMs = clock.wallNow();
           expiry = typeof packet?.expires_at === "string" ? Date.parse(packet.expires_at) : NaN;
@@ -73,16 +76,8 @@ export function createCredentialAcquisition(
             }
           }
         };
-        const response = await exchange(
-          {
-            method: "POST",
-            path: `/app/installations/${config.installationId}/access_tokens`,
-            authorization: jwt,
-            body: JSON.stringify({
-              repository_ids: [Number(config.repositoryId)],
-              permissions,
-            }),
-          },
+        const response = await exchange.issue(
+          jwt,
           attempt,
           () => {
             dispatched = true;

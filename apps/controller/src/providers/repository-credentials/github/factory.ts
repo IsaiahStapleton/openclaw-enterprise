@@ -6,19 +6,10 @@ import { createGitHubDriver, sameAuthority } from "./driver.ts";
 import { snapshotBinding } from "../../../drivers/repository-credentials/sessions.ts";
 import { validateGitHubConfiguration } from "./config.ts";
 import { createProviderTransport } from "./provider-transport.ts";
+import { permissionsForProfile } from "./profiles.ts";
 import { createRoutePolicy } from "./routes.ts";
 import type { GitHubDriverFactory, GitHubFactoryOptions, GitHubProfile } from "./types.ts";
 
-const profiles = Object.freeze({
-  "git-read": Object.freeze({ metadata: "read", contents: "read" }),
-  "git-write": Object.freeze({ metadata: "read", contents: "write" }),
-  "git-full": Object.freeze({
-    metadata: "read",
-    contents: "write",
-    pull_requests: "write",
-    issues: "write",
-  }),
-});
 function endpoint(value: string): string {
   const url = new URL(value);
   if (url.protocol !== "https:" || url.origin !== value || url.username || url.password) {
@@ -34,13 +25,15 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
       profile: options.binding.profile,
       identity: snapshotBinding(options.binding.identity),
     });
-  if (
-    selectedBinding &&
-    (!Object.hasOwn(profiles, selectedBinding.profile) ||
+  if (selectedBinding) {
+    permissionsForProfile(selectedBinding.profile);
+    if (
       selectedBinding.identity.providerInstanceId !== config.providerInstanceId ||
-      selectedBinding.identity.repositoryId !== config.repositoryId)
-  )
-    throw new Error("invalid-binding");
+      selectedBinding.identity.repositoryId !== config.repositoryId
+    ) {
+      throw new Error("invalid-binding");
+    }
+  }
   const apiOrigin = endpoint(options.trustedEndpoints?.apiOrigin ?? "https://api.github.com");
   const gitOrigin = endpoint(options.trustedEndpoints?.gitOrigin ?? "https://github.com");
   const gatewayOrigin = endpoint(options.gatewayOrigin);
@@ -48,8 +41,9 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
     if (profile !== "git-read" && profile !== "git-write" && profile !== "git-full") {
       throw new Error("unsupported-profile");
     }
-    if (selectedBinding && profile !== selectedBinding.profile)
+    if (selectedBinding && profile !== selectedBinding.profile) {
       throw new Error("unsupported-profile");
+    }
     return Object.freeze({
       binding:
         selectedBinding?.identity ??
@@ -134,9 +128,13 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
         throw new Error("invalid-binding");
       }
       const binding = grant(profile).binding;
-      const permissions = profiles[profile];
+      const permissions = permissionsForProfile(profile);
       const routes = policy(profile);
-      const exchange = createProviderTransport(apiOrigin, options.trustedEndpoints?.ca, clock);
+      const exchange = createProviderTransport(apiOrigin, options.trustedEndpoints?.ca, clock, {
+        installationId: config.installationId,
+        repositoryId: config.repositoryId,
+        profile,
+      });
       return createGitHubDriver({
         authority,
         binding,

@@ -28,7 +28,9 @@ export async function createGitHubServiceFactory(
     githubProviderModule("material"),
   ]);
   const key = borrowedKey ?? createGitHubKeyOwner({ privateKey, appId: fixtureAppId, clock });
-  if (!borrowedKey) resources.after(() => key.close());
+  if (!borrowedKey) {
+    resources.after(() => key.close());
+  }
   return createGitHubDriverFactory({
     configuration: githubConfigurationData({
       providerInstanceId: "github-fixture",

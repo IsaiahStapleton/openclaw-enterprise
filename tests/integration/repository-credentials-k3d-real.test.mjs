@@ -147,7 +147,9 @@ test(
       ),
     );
     assert.deepEqual(Object.keys(app).sort(), ["appId", "githubInstallationId", "repositoryId"]);
-    for (const value of Object.values(app)) assert.match(value, /^[1-9][0-9]{0,15}$/);
+    for (const value of Object.values(app)) {
+      assert.match(value, /^[1-9][0-9]{0,15}$/);
+    }
     const appKey = await readProtectedInput(
       process.env.OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE,
       "App key input",
@@ -176,15 +178,15 @@ test(
     const content = `Installed repository credential proof ${f.suffix}\n`;
     const marker = `<!-- oce-credential-proof:${f.suffix} -->`;
     assert.equal((await observe("GET", `git/ref/heads/${branch}`, undefined, 404)).status, 404);
-    let agent,
-      workerPod,
-      revision,
-      gateway,
-      attempt,
-      taskStarted = false,
-      agentStopped = false,
-      workFailure,
-      remoteEvidence;
+    let agent;
+    let workerPod;
+    let revision;
+    let gateway;
+    let attempt;
+    let taskStarted = false;
+    let agentStopped = false;
+    let workFailure;
+    let remoteEvidence;
     const cleanupFailures = [];
     try {
       const providerId = "repository-proof";
@@ -465,7 +467,9 @@ test(
         const permanent = publicUpstream.some(
           ({ cause }) => !["none", "dns", "timeout", "connection"].includes(cause),
         );
-        if (!transient || permanent || Date.now() + 5000 >= publicPreflightDeadline) break;
+        if (!transient || permanent || Date.now() + 5000 >= publicPreflightDeadline) {
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 5000));
       } while (Date.now() < publicPreflightDeadline);
       await f.record("Captured public upstream preflight; repository acceptance pending", {
@@ -750,7 +754,7 @@ ${commands}`;
         assert.equal(response.status, 200);
       } catch (error) {
         taskFailure = error;
-        if (taskTransport.outcome === "unresolved")
+        if (taskTransport.outcome === "unresolved") {
           taskTransport = {
             outcome:
               error instanceof SyntaxError
@@ -759,6 +763,7 @@ ${commands}`;
                   ? "transport-timeout"
                   : "transport-or-submit-failed",
           };
+        }
       }
       await f.record("Captured task transport diagnostics; repository acceptance pending", {
         evidenceKind: "diagnostic-only",
@@ -907,20 +912,26 @@ ${commands}`;
         const result = trace.results.find(
           (result) => result.toolCallId === call.id && result.seq > call.seq,
         );
-        if (!result || result.isError) return undefined;
-        if (succeeded(result)) return result;
+        if (!result || result.isError) {
+          return undefined;
+        }
+        if (succeeded(result)) {
+          return result;
+        }
         // A running exec is proved only by a later successful poll of the exact
         // returned process session. Its output stays attached to that exec call.
-        if (result.status !== "running" || typeof result.processSessionId !== "string")
+        if (result.status !== "running" || typeof result.processSessionId !== "string") {
           return undefined;
+        }
         for (const poll of trace.calls) {
           if (
             poll.name !== "process" ||
             poll.processAction !== "poll" ||
             poll.processSessionId !== result.processSessionId ||
             poll.seq <= result.seq
-          )
+          ) {
             continue;
+          }
           const completed = trace.results.find(
             (done) =>
               done.toolCallId === poll.id &&
@@ -928,7 +939,9 @@ ${commands}`;
               done.seq > poll.seq &&
               succeeded(done),
           );
-          if (completed) return completed;
+          if (completed) {
+            return completed;
+          }
         }
         return undefined;
       };
@@ -936,11 +949,12 @@ ${commands}`;
         .filter((call) => call.name === "exec")
         .map((call) => ({ ...call, completion: completionFor(call) }))
         .filter((call) => call.completion);
-      for (const { operation } of commandSpecs)
+      for (const { operation } of commandSpecs) {
         assert.ok(
           paired.some((call) => call.operations.includes(operation)),
           `successful standalone tool trace must account for ${operation}`,
         );
+      }
       assert.ok(
         paired.some(
           (call) =>
@@ -986,8 +1000,7 @@ ${commands}`;
         toolCallIds: paired.map((call) => call.id),
       });
     } catch (error) {
-      workFailure = error;
-      throw error;
+      workFailure = { error };
     } finally {
       if (agent) {
         try {
@@ -1046,8 +1059,9 @@ ${commands}`;
           cleanupFailures.push("Agent stop or session/material cleanup unresolved");
         }
       }
-      if (taskStarted && !agentStopped)
+      if (taskStarted && !agentStopped) {
         cleanupFailures.push("remote cleanup requires confirmed stopped Agent");
+      }
       if (taskStarted && agentStopped) {
         try {
           const { data: matches } = await observe(
@@ -1069,12 +1083,13 @@ ${commands}`;
             );
             const { data: ownedFile } = await observe("GET", `contents/${file}?ref=${sha}`);
             assert.equal(Buffer.from(ownedFile.content, "base64").toString("utf8"), content);
-            if (remoteEvidence)
+            if (remoteEvidence) {
               assert.equal(
                 sha,
                 remoteEvidence.commitSha,
                 "changed branch cannot be cleaned automatically",
               );
+            }
             assert.ok(matches.length <= 1, "ambiguous PR ownership");
             for (const pull of matches) {
               assert.equal(pull.body, marker);
@@ -1085,27 +1100,34 @@ ${commands}`;
               const { data: current } = await observe("GET", `pulls/${pull.number}`);
               assert.equal(current.head.sha, sha);
               assert.equal(current.body, marker);
-              if (current.state === "open")
+              if (current.state === "open") {
                 await observe("PATCH", `pulls/${pull.number}`, { state: "closed" });
+              }
               assert.equal((await observe("GET", `pulls/${pull.number}`)).data.state, "closed");
             }
             assert.equal((await observe("GET", `git/ref/heads/${branch}`)).data.object.sha, sha);
             await observe("DELETE", `git/refs/heads/${branch}`, undefined, 204);
             await observe("GET", `git/ref/heads/${branch}`, undefined, 404);
-          } else assert.equal(matches.length, 0, "PR remains after branch disappeared");
+          } else {
+            assert.equal(matches.length, 0, "PR remains after branch disappeared");
+          }
           await f.record("Run-owned remote PR and unchanged branch reconciled and removed");
         } catch {
           cleanupFailures.push("remote ownership or cleanup unresolved");
         }
       }
-      if (cleanupFailures.length)
-        throw new AggregateError(
-          [
-            ...(workFailure ? [workFailure] : []),
-            ...cleanupFailures.map((message) => new Error(message)),
-          ],
-          "cleanup must finish before installed acceptance can pass",
-        );
+    }
+    if (cleanupFailures.length) {
+      throw new AggregateError(
+        [
+          ...(workFailure ? [workFailure.error] : []),
+          ...cleanupFailures.map((message) => new Error(message)),
+        ],
+        "cleanup must finish before installed acceptance can pass",
+      );
+    }
+    if (workFailure) {
+      throw workFailure.error;
     }
   },
 );

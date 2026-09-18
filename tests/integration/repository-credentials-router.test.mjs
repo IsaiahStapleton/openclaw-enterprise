@@ -70,8 +70,11 @@ test(
   "ordinary Git and gh route independent admitted repositories through their actual targets",
   { timeout: 120000 },
   async (t) => {
-    if (await runInFixtureContainer(t, "tests/integration/repository-credentials-router.test.mjs"))
+    if (
+      await runInFixtureContainer(t, "tests/integration/repository-credentials-router.test.mjs")
+    ) {
       return;
+    }
     const fixture = await startRegistryCredentialServiceFixture(t);
     const manifest = await installMaterial(t, fixture.repositories);
     const work = await temporaryDirectory(t, "repository-router-work-");
@@ -91,7 +94,9 @@ test(
         ...options,
         allowFailure: true,
       });
-      if (!options.allowFailure) assert.equal(result.code, 0, result.stderr);
+      if (!options.allowFailure) {
+        assert.equal(result.code, 0, result.stderr);
+      }
       return result;
     };
     const git = (args, options) => invoke("git", args, options);

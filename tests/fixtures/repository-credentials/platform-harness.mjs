@@ -7,7 +7,9 @@ const args = process.argv.slice(2);
 if (args[0] === "models" && args[1] === "status") {
   const { readFile } = await import("node:fs/promises");
   const config = JSON.parse(await readFile(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
-  if (process.env.OPENAI_API_KEY !== "repository-platform-fixture-key") process.exit(1);
+  if (process.env.OPENAI_API_KEY !== "repository-platform-fixture-key") {
+    process.exit(1);
+  }
   process.stdout.write(
     JSON.stringify({
       auth: {
@@ -26,7 +28,9 @@ if (args[0] === "models" && args[1] === "status") {
   );
 } else if (args[0] === "gateway") {
   const port = Number(args[args.indexOf("--port") + 1]);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) process.exit(1);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    process.exit(1);
+  }
   const server = createServer((request, response) => {
     response.writeHead(request.url === "/readyz" ? 200 : 404, {
       "content-type": "application/json",

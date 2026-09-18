@@ -20,6 +20,7 @@ export function createAgentHandler(
 ): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
   const { config, service, factory, clock } = options;
   const limits = config.limits;
+  const trustedUpstreamOrigins = new Set(options.trustedUpstreamOrigins);
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     const receivedMonoMs = clock.monotonicNow();
     const parsed = inspectRequestHead(request, {
@@ -84,7 +85,7 @@ export function createAgentHandler(
         request,
         response,
         head: parsed.head,
-        trustedUpstreamOrigins: options.trustedUpstreamOrigins,
+        trustedUpstreamOrigins,
         headerBytes: limits.headerBytes,
         headerPairs: limits.headerPairs,
         clock,

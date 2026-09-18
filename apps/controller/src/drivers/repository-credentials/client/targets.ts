@@ -24,7 +24,12 @@ function gitOutput(
   if (missingAllowed && result.status === 1 && !result.error) {
     return [];
   }
-  if (result.status !== 0 || result.error || /[\r\0]/.test(result.stdout)) {
+  if (
+    result.status !== 0 ||
+    result.error ||
+    result.stdout.includes("\r") ||
+    result.stdout.includes("\0")
+  ) {
     throw new Error("repository-target-inspection-failed");
   }
   const values = result.stdout.split("\n");
@@ -183,7 +188,11 @@ function matchesGitUrl(value: string, binding: RuntimeRepositoryBinding): boolea
   // Refuse those spellings before matching the exact emitted repository identity.
   if (
     !value.startsWith("https://") ||
-    /[\s\x00-\x1f\x7f\\%?#@]/.test(value) ||
+    /[\s\\%?#@]/.test(value) ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    }) ||
     value.includes("..")
   ) {
     return false;

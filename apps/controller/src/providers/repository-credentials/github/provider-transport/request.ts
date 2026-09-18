@@ -4,15 +4,17 @@ import type {
   AttemptContext,
   Clock,
 } from "../../../../drivers/repository-credentials/backend-contracts.ts";
-import type { ProviderRequest, ProviderResponse } from "../provider-transport.ts";
+import type { ProviderResponse } from "../provider-transport.ts";
+import type { ProviderScope } from "./request-options.ts";
 import { providerRequestOptions } from "./request-options.ts";
 import { createProviderResponseBody } from "./response-body.ts";
 
 interface ProviderRequestDependencies {
-  readonly origin: string;
+  readonly endpoint: ProviderScope;
   readonly ca: Uint8Array | undefined;
   readonly clock: Clock;
-  readonly input: ProviderRequest;
+  readonly operation: "issue" | "revoke";
+  readonly authorization: string;
   readonly attempt: AttemptContext;
   readonly onDispatch: () => void;
   readonly assertMaterialCurrent: () => void;
@@ -20,10 +22,11 @@ interface ProviderRequestDependencies {
 }
 
 export function sendProviderRequest({
-  origin,
+  endpoint,
   ca,
   clock,
-  input,
+  operation,
+  authorization,
   attempt,
   onDispatch,
   assertMaterialCurrent,
@@ -94,6 +97,7 @@ export function sendProviderRequest({
     };
 
     try {
+      const prepared = providerRequestOptions(endpoint, operation, authorization, ca);
       attempt.assertAdmitted();
       assertMaterialCurrent();
       const remaining = attempt.deadlineMonoMs - clock.monotonicNow();
@@ -103,7 +107,7 @@ export function sendProviderRequest({
       // No await separates this admission check, dispatch latch and socket creation.
       onDispatch();
       attempt.observeDispatch();
-      request = httpsRequest(new URL(input.path, origin), providerRequestOptions(input, ca));
+      request = httpsRequest(prepared.options);
       request.on("error", fail);
       request.on("close", settle);
       request.on("response", receiveResponse);
@@ -113,7 +117,7 @@ export function sendProviderRequest({
         fail();
         return;
       }
-      request.end(input.body);
+      request.end(prepared.body);
     } catch {
       fail();
     }

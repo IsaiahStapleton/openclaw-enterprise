@@ -288,7 +288,9 @@ for (const action of ["retire", "finalize"]) {
       async settle(original) {
         assert.ok(originalOutcomes.has(original));
         // Settlement must not restart the lifetime observed at capture.
-        if (original.kind === "acquired") await clock.advance(500, 0);
+        if (original.kind === "acquired") {
+          await clock.advance(500, 0);
+        }
       },
     };
     lifecycle = createLifecycle({
@@ -345,7 +347,9 @@ for (const action of ["retire", "finalize"]) {
 async function eventually(check) {
   const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
-    if (check()) return;
+    if (check()) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("expected lifecycle state was not observed");

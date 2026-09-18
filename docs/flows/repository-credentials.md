@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-18"
-last_updated_session: "authoring-run/0771bac1-5a06-46c9-89bd-9b46b20cd3d4"
+last_updated_session: "authoring-run/99b8e474-5c94-4558-bce6-e7d6032f832c"
 ---
 
 # Repository credential service flow
@@ -22,15 +22,14 @@ page owns the shared in-process credential engine used by both callers.
 
 ## Entry Points
 
-- `apps/controller/src/repository-credentials.ts:main` loads trusted configuration and composes the service and listeners.
+- `apps/controller/src/repository-credentials.ts:main` delegates protected-path startup to `startCredentialService` in controller composition.
 - `apps/controller/src/drivers/repository-credentials/client/operator.ts:callControl` carries operator admission/status/close requests over the private Unix socket.
 - `apps/controller/src/drivers/repository-credentials/server.ts:startListeners` accepts HTTPS client traffic after protected startup succeeds.
 
-Standalone configuration selects one repository; registry configuration selects
-one App installation with multiple approved repositories and Namespace/profile
-policies. Each session remains bound to exactly one repository. The operator
-owns the control socket directory and protected files. Clients receive only
-private session files and public connection/trust configuration.
+Standalone configuration selects one repository; the registry supports several
+approved repositories under one App installation. Each session binds exactly one
+repository. The operator owns the protected files and control socket; clients
+receive session files and public connection/trust configuration.
 
 ## Flow
 
@@ -59,8 +58,10 @@ graph TD
 ### 1. Load protected startup inputs
 
 `apps/controller/src/composition/repository-credentials/check-config.ts:checkConfiguration` and
-`apps/controller/src/repository-credentials.ts:main` share the protected configuration
+`apps/controller/src/composition/repository-credentials/service.ts:startCredentialService` share the protected configuration
 loader at `apps/controller/src/composition/repository-credentials/config.ts:loadConfiguration`.
+The [configuration flow](repository-credential-configuration.md) traces its
+root-to-leaf protected-path validation and Kubernetes projection snapshots.
 `apps/controller/src/drivers/repository-credentials/configuration.ts:validateServiceConfig`
 validates gateway settings, session policy and service limits. The standalone
 check emits a safe summary without importing the session or listener owners.
@@ -76,15 +77,16 @@ installation tokens. Shared grant, client configuration and session DTOs live in
 type-only exports. The private backend protocol and nominal custody handles live
 in `apps/controller/src/drivers/repository-credentials/backend-contracts.ts`.
 Service, control and transport collaborators remain private to the credential
-engine. The public platform Driver is the thin session-control and local policy
-owner traced in the [Agent flow](agent-repository-credentials.md).
+engine. The runtime entrypoint returns a frozen forwarding object with only
+`open`, `status`, `close` and `shutdown`; listeners retain the original exchange
+owner. The deployed artifact contains runnable JavaScript, not a new client SDK.
+The platform Driver is the session-control and local policy owner traced in the
+[Agent flow](agent-repository-credentials.md).
 
 Registry startup selects
 `apps/controller/src/providers/repository-credentials/github/registry-factory.ts:createGitHubRegistryDriverFactory`
-from the same canonical authority loaded by API and worker. Kubernetes startup
-first uses `apps/controller/src/composition/repository-credentials/projected-inputs.ts:prepareProjectedInputs`
-to snapshot projected inputs into protected private files. The App key and TLS
-private key remain service-only. `startListeners` can reclaim only an owned,
+from the same canonical authority loaded by API and worker. App and TLS private
+keys remain service-only. `startListeners` can reclaim only an owned,
 private, refused stale Unix socket after checking that its identity is unchanged;
 a live or ambiguously owned socket fails startup.
 
@@ -161,8 +163,9 @@ gateway API host. Absolute API destinations and unqualified commands refuse.
 
 ### 4. Reserve, acquire and dispatch
 
-`apps/controller/src/drivers/repository-credentials/server.ts:startListeners` owns listeners and
-sockets. HTTPS bounds the TLS handshake separately and arms the `headerMs` timer
+`apps/controller/src/drivers/repository-credentials/server.ts:startListeners` bounds
+each listener's sockets independently, preserving private control admission when
+the public listener is full. HTTPS bounds the TLS handshake separately and arms the `headerMs` timer
 on the `TLSSocket` at `secureConnection`; the Unix control listener retains its
 raw-socket header timer. After an authenticated request reserves exchange
 capacity, `apps/controller/src/drivers/repository-credentials/transport/agent.ts:createAgentHandler`
@@ -176,15 +179,12 @@ requests reserve common exchange capacity before body forwarding. The GitHub
 driver plans admitted routes through
 `apps/controller/src/providers/repository-credentials/github/routes.ts:createRoutePolicy`, using
 `apps/controller/src/providers/repository-credentials/github/routes/classification.ts:classifyRoute`
-for target, method, profile and query classification. This provider-owned decision admits upload-pack discovery and execution for all
-three profiles, but rejects receive-pack discovery and execution for `git-read`.
-It admits REST and GraphQL only for `git-full`: selected repository metadata,
-PRs, issues and issue comments, plus `GET /meta` and `POST /graphql`, subject to
-the existing method, query, framing and media-type checks. Both Git-only profiles
-reject API reads as well as writes before upstream dispatch. GraphQL bodies are
-forwarded under the exact installation-token grant; this route check does not
-perform per-field GraphQL authorization. Renaming the API-capable profile does
-not broaden the route or request schema.
+for target, method, profile and query classification. All three profiles admit
+upload-pack; `git-read` rejects receive-pack. Both Git-only profiles deny API
+reads and writes before upstream dispatch. `git-full` admits the selected REST
+and GraphQL routes defined in the [reference](../reference/repository-credentials.md#profiles),
+subject to method, query, framing and media-type checks. GraphQL uses the exact
+installation-token grant without per-field authorization by this route check.
 
 `apps/controller/src/drivers/repository-credentials/service.ts:createCredentialService` reserves the
 exchange and delegates execution to
@@ -214,11 +214,20 @@ and session-bound plans, credentials and original outcomes through
 Its bounded credential transport,
 `apps/controller/src/providers/repository-credentials/github/provider-transport.ts:createProviderTransport`,
 uses `apps/controller/src/providers/repository-credentials/github/provider-transport/request.ts:sendProviderRequest`
-to dispatch and join the actual request close event. An original
+to dispatch and join the actual request close event. Its opaque scope captures
+the installation, repository and exact profile once. The adapter can issue that
+scope or revoke a token; it cannot supply arbitrary request targets, bodies or
+headers to the privileged transport. An original
 dispatch gate rechecks admission synchronously after authentication preparation,
 registers cancellation and opens the exchange without an intervening await.
-The sender independently checks the fixed upstream origin. Credential bytes stay
-inside private adapter/sender callbacks.
+The handler and sender independently capture their allowed upstream origins.
+`apps/controller/src/drivers/repository-credentials/transport/request-headers.ts:createUpstreamHeaders`
+validates adapter fields, rejects case-insensitive duplicates and reconstructs
+bounded transport headers before dispatch. Credential bytes stay
+inside private adapter/sender callbacks. The sender's final-response-header wait
+starts after the bounded input pipeline finishes, unless headers have already
+arrived. Connection, upload, stall and total deadlines remain active in their
+respective phases.
 
 ### 5. Deliver an outcome and release ownership
 
@@ -306,6 +315,8 @@ A structural flow check does not establish any of those runtime results.
 
 ## Changelog
 
+- 2026-09-18 09:45: Integrate protected startup, frozen runtime controls, fixed provider scope and bounded listener/upload behavior with the accompanying controller-owned Agent path. (authoring-run/99b8e474-5c94-4558-bce6-e7d6032f832c - 6fd1516de000bde46d4cd43e0d21ec3f0167d65e)
+
 - 2026-09-18 06:22: Trace the accompanying HTTPS header-timer handoff to admitted exchange ownership while preserving handshake and control limits. (authoring-run/0771bac1-5a06-46c9-89bd-9b46b20cd3d4 - baada1ad2f288de44ba54ee4cd1e111fcb6bbba8)
 
 - 2026-09-18 05:50: Document accompanying bounded upstream error delivery while preserving cancellation and exchange settlement. (authoring-run/d809d9cd-cac1-4449-80a0-6e07beaaed49 - 6d886fc6017180c215ee61a1247df36a494fa97a)
@@ -313,6 +324,14 @@ A structural flow check does not establish any of those runtime results.
 - 2026-09-18 03:04: Describe accompanying bound registry admission, recovery-only fencing and Kubernetes startup; link the platform-owned Agent lifecycle. (authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d - 8500b2da103063b4503b62e5529f3910513e84a9)
 
 - 2026-09-18 02:21: Update source ownership and emitted delivery pointers for the accompanying controller/contracts refactor; preserve the separate credential process and current lifecycle. (authoring-run/491fae6a-a220-4c92-880e-f438a7bb6480 - cce878092910f39770aa27baa64c6d710f9651f8)
+
+- 2026-09-18 03:38: Capture upstream origin authority and construct canonical bounded private request headers before dispatch. (authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115 - 7c26fe8660e0af5d223baa2da83689974df36ebe)
+
+- 2026-09-18 03:33: Start upstream final-response-header deadlines after completed upload and preserve early-response handling. (authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115 - 7f2fd5988dfce4a485db48d33f0480b3f9485b86)
+
+- 2026-09-18 03:29: Preserve private control admission under public socket saturation. (authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115 - 0d34c2159d6a8fbec213cacf6ba42ca66aa9170a)
+
+- 2026-09-18 03:28: Document accompanying protected-path package startup and runtime session-control facade. (authoring-run/3e7c0a60-2298-47e1-8656-9d63bbb7b5ed - 0d34c2159d6a8fbec213cacf6ba42ca66aa9170a)
 
 - 2026-09-18 01:59: Document accompanying admission reconciliation, failed-construction drainage and separate use/cleanup deadlines. (01a0b098-e407-7d42-bc53-9bce979ac912 - 87e5c418d7a6c45688ce3be87c204660b431c703)
 

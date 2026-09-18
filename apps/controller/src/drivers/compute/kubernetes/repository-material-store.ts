@@ -154,6 +154,7 @@ export class RepositoryMaterialStore {
       if (numericErrorStatus(error) === 404) {
         return undefined;
       }
+      // eslint-disable-next-line preserve-caught-error -- Kubernetes API errors may carry Secret bodies.
       throw new Error("Repository credential material could not be read.");
     }
   }
@@ -228,6 +229,7 @@ export class RepositoryMaterialStore {
         );
       } catch (error) {
         if (numericErrorStatus(error) !== 409) {
+          // eslint-disable-next-line preserve-caught-error -- Kubernetes API errors may carry Secret bodies.
           throw new Error("Repository credential material could not be created.");
         }
         observed = await this.read(binding.secretName);
@@ -287,6 +289,7 @@ export class RepositoryMaterialStore {
         );
       } catch (error) {
         if (numericErrorStatus(error) !== 404) {
+          // eslint-disable-next-line preserve-caught-error -- Kubernetes API errors may carry Secret bodies.
           throw new Error("Repository credential material could not be removed.");
         }
       }

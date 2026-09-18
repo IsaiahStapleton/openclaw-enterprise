@@ -2,10 +2,11 @@ import { request as httpsRequest } from "node:https";
 import type { ClientRequest, IncomingMessage, ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
-import type { Clock, RequestHead } from "../backend-contracts.ts";
+import type { Clock, HeaderFields, RequestHead } from "../backend-contracts.ts";
 import type { ExchangeSender } from "../internal-contracts.ts";
 import { ByteLimit, watchdog } from "./streams.ts";
 import { responseHeaders, safeResponseHeaders } from "./response-headers.ts";
+import { createUpstreamHeaders } from "./request-headers.ts";
 
 export interface UpstreamSenderOptions {
   readonly request: IncomingMessage;
@@ -20,6 +21,7 @@ export interface UpstreamSenderOptions {
 
 /** One sender owns exactly one exchange; it never retries an upstream request. */
 export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSender {
+  const trustedUpstreamOrigins = new Set(options.trustedUpstreamOrigins);
   let used = false;
   return async (privateRequest, context) => {
     if (used) {
@@ -35,10 +37,13 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
         origin.origin !== plan.origin ||
         origin.username ||
         origin.password ||
-        !options.trustedUpstreamOrigins.has(plan.origin) ||
+        !trustedUpstreamOrigins.has(plan.origin) ||
         !plan.target.startsWith("/") ||
         plan.target.startsWith("//") ||
-        /[\x00-\x20\x7f#]/.test(plan.target)
+        [...plan.target].some((character) => {
+          const code = character.charCodeAt(0);
+          return code <= 0x20 || code === 0x7f || character === "#";
+        })
       ) {
         throw new Error();
       }
@@ -48,37 +53,23 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
     if ((options.head.framing.bytes ?? 0) > plan.limits.inputWireBytes) {
       return { kind: "not-dispatched", code: "limit-exceeded" };
     }
-    const headers: Record<string, string> = { ...privateRequest.headers };
-    for (const name of Object.keys(headers)) {
-      const lower = name.toLowerCase();
-      if (
-        [
-          "host",
-          "connection",
-          "content-length",
-          "content-encoding",
-          "transfer-encoding",
-          "expect",
-          "cookie",
-          "proxy-authorization",
-          "trailer",
-          "upgrade",
-        ].includes(lower)
-      ) {
-        delete headers[name];
-      }
-    }
-    headers.host = origin.host;
-    headers.connection = "close";
-    headers["accept-encoding"] = "identity";
-    if (options.head.framing.kind === "length" && options.head.contentEncoding === "identity") {
-      headers["content-length"] = String(options.head.framing.bytes);
+    let headers: HeaderFields;
+    try {
+      headers = createUpstreamHeaders(privateRequest.headers, {
+        authority: origin.host,
+        head: options.head,
+        maximumBytes: options.headerBytes ?? 32768,
+        maximumPairs: options.headerPairs ?? 64,
+      });
+    } catch {
+      return { kind: "not-dispatched", code: "invalid-upstream-headers" };
     }
     let outbound: ClientRequest | undefined;
     let upstream: IncomingMessage | undefined;
     let dispatched = false;
     let failed = false;
     let inputCompleted = false;
+    let receivedHeaders = false;
     const pending: Promise<unknown>[] = [];
     const stopUpstream = () => {
       failed = true;
@@ -130,7 +121,11 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
                   : { ca: Buffer.from(options.upstreamCa) }),
                 rejectUnauthorized: true,
               },
-              resolve,
+              (response) => {
+                receivedHeaders = true;
+                stopHeaders?.();
+                resolve(response);
+              },
             );
             req.once("error", () => reject(new Error("upstream-failed")));
             req.once("close", () => resolveSocket());
@@ -152,7 +147,6 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
         cancel,
       );
       stopConnect = options.clock.schedule(plan.limits.connectMs, cancel);
-      stopHeaders = options.clock.schedule(plan.limits.firstHeaderMs, cancel);
       stopInput = options.clock.schedule(plan.limits.inputMs, cancel);
       if (!outbound) {
         throw new Error("dispatch-denied");
@@ -168,6 +162,10 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
           stopInput?.();
           inputStall.close();
           inputCompleted = true;
+          // An upstream may need the complete upload before it can respond.
+          if (!failed && !receivedHeaders) {
+            stopHeaders = options.clock.schedule(plan.limits.firstHeaderMs, cancel);
+          }
         },
         () => {
           cancel();
@@ -177,7 +175,6 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
       pending.push(inputDone);
       void inputDone.catch(() => {});
       upstream = await responseReady;
-      stopHeaders?.();
       stopConnect?.();
       responseStall = watchdog(options.clock, plan.limits.stallMs, cancel);
       const status = upstream.statusCode ?? 502;

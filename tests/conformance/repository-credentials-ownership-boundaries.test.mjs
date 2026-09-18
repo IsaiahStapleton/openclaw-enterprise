@@ -97,7 +97,9 @@ test(
                 ...driver,
                 async acquire(...args) {
                   const outcome = await driver.acquire(...args);
-                  if (outcome.kind === "acquired") observed.credential = outcome.credential;
+                  if (outcome.kind === "acquired") {
+                    observed.credential = outcome.credential;
+                  }
                   return outcome;
                 },
               };
@@ -207,7 +209,9 @@ test(
     } finally {
       // Keep both controlled providers alive until their real token cleanup ends.
       for (const instance of instances) {
-        if (instance.opened) instance.service.close(instance.opened.session.sessionId);
+        if (instance.opened) {
+          instance.service.close(instance.opened.session.sessionId);
+        }
       }
       await eventually(() =>
         instances.every(
@@ -326,7 +330,9 @@ test(
     };
     t.after(async () => {
       settlementRelease.resolve();
-      for (const opened of [running, queued]) service.close(opened.session.sessionId);
+      for (const opened of [running, queued]) {
+        service.close(opened.session.sessionId);
+      }
       await eventually(() =>
         [running, queued].every(
           ({ session }) => service.status(session.sessionId).state === "DISPOSED",

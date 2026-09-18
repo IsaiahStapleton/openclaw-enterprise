@@ -15,8 +15,9 @@ test("emitted service and client artifacts qualify the same-session thirteen-hou
     await runInFixtureContainer(t, "tests/integration/repository-credentials-container.test.mjs", {
       packaged: true,
     })
-  )
+  ) {
     return;
+  }
   await qualifyLongSession(t);
 });
 

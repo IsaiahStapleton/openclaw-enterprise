@@ -20,33 +20,48 @@ function dependencies(source, path) {
     throw new Error(`Unsupported runtime import in ${path}`);
   };
   function add(node) {
-    if (node?.type !== "StringLiteral") unsupported();
+    if (node?.type !== "StringLiteral") {
+      unsupported();
+    }
     // Alternate module loaders could hide dependencies from this ESM closure.
-    if (node.value === "module" || node.value === "node:module") unsupported();
+    if (node.value === "module" || node.value === "node:module") {
+      unsupported();
+    }
     specifiers.add(node.value);
   }
   function visit(node) {
-    if (!node || typeof node !== "object") return;
+    if (!node || typeof node !== "object") {
+      return;
+    }
     if (
       node.type === "ImportDeclaration" ||
       node.type === "ExportNamedDeclaration" ||
       node.type === "ExportAllDeclaration"
     ) {
-      if (node.source) add(node.source);
+      if (node.source) {
+        add(node.source);
+      }
     } else if (node.type === "ImportExpression") {
-      if (node.options || node.phase) unsupported();
+      if (node.options || node.phase) {
+        unsupported();
+      }
       add(node.source);
     } else if (node.type === "CallExpression" || node.type === "OptionalCallExpression") {
       if (node.callee.type === "Import") {
-        if (node.arguments.length !== 1) unsupported();
+        if (node.arguments.length !== 1) {
+          unsupported();
+        }
         add(node.arguments[0]);
       } else if (node.callee.type === "Identifier" && node.callee.name === "require") {
         unsupported();
       }
     }
     for (const value of Object.values(node)) {
-      if (Array.isArray(value)) value.forEach(visit);
-      else if (value && typeof value === "object") visit(value);
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+      } else if (value && typeof value === "object") {
+        visit(value);
+      }
     }
   }
   visit(parsers.babel.parse(source));
@@ -59,7 +74,9 @@ async function closure(name, entrypoints) {
   const allowedRoot = name === "client" ? join(emittedRoot, clientPath) : emittedRoot;
   while (pending.length) {
     const path = pending.pop();
-    if (files.has(path)) continue;
+    if (files.has(path)) {
+      continue;
+    }
     if (
       !contained(allowedRoot, path) ||
       !path.endsWith(".js") ||
@@ -71,7 +88,9 @@ async function closure(name, entrypoints) {
     const source = await readFile(path, "utf8");
     files.set(path, source);
     for (const specifier of dependencies(source, relative(emittedRoot, path))) {
-      if (isBuiltin(specifier)) continue;
+      if (isBuiltin(specifier)) {
+        continue;
+      }
       if (
         !/^\.{1,2}\//.test(specifier) ||
         !specifier.endsWith(".js") ||

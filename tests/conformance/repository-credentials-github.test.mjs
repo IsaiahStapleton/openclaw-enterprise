@@ -7,6 +7,8 @@ import {
 import { validateServiceConfig } from "../../apps/controller/src/drivers/repository-credentials/configuration.ts";
 import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
+import { createProviderTransport } from "../../apps/repository-credentials/src/backends/github/provider-transport.ts";
+
 const config = validateServiceConfig({
   gateway: {
     publicOrigin: "https://credentials.example",
@@ -20,9 +22,9 @@ const config = validateServiceConfig({
   },
 });
 function owner(factory, clock, profile, id, captured = () => {}) {
-  const authority = { sessionId: id, ...factory.resolve(profile).binding },
-    attempts = new WeakSet(),
-    records = new Map();
+  const authority = { sessionId: id, ...factory.resolve(profile).binding };
+  const attempts = new WeakSet();
+  const records = new Map();
   let sequence = 0;
   const custody = {
     assertAttempt(attempt, action) {
@@ -63,6 +65,90 @@ function owner(factory, clock, profile, id, captured = () => {}) {
     },
   };
 }
+test("provider transport pins destination and exact issuance scope before receiving credentials", async (t) => {
+  const clock = createControlledClock();
+  const fixture = await startGitHubFixture(t, { clock });
+  const key = createGitHubKeyOwner({ privateKey: fixture.privateKey, appId: "12345", clock });
+  t.after(() => key.close());
+  const scope = { installationId: "41", repositoryId: "73", profile: "git-read" };
+  for (const origin of [
+    "http://localhost",
+    "https://user@example.test",
+    `${fixture.origin}/path`,
+  ]) {
+    assert.throws(() => createProviderTransport(origin, fixture.tls.ca, clock, scope));
+  }
+  for (const installationId of ["//other.example", "https://other.example", "41/../42", "41?x=1"]) {
+    assert.throws(() =>
+      createProviderTransport(fixture.origin, fixture.tls.ca, clock, { ...scope, installationId }),
+    );
+  }
+  for (const changes of [
+    { repositoryId: "9007199254740992" },
+    { repositoryId: 73 },
+    { installationId: 41 },
+    { profile: "__proto__" },
+  ]) {
+    assert.throws(() =>
+      createProviderTransport(fixture.origin, fixture.tls.ca, clock, { ...scope, ...changes }),
+    );
+  }
+  let installationReads = 0;
+  const transportScope = {
+    ...scope,
+    get installationId() {
+      return ++installationReads === 1 ? "41" : "42";
+    },
+  };
+  const transport = createProviderTransport(fixture.origin, fixture.tls.ca, clock, transportScope);
+  assert.equal(installationReads, 1);
+  assert.deepEqual(Object.keys(transport).sort(), ["issue", "revoke"]);
+  assert.ok(Object.isFrozen(transport));
+  // A later caller cannot replace the URL, request body, or admitted permission map.
+  transportScope.repositoryId = "74";
+  transportScope.profile = "git-full";
+  let dispatches = 0;
+  let observations = 0;
+  const attempt = (action) => ({
+    action,
+    deadlineMonoMs: clock.monotonicNow() + 30000,
+    signal: new AbortController().signal,
+    assertAdmitted() {},
+    observeDispatch() {},
+  });
+  const onDispatch = () => dispatches++;
+  const observeResponse = () => observations++;
+  for (const authorization of ["unsafe\r\nHeader: value", "", { path: "//other.example" }]) {
+    await assert.rejects(
+      transport.issue(authorization, attempt("acquire"), onDispatch, () => {}, observeResponse),
+      /provider-unavailable/,
+    );
+  }
+  assert.equal(dispatches, 0);
+  assert.equal(fixture.issuesOfTokens.length, 0);
+  const issued = await key.withJwt((jwt, assertCurrent) =>
+    transport.issue(jwt, attempt("acquire"), onDispatch, assertCurrent, observeResponse),
+  );
+  let token;
+  try {
+    assert.equal(issued.status, 201);
+    token = JSON.parse(issued.body.toString()).token;
+  } finally {
+    issued.body.fill(0);
+  }
+  assert.equal(observations, 1);
+  assert.deepEqual(fixture.issuesOfTokens[0].repositoryIds, [73]);
+  assert.deepEqual(fixture.issuesOfTokens[0].permissions, { metadata: "read", contents: "read" });
+  const revoked = await transport.revoke(token, attempt("retire"), onDispatch);
+  try {
+    assert.equal(revoked.status, 204);
+  } finally {
+    revoked.body.fill(0);
+  }
+  assert.equal(dispatches, 2);
+  assert.equal(fixture.tokenState()[0].revoked, true);
+  assert.deepEqual(fixture.errors, []);
+});
 test("real HTTPS issuance preserves exact profiles after hour 13 and revokes with owned token after key closure", async (t) => {
   const clock = createControlledClock();
   const providerClock = createControlledClock(clock.wallNow());
@@ -85,8 +171,8 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
     limits: config.limits,
     trustedEndpoints: { apiOrigin: fixture.origin, gitOrigin: fixture.origin, ca: fixture.tls.ca },
   });
-  const first = owner(factory, clock, "git-write", "one"),
-    second = owner(factory, clock, "git-full", "two");
+  const first = owner(factory, clock, "git-write", "one");
+  const second = owner(factory, clock, "git-full", "two");
   const originalAttempt = first.attempt("acquire");
   await assert.rejects(first.driver.acquire({ ...originalAttempt }, undefined, 360000));
   const a = await first.driver.acquire(originalAttempt, undefined, 360000);
@@ -118,14 +204,14 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
     /foreign-credential/,
   );
   const head = {
-      method: "GET",
-      rawTarget: "/repos/Fixture/Repository",
-      headers: {},
-      receivedMonoMs: clock.monotonicNow(),
-      contentEncoding: "identity",
-      framing: { kind: "none", bytes: undefined },
-    },
-    plan = second.driver.plan({ authority: second.authority, session: {}, head });
+    method: "GET",
+    rawTarget: "/repos/Fixture/Repository",
+    headers: {},
+    receivedMonoMs: clock.monotonicNow(),
+    contentEncoding: "identity",
+    framing: { kind: "none", bytes: undefined },
+  };
+  const plan = second.driver.plan({ authority: second.authority, session: {}, head });
   // GitHub returns canonical identity casing even when configuration retains capitals.
   const issuePlan = second.driver.plan({
     authority: second.authority,
@@ -145,13 +231,14 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
       body: canonicalIssue,
     },
   );
-  for (const prefix of ["repos/fixture/repository", "repositories/73"])
+  for (const prefix of ["repos/fixture/repository", "repositories/73"]) {
     assert.equal(
       issuePlan.responsePolicy.headers(200, {
         link: `<https://api.github.com/${prefix}/issues?after=Y3Vyc29yOnYyOjE%3D&page=2>; rel="next"`,
       }).link,
       '<https://credentials.example/repos/Fixture/Repository/issues?after=Y3Vyc29yOnYyOjE%3D&page=2>; rel="next"',
     );
+  }
   for (const target of [
     "repos/fixture/repository-other/issues/1",
     "repos/fixture-other/repository/issues/1",
@@ -159,11 +246,12 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
     "REPOS/fixture/repository/issues/1",
     "repos/fixture/repository/issues/1?after=cursor",
     "repositories/730/issues/1",
-  ])
+  ]) {
     assert.throws(
       () => issuePlan.responsePolicy.rewriteJson({ url: `https://api.github.com/${target}` }),
       /unsafe-upstream-url/,
     );
+  }
   await assert.rejects(
     second.driver.withAuthentication(c.credential, { ...plan }, async () => {}),
     /invalid-credential/,
@@ -185,8 +273,11 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
   await second.driver.settle(retired);
   assert.equal(fixture.tokenState().at(-1).revoked, true);
   assert.deepEqual(fixture.errors, []);
-  for (const owned of [first, second])
-    for (const record of owned.records.values()) record.bytes.fill(0);
+  for (const owned of [first, second]) {
+    for (const record of owned.records.values()) {
+      record.bytes.fill(0);
+    }
+  }
 });
 test("refused and cancelled observations remain independently captured and token-owned cleanup succeeds", async (t) => {
   const clock = createControlledClock();
@@ -195,22 +286,27 @@ test("refused and cancelled observations remain independently captured and token
   const fixture = await startGitHubFixture(t, {
     clock: providerClock,
     issueResponse({ status, body }) {
-      if (mode === "surplus")
+      if (mode === "surplus") {
         return {
           status,
           body: { ...body, permissions: { ...body.permissions, administration: "write" } },
         };
-      if (mode === "refused") return { status: 403, body };
-      if (mode === "excess-skew")
+      }
+      if (mode === "refused") {
+        return { status: 403, body };
+      }
+      if (mode === "excess-skew") {
         return {
           status,
           body: { ...body, expires_at: new Date(clock.wallNow() + 3660001).toISOString() },
         };
-      if (mode === "short")
+      }
+      if (mode === "short") {
         return {
           status,
           body: { ...body, expires_at: new Date(clock.wallNow() + 1000).toISOString() },
         };
+      }
       return { status, body };
     },
   });
@@ -245,7 +341,9 @@ test("refused and cancelled observations remain independently captured and token
     const abort = new AbortController();
     // Closure during the original material callback cannot remove the cleanup obligation.
     const owned = owner(factory, clock, "git-full", selected, () => {
-      if (selected === "cancel") abort.abort();
+      if (selected === "cancel") {
+        abort.abort();
+      }
     });
     const result = await owned.driver.acquire(
       owned.attempt("acquire", abort.signal),
@@ -287,7 +385,9 @@ test("refused and cancelled observations remain independently captured and token
     const cleanup = await owned.driver.retire(owned.attempt("retire"), credential);
     assert.equal(cleanup.kind, "revoked");
     await owned.driver.settle(cleanup);
-    for (const record of owned.records.values()) record.bytes.fill(0);
+    for (const record of owned.records.values()) {
+      record.bytes.fill(0);
+    }
   }
   assert.ok(fixture.tokenState().every((token) => token.revoked));
   assert.deepEqual(fixture.errors, []);

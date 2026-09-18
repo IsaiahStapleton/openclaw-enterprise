@@ -59,9 +59,9 @@ export async function installProductionHelmControlPlane({
   const waitPod = (name) =>
     kubectl("-n", system, "wait", "--for=condition=Ready", `pod/${name}`, "--timeout=180s");
 
-  const postgresPassword = secret(),
-    migrationPassword = secret(),
-    appPassword = secret();
+  const postgresPassword = secret();
+  const migrationPassword = secret();
+  const appPassword = secret();
   await createSecret("postgres-bootstrap", {
     password: postgresPassword,
     "init.sql": `CREATE ROLE occ_migrator LOGIN PASSWORD '${migrationPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nCREATE ROLE occ_app LOGIN PASSWORD '${appPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nGRANT CREATE ON DATABASE openclaw_enterprise TO occ_migrator;\nCREATE SCHEMA occ AUTHORIZATION occ_migrator;\nCREATE SCHEMA drizzle AUTHORIZATION occ_migrator;\nREVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
@@ -184,7 +184,9 @@ export async function installProductionHelmControlPlane({
     api: { clients: apiClients },
     resources,
   };
-  if (repositoryCredentials !== undefined) values.repositoryCredentials = repositoryCredentials;
+  if (repositoryCredentials !== undefined) {
+    values.repositoryCredentials = repositoryCredentials;
+  }
   await writeFile(join(directory, "values.json"), JSON.stringify(values), { mode: 0o600 });
   await run(
     "helm",

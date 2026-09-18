@@ -61,12 +61,19 @@ function object(value: unknown, fields: readonly string[]): Record<string, unkno
   return value as Record<string, unknown>;
 }
 
+function hasControlCharacters(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f;
+  });
+}
+
 function identity(value: unknown): string {
   if (
     typeof value !== "string" ||
     Buffer.byteLength(value) < 1 ||
     Buffer.byteLength(value) > 512 ||
-    /[\u0000-\u001f\u007f]/.test(value)
+    hasControlCharacters(value)
   ) {
     return unavailable();
   }
@@ -208,7 +215,7 @@ export class UnixRepositoryCredentialControlClient implements RepositoryCredenti
       !isAbsolute(options.controlSocket) ||
       resolve(options.controlSocket) !== options.controlSocket ||
       Buffer.byteLength(options.controlSocket) > 103 ||
-      /[\u0000-\u001f\u007f]/.test(options.controlSocket)
+      hasControlCharacters(options.controlSocket)
     ) {
       throw new Error("The repository credential control socket must be an absolute Unix path.");
     }

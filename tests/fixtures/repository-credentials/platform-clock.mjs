@@ -9,7 +9,9 @@ export function createPlatformClock() {
     clearTimeout(timer.handle);
     timer.handle = setTimeout(
       () => {
-        if (!scheduled.delete(timer)) return;
+        if (!scheduled.delete(timer)) {
+          return;
+        }
         timer.callback();
       },
       Math.max(0, timer.at - monotonicNow()),
@@ -19,7 +21,9 @@ export function createPlatformClock() {
     wallNow: () => Date.now() + offset,
     monotonicNow,
     schedule(delayMs, callback) {
-      if (!Number.isFinite(delayMs) || delayMs < 0) throw new Error("invalid fixture timer");
+      if (!Number.isFinite(delayMs) || delayMs < 0) {
+        throw new Error("invalid fixture timer");
+      }
       const timer = { at: monotonicNow() + delayMs, callback, handle: undefined };
       scheduled.add(timer);
       arm(timer);
@@ -29,13 +33,18 @@ export function createPlatformClock() {
       };
     },
     async advance(milliseconds) {
-      if (!Number.isFinite(milliseconds) || milliseconds < 0)
+      if (!Number.isFinite(milliseconds) || milliseconds < 0) {
         throw new Error("invalid fixture clock advance");
+      }
       offset += milliseconds;
-      for (const timer of scheduled) arm(timer);
+      for (const timer of scheduled) {
+        arm(timer);
+      }
       for (let round = 0; round < 1000; round++) {
         await new Promise((resolve) => setTimeout(resolve, 1));
-        if (![...scheduled].some((timer) => timer.at <= monotonicNow())) return;
+        if (![...scheduled].some((timer) => timer.at <= monotonicNow())) {
+          return;
+        }
       }
       throw new Error("fixture timer callbacks did not settle");
     },

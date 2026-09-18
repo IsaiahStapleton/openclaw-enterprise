@@ -48,7 +48,9 @@ export function createControlAdmission(
   };
   return {
     open(id: string, input: SessionInput) {
-      if (disposed) throw new Error("CONTROL_CLOSED");
+      if (disposed) {
+        throw new Error("CONTROL_CLOSED");
+      }
       const recoverOnly = "recoverOnly" in input && input.recoverOnly === true;
       const snapshot = snapshotSessionInput(input);
       const admittedInput = isBoundInput(snapshot)
@@ -60,10 +62,14 @@ export function createControlAdmission(
       sweep();
       const previous = records.get(id);
       if (previous) {
-        if (!sameSessionInput(previous.input, admittedInput)) throw new Error("ADMISSION_CONFLICT");
+        if (!sameSessionInput(previous.input, admittedInput)) {
+          throw new Error("ADMISSION_CONFLICT");
+        }
         const status =
           previous.sessionId === undefined ? undefined : service.status(previous.sessionId);
-        if (!status) throw new Error("ADMISSION_MISSING");
+        if (!status) {
+          throw new Error("ADMISSION_MISSING");
+        }
         return { result: status, sessionId: previous.sessionId!, created: false };
       }
       const timestamp =
@@ -71,9 +77,15 @@ export function createControlAdmission(
           id,
         );
       const age = timestamp ? now() - Number(timestamp[1]) : -1;
-      if (age < 0) throw new Error("INVALID_ADMISSION");
-      if (age >= admissionWindowMs) throw new Error("ADMISSION_MISSING");
-      if (records.size >= 2 * config.limits.sessions) throw new Error("SESSION_CAPACITY");
+      if (age < 0) {
+        throw new Error("INVALID_ADMISSION");
+      }
+      if (age >= admissionWindowMs) {
+        throw new Error("ADMISSION_MISSING");
+      }
+      if (records.size >= 2 * config.limits.sessions) {
+        throw new Error("SESSION_CAPACITY");
+      }
       const forgetAt = clock.monotonicNow() + admissionWindowMs - age;
       if (recoverOnly) {
         // A missing result fences a delayed first-open for this still-fresh ID.
@@ -106,7 +118,9 @@ export function createControlAdmission(
     },
     dispose() {
       disposed = true;
-      for (const record of records.values()) record.cancel();
+      for (const record of records.values()) {
+        record.cancel();
+      }
       records.clear();
     },
   };

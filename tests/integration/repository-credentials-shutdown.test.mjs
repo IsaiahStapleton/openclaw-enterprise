@@ -16,7 +16,9 @@ test(
     const original = await createServiceConfiguration(t, { shutdownGraceMs: 100 });
     const config = { ...original, gateway: { ...original.gateway, listen: "127.0.0.1:0" } };
     const program = `
+    import assert from 'node:assert/strict';
     import { readFile } from 'node:fs/promises';
+    import { request } from 'node:https';
     const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString());
     const { credentialCompositionModule, credentialDriverModule } = await import(input.runtime);
@@ -24,11 +26,20 @@ test(
     const clock = createSystemClock();
     const factory = createAlternateDriverFactory({origin:'https://upstream.example.test',gatewayOrigin:input.config.gateway.publicOrigin,clock,controls:{lateCapture:new Promise(() => {})}});
     const tls = {key:await readFile(input.key),cert:await readFile(input.cert)};
-    const {service} = await runService({config:input.config,tls,factory,trustedUpstreamOrigins:new Set(),close(){}},clock);
+    const {service,listeners} = await runService({config:input.config,tls,factory,trustedUpstreamOrigins:new Set(),close(){}},clock);
+    assert.deepEqual(Reflect.ownKeys(service).sort(), ['close','open','shutdown','status']);
+    assert.equal(Object.isFrozen(service), true);
     const opened = service.open({durationSeconds:86400,profile:'git-write'});
-    const exchange = service.reserve(opened.bearer,{method:'GET',rawTarget:'/team/nested/project',headers:{},receivedMonoMs:clock.monotonicNow(),contentEncoding:'identity',framing:{kind:'none',bytes:undefined}},new AbortController().signal);
-    if ('kind' in exchange) throw new Error('unexpected refusal');
-    await service.execute(exchange,async () => { throw new Error('unexpected dispatch'); });
+    const status = await new Promise((resolve,reject) => {
+      const outbound = request({hostname:'127.0.0.1',port:listeners.address.port,path:'/team/nested/project',ca:tls.cert,headers:{host:new URL(input.config.gateway.publicOrigin).host,authorization:'Bearer '+opened.bearer}}, response => {
+        response.resume();
+        response.once('end', () => resolve(response.statusCode));
+      });
+      outbound.once('error', reject);
+      outbound.end();
+    });
+    assert.equal(status, 503);
+    assert.equal(factory.events.some(event => event.kind === 'rotate'), true);
     setInterval(() => {},1000);
     process.stdout.write('ready\\n');
   `;
@@ -42,7 +53,9 @@ test(
       stdio: ["pipe", "pipe", "pipe"],
     });
     t.after(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
     });
     let stdout = "";
     let stderr = "";
@@ -66,8 +79,9 @@ test(
       child.once("close", (code, signal) => resolve({ code, signal }));
     });
     const readyDeadline = Date.now() + 5000;
-    while (!stdout.includes("ready\n") && child.exitCode === null && Date.now() < readyDeadline)
+    while (!stdout.includes("ready\n") && child.exitCode === null && Date.now() < readyDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     assert.ok(stdout.includes("ready\n"), "child did not reach pending-settlement readiness");
     const started = Date.now();
     child.kill("SIGTERM");

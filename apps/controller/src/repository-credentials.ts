@@ -1,5 +1,9 @@
 import { pathToFileURL } from "node:url";
-import { runService } from "./composition/repository-credentials/service.ts";
+import { startCredentialService } from "./composition/repository-credentials/service.ts";
+
+export { startCredentialService } from "./composition/repository-credentials/service.ts";
+export type { RunningService } from "./composition/repository-credentials/service.ts";
+export type { CredentialService } from "./drivers/repository-credentials/service-contracts.ts";
 
 /** Direct process composition; check-config loads no session or listener owner. */
 export async function main(args: readonly string[] = process.argv.slice(2)): Promise<void> {
@@ -20,13 +24,7 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
     process.stdout.write(`${JSON.stringify(await checkConfiguration(path))}\n`);
     return;
   }
-  const [{ createSystemClock }, { loadConfiguration }] = await Promise.all([
-    import("./drivers/repository-credentials/clock.ts"),
-    import("./composition/repository-credentials/config.ts"),
-  ]);
-  const clock = createSystemClock();
-  const loaded = await loadConfiguration(path, clock);
-  await runService(loaded, clock);
+  await startCredentialService(path);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -36,7 +36,9 @@ async function issuanceBody(request) {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 1024 * 1024) throw new Error("fixture request limit");
+    if (size > 1024 * 1024) {
+      throw new Error("fixture request limit");
+    }
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -73,13 +75,18 @@ async function startProviderTransport(resources, { tls, select }) {
       upstream.setTimeout(30000, () => upstream.destroy(new Error("provider fixture timeout")));
       response.once("close", () => upstream.destroy());
       request.once("error", () => upstream.destroy());
-      if (selected.body !== undefined) upstream.end(selected.body);
-      else request.pipe(upstream);
+      if (selected.body !== undefined) {
+        upstream.end(selected.body);
+      } else {
+        request.pipe(upstream);
+      }
     })().catch(() => response.destroy());
   });
   const origin = await listen(resources, server);
   resources.after(() => {
-    for (const upstream of outgoing) upstream.destroy();
+    for (const upstream of outgoing) {
+      upstream.destroy();
+    }
   });
   return origin;
 }
@@ -194,7 +201,9 @@ export async function startRegistryCredentialServiceFixture(t, options = {}) {
           const prefix = `/repos/${entry.repository}`;
           return pathname === prefix || pathname.startsWith(`${prefix}/`);
         });
-        if (repository) return { origin: repository.github.origin };
+        if (repository) {
+          return { origin: repository.github.origin };
+        }
         if (["/graphql", "/installation/token", "/meta"].includes(pathname)) {
           const entry = tokenOwners.get(providerToken(request.headers.authorization));
           return entry && { origin: entry.github.origin };
@@ -270,7 +279,9 @@ export async function startRegistryCredentialServiceFixture(t, options = {}) {
       },
       async open(repositoryRef, overrides = {}) {
         const entry = byRef.get(repositoryRef);
-        if (!entry) throw new Error("unknown fixture repository");
+        if (!entry) {
+          throw new Error("unknown fixture repository");
+        }
         const binding = resolveGitHubRepositoryBinding(registry, {
           namespaceId,
           repositoryRef,
@@ -306,7 +317,9 @@ export async function startRegistryCredentialServiceFixture(t, options = {}) {
       },
     };
     if (options.autoOpen !== false) {
-      for (const entry of repositories) await fixture.open(entry.repositoryRef);
+      for (const entry of repositories) {
+        await fixture.open(entry.repositoryRef);
+      }
     }
     t.after(() => resources.close());
     return fixture;

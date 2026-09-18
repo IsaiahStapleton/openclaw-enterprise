@@ -6,6 +6,37 @@ TLS material, start bounded local upstreams, and remove their temporary files,
 listeners and containers when the tests finish. They do not load ambient
 GitHub credentials.
 
+## Check source authority boundaries
+
+Run `node scripts/verify-repository-credentials-boundary.mjs` after changing the
+service. The same check runs through `pnpm check:workspace` in baseline CI. It
+parses `composition/repository-credentials/`, `drivers/repository-credentials/`
+and `providers/repository-credentials/` beneath `apps/controller/src/`, plus
+`repository-credentials.ts` and `repository-credentials.mjs`, using the workspace's
+pinned Prettier TypeScript parser. Runtime imports and re-exports must stay within the
+scanned source or use reviewed external modules and named members. Erased
+`import type` and `export type` declarations remain available; inline type
+specifiers can preserve a runtime module load. The two raw HTTPS sender helpers have explicit
+consumer lists; the listener, private-file, signing, and client-command owners
+have separate I/O allowances. New network packages, raw global network or loader
+access, and new process-output owners fail the check.
+
+The credential-service maintainers own the allowlists in the
+[source guard](../../scripts/verify-repository-credentials-boundary.mjs). A new
+privileged member, owner, sender consumer, or external dependency requires
+explicit security review in the same change. Explain the required authority,
+its caller and scope, why an existing owner cannot provide it, and the negative
+test that protects the new boundary. Do not add a wildcard allowance to silence
+a failure. The [guard regression test](../../tests/conformance/repository-credentials-source-boundary.test.mjs)
+adds forbidden capabilities to a disposable copy of the real source tree.
+
+This is an accidental-regression guard for reviewed source. It does not perform
+whole-program dataflow analysis, prove that allowed owners handle secrets
+correctly, or sandbox malicious code. It does not replace capability design,
+runtime isolation, or the controlled and live tests below.
+
+## Run controlled tests
+
 ```sh
 node --test tests/conformance/repository-credentials-backend-conformance.test.mjs
 node --test tests/integration/repository-credentials-git.test.mjs

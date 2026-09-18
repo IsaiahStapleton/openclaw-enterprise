@@ -107,7 +107,10 @@ async function readBoundRequest(path: string): Promise<RepositoryCredentialBound
     typeof input === "string" &&
     input.length > 0 &&
     input.length <= 512 &&
-    !/[\x00-\x1f\x7f]/.test(input);
+    ![...input].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    });
   if (!isRecord(value) || !isRecord(value.expectedBinding)) {
     throw new Error("invalid-arguments");
   }

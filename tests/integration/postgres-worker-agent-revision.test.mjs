@@ -47,8 +47,11 @@ async function setup(
 
   let worker;
   context.after(async () => {
-    if (worker === undefined) await workerPool.end();
-    else await worker.stop();
+    if (worker === undefined) {
+      await workerPool.end();
+    } else {
+      await worker.stop();
+    }
     await observerPool.end();
   });
 
@@ -264,7 +267,9 @@ async function setup(
   }
 
   async function stop() {
-    if (worker !== undefined) await worker.stop();
+    if (worker !== undefined) {
+      await worker.stop();
+    }
   }
 
   return {
@@ -316,8 +321,12 @@ function repositoryBoundary({ count = 1, deadlineWallMs = Date.now() + 120_000 }
     async open(input, signal) {
       calls.push({ operation: input.recoverOnly ? "recover" : "open", input, signal });
       const existing = admissions.get(input.admissionId);
-      if (existing !== undefined) return { kind: "recovered", status: existing };
-      if (input.recoverOnly) return { kind: "missing" };
+      if (existing !== undefined) {
+        return { kind: "recovered", status: existing };
+      }
+      if (input.recoverOnly) {
+        return { kind: "missing" };
+      }
       const session = {
         sessionId: `session_${randomUUID()}`,
         state: "OPEN",
@@ -359,11 +368,15 @@ function repositoryBoundary({ count = 1, deadlineWallMs = Date.now() + 120_000 }
     async close(sessionId) {
       calls.push({ operation: "close", sessionId });
       const session = sessions.get(sessionId);
-      if (session === undefined) return undefined;
+      if (session === undefined) {
+        return undefined;
+      }
       const disposed = { ...session, state: "DISPOSED" };
       sessions.set(sessionId, disposed);
       for (const [admissionId, admitted] of admissions) {
-        if (admitted.sessionId === sessionId) admissions.set(admissionId, disposed);
+        if (admitted.sessionId === sessionId) {
+          admissions.set(admissionId, disposed);
+        }
       }
       return disposed;
     },
@@ -761,7 +774,9 @@ for (const change of ["revoked", "stopped", "expired", "superseded"]) {
       const repository = repositoryBoundary();
       const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
       const owner = await fixture.agent(`repository-${change}`);
-      if (change === "expired") repository.snapshot.deadlineWallMs = Date.now() + 3_000;
+      if (change === "expired") {
+        repository.snapshot.deadlineWallMs = Date.now() + 3_000;
+      }
       let actorId = fixture.actor.id;
       if (change === "revoked") {
         actorId = `principal-${randomUUID()}`;
@@ -901,7 +916,9 @@ test(
     const close = repository.driver.close;
     let unavailable = true;
     repository.driver.close = async (sessionId, signal) => {
-      if (unavailable) throw new Error("repository service temporarily unavailable");
+      if (unavailable) {
+        throw new Error("repository service temporarily unavailable");
+      }
       return close(sessionId, signal);
     };
     const stop = await fixture.requestStop(owner);
@@ -1143,7 +1160,9 @@ test(
     let preparations = 0;
     repository.driver.open = async (input, signal) => {
       const result = await open(input, signal);
-      if (result.kind === "created" && firstSession === undefined) firstSession = result.session;
+      if (result.kind === "created" && firstSession === undefined) {
+        firstSession = result.session;
+      }
       return result;
     };
     repository.driver.close = async (sessionId, signal) => {
@@ -1170,7 +1189,9 @@ test(
       ...fixture.compute,
       async prepareRevision(revision, deploymentContext) {
         preparations += 1;
-        if (preparations > 1) throw new Error("Compute unavailable after material replacement");
+        if (preparations > 1) {
+          throw new Error("Compute unavailable after material replacement");
+        }
         const observation = await fixture.compute.prepareRevision(revision, deploymentContext);
         const [binding] = deploymentContext.repositoryCredentials;
         return {
@@ -1404,7 +1425,9 @@ for (const slowCall of [1, 2]) {
       const fixture = await setup(context, {
         leaseDurationMs: 1_200,
         async onHealthy() {
-          if (++healthCalls !== slowCall) return;
+          if (++healthCalls !== slowCall) {
+            return;
+          }
           healthEntered.resolve();
           await releaseHealth.promise;
         },
@@ -1526,12 +1549,13 @@ test(
           const current = await fixture.state.read((view) =>
             view.agents.findAgent(fixture.namespace.id, owner.id),
           );
-          if (stoppedRevisions.length < 3)
+          if (stoppedRevisions.length < 3) {
             assert.equal(
               current.activeRevisionId,
               targetRevision.id,
               "the serving pointer remains until candidate cleanup succeeds",
             );
+          }
           if (revision.id === failedCandidate.id && failStopOnce) {
             failStopOnce = false;
             throw new Error("transient Compute stop failure");
@@ -1663,7 +1687,9 @@ for (const recovery of [false, true]) {
         undefined,
         fixture.createWorkerPool(),
       );
-      if (recovery) assert.equal((await fixture.work(candidate, "succeeded")).attempt_count, 1);
+      if (recovery) {
+        assert.equal((await fixture.work(candidate, "succeeded")).attempt_count, 1);
+      }
       assert.equal((await fixture.work(stop, "succeeded")).attempt_count, 1);
       const current = await fixture.state.read((view) =>
         view.agents.findAgent(fixture.namespace.id, owner.id),
@@ -1676,7 +1702,9 @@ for (const recovery of [false, true]) {
           (op) => op.namespace.id === fixture.namespace.id && op.revision.agentId === owner.id,
         ),
       );
-      if (recovery) assert.ok(operations.some((op) => op.operation === "retire-revision"));
+      if (recovery) {
+        assert.ok(operations.some((op) => op.operation === "retire-revision"));
+      }
     },
   );
 }
@@ -2597,7 +2625,9 @@ test(
             [candidate.idempotencyKey],
           );
           const row = result.rows[0];
-          if (row?.dependency_failures >= 1 && row.state !== "failed_permanent") return row;
+          if (row?.dependency_failures >= 1 && row.state !== "failed_permanent") {
+            return row;
+          }
           return undefined;
         },
       );
@@ -2833,7 +2863,9 @@ test(
         async retireRevision(previous) {
           retirements += 1;
           effects.push({ action: "retire", revisionId: previous.id });
-          if (retirements === 1) await releaseRetirement.promise;
+          if (retirements === 1) {
+            await releaseRetirement.promise;
+          }
           return fixture.compute.retireRevision(previous);
         },
       },

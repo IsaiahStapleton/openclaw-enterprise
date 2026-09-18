@@ -27,7 +27,10 @@ function parseConfigurationFields(value: unknown): ConfigurationFields {
       typeof field !== "string" ||
       field.length < 1 ||
       field.length > 4096 ||
-      /[\x00-\x1f\x7f]/.test(field)
+      [...field].some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 0x1f || code === 0x7f;
+      })
     ) {
       throw new Error("invalid-backend");
     }

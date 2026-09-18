@@ -166,8 +166,12 @@ function revisionWork(namespaceId, idempotencyKey, agentId, revisionId, availabl
 async function claimExpected(queue, idempotencyKey) {
   for (let index = 0; index < 200; index += 1) {
     const claim = await queue.claim();
-    if (!claim) break;
-    if (claim.idempotencyKey === idempotencyKey) return claim;
+    if (!claim) {
+      break;
+    }
+    if (claim.idempotencyKey === idempotencyKey) {
+      return claim;
+    }
     await queue.complete(claim);
   }
   assert.fail(`The durable queue did not expose expected work ${idempotencyKey}.`);
@@ -459,7 +463,9 @@ test(
     let namespaceMutationReached = false;
     await assert.rejects(
       state.transactWithQueue(async (unit, transactionQueue) => {
-        if (!(await transactionQueue.heartbeat(claim))) throw new WorkClaimLostError();
+        if (!(await transactionQueue.heartbeat(claim))) {
+          throw new WorkClaimLostError();
+        }
         namespaceMutationReached = true;
         await unit.namespaces.transitionNamespaceStatus(namespaceId, "ready", "deleting");
       }),
@@ -505,7 +511,9 @@ test(
       revisionWork(namespaceId, `${prefix}:revision:second`, agents[0], revisions[1], new Date(3)),
       revisionWork(namespaceId, `${prefix}:other-revision`, agents[1], revisions[2], new Date(4)),
     ];
-    for (const input of inputs) await queue.enqueue(input);
+    for (const input of inputs) {
+      await queue.enqueue(input);
+    }
 
     const allClaims = (await Promise.all(Array.from({ length: 8 }, () => queue.claim()))).filter(
       Boolean,
@@ -527,7 +535,9 @@ test(
     assert.equal(locked.rowCount, 3);
     assert.ok(locked.rows.every(({ claims }) => claims === 1));
 
-    for (const claim of allClaims) await queue.complete(claim);
+    for (const claim of allClaims) {
+      await queue.complete(claim);
+    }
     const remaining = await pool.query(
       `SELECT idempotency_key
      FROM occ.controller_work
@@ -629,7 +639,9 @@ test(
     }
 
     const claims = [];
-    for (const key of keys) claims.push(await claimExpected(queue, key));
+    for (const key of keys) {
+      claims.push(await claimExpected(queue, key));
+    }
     assert.equal(claims.length, 2);
     await delay(75);
 
@@ -650,7 +662,9 @@ test(
     assert.ok(audits.rows.every(({ events }) => events === 1));
 
     const cleanupQueue = new PostgresWorkQueue(pool, { leaseDurationMs: 1_000, random: () => 0 });
-    for (const key of keys) await cleanupQueue.complete(await claimExpected(cleanupQueue, key));
+    for (const key of keys) {
+      await cleanupQueue.complete(await claimExpected(cleanupQueue, key));
+    }
   },
 );
 
@@ -853,8 +867,9 @@ for (const transition of ["fail", "retry", "expired claim", "exhausted queued"])
         [owner.revisionId],
       );
       assert.deepEqual(evidence.rows, [{ actor_id: actorId }]);
-      if (claim)
+      if (claim) {
         await assert.rejects(queue.fail(claim, { code: "DUPLICATE_FAILURE" }), WorkClaimLostError);
+      }
       await queue.recoverStale();
       assert.equal((await readQueueRow(pool, cleanupKey)).state, "queued");
       await completeCleanupWork(queue, owner.revisionId, sourceKey);
@@ -1075,9 +1090,12 @@ test(
     const claimedKeys = [];
     for (let index = 0; index < 200; index += 1) {
       const claim = await queue.claim();
-      if (!claim) break;
-      if (cases.some((scenario) => scenario.key === claim.idempotencyKey))
+      if (!claim) {
+        break;
+      }
+      if (cases.some((scenario) => scenario.key === claim.idempotencyKey)) {
         claimedKeys.push(claim.idempotencyKey);
+      }
       await queue.complete(claim);
     }
     assert.deepEqual(
@@ -1389,14 +1407,20 @@ for (const invalid of [
         [agents[0], owner.revisionId],
       );
       let sourceKey = `agent_revision:${owner.revisionId}:maintenance:1`;
-      if (invalid === "ordinary") sourceKey = `agent_revision:${owner.revisionId}:reconcile`;
-      if (invalid === "leading zero")
+      if (invalid === "ordinary") {
+        sourceKey = `agent_revision:${owner.revisionId}:reconcile`;
+      }
+      if (invalid === "leading zero") {
         sourceKey = `agent_revision:${owner.revisionId}:maintenance:01`;
-      if (invalid === "suffix")
+      }
+      if (invalid === "suffix") {
         sourceKey = `agent_revision:${owner.revisionId}:maintenance:1:extra`;
-      if (invalid === "cleanup") sourceKey = repositoryCleanupKey(owner.revisionId, "source");
+      }
+      if (invalid === "cleanup") {
+        sourceKey = repositoryCleanupKey(owner.revisionId, "source");
+      }
       let input = revisionWork(namespaceId, sourceKey, agents[0], owner.revisionId);
-      if (invalid === "stop")
+      if (invalid === "stop") {
         input = {
           namespaceId,
           agentId: agents[0],
@@ -1404,22 +1428,31 @@ for (const invalid of [
           idempotencyKey: sourceKey,
           actorId: "principal-queue-integration",
         };
-      if (invalid === "namespace") input = namespaceWork(namespaceId, sourceKey);
-      if (invalid === "cleanup") await insertRawQueueWork(pool, input);
-      else await queue.enqueue(input);
+      }
+      if (invalid === "namespace") {
+        input = namespaceWork(namespaceId, sourceKey);
+      }
+      if (invalid === "cleanup") {
+        await insertRawQueueWork(pool, input);
+      } else {
+        await queue.enqueue(input);
+      }
       const claim = await claimExpected(queue, sourceKey);
-      if (invalid === "stopped")
+      if (invalid === "stopped") {
         await pool.query("UPDATE occ.agents SET desired_runtime_state = 'stopped' WHERE id = $1", [
           agents[0],
         ]);
-      if (invalid === "inactive")
+      }
+      if (invalid === "inactive") {
         await pool.query("UPDATE occ.agents SET active_revision_id = NULL WHERE id = $1", [
           agents[0],
         ]);
-      if (invalid === "namespace unavailable")
+      }
+      if (invalid === "namespace unavailable") {
         await pool.query("UPDATE occ.namespaces SET status = 'deleting' WHERE id = $1", [
           namespaceId,
         ]);
+      }
       const before = await readRepositoryAttempts(pool, owner.revisionId);
       await assert.rejects(
         queue.fail(claim, { code: "INVALID_CONTINUATION" }, { continuingRevision: true }),

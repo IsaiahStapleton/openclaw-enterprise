@@ -103,7 +103,9 @@ async function dropControlResponse(t, target) {
   });
   await chmod(socketPath, 0o600);
   t.after(async () => {
-    for (const socket of sockets) socket.destroy();
+    for (const socket of sockets) {
+      socket.destroy();
+    }
     await new Promise((resolve) => relay.close(resolve));
   });
   return { socketPath, receipt };
@@ -288,7 +290,9 @@ test(
     let socket;
     let sessionId;
     const observe = (event) => {
-      if (event.request.url === "/v1/sessions") socket = event.socket;
+      if (event.request.url === "/v1/sessions") {
+        socket = event.socket;
+      }
     };
     requests.subscribe(observe);
     t.after(() => requests.unsubscribe(observe));
@@ -393,7 +397,7 @@ test(
     assert.equal(closed.status, 200);
     assert.notEqual(closed.body.state, "OPEN");
     assert.equal(closed.body.bearer, undefined);
-    for (const profile of ["read-write", "app-full"])
+    for (const profile of ["read-write", "app-full"]) {
       assert.equal(
         (
           await control(config.gateway.controlSocket, "POST", "/v1/sessions", {
@@ -403,6 +407,7 @@ test(
         ).status,
         400,
       );
+    }
     assert.equal(
       (await control(config.gateway.controlSocket, "POST", "/v1/sessions", { durationSeconds: 0 }))
         .status,
@@ -635,8 +640,9 @@ test(
     while (
       !factory.events.some((event) => event.kind === "authentication") &&
       Date.now() < deadline
-    )
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 5));
+    }
     assert.ok(factory.events.some((event) => event.kind === "authentication"));
     service.close(opened.session.sessionId);
     resume();
@@ -661,7 +667,9 @@ test(
           failures.push(error);
         }
       }
-      if (failures.length) throw new AggregateError(failures, "listener fixture cleanup failed");
+      if (failures.length) {
+        throw new AggregateError(failures, "listener fixture cleanup failed");
+      }
     });
     const [
       { createSystemClock },
@@ -693,7 +701,9 @@ test(
         return;
       }
       const chunks = [];
-      for await (const chunk of request) chunks.push(chunk);
+      for await (const chunk of request) {
+        chunks.push(chunk);
+      }
       received.push({ method: request.method, body: Buffer.concat(chunks).toString() });
       if (request.method === "POST") {
         response.once("close", () => {
@@ -784,7 +794,9 @@ test(
             const chunks = [];
             incoming.on("data", (chunk) => {
               chunks.push(chunk);
-              if (disconnect) incoming.destroy();
+              if (disconnect) {
+                incoming.destroy();
+              }
             });
             incoming.once("error", reject);
             incoming.once(disconnect ? "close" : "end", () =>
@@ -968,7 +980,9 @@ async function holdControlRequest(t, target) {
       const data = Buffer.concat(chunks);
       const end = data.indexOf("\r\n\r\n");
       const length = /content-length: ([0-9]+)/i.exec(data.toString());
-      if (end < 0 || !length || data.length < end + 4 + Number(length[1])) return;
+      if (end < 0 || !length || data.length < end + 4 + Number(length[1])) {
+        return;
+      }
       caller.off("data", collect);
       caller.pause();
       release = () => {
@@ -992,7 +1006,9 @@ async function holdControlRequest(t, target) {
   });
   await chmod(socketPath, 0o600);
   t.after(async () => {
-    for (const socket of sockets) socket.destroy();
+    for (const socket of sockets) {
+      socket.destroy();
+    }
     await new Promise((resolve) => relay.close(resolve));
   });
   return { socketPath, received, release: () => release() };
@@ -1032,7 +1048,9 @@ test(
       status: 503,
       body: { error: "overloaded" },
     });
-    for (const entry of fixture.repositories) assert.equal(entry.github.trace.length, 0);
+    for (const entry of fixture.repositories) {
+      assert.equal(entry.github.trace.length, 0);
+    }
     await clock.advance(60_001);
     assert.deepEqual(await send(input, id), { status: 404, body: { error: "admission-missing" } });
     assert.equal((await send({ ...input, deadlineWallMs: clock.wallNow() + 60_000 })).status, 201);

@@ -38,7 +38,9 @@ async function privateDirectory(path: string): Promise<void> {
   try {
     await mkdir(path, { mode: 0o700 });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw error;
+    }
   }
   await realDirectory(path);
   const info = await lstat(path);
@@ -81,7 +83,9 @@ async function readProjected(path: string, maximum: number): Promise<Buffer> {
     let position = 0;
     while (position < data.length) {
       const result = await handle.read(data, position, data.length - position, position);
-      if (!result.bytesRead) break;
+      if (!result.bytesRead) {
+        break;
+      }
       position += result.bytesRead;
     }
     const after = await handle.stat();
@@ -197,7 +201,9 @@ export async function prepareProjectedInputs(
   } catch {
     throw new Error("invalid-projected-inputs");
   } finally {
-    for (const value of contents.values()) value.fill(0);
+    for (const value of contents.values()) {
+      value.fill(0);
+    }
   }
 }
 

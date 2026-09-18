@@ -215,7 +215,9 @@ function operands(args: readonly string[], start: number, options: Options): num
     } else if (options.flags.includes(argument)) {
       continue;
     } else if (options.values?.includes(argument)) {
-      if (!args[++index]) unsupported();
+      if (!args[++index]) {
+        unsupported();
+      }
     } else if (argument.startsWith("--")) {
       const separator = argument.indexOf("=");
       if (
@@ -225,18 +227,23 @@ function operands(args: readonly string[], start: number, options: Options): num
           options.assigned?.includes(argument.slice(0, separator))
         ) ||
         !argument.slice(separator + 1)
-      )
+      ) {
         unsupported();
+      }
     } else {
       // Git accepts attached short values and clusters of short switches. A
       // value-taking option consumes the rest of its token, or the next token.
       for (let offset = 1; offset < argument.length; offset++) {
         const option = `-${argument[offset]}`;
         if (options.values?.includes(option)) {
-          if (offset === argument.length - 1 && !args[++index]) unsupported();
+          if (offset === argument.length - 1 && !args[++index]) {
+            unsupported();
+          }
           break;
         }
-        if (!options.flags.includes(option)) unsupported();
+        if (!options.flags.includes(option)) {
+          unsupported();
+        }
       }
     }
   }
@@ -244,8 +251,12 @@ function operands(args: readonly string[], start: number, options: Options): num
 }
 
 function validateRemote(args: readonly string[], start: number): void {
-  if (args[start] === "-v" || args[start] === "--verbose") start++;
-  if (start === args.length) return;
+  if (args[start] === "-v" || args[start] === "--verbose") {
+    start++;
+  }
+  if (start === args.length) {
+    return;
+  }
   const command = args[start++]!;
   const forms: Readonly<Record<string, Options & { minimum: number; maximum: number }>> = {
     add: { flags: ["--tags", "--no-tags"], values: ["-t", "-m"], minimum: 2, maximum: 2 },
@@ -259,17 +270,22 @@ function validateRemote(args: readonly string[], start: number): void {
     show: { flags: ["-n", "--no-query"], minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
   };
   const form = Object.hasOwn(forms, command) ? forms[command] : undefined;
-  if (!form) unsupported();
+  if (!form) {
+    unsupported();
+  }
   const positions = operands(args, start, form);
-  if (positions.length < form.minimum || positions.length > form.maximum) unsupported();
+  if (positions.length < form.minimum || positions.length > form.maximum) {
+    unsupported();
+  }
   const endOptions = args.indexOf("--", start);
   if (
     command === "show" &&
     !args
       .slice(start, endOptions < 0 ? undefined : endOptions)
       .some((arg) => arg === "-n" || arg === "--no-query")
-  )
+  ) {
     unsupported();
+  }
 }
 
 function validateLocal(command: string, args: readonly string[], start: number): void {
@@ -280,7 +296,9 @@ function validateLocal(command: string, args: readonly string[], start: number):
   if (command === "credential") {
     // The standalone helper qualification uses this exact builtin. The ordinary
     // Agent router refuses it and never supplies credentials on its local path.
-    if (args.length !== start + 1 || args[start] !== "fill") unsupported();
+    if (args.length !== start + 1 || args[start] !== "fill") {
+      unsupported();
+    }
     return;
   }
   if (command === "worktree") {
@@ -288,8 +306,9 @@ function validateLocal(command: string, args: readonly string[], start: number):
       !["add", "list", "lock", "unlock", "move", "prune", "remove", "repair"].includes(
         args[start] ?? "",
       )
-    )
+    ) {
       unsupported();
+    }
   } else if (command === "config") {
     const positions = operands(args, start, {
       flags: [
@@ -332,15 +351,20 @@ function validateLocal(command: string, args: readonly string[], start: number):
       values: ["--file", "-f", "--blob", "--type", "--default", "--value", "--comment"],
     });
     const first = positions[0] === undefined ? undefined : args[positions[0]];
-    if (first === "edit") unsupported();
+    if (first === "edit") {
+      unsupported();
+    }
   } else if (!localCommands.has(command)) {
     unsupported();
   }
   if (["checkout", "switch", "restore"].includes(command)) {
     for (const argument of args.slice(start)) {
-      if (argument === "--") break;
-      if (/^--recurse-submodules(?:=|$)/.test(argument) && argument !== "--recurse-submodules=no")
+      if (argument === "--") {
+        break;
+      }
+      if (/^--recurse-submodules(?:=|$)/.test(argument) && argument !== "--recurse-submodules=no") {
         unsupported();
+      }
     }
   }
 }
@@ -354,7 +378,9 @@ export function parseGitInvocation(input: readonly string[]): ParsedGitInvocatio
     const option = args[index++]!;
     if (["-C", "-c", "--git-dir", "--work-tree", "--namespace"].includes(option)) {
       const value = args[index++];
-      if (value === undefined) unsupported();
+      if (value === undefined) {
+        unsupported();
+      }
       if (option === "-C" || option === "-c") {
         globalArguments.push(option, value);
       } else {
@@ -375,16 +401,22 @@ export function parseGitInvocation(input: readonly string[]): ParsedGitInvocatio
   const context = Object.freeze(globalArguments);
   const commandIndex = index;
   const command = args[index++];
-  if (!command) unsupported();
+  if (!command) {
+    unsupported();
+  }
   const options = Object.hasOwn(networkOptions, command) ? networkOptions[command] : undefined;
   if (!options) {
     validateLocal(command, args, index);
     return Object.freeze({ context, command, commandIndex, args, kind: "local", push: false });
   }
   const positions = operands(args, index, options);
-  if (command === "clone" && (positions.length < 1 || positions.length > 2)) unsupported();
+  if (command === "clone" && (positions.length < 1 || positions.length > 2)) {
+    unsupported();
+  }
   const targetIndex = positions[0];
-  if (targetIndex !== undefined && !args[targetIndex]) unsupported();
+  if (targetIndex !== undefined && !args[targetIndex]) {
+    unsupported();
+  }
   return Object.freeze({
     context,
     command,

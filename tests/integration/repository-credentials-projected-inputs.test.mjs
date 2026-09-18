@@ -33,7 +33,9 @@ async function project(directory, generation, values) {
     try {
       await symlink(`..data/${name}`, join(directory, name));
     } catch (error) {
-      if (error.code !== "EEXIST") throw error;
+      if (error.code !== "EEXIST") {
+        throw error;
+      }
     }
   }
   return path;
@@ -48,10 +50,8 @@ async function fixture(t) {
   for (const path of [inputsDirectory, registryDirectory, privateVolume, controlVolume]) {
     await mkdir(path, { mode: 0o755 });
   }
-  // kubelet's fsGroup writable emptyDir roots are separate from the private
-  // directories created and owned by the unprivileged service process.
-  await chmod(privateVolume, 0o770);
-  await chmod(controlVolume, 0o770);
+  // This filesystem fixture supplies trusted, non-writable ancestors. Actual
+  // Kubernetes volume ownership and modes require the installed chart check.
   const options = {
     inputsDirectory,
     registryFile: join(registryDirectory, "registry.json"),
@@ -163,6 +163,21 @@ test("projected service inputs become owned private files accepted by the real l
   const restarted = await f.prepare();
   assert.equal(restarted.config.sessionPolicy.maximumDurationSeconds, 1800);
   restarted.close();
+});
+
+test("projection startup rejects a writable ancestor above its private snapshot", async (t) => {
+  const f = await fixture(t);
+  const loaded = await f.prepare();
+  loaded.close();
+  const privateVolume = join(f.options.privateDirectory, "..");
+  // Keeping the immediate snapshot directory private does not protect it from
+  // replacement through a writable parent volume. Startup must fail closed.
+  await chmod(privateVolume, 0o770);
+  assert.equal((await lstat(f.options.privateDirectory)).mode & 0o777, 0o700);
+  await assert.rejects(f.prepare(), { message: "invalid-projected-inputs" });
+  await chmod(privateVolume, 0o755);
+  const restored = await f.prepare();
+  restored.close();
 });
 
 test("projection startup bounds service drain within the worker Pod termination grace", async (t) => {

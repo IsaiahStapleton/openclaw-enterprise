@@ -357,7 +357,8 @@ test(
       0,
       "runtime material must be removed after actual Pod termination",
     );
-    for (const repository of credentials.repositories)
+    for (const repository of credentials.repositories) {
       assert.deepEqual(repository.github.errors, []);
+    }
   },
 );

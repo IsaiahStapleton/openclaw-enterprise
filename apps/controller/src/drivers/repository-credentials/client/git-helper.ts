@@ -19,7 +19,13 @@ async function run(): Promise<void> {
   if (operation !== "get") {
     return;
   }
-  if (/[\x00-\x09\x0b-\x1f\x7f]/.test(input) || !input.endsWith("\n")) {
+  if (
+    [...input].some((character) => {
+      const code = character.charCodeAt(0);
+      return (code <= 0x1f && code !== 0x0a) || code === 0x7f;
+    }) ||
+    !input.endsWith("\n")
+  ) {
     return;
   }
   const lines = input.split("\n");

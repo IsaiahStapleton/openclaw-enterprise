@@ -91,6 +91,17 @@ async function gatewayTls(directory, host, execute) {
 }
 
 export async function createRepositoryPlatformFixture(context) {
+  const diagnostic = { kind: "repository-platform-setup", stage: "selection" };
+  try {
+    return await setupRepositoryPlatformFixture(context, diagnostic);
+  } catch (cause) {
+    const error = new Error("Repository platform setup failed.", { cause });
+    error.openclawCiDiagnostic = diagnostic;
+    throw error;
+  }
+}
+
+async function setupRepositoryPlatformFixture(context, diagnostic) {
   const selection = {
     kubeconfigPath: process.env.OCC_TEST_KUBERNETES_KUBECONFIG,
     kubernetesContext: process.env.OCC_TEST_KUBERNETES_CONTEXT,
@@ -117,6 +128,7 @@ export async function createRepositoryPlatformFixture(context) {
 
   const scope = createResourceScope({ cleanupTimeoutMs: 300_000 });
   context.after(() => scope.close());
+  diagnostic.stage = "kubernetes-setup";
   const suffix = randomBytes(5).toString("hex");
   const system = `oce-repository-fixture-${suffix}`;
   const directory = await mkdtemp(join(tmpdir(), "oce-repository-platform-"));
@@ -151,11 +163,12 @@ export async function createRepositoryPlatformFixture(context) {
       kubectl("delete", "clusterrole", namespaceRole, tenantRole, "--ignore-not-found"),
     ]);
     const failures = cleanup.filter(({ status }) => status === "rejected");
-    if (failures.length > 0)
+    if (failures.length > 0) {
       throw new AggregateError(
         failures.map(({ reason }) => reason),
         "owned Kubernetes fixture cleanup failed",
       );
+    }
   });
   await apply({ apiVersion: "v1", kind: "Namespace", metadata: { name: system } });
   await apply({
@@ -259,6 +272,7 @@ export async function createRepositoryPlatformFixture(context) {
   };
   const authSecret = "repository-platform-auth-secret-minimum-thirty-two-bytes";
   const authBaseURL = "http://127.0.0.1";
+  diagnostic.stage = "database-bootstrap";
   const [
     { default: pg },
     { loadInstallationConfiguration },
@@ -303,11 +317,12 @@ export async function createRepositoryPlatformFixture(context) {
     app = undefined;
     const outcomes = await Promise.allSettled([currentWorker?.stop(), currentApp?.close()]);
     const failures = outcomes.filter(({ status }) => status === "rejected");
-    if (failures.length > 0)
+    if (failures.length > 0) {
       throw new AggregateError(
         failures.map(({ reason }) => reason),
         "platform process cleanup failed",
       );
+    }
   }
   scope.after(stopProcesses);
   async function startProcesses() {
@@ -354,7 +369,9 @@ export async function createRepositoryPlatformFixture(context) {
     );
     return body?.data;
   }
+  diagnostic.stage = "controller-startup";
   await startProcesses();
+  diagnostic.stage = "namespace-create";
   const namespace = await request(
     "POST",
     "/namespaces",
@@ -363,6 +380,7 @@ export async function createRepositoryPlatformFixture(context) {
   );
   const placement = kubernetesNamespaceName(namespace.id);
   ownedNamespaces.push(placement);
+  diagnostic.stage = "namespace-provisioning";
   for (const tenant of [...bootstrapNamespaces, placement]) {
     await kube.waitFor("worker-created tenant Namespace", async () => {
       const namespaces = JSON.parse(await kubectl("get", "namespaces", "-o", "json")).items;
@@ -376,12 +394,15 @@ export async function createRepositoryPlatformFixture(context) {
       subjects: [{ kind: "ServiceAccount", name: "controller", namespace: system }],
     });
   }
+  diagnostic.stage = "namespace-reconciliation";
   await kube.waitFor(
     "actual worker Namespace reconciliation",
     async () => (await request("GET", `/namespaces/${namespace.id}`)).status === "ready",
   );
+  diagnostic.stage = "controller-stop";
   await stopProcesses();
 
+  diagnostic.stage = "credential-service-startup";
   const gatewayHost = `repository-credentials.${system}.svc.cluster.local`;
   const tls = await gatewayTls(directory, gatewayHost, execute);
   const gatewayPort = await availablePort();
@@ -392,6 +413,7 @@ export async function createRepositoryPlatformFixture(context) {
     gateway: { publicOrigin: `https://${gatewayHost}`, listen: `0.0.0.0:${gatewayPort}` },
     autoOpen: false,
   });
+  diagnostic.stage = "control-relay-startup";
   const control = await startControlResponseRelay(scope, {
     directory,
     target: credentialsFixture.config.gateway.controlSocket,
@@ -399,6 +421,7 @@ export async function createRepositoryPlatformFixture(context) {
   scope.after(stopProcesses);
   // This fixed relay only carries TLS bytes to this run's controlled service.
   // It has no client-selected destination and replaces no credential behavior.
+  diagnostic.stage = "relay-creation";
   const relayLabels = { "app.kubernetes.io/name": `repository-relay-${suffix}` };
   await apply({
     apiVersion: "v1",
@@ -438,6 +461,7 @@ export async function createRepositoryPlatformFixture(context) {
     metadata: { name: "repository-credentials", namespace: system },
     spec: { selector: relayLabels, ports: [{ port: 443, targetPort: 8443 }] },
   });
+  diagnostic.stage = "relay-readiness";
   await kubectl(
     "wait",
     "--for=condition=Ready",
@@ -446,6 +470,7 @@ export async function createRepositoryPlatformFixture(context) {
     system,
     "--timeout=120s",
   );
+  diagnostic.stage = "controller-restart";
   configuration.provider = [
     {
       id: credentialsFixture.providerId,
@@ -472,7 +497,9 @@ export async function createRepositoryPlatformFixture(context) {
 
   const agents = [];
   scope.after(async () => {
-    if (app === undefined) return;
+    if (app === undefined) {
+      return;
+    }
     for (const agent of agents) {
       await request("POST", `/namespaces/${namespace.id}/agents/${agent.id}/stop`, undefined, 202);
     }
@@ -577,9 +604,11 @@ export async function createRepositoryPlatformFixture(context) {
       (await podNode(pod, toolScript, JSON.stringify({ command, args, cwd }))).stdout,
     );
     assert.ok(Number.isInteger(result.code), `${command} did not exit normally`);
-    if (expected === "failure")
+    if (expected === "failure") {
       assert.notEqual(result.code, 0, `${command} unexpectedly succeeded`);
-    else assert.equal(result.code, expected, `${command} returned an unexpected exit status`);
+    } else {
+      assert.equal(result.code, expected, `${command} returned an unexpected exit status`);
+    }
     return result.stdout;
   }
   const material = async (pod) => JSON.parse((await podNode(pod, materialScript)).stdout);

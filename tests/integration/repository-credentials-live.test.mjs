@@ -49,7 +49,9 @@ test(
     let clientDirectory;
     const cleanupRequest = async ({ method, path, body }, signal) => {
       const args = ["api", "--method", method, path];
-      if (body) args.push("--input", await cleanupClient.json("cleanup.json", body));
+      if (body) {
+        args.push("--input", await cleanupClient.json("cleanup.json", body));
+      }
       const response = await cleanupClient.gh(args, { signal, timeout: 5000 });
       return response.stdout ? JSON.parse(response.stdout) : undefined;
     };
@@ -168,8 +170,9 @@ test(
       // budget so the cancelled work signal cannot suppress reconciliation.
       const cleanupSignal = AbortSignal.timeout(60000);
       try {
-        if (clientDirectory)
+        if (clientDirectory) {
           cleanupClient = await runPinnedClients(t, { clientDirectory }, { signal: cleanupSignal });
+        }
       } catch {
         failures.push("cleanup client unavailable");
       }

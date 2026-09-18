@@ -9,7 +9,9 @@ function object(
   value: OpenClawConfigurationValue | undefined,
   path: string,
 ): OpenClawConfigurationDocument {
-  if (value === undefined) return {};
+  if (value === undefined) {
+    return {};
+  }
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Repository credentials require ${path} to be an object.`);
   }
@@ -47,7 +49,9 @@ function projectAgent(
 ): OpenClawConfigurationDocument {
   const agent = object(value, path);
   const tools = object(agent.tools, `${path}.tools`);
-  if (tools.exec === undefined) return agent;
+  if (tools.exec === undefined) {
+    return agent;
+  }
   // Agent pathPrepend replaces the global list, so preserve its effective inheritance.
   return {
     ...agent,

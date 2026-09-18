@@ -32,7 +32,9 @@ async function loadPublicCa(path: string): Promise<Uint8Array> {
     let size = 0;
     while (size < data.length) {
       const result = await file.read(data, size, data.length - size, size);
-      if (result.bytesRead === 0) break;
+      if (result.bytesRead === 0) {
+        break;
+      }
       size += result.bytesRead;
     }
     const after = await file.stat();

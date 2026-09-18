@@ -52,7 +52,9 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       try {
         return await lstat(path);
       } catch (error) {
-        if (error.code === "ENOENT") return false;
+        if (error.code === "ENOENT") {
+          return false;
+        }
         throw error;
       }
     });
@@ -60,7 +62,9 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
     return JSON.parse((await docker(["inspect", name])).stdout)[0];
   }
   async function imageId(reference) {
-    if (reference.startsWith("-")) throw new Error("invalid image reference");
+    if (reference.startsWith("-")) {
+      throw new Error("invalid image reference");
+    }
     const image = JSON.parse((await docker(["image", "inspect", reference])).stdout)[0];
     assert.match(image.Id, /^sha256:[a-f0-9]{64}$/);
     return image.Id;
@@ -110,17 +114,23 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
           signal: cleanupSignal,
         });
       async function remove(name, grace) {
-        if (!created.has(name)) return;
+        if (!created.has(name)) {
+          return;
+        }
         const stopped = await docker(["stop", "--time", String(grace), name], {
           timeout: (grace + 5) * 1000,
           allowFailure: true,
         }).catch(() => undefined);
-        if (!stopped || stopped.code !== 0) failures.push(`container-stop-failed:${name}`);
+        if (!stopped || stopped.code !== 0) {
+          failures.push(`container-stop-failed:${name}`);
+        }
         const removed = await docker(["rm", "--force", name], {
           timeout: 5000,
           allowFailure: true,
         }).catch(() => undefined);
-        if (!removed || removed.code !== 0) failures.push(`container-remove-failed:${name}`);
+        if (!removed || removed.code !== 0) {
+          failures.push(`container-remove-failed:${name}`);
+        }
       }
       await remove(names.agent, 1);
       await remove(names.operator, 1);
@@ -202,7 +212,9 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       try {
         return JSON.parse(await readFile(join(state, "report.json"), "utf8"));
       } catch (error) {
-        if (error.code === "ENOENT") return undefined;
+        if (error.code === "ENOENT") {
+          return undefined;
+        }
         throw error;
       }
     }
@@ -315,7 +327,9 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
     ]);
     const containers = {};
     for (const [role, name] of Object.entries(names)) {
-      if (role === "operator") continue;
+      if (role === "operator") {
+        continue;
+      }
       const metadata = await inspect(name);
       assert.equal(metadata.Image, role === "service" ? serviceId : clientId);
       containers[role] = {
