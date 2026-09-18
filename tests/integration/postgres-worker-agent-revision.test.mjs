@@ -2174,6 +2174,13 @@ test(
     await fixture.work(predecessor, "succeeded");
     await fixture.stop();
 
+    // This worker must drain another Namespace's real stop work without adding
+    // its effects to this Agent's observations or consuming its injected fault.
+    const foreign = await setup(context);
+    const foreignOwner = await foreign.agent("stop-publication-foreign");
+    const foreignRevision = await foreign.revision(foreignOwner, 1);
+    const foreignStop = await foreign.requestStop(foreignOwner);
+
     const replacement = await fixture.revision(owner, 2);
     await fixture.compute.prepareRevision(replacement);
     // Recreate the committed publication boundary before route finalization. Stop
@@ -2196,10 +2203,16 @@ test(
       {
         ...fixture.compute,
         async stopRevision(candidate) {
+          if (candidate.namespaceId !== fixture.namespace.id) {
+            return fixture.compute.stopRevision(candidate);
+          }
           stoppedRevisions.push(candidate.id);
           return fixture.compute.stopRevision(candidate);
         },
         async retireRevision(candidate) {
+          if (candidate.namespaceId !== fixture.namespace.id) {
+            return fixture.compute.retireRevision(candidate);
+          }
           retiredRevisions.push(candidate.id);
           if (failRetirement) {
             failRetirement = false;
@@ -2216,6 +2229,10 @@ test(
 
     await fixture.work(replacement, "succeeded");
     await fixture.work(stop, "succeeded");
+    await Promise.all([
+      foreign.work(foreignRevision, "succeeded"),
+      foreign.work(foreignStop, "succeeded"),
+    ]);
     const [stopped, retainedPredecessor, retainedReplacement] = await fixture.state.read(
       async (view) =>
         Promise.all([
