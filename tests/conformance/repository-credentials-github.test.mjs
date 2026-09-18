@@ -7,6 +7,7 @@ import {
 import { validateServiceConfig } from "../../apps/repository-credentials/src/config.ts";
 import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
+import { createProviderTransport } from "../../apps/repository-credentials/src/backends/github/provider-transport.ts";
 const config = validateServiceConfig({
   gateway: {
     publicOrigin: "https://credentials.example",
@@ -63,6 +64,82 @@ function owner(factory, clock, profile, id, captured = () => {}) {
     },
   };
 }
+test("provider transport pins destination and exact issuance scope before receiving credentials", async (t) => {
+  const clock = createControlledClock();
+  const fixture = await startGitHubFixture(t, { clock });
+  const key = createGitHubKeyOwner({ privateKey: fixture.privateKey, appId: "12345", clock });
+  t.after(() => key.close());
+  const scope = { installationId: "41", repositoryId: "73", profile: "git-read" };
+  for (const origin of ["http://localhost", "https://user@example.test", `${fixture.origin}/path`])
+    assert.throws(() => createProviderTransport(origin, fixture.tls.ca, clock, scope));
+  for (const installationId of ["//other.example", "https://other.example", "41/../42", "41?x=1"])
+    assert.throws(() =>
+      createProviderTransport(fixture.origin, fixture.tls.ca, clock, { ...scope, installationId }),
+    );
+  for (const changes of [
+    { repositoryId: "9007199254740992" },
+    { repositoryId: 73 },
+    { installationId: 41 },
+    { profile: "__proto__" },
+  ])
+    assert.throws(() =>
+      createProviderTransport(fixture.origin, fixture.tls.ca, clock, { ...scope, ...changes }),
+    );
+  let installationReads = 0;
+  const transportScope = {
+    ...scope,
+    get installationId() {
+      return ++installationReads === 1 ? "41" : "42";
+    },
+  };
+  const transport = createProviderTransport(fixture.origin, fixture.tls.ca, clock, transportScope);
+  assert.equal(installationReads, 1);
+  assert.deepEqual(Object.keys(transport).sort(), ["issue", "revoke"]);
+  assert.ok(Object.isFrozen(transport));
+  // A later caller cannot replace the URL, request body, or admitted permission map.
+  transportScope.repositoryId = "74";
+  transportScope.profile = "git-full";
+  let dispatches = 0;
+  let observations = 0;
+  const attempt = (action) => ({
+    action,
+    deadlineMonoMs: clock.monotonicNow() + 30000,
+    signal: new AbortController().signal,
+    assertAdmitted() {},
+    observeDispatch() {},
+  });
+  const onDispatch = () => dispatches++;
+  const observeResponse = () => observations++;
+  for (const authorization of ["unsafe\r\nHeader: value", "", { path: "//other.example" }])
+    await assert.rejects(
+      transport.issue(authorization, attempt("acquire"), onDispatch, () => {}, observeResponse),
+      /provider-unavailable/,
+    );
+  assert.equal(dispatches, 0);
+  assert.equal(fixture.issuesOfTokens.length, 0);
+  const issued = await key.withJwt((jwt, assertCurrent) =>
+    transport.issue(jwt, attempt("acquire"), onDispatch, assertCurrent, observeResponse),
+  );
+  let token;
+  try {
+    assert.equal(issued.status, 201);
+    token = JSON.parse(issued.body.toString()).token;
+  } finally {
+    issued.body.fill(0);
+  }
+  assert.equal(observations, 1);
+  assert.deepEqual(fixture.issuesOfTokens[0].repositoryIds, [73]);
+  assert.deepEqual(fixture.issuesOfTokens[0].permissions, { metadata: "read", contents: "read" });
+  const revoked = await transport.revoke(token, attempt("retire"), onDispatch);
+  try {
+    assert.equal(revoked.status, 204);
+  } finally {
+    revoked.body.fill(0);
+  }
+  assert.equal(dispatches, 2);
+  assert.equal(fixture.tokenState()[0].revoked, true);
+  assert.deepEqual(fixture.errors, []);
+});
 test("real HTTPS issuance preserves exact profiles after hour 13 and revokes with owned token after key closure", async (t) => {
   const clock = createControlledClock();
   const providerClock = createControlledClock(clock.wallNow());

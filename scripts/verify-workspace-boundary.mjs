@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyRepositoryCredentialBoundary } from "./verify-repository-credentials-boundary.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const activeApplications = ["controller", "repository-credentials"];
@@ -127,8 +128,11 @@ for (const source of sources) {
   }
 }
 
+const credentialSources = await verifyRepositoryCredentialBoundary();
+
 process.stdout.write(
   "Workspace boundary verified: " +
     `${activeApplications.length} application, ${activePackages.length} packages, ` +
-    `${activeGoPackages.length} Go packages, ${sources.length} sources, legacy excluded.\n`,
+    `${activeGoPackages.length} Go packages, ${sources.length} sources, legacy excluded; ` +
+    `${credentialSources} credential sources checked.\n`,
 );

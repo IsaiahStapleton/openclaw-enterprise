@@ -16,7 +16,8 @@ pnpm test:conformance
 pnpm test:integration
 ```
 
-`check:workspace` checks the active workspace.
+`check:workspace` checks the active workspace, including the
+[repository credential source boundary](repository-credentials.md#check-source-authority-boundaries).
 The test scripts above run the same canonical workspace verification before
 their selected Node.js tests. `openapi:check` compares generated routes and both
 API artifacts with the checked-in versions. `typecheck` and `build` currently
