@@ -7,7 +7,7 @@ import {
 import { validateServiceConfig } from "../../apps/controller/src/drivers/repository-credentials/configuration.ts";
 import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
-import { createProviderTransport } from "../../apps/repository-credentials/src/backends/github/provider-transport.ts";
+import { createProviderTransport } from "../../apps/controller/src/providers/repository-credentials/github/provider-transport.ts";
 
 const config = validateServiceConfig({
   gateway: {
