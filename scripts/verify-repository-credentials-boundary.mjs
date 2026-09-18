@@ -16,6 +16,8 @@ const reviewedImports = {
     "node:fs/promises": ["lstat", "open"],
     "node:tls": ["createSecureContext"],
   },
+  "lifecycle.ts": { "node:crypto": ["randomUUID"] },
+  "sessions.ts": { "node:crypto": ["createHash", "randomBytes", "randomUUID"] },
 };
 const ordinaryBuiltins = new Set([
   "node:os",
