@@ -23,6 +23,14 @@ Read its [implementation status](docs/design.md#implementation-status) before
 treating a target-design capability as implemented; verify current code and tests.
 Do not create a competing architecture specification in this checkout.
 
+## Repository layout
+
+Read and follow [Repository layout and conventions](docs/layout.md) before
+adding or moving code, tests, tooling, or documentation. Place changes with the
+existing owner and preserve the declared workspace and package boundaries.
+Update that guide and affected navigation in the same change when directories,
+ownership, or placement conventions change.
+
 ## Keep agents in their lane
 
 "Our PRs" and "my PRs" mean PRs authored by the requesting user's GitHub
