@@ -21,6 +21,13 @@ and prints a safe configuration summary. It does not start listeners or call
 GitHub. The emitted app uses Node built-ins and needs no controller packages or
 runtime `node_modules`.
 
+For `invalid-configuration`, inspect the file and every directory in its absolute
+path. Use root or service-user ownership, private configuration/key files, and
+directories that other users cannot modify. A root-owned sticky temporary
+directory is allowed above the protected immediate parent. Move files out of
+shared writable deployment directories before retrying; the complete policy is
+in the [reference](../reference/repository-credentials.md#configuration).
+
 Create the protected configuration shown in the
 [reference](../reference/repository-credentials.md#configuration). Use a GitHub
 App installed on the selected repository with the permissions for your chosen

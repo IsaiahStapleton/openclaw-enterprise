@@ -27,13 +27,18 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
     process.stdout.write(`${JSON.stringify(await checkConfiguration(path))}\n`);
     return;
   }
+  await startCredentialService(path);
+}
+
+/** Start the service using its protected, operator-owned configuration. */
+export async function startCredentialService(configurationPath: string): Promise<RunningService> {
   const [{ createSystemClock }, { loadConfiguration }] = await Promise.all([
     import("./clock.ts"),
     import("./config.ts"),
   ]);
   const clock = createSystemClock();
-  const loaded = await loadConfiguration(path, clock);
-  await runService(loaded, clock);
+  const loaded = await loadConfiguration(configurationPath, clock);
+  return runService(loaded, clock);
 }
 
 /** Trusted process composition, shared by the CLI and embedded process launchers. */
@@ -94,7 +99,13 @@ export async function runService(
   };
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
-  return { service, listeners };
+  const controls = Object.freeze<CredentialService>({
+    open: (input) => service.open(input),
+    status: (sessionId) => service.status(sessionId),
+    close: (sessionId) => service.close(sessionId),
+    shutdown: (graceMs) => service.shutdown(graceMs),
+  });
+  return Object.freeze({ service: controls, listeners });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
