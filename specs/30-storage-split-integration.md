@@ -1,6 +1,6 @@
 # Storage split: shared interface and integration
 
-**Status: Draft; integration incomplete.** This updates the Memory placement and
+**Status: Draft; integration incomplete.** This updates the Memory and Skills placement and
 implementation plan in [the original proposal](28-gateway-harness-storage-split.md).
 The separate-storage boundary, native Harness file tools, four-document owner
 editing scope, and first-start file behavior remain the same.
@@ -13,12 +13,21 @@ compatibility is a source-review requirement, not a second model E2E environment
 
 ## Where data lives
 
-| Gateway storage                           | Harness storage                             |
-| ----------------------------------------- | ------------------------------------------- |
-| Credentials, policy, conversation history | Project files, Git repo and Agent documents |
-| Memory index and maintenance state        | Memory files                                |
-| Attachment bytes needed for delivery      | Task inputs and outputs                     |
-| Gateway plugin code and policy hooks      | Skills and their execution dependencies     |
+| Data                                                     | Authoritative location  | Why / cross-host access                                                                                       |
+| -------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Credentials, policy, conversation history                | Gateway                 | Gateway controls routing, access and session state.                                                           |
+| Project files, Git repo, Agent documents                 | Harness                 | Native file tools operate locally; Gateway reads permitted documents and edits only the four owner documents. |
+| Memory files                                             | Harness                 | The model reads and writes files; Gateway accesses them for indexing and maintenance.                         |
+| Memory index and maintenance state                       | Gateway                 | Reuse search, embedding and session-indexing logic.                                                           |
+| Bundled, plugin, Library, Workshop and user-level Skills | Gateway                 | These sources are installed or published on Gateway; deliver selected resources to the Harness when needed.   |
+| Workspace Skills                                         | Harness                 | Discover workspace roots remotely; read and execute their contents locally.                                   |
+| Harness-private Skills, such as Codex-managed Skills     | Harness                 | Keep native discovery private; do not enumerate them into Gateway's catalog.                                  |
+| Skill execution dependencies                             | Harness                 | Run approved installers where the tools execute, regardless of the Skill source.                              |
+| Attachments                                              | Each consumer's storage | Stage inputs on Harness; retrieve selected outputs into Gateway for delivery.                                 |
+
+Source names alone do not determine placement. Configured extra directories and
+managed directories inside the workspace are Harness-owned; those outside it
+remain Gateway-owned. Preserve existing source precedence across the two hosts.
 
 The Harness remains an untrusted execution environment. Neither side gets a
 general mount of the other's storage. Gateway retrieves permitted content for
@@ -64,17 +73,40 @@ maintenance state. Only file operations move. The tradeoff is remote file reads
 and change notifications, rather than remote search results. Missing remote
 access reports unavailable; it must not read an old Gateway workspace copy.
 
+## Skills: keep discovery with the source owner
+
+Gateway reads its own Skill sources locally. Task preparation reads workspace
+Skill metadata through `loadSkills`; selected bodies and resources use
+`skillResources`. The source owner does not determine execution location:
+Gateway applies policy, and `installSkillDependencies` runs on Harness.
+
+Each image initializes its own bundled/plugin assets. This supplies local
+software resources; it does not make Gateway discover every Skill remotely or
+synchronize a mutable workspace.
+
+Channel startup uses Gateway-local Skill discovery. The first release does not
+generate native channel command menus from remote workspace Skills; ordinary
+message ingress does not wait for that catalog. Required task-time reads still
+report unavailable when Harness cannot supply them.
+
+[OCE #241](https://github.com/openclaw/openclaw-enterprise/issues/241) tracks remote
+Skill menus: cache names, descriptions and command mappings on Gateway, refresh
+in the background, and update menus and handlers together. Start from the cached
+list, or basic commands on first startup. Execution still resolves current Skill
+content and permissions. The cache and background refresh are deferred, not part
+of this implementation.
+
 ## Common contract, different transports
 
 The OpenClaw candidate registers `AgentWorkspaceAccess` for the Agent's workspace.
 Existing Gateway callers select it; ordinary local workspaces keep their current path.
 
-| Consumer                      | Shared candidate interface                   | Harness-side work                                                              |
-| ----------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------ |
-| Agent documents and bootstrap | `bridge` (`SandboxFsBridge`)                 | Read permitted documents; write only the owner-editable documents              |
-| Attachments                   | `prepareTurnAttachments`, `outboundMedia`    | Stage inputs and fetch selected outputs                                        |
-| Memory                        | `memoryFiles`                                | Native discovery, reads, maintenance writes and watch notifications            |
-| Skills                        | `skillResources`, `installSkillDependencies` | Supply source for policy checks; run the approved installer beside the Harness |
+| Consumer                      | Shared candidate interface                                 | Harness-side work                                                                    |
+| ----------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Agent documents and bootstrap | `bridge` (`SandboxFsBridge`)                               | Read permitted documents; write only the owner-editable documents                    |
+| Attachments                   | `prepareTurnAttachments`, `outboundMedia`                  | Stage inputs and fetch selected outputs                                              |
+| Memory                        | `memoryFiles`                                              | Native discovery, reads, maintenance writes and watch notifications                  |
+| Skills                        | `loadSkills`, `skillResources`, `installSkillDependencies` | Discover workspace sources; read selected resources; run approved dependency recipes |
 
 Candidate source owners in `openclaw/openclaw`:
 
@@ -86,6 +118,9 @@ Candidate source owners in `openclaw/openclaw`:
   client, using the plugin-owned `workspace.memory` command and existing file grants.
 - `extensions/memory-core/src/remote/memory-files-worker.ts`: native file operations,
   without an index or embedding credentials on Harness.
+- `src/skills/loading/workspace-skill-sources.ts`: partition Gateway and workspace roots.
+- `src/skills/loading/workspace-skill-loader.ts`: merge discovery in existing precedence;
+  use Harness availability facts without moving Gateway source files.
 - `src/skills/lifecycle/install.ts`: Gateway policy check before remote dependency installation.
 
 These are candidate paths, not a claim that the current OpenClaw release supplies
@@ -113,7 +148,7 @@ Verification of a Codex host over SSH does not prove Enterprise node transport
 or provisioning. The existing node adapter
 currently registers document, attachment, Memory and Skills access. Native Memory
 operations pass local tests. Skills discovery, instruction reads and a real npm
-dependency installation pass locally. Bundled/plugin Skills initialize from each
+dependency installation pass locally. Bundled/plugin assets initialize from each
 host's image instead of shared mounts; the Harness runtime-image test passes.
 The dedicated Gateway workspace and generated-image mounts are removed; sessions
 use Gateway private storage. Manifest checks pass, but these checks do not prove
@@ -131,3 +166,8 @@ failure states do not expand this acceptance list.
 Update the [existing workspace flow](../docs/flows/workspace-files.md) as each path
 lands. Local packaged-worker tests and mount checks are useful evidence, but do
 not establish Enterprise deployment or model E2E.
+
+Remaining integration and accepted limitations are tracked under
+[OCE #76](https://github.com/openclaw/openclaw-enterprise/issues/76), with deferred
+remote menus in #241. Existing bugs and unconfirmed test-only states are recorded
+separately from features deferred by this design.

@@ -174,13 +174,16 @@ outputs, while owner document editing retains its four-file allowlist. The index
 and embedding configuration remain on Gateway. Local native-worker read, write
 and watch checks pass; deployment verification remains pending.
 
-`workspace.skills` connects native discovery, source reads and dependency
-installation. The Gateway checks installation policy before requesting execution;
-the Harness launcher adds native dependency directories to both child processes'
-PATH. Local discovery, reads and real npm installation pass. Both launchers run
-`runtime-entrypoints.ts:initializeRuntimeAssets` using their own image. Compute
-no longer mounts bundled/plugin Skills from the shared PVC. The Harness runtime
-test verifies private asset initialization and retained owner document edits.
+`workspace.skills` supplies workspace discovery, source reads and dependency
+installation. Gateway-provided Skills remain local; the
+[ownership table](../../specs/30-storage-split-integration.md#where-data-lives)
+distinguishes these from Harness-owned files. Gateway checks policy before
+requesting dependency installation on Harness. Each launcher runs
+`runtime-entrypoints.ts:initializeRuntimeAssets` from its own image; this replaces
+shared asset mounts, not local Gateway discovery. Remote-derived channel menus
+are deferred to [#241](https://github.com/openclaw/openclaw-enterprise/issues/241).
+Local discovery, reads, npm installation and Harness image initialization pass;
+deployed integration remains unverified.
 `kubernetes/index.ts:deployment` mounts the workspace and generated-image PVC
 only on Harness. Dedicated Gateway sessions move to its private state PVC;
 Harness no longer receives them. The existing Codex remote-media reader transfers
@@ -230,7 +233,7 @@ primary Agent `main`. Reads re-check the response content limit and return
 `{ name, content }`; writes return `{ name, size }`. There is no list, delete,
 compare-and-swap, generic RPC, chat bridge, or PostgreSQL file copy.
 
-The Kubernetes PVC retains the native workspace across gateway Pod replacement.
+The Harness PVC retains the dedicated workspace across Pod replacement.
 Certificate renewal under the same trusted CA affects new WSS connections
 without restarting OCC. Root-CA replacement follows the
 [trust rotation requirements](../reference/gateway-routing.md#tls-and-certificate-lifecycle).
@@ -268,6 +271,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 14:15: Clarified Skill source ownership and deferred remote channel menus; corrected dedicated workspace persistence. (01a082d6-50c7-7953-808f-7e609f6fc7cb - 56e4fa74eacb0c411f51353f4f726444fc572336)
 
 - 2026-09-18 13:22: Reused Harness storage for revision-specific node identity; removed the separate node PVC lifecycle. (01a082d6-50c7-7953-808f-7e609f6fc7cb - e257c4d96934895de7d3e06980dddce05ae19725)
 

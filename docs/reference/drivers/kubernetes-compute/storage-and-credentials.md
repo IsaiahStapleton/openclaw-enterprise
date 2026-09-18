@@ -1,6 +1,6 @@
 # Kubernetes storage and credentials
 
-Configure persistent gateway state, shared dedicated workspaces, and runtime
+Configure separate Gateway and Harness storage, and runtime
 Secrets for the [Kubernetes Compute Driver](../kubernetes-compute.md).
 
 ## Gateway storage
@@ -33,19 +33,21 @@ writer.
 Only the gateway Pod receives this claim. Its complete writable directories
 include database files and their WAL/SHM siblings:
 
-| Private subpath | Gateway mount                            |
-| --------------- | ---------------------------------------- |
-| `state`         | `/home/node/.openclaw/state`             |
-| `agent`         | `/home/node/.openclaw/agents/main/agent` |
-| `media`         | `/home/node/.openclaw/media`             |
+| Private subpath             | Gateway mount                               |
+| --------------------------- | ------------------------------------------- |
+| `state`                     | `/home/node/.openclaw/state`                |
+| `agent`                     | `/home/node/.openclaw/agents/main/agent`    |
+| `media`                     | `/home/node/.openclaw/media`                |
+| `sessions` (dedicated mode) | `/home/node/.openclaw/agents/main/sessions` |
 
 Embedded gateways also mount the same private claim's `workspace` subpath at
 `/home/node/.openclaw/workspace`, the default workspace under the configured
 `OPENCLAW_STATE_DIR`. This retains the workspace files attested by gateway
 SQLite so a continued turn after Pod replacement does not fail with
 `WorkspaceVanishedError`. Native configurations that override the workspace
-path are outside this default-workspace persistence contract. Dedicated
-gateways keep their existing shared workspace at `/home/node/workspace`.
+path are outside this default-workspace persistence contract. In dedicated mode,
+`/home/node/workspace` is a logical Gateway workspace key: file access uses the
+paired node, and Gateway does not mount the Harness workspace.
 
 A nonroot init container prepares these directories using the gateway image,
 without credentials or additional privileges. The nested
@@ -53,11 +55,29 @@ without credentials or additional privileges. The nested
 Codex credentials remain ephemeral. The remaining private runtime home is
 also ephemeral. Persisting these directories does not persist the entire home.
 
-Each dedicated Agent additionally receives its existing `40Gi`
-`ReadWriteMany` shared workspace claim. Workspace, session sharing,
-generated-image exchange, and skill mounts keep their existing directional
-permissions. The dedicated Harness never receives the private gateway claim.
-Embedded Agents receive the private claim but do not create a shared claim.
+## Harness storage
+
+Each dedicated Agent receives a `40Gi` `ReadWriteMany` claim mounted only by
+Harness Pods:
+
+| Subpath                                       | Harness mount                        |
+| --------------------------------------------- | ------------------------------------ |
+| `workspace`                                   | `/home/node/workspace`               |
+| `generated-images`                            | `/home/node/.codex/generated_images` |
+| `workspace-node-<agent-hash>-<revision-hash>` | `/home/node/.openclaw-node`          |
+
+The revision-specific directory retains file-node identity across Pod replacement.
+Sessions stay on the private Gateway claim. Selected generated-image bytes return
+through the Codex remote-media reader; there is no shared image mount. Each image
+initializes its own bundled/plugin assets instead of mounting shared Skill trees.
+The Harness never receives the Gateway claim. Embedded Agents use the private
+claim without creating this Harness claim.
+
+RWX remains necessary for the Driver's overlapping Harness revisions, not for
+Gateway access. The interface and Skill ownership proposal is recorded in
+[the storage split specification](../../../../specs/30-storage-split-integration.md#where-data-lives).
+Rendered mounts do not establish deployed runtime compatibility; use the
+[workspace flow](../../../flows/workspace-files.md) for integration status.
 
 Both claims retain exact Namespace and Agent ownership across revision
 cutover and gateway Pod replacement. Reconciliation rejects foreign,
