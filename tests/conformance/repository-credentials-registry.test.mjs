@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -8,6 +9,18 @@ import {
   validateGitHubRepositoryRegistry,
 } from "../../apps/controller/src/providers/repository-credentials/github/registry.ts";
 import { loadGitHubRepositoryRegistry } from "../../apps/controller/src/providers/repository-credentials/github/registry-loader.ts";
+import {
+  createGitHubDriverFactory,
+  createGitHubKeyOwner,
+} from "../../apps/controller/src/providers/repository-credentials/github/index.ts";
+import { validateServiceConfig } from "../../apps/controller/src/drivers/repository-credentials/configuration.ts";
+import { createCredentialService } from "../../apps/controller/src/drivers/repository-credentials/service.ts";
+import {
+  githubConfigurationData,
+  serviceConfigurationData,
+} from "../fixtures/repository-credentials/builders.mjs";
+import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
+import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
 
 function registryInput() {
   return {
@@ -109,6 +122,63 @@ test("canonical registry fingerprints bind exact authority and the selected Name
   assert.throws(() => {
     registry.repositories[0].namespaces[0].profiles.push("git-read");
   }, TypeError);
+});
+
+test("GitHub factory snapshots a registry-selected write grant through session admission", (t) => {
+  const resources = createResourceScope();
+  t.after(() => resources.close());
+  const registry = validateGitHubRepositoryRegistry(registryInput());
+  const binding = resolveGitHubRepositoryBinding(registry, {
+    namespaceId: "namespace-a",
+    repositoryRef: "application",
+    profile: "git-write",
+  });
+  const selection = { profile: binding.profile, identity: { ...binding.grant } };
+  const expected = { ...selection.identity };
+  const clock = createControlledClock(1700000000000);
+  const config = validateServiceConfig(serviceConfigurationData());
+  const configuration = githubConfigurationData({
+    providerInstanceId: registry.providerInstanceId,
+    configVersion: "registry",
+    appId: registry.appId,
+    installationId: registry.githubInstallationId,
+    repositoryId: registry.repositories[0].repositoryId,
+    repository: registry.repositories[0].repository,
+  });
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const key = createGitHubKeyOwner({ privateKey, appId: configuration.appId, clock });
+  resources.after(() => key.close());
+  const factory = createGitHubDriverFactory({
+    configuration,
+    binding: selection,
+    key,
+    clock,
+    gatewayOrigin: config.gateway.publicOrigin,
+    limits: config.limits,
+  });
+
+  // Caller mutation cannot replace the selected profile or its opaque registry grant.
+  selection.profile = "git-full";
+  selection.identity.providerInstanceId = "changed-instance";
+  selection.identity.repositoryId = "74";
+  selection.identity.grantId = "changed-grant";
+  const resolved = factory.resolve("git-write");
+  assert.deepEqual(resolved.binding, expected);
+  assert.equal(Object.isFrozen(resolved.binding), true);
+  assert.throws(() => factory.resolve("git-read"), /unsupported-profile/);
+  assert.throws(() => factory.resolve("git-full"), /unsupported-profile/);
+
+  // Admission must find the selected write authority without probing a refused read profile.
+  const service = createCredentialService({ config, factory, clock });
+  resources.after(() => service.shutdown(1000));
+  const opened = service.open({ durationSeconds: 60, profile: "git-write" });
+  assert.equal(opened.session.state, "OPEN");
+  assert.deepEqual(opened.session.binding, expected);
+  assert.throws(
+    () => service.open({ durationSeconds: 60, profile: "git-full" }),
+    /unsupported-profile/,
+  );
+  service.close(opened.session.sessionId);
 });
 
 test("registry refuses ambiguous repositories, wildcard policy, unsupported profiles and noncanonical IDs", async (t) => {
