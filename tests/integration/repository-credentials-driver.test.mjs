@@ -226,6 +226,40 @@ test("Unix control rejects malformed status and preserves authoritative absence 
     reply = { status: 200, body };
     await assert.rejects(client.close(id, signal), (error) => error.retryable === true);
   }
+  await t.test("created response rejects a non-string client username", async () => {
+    const configuration = {
+      gatewayOrigin: "https://credentials.example.test",
+      gitRemote: "https://credentials.example.test/example/project.git",
+      gitUsername: "gateway-session",
+      canonicalApiHost: "github.com",
+      apiHost: "credentials.example.test",
+      repository: "example/project",
+    };
+    const input = {
+      namespaceId: "namespace",
+      repositoryRef: "project",
+      profile: "git-read",
+      expectedBinding: valid.binding,
+      durationSeconds: 1,
+      deadlineWallMs: valid.deadlineWallMs,
+    };
+    const admissionId = `${Date.now()}-${randomUUID()}`;
+    reply = {
+      status: 201,
+      body: {
+        session: { ...valid, state: "OPEN" },
+        bearer: "b".repeat(43),
+        client: configuration,
+      },
+    };
+    assert.deepEqual((await client.open(input, admissionId, signal)).result.client, configuration);
+    // A username bypasses URL parsing but still crosses the untrusted control-response boundary.
+    reply.body.client = { ...configuration, gitUsername: 1 };
+    await assert.rejects(
+      client.open(input, admissionId, signal),
+      (error) => error.retryable === true,
+    );
+  });
   reply = { status: 404, body: { error: "not-found" } };
   assert.equal(await client.status(id, signal), undefined);
   for (const candidate of [

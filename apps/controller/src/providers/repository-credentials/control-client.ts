@@ -120,17 +120,18 @@ function status(value: unknown): RepositoryCredentialSessionStatus {
     "uncertain",
     "auxiliaryPending",
   ]);
+  const deadlineWallMs = counter(parsed.deadlineWallMs);
   if (
     (parsed.state !== "OPEN" && parsed.state !== "CLOSED" && parsed.state !== "DISPOSED") ||
     typeof cleanup.auxiliaryPending !== "boolean" ||
-    counter(parsed.deadlineWallMs) === 0
+    deadlineWallMs === 0
   ) {
     return unavailable();
   }
   const result = Object.freeze({
     sessionId: sessionId(parsed.sessionId),
     state: parsed.state,
-    deadlineWallMs: parsed.deadlineWallMs as number,
+    deadlineWallMs,
     binding: binding(parsed.binding),
     activeUses: counter(parsed.activeUses),
     cleanup: Object.freeze({
@@ -164,11 +165,16 @@ function client(value: unknown): RepositoryCredentialClientConfiguration {
     "apiHost",
     "repository",
   ]);
-  const fields = Object.fromEntries(
-    Object.entries(parsed).map(([key, value]) => [key, identity(value)]),
-  );
-  const origin = new URL(fields.gatewayOrigin!);
-  const remote = new URL(fields.gitRemote!);
+  const fields: RepositoryCredentialClientConfiguration = {
+    gatewayOrigin: identity(parsed.gatewayOrigin),
+    gitRemote: identity(parsed.gitRemote),
+    gitUsername: identity(parsed.gitUsername),
+    canonicalApiHost: identity(parsed.canonicalApiHost),
+    apiHost: identity(parsed.apiHost),
+    repository: identity(parsed.repository),
+  };
+  const origin = new URL(fields.gatewayOrigin);
+  const remote = new URL(fields.gitRemote);
   if (
     origin.protocol !== "https:" ||
     origin.origin !== fields.gatewayOrigin ||
@@ -180,13 +186,13 @@ function client(value: unknown): RepositoryCredentialClientConfiguration {
     remote.search ||
     remote.hash ||
     fields.apiHost !== origin.hostname ||
-    !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(fields.canonicalApiHost!) ||
-    !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(fields.repository!) ||
+    !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(fields.canonicalApiHost) ||
+    !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(fields.repository) ||
     remote.pathname !== `/${fields.repository}.git`
   ) {
     return unavailable();
   }
-  return Object.freeze(fields) as unknown as RepositoryCredentialClientConfiguration;
+  return Object.freeze(fields);
 }
 
 function opened(value: unknown): RepositoryCredentialSessionResult {
