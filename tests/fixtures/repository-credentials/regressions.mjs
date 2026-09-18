@@ -24,7 +24,9 @@ for (const reason of ["timeout", "output overflow", "cancelled"]) {
       // Cancel only after the descendant exists, so this proves tree cleanup
       // rather than racing process startup on a busy container host.
       timer = setInterval(() => {
-        if (existsSync(pidFile)) controller.abort("sensitive-fixture-value");
+        if (existsSync(pidFile)) {
+          controller.abort("sensitive-fixture-value");
+        }
       }, 10);
     }
     const start = performance.now();
@@ -48,7 +50,9 @@ for (const reason of ["timeout", "output overflow", "cancelled"]) {
       try {
         running = !/\) Z /.test(await readFile(`/proc/${pid}/stat`, "utf8"));
       } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
       }
       assert.equal(running, false, "owned descendant remains running");
     } finally {
@@ -58,8 +62,9 @@ for (const reason of ["timeout", "output overflow", "cancelled"]) {
 }
 
 test("pre-registered cleanup reconciles accepted creations with lost responses without replay", async (t) => {
-  if (await runInFixtureContainer(t, "tests/fixtures/repository-credentials/regressions.mjs"))
+  if (await runInFixtureContainer(t, "tests/fixtures/repository-credentials/regressions.mjs")) {
     return;
+  }
   // Reconciliation uses the same admitted session and production sender as the
   // original write, including when the provider accepted it but lost its reply.
   const serviceFixture = await startCredentialServiceFixture(t);
@@ -126,7 +131,9 @@ test("pre-registered cleanup reconciles accepted creations with lost responses w
     fixture.disconnectAfterMutation("POST", `/${path}`);
     await assert.rejects(send({ method: "POST", path, body }));
   }
-  for (const action of cleanups.reverse()) await action(AbortSignal.timeout(5000));
+  for (const action of cleanups.reverse()) {
+    await action(AbortSignal.timeout(5000));
+  }
   assert.equal(fixture.issues.get(parent.number).state, "open");
   assert.equal(fixture.pulls.get(other.number).state, "open");
   assert.equal(fixture.comments.size, 1);

@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import type { SafeConfigurationSummary } from "./contracts.ts";
 import { loadConfiguration } from "./config.ts";
 import { createSystemClock } from "./clock.ts";
+
 export async function checkConfiguration(path: string): Promise<SafeConfigurationSummary> {
   const loaded = await loadConfiguration(path, createSystemClock());
   try {

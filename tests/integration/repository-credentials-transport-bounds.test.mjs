@@ -40,7 +40,9 @@ async function startTransport(t, onRequest, limits = {}) {
         failures.push(error);
       }
     }
-    if (failures.length) throw new AggregateError(failures, "transport cleanup failed");
+    if (failures.length) {
+      throw new AggregateError(failures, "transport cleanup failed");
+    }
   });
   const [
     { createSystemClock },
@@ -170,7 +172,9 @@ function startRequest(
       response.once("end", () => finish("completed"));
       response.once("error", () => finish("closed"));
       response.once("close", () => {
-        if (!response.complete) finish("closed");
+        if (!response.complete) {
+          finish("closed");
+        }
       });
       onResponse?.(response);
     },
@@ -232,7 +236,9 @@ test(
         if (heldResponses.length < 2) {
           heldResponses.push(outgoing);
           outgoing.write("0000");
-        } else outgoing.end("0000");
+        } else {
+          outgoing.end("0000");
+        }
       },
       { exchanges: 2, exchangesPerSession: 1, sockets: 8 },
     );
@@ -277,10 +283,13 @@ test(
     assert.equal(fixture.received.length, 2);
 
     // Denial cannot cancel either admitted stream or replace its credential.
-    for (const response of heldResponses) response.write("0000");
+    for (const response of heldResponses) {
+      response.write("0000");
+    }
     await eventually(() => delivered.every((bytes) => bytes === 8));
-    for (const opened of [first, second])
+    for (const opened of [first, second]) {
       assert.equal(fixture.service.status(opened.session.sessionId).activeUses, 1);
+    }
     heldResponses[0].end();
     assert.deepEqual(await heldClients[0].result, {
       kind: "completed",
@@ -416,7 +425,9 @@ test(
       (incoming, outgoing) => {
         incoming.on("data", (chunk) => (receivedBytes += chunk.length));
         incoming.once("close", () => {
-          if (!incoming.complete) incompleteRequestClosed = true;
+          if (!incoming.complete) {
+            incompleteRequestClosed = true;
+          }
         });
         incoming.once("end", () =>
           outgoing
@@ -553,7 +564,9 @@ function writePayload(outgoing) {
 
 function payloadDigest() {
   const hash = createHash("sha256");
-  for (let offset = 0; offset < streamBytes; offset += streamChunk.length) hash.update(streamChunk);
+  for (let offset = 0; offset < streamBytes; offset += streamChunk.length) {
+    hash.update(streamChunk);
+  }
   return hash.digest("hex");
 }
 
@@ -664,7 +677,9 @@ test(
       if (++requests === 1) {
         outgoing.once("close", () => (upstreamCancelled = !outgoing.writableFinished));
         outgoing.write("0000");
-      } else outgoing.end("0000");
+      } else {
+        outgoing.end("0000");
+      }
     });
     let delivered = 0;
     const client = startRequest(fixture, {

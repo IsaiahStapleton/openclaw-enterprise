@@ -60,12 +60,15 @@ export function createCredentialService(
   let shuttingDown = false;
 
   function notifyShutdown() {
-    for (const notify of [...shutdownWaiters]) notify();
+    for (const notify of [...shutdownWaiters]) {
+      notify();
+    }
   }
 
   function isOpen(session: Session) {
-    if (session.state === "OPEN" && clock.monotonicNow() >= session.admission.deadlineMonoMs)
+    if (session.state === "OPEN" && clock.monotonicNow() >= session.admission.deadlineMonoMs) {
       close(session);
+    }
     return session.state === "OPEN";
   }
   function changed(session: Session) {
@@ -78,8 +81,9 @@ export function createCredentialService(
       session.custody.reservations.size === 0 &&
       session.custody.renewalCount === 0 &&
       session.custody.renewalCallbacks === 0
-    )
+    ) {
       session.state = "DISPOSED";
+    }
     notifyShutdown();
   }
   function snapshot(session: Session): SessionStatus {
@@ -105,7 +109,9 @@ export function createCredentialService(
     });
   }
   function finish(exchange: Exchange) {
-    if (exchange.finished) return;
+    if (exchange.finished) {
+      return;
+    }
     exchange.finished = true;
     exchange.detach();
     exchange.cancellations.clear();
@@ -114,51 +120,72 @@ export function createCredentialService(
     changed(exchange.session);
   }
   function cancel(exchange: Exchange) {
-    if (exchange.finished) return;
+    if (exchange.finished) {
+      return;
+    }
     exchange.controller.abort();
     for (const stop of exchange.cancellations) {
       try {
         stop();
-      } catch {}
+      } catch {
+        // One failing cancellation must not prevent the remaining stops.
+        // Executing exchanges retain ownership of draining I/O and finishing.
+      }
     }
     exchange.cancellations.clear();
-    if (!exchange.executing) finish(exchange);
+    if (!exchange.executing) {
+      finish(exchange);
+    }
   }
   function close(session: Session) {
-    if (session.state !== "OPEN") return;
+    if (session.state !== "OPEN") {
+      return;
+    }
     session.state = "CLOSED";
     bearers.delete(session.admission.digest);
     session.cancelDeadline();
-    for (const exchange of [...session.exchanges]) cancel(exchange);
+    for (const exchange of [...session.exchanges]) {
+      cancel(exchange);
+    }
     session.lifecycle.close();
     changed(session);
   }
   function original(ref: ExchangeRef) {
     const exchange = exchanges.get(ref);
-    if (!exchange || exchange.finished) throw new Error("FOREIGN_EXCHANGE");
+    if (!exchange || exchange.finished) {
+      throw new Error("FOREIGN_EXCHANGE");
+    }
     return exchange;
   }
 
   return Object.freeze({
     open(input: OpenSessionInput) {
-      if (shuttingDown) throw new Error("SERVICE_CLOSED");
+      if (shuttingDown) {
+        throw new Error("SERVICE_CLOSED");
+      }
       if (
         !Number.isSafeInteger(input.durationSeconds) ||
         input.durationSeconds <= 0 ||
         input.durationSeconds > policy.maximumDurationSeconds
-      )
+      ) {
         throw new Error("INVALID_DURATION");
+      }
       const profile = input.profile ?? policy.defaultProfile;
-      if (!policy.allowedProfiles.includes(profile)) throw new Error("INVALID_PROFILE");
+      if (!policy.allowedProfiles.includes(profile)) {
+        throw new Error("INVALID_PROFILE");
+      }
       for (const [id, existing] of sessions) {
         isOpen(existing);
-        if (existing.state === "DISPOSED") sessions.delete(id);
+        if (existing.state === "DISPOSED") {
+          sessions.delete(id);
+        }
       }
-      if (sessions.size + failedConstructions.size >= limits.sessions)
+      if (sessions.size + failedConstructions.size >= limits.sessions) {
         throw new Error("SESSION_CAPACITY");
+      }
       const resolved = factory.resolve(profile);
       const { bearer, ...admission } = admitSession(resolved.binding, input.durationSeconds, clock);
-      let session: Session;
+      let session: Session | undefined = undefined;
       let constructing = true;
       const custody = createCustody({
         clock,
@@ -186,8 +213,9 @@ export function createCredentialService(
           binding.providerInstanceId !== admission.binding.providerInstanceId ||
           binding.repositoryId !== admission.binding.repositoryId ||
           binding.grantId !== admission.binding.grantId
-        )
+        ) {
           throw new Error("DRIVER_BINDING_MISMATCH");
+        }
       } catch (error) {
         constructing = false;
         // No valid driver exists to finalize this custody. Retain its capacity
@@ -211,10 +239,12 @@ export function createCredentialService(
         safetyMarginMs: limits.credentialMarginMs,
         admitted: () => !!session && isOpen(session),
         changed: () => {
-          if (session) changed(session);
+          if (session) {
+            changed(session);
+          }
         },
       });
-      session = {
+      const openedSession: Session = {
         admission,
         custody,
         driver,
@@ -223,9 +253,10 @@ export function createCredentialService(
         exchanges: new Set(),
         cancelDeadline: () => {},
       };
+      session = openedSession;
       session.cancelDeadline = clock.schedule(
         Math.max(0, admission.deadlineMonoMs - clock.monotonicNow()),
-        () => close(session),
+        () => close(openedSession),
       );
       sessions.set(admission.authority.sessionId, session);
       bearers.set(admission.digest, session);
@@ -241,19 +272,27 @@ export function createCredentialService(
     },
     close(sessionId: string) {
       const session = sessions.get(sessionId);
-      if (!session) throw new Error("SESSION_NOT_FOUND");
+      if (!session) {
+        throw new Error("SESSION_NOT_FOUND");
+      }
       close(session);
       return snapshot(session);
     },
     reserve(bearer: string, head: RequestHead, signal: AbortSignal) {
       const digest = bearerDigest(bearer);
       const session = digest ? bearers.get(digest) : undefined;
-      if (shuttingDown || !session || !isOpen(session) || signal.aborted)
+      if (shuttingDown || !session || !isOpen(session) || signal.aborted) {
         return deny(401, "session-unavailable");
-      if (exchangeCount >= limits.exchanges || session.exchanges.size >= limits.exchangesPerSession)
+      }
+      if (
+        exchangeCount >= limits.exchanges ||
+        session.exchanges.size >= limits.exchangesPerSession
+      ) {
         return deny(503, "exchange-capacity");
-      if (!Number.isFinite(head.receivedMonoMs) || head.receivedMonoMs > clock.monotonicNow())
+      }
+      if (!Number.isFinite(head.receivedMonoMs) || head.receivedMonoMs > clock.monotonicNow()) {
         return deny(400, "invalid-request");
+      }
       let plan: RequestPlan | Denied;
       try {
         plan = session.driver.plan(
@@ -266,14 +305,19 @@ export function createCredentialService(
       } catch {
         return deny(400, "invalid-request");
       }
-      if ("kind" in plan) return plan;
-      if (!Number.isFinite(plan.limits.totalMs) || plan.limits.totalMs <= 0)
+      if ("kind" in plan) {
+        return plan;
+      }
+      if (!Number.isFinite(plan.limits.totalMs) || plan.limits.totalMs <= 0) {
         return deny(400, "invalid-request");
+      }
       const deadline = Math.min(
         session.admission.deadlineMonoMs,
         head.receivedMonoMs + Math.min(limits.exchangeMs, plan.limits.totalMs),
       );
-      if (clock.monotonicNow() >= deadline) return deny(408, "request-expired");
+      if (clock.monotonicNow() >= deadline) {
+        return deny(408, "request-expired");
+      }
       const controller = new AbortController();
       const ref = Object.freeze({}) as ExchangeRef;
       const exchange: Exchange = {
@@ -299,7 +343,9 @@ export function createCredentialService(
       exchanges.set(ref, exchange);
       session.exchanges.add(exchange);
       exchangeCount++;
-      if (signal.aborted) cancel(exchange);
+      if (signal.aborted) {
+        cancel(exchange);
+      }
       return ref;
     },
     plan(ref: ExchangeRef) {
@@ -315,21 +361,28 @@ export function createCredentialService(
     },
     cancel(ref: ExchangeRef) {
       const exchange = exchanges.get(ref);
-      if (!exchange) throw new Error("FOREIGN_EXCHANGE");
+      if (!exchange) {
+        throw new Error("FOREIGN_EXCHANGE");
+      }
       cancel(exchange);
     },
     async shutdown(graceMs: number): Promise<ShutdownSummary> {
-      if (!Number.isFinite(graceMs) || graceMs <= 0) throw new Error("INVALID_GRACE");
+      if (!Number.isFinite(graceMs) || graceMs <= 0) {
+        throw new Error("INVALID_GRACE");
+      }
       shuttingDown = true;
-      for (const session of sessions.values()) close(session);
+      for (const session of sessions.values()) {
+        close(session);
+      }
       let notify: () => void = () => {};
       const drained = new Promise<void>((resolve) => {
         notify = () => {
           if (
             failedConstructions.size === 0 &&
             [...sessions.values()].every((session) => session.state === "DISPOSED")
-          )
+          ) {
             resolve();
+          }
         };
         shutdownWaiters.add(notify);
         notify();

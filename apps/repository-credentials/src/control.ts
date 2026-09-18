@@ -45,17 +45,22 @@ export function createControlAdmission(
   };
   return {
     open(id: string, input: OpenSessionInput) {
-      if (disposed) throw new Error("CONTROL_CLOSED");
+      if (disposed) {
+        throw new Error("CONTROL_CLOSED");
+      }
       sweep();
       const previous = records.get(id);
       if (previous) {
         if (
           previous.input.durationSeconds !== input.durationSeconds ||
           previous.input.profile !== input.profile
-        )
+        ) {
           throw new Error("ADMISSION_CONFLICT");
+        }
         const status = service.status(previous.sessionId);
-        if (!status) throw new Error("ADMISSION_NOT_FOUND");
+        if (!status) {
+          throw new Error("ADMISSION_NOT_FOUND");
+        }
         return { result: status, sessionId: previous.sessionId, created: false };
       }
       const timestamp =
@@ -63,8 +68,12 @@ export function createControlAdmission(
           id,
         );
       const age = timestamp ? now() - Number(timestamp[1]) : -1;
-      if (age < 0 || age >= admissionWindowMs) throw new Error("INVALID_ADMISSION");
-      if (records.size >= 2 * config.limits.sessions) throw new Error("SESSION_CAPACITY");
+      if (age < 0 || age >= admissionWindowMs) {
+        throw new Error("INVALID_ADMISSION");
+      }
+      if (records.size >= 2 * config.limits.sessions) {
+        throw new Error("SESSION_CAPACITY");
+      }
       const opened = service.open(input);
       const record = {
         input,
@@ -87,7 +96,9 @@ export function createControlAdmission(
     },
     dispose() {
       disposed = true;
-      for (const record of records.values()) record.cancel();
+      for (const record of records.values()) {
+        record.cancel();
+      }
       records.clear();
     },
   };
@@ -194,13 +205,17 @@ export async function handleControl(
       // Before handing bytes to the socket, nondelivery is certain. Once writes
       // begin, a lost response is ambiguous and must remain recoverable.
       if (response.destroyed || request.socket.destroyed) {
-        if (admission.created) admissions.close(admission.sessionId);
+        if (admission.created) {
+          admissions.close(admission.sessionId);
+        }
         return;
       }
       try {
         reply(response, admission.created ? 201 : 200, admission.result);
       } catch (error) {
-        if (admission.created && !response.headersSent) admissions.close(admission.sessionId);
+        if (admission.created && !response.headersSent) {
+          admissions.close(admission.sessionId);
+        }
         throw error;
       }
     } else {
@@ -226,9 +241,9 @@ export async function handleControl(
       if (invalid) {
         code = "invalid-request";
         status = 400;
-      } else if (error instanceof Error && error.message === "SESSION_CAPACITY")
+      } else if (error instanceof Error && error.message === "SESSION_CAPACITY") {
         code = "overloaded";
-      else if (error instanceof Error && error.message === "ADMISSION_NOT_FOUND") {
+      } else if (error instanceof Error && error.message === "ADMISSION_NOT_FOUND") {
         code = "not-found";
         status = 404;
       }

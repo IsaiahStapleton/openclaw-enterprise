@@ -1235,8 +1235,9 @@ async function prepareFile({ lane, file, statePath }) {
   const resourceIds = [];
 
   if (name === "repository-credentials-container") {
-    if (state?.lane !== name)
+    if (state?.lane !== name) {
       throw new Error("Repository credential images require their own lane state.");
+    }
     applyLaneEnv(name, env);
     const prepared = await prepareRepositoryCredentialsFile({
       clientImage: env.REPOSITORY_CREDENTIALS_NODE_IMAGE,

@@ -23,7 +23,9 @@ export function sendError(
   code: string,
   headers: Readonly<Record<string, string>> = {},
 ): void {
-  if (response.destroyed) return;
+  if (response.destroyed) {
+    return;
+  }
   if (response.headersSent) {
     response.destroy();
     return;

@@ -124,8 +124,9 @@ test("second backend uses the production HTTPS sender and distinct native authen
       t,
       "tests/conformance/repository-credentials-backend-conformance.test.mjs",
     )
-  )
+  ) {
     return;
+  }
   const clock = createControlledClock();
   const config = await createServiceConfiguration(t);
   const upstream = await startAlternateUpstream(t, { clock });
@@ -169,8 +170,9 @@ test("drain-before rotation waits for a streamed upstream write and preserves th
       t,
       "tests/conformance/repository-credentials-backend-conformance.test.mjs",
     )
-  )
+  ) {
     return;
+  }
   const resources = createResourceScope();
   t.after(() => resources.close());
   const clock = createControlledClock();

@@ -12,7 +12,9 @@ export async function launchClient(
   command: string,
   args: string[],
 ): Promise<number> {
-  if (command !== "git" && command !== "gh") throw new Error("unsupported-client-command");
+  if (command !== "git" && command !== "gh") {
+    throw new Error("unsupported-client-command");
+  }
   const sessionDirectory = resolve(directory);
   const configuration = await readClientConfiguration(sessionDirectory);
   const home = await mkdtemp(join(tmpdir(), "repository-client-"));

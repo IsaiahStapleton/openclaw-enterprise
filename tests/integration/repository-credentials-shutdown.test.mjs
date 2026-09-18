@@ -42,7 +42,9 @@ test(
       stdio: ["pipe", "pipe", "pipe"],
     });
     t.after(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
     });
     let stdout = "";
     let stderr = "";
@@ -67,8 +69,9 @@ test(
       child.once("close", (code, signal) => resolve({ code, signal }));
     });
     const readyDeadline = Date.now() + 5000;
-    while (!stdout.includes("ready\n") && child.exitCode === null && Date.now() < readyDeadline)
+    while (!stdout.includes("ready\n") && child.exitCode === null && Date.now() < readyDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     assert.ok(stdout.includes("ready\n"), "child did not reach pending-settlement readiness");
     const started = Date.now();
     child.kill("SIGTERM");

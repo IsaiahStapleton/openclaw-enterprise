@@ -15,8 +15,11 @@ export function createAlternateDriver({
   controls,
   events,
 }) {
-  for (const key of Object.keys(binding))
-    if (authority[key] !== binding[key]) throw new Error("foreign-authority");
+  for (const key of Object.keys(binding)) {
+    if (authority[key] !== binding[key]) {
+      throw new Error("foreign-authority");
+    }
+  }
   const outcomes = new WeakMap();
   const plans = new WeakSet();
   const handles = new WeakMap();
@@ -39,17 +42,22 @@ export function createAlternateDriver({
     safeCleanupRetry: Object.freeze({ retire: true, finalize: false }),
     async acquire(attempt, previous, minimumValidityMs) {
       custody.assertAttempt(attempt, "acquire");
-      if (previous !== undefined && !handles.has(previous)) throw new Error("foreign-credential");
+      if (previous !== undefined && !handles.has(previous)) {
+        throw new Error("foreign-credential");
+      }
       let dispatched = false;
       try {
         attempt.assertAdmitted();
-        if (finalized)
+        if (finalized) {
           return result(attempt, {
             kind: "reauthorization-required",
             code: "authority-unavailable",
           });
+        }
         await custody.withRenewal(renewal, async (bytes) => {
-          if (digest(bytes) !== renewalDigest) throw new Error("renewal-lost");
+          if (digest(bytes) !== renewalDigest) {
+            throw new Error("renewal-lost");
+          }
         });
         attempt.assertAdmitted();
         attempt.observeDispatch();
@@ -63,7 +71,9 @@ export function createAlternateDriver({
           previous: previous !== undefined,
         });
         const capture = () => {
-          if (current) accepted.delete(handles.get(current).digest);
+          if (current) {
+            accepted.delete(handles.get(current).digest);
+          }
           const bytes = randomBytes(24).toString("hex");
           const observation = {
             observedWallMs: clock.wallNow(),
@@ -83,18 +93,24 @@ export function createAlternateDriver({
           const settled = controls.lateCapture.then(() => {
             capture();
           });
-          if (controls.waitForAcquisitionAbort)
+          if (controls.waitForAcquisitionAbort) {
             await new Promise((resolve) => {
-              if (attempt.signal.aborted) resolve();
-              else attempt.signal.addEventListener("abort", resolve, { once: true });
+              if (attempt.signal.aborted) {
+                resolve();
+              } else {
+                attempt.signal.addEventListener("abort", resolve, { once: true });
+              }
             });
+          }
           return result(attempt, { kind: "uncertain" }, settled);
         }
         const acquired = capture();
-        if (controls.rejectScope)
+        if (controls.rejectScope) {
           return result(attempt, { kind: "rejected", code: "scope-mismatch" });
-        if (lifetimeMs < minimumValidityMs)
+        }
+        if (lifetimeMs < minimumValidityMs) {
           return result(attempt, { kind: "rejected", code: "insufficient-validity" });
+        }
         return result(attempt, acquired);
       } catch {
         return result(attempt, { kind: dispatched ? "uncertain" : "not-dispatched" });
@@ -102,7 +118,9 @@ export function createAlternateDriver({
     },
     async retire(attempt, credential) {
       custody.assertAttempt(attempt, "retire");
-      if (!handles.has(credential)) throw new Error("foreign-credential");
+      if (!handles.has(credential)) {
+        throw new Error("foreign-credential");
+      }
       try {
         attempt.assertAdmitted();
         await custody.withAccess(credential, "retire", async (bytes) => {
@@ -122,7 +140,9 @@ export function createAlternateDriver({
       try {
         attempt.assertAdmitted();
         await custody.withRenewal(renewal, async (bytes) => {
-          if (digest(bytes) !== renewalDigest) throw new Error("renewal-lost");
+          if (digest(bytes) !== renewalDigest) {
+            throw new Error("renewal-lost");
+          }
           attempt.observeDispatch();
         });
         await custody.disposeRenewal(renewal);
@@ -134,7 +154,9 @@ export function createAlternateDriver({
       }
     },
     async settle(original) {
-      if (!outcomes.has(original)) throw new Error("foreign-outcome");
+      if (!outcomes.has(original)) {
+        throw new Error("foreign-outcome");
+      }
       controls.observe?.({ kind: "settlement-started", attemptId: original.attemptId });
       await outcomes.get(original);
       controls.observe?.({ kind: "settlement-completed", attemptId: original.attemptId });
@@ -144,8 +166,9 @@ export function createAlternateDriver({
         request.authority.sessionId !== authority.sessionId ||
         request.head.rawTarget !== "/team/nested/project" ||
         !["GET", "POST"].includes(request.head.method)
-      )
+      ) {
         return denied;
+      }
       const plan = Object.freeze({
         origin,
         target: "/v2/projects/team%2Fnested%2Fproject",
@@ -179,8 +202,9 @@ export function createAlternateDriver({
       return plan;
     },
     async withAuthentication(credential, plan, send) {
-      if (finalized || !plans.has(plan) || !handles.has(credential))
+      if (finalized || !plans.has(plan) || !handles.has(credential)) {
         throw new Error("foreign-or-closed-authority");
+      }
       return custody.withAccess(credential, "authenticate", async (bytes) => {
         events.push({ kind: "authentication", sessionId: authority.sessionId });
         await controls.beforeSend?.();

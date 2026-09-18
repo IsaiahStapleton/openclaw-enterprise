@@ -16,8 +16,9 @@ export async function removeRemoteBranches(client, checkout, branches) {
       .map((line) => line.split("\t")[1]),
   );
   const existing = branches.filter((_, index) => present.has(refs[index]));
-  if (existing.length)
+  if (existing.length) {
     await client.git(["push", "origin", "--delete", ...existing], { cwd: checkout });
+  }
 }
 
 export async function exerciseGit(t, fixture, { push = true } = {}) {
@@ -122,8 +123,9 @@ export async function exerciseGh(t, fixture, client) {
     `${prefix}/issues`,
     `${prefix}/issues/${issue.number}`,
     `${prefix}/issues/comments/${comment.id}`,
-  ])
+  ]) {
     await client.gh(["api", route]);
+  }
   await client.gh([
     "api",
     "--method",

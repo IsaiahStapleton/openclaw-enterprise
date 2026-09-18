@@ -12,12 +12,15 @@ export function createGitHubKeyOwner(options: GitHubKeyOptions): GitHubKeyOwner 
     (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048 ||
     (key.asymmetricKeyDetails?.modulusLength ?? 0) > 8192 ||
     !/^[1-9][0-9]{0,19}$/.test(appId)
-  )
+  ) {
     throw new Error("invalid-signing-key");
+  }
   return Object.freeze({
     async withJwt<T>(consume: (jwt: string, assertCurrent: () => void) => Promise<T>): Promise<T> {
       const assertCurrent = () => {
-        if (!key) throw new Error("authority-unavailable");
+        if (!key) {
+          throw new Error("authority-unavailable");
+        }
       };
       assertCurrent();
       const now = Math.floor(clock.wallNow() / 1000);

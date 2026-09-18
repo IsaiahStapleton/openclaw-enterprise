@@ -80,7 +80,9 @@ function constructionFailure(kind) {
     factory: {
       ...factory,
       create(options) {
-        if (!fail) return factory.create(options);
+        if (!fail) {
+          return factory.create(options);
+        }
         const { custody } = options;
         const first = custody.retainRenewal(Buffer.from("construction-renewal"));
         const second = custody.retainRenewal(Buffer.from("second-renewal"));
@@ -88,7 +90,9 @@ function constructionFailure(kind) {
           retained.bytes = bytes;
           entered.resolve();
           await release.promise;
-          if (kind === "invalid binding") throw new Error("callback-failed");
+          if (kind === "invalid binding") {
+            throw new Error("callback-failed");
+          }
         });
         retained = {
           custody,
@@ -100,7 +104,9 @@ function constructionFailure(kind) {
             () => "failed",
           ),
         };
-        if (kind === "factory throw") throw new Error("factory-failed");
+        if (kind === "factory throw") {
+          throw new Error("factory-failed");
+        }
         const binding = factory.resolve("git-write").binding;
         return {
           binding: { ...binding, grantId: kind === "invalid binding" ? "" : "different-grant" },
@@ -120,10 +126,11 @@ function constructionFailure(kind) {
     async cleanup() {
       release.resolve();
       await retained?.read;
-      if (retained)
+      if (retained) {
         await Promise.allSettled(
           retained.renewals.map((ref) => retained.custody.disposeRenewal(ref)),
         );
+      }
       await tick();
     },
   };
@@ -594,9 +601,13 @@ for (const scenario of [
     const settle = firstDriver.settle.bind(firstDriver);
     firstDriver.settle = async (original) => {
       await settle(original);
-      if (original.kind === scenario.heldOutcome) await settlement.promise;
+      if (original.kind === scenario.heldOutcome) {
+        await settlement.promise;
+      }
     };
-    for (const session of sessions) service.close(session.session.sessionId);
+    for (const session of sessions) {
+      service.close(session.session.sessionId);
+    }
     await tick();
     await clock.advance(1);
     await tick();
@@ -615,11 +626,12 @@ for (const scenario of [
       assert.equal(status.cleanup.auxiliaryPending, false);
       assert.equal(status.cleanup.pending, 0);
       assert.equal(status.cleanup.uncertain, 0);
-      for (const kind of scenario.expectedCleanup)
+      for (const kind of scenario.expectedCleanup) {
         assert.equal(
           factory.events.filter((event) => event.kind === kind && event.sessionId === id).length,
           1,
         );
+      }
     }
     assert.equal(clock.pendingTimers(), 0);
     // DISPOSED requires empty renewal custody, and every bounded session slot
@@ -627,10 +639,13 @@ for (const scenario of [
     const replacements = sessions.map(() =>
       service.open({ durationSeconds: 3600, profile: undefined }),
     );
-    for (const session of replacements) service.close(session.session.sessionId);
+    for (const session of replacements) {
+      service.close(session.session.sessionId);
+    }
     await tick();
     assert.equal(clock.pendingTimers(), 0);
-    for (const session of replacements)
+    for (const session of replacements) {
       assert.equal(service.status(session.session.sessionId).state, "DISPOSED");
+    }
   });
 }

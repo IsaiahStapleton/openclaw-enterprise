@@ -46,13 +46,16 @@ test("GitHub driver admits exact REST methods, conservative GraphQL writes and c
       effect: method === "GET" ? "read" : "write",
     })),
   );
-  for (const scenario of routeScenarios)
+  for (const scenario of routeScenarios) {
     await t.test(scenario.name, () => {
       const plan = bind().plan(scenario.request);
       assert.equal("kind" in plan, !scenario.admitted);
-      if (!("kind" in plan)) assert.equal(plan.effect, scenario.effect);
+      if (!("kind" in plan)) {
+        assert.equal(plan.effect, scenario.effect);
+      }
     });
-  for (const profile of ["git-read", "git-write", "git-full"])
+  }
+  for (const profile of ["git-read", "git-write", "git-full"]) {
     for (const service of ["upload", "receive"]) {
       const git = bind(profile);
       assert.equal(
@@ -67,17 +70,20 @@ test("GitHub driver admits exact REST methods, conservative GraphQL writes and c
           "content-type": `application/x-git-${service}-pack-request`,
           "git-protocol": "version=2",
         }),
-      ])
+      ]) {
         assert.equal(
           "kind" in git.plan(request),
           profile === "git-read" && service === "receive",
           `${profile} ${request.method} ${request.rawTarget}`,
         );
+      }
     }
+  }
   for (const profile of ["git-read", "git-write"]) {
     const git = bind(profile);
-    for (const request of [head("GET", "/repos/fixture/repository"), head("POST", "/graphql")])
+    for (const request of [head("GET", "/repos/fixture/repository"), head("POST", "/graphql")]) {
       assert.equal(git.plan(request).kind, "denied");
+    }
   }
   assert.throws(() => factory.resolve("read-write"), /unsupported-profile/);
   for (const path of [
@@ -87,8 +93,9 @@ test("GitHub driver admits exact REST methods, conservative GraphQL writes and c
     "/repos/fixture/repository/issues?page=1&page=2",
     "/repos/fixture/repository/issues?per_page=101",
     "https://api.github.com/repos/fixture/repository",
-  ])
+  ]) {
     assert.equal(bound.plan(head("GET", path)).kind, "denied");
+  }
 });
 test("pinned gh GraphQL media profile is admitted and reconstructed without widening REST media", async (t) => {
   const { bind } = await createGitHubPlanningFixture(t);
@@ -112,8 +119,9 @@ test("pinned gh GraphQL media profile is admitted and reconstructed without wide
     ["/graphql", { accept: `${accept}, application/xml` }],
     ["/graphql", { accept: "application/vnd.github.unqualified-preview+json" }],
     ["/graphql", { accept, "graphql-features": "unqualified" }],
-  ])
+  ]) {
     assert.equal(bound.plan(head("POST", path, headers)).kind, "denied");
+  }
 });
 test("REST issue and PR responses preserve informational URLs on reads and successful mutations", async (t) => {
   const { bind } = await createGitHubPlanningFixture(t);
@@ -129,7 +137,7 @@ test("REST issue and PR responses preserve informational URLs on reads and succe
       { name: "create item", method: "POST", path: resource, status: 201, list: false },
       { name: "update item", method: "PATCH", path: `${resource}/1`, status: 200, list: false },
     ];
-    for (const scenario of scenarios)
+    for (const scenario of scenarios) {
       await t.test(`${resource}: ${scenario.name} preserves informational links`, () => {
         const plan = bind().plan(
           head(scenario.method, `/repos/fixture/repository/${scenario.path}`),
@@ -149,9 +157,11 @@ test("REST issue and PR responses preserve informational URLs on reads and succe
           plan.responsePolicy.headers(scenario.status, { "content-type": "application/json" }),
         );
       });
+    }
   }
-  for (const path of ["labels/bug", "milestones/1", "pulls/1/comments", "pulls/1/commits"])
+  for (const path of ["labels/bug", "milestones/1", "pulls/1/comments", "pulls/1/commits"]) {
     assert.equal(bound.plan(head("GET", `/repos/fixture/repository/${path}`)).kind, "denied");
+  }
 });
 test("followed JSON links validate field purpose while GraphQL human URLs remain intact", async (t) => {
   const { bind } = await createGitHubPlanningFixture(t);
@@ -164,8 +174,9 @@ test("followed JSON links validate field purpose while GraphQL human URLs remain
     "https://api.github.com/repos/fixture/repository/labels/bug",
     "https://api.github.com/repos/fixture/repository/issues/1#fragment",
     "https://api.github.com/repos/fixture/repository/pulls/1",
-  ])
+  ]) {
     assert.throws(() => issue.responsePolicy.rewriteJson({ url }), /unsafe-upstream-url/);
+  }
   assert.throws(
     () =>
       issue.responsePolicy.rewriteJson({
@@ -270,10 +281,11 @@ test("native repository-ID pagination stays bound to the configured repository a
     "https://api.github.com/repositories/73/issues?after=bad%20cursor",
     `https://api.github.com/repositories/73/issues?after=${"a".repeat(1025)}`,
     `https://api.github.com/repositories/73/issues?after=${cursor}&after=${cursor}`,
-  ])
+  ]) {
     assert.throws(() => plan.responsePolicy.headers(200, { link: `<${url}>; rel="next"` }), {
       message: "unsafe-upstream-url",
     });
+  }
 });
 
 test("response policy rejects a literal comma inside an otherwise admitted Link URL", async (t) => {
@@ -301,8 +313,8 @@ test("response policy rejects a literal comma inside an otherwise admitted Link 
 
 test("gateway authentication is separate from upstream signing and rejects foreign attempt/result/plan objects", async (t) => {
   const { factory, key, publicKey, bind } = await createGitHubPlanningFixture(t);
-  const bound = bind(),
-    bearer = "a".repeat(43);
+  const bound = bind();
+  const bearer = "a".repeat(43);
   assert.equal(
     factory.parseAuthentication(
       head("GET", "/fixture/repository.git/info/refs?service=git-upload-pack"),

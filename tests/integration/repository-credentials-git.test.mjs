@@ -12,8 +12,9 @@ import { exerciseGit } from "../fixtures/repository-credentials/workflows.mjs";
 import { runInFixtureContainer } from "../fixtures/repository-credentials/container.mjs";
 
 test("real Git clones, fetches, switches and pushes using the cold gateway helper", async (t) => {
-  if (await runInFixtureContainer(t, "tests/integration/repository-credentials-git.test.mjs"))
+  if (await runInFixtureContainer(t, "tests/integration/repository-credentials-git.test.mjs")) {
     return;
+  }
   const fixture = await startCredentialServiceFixture(t, { profile: "git-write" });
   await exerciseGit(t, fixture);
   assert.ok(fixture.git.trace.some((entry) => entry.gitProtocol === "version=2"));

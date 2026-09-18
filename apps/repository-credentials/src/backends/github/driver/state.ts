@@ -64,8 +64,9 @@ export function createGitHubDriverState({
       !sameAuthority(attempt.authority, authority) ||
       attempt.action !== action ||
       admittedAttempts.has(attempt)
-    )
+    ) {
       throw new Error("foreign-attempt");
+    }
     admittedAttempts.add(attempt);
   }
   function outcome<T extends ProviderOutcomePayload>(
@@ -96,14 +97,19 @@ export function createGitHubDriverState({
       }
     },
     async settle(original) {
-      if (!unsettledOutcomes.has(original)) throw new Error("foreign-outcome");
+      if (!unsettledOutcomes.has(original)) {
+        throw new Error("foreign-outcome");
+      }
       unsettledOutcomes.delete(original);
     },
     plan(request) {
-      if (finalized || !sameAuthority(request.authority, authority))
+      if (finalized || !sameAuthority(request.authority, authority)) {
         return Object.freeze({ kind: "denied" as const, status: 403, code: "invalid-binding" });
+      }
       const plan = routes.plan(request.head);
-      if (!("kind" in plan)) plans.add(plan);
+      if (!("kind" in plan)) {
+        plans.add(plan);
+      }
       return plan;
     },
   };

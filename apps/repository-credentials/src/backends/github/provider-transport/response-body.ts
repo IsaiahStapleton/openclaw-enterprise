@@ -16,7 +16,9 @@ export function createProviderResponseBody() {
       return Buffer.concat(chunks);
     },
     discard(): void {
-      for (const chunk of chunks) chunk.fill(0);
+      for (const chunk of chunks) {
+        chunk.fill(0);
+      }
       chunks.length = 0;
     },
   };

@@ -19,8 +19,9 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
     !path ||
     args.length !== permitted ||
     (check && args.filter((arg) => arg === "--check-config").length !== 1)
-  )
+  ) {
     throw new Error("invalid-arguments");
+  }
   if (check) {
     const { checkConfiguration } = await import("./check-config.ts");
     process.stdout.write(`${JSON.stringify(await checkConfiguration(path))}\n`);
@@ -59,7 +60,9 @@ export async function runService(
   }
   let stopping = false;
   const shutdown = () => {
-    if (stopping) return;
+    if (stopping) {
+      return;
+    }
     stopping = true;
     listeners.stopAdmission();
     const grace = loaded.config.limits.shutdownGraceMs;

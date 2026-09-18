@@ -21,13 +21,16 @@ export function registerResourceCleanup(
         query.set("sort", "created");
         query.set("direction", "desc");
       }
-      if (head) query.set("head", `${repository.split("/")[0]}:${head}`);
+      if (head) {
+        query.set("head", `${repository.split("/")[0]}:${head}`);
+      }
       const values = await request(
         { method: "GET", path: `${prefix}/${collection}?${query}` },
         signal,
       );
-      if (!Array.isArray(values))
+      if (!Array.isArray(values)) {
         throw new ResourceCleanupError(`unresolved ${kind} identity: ${marker}`);
+      }
       matches.push(
         ...values.filter(
           (value) =>
@@ -44,26 +47,32 @@ export function registerResourceCleanup(
     }
     // Absence after a lost response remains unresolved: provider visibility may
     // lag. Multiple matches or a truncated search also cannot establish ownership.
-    if (!complete || matches.length !== 1)
+    if (!complete || matches.length !== 1) {
       throw new ResourceCleanupError(`unresolved ${kind} identity: ${marker}`);
+    }
     const value = matches[0];
     const id = kind === "comment" ? value.id : value.number;
-    if (!Number.isSafeInteger(id) || id <= 0)
+    if (!Number.isSafeInteger(id) || id <= 0) {
       throw new ResourceCleanupError(`unresolved ${kind} identity: ${marker}`);
+    }
     const path = `${prefix}/${kind === "comment" ? "issues/comments" : kind}/${id}`;
-    if (kind === "comment") await request({ method: "DELETE", path }, signal);
-    else {
+    if (kind === "comment") {
+      await request({ method: "DELETE", path }, signal);
+    } else {
       await request({ method: "PATCH", path, body: { state: "closed" } }, signal);
       const closed = await request({ method: "GET", path }, signal);
-      if (closed.number !== id || closed.state !== "closed")
+      if (closed.number !== id || closed.state !== "closed") {
         throw new ResourceCleanupError(`unresolved ${kind} closure: ${marker}`);
+      }
     }
   };
   cleanups.push(async (signal) => {
     try {
       await reconcile(signal);
     } catch (error) {
-      if (error instanceof ResourceCleanupError) throw error;
+      if (error instanceof ResourceCleanupError) {
+        throw error;
+      }
       throw new ResourceCleanupError(`unresolved ${kind} cleanup: ${marker}`);
     }
   });
@@ -93,10 +102,11 @@ export async function closeAndDispose(
       "error" in status ||
       status.sessionId !== sessionId ||
       !["CLOSED", "DISPOSED"].includes(status.state)
-    )
+    ) {
       throw new Error(
         `session cleanup failed: local closure ${locallyClosed ? "confirmed" : "unconfirmed"}`,
       );
+    }
     locallyClosed = true;
     const cleanup = status.cleanup;
     return (
@@ -120,8 +130,9 @@ export async function closeAndDispose(
   while (performance.now() < deadline) {
     signal?.throwIfAborted();
     const status = await control({ method: "GET", path: `/v1/sessions/${sessionId}` });
-    if (inspect(status) && performance.now() <= deadline)
+    if (inspect(status) && performance.now() <= deadline) {
       return { localClosure: "confirmed", disposal: "confirmed" };
+    }
     await delay(Math.min(pollMs, Math.max(0, deadline - performance.now())), undefined, { signal });
   }
   throw new Error("session cleanup unresolved: local closure confirmed; disposal pending");
