@@ -4,7 +4,7 @@ Build the service and admit a session to give an ordinary container Git and
 selected GitHub CLI access to one repository. The container receives a gateway
 bearer; GitHub App keys and installation tokens stay in the service. Review the
 [profiles and lifecycle](../reference/repository-credentials.md) before selecting
-`read-write`.
+`git-full`.
 
 ## Build and validate
 
@@ -40,15 +40,21 @@ outside the Agent's filesystem mounts.
 
 ## Open and use a session
 
-Choose a duration within `maximumDurationSeconds`. The output directory must not
-exist, and its parent must be owned and mode 0700. The command writes private
+Choose a duration within `maximumDurationSeconds` and a profile enabled in
+`allowedProfiles`. Omit `--profile` to use the configured default, `git-write` in
+the example configuration, for Git clone, fetch, checkout and push. Select
+`--profile git-read` when push is unnecessary. The example below selects
+`git-full` because the later commands create PRs, issues and comments; both
+Git-only profiles deny all API calls.
+
+The output directory must not exist, and its parent must be owned and mode 0700. The command writes private
 files atomically and prints the session identifier, deadline and directory,
 without printing the bearer:
 
 ```sh
 pnpm credentials:operator open \
   --socket /absolute/path/control/control.sock \
-  --duration-seconds 86400 --profile read-write \
+  --duration-seconds 86400 --profile git-full \
   --output /absolute/path/sessions/task \
   --ca /absolute/path/gateway-ca.pem
 ```
@@ -80,7 +86,8 @@ Use credential-free HTTPS URLs. If the launcher refuses inherited URL credential
 remove userinfo from remote fetch/push URLs and `url.*.insteadOf` or
 `url.*.pushInsteadOf` destinations; the selected session helper supplies authentication.
 
-The API launcher checks that the executable is exactly `gh` 2.100.0. Create a
+API commands require a `git-full` session. The launcher checks that the
+executable is exactly `gh` 2.100.0. Create a
 request body file in the working directory, then use relative API paths:
 
 ```sh

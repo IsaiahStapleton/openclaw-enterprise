@@ -218,7 +218,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       sessionPolicy: {
         maximumDurationSeconds: 172800,
         defaultProfile: "git-write",
-        allowedProfiles: ["git-write", "read-write"],
+        allowedProfiles: ["git-read", "git-write", "git-full"],
       },
       limits: { shutdownGraceMs: 5000 },
       backend: {
@@ -282,7 +282,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       "--duration-seconds",
       "86400",
       "--profile",
-      "read-write",
+      "git-full",
       "--output",
       "/sessions/selected",
       "--ca",
@@ -292,7 +292,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       "--duration-seconds",
       "86400",
       "--profile",
-      "read-write",
+      "git-full",
       "--output",
       "/sessions/sibling",
       "--ca",

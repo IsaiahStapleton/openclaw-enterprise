@@ -1,5 +1,7 @@
 import { pathToFileURL } from "node:url";
-import type { Clock, CredentialService, LoadedConfiguration } from "./contracts.ts";
+import type { Clock } from "./driver-contracts.ts";
+import type { CredentialService } from "./contracts.ts";
+import type { LoadedConfiguration } from "./internal-contracts.ts";
 import type { BoundListeners } from "./server.ts";
 
 export interface RunningService {

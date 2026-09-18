@@ -142,6 +142,22 @@ function prepareGitArguments(args: string[], env: NodeJS.ProcessEnv, policy: str
       rejectGitUrlCredentials(argument.startsWith("--repo=") ? argument.slice(7) : argument);
     }
   }
+  const overrides = inspectGitConfiguration(context, env, cloning);
+  // Equal-specificity command entries win URL matching; empty entries reset
+  // multi-valued headers/helpers. Generic entries alone cannot enforce this.
+  return [
+    ...context,
+    ...[...overrides].flatMap(([key, value]) => ["-c", `${key}=${value}`]),
+    ...policy,
+    ...args.slice(index),
+  ];
+}
+
+function inspectGitConfiguration(
+  context: string[],
+  env: NodeJS.ProcessEnv,
+  cloning: boolean,
+): ReadonlyMap<string, string> {
   const inspected = spawnSync("git", [...context, "config", "--null", "--list", "--includes"], {
     env,
     encoding: "utf8",
@@ -186,14 +202,7 @@ function prepareGitArguments(args: string[], env: NodeJS.ProcessEnv, policy: str
       throw new Error("unsafe-git-configuration");
     }
   }
-  // Equal-specificity command entries win URL matching; empty entries reset
-  // multi-valued headers/helpers. Generic entries alone cannot enforce this.
-  return [
-    ...context,
-    ...[...overrides].flatMap(([key, value]) => ["-c", `${key}=${value}`]),
-    ...policy,
-    ...args.slice(index),
-  ];
+  return overrides;
 }
 
 export function prepareClientCommand(

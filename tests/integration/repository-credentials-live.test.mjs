@@ -40,7 +40,7 @@ test(
     const opened = await callControl(socket, {
       method: "POST",
       path: "/v1/sessions",
-      body: { durationSeconds: 300, profile: "read-write" },
+      body: { durationSeconds: 300, profile: "git-full" },
     });
     assert.ok(opened.session && opened.client, "live session admission failed");
     const cleanup = [() => closeAndDispose(callControl, socket, opened.session.sessionId)];

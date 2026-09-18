@@ -31,7 +31,11 @@ TLS switch or localhost `GH_HOST` substitute is used.
 ## What the controlled tests prove
 
 The Git upstream runs the actual `git-http-backend` against a disposable bare
-repository. Assertions check remote refs after clone, fetch, switch and push.
+repository. The `git-write` case proves clone, fetch, branch checkout and push,
+with assertions on remote refs. The `git-read` case proves the read operations,
+rejects push and API requests before token acquisition or upstream access, and
+checks that a denied push leaves remote refs unchanged. API and combined
+workflow coverage selects `git-full`.
 A fault case drops the response after receive-pack finishes and checks that the
 service sends the push once while the remote ref records the accepted commit.
 
@@ -102,7 +106,7 @@ REPOSITORY_CREDENTIALS_LIVE_CA=/run/credential-service/public-ca.pem \
   node --test tests/integration/repository-credentials-live.test.mjs
 ```
 
-The smoke admits a five-minute `read-write` session through the real control API.
+The smoke admits a five-minute `git-full` session through the real control API.
 It clones and pushes unique temporary branches, exercises REST and native PR
 creation plus issue/comments. Before each create, it registers reconciliation
 using a unique run marker and, for PRs, the unique head branch. Cleanup inspects

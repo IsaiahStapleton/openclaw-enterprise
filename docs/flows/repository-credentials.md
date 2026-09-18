@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-17"
-last_updated_session: "authoring-run/d1f4d5a2-f493-43f0-8b8f-5471e61bb690"
+last_updated_session: "authoring-run/17d63f83-3b86-4bfa-950d-89c50a927b0d"
 ---
 
 # Repository credential service flow
@@ -32,7 +32,7 @@ graph TD
   Operator["Operator opens session"] --> Admission["Service freezes grant<br/>and creates bearer"]
   Admission --> Files["CLI publishes private<br/>client directory"]
   Files --> Client["Git or pinned gh<br/>calls gateway"]
-  Client --> Route["Validate auth, route<br/>and request capacity"]
+  Client --> Route["Validate auth, profile route<br/>and request capacity"]
   Route -->|Denied| Denial["Bounded local failure"]
   Route -->|Admitted| Credential["Reuse valid credential<br/>or acquire and capture"]
   Credential -->|Uncertain issue| Blocked["Block minting<br/>retain cleanup obligation"]
@@ -51,14 +51,19 @@ graph TD
 
 `apps/repository-credentials/src/check-config.ts:checkConfiguration` and
 `apps/repository-credentials/src/main.ts:main` share the protected configuration
-loader. The standalone check emits a safe summary without importing the session
-or listener owners. Normal startup constructs the system clock, bound driver
+loader. `apps/repository-credentials/src/configuration/service.ts:validateServiceConfig`
+validates gateway settings, session policy and service limits. The standalone
+check emits a safe summary without importing the session or listener owners. Normal startup constructs the system clock, bound driver
 factory, common service, and listeners.
 `apps/repository-credentials/src/backends/github/index.ts` exports the startup
 API; `apps/repository-credentials/src/backends/github/factory.ts:createGitHubDriverFactory`
 resolves grants, parses client authentication and composes session-bound drivers.
 The App signing key belongs to the process, independently of each session's
-installation tokens.
+installation tokens. Session-consumer types live in
+`apps/repository-credentials/src/contracts.ts`; backend extension contracts live
+in `apps/repository-credentials/src/driver-contracts.ts`. Service and transport
+collaborators remain in `apps/repository-credentials/src/internal-contracts.ts`.
+The split preserves the original nominal handles and runtime owners.
 
 ### 2. Admit and publish a client session
 
@@ -66,6 +71,11 @@ installation tokens.
 request method, target, content type and bounded body before invoking the common
 service. `apps/repository-credentials/src/service.ts:createCredentialService`
 checks duration, allowed profile and capacity, then freezes the resolved binding.
+The common service treats profile names as opaque configured values. The GitHub
+factory resolves `git-read`, `git-write` and `git-full` to the exact permission
+maps in the [reference](../reference/repository-credentials.md#configuration),
+including the profile in the grant identity. Protected startup validation rejects
+unknown names, including `read-write`; the example default remains `git-write`.
 Bearer lookup retains a digest. Only the original admission response contains
 the bearer.
 
@@ -112,7 +122,17 @@ checks generic framing and delegates authentication to the bound factory. A vali
 Git route with no credentials receives the local Basic challenge. Authenticated
 requests reserve common exchange capacity before body forwarding. The GitHub
 driver plans admitted routes through
-`apps/repository-credentials/src/backends/github/routes.ts:createRoutePolicy`.
+`apps/repository-credentials/src/backends/github/routes.ts:createRoutePolicy`, using
+`apps/repository-credentials/src/backends/github/routes/classification.ts:classifyRoute`
+for target, method, profile and query classification. This provider-owned decision admits upload-pack discovery and execution for all
+three profiles, but rejects receive-pack discovery and execution for `git-read`.
+It admits REST and GraphQL only for `git-full`: selected repository metadata,
+PRs, issues and issue comments, plus `GET /meta` and `POST /graphql`, subject to
+the existing method, query, framing and media-type checks. Both Git-only profiles
+reject API reads as well as writes before upstream dispatch. GraphQL bodies are
+forwarded under the exact installation-token grant; this route check does not
+perform per-field GraphQL authorization. Renaming the API-capable profile does
+not broaden the route or request schema.
 
 `apps/repository-credentials/src/service.ts:createCredentialService` reserves the
 exchange and delegates execution to
@@ -126,10 +146,16 @@ settlement remains pending, requests needing acquisition return `not-dispatched`
 without attaching new waiters or starting another acquisition. The original
 owner retains capture, settlement and cleanup obligations until they resolve.
 `apps/repository-credentials/src/backends/github/driver.ts:createGitHubDriver`
-owns session credentials and provider actions; it uses the bounded credential
-transport from
-`apps/repository-credentials/src/backends/github/provider-transport.ts:createProviderTransport`.
-An original
+composes acquisition and capture through
+`apps/repository-credentials/src/backends/github/driver/acquisition.ts:createCredentialAcquisition`,
+authentication and retirement through
+`apps/repository-credentials/src/backends/github/driver/access.ts:createCredentialAccess`,
+and session-bound plans, credentials and original outcomes through
+`apps/repository-credentials/src/backends/github/driver/state.ts:createGitHubDriverState`.
+Its bounded credential transport,
+`apps/repository-credentials/src/backends/github/provider-transport.ts:createProviderTransport`,
+uses `apps/repository-credentials/src/backends/github/provider-transport/request.ts:sendProviderRequest`
+to dispatch and join the actual request close event. An original
 dispatch gate rechecks admission synchronously after authentication preparation,
 registers cancellation and opens the exchange without an intervening await.
 The sender independently checks the fixed upstream origin. Credential bytes stay
@@ -141,6 +167,10 @@ inside private adapter/sender callbacks.
 checks upstream header bounds and framing. The GitHub route plan carries the
 policy from `apps/repository-credentials/src/backends/github/response.ts:createResponsePolicy`
 for provider response headers, pagination and explicitly followed resource fields.
+It composes URL validation and pagination rewriting from
+`apps/repository-credentials/src/backends/github/response-urls.ts:createUrlRewriter`
+and `rewritePaginationLinks`, and resource-field rewriting from
+`apps/repository-credentials/src/backends/github/response-resources.ts:createResourceRewriter`.
 Informational nested labels, milestones, repository metadata and human content
 remain unchanged. Transport applies
 `apps/repository-credentials/src/transport/response-headers.ts:safeResponseHeaders`
@@ -181,7 +211,8 @@ have pending or uncertain cleanup.
 
 A helper failure reports a fixed category without credentials. Diagnose the
 configured HTTPS host/path and private file ownership first. API failures also
-require checking the pinned CLI, canonical host, gateway DNS/SAN and port 443.
+require checking that the session uses `git-full`, then the pinned CLI, canonical
+host, gateway DNS/SAN and port 443.
 The [test guide](../testing/repository-credentials.md) owns controlled upstream,
 long-session, alternate-adapter, packaged and authorized live-provider checks.
 A structural flow check does not establish any of those runtime results.
@@ -197,6 +228,12 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-17 23:47: Refresh configuration, route classification, driver composition and provider request source pointers from the accompanying adapter extraction. (authoring-run/17d63f83-3b86-4bfa-950d-89c50a927b0d - 251bf5662df1fd61e132ca57a36008409add1996)
+
+- 2026-09-17 23:40: Refresh contract and response-policy source owners after extraction; preserve the existing lifecycle. (authoring-run/6c0de761-bba9-4070-9920-e7d6a83620dd - 3f0ce26cf864a8909c52104c1c6b6092ca21c857)
+
+- 2026-09-17 22:22: Document accompanying git-read, default git-write and git-full profile changes and provider-owned route authorization. (01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c4ecf32727aef09a6b4caeec16870bf391f7a505)
 
 - 2026-09-17 22:10: Refuse new waiters after acquisition cancellation while retaining original settlement and cleanup ownership. (authoring-run/d1f4d5a2-f493-43f0-8b8f-5471e61bb690 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
 

@@ -1,6 +1,6 @@
 import { Transform } from "node:stream";
 import type { TransformCallback } from "node:stream";
-import type { Clock } from "../contracts.ts";
+import type { Clock } from "../driver-contracts.ts";
 
 export class ByteLimit extends Transform {
   #bytes = 0;

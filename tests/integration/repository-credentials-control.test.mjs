@@ -111,10 +111,10 @@ test(
     assert.equal((await lstat(config.gateway.controlSocket)).mode & 0o777, 0o600);
     const opened = await control(config.gateway.controlSocket, "POST", "/v1/sessions", {
       durationSeconds: 86400,
-      profile: "git-write",
     });
     assert.equal(opened.status, 201);
     assert.equal(opened.body.session.state, "OPEN");
+    assert.equal(opened.body.session.binding.grantId, "1:git-write");
     assert.ok(opened.body.bearer.length >= 43);
     const id = opened.body.session.sessionId;
     const status = await control(config.gateway.controlSocket, "GET", `/v1/sessions/${id}`);
@@ -125,6 +125,16 @@ test(
     assert.equal(closed.status, 200);
     assert.notEqual(closed.body.state, "OPEN");
     assert.equal(closed.body.bearer, undefined);
+    for (const profile of ["read-write", "app-full"])
+      assert.equal(
+        (
+          await control(config.gateway.controlSocket, "POST", "/v1/sessions", {
+            durationSeconds: 86400,
+            profile,
+          })
+        ).status,
+        400,
+      );
     assert.equal(
       (await control(config.gateway.controlSocket, "POST", "/v1/sessions", { durationSeconds: 0 }))
         .status,

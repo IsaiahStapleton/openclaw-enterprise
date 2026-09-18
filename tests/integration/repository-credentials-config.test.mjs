@@ -31,7 +31,7 @@ test("protected startup accepts RSA/TLS files without provider calls and rejects
     sessionPolicy: {
       maximumDurationSeconds: 172800,
       defaultProfile: "git-write",
-      allowedProfiles: ["git-write", "read-write"],
+      allowedProfiles: ["git-read", "git-write", "git-full"],
     },
     backend: {
       kind: "github-app",
@@ -51,8 +51,23 @@ test("protected startup accepts RSA/TLS files without provider calls and rejects
   const summary = await checkConfiguration(file);
   assert.equal(summary.valid, true);
   assert.equal(summary.maximumDurationSeconds, 172800);
+  assert.deepEqual(summary.profiles, ["git-read", "git-write", "git-full"]);
   assert.equal(JSON.stringify(summary).includes("PRIVATE KEY"), false);
   assert.equal(JSON.stringify(summary).includes(directory), false);
+  // Removed and unknown profiles must fail at trusted startup, before serving
+  // any sessions, even when they are explicitly named in the operator policy.
+  for (const profile of ["read-write", "app-full"]) {
+    await save({
+      ...input,
+      sessionPolicy: {
+        ...input.sessionPolicy,
+        defaultProfile: profile,
+        allowedProfiles: [profile],
+      },
+    });
+    await assert.rejects(checkConfiguration(file), { message: "invalid-configuration" });
+  }
+  await save();
   await chmod(key, 0o644);
   await assert.rejects(checkConfiguration(file), { message: "invalid-configuration" });
   await chmod(key, 0o600);

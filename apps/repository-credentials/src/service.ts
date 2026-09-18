@@ -1,17 +1,17 @@
 import type {
   BoundDriverFactory,
   Clock,
-  CredentialService,
   Denied,
-  ExchangeRef,
-  ExchangeSender,
   RequestHead,
   RequestPlan,
+} from "./driver-contracts.ts";
+import type {
   OpenSessionInput,
   ServiceConfig,
   SessionStatus,
   ShutdownSummary,
 } from "./contracts.ts";
+import type { CredentialServiceOwner, ExchangeRef, ExchangeSender } from "./internal-contracts.ts";
 import { createCustody } from "./custody.ts";
 import type { CustodyOwner } from "./custody.ts";
 import { createLifecycle } from "./lifecycle.ts";
@@ -42,7 +42,7 @@ const deny = (status: number, code: string): Denied =>
 
 export function createCredentialService(
   options: Readonly<{ config: ServiceConfig; factory: BoundDriverFactory; clock: Clock }>,
-): CredentialService {
+): CredentialServiceOwner {
   const { factory, clock } = options;
   // Caller mutation cannot change limits or broaden an already admitted policy.
   const limits = Object.freeze({ ...options.config.limits });

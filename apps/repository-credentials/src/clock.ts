@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import type { Clock } from "./contracts.ts";
+import type { Clock } from "./driver-contracts.ts";
 
 export function createSystemClock(): Clock {
   return Object.freeze({

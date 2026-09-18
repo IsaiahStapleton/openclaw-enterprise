@@ -8,6 +8,9 @@ description: Gate new or changed Enterprise tests and audit existing tests for o
 Use the authoring gate when writing or changing tests. For a requested audit,
 inspect the selected scope before proposing edits; keep each batch coherent.
 Read [repository test integrity rules](../../../AGENTS.md#test-integrity) first.
+Use [fixture and scenario conventions](../../../docs/testing/fixtures-and-scenarios.md)
+when extracting reusable setup, builders, or contract suites. Keep expected
+outcomes independent of the implementation and resource ownership explicit.
 
 ## Authoring gate
 
