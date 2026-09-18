@@ -315,6 +315,8 @@ A structural flow check does not establish any of those runtime results.
 
 ## Changelog
 
+- 2026-09-18 12:03: Keep admitted TLS exchanges outside the header timeout while bounding incomplete handshakes and headers. (authoring-run/36d61593-c993-48a9-9b32-1bcb6e898a3d - b0b0b8b7ba98d2c8506ba261334aba1e769a87ef)
+
 - 2026-09-18 09:45: Integrate protected startup, frozen runtime controls, fixed provider scope and bounded listener/upload behavior with the accompanying controller-owned Agent path. (authoring-run/99b8e474-5c94-4558-bce6-e7d6032f832c - 6fd1516de000bde46d4cd43e0d21ec3f0167d65e)
 
 - 2026-09-18 06:22: Trace the accompanying HTTPS header-timer handoff to admitted exchange ownership while preserving handshake and control limits. (authoring-run/0771bac1-5a06-46c9-89bd-9b46b20cd3d4 - baada1ad2f288de44ba54ee4cd1e111fcb6bbba8)

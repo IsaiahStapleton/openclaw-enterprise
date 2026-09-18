@@ -12,17 +12,15 @@ import {
   startGitHubFixture,
   fixtureRepository,
 } from "../fixtures/repository-credentials/github.mjs";
-import { createGitHubServiceFactory } from "../fixtures/repository-credentials/service-resources.mjs";
+import {
+  createGitHubServiceFactory,
+  startServiceListeners,
+} from "../fixtures/repository-credentials/service-resources.mjs";
 
 async function fixture(t) {
   const resources = createResourceScope();
   t.after(() => resources.close());
-  const [{ createSystemClock }, { createCredentialService }, { startListeners }] =
-    await Promise.all([
-      credentialDriverModule("clock"),
-      credentialDriverModule("service"),
-      credentialDriverModule("server"),
-    ]);
+  const { createSystemClock } = await credentialDriverModule("clock");
   const clock = createSystemClock();
   const tls = await createTlsMaterial(resources);
   const base = await createServiceConfiguration(resources, {
@@ -50,7 +48,6 @@ async function fixture(t) {
     trustedEndpoints: { apiOrigin: github.origin, gitOrigin: upstreamOrigin, ca: tls.ca },
   });
   let acquisitionStarted = false;
-  let finishAcquisition;
   let acquisitionFinished = Promise.resolve();
   const factory = {
     ...actualFactory,
@@ -60,44 +57,29 @@ async function fixture(t) {
         ...backend,
         async acquire(...args) {
           acquisitionStarted = true;
-          acquisitionFinished = new Promise((resolve) => {
-            finishAcquisition = resolve;
-          });
+          const completion = Promise.withResolvers();
+          acquisitionFinished = completion.promise;
           try {
             // Model a provider queue/acquisition delay after the authenticated
             // request has been admitted, before any provider dispatch occurs.
             await delay(config.limits.headerMs * 3);
             return await backend.acquire(...args);
           } finally {
-            finishAcquisition();
+            completion.resolve();
           }
         },
       };
     },
   };
-  const service = createCredentialService({ config, factory, clock });
-  const listeners = await startListeners({
+  resources.after(() => acquisitionFinished);
+  const { service, listeners } = await startServiceListeners(resources, {
     config,
-    service,
     factory,
     clock,
     tls,
-    trustedUpstreamOrigins: new Set([github.origin, upstreamOrigin]),
-    upstreamCa: tls.ca,
+    upstreamOrigins: [github.origin, upstreamOrigin],
   });
-  resources.after(async () => {
-    await acquisitionFinished;
-    listeners.stopAdmission();
-    try {
-      const summary = await service.shutdown(1500);
-      assert.equal(summary.graceExpired, false);
-      assert.equal(summary.pendingCredentials, 0);
-      assert.equal(summary.pendingAuxiliary, 0);
-    } finally {
-      await listeners.close();
-    }
-  });
-  return { config, service, listeners, tls, acquisitionStarted: () => acquisitionStarted };
+  return { resources, service, listeners, tls, acquisitionStarted: () => acquisitionStarted };
 }
 
 test(
@@ -128,10 +110,16 @@ test(
           );
         },
       );
+      const closed = new Promise((done) => outgoing.once("close", done));
+      context.resources.after(async () => {
+        outgoing.destroy();
+        await closed;
+      });
       outgoing.once("error", reject);
       outgoing.end();
-    });
-    assert.equal(context.acquisitionStarted(), true);
+    }).finally(() =>
+      assert.equal(context.acquisitionStarted(), true, "request must reach credential acquisition"),
+    );
     assert.deepEqual(result, { status: 200, body: "0000" });
   },
 );
@@ -149,7 +137,11 @@ for (const handshake of [false, true]) {
             ca: context.tls.ca,
           })
         : connectTcp({ host: "127.0.0.1", port: context.listeners.address.port });
-      t.after(() => socket.destroy());
+      const closed = new Promise((done) => socket.once("close", done));
+      context.resources.after(async () => {
+        socket.destroy();
+        await closed;
+      });
       socket.on("error", () => {});
       let tcpConnected = false;
       socket.once("connect", () => {
@@ -166,13 +158,15 @@ for (const handshake of [false, true]) {
       }
       let deadline;
       try {
-        await new Promise((resolve, reject) => {
-          socket.once("close", resolve);
-          deadline = setTimeout(
-            () => reject(new Error("listener failed to close incomplete request")),
-            1000,
-          );
-        });
+        await Promise.race([
+          closed,
+          new Promise((_, reject) => {
+            deadline = setTimeout(
+              () => reject(new Error("listener failed to close incomplete request")),
+              1000,
+            );
+          }),
+        ]);
       } finally {
         clearTimeout(deadline);
       }
