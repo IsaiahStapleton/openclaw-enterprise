@@ -27,6 +27,7 @@ import type {
   PluginRevisionState,
   ProviderDefinition,
   ProviderRef,
+  RepositoryCredentialDriver,
   ResourceKind,
   ResourceRef,
   SandboxDriver,
@@ -117,6 +118,13 @@ export {
   type TransactionalAuditWriter,
 } from "./state/platform-state.ts";
 export { createPostgresPool } from "./state/postgres-pool.ts";
+export type {
+  RepositoryRevisionOwner,
+  RepositorySessionAttempt,
+  RepositorySessionPhase,
+  RepositorySessionReadRepository,
+  RepositorySessionRepository,
+} from "./ports/repository-sessions.ts";
 export {
   PostgresPlatformState,
   PostgresPlatformStateStore,
@@ -245,6 +253,7 @@ type DriverByCapability = {
   sandbox: SandboxDriver;
   compute: ComputeDriver;
   plugin: PluginDriver;
+  repository_credentials: RepositoryCredentialDriver;
 };
 type DriverFor<Capability extends DriverCapability> = DriverByCapability[Capability];
 
@@ -292,6 +301,16 @@ function driverHasCapabilityContract(driver: Driver): boolean {
       typeof candidate.cleanup === "function"
     );
   if (driver.capability === "plugin") return typeof candidate.listCatalog === "function";
+  if (driver.capability === "repository_credentials") {
+    return (
+      ["resolve", "open", "status", "close"].every(
+        (operation) => typeof candidate[operation] === "function",
+      ) &&
+      typeof candidate.maintenanceIntervalMs === "number" &&
+      Number.isFinite(candidate.maintenanceIntervalMs) &&
+      candidate.maintenanceIntervalMs > 0
+    );
+  }
   return (
     typeof candidate.ensureNamespace === "function" &&
     typeof candidate.deleteNamespace === "function" &&

@@ -102,6 +102,9 @@ export function validateProviderDefinitions(value: unknown = []): readonly Provi
   const ids = new Set<string>();
   const serviceAccountDrivers = new Set<string>();
   for (const provider of providers) {
+    if (provider.type !== "chatgpt") {
+      throw new ScopeViolationError("Unsupported Provider type.");
+    }
     if (ids.has(provider.id)) {
       throw new ScopeViolationError("Provider IDs must be unique.");
     }
@@ -141,6 +144,9 @@ export function validateSelectedProviderDrivers(
   selectedServiceAccountDriver: Driver | undefined,
 ): void {
   for (const provider of providers) {
+    if (provider.type !== "chatgpt") {
+      throw new DriverSelectionError("Unsupported Provider type.");
+    }
     if (
       selectedServiceAccountDriver === undefined ||
       selectedServiceAccountDriver.id !== provider.drivers.service_account
@@ -163,7 +169,7 @@ export function validateServiceAccountProviderBinding(
     | undefined,
 ): void {
   const provider = assertConfiguredProvider(providers, providerIdValue, "Agent Provider");
-  if (provider === undefined || binding === undefined) {
+  if (provider === undefined || provider.type !== "chatgpt" || binding === undefined) {
     throw new ResourceConflictError(
       "The managed ServiceAccount credential has no Provider binding.",
     );

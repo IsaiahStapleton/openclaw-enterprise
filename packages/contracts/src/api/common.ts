@@ -261,6 +261,36 @@ export const UpdateServiceAccountCredentialBody = Type.Object(
   { additionalProperties: false },
 );
 
+const RepositoryBindingSelector = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+});
+
+export const RepositoryBindingRequestSchema = Type.Object(
+  {
+    repositoryRef: RepositoryBindingSelector,
+    profile: Type.Optional(RepositoryBindingSelector),
+  },
+  { additionalProperties: false },
+);
+
+export const RepositoryBindingSelectionSchema = Type.Object(
+  { repositoryRef: RepositoryBindingSelector, profile: RepositoryBindingSelector },
+  { additionalProperties: false },
+);
+
+export const RepositoryBindingRequestsSchema = Type.Array(RepositoryBindingRequestSchema, {
+  maxItems: 16,
+  description:
+    "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
+});
+
+export const RepositoryBindingSelectionsSchema = Type.Array(RepositoryBindingSelectionSchema, {
+  minItems: 1,
+  maxItems: 16,
+});
+
 export const CreateAgentBody = Type.Object(
   {
     name: Name,
@@ -269,6 +299,7 @@ export const CreateAgentBody = Type.Object(
     harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
   },
   { additionalProperties: false },
 );
@@ -280,6 +311,7 @@ export const UpdateAgentBody = Type.Object(
     harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
   },
   { additionalProperties: false },
 );

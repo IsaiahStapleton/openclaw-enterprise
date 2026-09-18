@@ -16,7 +16,7 @@ import {
   normalizeLoggingLevel,
 } from "../../packages/contracts/src/index.ts";
 
-test("the Driver contract exposes IAM, Compute, Configuration, ServiceAccount, Secret, Sandbox, and Plugin capabilities", () => {
+test("the Driver contract exposes the supported platform capabilities", () => {
   assert.deepEqual(DRIVER_CAPABILITIES, [
     "iam",
     "compute",
@@ -25,6 +25,7 @@ test("the Driver contract exposes IAM, Compute, Configuration, ServiceAccount, S
     "secret",
     "sandbox",
     "plugin",
+    "repository_credentials",
   ]);
   assert.equal(Object.isFrozen(DRIVER_CAPABILITIES), true);
 
@@ -184,6 +185,22 @@ test("an admitted AgentRevision is a detached and deeply immutable deployment sn
       },
     },
     sandboxDriverId: "sandbox-test",
+    repositoryCredentials: {
+      driver: { id: "repository-credentials", implementation: "repository-test" },
+      deadlineWallMs: 1786755600000,
+      bindings: [
+        {
+          repositoryRef: "application",
+          profile: "write-profile",
+          providerId: "repository-provider",
+          grant: {
+            providerInstanceId: "provider-instance",
+            repositoryId: "repository-identity",
+            grantId: "admitted-grant",
+          },
+        },
+      ],
+    },
     servicePrincipalId: "service-principal-agent-a",
     createdAt: "2026-08-15T00:00:00.000Z",
   };
@@ -197,6 +214,11 @@ test("an admitted AgentRevision is a detached and deeply immutable deployment sn
   assert.equal(Object.isFrozen(admitted.harnessAuth), true);
   assert.equal(Object.isFrozen(admitted.harnessAuth.credential.secretRef), true);
   assert.equal(Object.isFrozen(admitted.harnessAuth.providerBinding), true);
+  assert.equal(Object.isFrozen(admitted.repositoryCredentials), true);
+  assert.equal(Object.isFrozen(admitted.repositoryCredentials.driver), true);
+  assert.equal(Object.isFrozen(admitted.repositoryCredentials.bindings), true);
+  assert.equal(Object.isFrozen(admitted.repositoryCredentials.bindings[0]), true);
+  assert.equal(Object.isFrozen(admitted.repositoryCredentials.bindings[0].grant), true);
   assert.equal(admitted.sandboxDriverId, "sandbox-test");
   assert.equal(admitted.configurationId, "configuration-a");
   assert.equal(admitted.configurationKind, "agent");
@@ -211,8 +233,25 @@ test("an admitted AgentRevision is a detached and deeply immutable deployment sn
   mutableRevision.sandboxDriverId = "changed-after-admission";
   mutableRevision.harnessAuth.credential.secretRef.name = "replacement-source";
   mutableRevision.harnessAuth.providerBinding.workspaceId = "replacement-workspace";
+  // Draft mutation must not retarget or extend an already admitted repository grant.
+  mutableRevision.repositoryCredentials.driver.id = "replacement-driver";
+  mutableRevision.repositoryCredentials.deadlineWallMs += 60_000;
+  mutableRevision.repositoryCredentials.bindings[0].profile = "replacement-profile";
+  mutableRevision.repositoryCredentials.bindings[0].grant.repositoryId = "replacement-repository";
+  mutableRevision.repositoryCredentials.bindings.push({
+    ...mutableRevision.repositoryCredentials.bindings[0],
+    repositoryRef: "additional-repository",
+  });
   assert.equal(admitted.harnessAuth.credential.secretRef.name, "account-source");
   assert.equal(admitted.harnessAuth.providerBinding.workspaceId, "workspace-a");
+  assert.equal(admitted.repositoryCredentials.driver.id, "repository-credentials");
+  assert.equal(admitted.repositoryCredentials.deadlineWallMs, 1786755600000);
+  assert.equal(admitted.repositoryCredentials.bindings.length, 1);
+  assert.equal(admitted.repositoryCredentials.bindings[0].profile, "write-profile");
+  assert.equal(
+    admitted.repositoryCredentials.bindings[0].grant.repositoryId,
+    "repository-identity",
+  );
 
   assert.deepEqual(admitted.configuration, {
     model: "gpt-test",
@@ -242,5 +281,8 @@ test("an admitted AgentRevision is a detached and deeply immutable deployment sn
   }, TypeError);
   assert.throws(() => {
     admitted.sandboxDriverId = "unauthorized-sandbox-mutation";
+  }, TypeError);
+  assert.throws(() => {
+    admitted.repositoryCredentials.bindings[0].grant.repositoryId = "unauthorized-repository";
   }, TypeError);
 });

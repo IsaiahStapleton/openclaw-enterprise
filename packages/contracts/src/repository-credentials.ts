@@ -1,9 +1,12 @@
-/** Session consumers, client configuration, and operator settings. */
+import type { Driver } from "./index.ts";
+
+/** Exact resolved provider, repository, and policy identity. */
 export type RepositoryCredentialGrantIdentity = Readonly<{
   providerInstanceId: string;
   repositoryId: string;
   grantId: string;
 }>;
+
 export interface RepositoryCredentialClientConfiguration {
   readonly gatewayOrigin: string;
   readonly gitRemote: string;
@@ -12,10 +15,24 @@ export interface RepositoryCredentialClientConfiguration {
   readonly apiHost: string;
   readonly repository: string;
 }
+
+/** Protected single-repository operator input; registry admission uses the bound form. */
 export type RepositoryCredentialSessionInput = Readonly<{
   durationSeconds: number;
   profile: string | undefined;
 }>;
+
+/** Registry-backed admission always supplies the complete resolved authority. */
+export interface RepositoryCredentialBoundSessionInput extends RepositoryCredentialSessionInput {
+  readonly namespaceId: string;
+  readonly repositoryRef: string;
+  readonly profile: string;
+  readonly expectedBinding: RepositoryCredentialGrantIdentity;
+  readonly deadlineWallMs: number;
+  /** Look up an admission without creating a session; not part of replay identity. */
+  readonly recoverOnly?: true;
+}
+
 export interface RepositoryCredentialSessionStatus {
   readonly sessionId: string;
   readonly state: "OPEN" | "CLOSED" | "DISPOSED";
@@ -31,8 +48,93 @@ export interface RepositoryCredentialSessionStatus {
     auxiliaryPending: boolean;
   }>;
 }
+
 export interface RepositoryCredentialSessionResult {
   readonly session: RepositoryCredentialSessionStatus;
   readonly bearer: string;
   readonly client: RepositoryCredentialClientConfiguration;
 }
+
+export interface RepositoryBindingRequest {
+  readonly repositoryRef: string;
+  readonly profile?: string;
+}
+
+export interface RepositoryBindingSelection {
+  readonly repositoryRef: string;
+  readonly profile: string;
+}
+
+export interface AdmittedRepositoryBinding extends RepositoryBindingSelection {
+  readonly providerId: string;
+  readonly grant: RepositoryCredentialGrantIdentity;
+}
+
+export interface RepositoryCredentialResolution {
+  readonly bindings: readonly AdmittedRepositoryBinding[];
+  readonly sessionDurationSeconds: number;
+}
+
+export interface RepositoryRevisionState {
+  readonly driver: { readonly id: string; readonly implementation: string };
+  readonly deadlineWallMs: number;
+  readonly bindings: readonly AdmittedRepositoryBinding[];
+}
+
+export interface OpenRepositorySessionInput {
+  readonly namespaceId: string;
+  readonly admissionId: string;
+  readonly binding: AdmittedRepositoryBinding;
+  readonly durationSeconds: number;
+  readonly deadlineWallMs: number;
+  /** Restricts the operation to recovered/missing results, without creating authority. */
+  readonly recoverOnly?: true;
+}
+
+export type OpenRepositorySessionResult =
+  | { readonly kind: "created"; readonly result: RepositoryCredentialSessionResult }
+  | { readonly kind: "recovered"; readonly status: RepositoryCredentialSessionStatus }
+  | { readonly kind: "missing" };
+
+export interface RepositoryCredentialDriver extends Driver {
+  readonly capability: "repository_credentials";
+  readonly maintenanceIntervalMs: number;
+  resolve(input: {
+    readonly namespaceId: string;
+    readonly bindings: readonly RepositoryBindingRequest[];
+  }): RepositoryCredentialResolution;
+  open(
+    input: OpenRepositorySessionInput,
+    signal: AbortSignal,
+  ): Promise<OpenRepositorySessionResult>;
+  status(
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<RepositoryCredentialSessionStatus | undefined>;
+  close(
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<RepositoryCredentialSessionStatus | undefined>;
+}
+
+/** Ephemeral UTF-8 contents; Compute owns paths, modes, and runtime material objects. */
+export type RepositoryCredentialSessionFiles = Readonly<{
+  bearer: string;
+  "client.json": string;
+  gitconfig: string;
+  "gh/hosts.yml": string;
+  "gh/config.yml": string;
+  "ca.pem"?: string;
+}>;
+
+export interface RepositoryCredentialMaterialRef {
+  readonly repositoryRef: string;
+  readonly sessionId: string;
+}
+
+export type RepositoryCredentialRuntimeBinding = RepositoryCredentialMaterialRef & {
+  readonly deadlineWallMs: number;
+} & (
+    | { readonly kind: "new"; readonly files: RepositoryCredentialSessionFiles }
+    | { readonly kind: "retained" }
+  );

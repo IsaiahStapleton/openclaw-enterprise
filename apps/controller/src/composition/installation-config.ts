@@ -233,6 +233,9 @@ function providerConfiguration(
     throw new Error("drivers.service_account requires an owning provider entry with type chatgpt.");
   }
   for (const provider of providers) {
+    if (provider.type !== "chatgpt") {
+      throw new Error("Unsupported Provider type.");
+    }
     if (serviceAccount === undefined) {
       throw new Error(
         `provider[${provider.id}].drivers.service_account requires drivers.service_account.`,
