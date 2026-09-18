@@ -347,8 +347,23 @@ test("closing one session preserves another session and prevents replay after di
   await tick();
 });
 
-for (const acquireFirst of [false, true]) {
-  test(`saturated cleanup queue drains every session and renewal after ${acquireFirst ? "retirement" : "finalization"} admission rejection`, async () => {
+for (const scenario of [
+  {
+    name: "finalization admission rejection",
+    acquireFirst: false,
+    heldOutcome: "finalized",
+    queuedAction: "finalize",
+    expectedCleanup: ["finalize"],
+  },
+  {
+    name: "retirement admission rejection",
+    acquireFirst: true,
+    heldOutcome: "revoked",
+    queuedAction: "retire",
+    expectedCleanup: ["retire", "finalize"],
+  },
+]) {
+  test(`saturated cleanup queue drains every session and renewal after ${scenario.name}`, async (t) => {
     const clock = createControlledClock(1700000000000);
     const factory = createAlternateDriverFactory({
       origin: "https://upstream.example.test",
@@ -362,7 +377,7 @@ for (const acquireFirst of [false, true]) {
     const sessions = Array.from({ length: 4 }, () =>
       service.open({ durationSeconds: 3600, profile: undefined }),
     );
-    if (acquireFirst) {
+    if (scenario.acquireFirst) {
       for (const session of sessions) {
         const exchange = service.reserve(session.bearer, head(clock), new AbortController().signal);
         assert.equal((await service.execute(exchange, send)).kind, "completed");
@@ -371,28 +386,28 @@ for (const acquireFirst of [false, true]) {
     }
     // Hold the first real outcome's settlement so one running action and one
     // queued action exhaust capacity while the other sessions remain eligible.
-    let release;
-    const held = new Promise((resolve) => {
-      release = resolve;
+    const settlement = Promise.withResolvers();
+    t.after(async () => {
+      settlement.resolve();
+      await tick();
     });
     const firstDriver = factory.drivers[0];
     const settle = firstDriver.settle.bind(firstDriver);
     firstDriver.settle = async (original) => {
       await settle(original);
-      if (original.kind === (acquireFirst ? "revoked" : "finalized")) await held;
+      if (original.kind === scenario.heldOutcome) await settlement.promise;
     };
     for (const session of sessions) service.close(session.session.sessionId);
     await tick();
     await clock.advance(1);
     await tick();
-    const action = acquireFirst ? "retire" : "finalize";
-    assert.equal(factory.events.filter((event) => event.kind === action).length, 1);
+    assert.equal(factory.events.filter((event) => event.kind === scenario.queuedAction).length, 1);
     for (const session of sessions) {
       const status = service.status(session.session.sessionId);
       assert.equal(status.state, "CLOSED");
       assert.equal(status.cleanup.uncertain, 0);
     }
-    release();
+    settlement.resolve();
     await tick();
     for (const session of sessions) {
       const id = session.session.sessionId;
@@ -401,7 +416,7 @@ for (const acquireFirst of [false, true]) {
       assert.equal(status.cleanup.auxiliaryPending, false);
       assert.equal(status.cleanup.pending, 0);
       assert.equal(status.cleanup.uncertain, 0);
-      for (const kind of acquireFirst ? ["retire", "finalize"] : ["finalize"])
+      for (const kind of scenario.expectedCleanup)
         assert.equal(
           factory.events.filter((event) => event.kind === kind && event.sessionId === id).length,
           1,

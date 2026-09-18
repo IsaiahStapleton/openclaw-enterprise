@@ -1,11 +1,5 @@
-import type {
-  Clock,
-  DispatchGate,
-  ExchangeOutcome,
-  ExchangeSender,
-  RepoDriver,
-  RequestPlan,
-} from "../contracts.ts";
+import type { Clock, RepoDriver, RequestPlan } from "../driver-contracts.ts";
+import type { DispatchGate, ExchangeOutcome, ExchangeSender } from "../internal-contracts.ts";
 import type { CapturedCredential } from "../custody.ts";
 import type { LifecycleOwner } from "../lifecycle.ts";
 import { waitWithin } from "../provider-queue.ts";

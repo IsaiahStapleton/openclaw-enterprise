@@ -5,7 +5,7 @@ import type {
   CredentialRef,
   DriverCustody,
   RenewalRef,
-} from "./contracts.ts";
+} from "./driver-contracts.ts";
 
 export interface CapturedCredential {
   readonly ref: CredentialRef;

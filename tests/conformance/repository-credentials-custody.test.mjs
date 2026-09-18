@@ -93,7 +93,7 @@ test("late capture survives local closure while original settlement ends capture
   assert.equal(custody.reservations.size, 0);
 });
 
-test("access slot reclamation retains independent renewal bytes through finalization drain", async () => {
+test("access slot reclamation retains independent renewal bytes through finalization drain", async (t) => {
   const { custody, capture, reservation, close } = setup();
   const renewal = custody.driver.retainRenewal(Buffer.from("renewal-authority"));
   const ref = capture();
@@ -103,23 +103,24 @@ test("access slot reclamation retains independent renewal bytes through finaliza
   custody.release(record);
   close();
   assert.equal(custody.records.size, 0);
-  let release;
-  const blocked = new Promise((resolve) => {
-    release = resolve;
-  });
+  const renewalRead = Promise.withResolvers();
   let bytes;
   const read = custody.driver.withRenewal(renewal, async (value) => {
     bytes = value;
-    await blocked;
+    await renewalRead.promise;
   });
   let disposed = false;
   const dispose = custody.driver.disposeRenewal(renewal).then(() => {
     disposed = true;
   });
+  t.after(async () => {
+    renewalRead.resolve();
+    await Promise.all([read, dispose]);
+  });
   await Promise.resolve();
   assert.equal(disposed, false);
   assert.equal(custody.renewalCount, 1);
-  release();
+  renewalRead.resolve();
   await read;
   await dispose;
   assert.equal(custody.renewalCount, 0);

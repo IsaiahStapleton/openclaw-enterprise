@@ -78,7 +78,7 @@ test("emitted credential configuration check runs without workspace packages or 
       sessionPolicy: {
         maximumDurationSeconds: 172800,
         defaultProfile: "git-write",
-        allowedProfiles: ["git-write", "read-write"],
+        allowedProfiles: ["git-read", "git-write", "git-full"],
       },
       backend: {
         kind: "github-app",

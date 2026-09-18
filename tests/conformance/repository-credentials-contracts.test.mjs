@@ -16,7 +16,7 @@ const config = validateServiceConfig({
   sessionPolicy: {
     maximumDurationSeconds: 86400,
     defaultProfile: "git-write",
-    allowedProfiles: ["git-write", "read-write"],
+    allowedProfiles: ["git-write", "git-full"],
   },
 });
 function setup() {
@@ -52,7 +52,7 @@ function head(method, target, headers = {}) {
     framing: { kind: "none", bytes: undefined },
   };
 }
-function driver(factory, profile = "read-write") {
+function driver(factory, profile = "git-full") {
   const authority = { sessionId: "session-one", ...factory.resolve(profile).binding };
   return {
     authority,
