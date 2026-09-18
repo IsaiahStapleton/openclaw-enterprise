@@ -1,12 +1,14 @@
 import { request } from "node:http";
 import { isAbsolute, resolve } from "node:path";
 import type {
-  RepositoryCredentialBoundSessionInput,
   RepositoryCredentialClientConfiguration,
   RepositoryCredentialGrantIdentity,
-  RepositoryCredentialSessionResult,
   RepositoryCredentialSessionStatus,
 } from "@openclaw-enterprise/contracts";
+import type {
+  RepositoryCredentialBoundSessionInput,
+  RepositoryCredentialSessionResult,
+} from "../../drivers/repository-credentials/service-contracts.ts";
 
 /** Private wire response; the selected Driver renders the portable runtime files. */
 export type RepositoryCredentialControlOpenResult =

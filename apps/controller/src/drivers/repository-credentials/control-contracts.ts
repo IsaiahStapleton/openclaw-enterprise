@@ -2,8 +2,8 @@ import type {
   RepositoryCredentialSessionInput,
   RepositoryCredentialBoundSessionInput,
   RepositoryCredentialSessionResult,
-  RepositoryCredentialSessionStatus,
-} from "@openclaw-enterprise/contracts";
+} from "./service-contracts.ts";
+import type { RepositoryCredentialSessionStatus } from "@openclaw-enterprise/contracts";
 
 export type ControlRequest =
   | Readonly<{

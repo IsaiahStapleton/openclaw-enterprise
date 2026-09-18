@@ -1,10 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AuthorityIdentity, Clock, SessionRef } from "./backend-contracts.ts";
+import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
 import type {
-  RepositoryCredentialGrantIdentity,
   RepositoryCredentialSessionInput,
   RepositoryCredentialBoundSessionInput,
-} from "@openclaw-enterprise/contracts";
+} from "./service-contracts.ts";
 
 export interface SessionAdmission {
   readonly ref: SessionRef;

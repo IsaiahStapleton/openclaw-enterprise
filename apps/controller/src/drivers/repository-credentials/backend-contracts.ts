@@ -1,4 +1,4 @@
-import type { RepositoryCredentialBoundSessionInput } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialBoundSessionInput } from "./service-contracts.ts";
 import type {
   RepositoryCredentialClientConfiguration,
   RepositoryCredentialGrantIdentity,

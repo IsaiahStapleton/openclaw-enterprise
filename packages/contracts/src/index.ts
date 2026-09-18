@@ -27,7 +27,6 @@ export type {
   OpenRepositorySessionResult,
   RepositoryBindingRequest,
   RepositoryBindingSelection,
-  RepositoryCredentialBoundSessionInput,
   RepositoryCredentialDriver,
   RepositoryCredentialGrantIdentity,
   RepositoryCredentialClientConfiguration,
@@ -35,9 +34,7 @@ export type {
   RepositoryCredentialResolution,
   RepositoryCredentialRuntimeBinding,
   RepositoryCredentialSessionFiles,
-  RepositoryCredentialSessionInput,
   RepositoryCredentialSessionStatus,
-  RepositoryCredentialSessionResult,
   RepositoryRevisionState,
 } from "./repository-credentials.ts";
 

@@ -53,8 +53,9 @@ those same owners: `drivers/repository-credentials/` contains its private sessio
 transport and client implementation; `providers/repository-credentials/github/`
 contains its GitHub implementation; and `composition/repository-credentials/`
 loads protected inputs and assembles the dedicated process. Shared platform
-Driver, admission and runtime material contracts live in
-`packages/contracts/src/repository-credentials.ts`. OCC owns immutable Agent
+Driver and runtime material contracts live in
+`packages/contracts/src/repository-credentials.ts`. Internal service admission and
+control contracts remain in the credential Driver owner. OCC owns immutable Agent
 bindings and safe session State; controller worker helpers connect those records
 to Compute delivery. The public Driver remains separate from the engine's private
 backend protocol. See the [Agent repository flow](flows/agent-repository-credentials.md).

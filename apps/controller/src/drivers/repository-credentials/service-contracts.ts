@@ -1,9 +1,31 @@
 import type {
-  RepositoryCredentialSessionInput,
-  RepositoryCredentialBoundSessionInput,
-  RepositoryCredentialSessionResult,
+  RepositoryCredentialClientConfiguration,
+  RepositoryCredentialGrantIdentity,
   RepositoryCredentialSessionStatus,
 } from "@openclaw-enterprise/contracts";
+
+/** Protected single-repository operator input; registry admission uses the bound form. */
+export type RepositoryCredentialSessionInput = Readonly<{
+  durationSeconds: number;
+  profile: string | undefined;
+}>;
+
+/** Registry-backed admission always supplies the complete resolved authority. */
+export interface RepositoryCredentialBoundSessionInput extends RepositoryCredentialSessionInput {
+  readonly namespaceId: string;
+  readonly repositoryRef: string;
+  readonly profile: string;
+  readonly expectedBinding: RepositoryCredentialGrantIdentity;
+  readonly deadlineWallMs: number;
+  /** Look up an admission without creating a session; not part of replay identity. */
+  readonly recoverOnly?: true;
+}
+
+export interface RepositoryCredentialSessionResult {
+  readonly session: RepositoryCredentialSessionStatus;
+  readonly bearer: string;
+  readonly client: RepositoryCredentialClientConfiguration;
+}
 
 export interface ShutdownSummary {
   readonly closedSessions: number;

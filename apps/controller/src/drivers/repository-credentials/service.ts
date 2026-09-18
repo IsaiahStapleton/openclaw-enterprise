@@ -8,9 +8,10 @@ import type {
 import type {
   RepositoryCredentialSessionInput,
   RepositoryCredentialBoundSessionInput,
-  RepositoryCredentialSessionStatus,
-} from "@openclaw-enterprise/contracts";
-import type { ServiceConfig, ShutdownSummary } from "./service-contracts.ts";
+  ServiceConfig,
+  ShutdownSummary,
+} from "./service-contracts.ts";
+import type { RepositoryCredentialSessionStatus } from "@openclaw-enterprise/contracts";
 import type { CredentialServiceOwner, ExchangeRef, ExchangeSender } from "./internal-contracts.ts";
 import { createCustody } from "./custody.ts";
 import type { CustodyOwner } from "./custody.ts";

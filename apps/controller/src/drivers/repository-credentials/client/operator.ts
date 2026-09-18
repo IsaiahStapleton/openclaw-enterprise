@@ -3,7 +3,7 @@ import { request as httpRequest } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RepositoryCredentialBoundSessionInput } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialBoundSessionInput } from "../service-contracts.ts";
 import { readPrivateFile } from "./private-files.ts";
 import type { ControlRequest, ControlResponse } from "../control-contracts.ts";
 import { writeClientConfiguration } from "./config.ts";
@@ -145,7 +145,19 @@ async function readBoundRequest(path: string): Promise<RepositoryCredentialBound
   ) {
     throw new Error("invalid-arguments");
   }
-  return value as unknown as RepositoryCredentialBoundSessionInput;
+  const request: RepositoryCredentialBoundSessionInput = {
+    durationSeconds: Number(value.durationSeconds),
+    profile: value.profile,
+    namespaceId: value.namespaceId,
+    repositoryRef: value.repositoryRef,
+    expectedBinding: {
+      providerInstanceId: binding.providerInstanceId,
+      repositoryId: binding.repositoryId,
+      grantId: binding.grantId,
+    },
+    deadlineWallMs: Number(value.deadlineWallMs),
+  };
+  return Object.hasOwn(value, "recoverOnly") ? { ...request, recoverOnly: true } : request;
 }
 
 async function main(): Promise<void> {

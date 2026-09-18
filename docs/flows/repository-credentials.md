@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-18"
-last_updated_session: "authoring-run/99b8e474-5c94-4558-bce6-e7d6032f832c"
+last_updated_session: "codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a"
 ---
 
 # Repository credential service flow
@@ -72,10 +72,12 @@ API or worker.
 `apps/controller/src/providers/repository-credentials/github/factory.ts:createGitHubDriverFactory`
 resolves grants, parses client authentication and composes session-bound drivers.
 The App signing key belongs to the process, independently of each session's
-installation tokens. Shared grant, client configuration and session DTOs live in
-`packages/contracts/src/repository-credentials.ts` and leave through its package's
-type-only exports. The private backend protocol and nominal custody handles live
-in `apps/controller/src/drivers/repository-credentials/backend-contracts.ts`.
+installation tokens. Shared grant, client configuration and session status contracts
+live in `packages/contracts/src/repository-credentials.ts` and leave through its
+package's type-only exports. Internal admission and bearer-result contracts live
+in `apps/controller/src/drivers/repository-credentials/service-contracts.ts`.
+The private backend protocol and nominal custody handles live in
+`apps/controller/src/drivers/repository-credentials/backend-contracts.ts`.
 Service, control and transport collaborators remain private to the credential
 engine. The runtime entrypoint returns a frozen forwarding object with only
 `open`, `status`, `close` and `shutdown`; listeners retain the original exchange
@@ -314,6 +316,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 19:10: Keep internal admission and bearer results with the credential engine and identify the shared session status contract. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - 4221fc5591b750cd59b459815a7bc327e98f295c)
 
 - 2026-09-18 12:03: Keep admitted TLS exchanges outside the header timeout while bounding incomplete handshakes and headers. (authoring-run/36d61593-c993-48a9-9b32-1bcb6e898a3d - b0b0b8b7ba98d2c8506ba261334aba1e769a87ef)
 
