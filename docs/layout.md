@@ -50,13 +50,23 @@ owning Driver or Provider and wire it through composition. See
 [current architecture](ARCHITECTURE.md) for component interactions and the
 [platform design](design.md) for the approved target and implementation status.
 
-Repository credential source shares the controller build. Its separate service
-artifact contains the process and configuration-check entrypoints with their
-dependencies; the Git/gh client artifact contains only its own runtime subtree.
-The private `RepositoryBackend` contract belongs to the credential engine; it
-does not expose a platform Driver capability. Containers and ordinary-Agent
-integration remain pending; see the
-[credential reference](reference/repository-credentials.md).
+The [repository capability](reference/repository-credentials.md#repo-driver-contract)
+uses `RepoDriver` in `packages/contracts/src/repo.ts` and the bundled
+`drivers/repo/github/driver.ts` adapter. Under `apps/controller/src/`, its owners are:
+
+- `drivers/repo/credentials/`: private common sessions, custody, lifecycle,
+  transport and contracts, including the private client-configuration type.
+- `drivers/repo/github/credentials/`: GitHub policy, backend and closed Git/gh client bundle.
+- `providers/repository-credentials/control-client.ts`: configured private-service
+  connection and complete response validation.
+- `composition/repository-credentials/`: registry and protected-file loading,
+  platform wiring and separate-process assembly.
+
+OCC owns immutable Agent bindings and safe session State; worker helpers connect
+those records to Compute delivery. Public status omits private cleanup diagnostics.
+The common engine's `RepositoryBackend` protocol is separate from `RepoDriver`.
+Only the dedicated service process initializes signing and provider-token custody.
+See the [Agent repository flow](flows/agent-repository-credentials.md).
 
 ## Deployment, tooling, and checks
 

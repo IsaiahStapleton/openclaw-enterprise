@@ -62,20 +62,27 @@ parent remains unwritable by those users.
 The loader opens the final basename without following symlinks. It checks the
 file owner, mode, link count, type, and size, performs a bounded read, and compares
 the open file with the named inode and its original metadata. Invalid or replaced
-files fail before their contents become configuration. The private reader returns
-either owned bytes or a failure without filesystem details. It clears its read
-buffer and closes the file handle before transferring the return buffer. If
-closing fails, the reader clears the still-owned return buffer and reports
-failure. The configuration loader owns and clears bytes only after a successful
-transfer.
+files fail before their contents become configuration. The reader retains ownership
+of its candidate buffer until descriptor closure and transfer succeed. It clears
+scratch bytes and any candidate that cannot be transferred, including on a close
+failure. Success transfers an independent buffer to its caller; failure returns
+no filesystem details. Configuration maps
+that failure to `invalid-configuration` and clears successfully returned bytes.
 
 ### 3. Validate configuration and construct material owners
 
 `apps/controller/src/composition/repository-credentials/config.ts:loadConfiguration`
 
-The composition loader validates the service policy and GitHub configuration, then
-repeats protected reads for the App key, certificate, and TLS key. The GitHub key
-owner accepts the configured RSA signing key; TLS context creation validates
+Composition validates the service policy and selects either one GitHub repository
+or the canonical registry, together with its App identity and key path.
+`composition/repository-credentials/registry.ts` owns registry file I/O;
+`drivers/repo/github/credentials/registry.ts` owns pure GitHub policy validation.
+Public projected registry reads retain their own generation/symlink rules;
+they do not weaken protected-secret descriptor validation. That
+validated selection determines the factory after protected reads load the App
+key, certificate and TLS key. Registry policy remains bounded to its installation,
+repository and Namespace/profile grants. The GitHub key owner accepts the
+configured RSA signing key; TLS context creation validates
 the certificate and private-key pair. The frozen result owns the selected
 factory and TLS buffers. Failure closes any constructed owner and clears loaded
 buffers before returning `invalid-configuration`.

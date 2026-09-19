@@ -180,13 +180,14 @@ pnpm credentials:build
 pnpm credentials:check-config /absolute/path/service.json
 ```
 
-The check reads protected configuration, validates the RSA key and TLS inputs,
-and prints a safe configuration summary. It does not start listeners or call
-GitHub. The builder writes separate `.build/repository-credentials/service` and
-`.build/repository-credentials/client` directories. Each contains its own manifest
-and emitted runtime closure, using Node built-ins without runtime `node_modules`.
-Source lives under the controller tree; the credential service still runs as a
-separate process and owns the App signing key.
+The build stages `.build/repository-credentials/service` and
+`.build/repository-credentials/client`. Each contains a minimal manifest and its
+selected emitted modules, using Node built-ins without runtime `node_modules`.
+The check validates protected configuration, RSA and TLS inputs, and prints a
+safe summary without starting listeners or calling GitHub. The service entrypoint
+is `repository-credentials.js`; the client launch, operator, Git helper and router
+entrypoints live under `drivers/repo/github/credentials/client/` in emitted output.
+These artifacts retain separate service/client dependency closures.
 
 For `invalid-configuration`, inspect the file and every directory in its absolute
 path. Use root or service-user ownership, private configuration/key files, and

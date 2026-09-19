@@ -4,7 +4,8 @@ A Provider is Installation-owned configuration that gives related Drivers an
 authenticated client. The bundled ChatGPT client manages upstream service
 accounts. Its nullable Agent `providerId` association neither grants permissions
 nor changes model or Harness selection. The GitHub Provider owns repository
-credential policy and uses the separate Agent `repositoryBindings` selection.
+credential configuration for the selected `RepoDriver` and uses the separate
+Agent `repositoryBindings` selection.
 Providers have no OCC resource or write API. Installation administrators can
 discover nonsecret configured IDs and types through `GET /providers`.
 
@@ -70,9 +71,9 @@ provider:
     configuration:
       registryPath: /etc/openclaw/repository-registry/registry.json
     drivers:
-      repository_credentials: repository-credentials
+      repo: repository-credentials
 drivers:
-  repository_credentials:
+  repo:
     id: repository-credentials
     configuration:
       controlSocket: /run/openclaw/repository-control/private/control.sock
@@ -82,7 +83,7 @@ drivers:
 
 Keep the ordinary required Driver settings alongside this fragment. One GitHub
 Provider is supported and may coexist with one ChatGPT Provider. Its member ID
-must match the selected `repository_credentials` Driver. The registry's Provider
+must match the selected `repo` Driver. The registry's Provider
 ID must match the definition, and the session duration must fit the registry's
 maximum. Unsupported Driver packages or configuration keys fail startup.
 
@@ -107,12 +108,14 @@ ServiceAccount Driver. The worker receives nonsecret ChatGPT definitions for rec
 Existing Driver lifecycle, controller/state injection, Compute credential
 storage, installed factory signatures, and package trust rules remain unchanged.
 
-For GitHub, API and worker construct the same repository Driver from
+For GitHub, API and worker construct `GitHubRepoDriver` from
 `Provider<RepositoryCredentialControlClient>`, the validated registry, and the
 selected duration. Construction reads the public CA but never connects the
 private control socket. API resolution is local policy; the worker invokes
-session operations. Only the separate service owns the App key, private TLS
-material, token acquisition, and forwarding engine.
+session operations. The Provider client validates full private control responses;
+the Driver then returns the [four-field public status](repository-credentials.md#repo-driver-contract).
+Only the separate service owns the App key, private TLS material, token
+acquisition, and forwarding engine.
 
 ## Agent association and immutable deployment
 

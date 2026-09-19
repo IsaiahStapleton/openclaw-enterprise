@@ -29,11 +29,12 @@ responsible for custody, authorization and cleanup.
 ## Check source authority boundaries
 
 Run `node scripts/verify-repository-credentials-boundary.mjs` after changing the
-common owners in `apps/controller/src/drivers/repo/credentials/`, the GitHub
-backend/client in `apps/controller/src/drivers/repo/github/credentials/`, or the
-separate-process assembly in `apps/controller/src/composition/repository-credentials/`. The same check runs through `pnpm check:workspace` in baseline CI. It
-parses every credential-service source file using the workspace's pinned
-Prettier TypeScript parser. Runtime imports and re-exports must stay within the
+service. The same check runs through `pnpm check:workspace` in baseline CI. It
+parses `composition/repository-credentials/`, `drivers/repo/credentials/`,
+`drivers/repo/github/` and `providers/repository-credentials/` beneath
+`apps/controller/src/`, plus
+`repository-credentials.ts` and `repository-credentials.mjs`, using the workspace's
+pinned Prettier TypeScript parser. Runtime imports and re-exports must stay within the
 scanned source or use reviewed external modules and named members. Erased
 `import type` and `export type` declarations remain available; inline type
 specifiers can preserve a runtime module load. The two raw HTTPS sender helpers have explicit
@@ -84,8 +85,11 @@ TLS switch or localhost `GH_HOST` substitute is used.
 The admission suite uses the actual HTTP application and checks authorized
 selection, defaults, immutable public revision output and unsupported runtime
 rejection. The Driver suite exercises the concrete registry, Unix control and
-provider engine. Runtime-material suites check the closed file set, generation
-identity and actual init-file publication. Run the relevant source checks with
+provider engine. It checks all four public status projections after complete
+private decoding, including false disposal and valid historical revoked/expired
+counts. Runtime-material suites check the closed file set, generation identity
+and actual init-file publication. The private client DTO adds no emitted runtime
+edge outside the GitHub client subtree. Run the relevant source checks with
 prepared dependencies:
 
 ```sh

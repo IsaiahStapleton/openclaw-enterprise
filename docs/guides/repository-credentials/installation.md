@@ -96,7 +96,9 @@ Agent configuration and command arguments.
 
 Add the [GitHub Provider and Driver fragment](../../reference/providers.md#github-repository-credentials)
 to the existing Installation YAML. Set its Provider ID to `repository-provider`
-and `sessionDurationSeconds` to `86400`. Keep the shown registry, control socket
+and `sessionDurationSeconds` to `86400`. Select the optional capability through
+`drivers.repo` and the matching Provider `drivers.repo` member; keep the configured
+Driver ID unchanged. Keep the shown registry, control socket
 and public CA paths; Helm mounts exactly those locations.
 
 Add this peer under the existing

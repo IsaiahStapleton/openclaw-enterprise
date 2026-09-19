@@ -1,7 +1,6 @@
 ---
 created: 2026-08-25
-updated: 2026-09-18
-last_updated_session: authoring-run/977f7873-bde4-4525-887a-02943094938e
+updated: 2026-09-19
 ---
 
 # Production Startup Flow
@@ -154,11 +153,12 @@ server, emits `worker.started`, and polls durable Namespace and AgentRevision
 work. Worker readiness depends on fresh queue-health observations. Neither
 process mounts the bootstrap PVC.
 
-`apps/controller/src/composition/repository-credentials/platform.ts:composeRepositoryCredentialDriver`
+`apps/controller/src/composition/repository-credentials/platform.ts:composeRepoDriver`
 
 When selected, both processes load the same canonical registry and public CA,
-construct the repository Provider with a lazy Unix client, and register its
-Driver. API startup performs no control operation and loads no App key or
+construct the GitHub Provider with a lazy Unix client, and register
+`GitHubRepoDriver` under the optional `repo` capability. The configured Provider
+member and `drivers.repo` must select the same Driver ID. API startup performs no control operation and loads no App key or
 session engine. The worker owns subsequent session lifecycle calls through the
 selected Driver; API readiness remains database-backed.
 
@@ -237,15 +237,15 @@ tenant deployment and TUI procedures run.
 
 ## Changelog
 
-- 2026-09-18 03:03: Trace optional repository Driver composition and service-only projected input startup. (authoring-run/977f7873-bde4-4525-887a-02943094938e - 8500b2da103063b4503b62e5529f3910513e84a9)
+- 2026-09-18 03:03: Trace optional repository Driver composition and service-only projected input startup. (8500b2da103063b4503b62e5529f3910513e84a9)
 
-- 2026-09-17 12:56: Trace the advisory Kubernetes 1.35 startup preflight and warning handoff. (authoring-run/a6571e7c-996e-4f11-9c4c-f61418a8d109 - 324fe2d17f3856cd1602a57e4d8aa99a34d6514c)
-- 2026-09-01 19:09: Document initial default Namespace creation and unchanged repeat-bootstrap behavior. (codex/01a05ef1-ee29-7941-80f2-448bb0789969 - 872fa544c98bb7ad11b2d92d777e49229ececbf5) (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
-- 2026-09-01 12:58: Trace production bootstrap-volume preparation, Helm startup, and authenticated Installation proof. (codex/01a05e87-6c64-7960-b9c2-f444d4a3d737 - bdb846c38d5dae6085a8841f720c93068ba8ad15)
-- 2026-09-01 10:19: Validate Provider configuration at startup and exact saved ownership at use, preserving API repair access. (01a05d6b-e21d-7fc0-b1bd-b5cb15b365c6 - 1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158)
-- 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (01a05d97-f2b0-71d0-bfc3-01ee7d6d58f9 - b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
-- 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
-- 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (01a05a3d-526f-7553-8cd8-070bd1847acb - b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
-- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
-- 2026-08-28 17:54: Separated Helm execution from the deployment walkthrough and included optional Sandbox Driver startup ownership. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 4270aa29b7015562049f46c6027962fd85b584a9)
+- 2026-09-17 12:56: Trace the advisory Kubernetes 1.35 startup preflight and warning handoff. (324fe2d17f3856cd1602a57e4d8aa99a34d6514c)
+- 2026-09-01 19:09: Document initial default Namespace creation and unchanged repeat-bootstrap behavior. (872fa544c98bb7ad11b2d92d777e49229ececbf5) (aa366c49c44834d59f74994c5fd37fb8096f169f)
+- 2026-09-01 12:58: Trace production bootstrap-volume preparation, Helm startup, and authenticated Installation proof. (bdb846c38d5dae6085a8841f720c93068ba8ad15)
+- 2026-09-01 10:19: Validate Provider configuration at startup and exact saved ownership at use, preserving API repair access. (1c7eae4d11e6c474cc7f1bbbb05d2c2e7052a158)
+- 2026-09-01 08:47: Trace Provider membership, API-only client injection, and persisted ownership checks. (b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d)
+- 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (94a5440898bf331987148d7733f0075506af64a6)
+- 2026-08-31 20:33: Trace the shared installation initializer, startup ordering, and initializer-owned credential delivery. (b6f213cbcee11ba3dd69886c936c7e5abe233eb3)
+- 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
+- 2026-08-28 17:54: Separated Helm execution from the deployment walkthrough and included optional Sandbox Driver startup ownership. (4270aa29b7015562049f46c6027962fd85b584a9)
 - 2026-08-25 03:43: Added the production Helm initialization, protected administrator bootstrap, private OCC API, independent worker, and readiness startup flow. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 2e9769c751d7)

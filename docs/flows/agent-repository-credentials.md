@@ -1,7 +1,6 @@
 ---
 created: "2026-09-18"
 updated: "2026-09-18"
-last_updated_session: "authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d"
 ---
 
 # Agent repository credential flow
@@ -77,11 +76,11 @@ graph TD
 uses `resolveRepositoryBindings` after existing authorization. The public input
 contains distinct opaque references and optional profiles, not provider tokens
 or caller-selected grant identities. The concrete
-`apps/controller/src/drivers/repository-credentials/github.ts:GitHubRepositoryCredentialDriver.resolve`
+`apps/controller/src/drivers/repo/github/driver.ts:GitHubRepoDriver.resolve`
 uses local registry policy and defaults an omitted profile to `git-write`.
 It performs no control-socket or GitHub call.
 
-`apps/controller/src/providers/repository-credentials/github/registry.ts:resolveGitHubRepositoryBinding`
+`apps/controller/src/drivers/repo/github/credentials/registry.ts:resolveGitHubRepositoryBinding`
 requires the exact Namespace/reference/profile combination. Its fingerprint
 binds provider/App/installation/repository identity, duration policy and the
 Namespace's complete profile policy. The same registry supports several
@@ -99,9 +98,12 @@ move it. The public `clientRevision` serializer in
 `apps/controller/src/index.ts` returns only Driver identity, references, profiles
 and deadline from that snapshot.
 
-`apps/controller/src/composition/repository-credentials/platform.ts:composeRepositoryCredentialDriver`
-constructs the thin Driver around a Provider-owned Unix client, validated registry
-and public CA. The API and worker do not load the token engine or private App
+`apps/controller/src/composition/repository-credentials/platform.ts:composeRepoDriver`
+constructs `GitHubRepoDriver` for capability `repo` around a Provider-owned Unix
+client, validated registry and public CA. Installation and Provider membership
+must select the same opaque Driver ID. The existing
+`AgentRevision.repositoryCredentials` and persisted
+`admitted_spec.repository_credentials` fields are unchanged. The API and worker do not load the token engine or private App
 key. The [production startup flow](production-startup.md) owns composition and
 sidecar launch; the service validates its own protected inputs before listening.
 
@@ -118,10 +120,18 @@ bearers or client files.
 `apps/controller/src/providers/repository-credentials/control-client.ts:UnixRepositoryCredentialControlClient`
 sends the bound request over the private socket. The service independently
 resolves and compares the grant through
-`apps/controller/src/providers/repository-credentials/github/registry-factory.ts:createGitHubRegistryDriverFactory`.
+`apps/controller/src/drivers/repo/github/credentials/registry-factory.ts:createGitHubRegistryDriverFactory`.
+The configured client validates the complete private response, including cleanup
+counts and terminal-state consistency. `DISPOSED` permits historical revoked and
+expired counts, but no active uses, active/pending/uncertain credentials or pending
+auxiliary work. The Driver explicitly constructs a fresh four-field status and
+three-field binding for created-open, recovered-open, status and close. Validation
+still precedes projection; narrowing the public object cannot hide malformed
+private state.
+
 Only a created control response contains the bearer. The concrete Driver encodes
 transient files with
-`apps/controller/src/drivers/repository-credentials/client/config.ts:encodeRepositoryCredentialSessionFiles`
+`apps/controller/src/drivers/repo/github/credentials/client/config.ts:encodeRepositoryCredentialSessionFiles`
 and returns session status plus that closed file map. The worker records the
 session ID before passing files solely through
 `ComputeRevisionContext.repositoryCredentials`.
@@ -129,7 +139,7 @@ session ID before passing files solely through
 A confirmed open session produces a `retained` binding without new files. An
 unfinished opening attempt uses `recoverOnly` to find or fence the original
 admission, closes any recovered session, then permits a fresh authorized attempt.
-`apps/controller/src/drivers/repository-credentials/control.ts:createControlAdmission`
+`apps/controller/src/drivers/repo/credentials/control.ts:createControlAdmission`
 never reissues a bearer and records a cancellation fence for a missing fresh ID.
 Transport failure or overload cannot establish absence.
 
@@ -167,7 +177,7 @@ installation tokens and the control socket never enter this material set.
 
 ### 5. Pin each Git or GitHub CLI command
 
-`apps/controller/src/drivers/repository-credentials/client/router.ts:routeRepositoryClient`
+`apps/controller/src/drivers/repo/github/credentials/client/router.ts:routeRepositoryClient`
 reads one protected manifest generation and selects from the parsed command
 or effective Git remotes. The actual Git context includes accepted global
 options and worktree selection. A clone uses the admitted gateway URL while
@@ -259,5 +269,5 @@ State/worker, real-client, installed/runtime and live-provider checks.
 
 ## Changelog
 
-- 2026-09-18 04:55: Trace the accompanying native exec PATH projection for repository material, including per-agent overrides. (authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d - e3012a8cee0c5ea60bc02943ebed88a1c88eb0d2)
-- 2026-09-18 03:04: Trace the accompanying Agent admission, durable session lifecycle, Kubernetes material generation and concurrent client integration. (authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d - 8500b2da103063b4503b62e5529f3910513e84a9)
+- 2026-09-18 04:55: Trace the accompanying native exec PATH projection for repository material, including per-agent overrides. (e3012a8cee0c5ea60bc02943ebed88a1c88eb0d2)
+- 2026-09-18 03:04: Trace the accompanying Agent admission, durable session lifecycle, Kubernetes material generation and concurrent client integration. (8500b2da103063b4503b62e5529f3910513e84a9)
