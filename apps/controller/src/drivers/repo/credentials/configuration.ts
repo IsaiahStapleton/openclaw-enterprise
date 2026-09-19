@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import type { ServiceConfig, ServiceLimits } from "../contracts.ts";
+import type { ServiceConfig, ServiceLimits } from "./service-contracts.ts";
 
 const defaults: ServiceLimits = Object.freeze({
   sessions: 16,

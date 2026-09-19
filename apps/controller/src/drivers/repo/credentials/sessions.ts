@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { AuthorityIdentity, Clock, SessionRef } from "./driver-contracts.ts";
-import type { RepositoryGrantIdentity } from "./contracts.ts";
+import type { AuthorityIdentity, Clock, SessionRef } from "./backend-contracts.ts";
+import type { RepositoryGrantIdentity } from "./service-contracts.ts";
 
 export interface SessionAdmission {
   readonly ref: SessionRef;

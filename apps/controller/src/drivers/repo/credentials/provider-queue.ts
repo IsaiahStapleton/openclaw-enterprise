@@ -1,4 +1,14 @@
-import type { Clock } from "./driver-contracts.ts";
+import type { Clock } from "./backend-contracts.ts";
+
+/** Scheduling operations used by a session lifecycle. */
+export interface ProviderQueue {
+  run<T>(
+    signal: AbortSignal,
+    task: () => Promise<T>,
+    priority?: "foreground" | "cleanup",
+  ): Promise<T>;
+  whenAvailable(notify: () => void): void;
+}
 
 /** The running task owns this slot through settlement, including after abort. */
 export function createProviderQueue(maximumQueued: number) {

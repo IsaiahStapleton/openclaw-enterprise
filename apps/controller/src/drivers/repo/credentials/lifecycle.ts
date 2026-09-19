@@ -5,10 +5,11 @@ import type {
   AuthorityIdentity,
   Clock,
   CredentialRef,
-  RepoDriver,
-} from "./driver-contracts.ts";
+  RepositoryBackend,
+} from "./backend-contracts.ts";
 import type { CapturedCredential, CustodyOwner } from "./custody.ts";
-import { createProviderQueue, waitWithin } from "./provider-queue.ts";
+import { waitWithin } from "./provider-queue.ts";
+import type { ProviderQueue } from "./provider-queue.ts";
 
 interface Waiter {
   readonly deadline: number;
@@ -19,31 +20,48 @@ interface Acquisition {
   readonly result: Promise<CredentialRef>;
 }
 
+interface LifecycleState {
+  current: CapturedCredential | undefined;
+  acquiring: Acquisition | undefined;
+  blocked: boolean;
+  activeActions: number;
+  revoked: number;
+  expired: number;
+  finalized: boolean;
+  finalizeAttempted: boolean;
+  cleanupWaiting: boolean;
+  maintenanceScheduled: boolean;
+  cancelExpiry: (() => void) | undefined;
+  readonly drainWaiters: Set<() => void>;
+}
+
 export function createLifecycle(options: {
   clock: Clock;
   authority: AuthorityIdentity;
   deadlineMonoMs: number;
   custody: CustodyOwner;
-  driver: RepoDriver;
-  queue: ReturnType<typeof createProviderQueue>;
+  driver: RepositoryBackend;
+  queue: ProviderQueue;
   providerActionMs: number;
   safetyMarginMs: number;
   admitted(): boolean;
   changed(): void;
 }) {
   const { clock, custody, driver, queue } = options;
-  let current: CapturedCredential | undefined;
-  let acquiring: Acquisition | undefined;
-  let blocked = false;
-  let activeActions = 0;
-  let revoked = 0;
-  let expired = 0;
-  let finalized = false;
-  let finalizeAttempted = false;
-  let cleanupWaiting = false;
-  let maintenanceScheduled = false;
-  let cancelExpiry: (() => void) | undefined;
-  const drainWaiters = new Set<() => void>();
+  const state: LifecycleState = {
+    current: undefined,
+    acquiring: undefined,
+    blocked: false,
+    activeActions: 0,
+    revoked: 0,
+    expired: 0,
+    finalized: false,
+    finalizeAttempted: false,
+    cleanupWaiting: false,
+    maintenanceScheduled: false,
+    cancelExpiry: undefined,
+    drainWaiters: new Set(),
+  };
 
   function attempt(
     action: AttemptContext["action"],
@@ -96,20 +114,21 @@ export function createLifecycle(options: {
   }
   function changed() {
     options.changed();
-    for (const notify of [...drainWaiters]) {
+    for (const notify of [...state.drainWaiters]) {
       notify();
     }
     maintain();
   }
   function armExpiry() {
+    const cancelExpiry = state.cancelExpiry;
     cancelExpiry?.();
-    cancelExpiry = undefined;
+    state.cancelExpiry = undefined;
     const now = clock.monotonicNow();
     const deadlines = [...custody.records]
       .map((record) => record.deadlineMonoMs)
       .filter((value): value is number => value !== undefined && value > now);
     if (deadlines.length) {
-      cancelExpiry = clock.schedule(Math.min(...deadlines) - now, changed);
+      state.cancelExpiry = clock.schedule(Math.min(...deadlines) - now, changed);
     }
   }
   function waitForDrain(
@@ -127,9 +146,11 @@ export function createLifecycle(options: {
           resolve();
         }
       };
-      drainWaiters.add(notify);
+      state.drainWaiters.add(notify);
     });
-    return waitWithin(work, signal, deadline, clock).finally(() => drainWaiters.delete(notify));
+    return waitWithin(work, signal, deadline, clock).finally(() =>
+      state.drainWaiters.delete(notify),
+    );
   }
 
   function startAcquisition(): Acquisition {
@@ -144,19 +165,19 @@ export function createLifecycle(options: {
     // A waiter may disconnect while the original provider owner remains active.
     void result.catch(() => {});
     const acquisition: Acquisition = { controller, waiters, result };
-    acquiring = acquisition;
+    state.acquiring = acquisition;
     let deadline = options.deadlineMonoMs;
     const ownedAttempt = attempt("acquire", controller, () => deadline);
     let reservation;
     try {
       reservation = custody.reserve(ownedAttempt.context);
     } catch {
-      acquiring = undefined;
+      state.acquiring = undefined;
       reject(new Error("CREDENTIAL_CAPACITY"));
       return acquisition;
     }
     const capture = reservation;
-    activeActions++;
+    state.activeActions++;
     void Promise.resolve().then(async () => {
       let invoked = false;
       let settled = false;
@@ -172,7 +193,7 @@ export function createLifecycle(options: {
           );
           try {
             ownedAttempt.context.assertAdmitted();
-            const previous = current;
+            const previous = state.current;
             if (driver.replacement === "drain-before" && previous) {
               previous.accepted = false;
               await waitForDrain(previous, controller.signal, deadline);
@@ -191,17 +212,17 @@ export function createLifecycle(options: {
               );
             } catch {
               capture.unknown = true;
-              blocked = true;
+              state.blocked = true;
               reject(new Error("ACQUISITION_UNCERTAIN"));
               await new Promise<void>(() => {});
               return;
             }
             if (ownedAttempt.dispatched && outcome.kind === "not-dispatched") {
-              blocked = true;
+              state.blocked = true;
               capture.unknown = true;
             }
             if (outcome.kind === "uncertain") {
-              blocked = true;
+              state.blocked = true;
               capture.unknown = true;
               reject(new Error("ACQUISITION_UNCERTAIN"));
             } else if (outcome.kind !== "acquired") {
@@ -211,7 +232,7 @@ export function createLifecycle(options: {
               await driver.settle(outcome);
               settled = true;
             } catch {
-              blocked = true;
+              state.blocked = true;
               capture.unknown = true;
               reject(new Error("SETTLEMENT_PENDING"));
               await new Promise<void>(() => {});
@@ -247,10 +268,10 @@ export function createLifecycle(options: {
                 reject(new Error("CREDENTIAL_NOT_USABLE"));
               } else {
                 accepted.accepted = true;
-                if (current && current !== accepted) {
-                  current.accepted = false;
+                if (state.current && state.current !== accepted) {
+                  state.current.accepted = false;
                 }
-                current = accepted;
+                state.current = accepted;
                 resolve(accepted.ref);
               }
             }
@@ -267,11 +288,11 @@ export function createLifecycle(options: {
         // A driver violating its outcome/settlement contract keeps its reservation.
         if (invoked && !settled) {
           capture.unknown = true;
-          blocked = true;
+          state.blocked = true;
         }
-        activeActions--;
-        if (acquiring === acquisition) {
-          acquiring = undefined;
+        state.activeActions--;
+        if (state.acquiring === acquisition) {
+          state.acquiring = undefined;
         }
         changed();
       }
@@ -282,19 +303,19 @@ export function createLifecycle(options: {
   function waitForCleanupCapacity() {
     // Rejected entries never reached the driver. One wake per session avoids
     // repeatedly retrying unchanged queue capacity from maintenance microtasks.
-    if (cleanupWaiting) {
+    if (state.cleanupWaiting) {
       return;
     }
-    cleanupWaiting = true;
+    state.cleanupWaiting = true;
     queue.whenAvailable(() => {
-      cleanupWaiting = false;
+      state.cleanupWaiting = false;
       maintain();
     });
   }
   function retire(record: CapturedCredential) {
     record.retiring = true;
     let invoked = false;
-    activeActions++;
+    state.activeActions++;
     const controller = new AbortController();
     let deadline = Infinity;
     const owned = attempt("retire", controller, () => deadline);
@@ -315,10 +336,10 @@ export function createLifecycle(options: {
             }
             if (outcome.kind === "revoked") {
               record.disposition = "revoked";
-              revoked++;
+              state.revoked++;
             } else if (outcome.kind === "expired") {
               record.disposition = "expired";
-              expired++;
+              state.expired++;
             } else {
               record.disposition = outcome.kind === "uncertain" ? "uncertain" : "pending";
             }
@@ -341,13 +362,13 @@ export function createLifecycle(options: {
       })
       .finally(() => {
         record.retiring = false;
-        activeActions--;
+        state.activeActions--;
         changed();
       });
   }
   function finalize() {
     let invoked = false;
-    activeActions++;
+    state.activeActions++;
     const controller = new AbortController();
     let deadline = Infinity;
     const owned = attempt("finalize", controller, () => deadline);
@@ -359,7 +380,7 @@ export function createLifecycle(options: {
           const cancel = clock.schedule(options.providerActionMs, () => controller.abort());
           try {
             invoked = true;
-            finalizeAttempted = true;
+            state.finalizeAttempted = true;
             const outcome = await driver.finalize(owned.context);
             await driver.settle(outcome);
             custody.endAttempt(owned.context);
@@ -368,7 +389,7 @@ export function createLifecycle(options: {
             }
             if (outcome.kind === "finalized") {
               await custody.disposeAllRenewal();
-              finalized = true;
+              state.finalized = true;
             }
           } catch {
             await new Promise<void>(() => {});
@@ -385,7 +406,7 @@ export function createLifecycle(options: {
         }
       })
       .finally(() => {
-        activeActions--;
+        state.activeActions--;
         changed();
       });
   }
@@ -402,77 +423,82 @@ export function createLifecycle(options: {
         now >= record.deadlineMonoMs
       ) {
         record.disposition = "expired";
-        expired++;
+        state.expired++;
       }
       if (record.disposition === "revoked" || record.disposition === "expired") {
-        if (current === record) {
-          current = undefined;
+        if (state.current === record) {
+          state.current = undefined;
         }
         custody.release(record);
         continue;
       }
-      if (options.admitted() && record === current && record.accepted) {
+      if (options.admitted() && record === state.current && record.accepted) {
         continue;
       }
-      if (driver.cleanup === "revocable" && !record.retirementAttempted && !cleanupWaiting) {
+      if (driver.cleanup === "revocable" && !record.retirementAttempted && !state.cleanupWaiting) {
         retire(record);
       }
     }
     armExpiry();
     if (
       !options.admitted() &&
-      activeActions === 0 &&
+      state.activeActions === 0 &&
       custody.records.size === 0 &&
       custody.reservations.size === 0 &&
       custody.renewalCallbacks === 0 &&
-      !cleanupWaiting &&
-      !finalizeAttempted
+      !state.cleanupWaiting &&
+      !state.finalizeAttempted
     ) {
       finalize();
     }
     options.changed();
   }
   function maintain() {
-    if (maintenanceScheduled) {
+    if (state.maintenanceScheduled) {
       return;
     }
-    maintenanceScheduled = true;
+    state.maintenanceScheduled = true;
     queueMicrotask(() => {
-      maintenanceScheduled = false;
+      state.maintenanceScheduled = false;
       sweep();
     });
   }
   return Object.freeze({
     get activeActions() {
-      return activeActions;
+      return state.activeActions;
     },
     get finalized() {
-      return finalized;
+      return state.finalized;
     },
     get blocked() {
-      return blocked;
+      return state.blocked;
     },
     get counters() {
-      return { revoked, expired };
+      return { revoked: state.revoked, expired: state.expired };
     },
     maintain,
     close() {
-      acquiring?.controller.abort();
-      if (current) {
-        current.accepted = false;
+      state.acquiring?.controller.abort();
+      if (state.current) {
+        state.current.accepted = false;
       }
       changed();
     },
     async acquire(deadline: number, signal: AbortSignal): Promise<CapturedCredential> {
-      if (!options.admitted() || signal.aborted || clock.monotonicNow() >= deadline || blocked) {
+      if (
+        !options.admitted() ||
+        signal.aborted ||
+        clock.monotonicNow() >= deadline ||
+        state.blocked
+      ) {
         throw new Error("SESSION_UNAVAILABLE");
       }
-      if (usable(current, deadline)) {
-        current.uses++;
-        return current;
+      if (usable(state.current, deadline)) {
+        state.current.uses++;
+        return state.current;
       }
       sweep();
-      const acquisition = acquiring ?? startAcquisition();
+      const acquisition = state.acquiring ?? startAcquisition();
       // Retain the original settlement owner without admitting more waiters.
       if (acquisition.controller.signal.aborted) {
         throw new Error("ACQUISITION_CANCELLED");
