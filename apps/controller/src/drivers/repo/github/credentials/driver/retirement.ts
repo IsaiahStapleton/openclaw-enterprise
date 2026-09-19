@@ -2,9 +2,9 @@ import type {
   AttemptContext,
   Clock,
   DriverCustody,
-  RepoDriver,
+  RepositoryBackend,
   RetireOutcome,
-} from "../../../driver-contracts.ts";
+} from "../../../credentials/backend-contracts.ts";
 import type { ProviderResponse, ProviderTransport } from "../provider-transport.ts";
 import type { GitHubDriverState } from "./state.ts";
 import { tokenLifetimeMs } from "./lifetime.ts";
@@ -29,7 +29,7 @@ export function createCredentialRetirement({
   custody,
   clock,
   exchange,
-}: RetirementDependencies): RepoDriver["retire"] {
+}: RetirementDependencies): RepositoryBackend["retire"] {
   async function retireBorrowed(
     attempt: AttemptContext,
     bytes: Uint8Array,

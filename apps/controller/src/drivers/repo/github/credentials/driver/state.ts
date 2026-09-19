@@ -7,9 +7,9 @@ import type {
   FinalizeOutcome,
   OriginalOutcome,
   RequestPlan,
-  RepoDriver,
+  RepositoryBackend,
   RetireOutcome,
-} from "../../../driver-contracts.ts";
+} from "../../../credentials/backend-contracts.ts";
 import type { RoutePolicy } from "../routes.ts";
 
 type OutcomePayload<T> = T extends OriginalOutcome ? Omit<T, keyof OriginalOutcome> : never;
@@ -37,7 +37,7 @@ interface CredentialRecord {
   accepted: boolean;
 }
 
-export interface GitHubDriverState extends Pick<RepoDriver, "finalize" | "settle" | "plan"> {
+export interface GitHubDriverState extends Pick<RepositoryBackend, "finalize" | "settle" | "plan"> {
   readonly credentials: WeakMap<CredentialRef, CredentialRecord>;
   readonly plans: WeakSet<RequestPlan>;
   readonly finalized: boolean;

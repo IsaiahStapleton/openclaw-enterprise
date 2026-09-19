@@ -3,9 +3,9 @@ import type {
   CredentialRef,
   DriverCustody,
   PrivateUpstreamRequest,
-  RepoDriver,
+  RepositoryBackend,
   RequestPlan,
-} from "../../../driver-contracts.ts";
+} from "../../../credentials/backend-contracts.ts";
 import type { GitHubDriverState } from "./state.ts";
 
 type AuthenticationDependencies = Readonly<{
@@ -59,7 +59,7 @@ async function sendAuthenticated<T>(
 
 export function createCredentialAuthentication(
   deps: AuthenticationDependencies,
-): RepoDriver["withAuthentication"] {
+): RepositoryBackend["withAuthentication"] {
   return async (credential, plan, send) => {
     assertAuthenticationAllowed(deps, credential, plan);
     return deps.custody.withAccess(credential, "authenticate", (bytes) =>

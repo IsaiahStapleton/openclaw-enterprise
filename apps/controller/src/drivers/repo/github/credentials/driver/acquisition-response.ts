@@ -5,7 +5,7 @@ import type {
   CredentialRef,
   DriverCustody,
   OriginalOutcome,
-} from "../../../driver-contracts.ts";
+} from "../../../credentials/backend-contracts.ts";
 import type { ProviderResponse } from "../provider-transport.ts";
 import type { GitHubDriverState } from "./state.ts";
 import { providerClockSkewMs, tokenLifetimeMs } from "./lifetime.ts";
