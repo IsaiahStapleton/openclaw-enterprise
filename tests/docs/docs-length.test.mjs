@@ -196,6 +196,49 @@ test("word-count CLI reports the approved API exception without exempting other 
   assert.deepEqual(readJsonOutput(rejected).violations, ["api.md", "docs/reference/api/agents.md"]);
 });
 
+test("word-count CLI exempts root and nested AGENTS.md files and their aliases", async (t) => {
+  const directory = await fixture(t);
+  await mkdir(join(directory, "nested"));
+  await writeFile(join(directory, "AGENTS.md"), words(3000));
+  await writeFile(join(directory, "nested/AGENTS.md"), words(1600));
+  // This alias sorts first, so reporting must recover the instruction file's name.
+  await symlink("AGENTS.md", join(directory, "nested/AAA.md"));
+  await symlink("AGENTS.md", join(directory, "CLAUDE.md"));
+
+  const json = readJson(runWordCount(directory, ["--json"]));
+  assert.deepEqual(json.exceptions, ["AGENTS.md", "nested/AGENTS.md"]);
+  assert.deepEqual(json.violations, []);
+  assert.deepEqual(json.reviewPages, []);
+  assert.deepEqual(
+    json.rows.map(({ path, totalWords, aliases }) => ({ path, totalWords, aliases })),
+    [
+      { path: "AGENTS.md", totalWords: 3000, aliases: ["CLAUDE.md"] },
+      { path: "nested/AGENTS.md", totalWords: 1600, aliases: ["nested/AAA.md"] },
+    ],
+  );
+  const report = runWordCount(directory);
+  assert.equal(report.status, 0, report.stderr || report.stdout);
+  assert.match(report.stdout, /AGENTS\.md: 3000 words \(approved length exception/);
+});
+
+test("word-count CLI rejects ordinary documents despite AGENTS.md aliases or similar names", async (t) => {
+  const directory = await fixture(t);
+  await mkdir(join(directory, "docs"));
+  await writeFile(join(directory, "guide.md"), words(2501));
+  await symlink("guide.md", join(directory, "AGENTS.md"));
+  await writeFile(join(directory, "docs/agents.md"), words(2501));
+  await writeFile(join(directory, "AGENTS-extra.md"), words(2501));
+
+  const result = runWordCount(directory, ["--json"]);
+  assert.equal(result.status, 1);
+  const json = readJsonOutput(result);
+  assert.deepEqual(json.exceptions, []);
+  assert.equal(json.violations.length, 3);
+  assert.ok(json.violations.includes("docs/agents.md"));
+  assert.ok(json.violations.includes("AGENTS-extra.md"));
+  assert.ok(json.rows.some((row) => [row.path, ...row.aliases].includes("guide.md")));
+});
+
 test("word-count CLI does not exempt another file through an API path symlink", async (t) => {
   const directory = await fixture(t);
   await mkdir(join(directory, "docs/reference"), { recursive: true });

@@ -15,7 +15,8 @@ Both workflows reuse the [run-ci-lane action](../../.github/actions/run-ci-lane/
 
 The `checks-baseline` lane runs `pnpm docs:check`: pages above 1,500 visible words
 are flagged for review and pages above 2,500 fail, except the approved single-page
-[API reference](../reference/api.md). The generated API, site build, navigation,
+[API reference](../reference/api.md) and `AGENTS.md` instruction files (see the
+[length policy](../../AGENTS.md#documentation-length-budget)). The generated API, site build, navigation,
 and links must pass. Run `pnpm docs:check-length` for the word-count
 check alone.
 
