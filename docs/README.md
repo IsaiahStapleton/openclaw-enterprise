@@ -23,6 +23,8 @@ response schemas. The [console guide](reference/console.md) covers browser tasks
 Compare bundled implementations in the [ComputeDriver feature matrix](reference/drivers/compute-matrix.md).
 Use the [PluginDriver feature matrix](reference/drivers/plugin-matrix.md) to
 compare plugin discovery and approval-policy support.
+The optional [RepoDriver](reference/repository-credentials.md#repo-driver-contract)
+connects approved repository bindings to the separate credential service.
 [Agent plugins](reference/agent-plugins.md) and
 [PluginDriver](reference/drivers/plugin.md) cover curated plugin selection, startup
 validation, and native runtime policy.
@@ -58,4 +60,7 @@ traces protected-file validation and GitHub key ownership.
 ## Implementation history
 
 The [spec archive](../specs/README.md) preserves proposals and delivery records.
-Recorded statuses do not replace current feature reference.
+The [repository credential RFC](../specs/31-repository-credentials.md) records its
+interface and ownership refinement; its [qualification companion](../specs/31-repository-credentials/qualification.md)
+separates historical results from final-artifact acceptance. Recorded statuses
+do not replace current feature reference.

@@ -51,12 +51,37 @@ revision. Reconciliation, token renewal and service recovery cannot extend it.
 A new deployment admits a new revision and deadline. Public Agent responses expose selections; revision responses also expose the
 deadline. Neither exposes grant internals, bearer material or session files.
 
+## Repo Driver contract
+
+The optional `repo` capability uses `RepoDriver extends Driver`, with the bundled
+`GitHubRepoDriver`. Trusted Installation `drivers.repo` and GitHub Provider
+`drivers.repo` select the same configured Driver ID. The
+[shared contract](../../packages/contracts/src/repo.ts) exposes four operations:
+
+- `resolve` checks Namespace policy and returns admitted bindings and duration.
+- `open` returns `created` with private runtime files, `recovered` with status
+  only, or `missing`. `recoverOnly` cannot create authority.
+- `status` returns the current observation or authoritative absence.
+- `close` stops local authority and reports closure or absence; it does not
+  promise remote revocation or runtime termination.
+
+Every public status contains only `sessionId`, `state`, `deadlineWallMs` and
+`binding`; the binding contains `providerInstanceId`, `repositoryId` and `grantId`.
+Created-open, recovered-open, status and close return fresh immutable snapshots
+after complete private control validation. Cleanup counters remain private.
+Client-configuration decoding is also private; public runtime files retain their
+closed Git/gh schema. Status cannot regenerate those files.
+
+`maintenanceIntervalMs` schedules worker reconciliation; it is not a measured
+withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
+persisted `admitted_spec.repository_credentials` retain their meaning.
+
 ## Configuration
 
 ### Canonical platform registry
 
 The GitHub Provider selects one registry through `configuration.registryPath`;
-its `drivers.repository_credentials` names the selected Driver. API, worker and
+its `drivers.repo` names the selected Driver. API, worker and
 service load the same immutable, versioned ConfigMap. The registry contains
 nonsecret identity and Namespace policy for one App installation and multiple
 repositories:
@@ -110,8 +135,10 @@ bindings. Both Git-only profiles deny all REST and GraphQL calls. `git-read`
 denies push discovery and execution. `git-full` admits selected repository
 metadata, PR, issue and issue-comment routes, `GET /meta` and `POST /graphql`,
 subject to method, query, framing and media-type restrictions. GraphQL uses the
-exact installation-token grant; the service does not provide per-field GraphQL
-authorization. The former `read-write` profile has no compatibility alias.
+exact installation-token grant and can also return public information allowed
+by GitHub. There is no per-field or branch-only GraphQL authorization; every
+GraphQL POST is treated as a possible write. The former `read-write` profile has
+no compatibility alias.
 
 Native repository rules still apply. Administration, workflow changes requiring
 additional permissions, Actions, packages, projects, SSH, LFS and unselected
@@ -167,7 +194,7 @@ private files before protected-path validation. API and worker receive
 registry/public CA inputs; only the service receives App and TLS private keys.
 
 The privileged GitHub transport captures the installation, repository and exact
-permission profile when the Driver is constructed. Its only operations are
+permission profile when the backend is constructed. Its only operations are
 issuance for that captured scope and revocation of an owned token; callers cannot
 supply an HTTP URL, method, path, request body or extra headers. Extending those
 operations changes a credential boundary and requires security review.
@@ -191,8 +218,8 @@ The trusted worker or local operator uses HTTP over a private mode-0600 Unix soc
 
 | Request                                                           | Response                                                    |
 | ----------------------------------------------------------------- | ----------------------------------------------------------- |
-| `POST /v1/sessions` with `durationSeconds` and optional `profile` | Session status, public client configuration and bearer once |
-| `GET /v1/sessions/{id}`                                           | Public session and cleanup status                           |
+| `POST /v1/sessions` with `durationSeconds` and optional `profile` | Session status, client configuration and bearer once        |
+| `GET /v1/sessions/{id}`                                           | Private session and cleanup status                          |
 | `POST /v1/sessions/{id}/close`                                    | Immediate local closure status; cleanup reported separately |
 
 The socket's parent is private to the service/operator. It is never mounted into
@@ -203,13 +230,13 @@ Admission requires `X-Admission-Id`: a 13-digit Unix-millisecond timestamp,
 a hyphen, and a lowercase UUIDv4. The operator CLI generates and prints this
 nonsecret ID before dispatch. The first response is HTTP 201 with the bearer.
 Repeating the same ID and effective duration/profile returns HTTP 200 with
-public status only; conflicting inputs fail. Follow the
+status only; conflicting inputs fail. Follow the
 [lost-response recovery procedure](../guides/repository-credentials.md#recover-an-admission)
 to close that session and explicitly request replacement client material.
 
 Platform admission additionally requires `namespaceId`, `repositoryRef`,
 normalized `profile`, `expectedBinding` and `deadlineWallMs`. Replays must match
-all original fields. `recoverOnly: true` may return public status or
+all original fields. `recoverOnly: true` may return status or
 `admission-missing`, never create a session. A missing lookup fences a delayed
 first-open using that still-fresh ID. Capacity or transport failure remains an
 error, not evidence of absence.
@@ -238,10 +265,11 @@ Cleanup retains the one-hour bound from local receipt. A forward wall-clock
 change can deny authentication but cannot establish remote expiration.
 
 Closing or expiring a session prevents new use immediately and cancels owned
-exchanges. `CLOSED` does not imply confirmed revocation. Status distinguishes
-pending, revoked, expired and uncertain credentials, plus auxiliary cleanup.
+exchanges. `CLOSED` does not imply confirmed revocation. Private control status
+distinguishes pending, revoked, expired and uncertain credentials, plus auxiliary cleanup.
 `DISPOSED` requires settled actions, resolved access-token obligations and
-completed auxiliary finalization. An uncertain issuance blocks automatic minting.
+completed auxiliary finalization; historical revoked/expired counters may remain
+nonzero. An uncertain issuance blocks automatic minting.
 An uncertain push or API mutation is never automatically replayed.
 
 Failed admission can also retain cleanup work. If session construction fails,

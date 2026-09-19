@@ -186,7 +186,10 @@ The build stages `.build/repository-credentials/service` and
 `.build/repository-credentials/client`. Each contains a minimal manifest and its
 selected emitted modules, using Node built-ins without runtime `node_modules`.
 The check validates protected configuration, RSA and TLS inputs, and prints a
-safe summary without starting listeners or calling GitHub.
+safe summary without starting listeners or calling GitHub. The service entrypoint
+is `repository-credentials.js`; the client launch, operator, Git helper and router
+entrypoints live under `drivers/repo/github/credentials/client/` in emitted output.
+These artifacts retain separate service/client dependency closures.
 
 For `invalid-configuration`, inspect the file and every directory in its absolute
 path. Use root or service-user ownership, private configuration/key files, and
@@ -246,7 +249,7 @@ Use an absolute launcher path so commands continue to work after entering the
 cloned repository. Replace `/absolute/path/checkout` with the OCE checkout:
 
 ```sh
-credential_client=/absolute/path/checkout/apps/controller/dist/drivers/repository-credentials/client/launch.js
+credential_client=/absolute/path/checkout/apps/controller/dist/drivers/repo/github/credentials/client/launch.js
 node "$credential_client" /absolute/path/sessions/task git clone \
   https://credentials.example.internal/example/project.git
 cd project

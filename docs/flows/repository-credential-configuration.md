@@ -1,7 +1,6 @@
 ---
 created: 2026-09-18
-updated: 2026-09-18
-last_updated_session: "codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a"
+updated: 2026-09-19
 ---
 
 # Repository credential configuration flow
@@ -81,9 +80,11 @@ parent remains unwritable by those users.
 The loader opens the final basename without following symlinks. It checks the
 file owner, mode, link count, type, and size, performs a bounded read, and compares
 the open file with the named inode and its original metadata. Invalid or replaced
-files fail before their contents become configuration. The reader clears its scratch
-buffer and awaits file closure before returning. Success transfers an independent
-buffer to its caller; failure returns no filesystem details. Configuration maps
+files fail before their contents become configuration. The reader retains ownership
+of its candidate buffer until descriptor closure and transfer succeed. It clears
+scratch bytes and any candidate that cannot be transferred, including on a close
+failure. Success transfers an independent buffer to its caller; failure returns
+no filesystem details. Configuration maps
 that failure to `invalid-configuration` and clears successfully returned bytes.
 
 ### 3. Validate configuration and construct material owners
@@ -91,7 +92,11 @@ that failure to `invalid-configuration` and clears successfully returned bytes.
 `apps/controller/src/composition/repository-credentials/config.ts:loadConfiguration`
 
 Composition validates the service policy and selects either one GitHub repository
-or the canonical registry, together with its App identity and key path. That
+or the canonical registry, together with its App identity and key path.
+`composition/repository-credentials/registry.ts` owns registry file I/O;
+`drivers/repo/github/credentials/registry.ts` owns pure GitHub policy validation.
+Public projected registry reads retain their own generation/symlink rules;
+they do not weaken protected-secret descriptor validation. That
 validated selection determines the factory after protected reads load the App
 key, certificate and TLS key. Registry policy remains bounded to its installation,
 repository and Namespace/profile grants. The GitHub key owner accepts the
@@ -140,12 +145,12 @@ startup validation, not live GitHub behavior or platform integration.
 
 ## Changelog
 
-- 2026-09-18 20:32: Reconcile the protected reader with controller startup and retain Kubernetes input ownership. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c426001fc353544f9623ead2e644c7857caa6d82)
+- 2026-09-18 20:32: Reconcile the protected reader with controller startup and retain Kubernetes input ownership. (c426001fc353544f9623ead2e644c7857caa6d82)
 
-- 2026-09-18 19:10: Trace the protected reader result and validated backend selection while preserving file and material ownership. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - 4221fc5591b750cd59b459815a7bc327e98f295c)
+- 2026-09-18 19:10: Trace the protected reader result and validated backend selection while preserving file and material ownership. (4221fc5591b750cd59b459815a7bc327e98f295c)
 
-- 2026-09-18 18:51: Separate protected-file reading from configuration assembly while preserving validation and disposal. (authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772 - d29fac7d363eb1cfb3dab6306a81cc3b8daf395d)
+- 2026-09-18 18:51: Separate protected-file reading from configuration assembly while preserving validation and disposal. (d29fac7d363eb1cfb3dab6306a81cc3b8daf395d)
 
-- 2026-09-18 09:45: Trace the accompanying controller-owned protected loader and Kubernetes private projection snapshots without relaxing ancestor validation. (authoring-run/99b8e474-5c94-4558-bce6-e7d6032f832c - 6fd1516de000bde46d4cd43e0d21ec3f0167d65e)
+- 2026-09-18 09:45: Trace the accompanying controller-owned protected loader and Kubernetes private projection snapshots without relaxing ancestor validation. (6fd1516de000bde46d4cd43e0d21ec3f0167d65e)
 
-- 2026-09-18 03:32: Document protected ancestor validation and configuration ownership with the accompanying security correction (codex/01a0b287-be12-7492-8826-a168e5b53103 - 2d4877aaf438c919a2240109cb2e7067e4d75b4d)
+- 2026-09-18 03:32: Document protected ancestor validation and configuration ownership with the accompanying security correction (2d4877aaf438c919a2240109cb2e7067e4d75b4d)
