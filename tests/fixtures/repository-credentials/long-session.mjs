@@ -5,15 +5,24 @@ import { join } from "node:path";
 import { startCredentialServiceFixture, eventually, gatewayRequest } from "./service.mjs";
 import { exerciseGit, exerciseGh } from "./workflows.mjs";
 
+async function clientFileDigests(directory) {
+  return Promise.all(
+    ["bearer", "client.json", "gitconfig", "gh/hosts.yml", "gh/config.yml", "ca.pem"].map(
+      async (name) => ({
+        name,
+        digest: createHash("sha256")
+          .update(await readFile(join(directory, name)))
+          .digest("hex"),
+      }),
+    ),
+  );
+}
+
 export async function qualifyLongSession(t) {
   const fixture = await startCredentialServiceFixture(t);
   const { client, checkout, commit } = await exerciseGit(t, fixture, { push: false });
   const { session } = fixture.opened;
-  const bearerDigest = async () =>
-    createHash("sha256")
-      .update(await readFile(join(fixture.clientDirectory, "bearer")))
-      .digest("hex");
-  const admittedBearerDigest = await bearerDigest();
+  const admittedFiles = await clientFileDigests(fixture.clientDirectory);
   const firstToken = fixture.github.tokenState()[0];
   const firstIssue = fixture.github.issuesOfTokens[0];
   // The same running service and private client files survive a trusted clock
@@ -25,11 +34,12 @@ export async function qualifyLongSession(t) {
   );
   assert.equal(await fixture.git.ref("refs/heads/agent-feature"), commit);
   await exerciseGh(t, fixture, client);
-  assert.equal(
-    await bearerDigest(),
-    admittedBearerDigest,
-    "the client bearer file remains unchanged",
+  assert.deepEqual(
+    await clientFileDigests(fixture.clientDirectory),
+    admittedFiles,
+    "the bearer and client configuration files remain unchanged",
   );
+  assert.equal(fixture.service.status(session.sessionId).deadlineWallMs, session.deadlineWallMs);
   assert.equal(fixture.service.status(session.sessionId).sessionId, session.sessionId);
   assert.deepEqual(fixture.service.status(session.sessionId).binding, session.binding);
   assert.equal(

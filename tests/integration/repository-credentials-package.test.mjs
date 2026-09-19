@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile, chmod } from "node:fs/promises";
+import {
+  cp,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+  chmod,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
@@ -201,4 +211,27 @@ try {
   assert.equal(started.status, 0, started.stdout + started.stderr);
   const manifest = JSON.parse(await readFile(join(runtime, "package.json"), "utf8"));
   assert.deepEqual(manifest.dependencies ?? {}, {});
+});
+
+test("emitted credential Docker contexts contain only staged runtime inputs", async () => {
+  // The service/client package check stages the real emitted closures first.
+  // Docker receives only those contexts, never the source workspace or its tools.
+  const ignore = await readFile(
+    join(root, "deploy/runtime/repository-credentials/.dockerignore"),
+    "utf8",
+  );
+  for (const name of ["service", "client"]) {
+    const context = join(root, ".build/repository-credentials", name);
+    assert.deepEqual((await readdir(context)).sort(), [".dockerignore", "dist", "package.json"]);
+    assert.equal(await readFile(join(context, ".dockerignore"), "utf8"), ignore);
+    const files = await readdir(join(context, "dist"), { recursive: true, withFileTypes: true });
+    assert.ok(
+      files.some((file) => file.isFile()),
+      "the context must contain emitted modules",
+    );
+    assert.ok(
+      files.every((file) => file.isDirectory() || (file.isFile() && file.name.endsWith(".js"))),
+      "runtime contexts exclude declarations, source maps, compiler state and linked inputs",
+    );
+  }
 });

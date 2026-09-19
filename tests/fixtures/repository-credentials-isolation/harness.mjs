@@ -279,7 +279,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
         "--entrypoint",
         "node",
         clientId,
-        "/app/dist/client/operator.js",
+        "/app/dist/drivers/repo/github/credentials/client/operator.js",
         operation,
         "--socket",
         "/run/repository-control/control.sock",
@@ -354,7 +354,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       ],
     );
     assert.deepEqual(containers.service.args, [
-      "/app/dist/main.js",
+      "/app/dist/repository-credentials.js",
       "--config",
       "/run/repository-credentials/config.json",
     ]);
@@ -365,7 +365,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       "node",
       "--input-type=module",
       "-e",
-      "import { existsSync } from 'node:fs'; if (existsSync('/app/dist/client')) process.exit(1);",
+      "import { existsSync } from 'node:fs'; if (existsSync('/app/dist/drivers/repo/github/credentials/client')) process.exit(1);",
     ]);
     t.diagnostic(
       JSON.stringify({
@@ -407,7 +407,15 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
     await scan();
     async function client(command, args, allowFailure = false) {
       const result = await docker(
-        ["exec", names.agent, "node", "/app/dist/client/launch.js", "/session", command, ...args],
+        [
+          "exec",
+          names.agent,
+          "node",
+          "/app/dist/drivers/repo/github/credentials/client/launch.js",
+          "/session",
+          command,
+          ...args,
+        ],
         { allowFailure },
       );
       clientOutputs.push(result.stdout, result.stderr);
