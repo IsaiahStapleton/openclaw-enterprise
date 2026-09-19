@@ -3,7 +3,7 @@ import { request as httpRequest } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ControlRequest, ControlResponse } from "../contracts.ts";
+import type { ControlRequest, ControlResponse } from "../../../credentials/service-contracts.ts";
 import { writeClientConfiguration } from "./config.ts";
 
 export async function callControl(

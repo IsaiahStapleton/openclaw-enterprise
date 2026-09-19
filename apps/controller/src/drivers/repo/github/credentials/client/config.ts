@@ -1,6 +1,9 @@
 import { lstat, mkdir, mkdtemp, open, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { OpenSessionResult, PublicClientConfiguration } from "../contracts.ts";
+import type {
+  OpenSessionResult,
+  PublicClientConfiguration,
+} from "../../../credentials/service-contracts.ts";
 import { assertPrivateDirectory, readPrivateFile } from "./private-files.ts";
 
 export interface ClientFiles {
