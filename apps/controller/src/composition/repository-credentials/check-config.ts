@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
-import type { SafeConfigurationSummary } from "./contracts.ts";
+import type { SafeConfigurationSummary } from "../../drivers/repo/credentials/service-contracts.ts";
 import { loadConfiguration } from "./config.ts";
-import { createSystemClock } from "./clock.ts";
+import { createSystemClock } from "../../drivers/repo/credentials/clock.ts";
 
 export async function checkConfiguration(path: string): Promise<SafeConfigurationSummary> {
   const loaded = await loadConfiguration(path, createSystemClock());

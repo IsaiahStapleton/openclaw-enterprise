@@ -48,8 +48,6 @@ importers:
         specifier: 8.70.0
         version: 8.70.0(@typescript/typescript6@6.0.2)(eslint@10.10.0)
 
-  apps/repository-credentials: {}
-
   apps/controller:
     dependencies:
       '@better-auth/api-key':
