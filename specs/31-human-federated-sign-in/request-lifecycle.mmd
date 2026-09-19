@@ -1,0 +1,72 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontSize: 16px
+    actorBkg: "#EDF2F7"
+    actorBorder: "#879AB0"
+    actorTextColor: "#25364A"
+    signalColor: "#596779"
+    signalTextColor: "#344054"
+    noteBkgColor: "#F7F1E5"
+    noteBorderColor: "#B3A078"
+  sequence:
+    mirrorActors: true
+    useMaxWidth: false
+    actorMargin: 42
+    width: 145
+    messageMargin: 28
+    noteMargin: 14
+---
+sequenceDiagram
+  actor Browser as Person / browser
+  box Controller process
+    participant Auth as Authentication
+    participant Owners as Account + IAM + State
+  end
+  participant DB as PostgreSQL
+  participant Provider as Identity provider
+  Note over Browser,Provider: 1 · Start proposed browser journey
+  Browser->>Auth: Trusted-origin start, selected provider
+  Auth->>Owners: Reserve bound one-use attempt
+  Owners->>DB: Persist attempt with finite expiry
+  DB-->>Owners: Acknowledge persistence
+  Owners-->>Auth: Bound attempt
+  Auth-->>Browser: Authorization URL
+  Browser->>Provider: Sign in and authorize
+  Provider-->>Browser: Exact callback with code and state
+  Note over Browser,DB: 2 · Consume attempt before remote work
+  Browser->>Auth: Bound callback
+  Auth->>Owners: Match and consume attempt
+  Owners->>DB: Atomic consumption
+  DB-->>Owners: Consumption acknowledged
+  Owners-->>Auth: Consumed attempt
+  Note over Auth,Provider: 3 · Remote verification outside State locks
+  Auth->>Provider: Bounded exchange and identity verification
+  Provider-->>Auth: Token response / authenticated identity
+  Auth->>Auth: Validate then discard provider tokens
+  Note over Auth,DB: 4 · Short guarded session transaction
+  Auth->>Owners: Verified provider instance and subject
+  Owners->>DB: Guard current method and active account
+  DB-->>Owners: Current association and version
+  alt Known current account
+    Owners->>DB: Insert fresh session and required login facts
+    DB-->>Owners: COMMIT acknowledgment or unknown
+    alt Commit acknowledged
+      Owners-->>Auth: Persisted session accepted
+      Auth-->>Browser: Ordinary stored-session cookie
+    else Commit uncertain
+      Owners-->>Auth: Unknown outcome
+      Auth-->>Browser: No credential, no blind replay
+    end
+  else Unknown verified identity
+    Owners-->>Auth: No matching active account
+    Auth-->>Browser: Actionable no-access result, no session
+  end
+  Note over Browser,DB: 5 · Only acknowledged session enters authorized Console
+  Browser->>Auth: Configuration / Agent lifecycle request
+  Auth->>Owners: Admit current session, authorize exact operation
+  Owners->>DB: Allowed resource operation and required facts
+  DB-->>Owners: Acknowledged result
+  Owners-->>Auth: Authorized result
+  Auth-->>Browser: Console result within granted scope
