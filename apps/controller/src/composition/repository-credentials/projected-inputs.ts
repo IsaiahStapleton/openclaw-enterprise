@@ -2,10 +2,10 @@ import { constants } from "node:fs";
 import { lstat, mkdir, open, readdir, readlink, realpath, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { Clock } from "../../drivers/repository-credentials/backend-contracts.ts";
+import type { Clock } from "../../drivers/repo/credentials/backend-contracts.ts";
 import type { LoadedConfiguration } from "./contracts.ts";
-import { record } from "../../drivers/repository-credentials/configuration.ts";
-import { createSystemClock } from "../../drivers/repository-credentials/clock.ts";
+import { record } from "../../drivers/repo/credentials/configuration.ts";
+import { createSystemClock } from "../../drivers/repo/credentials/clock.ts";
 import { loadConfiguration } from "./config.ts";
 import { runService } from "./service.ts";
 

@@ -1,6 +1,6 @@
 import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
-import type { Denied } from "../../../drivers/repository-credentials/backend-contracts.ts";
-import { sameBinding } from "../../../drivers/repository-credentials/sessions.ts";
+import type { Denied } from "../../credentials/backend-contracts.ts";
+import { sameBinding } from "../../credentials/sessions.ts";
 import { createGitHubDriverFactory } from "./factory.ts";
 import { resolveGitHubRepositoryBinding, validateGitHubRepositoryRegistry } from "./registry.ts";
 import type { GitHubRepositoryRegistry, GitHubRepositoryRegistration } from "./registry.ts";

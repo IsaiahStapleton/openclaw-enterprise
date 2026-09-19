@@ -1,7 +1,7 @@
-import type { Clock } from "../../drivers/repository-credentials/backend-contracts.ts";
-import type { CredentialService } from "../../drivers/repository-credentials/service-contracts.ts";
+import type { Clock } from "../../drivers/repo/credentials/backend-contracts.ts";
+import type { CredentialService } from "../../drivers/repo/credentials/service-contracts.ts";
 import type { LoadedConfiguration } from "./contracts.ts";
-import type { BoundListeners } from "../../drivers/repository-credentials/server.ts";
+import type { BoundListeners } from "../../drivers/repo/credentials/server.ts";
 
 export interface RunningService {
   readonly service: CredentialService;
@@ -11,7 +11,7 @@ export interface RunningService {
 /** Start the service using its protected, operator-owned configuration. */
 export async function startCredentialService(configurationPath: string): Promise<RunningService> {
   const [{ createSystemClock }, { loadConfiguration }] = await Promise.all([
-    import("../../drivers/repository-credentials/clock.ts"),
+    import("../../drivers/repo/credentials/clock.ts"),
     import("./config.ts"),
   ]);
   const clock = createSystemClock();
@@ -25,8 +25,8 @@ export async function runService(
   clock: Clock,
 ): Promise<RunningService> {
   const [{ createCredentialService }, { startListeners }] = await Promise.all([
-    import("../../drivers/repository-credentials/service.ts"),
-    import("../../drivers/repository-credentials/server.ts"),
+    import("../../drivers/repo/credentials/service.ts"),
+    import("../../drivers/repo/credentials/server.ts"),
   ]);
   const service = createCredentialService({
     config: loaded.config,

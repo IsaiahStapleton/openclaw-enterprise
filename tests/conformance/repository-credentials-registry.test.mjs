@@ -7,14 +7,8 @@ import { tmpdir } from "node:os";
 import {
   resolveGitHubRepositoryBinding,
   validateGitHubRepositoryRegistry,
-} from "../../apps/controller/src/providers/repository-credentials/github/registry.ts";
-import { loadGitHubRepositoryRegistry } from "../../apps/controller/src/providers/repository-credentials/github/registry-loader.ts";
-import {
-  createGitHubDriverFactory,
-  createGitHubKeyOwner,
-} from "../../apps/controller/src/providers/repository-credentials/github/index.ts";
-import { validateServiceConfig } from "../../apps/controller/src/drivers/repository-credentials/configuration.ts";
-import { createCredentialService } from "../../apps/controller/src/drivers/repository-credentials/service.ts";
+} from "../../apps/controller/src/drivers/repo/github/credentials/registry.ts";
+import { loadGitHubRepositoryRegistry } from "../../apps/controller/src/composition/repository-credentials/registry.ts";
 import {
   githubConfigurationData,
   serviceConfigurationData,
@@ -124,7 +118,16 @@ test("canonical registry fingerprints bind exact authority and the selected Name
   }, TypeError);
 });
 
-test("GitHub factory snapshots a registry-selected write grant through session admission", (t) => {
+test("GitHub factory snapshots a registry-selected write grant through session admission", async (t) => {
+  const [
+    { createGitHubDriverFactory, createGitHubKeyOwner },
+    { validateServiceConfig },
+    { createCredentialService },
+  ] = await Promise.all([
+    import("../../apps/controller/src/drivers/repo/github/credentials/index.ts"),
+    import("../../apps/controller/src/drivers/repo/credentials/configuration.ts"),
+    import("../../apps/controller/src/drivers/repo/credentials/service.ts"),
+  ]);
   const resources = createResourceScope();
   t.after(() => resources.close());
   const registry = validateGitHubRepositoryRegistry(registryInput());
