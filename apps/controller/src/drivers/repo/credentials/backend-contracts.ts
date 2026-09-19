@@ -1,8 +1,6 @@
 import type { RepositoryCredentialBoundSessionInput } from "./service-contracts.ts";
-import type {
-  RepositoryCredentialClientConfiguration,
-  RepositoryCredentialGrantIdentity,
-} from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialClientConfiguration } from "./client-contracts.ts";
 import type { JsonValue } from "./json-value.ts";
 
 /** Backend extension protocol. Runtime owners also check original object identity. */

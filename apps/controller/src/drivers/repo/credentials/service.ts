@@ -10,8 +10,8 @@ import type {
   RepositoryCredentialBoundSessionInput,
   ServiceConfig,
   ShutdownSummary,
+  SessionStatus,
 } from "./service-contracts.ts";
-import type { RepositoryCredentialSessionStatus } from "@openclaw-enterprise/contracts";
 import type { CredentialServiceOwner, ExchangeRef, ExchangeSender } from "./internal-contracts.ts";
 import { createCustody } from "./custody.ts";
 import type { CustodyOwner } from "./custody.ts";
@@ -33,7 +33,7 @@ import type { SessionAdmission } from "./sessions.ts";
 type Admission = Omit<SessionAdmission, "bearer">;
 interface Session {
   readonly admission: Admission;
-  state: RepositoryCredentialSessionStatus["state"];
+  state: SessionStatus["state"];
   readonly custody: CustodyOwner;
   readonly lifecycle: LifecycleOwner;
   readonly driver: ReturnType<RepositoryBackendFactory["create"]>;
@@ -98,7 +98,7 @@ export function createCredentialService(
     }
     notifyShutdown();
   }
-  function snapshot(session: Session): RepositoryCredentialSessionStatus {
+  function snapshot(session: Session): SessionStatus {
     isOpen(session);
     const records = [...session.custody.records];
     const unknown = [...session.custody.reservations].filter(

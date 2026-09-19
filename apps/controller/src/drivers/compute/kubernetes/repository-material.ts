@@ -1,10 +1,10 @@
 import type { V1Volume, V1VolumeMount } from "@kubernetes/client-node";
 import type {
   AgentRevision,
-  RepositoryCredentialClientConfiguration,
   RepositoryCredentialRuntimeBinding,
   RepositoryCredentialSessionFiles,
 } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialClientConfiguration } from "../../repo/credentials/client-contracts.ts";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { REPOSITORY_MATERIAL_INIT_ENTRYPOINT } from "./repository-material-init.ts";

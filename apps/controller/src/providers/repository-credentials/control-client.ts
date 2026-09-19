@@ -1,19 +1,17 @@
 import { request } from "node:http";
 import { isAbsolute, resolve } from "node:path";
-import type {
-  RepositoryCredentialClientConfiguration,
-  RepositoryCredentialGrantIdentity,
-  RepositoryCredentialSessionStatus,
-} from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialClientConfiguration } from "../../drivers/repo/credentials/client-contracts.ts";
 import type {
   RepositoryCredentialBoundSessionInput,
   RepositoryCredentialSessionResult,
-} from "../../drivers/repository-credentials/service-contracts.ts";
+  SessionStatus,
+} from "../../drivers/repo/credentials/service-contracts.ts";
 
 /** Private wire response; the selected Driver renders the portable runtime files. */
 export type RepositoryCredentialControlOpenResult =
   | { readonly kind: "created"; readonly result: RepositoryCredentialSessionResult }
-  | { readonly kind: "recovered"; readonly status: RepositoryCredentialSessionStatus }
+  | { readonly kind: "recovered"; readonly status: SessionStatus }
   | { readonly kind: "missing" };
 
 export interface RepositoryCredentialControlClient {
@@ -22,14 +20,8 @@ export interface RepositoryCredentialControlClient {
     admissionId: string,
     signal: AbortSignal,
   ): Promise<RepositoryCredentialControlOpenResult>;
-  status(
-    sessionId: string,
-    signal: AbortSignal,
-  ): Promise<RepositoryCredentialSessionStatus | undefined>;
-  close(
-    sessionId: string,
-    signal: AbortSignal,
-  ): Promise<RepositoryCredentialSessionStatus | undefined>;
+  status(sessionId: string, signal: AbortSignal): Promise<SessionStatus | undefined>;
+  close(sessionId: string, signal: AbortSignal): Promise<SessionStatus | undefined>;
 }
 
 export class RepositoryCredentialControlError extends Error {
@@ -105,7 +97,7 @@ function binding(value: unknown): RepositoryCredentialGrantIdentity {
   });
 }
 
-function status(value: unknown): RepositoryCredentialSessionStatus {
+function status(value: unknown): SessionStatus {
   const parsed = object(value, [
     "sessionId",
     "state",
@@ -259,17 +251,11 @@ export class UnixRepositoryCredentialControlClient implements RepositoryCredenti
     }
   }
 
-  async status(
-    id: string,
-    signal: AbortSignal,
-  ): Promise<RepositoryCredentialSessionStatus | undefined> {
+  async status(id: string, signal: AbortSignal): Promise<SessionStatus | undefined> {
     return this.session("GET", id, signal);
   }
 
-  async close(
-    id: string,
-    signal: AbortSignal,
-  ): Promise<RepositoryCredentialSessionStatus | undefined> {
+  async close(id: string, signal: AbortSignal): Promise<SessionStatus | undefined> {
     return this.session("POST", id, signal);
   }
 
@@ -285,7 +271,7 @@ export class UnixRepositoryCredentialControlClient implements RepositoryCredenti
     method: "GET" | "POST",
     id: string,
     signal: AbortSignal,
-  ): Promise<RepositoryCredentialSessionStatus | undefined> {
+  ): Promise<SessionStatus | undefined> {
     sessionId(id);
     const reply = await this.call(
       method,

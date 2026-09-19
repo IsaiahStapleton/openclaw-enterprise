@@ -185,6 +185,8 @@ test("client files reject unsafe targets and the launcher refuses absolute API d
   t.after(() => rm(parent, { recursive: true, force: true }));
   const unsafe = join(parent, "unsafe");
   await mkdir(unsafe, { mode: 0o755 });
+  // Set the unsafe mode explicitly so a restrictive host umask cannot repair the fixture.
+  await chmod(unsafe, 0o755);
   await assert.rejects(
     writeClientConfiguration(opened, join(unsafe, "session"), undefined),
     /unsafe-client-directory/,

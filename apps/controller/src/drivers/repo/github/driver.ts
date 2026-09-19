@@ -4,7 +4,7 @@ import type {
   OpenRepositorySessionResult,
   Provider,
   RepositoryBindingRequest,
-  RepositoryCredentialDriver,
+  RepoDriver,
   RepositoryCredentialGrantIdentity,
   RepositoryCredentialResolution,
   RepositoryCredentialSessionStatus,
@@ -14,13 +14,27 @@ import { isAbsolute, resolve } from "node:path";
 import {
   RepositoryCredentialControlError,
   type RepositoryCredentialControlClient,
-} from "../../providers/repository-credentials/control-client.ts";
+} from "../../../providers/repository-credentials/control-client.ts";
 import {
   resolveGitHubRepositoryBinding,
   validateGitHubRepositoryRegistry,
   type GitHubRepositoryRegistry,
-} from "../../providers/repository-credentials/github/registry.ts";
-import { encodeRepositoryCredentialSessionFiles } from "./client/config.ts";
+} from "./credentials/registry.ts";
+import { encodeRepositoryCredentialSessionFiles } from "./credentials/client/config.ts";
+import type { SessionStatus } from "../credentials/service-contracts.ts";
+
+function publicStatus(status: SessionStatus): RepositoryCredentialSessionStatus {
+  return Object.freeze({
+    sessionId: status.sessionId,
+    state: status.state,
+    deadlineWallMs: status.deadlineWallMs,
+    binding: Object.freeze({
+      providerInstanceId: status.binding.providerInstanceId,
+      repositoryId: status.binding.repositoryId,
+      grantId: status.binding.grantId,
+    }),
+  });
+}
 
 function hasControlCharacters(value: string): boolean {
   return [...value].some((character) => {
@@ -40,7 +54,7 @@ function sameBinding(
   );
 }
 
-export class GitHubRepositoryCredentialDriver implements RepositoryCredentialDriver {
+export class GitHubRepoDriver implements RepoDriver {
   static readonly configurationSchema: JSONSchema = Object.freeze({
     type: "object",
     additionalProperties: false,
@@ -90,7 +104,7 @@ export class GitHubRepositoryCredentialDriver implements RepositoryCredentialDri
     }
   }
 
-  readonly capability = "repository_credentials" as const;
+  readonly capability = "repo" as const;
   readonly implementation = "github";
   readonly maintenanceIntervalMs = 30_000;
   readonly id: string;
@@ -105,7 +119,7 @@ export class GitHubRepositoryCredentialDriver implements RepositoryCredentialDri
     registry: GitHubRepositoryRegistry,
     options: { readonly sessionDurationSeconds: number; readonly publicCa?: Uint8Array },
   ) {
-    const id = provider.drivers.repository_credentials;
+    const id = provider.drivers.repo;
     if (
       typeof id !== "string" ||
       Buffer.byteLength(id) < 1 ||
@@ -204,12 +218,12 @@ export class GitHubRepositoryCredentialDriver implements RepositoryCredentialDri
       );
     }
     if (result.kind === "recovered") {
-      return result;
+      return Object.freeze({ kind: "recovered", status: publicStatus(result.status) });
     }
     try {
       return Object.freeze({
         kind: "created",
-        session: status,
+        session: publicStatus(status),
         files: Object.freeze(encodeRepositoryCredentialSessionFiles(result.result, this.#publicCa)),
       });
     } catch {
@@ -217,18 +231,20 @@ export class GitHubRepositoryCredentialDriver implements RepositoryCredentialDri
     }
   }
 
-  status(
+  async status(
     sessionId: string,
     signal: AbortSignal,
   ): Promise<RepositoryCredentialSessionStatus | undefined> {
-    return this.control(() => this.#client.status(sessionId, signal));
+    const status = await this.control(() => this.#client.status(sessionId, signal));
+    return status === undefined ? undefined : publicStatus(status);
   }
 
-  close(
+  async close(
     sessionId: string,
     signal: AbortSignal,
   ): Promise<RepositoryCredentialSessionStatus | undefined> {
-    return this.control(() => this.#client.close(sessionId, signal));
+    const status = await this.control(() => this.#client.close(sessionId, signal));
+    return status === undefined ? undefined : publicStatus(status);
   }
 
   private async control<T>(operation: () => Promise<T>): Promise<T> {

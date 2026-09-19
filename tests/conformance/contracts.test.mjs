@@ -25,14 +25,22 @@ test("the Driver contract exposes the supported platform capabilities", () => {
     "secret",
     "sandbox",
     "plugin",
-    "repository_credentials",
+    "repo",
   ]);
   assert.equal(Object.isFrozen(DRIVER_CAPABILITIES), true);
 
   for (const capability of DRIVER_CAPABILITIES) {
     assert.equal(isDriverCapability(capability), true);
   }
-  for (const unsupported of ["gateway", "secrets", "providers", "legacy", "", undefined]) {
+  for (const unsupported of [
+    "gateway",
+    "secrets",
+    "providers",
+    "legacy",
+    "repository_credentials",
+    "",
+    undefined,
+  ]) {
     assert.equal(isDriverCapability(unsupported), false);
   }
 });
