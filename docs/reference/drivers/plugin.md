@@ -148,7 +148,9 @@ OpenClaw preparation installs the supported exact npm version, refreshes the nat
 registry, reapplies the requested policy to its private writable configuration,
 and checks plugin ID, package name, runtime/install version, recorded integrity,
 and that the runtime source resolves within the resolved install path.
-Failure prevents the replacement gateway from starting. The previous revision
+Identity, integrity, or effective-policy verification failure prevents the
+replacement gateway from starting. A confirmed installation rejection can instead
+disable that optional selection and produce a warning. The previous revision
 record remains stored, but the worker does not restore the old active pointer:
 it retains the candidate pointer and retries. This does not promise uninterrupted
 availability or automatic rollback during replacement. Retries reuse the
@@ -159,6 +161,16 @@ Codex apps, applies the separate OpenClaw Codex bridge configuration with
 `allow_all_plugins:false` and one entry per selected plugin. Compute owns the native
 installation and readiness path; the PluginDriver only translates requested state
 after native discovery.
+
+During native installation, the runtime preserves the admitted plugin map key
+for each selected operation. Only two typed native observations become
+attributed plugin warnings: a matching selected install failure, or a
+successful Codex install response with nonempty apps that still need
+authentication. The startup result includes only `{pluginId, code}` with
+`PLUGIN_INSTALL_FAILED` or `PLUGIN_AUTH_REQUIRED`; it does not emit native text,
+command output, credentials, or deployment IDs. Errors from discovery,
+configuration, policy translation, transport, signals, cancellation, malformed
+responses, or unknown exceptions remain ordinary startup failures.
 
 Credentials use the existing Harness/ServiceAccount path at runtime. A direct
 MCP call, package listing, or rendered bridge configuration cannot prove native

@@ -9,6 +9,7 @@ import type {
   AuthorizationDecision,
   AuthorizationRequest,
   ComputeDriver,
+  PluginDeploymentWarning,
   ComputeRevisionContext,
   ConfigurationDriver,
   Driver,
@@ -75,6 +76,8 @@ interface DispatchResult {
 }
 
 interface RevisionDispatchResult extends DispatchResult {
+  readonly data?: Readonly<Record<string, unknown>>;
+  readonly resultData?: Readonly<Record<string, unknown>>;
   readonly revision?: Readonly<AgentRevision>;
   readonly previous?: Readonly<AgentRevision>;
   readonly supersededBy?: Readonly<AgentRevision>;
@@ -213,12 +216,67 @@ function validRevisionObservation(value: unknown, revision: Readonly<AgentRevisi
     return false;
   }
   const observation = value as Record<string, unknown>;
+  if (
+    observation.warnings !== undefined &&
+    computePluginWarnings(observation.warnings, revision) === undefined
+  ) {
+    return false;
+  }
   return (
     observation.namespaceId === revision.namespaceId &&
     observation.agentId === revision.agentId &&
     observation.revisionId === revision.id &&
     typeof observation.ready === "boolean"
   );
+}
+
+function computePluginWarnings(
+  warnings: unknown,
+  revision: Readonly<AgentRevision>,
+): readonly PluginDeploymentWarning[] | undefined {
+  if (warnings === undefined) {
+    return Object.freeze([]);
+  }
+  if (!Array.isArray(warnings)) {
+    return undefined;
+  }
+  const admitted = revision.plugins?.plugins;
+  if (admitted === undefined) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const normalized: PluginDeploymentWarning[] = [];
+  for (const warning of warnings) {
+    if (typeof warning !== "object" || warning === null || Array.isArray(warning)) {
+      return undefined;
+    }
+    const candidate = warning as Record<string, unknown>;
+    const code = candidate.code;
+    const pluginId = candidate.pluginId;
+    if (
+      Object.keys(candidate).length !== 2 ||
+      (code !== "PLUGIN_INSTALL_FAILED" && code !== "PLUGIN_AUTH_REQUIRED") ||
+      typeof pluginId !== "string" ||
+      !Object.hasOwn(admitted, pluginId)
+    ) {
+      return undefined;
+    }
+    if (seen.has(pluginId)) {
+      return undefined;
+    }
+    seen.add(pluginId);
+    normalized.push({ code, pluginId });
+  }
+  return Object.freeze(normalized);
+}
+
+function pluginWarningsResultData(
+  warnings: readonly PluginDeploymentWarning[],
+): Readonly<Record<string, unknown>> | undefined {
+  if (warnings.length === 0) {
+    return undefined;
+  }
+  return Object.freeze({ warnings });
 }
 
 function revisionSecretBindings(
@@ -980,6 +1038,21 @@ export class ControllerWorker {
         });
         return;
       }
+      if (claim.idempotencyKey.startsWith(`agent_revision:${revision.id}:maintenance:`)) {
+        const original = await this.queue.findWork(`agent_revision:${revision.id}:reconcile`);
+        if (original === undefined) {
+          await this.finalizeRevision(claim, { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" });
+          return;
+        }
+        if (
+          original.state === "failed_permanent" ||
+          original.reasonCode === "REVISION_SUPERSEDED"
+        ) {
+          // Maintenance must never prepare or reactivate a terminally failed deployment.
+          await this.finalizeRevision(claim, { outcome: "permanent", code: "REVISION_SUPERSEDED" });
+          return;
+        }
+      }
       if (agent.activeRevisionId !== undefined && previous === undefined) {
         await this.finalizeRevision(claim, {
           outcome: "permanent",
@@ -1045,23 +1118,27 @@ export class ControllerWorker {
         }
       }
       if (agent.activeRevisionId === revision.id) {
+        let resultData: Readonly<Record<string, unknown>> | undefined;
         try {
           const compute = this.compute;
-          if (this.maintenanceIntervalMs !== undefined) {
-            const observation = await this.withClaimHeartbeat(claim, () =>
-              compute.prepareRevision(revision, secretContext.context),
-            );
-            if (!validRevisionObservation(observation, revision)) {
-              await this.finalizeRevision(claim, {
-                outcome: "permanent",
-                code: "INVALID_DRIVER_OBSERVATION",
-              });
-              return;
-            }
-            if (!observation.ready) {
-              await this.finalizeActiveRevision(claim, revision, "REVISION_INCOMPLETE");
-              return;
-            }
+          // Publishing the active pointer precedes activation. Reobserve even when
+          // periodic maintenance is disabled so recovery verifies current readiness.
+          const observation = await this.withClaimHeartbeat(claim, () =>
+            compute.prepareRevision(revision, secretContext.context),
+          );
+          if (!validRevisionObservation(observation, revision)) {
+            await this.finalizeRevision(claim, {
+              outcome: "permanent",
+              code: "INVALID_DRIVER_OBSERVATION",
+            });
+            return;
+          }
+          resultData = pluginWarningsResultData(
+            computePluginWarnings(observation.warnings, revision) ?? Object.freeze([]),
+          );
+          if (!observation.ready) {
+            await this.finalizeActiveRevision(claim, revision, "REVISION_INCOMPLETE");
+            return;
           }
           if (this.shouldActivatePublishedRevision(compute)) {
             await this.withClaimHeartbeat(claim, () =>
@@ -1087,6 +1164,7 @@ export class ControllerWorker {
           outcome: "success",
           code: "REVISION_ALREADY_ACTIVE",
           revision,
+          ...(resultData === undefined ? {} : { resultData }),
         });
         return;
       }
@@ -1299,6 +1377,9 @@ export class ControllerWorker {
       if (!validRevisionObservation(observation, revision)) {
         return { outcome: "permanent", code: "INVALID_DRIVER_OBSERVATION" };
       }
+      const resultData = pluginWarningsResultData(
+        computePluginWarnings(observation.warnings, revision) ?? Object.freeze([]),
+      );
       if (!observation.ready) {
         return { outcome: "pending", code: "REVISION_INCOMPLETE" };
       }
@@ -1322,6 +1403,7 @@ export class ControllerWorker {
         outcome: "success",
         code: "REVISION_ACTIVATED",
         revision,
+        ...(resultData === undefined ? {} : { resultData }),
         context,
         ...(previous === undefined ? {} : { previous }),
         ...(expectedActiveRevisionId === undefined ? {} : { expectedActiveRevisionId }),
@@ -1492,7 +1574,12 @@ export class ControllerWorker {
       result.outcome === "pending" &&
       Date.now() - claim.createdAt.getTime() >= this.convergenceTimeoutMs;
     const resolved: RevisionDispatchResult = expired
-      ? { ...result, outcome: "permanent", code: "CONVERGENCE_DEADLINE_EXCEEDED" }
+      ? {
+          ...result,
+          outcome: "permanent",
+          code: "CONVERGENCE_DEADLINE_EXCEEDED",
+          data: { timeoutMs: this.convergenceTimeoutMs },
+        }
       : result;
     let activated: Readonly<AgentRevision> | undefined;
     let stoppedCandidate: Readonly<AgentRevision> | undefined;
@@ -1533,13 +1620,21 @@ export class ControllerWorker {
       }
 
       if (resolved.outcome === "success") {
-        await queue.complete(claim);
+        await queue.complete(claim, {
+          code: resolved.code,
+          ...(resolved.resultData === undefined ? {} : { resultData: resolved.resultData }),
+        });
       } else if (resolved.outcome === "pending") {
         await queue.defer(claim, { code: resolved.code });
       } else if (resolved.outcome === "permanent" || claim.attemptCount >= this.maxAttempts) {
-        await queue.fail(claim, { code: resolved.code });
+        await queue.fail(claim, {
+          code: resolved.code,
+          ...(resolved.data === undefined ? {} : { data: resolved.data }),
+        });
       } else {
-        await queue.retry(claim, { code: resolved.code });
+        await queue.retry(claim, {
+          code: resolved.code,
+        });
       }
     }, this.queueOptions);
     if (stoppedCandidate !== undefined) {
@@ -1599,7 +1694,7 @@ export class ControllerWorker {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
       }
-      await queue.complete(claim);
+      await queue.complete(claim, { code });
     }, this.queueOptions);
     this.emit({
       event: "worker.completed",
@@ -1651,7 +1746,10 @@ export class ControllerWorker {
         return;
       }
       await this.appendRevisionObservation(unit, claim, result);
-      await queue.complete(claim);
+      await queue.complete(claim, {
+        code: result.code,
+        ...(result.resultData === undefined ? {} : { resultData: result.resultData }),
+      });
       if (this.maintenanceIntervalMs !== undefined) {
         await this.enqueueMaintenance(queue, claim, revision);
       }
@@ -1681,7 +1779,10 @@ export class ControllerWorker {
       this.maintenanceIntervalMs === undefined ||
       !claim.idempotencyKey.startsWith(`agent_revision:${revision.id}:maintenance:`)
     ) {
-      await this.finalizeRevision(claim, { outcome: "pending", code });
+      await this.finalizeRevision(claim, {
+        outcome: "pending",
+        code,
+      });
       return;
     }
     await this.state.transactWithQueue(async (unit, queue) => {
@@ -1720,8 +1821,21 @@ export class ControllerWorker {
     revision: Readonly<AgentRevision>,
   ): Promise<void> {
     const interval = this.maintenanceIntervalMs!;
-    const availableAt = new Date(Date.now() + interval);
-    const maintenanceBucket = Math.floor(availableAt.getTime() / interval);
+    const candidateAvailableAt = new Date(Date.now() + interval);
+    let maintenanceBucket = Math.floor(candidateAvailableAt.getTime() / interval);
+    const maintenancePrefix = `agent_revision:${revision.id}:maintenance:`;
+    const currentBucket = claim.idempotencyKey.startsWith(maintenancePrefix)
+      ? Number(claim.idempotencyKey.slice(maintenancePrefix.length))
+      : undefined;
+    // Clock skew must not deduplicate the successor against its completed claim.
+    const availableAt =
+      currentBucket !== undefined &&
+      Number.isSafeInteger(currentBucket) &&
+      currentBucket >= 0 &&
+      maintenanceBucket <= currentBucket
+        ? new Date((currentBucket + 1) * interval)
+        : candidateAvailableAt;
+    maintenanceBucket = Math.floor(availableAt.getTime() / interval);
     await queue.enqueue({
       idempotencyKey: `agent_revision:${revision.id}:maintenance:${maintenanceBucket}`,
       namespaceId: revision.namespaceId,

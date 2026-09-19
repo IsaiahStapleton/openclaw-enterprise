@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-17
-last_updated_session: codex/01a03526-12b3-7f50-b599-e8414052909d
+updated: 2026-09-18
+last_updated_session: codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464
 ---
 
 # Controller Worker Flow
@@ -160,6 +160,12 @@ immutable snapshot. The worker validates the returned observation's owner and
 shape before treating it as ready. A pending observation defers convergence;
 an invalid observation fails permanently.
 
+Compute can also return safe plugin warnings for the current startup attempt.
+The worker validates each closed code and admitted selection key against the
+immutable revision. Warnings do not fail deployment; readiness means Compute
+has already verified that failed selections are disabled. Missing or malformed
+startup evidence cannot be interpreted as a safe successful installation.
+
 Agent-stop dispatch captures the Agent's revisions owned by the current Compute
 and validates their exact owner. It calls `stopRevision` for the active revision
 first, then the remaining captured revisions, including terminal candidates and
@@ -219,7 +225,9 @@ the predecessor. `completeActivatedRevision()` then rechecks the exact active
 revision and claim, appends activation evidence, and completes work in a second
 transaction. This deliberately does not claim that infrastructure effects and
 database state are one atomic transaction. Interrupted finalization is retried;
-the already-active branch finishes activation and retirement safely.
+the already-active branch re-observes the candidate before finishing activation
+and retirement safely. That re-observation prevents a plugin failure retained by
+Compute from being mistaken for success after a claim loss.
 
 Stop finalization rechecks the live claim, Agent owner, and stopped desired state.
 After all captured cleanup succeeds, it clears `activeRevisionId` only when
@@ -242,11 +250,23 @@ the convergence deadline produce terminal failure instead. See the
 and the [settings reference](../reference/settings/operations.md#controller-worker-environment)
 for their timing controls.
 
+Terminal work rows store the overall `reason_code` and one optional `result_data`
+object for success or failure details. Successful revision work stores
+`{ warnings: [...] }`; a convergence deadline failure stores `{ timeoutMs }`.
+`PostgresWorkQueue.complete` and `PostgresWorkQueue.fail` publish that data under
+the live claim. The deployment status projection derives its separate `error`
+and `warnings` fields from the saved result. Stale claims cannot publish outcomes or warnings. Completion needs no
+runtime receipt acknowledgment or post-commit cleanup protocol. The original
+deployment's warnings remain a historical startup result; later maintenance
+observations do not rewrite that completed deployment.
+
 If Compute declares a maintenance interval, successful activation schedules
 another exact-revision observation. An incomplete active-runtime observation or
 Compute binding closes the bounded item and schedules another so that a provider
 outage does not abandon reconciliation of an authorized active runtime.
-Each new claim reauthorizes its original actor.
+Each new claim reauthorizes its original actor. The next maintenance key uses a
+strictly later time bucket than the current claim, preventing clock skew from
+colliding with completed work and silently dropping its successor.
 
 `worker.completed` reports the target, outcome, and code; polling then continues.
 Lease loss is reported as `worker.error` with `CLAIM_LOST` rather than publishing
@@ -293,6 +313,13 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-18 17:17: Generalized terminal details to result_data for success warnings and failure metadata, retaining live-claim fencing and the deployment API projection. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 6a582ce9)
+
+- 2026-09-17 21:20: Keep maintenance successor buckets monotonic when database and worker clocks differ. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 7f968f39)
+
+- 2026-09-17 20:28: Replaced terminal plugin receipts with verified optional-plugin exclusion, current startup status, and successful deployment warnings; runtime verification in progress. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 7771526d)
+- 2026-09-17 20:28: Removed the first-failure receipt and acknowledgment lifecycle under the approved best-effort plugin decision. (NOT_IN_SPEC)
 
 - 2026-09-17 12:09: Separate health reporting from claim renewal, preserve lease-loss fencing, and restore admitted Agent bindings before stop effects. (01a03526-12b3-7f50-b599-e8414052909d - 683d0e253ad827af7c6098650097fa6a8ad61f57)
 - 2026-09-17 01:22: Include failed candidates and interrupted retirement in exact Agent-stop cleanup, preserving later deployments and retained state. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 73c2ef49)

@@ -677,11 +677,17 @@ export interface NamespaceDeleteResult extends Scope {
   readonly failure?: NamespaceLifecycleFailure;
 }
 
+export interface PluginDeploymentWarning {
+  readonly code: "PLUGIN_INSTALL_FAILED" | "PLUGIN_AUTH_REQUIRED";
+  readonly pluginId: string;
+}
+
 export interface ComputeReadiness extends Scope {
   readonly namespaceId: string;
   readonly agentId: string;
   readonly revisionId: string;
   readonly ready: boolean;
+  readonly warnings?: readonly PluginDeploymentWarning[];
 }
 
 /** Authorized, server-admitted resource identities for an Agent-owned runtime. */

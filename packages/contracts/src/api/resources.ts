@@ -272,6 +272,64 @@ export const AgentRevisionListResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentDeploymentStatusSchema = Type.Object(
+  {
+    deploymentId: RevisionId,
+    namespaceId: NamespaceId,
+    agentId: AgentId,
+    status: Type.Union([
+      Type.Literal("queued"),
+      Type.Literal("running"),
+      Type.Literal("succeeded"),
+      Type.Literal("failed"),
+    ]),
+    error: Type.Union(
+      [
+        Type.Null(),
+        Type.Object(
+          {
+            code: Type.String({ minLength: 1, maxLength: 64 }),
+            message: Type.String({ minLength: 1 }),
+            data: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Unknown())),
+          },
+          { additionalProperties: false },
+        ),
+      ],
+      {
+        description:
+          "Null unless deployment failed. A failure contains code, a fixed safe message, and optional allowlisted data. CONVERGENCE_DEADLINE_EXCEEDED may include data.timeoutMs. Native error text is never returned.",
+      },
+    ),
+    warnings: Type.Array(
+      Type.Object(
+        {
+          code: Type.Union([
+            Type.Literal("PLUGIN_INSTALL_FAILED"),
+            Type.Literal("PLUGIN_AUTH_REQUIRED"),
+          ]),
+          pluginId: Type.String({
+            minLength: 1,
+            maxLength: 253,
+            pattern: PluginIdPattern,
+            description: "The admitted Agent plugin selection key.",
+          }),
+        },
+        { additionalProperties: false },
+      ),
+      {
+        description:
+          "Warnings recorded from this deployment startup. Plugin install and connector-auth warnings mean the deployment succeeded after the runtime disabled the affected admitted plugin for that startup.",
+      },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentDeploymentStatusResponse = Type.Object(
+  { data: AgentDeploymentStatusSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
 export const WorkspaceFileResponse = Type.Object(
   {
     data: Type.Object(
@@ -311,6 +369,7 @@ export type AgentRuntimeCredentialStatusWire = Type.Static<
   typeof AgentRuntimeCredentialStatusSchema
 >;
 export type AgentRevisionWire = Type.Static<typeof AgentRevisionSchema>;
+export type AgentDeploymentStatusWire = Type.Static<typeof AgentDeploymentStatusSchema>;
 export type InstallationResponse = Type.Static<typeof InstallationResponse>;
 export type NamespaceResponse = Type.Static<typeof NamespaceResponse>;
 export type NamespaceListResponse = Type.Static<typeof NamespaceListResponse>;
@@ -324,5 +383,6 @@ export type AgentListResponse = Type.Static<typeof AgentListResponse>;
 export type ProviderListResponse = Type.Static<typeof ProviderListResponse>;
 export type AgentRevisionResponse = Type.Static<typeof AgentRevisionResponse>;
 export type AgentRevisionListResponse = Type.Static<typeof AgentRevisionListResponse>;
+export type AgentDeploymentStatusResponse = Type.Static<typeof AgentDeploymentStatusResponse>;
 export type WorkspaceFileResponse = Type.Static<typeof WorkspaceFileResponse>;
 export type WorkspaceFileUpdateResponse = Type.Static<typeof WorkspaceFileUpdateResponse>;

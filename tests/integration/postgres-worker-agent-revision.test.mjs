@@ -145,7 +145,7 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy } = {}) {
     return owner;
   }
 
-  async function revision(owner, number, harness) {
+  async function revision(owner, number, harness, plugins) {
     let harnessAuth;
     if (owner.harnessAuth.method === "runtime") {
       harnessAuth = owner.harnessAuth;
@@ -177,6 +177,7 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy } = {}) {
       configurationGeneration: 1,
       harness: approvedHarness,
       compute: { id: compute.id, implementation: compute.implementation },
+      ...(plugins === undefined ? {} : { plugins }),
       harnessAuth,
       servicePrincipalId: owner.servicePrincipalId,
       createdAt: new Date().toISOString(),
@@ -255,6 +256,7 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy } = {}) {
 
   return {
     installation,
+    controller,
     actor,
     namespace,
     observerPool,
@@ -271,6 +273,18 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy } = {}) {
     stop,
     createWorkerPool,
     workerPool,
+  };
+}
+
+function codexPluginRevisionState(pluginId) {
+  return {
+    driver: { id: "codex-plugin", implementation: "occ/codex-plugin" },
+    plugins: {
+      [pluginId]: {
+        enabled: true,
+        approvalMode: "auto",
+      },
+    },
   };
 }
 
@@ -1688,6 +1702,203 @@ test(
       [candidate.id],
     );
     assert.deepEqual(evidence.rows, [{ reason: "CONVERGENCE_DEADLINE_EXCEEDED" }]);
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "CONVERGENCE_DEADLINE_EXCEEDED",
+      message: "Deployment convergence deadline exceeded.",
+      data: { timeoutMs: 1 },
+    });
+    assert.deepEqual(status.warnings, []);
+  },
+);
+
+test(
+  "plugin startup warnings complete deployment and remain visible in status",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const pluginId = "codex-plugin:linear@openai-curated-remote";
+    const otherPluginId = "codex-plugin:calendar@openai-curated-remote";
+    const warnings = [
+      { code: "PLUGIN_AUTH_REQUIRED", pluginId },
+      { code: "PLUGIN_INSTALL_FAILED", pluginId: otherPluginId },
+    ];
+    const pluginState = codexPluginRevisionState(pluginId);
+    pluginState.plugins[otherPluginId] = { enabled: true, approvalMode: "auto" };
+    const owner = await fixture.agent("plugin-warning", "dedicated");
+    const candidate = await fixture.revision(owner, 1, undefined, pluginState);
+    const prepared = [];
+
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        prepared.push(revision.id);
+        if (revision.id !== candidate.id) {
+          return fixture.compute.prepareRevision(revision);
+        }
+        return {
+          namespaceId: revision.namespaceId,
+          agentId: revision.agentId,
+          revisionId: revision.id,
+          ready: true,
+          warnings,
+        };
+      },
+    });
+
+    await fixture.work(candidate, "succeeded");
+    const terminal = await fixture.observerPool.query(
+      `SELECT state, reason_code, result_data
+       FROM occ.controller_work WHERE idempotency_key = $1`,
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(terminal.rows, [
+      {
+        state: "succeeded",
+        reason_code: "REVISION_ACTIVATED",
+        result_data: { warnings },
+      },
+    ]);
+    const active = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(active.activeRevisionId, candidate.id);
+    assert.deepEqual(prepared, [candidate.id]);
+    // The public status projection reads the persisted result through OCC;
+    // individual plugin failures must not turn a successful deployment into an error.
+    assert.deepEqual(
+      await fixture.controller.getDeploymentStatus(
+        fixture.actor.id,
+        fixture.namespace.id,
+        owner.id,
+        candidate.id,
+      ),
+      {
+        deploymentId: candidate.id,
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        status: "succeeded",
+        error: null,
+        warnings,
+      },
+    );
+  },
+);
+
+test(
+  "plugin warnings after active-pointer publication still activate the ready revision",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const pluginId = "codex-plugin:github@openai-curated-remote";
+    const owner = await fixture.agent("plugin-post-pointer-warning", "dedicated");
+    const candidate = await fixture.revision(
+      owner,
+      1,
+      undefined,
+      codexPluginRevisionState(pluginId),
+    );
+    const published = await fixture.state.transact((unit) =>
+      unit.agents.compareAndSetActiveRevision(
+        fixture.namespace.id,
+        owner.id,
+        undefined,
+        candidate.id,
+      ),
+    );
+    assert.equal(published.activeRevisionId, candidate.id);
+
+    let prepareCount = 0;
+    const activations = [];
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        prepareCount += 1;
+        return {
+          namespaceId: revision.namespaceId,
+          agentId: revision.agentId,
+          revisionId: revision.id,
+          ready: true,
+          warnings: [{ code: "PLUGIN_INSTALL_FAILED", pluginId }],
+        };
+      },
+      async activateRevision(revision) {
+        activations.push(revision.id);
+      },
+    });
+
+    await fixture.work(candidate, "succeeded");
+    assert.equal(prepareCount, 1);
+    assert.deepEqual(activations, [candidate.id]);
+    const terminal = await fixture.observerPool.query(
+      `SELECT state, reason_code, result_data
+       FROM occ.controller_work WHERE idempotency_key = $1`,
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(terminal.rows, [
+      {
+        state: "succeeded",
+        reason_code: "REVISION_ALREADY_ACTIVE",
+        result_data: { warnings: [{ code: "PLUGIN_INSTALL_FAILED", pluginId }] },
+      },
+    ]);
+  },
+);
+
+test(
+  "foreign plugin warnings remain generic invalid Compute observations",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const pluginId = "codex-plugin:slack@openai-curated-remote";
+    const owner = await fixture.agent("foreign-plugin-diagnostic", "dedicated");
+    const candidate = await fixture.revision(
+      owner,
+      1,
+      undefined,
+      codexPluginRevisionState(pluginId),
+    );
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        return {
+          namespaceId: revision.namespaceId,
+          agentId: revision.agentId,
+          revisionId: revision.id,
+          ready: true,
+          warnings: [
+            {
+              code: "PLUGIN_INSTALL_FAILED",
+              pluginId: "codex-plugin:foreign@openai-curated-remote",
+            },
+          ],
+        };
+      },
+    });
+
+    await fixture.work(candidate, "failed_permanent");
+    const generic = await fixture.observerPool.query(
+      `SELECT state, reason_code, result_data
+       FROM occ.controller_work WHERE idempotency_key = $1`,
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(generic.rows, [
+      {
+        state: "failed_permanent",
+        reason_code: "INVALID_DRIVER_OBSERVATION",
+        result_data: null,
+      },
+    ]);
+    const inactive = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(inactive.activeRevisionId, undefined);
   },
 );
 
@@ -1850,7 +2061,7 @@ test(
     assert.equal(
       effects.filter(({ action, revisionId }) => action === "prepare" && revisionId === second.id)
         .length,
-      1,
+      2,
     );
     const activation = await fixture.observerPool.query(
       `SELECT action FROM occ.audit_events

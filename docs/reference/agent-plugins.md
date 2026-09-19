@@ -46,8 +46,10 @@ later curated release for the same requested catalog ID. Kubernetes retains the
 native OpenClaw installation registry in the Agent-owned state database; the
 existing serialized gateway replacement prevents old and new revisions from
 installing concurrently. The Agent workspace retains its existing lifecycle.
-Failed catalog resolution, installation, authentication, or policy translation
-cannot make the candidate a ready serving workload. Ordinary retirement removes
+Failed catalog resolution, policy translation, integrity verification, or core
+authentication keeps the candidate unready. A confirmed selected-plugin install
+rejection or plugin authentication requirement disables that selection while
+other successfully prepared plugins can serve. Ordinary retirement removes
 old workload state, but does not delete the Agent-owned database.
 
 Read `Agent.plugins` for saved selections and the active AgentRevision for its
@@ -55,6 +57,24 @@ requested plugin snapshot. Check deployment status for startup outcomes;
 `activeRevisionId` alone is not installation evidence because the worker records
 the pointer before runtime activation completes. Saved configuration remains
 readable if the catalog entry or Driver disappears.
+
+For Compute-owned Kubernetes embedded OpenClaw and dedicated Codex workloads,
+a selected native install rejection produces a `PLUGIN_INSTALL_FAILED` warning.
+A successful Codex install response with apps that still need authentication
+produces `PLUGIN_AUTH_REQUIRED`. Deployment can succeed with these warnings once
+the failed selections are explicitly disabled in the effective native and
+gateway configuration. Warnings contain only the admitted selection key and a
+closed code; native error text and credentials are never returned.
+
+The requested plugin map remains unchanged. Startup creates an effective map
+that disables failed selections and preserves successful selections' policies.
+Dedicated Codex also blocks failed gateway bridge entries so the gateway cannot
+retry their installation during a turn. Runtime restarts recompute the result
+and refresh the effective configuration before serving. Failure to apply or
+verify that configuration remains fatal. Transport loss, timeouts, malformed
+native responses, signals, and unrelated startup failures remain unattributed
+startup failures. Provider-owned Harnesses and non-Kubernetes Compute paths
+retain their existing generic startup-failure behavior.
 
 SSH Compute currently supports plugin-free embedded OpenClaw only. A revision
 with any nonempty requested plugin map is rejected before SSH host effects,
@@ -164,6 +184,11 @@ Agent GET, create, and update return saved selections under `data.plugins`.
 Existing revision and deployment-status reads describe the deployed request and
 startup outcome. Successful Agent mutations and authorization denials retain
 attributable audit evidence.
+
+The [Agent reference](agents.md#deployment-status) owns generic deployment
+polling. Plugin failure responses use fixed platform messages and include only
+the admitted plugin ID in `error.data`. Native text, command output,
+credentials, claim tokens, and workload paths are never returned.
 
 ### Agent and revision plugin fields
 

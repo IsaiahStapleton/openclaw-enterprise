@@ -1,5 +1,29 @@
 import { PLUGIN_RUNTIME_TRANSLATOR_SOURCE } from "../../plugin/runtime-translator.ts";
 
+export const PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN = "openclaw-plugin-runtime/app-server-token/v1";
+
+const PLUGIN_APP_SERVER_TOKEN_DERIVATION_HELPER = String.raw`
+function derivePluginAppServerTokenFromBase(baseToken, revisionId, startupId) {
+  if (
+    typeof baseToken !== "string" ||
+    baseToken.length === 0 ||
+    typeof revisionId !== "string" ||
+    revisionId.length === 0 ||
+    typeof startupId !== "string" ||
+    startupId.length === 0
+  ) {
+    throw new Error("Codex app-server token derivation inputs are invalid.");
+  }
+  return createHmac("sha256", baseToken)
+    .update(${JSON.stringify(PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN)})
+    .update("\0")
+    .update(revisionId)
+    .update("\0")
+    .update(startupId)
+    .digest("hex");
+}
+`;
+
 export const PLUGIN_RUNTIME_HELPERS = String.raw`
 const pluginRuntimeTranslator = (${PLUGIN_RUNTIME_TRANSLATOR_SOURCE})();
 const {
@@ -11,10 +35,34 @@ const {
   readFileSync: pluginReadFileSync,
   writeFileSync: pluginWriteFileSync,
 } = require("node:fs");
+const {
+  createHmac,
+  randomUUID: pluginRandomUUID,
+} = require("node:crypto");
 const { spawnSync: pluginSpawnSync } = require("node:child_process");
+const { createServer: pluginCreateServer } = require("node:http");
 
 const CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS ?? "10000");
 const CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS ?? "60000");
+const PLUGIN_STATUS_PATH = "/openclaw/plugin-runtime/status";
+const PLUGIN_DIAGNOSTIC_CODES = new Set(["PLUGIN_INSTALL_FAILED", "PLUGIN_AUTH_REQUIRED"]);
+const pluginBaseAppServerToken = process.env.APP_SERVER_TOKEN;
+
+${PLUGIN_APP_SERVER_TOKEN_DERIVATION_HELPER}
+
+class PluginTerminalDiagnosticError extends Error {
+  constructor(diagnostic, message) {
+    super(message);
+    this.diagnostic = diagnostic;
+  }
+}
+
+class CodexAppServerRequestError extends Error {
+  constructor(method, message) {
+    super(message);
+    this.method = method;
+  }
+}
 
 function readRuntimePayload() {
   const encoded = process.env.OPENCLAW_PLUGIN_RUNTIME_JSON;
@@ -77,12 +125,115 @@ function pluginRuntimeReady() {
   if (marker !== undefined) pluginWriteFileSync(marker, "ready\n", { mode: 0o600 });
 }
 
+function pluginRuntimeStatusContainer() {
+  return requireNonEmptyString(process.env.OPENCLAW_PLUGIN_STATUS_CONTAINER, "Plugin status container");
+}
+
+function pluginRuntimeRevisionId() {
+  return requireNonEmptyString(process.env.OPENCLAW_AGENT_REVISION_ID, "Plugin status revision ID");
+}
+
+function pluginRuntimeStatusPort() {
+  if (process.env.OPENCLAW_PLUGIN_STATUS_PORT === undefined) return undefined;
+  const port = Number(process.env.OPENCLAW_PLUGIN_STATUS_PORT);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("Plugin status port is invalid.");
+  }
+  return port;
+}
+
+let pluginStatusReport = {
+  revisionId: process.env.OPENCLAW_AGENT_REVISION_ID ?? "",
+  container: process.env.OPENCLAW_PLUGIN_STATUS_CONTAINER ?? "",
+  startupId: pluginRandomUUID(),
+  podUid: process.env.OPENCLAW_POD_UID ?? "",
+  phase: "starting",
+  successfulPluginIds: [],
+  failures: [],
+};
+
+function publishPluginRuntimeStatus(report) {
+  if (pluginRuntimeStatusPort() === undefined) return;
+  const successfulPluginIds = [...new Set(report.successfulPluginIds ?? [])];
+  const failures = [
+    ...new Map((report.failures ?? []).map((failure) => [failure.pluginId, pluginDiagnostic(failure.pluginId, failure.code)])).values(),
+  ];
+  if (successfulPluginIds.some((pluginId) => failures.some((failure) => failure.pluginId === pluginId))) {
+    throw new Error("Plugin status report cannot mark a plugin successful and failed.");
+  }
+  pluginStatusReport = {
+    ...pluginStatusReport,
+    revisionId: pluginRuntimeRevisionId(),
+    container: pluginRuntimeStatusContainer(),
+    podUid: requireNonEmptyString(process.env.OPENCLAW_POD_UID, "Plugin status Pod UID"),
+    phase: report.phase,
+    successfulPluginIds,
+    failures,
+  };
+}
+
+function startPluginRuntimeStatusServer() {
+  const port = pluginRuntimeStatusPort();
+  if (port === undefined) return;
+  const server = pluginCreateServer((request, response) => {
+    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (request.method !== "GET" || pathname !== PLUGIN_STATUS_PATH) {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "not_found" }));
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(pluginStatusReport));
+  });
+  server.listen(port, "0.0.0.0");
+}
+
+function pluginBestEffortEnabled() {
+  return pluginRuntimeStatusPort() !== undefined;
+}
+
+function derivePluginAppServerToken(startupId) {
+  return derivePluginAppServerTokenFromBase(
+    requireNonEmptyString(pluginBaseAppServerToken, "Codex app-server base token"),
+    pluginRuntimeRevisionId(),
+    requireNonEmptyString(startupId, "Plugin runtime startup ID"),
+  );
+}
+
+function pluginDiagnostic(pluginId, code) {
+  requireNonEmptyString(pluginId, "Plugin diagnostic plugin ID");
+  if (!PLUGIN_DIAGNOSTIC_CODES.has(code)) {
+    throw new Error("Plugin diagnostic code is invalid.");
+  }
+  return { pluginId, code };
+}
+
+function isPluginDiagnostic(value) {
+  return (
+    isPlainObject(value) &&
+    typeof value.pluginId === "string" &&
+    value.pluginId.length > 0 &&
+    PLUGIN_DIAGNOSTIC_CODES.has(value.code)
+  );
+}
+
+function isPluginTerminalDiagnosticError(error) {
+  return error instanceof PluginTerminalDiagnosticError && isPluginDiagnostic(error.diagnostic);
+}
+
 function readOpenClawConfig() {
   return JSON.parse(pluginReadFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
 }
 
+function writableOpenClawConfigPath() {
+  if (typeof process.env.OPENCLAW_STATE_DIR === "string" && process.env.OPENCLAW_STATE_DIR.length > 0) {
+    return safeRuntimePath(process.env.OPENCLAW_STATE_DIR, "openclaw.json");
+  }
+  return safeRuntimePath(requireNonEmptyString(process.env.HOME, "OpenClaw runtime home"), ".openclaw/openclaw.json");
+}
+
 function writeOpenClawConfig(config) {
-  const target = safeRuntimePath(process.env.HOME, ".openclaw/openclaw.json");
+  const target = writableOpenClawConfigPath();
   pluginMkdirSync(pluginDirname(target), { recursive: true });
   pluginWriteFileSync(target, JSON.stringify(config), { mode: 0o600 });
   process.env.OPENCLAW_CONFIG_PATH = target;
@@ -90,6 +241,10 @@ function writeOpenClawConfig(config) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function cloneJson(value) {
@@ -118,7 +273,15 @@ function objectAtPath(root, path) {
   return isPlainObject(current) ? current : undefined;
 }
 
-function assertNoOpenClawPluginConfigConflict(base, overlay) {
+function isManagedOpenClawPluginEntry(value) {
+  return (
+    isPlainObject(value) &&
+    typeof value.enabled === "boolean" &&
+    Object.keys(value).length === 1
+  );
+}
+
+function assertNoOpenClawPluginConfigConflict(base, overlay, options = {}) {
   const baseEntries = objectAtPath(base, ["plugins", "entries"]);
   const overlayEntries = objectAtPath(overlay, ["plugins", "entries"]);
   if (overlayEntries === undefined) return;
@@ -128,6 +291,13 @@ function assertNoOpenClawPluginConfigConflict(base, overlay) {
       baseEntries?.[pluginId] !== undefined &&
       JSON.stringify(baseEntries[pluginId]) !== JSON.stringify(overlayEntries[pluginId])
     ) {
+      if (
+        options.allowManagedOpenClawPluginReplacement === true &&
+        isManagedOpenClawPluginEntry(baseEntries[pluginId]) &&
+        isManagedOpenClawPluginEntry(overlayEntries[pluginId])
+      ) {
+        continue;
+      }
       throw new Error("OpenClaw plugin configuration conflicts with managed plugin selections.");
     }
   }
@@ -140,8 +310,8 @@ function assertNoOpenClawPluginConfigConflict(base, overlay) {
   }
 }
 
-function mergeOpenClawPluginConfiguration(base, overlay) {
-  assertNoOpenClawPluginConfigConflict(base, overlay);
+function mergeOpenClawPluginConfiguration(base, overlay, options = {}) {
+  assertNoOpenClawPluginConfigConflict(base, overlay, options);
   const next = mergeConfig(base, overlay);
   const baseAllow = Array.isArray(base?.tools?.alsoAllow) ? base.tools.alsoAllow : [];
   const overlayAllow = Array.isArray(overlay?.tools?.alsoAllow) ? overlay.tools.alsoAllow : [];
@@ -152,23 +322,112 @@ function mergeOpenClawPluginConfiguration(base, overlay) {
       ...overlayAllow.filter((tool) => !baseAllow.includes(tool)),
     ];
   }
+  const overlayEntries = objectAtPath(overlay, ["plugins", "entries"]);
+  if (overlayEntries !== undefined) {
+    const disabledManagedTools = Object.entries(overlayEntries)
+      .filter(([pluginId, entry]) => pluginId !== "codex" && isManagedOpenClawPluginEntry(entry) && entry.enabled === false)
+      .map(([pluginId]) => pluginId);
+    if (disabledManagedTools.length > 0 && Array.isArray(next.tools?.alsoAllow)) {
+      next.tools.alsoAllow = next.tools.alsoAllow.filter((tool) => !disabledManagedTools.includes(tool));
+    }
+  }
   return next;
 }
 
-function openClawPluginConfiguration(runtime) {
+function pluginFailureIds(failures) {
+  return new Set((failures ?? []).map((failure) => failure.pluginId));
+}
+
+function hasEnabledPluginSelections(runtime) {
+  return Object.values(runtime?.manifest?.selections ?? {}).some((selection) => selection?.enabled === true);
+}
+
+function readPluginFailuresFromEnvironment() {
+  const encoded = process.env.OPENCLAW_PLUGIN_FAILURES_JSON;
+  if (encoded === undefined || encoded.length === 0) return [];
+  const parsed = JSON.parse(encoded);
+  if (!Array.isArray(parsed)) throw new Error("Plugin failure set is invalid.");
+  return parsed.map((failure) => pluginDiagnostic(failure.pluginId, failure.code));
+}
+
+async function readPeerPluginRuntimeStatus() {
+  if (typeof process.env.APP_SERVER_URL !== "string" || !process.env.APP_SERVER_URL.startsWith("ws://")) {
+    return undefined;
+  }
+  const url = new URL(process.env.APP_SERVER_URL.replace(/^ws:/, "http:"));
+  url.port = String(pluginRuntimeStatusPort() ?? "");
+  url.pathname = PLUGIN_STATUS_PATH;
+  const response = await fetch(url, { signal: AbortSignal.timeout(CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS) });
+  if (response.status !== 200) throw new Error("Peer plugin runtime status is unavailable.");
+  const status = await response.json();
+  if (
+    !isPlainObject(status) ||
+    status.revisionId !== pluginRuntimeRevisionId() ||
+    status.container !== "agent" ||
+    typeof status.startupId !== "string" ||
+    status.startupId.length === 0 ||
+    typeof status.podUid !== "string" ||
+    status.podUid.length === 0 ||
+    status.phase !== "ready" ||
+    !Array.isArray(status.successfulPluginIds) ||
+    status.successfulPluginIds.some((pluginId) => typeof pluginId !== "string" || pluginId.length === 0) ||
+    !Array.isArray(status.failures)
+  ) {
+    throw new Error("Peer plugin runtime status is not ready.");
+  }
+  if (!status.failures.every(isPluginDiagnostic)) {
+    throw new Error("Peer plugin runtime status returned invalid diagnostics.");
+  }
+  const failures = status.failures.map((failure) => pluginDiagnostic(failure.pluginId, failure.code));
+  const successfulPluginIds = [...new Set(status.successfulPluginIds)];
+  if (successfulPluginIds.some((pluginId) => failures.some((failure) => failure.pluginId === pluginId))) {
+    throw new Error("Peer plugin runtime status is inconsistent.");
+  }
+  return {
+    revisionId: status.revisionId,
+    container: status.container,
+    startupId: status.startupId,
+    podUid: status.podUid,
+    phase: status.phase,
+    successfulPluginIds,
+    failures,
+  };
+}
+
+async function waitForPeerPluginRuntimeStatus() {
+  const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const status = await readPeerPluginRuntimeStatus();
+      if (status !== undefined) return status;
+    } catch (error) {
+      lastError = error;
+      await pluginRuntimeDelay(250);
+    }
+  }
+  throw new Error("Peer plugin runtime status did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
+}
+
+function samePluginFailures(left, right) {
+  return JSON.stringify([...(left ?? [])].sort((a, b) => a.pluginId.localeCompare(b.pluginId))) ===
+    JSON.stringify([...(right ?? [])].sort((a, b) => a.pluginId.localeCompare(b.pluginId)));
+}
+
+function openClawPluginConfiguration(runtime, failures = []) {
   if (runtime.manifest?.kind === "openclaw") {
-    return pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {}).configuration;
+    return pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {}, failures).configuration;
   }
   if (runtime.manifest?.kind === "codex") {
-    return pluginRuntimeTranslator.codexOpenClawConfiguration(runtime.manifest.selections ?? {});
+    return pluginRuntimeTranslator.codexOpenClawConfiguration(runtime.manifest.selections ?? {}, failures);
   }
   return undefined;
 }
 
-function applyOpenClawPluginConfiguration(runtime) {
-  const overlay = openClawPluginConfiguration(runtime);
+function applyOpenClawPluginConfiguration(runtime, failures = [], options = {}) {
+  const overlay = openClawPluginConfiguration(runtime, failures);
   if (overlay === undefined) return;
-  writeOpenClawConfig(mergeOpenClawPluginConfiguration(readOpenClawConfig(), overlay));
+  writeOpenClawConfig(mergeOpenClawPluginConfiguration(readOpenClawConfig(), overlay, options));
 }
 
 function assertConfigContainsOverlay(base, overlay, path) {
@@ -214,11 +473,17 @@ function openClawPluginPackageSpec(plugin) {
   return packageName + "@" + version;
 }
 
-function runOpenClaw(args, description) {
+function runOpenClaw(args, description, diagnostic) {
   const result = pluginSpawnSync("node", ["/app/openclaw.mjs", ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
+  if (result.error !== undefined || typeof result.status !== "number") {
+    throw new Error(description + " failed.");
+  }
+  if (result.status !== 0 && diagnostic !== undefined) {
+    throw new PluginTerminalDiagnosticError(diagnostic, description + " failed.");
+  }
   if (result.status !== 0) {
     throw new Error(description + " failed.");
   }
@@ -278,28 +543,49 @@ function verifyOpenClawPluginInstall(plugin) {
   }
 }
 
-function installOpenClawPlugins(runtime) {
+function installOpenClawPlugins(runtime, failures = []) {
   const artifact =
     runtime.manifest?.kind === "openclaw"
-      ? pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {})
+      ? pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {}, failures)
       : { installs: [] };
   const installs = artifact.installs ?? [];
-  applyOpenClawPluginConfiguration(runtime);
+  const failed = [...failures];
+  const successfulPluginIds = [];
+  const failedIds = pluginFailureIds(failed);
+  applyOpenClawPluginConfiguration(runtime, failed);
   for (const plugin of installs) {
+    if (failedIds.has(plugin.pluginId)) continue;
     const spec = openClawPluginPackageSpec(plugin);
-    runOpenClaw(["plugins", "install", spec, "--pin", "--force"], "OpenClaw plugin install");
+    try {
+      runOpenClaw(
+        ["plugins", "install", spec, "--pin", "--force"],
+        "OpenClaw plugin install",
+        pluginDiagnostic(plugin.pluginId, "PLUGIN_INSTALL_FAILED"),
+      );
+      successfulPluginIds.push(plugin.pluginId);
+    } catch (error) {
+      if (isPluginTerminalDiagnosticError(error)) {
+        if (!pluginBestEffortEnabled()) throw error;
+        failed.push(error.diagnostic);
+        failedIds.add(error.diagnostic.pluginId);
+        continue;
+      }
+      throw error;
+    }
   }
-  if (installs.length > 0) {
+  if (successfulPluginIds.length > 0) {
     runOpenClawJson(["plugins", "registry", "--refresh", "--json"], "OpenClaw plugin registry refresh");
   }
-  applyOpenClawPluginConfiguration(runtime);
-  const overlay = openClawPluginConfiguration(runtime);
+  applyOpenClawPluginConfiguration(runtime, failed, { allowManagedOpenClawPluginReplacement: true });
+  const overlay = openClawPluginConfiguration(runtime, failed);
   if (overlay !== undefined) {
     assertConfigContainsOverlay(readOpenClawConfig(), overlay);
   }
   for (const plugin of installs) {
+    if (failedIds.has(plugin.pluginId)) continue;
     verifyOpenClawPluginInstall(plugin);
   }
+  return { successfulPluginIds, failures: failed };
 }
 
 function pluginRuntimeDelay(ms) {
@@ -325,6 +611,31 @@ function createPluginWebSocket(url, options) {
   } catch {
     throw new Error("Codex app-server plugin runtime WebSocket client is unavailable.");
   }
+}
+
+function isJsonRpcError(value) {
+  return (
+    isPlainObject(value) &&
+    Number.isInteger(value.code) &&
+    typeof value.message === "string"
+  );
+}
+
+function isAppSummary(value) {
+  return (
+    isPlainObject(value) &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    typeof value.name === "string" &&
+    (value.needsAuth === undefined || typeof value.needsAuth === "boolean") &&
+    (value.category === undefined || value.category === null || typeof value.category === "string") &&
+    (value.description === undefined ||
+      value.description === null ||
+      typeof value.description === "string") &&
+    (value.installUrl === undefined ||
+      value.installUrl === null ||
+      typeof value.installUrl === "string")
+  );
 }
 
 function codexAppServerRequestSequence(requests, timeoutMs) {
@@ -367,10 +678,26 @@ function codexAppServerRequestSequence(requests, timeoutMs) {
         finish(new Error("Codex app-server plugin runtime response was invalid JSON."));
         return;
       }
+      if (!isPlainObject(message)) {
+        finish(new Error("Codex app-server plugin runtime response was malformed."));
+        return;
+      }
       if (message.id !== requestIndex + 1) return;
-      if (message.error !== undefined) {
+      // Codex 0.152.1's app-server protocol uses id plus exactly one of
+      // result or error; its pinned schema omits a jsonrpc response field.
+      const hasResult = hasOwn(message, "result");
+      const hasError = hasOwn(message, "error");
+      if (hasResult === hasError) {
+        finish(new Error("Codex app-server plugin runtime response was malformed."));
+        return;
+      }
+      if (hasError) {
         const method = requests[requestIndex]?.method ?? "unknown";
-        finish(new Error("Codex app-server plugin runtime request failed during " + method + ": " + (message.error.message ?? "unknown error")));
+        if (!isJsonRpcError(message.error)) {
+          finish(new Error("Codex app-server plugin runtime response was malformed."));
+          return;
+        }
+        finish(new CodexAppServerRequestError(method, "Codex app-server plugin runtime request failed during " + method + ": " + (message.error.message ?? "unknown error")));
         return;
       }
       results.push(message.result);
@@ -482,34 +809,111 @@ function verifyCodexPluginDetail(plugin, readParams, detail) {
   }
 }
 
-async function installCodexSelectionSet(selections) {
+function enabledCodexSelectionIds(selections) {
+  return new Set(
+    Object.entries(selections ?? {})
+      .filter(([, selection]) => isPlainObject(selection) && selection.enabled === true)
+      .map(([pluginId]) => pluginId),
+  );
+}
+
+async function installCodexSelectionSet(selections, failures = []) {
+  if (Object.keys(selections).length === 0) return { successfulPluginIds: [], failures: [] };
+  const enabledPluginIds = enabledCodexSelectionIds(selections);
   const listed = await codexAppServerRequest("plugin/list", {});
   const readParamsList = pluginRuntimeTranslator.codexReadParamsForSelections(selections, listed);
-  if (readParamsList.length === 0) return;
+  if (readParamsList.length === 0) return { successfulPluginIds: [], failures: [] };
   const resolvedDetails = [];
   for (const readParams of readParamsList) {
     resolvedDetails.push(await codexAppServerRequest("plugin/read", readParams));
   }
-  const resolvedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, resolvedDetails);
-  await writeCodexAppConfiguration(resolvedArtifact.configuration);
+  const failed = [...failures];
+  const failedIds = pluginFailureIds(failed);
+  const successfulPluginIds = [];
+  const resolvedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, resolvedDetails, failed);
   for (const readParams of readParamsList) {
-    const install = await codexAppServerRequest("plugin/install", readParams);
-    if ((install?.appsNeedingAuth ?? []).length > 0) {
+    const selectedPlugin = resolvedArtifact.installs.find(
+      (candidate) => candidate.remotePluginId === readParams.pluginName,
+    );
+    if (selectedPlugin !== undefined && !enabledPluginIds.has(selectedPlugin.pluginId)) continue;
+    if (selectedPlugin !== undefined && failedIds.has(selectedPlugin.pluginId)) continue;
+    let install;
+    try {
+      install = await codexAppServerRequest("plugin/install", readParams);
+    } catch (error) {
+      if (
+        error instanceof CodexAppServerRequestError &&
+        error.method === "plugin/install" &&
+        selectedPlugin !== undefined
+      ) {
+        if (!pluginBestEffortEnabled()) {
+          throw new PluginTerminalDiagnosticError(
+            pluginDiagnostic(selectedPlugin.pluginId, "PLUGIN_INSTALL_FAILED"),
+            "Codex plugin installation failed.",
+          );
+        }
+        const diagnostic = pluginDiagnostic(selectedPlugin.pluginId, "PLUGIN_INSTALL_FAILED");
+        failed.push(diagnostic);
+        failedIds.add(diagnostic.pluginId);
+        continue;
+      }
+      throw error;
+    }
+    if (!isPlainObject(install)) {
+      throw new Error("Codex plugin installation returned invalid data.");
+    }
+    if (install.authPolicy !== "ON_INSTALL" && install.authPolicy !== "ON_USE") {
+      throw new Error("Codex plugin installation returned invalid authentication data.");
+    }
+    const appsNeedingAuth = install.appsNeedingAuth;
+    if (appsNeedingAuth !== undefined && !Array.isArray(appsNeedingAuth)) {
+      throw new Error("Codex plugin installation returned invalid authentication data.");
+    }
+    if ((appsNeedingAuth ?? []).some((app) => !isAppSummary(app))) {
+      throw new Error("Codex plugin installation returned invalid authentication data.");
+    }
+    if ((appsNeedingAuth ?? []).length > 0) {
+      if (selectedPlugin !== undefined) {
+        if (!pluginBestEffortEnabled()) {
+          throw new PluginTerminalDiagnosticError(
+            pluginDiagnostic(selectedPlugin.pluginId, "PLUGIN_AUTH_REQUIRED"),
+            "Codex plugin installation requires connector authentication.",
+          );
+        }
+        const diagnostic = pluginDiagnostic(selectedPlugin.pluginId, "PLUGIN_AUTH_REQUIRED");
+        failed.push(diagnostic);
+        failedIds.add(diagnostic.pluginId);
+        continue;
+      }
       throw new Error("Codex plugin installation requires connector authentication.");
     }
+    if (selectedPlugin !== undefined) successfulPluginIds.push(selectedPlugin.pluginId);
   }
+  const effectiveResolvedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, resolvedDetails, failed);
+  await writeCodexAppConfiguration(effectiveResolvedArtifact.configuration);
   const installedDetails = [];
   for (const readParams of readParamsList) {
-    installedDetails.push(await codexAppServerRequest("plugin/read", readParams));
+    const selectedPlugin = resolvedArtifact.installs.find(
+      (candidate) => candidate.remotePluginId === readParams.pluginName,
+    );
+    if (
+      selectedPlugin !== undefined &&
+      (failedIds.has(selectedPlugin.pluginId) || !enabledPluginIds.has(selectedPlugin.pluginId))
+    ) {
+      installedDetails.push(resolvedDetails[readParamsList.indexOf(readParams)]);
+    } else {
+      installedDetails.push(await codexAppServerRequest("plugin/read", readParams));
+    }
   }
-  const installedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, installedDetails);
-  if (JSON.stringify(installedArtifact.installs) !== JSON.stringify(resolvedArtifact.installs)) {
+  const installedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, installedDetails, failed);
+  if (JSON.stringify(installedArtifact.installs) !== JSON.stringify(effectiveResolvedArtifact.installs)) {
     throw new Error("Codex plugin installed release metadata does not match startup resolution.");
   }
-  if (JSON.stringify(installedArtifact.configuration) !== JSON.stringify(resolvedArtifact.configuration)) {
+  if (JSON.stringify(installedArtifact.configuration) !== JSON.stringify(effectiveResolvedArtifact.configuration)) {
     throw new Error("Codex plugin installed app mapping does not match startup resolution.");
   }
-  for (const plugin of resolvedArtifact.installs) {
+  for (const plugin of effectiveResolvedArtifact.installs) {
+    if (failedIds.has(plugin.pluginId) || !enabledPluginIds.has(plugin.pluginId)) continue;
     const readParams = readParamsList.find((candidate) => candidate.pluginName === plugin.remotePluginId);
     if (readParams === undefined) {
       throw new Error("Codex plugin installed identity does not match the selected catalog entry.");
@@ -517,17 +921,19 @@ async function installCodexSelectionSet(selections) {
     const detail = installedDetails[readParamsList.indexOf(readParams)];
     verifyCodexPluginDetail(plugin, readParams, detail);
   }
-  assertConfigContainsOverlay(await readCodexAppConfiguration(), resolvedArtifact.configuration);
+  assertConfigContainsOverlay(await readCodexAppConfiguration(), effectiveResolvedArtifact.configuration);
+  return { successfulPluginIds, failures: failed };
 }
 
-async function installCodexPlugins(runtime) {
+async function installCodexPlugins(runtime, failures = []) {
   assertCodexPluginRuntime(runtime);
   const selections = runtime.manifest.selections ?? {};
   const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
   let lastError;
+  let result = { successfulPluginIds: [], failures };
   while (Date.now() < deadline) {
     try {
-      await installCodexSelectionSet(selections);
+      result = await installCodexSelectionSet(selections, failures);
       lastError = undefined;
       break;
     } catch (error) {
@@ -538,6 +944,7 @@ async function installCodexPlugins(runtime) {
   if (lastError !== undefined) {
     throw new Error("Codex plugin installation did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
   }
+  return result;
 }
 `;
 
@@ -603,6 +1010,7 @@ const { spawn } = require("node:child_process");
 ${PLUGIN_RUNTIME_HELPERS}
 ${OPENCLAW_AUTH_PROBE_HELPERS}
 
+startPluginRuntimeStatusServer();
 const runtimeAssetsDirectory = "/home/node/openclaw-runtime-assets";
 
 function clearDirectoryContents(directory) {
@@ -659,14 +1067,62 @@ if (process.env.OPENCLAW_WORKSPACE_DIR !== undefined) {
 }
 delete process.env.OPENCLAW_LOG_LEVEL;
 const pluginRuntime = readGatewayPluginRuntime();
-if (pluginRuntime !== undefined) installOpenClawPlugins(pluginRuntime);
+(async () => {
+const peerStatus =
+  pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime)
+    ? await waitForPeerPluginRuntimeStatus()
+    : undefined;
+const peerFailures = peerStatus?.failures ?? readPluginFailuresFromEnvironment();
+if (peerStatus !== undefined) {
+  process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(peerStatus.startupId);
+}
+const pluginResult =
+  pluginRuntime === undefined
+    ? { successfulPluginIds: [], failures: peerFailures }
+    : installOpenClawPlugins(pluginRuntime, peerFailures);
+if (peerStatus !== undefined) {
+  pluginResult.successfulPluginIds = peerStatus.successfulPluginIds;
+}
+publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
 const child = spawn(
   "node",
   ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
   { stdio: "inherit" },
 );
 forwardTermination(child);
+if (pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime)) {
+  let pollInFlight = false;
+  let stoppingForChangedPeerStatus = false;
+  const stopForChangedPeerStatus = () => {
+    if (stoppingForChangedPeerStatus) return;
+    stoppingForChangedPeerStatus = true;
+    publishPluginRuntimeStatus({ phase: "starting", ...pluginResult });
+    child.kill("SIGTERM");
+    setTimeout(() => process.exit(1), 8_000).unref();
+  };
+  setInterval(async () => {
+    if (pollInFlight) return;
+    pollInFlight = true;
+    try {
+      const current = await readPeerPluginRuntimeStatus();
+      if (current === undefined || peerStatus === undefined) {
+        stopForChangedPeerStatus();
+      } else if (
+        current.startupId !== peerStatus.startupId ||
+        current.podUid !== peerStatus.podUid ||
+        !samePluginFailures(current.failures, pluginResult.failures)
+      ) {
+        stopForChangedPeerStatus();
+      }
+    } catch {
+      stopForChangedPeerStatus();
+    } finally {
+      pollInFlight = false;
+    }
+  }, 2_000).unref();
+}
 child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
+})();
 }
 `;
 
@@ -678,6 +1134,7 @@ const { spawn, spawnSync } = require("node:child_process");
 ${PLUGIN_RUNTIME_HELPERS}
 ${AUTH_PROBE_FAILURE_HELPER}
 
+startPluginRuntimeStatusServer();
 const loginMode = process.env.CODEX_LOGIN_MODE;
 const apiKey = process.env.OPENAI_API_KEY;
 const accessToken = process.env.CODEX_ACCESS_TOKEN;
@@ -799,6 +1256,9 @@ function forwardTermination(child) {
   process.on("SIGINT", () => forward("SIGINT"));
 }
 
+if (pluginRuntimeStatusPort() !== undefined) {
+  process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(pluginStatusReport.startupId);
+}
 const digest = createHash("sha256").update(process.env.APP_SERVER_TOKEN).digest("hex");
 const child = spawn(
   "codex",
@@ -821,7 +1281,12 @@ forwardTermination(child);
 child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
 (async () => {
   try {
-    if (pluginRuntime !== undefined) await installCodexPlugins(pluginRuntime);
+    if (pluginRuntime !== undefined) {
+      const result = await installCodexPlugins(pluginRuntime);
+      publishPluginRuntimeStatus({ phase: "ready", ...result });
+    } else {
+      publishPluginRuntimeStatus({ phase: "ready", successfulPluginIds: [], failures: [] });
+    }
     pluginRuntimeReady();
   } catch (error) {
     console.error("Codex plugin runtime initialization failed: " + pluginRuntimeErrorMessage(error));
@@ -837,20 +1302,51 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 
 // the trusted apiserver proxy source, but its probes have no forwarded headers.
 export const GATEWAY_READINESS_ENTRYPOINT = String.raw`
 const timeout = setTimeout(() => process.exit(1), 2_000);
-const request = require("node:http").get(
-  "http://127.0.0.1:" + process.env.OPENCLAW_GATEWAY_PORT + "/readyz",
-  (response) => {
-    response.resume();
-    clearTimeout(timeout);
-    process.exit(response.statusCode === 200 ? 0 : 1);
-  },
-);
-request.on("error", () => process.exit(1));
+const http = require("node:http");
+function nativeReady() {
+  const request = http.get(
+    "http://127.0.0.1:" + process.env.OPENCLAW_GATEWAY_PORT + "/readyz",
+    (response) => {
+      response.resume();
+      clearTimeout(timeout);
+      process.exit(response.statusCode === 200 ? 0 : 1);
+    },
+  );
+  request.on("error", () => process.exit(1));
+}
+if (process.env.OPENCLAW_PLUGIN_STATUS_PORT === undefined) {
+  nativeReady();
+} else {
+  const request = http.get(
+    "http://127.0.0.1:" + process.env.OPENCLAW_PLUGIN_STATUS_PORT + "/openclaw/plugin-runtime/status",
+    (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+        if (body.length > 65536) process.exit(1);
+      });
+      response.on("end", () => {
+        try {
+          const status = JSON.parse(body);
+          if (response.statusCode !== 200 || status.phase !== "ready") process.exit(1);
+          nativeReady();
+        } catch {
+          process.exit(1);
+        }
+      });
+    },
+  );
+  request.on("error", () => process.exit(1));
+}
 `;
 
 export const AGENT_READINESS_ENTRYPOINT = String.raw`
 const timeout = setTimeout(() => process.exit(1), 2_000);
 const { existsSync } = require("node:fs");
+const { createHmac } = require("node:crypto");
+const http = require("node:http");
+${PLUGIN_APP_SERVER_TOKEN_DERIVATION_HELPER}
 if (
   process.env.OPENCLAW_PLUGIN_READY_MARKER !== undefined &&
   !existsSync(process.env.OPENCLAW_PLUGIN_READY_MARKER)
@@ -862,17 +1358,55 @@ try {
   ReadinessWebSocket = require("ws");
 } catch {}
 if (ReadinessWebSocket === undefined) process.exit(1);
-const socket = new ReadinessWebSocket("ws://127.0.0.1:" + process.env.APP_SERVER_PORT, {
-  headers: { Authorization: "Bearer " + process.env.APP_SERVER_TOKEN },
-});
-const onSocket = (event, listener) => {
-  if (typeof socket.addEventListener === "function") socket.addEventListener(event, listener);
-  else socket.on(event, listener);
-};
-onSocket("open", () => {
-  clearTimeout(timeout);
-  socket.close();
-  process.exit(0);
-});
-onSocket("error", () => process.exit(1));
+function derivedToken(startupId) {
+  try {
+    return derivePluginAppServerTokenFromBase(
+      process.env.APP_SERVER_TOKEN,
+      process.env.OPENCLAW_AGENT_REVISION_ID,
+      startupId,
+    );
+  } catch {
+    process.exit(1);
+  }
+}
+function checkWebSocket(token) {
+  const socket = new ReadinessWebSocket("ws://127.0.0.1:" + process.env.APP_SERVER_PORT, {
+    headers: { Authorization: "Bearer " + token },
+  });
+  const onSocket = (event, listener) => {
+    if (typeof socket.addEventListener === "function") socket.addEventListener(event, listener);
+    else socket.on(event, listener);
+  };
+  onSocket("open", () => {
+    clearTimeout(timeout);
+    socket.close();
+    process.exit(0);
+  });
+  onSocket("error", () => process.exit(1));
+}
+if (process.env.OPENCLAW_PLUGIN_STATUS_PORT === undefined) {
+  checkWebSocket(process.env.APP_SERVER_TOKEN);
+} else {
+  const request = http.get(
+    "http://127.0.0.1:" + process.env.OPENCLAW_PLUGIN_STATUS_PORT + "/openclaw/plugin-runtime/status",
+    (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+        if (body.length > 65536) process.exit(1);
+      });
+      response.on("end", () => {
+        try {
+          const status = JSON.parse(body);
+          if (response.statusCode !== 200 || status.phase !== "ready") process.exit(1);
+          checkWebSocket(derivedToken(status.startupId));
+        } catch {
+          process.exit(1);
+        }
+      });
+    },
+  );
+  request.on("error", () => process.exit(1));
+}
 `;
