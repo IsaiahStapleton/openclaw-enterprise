@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import type { Denied, RequestHead } from "../driver-contracts.ts";
+import type { Denied, RequestHead } from "../backend-contracts.ts";
 
 const NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const VALUE = /^[\x20-\x7e]*$/;

@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import type { HeaderFields } from "../driver-contracts.ts";
+import type { HeaderFields } from "../backend-contracts.ts";
 
 const UNSAFE = new Set([
   "connection",

@@ -16,8 +16,8 @@ export async function createGitHubServiceFactory(
   { config, clock, privateKey, trustedEndpoints, providerInstanceId = "github-fixture" },
 ) {
   const [{ createGitHubDriverFactory }, { createGitHubKeyOwner }] = await Promise.all([
-    appModule("backends/github/index"),
-    appModule("backends/github/material"),
+    appModule("drivers/repo/github/credentials/index"),
+    appModule("drivers/repo/github/credentials/material"),
   ]);
   const key = createGitHubKeyOwner({ privateKey, appId: fixtureAppId, clock });
   resources.after(() => key.close());
@@ -72,8 +72,8 @@ export async function startServiceListeners(
   },
 ) {
   const [{ createCredentialService }, { startListeners }] = await Promise.all([
-    appModule("service"),
-    appModule("server"),
+    appModule("drivers/repo/credentials/service"),
+    appModule("drivers/repo/credentials/server"),
   ]);
   const service = createCredentialService({ config, factory, clock });
   let listeners;
@@ -94,7 +94,9 @@ export async function startServiceListeners(
 }
 
 export async function writeSessionClientConfiguration(resources, { opened, ca }) {
-  const { writeClientConfiguration } = await appModule("client/config");
+  const { writeClientConfiguration } = await appModule(
+    "drivers/repo/github/credentials/client/config",
+  );
   const parent = await temporaryDirectory(resources, "rcs-client-");
   await chmod(parent, 0o700);
   const clientDirectory = join(parent, "session");

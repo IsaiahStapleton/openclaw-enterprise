@@ -33,7 +33,7 @@ const responseLimit = 4096;
 async function startTransport(t, onRequest, limits = {}) {
   const resources = createResourceScope();
   t.after(() => resources.close());
-  const { createSystemClock } = await appModule("clock");
+  const { createSystemClock } = await appModule("drivers/repo/credentials/clock");
   const clock = createSystemClock();
   const tls = await createTlsMaterial(resources);
   // One exchange slot makes leaked reservations visible to the following request.
@@ -300,7 +300,7 @@ test(
 
     // A full public listener cannot prevent the operator from closing authority
     // through the production Unix-socket client and control handler.
-    const { callControl } = await appModule("client/operator");
+    const { callControl } = await appModule("drivers/repo/github/credentials/client/operator");
     const other = fixture.service.open({ durationSeconds: 300, profile: "git-write" });
     const closed = await callControl(fixture.config.gateway.controlSocket, {
       method: "POST",
@@ -794,7 +794,7 @@ test(
     await eventually(() => delivered === 4);
     const sessionId = fixture.opened.session.sessionId;
     assert.equal(fixture.service.status(sessionId).activeUses, 1);
-    const { callControl } = await appModule("client/operator");
+    const { callControl } = await appModule("drivers/repo/github/credentials/client/operator");
     const closed = await callControl(fixture.config.gateway.controlSocket, {
       method: "POST",
       path: `/v1/sessions/${sessionId}/close`,

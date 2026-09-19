@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { BoundDriverFactory, Clock } from "../driver-contracts.ts";
-import type { ServiceConfig } from "../contracts.ts";
+import type { RepositoryBackendFactory, Clock } from "../backend-contracts.ts";
+import type { ServiceConfig } from "../service-contracts.ts";
 import type { ExchangeRef, ExchangeService } from "../internal-contracts.ts";
 import { inspectRequestHead } from "./request.ts";
 import { createUpstreamSender } from "./upstream.ts";
@@ -9,7 +9,7 @@ import { sendError } from "./errors.ts";
 export interface AgentHandlerOptions {
   readonly config: ServiceConfig;
   readonly service: ExchangeService;
-  readonly factory: BoundDriverFactory;
+  readonly factory: RepositoryBackendFactory;
   readonly trustedUpstreamOrigins: ReadonlySet<string>;
   readonly clock: Clock;
   readonly upstreamCa?: Uint8Array;
