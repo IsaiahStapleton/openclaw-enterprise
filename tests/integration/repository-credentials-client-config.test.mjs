@@ -6,9 +6,9 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { createServer } from "node:https";
 import { once } from "node:events";
-import { writeClientConfiguration } from "../../apps/repository-credentials/src/client/config.ts";
+import { writeClientConfiguration } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 
-const launcher = resolve("apps/repository-credentials/src/client/launch.ts");
+const launcher = resolve("apps/controller/src/drivers/repo/github/credentials/client/launch.ts");
 const opened = {
   session: { sessionId: "session-test", deadlineWallMs: Date.now() + 86400000 },
   bearer: "controlled_gateway_bearer_0000000000000000000000",
@@ -98,7 +98,9 @@ test("client files reject unsafe targets and the launcher refuses absolute API d
   const parent = await mkdtemp(join(tmpdir(), "credential-client-test-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const unsafe = join(parent, "unsafe");
-  await mkdir(unsafe, { mode: 0o755 });
+  await mkdir(unsafe);
+  // A restrictive umask must not turn this unsafe-directory fixture into a private one.
+  await chmod(unsafe, 0o755);
   await assert.rejects(
     writeClientConfiguration(opened, join(unsafe, "session"), undefined),
     /unsafe-client-directory/,

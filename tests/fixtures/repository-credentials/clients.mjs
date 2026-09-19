@@ -11,7 +11,7 @@ import { cleanEnvironment, run, temporaryDirectory } from "./process.mjs";
  */
 export async function runPinnedClients(t, fixture, { signal = t.signal } = {}) {
   const directory = await temporaryDirectory(t, "repository-credentials-client-work-");
-  const launcher = join(appRoot, `client/launch.${appExtension}`);
+  const launcher = join(appRoot, `drivers/repo/github/credentials/client/launch.${appExtension}`);
   const env = cleanEnvironment({ HOME: directory });
   const invoke = (client, args, options = {}) =>
     run(process.execPath, [launcher, fixture.clientDirectory, client, ...args], {
