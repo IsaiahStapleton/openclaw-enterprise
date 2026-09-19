@@ -8,8 +8,8 @@ bearer; GitHub App keys and installation tokens stay in the service. Review the
 
 ## Build and validate
 
-From a checkout with the repository's Node 24 and pinned pnpm dependencies
-prepared, build only this application:
+From the repository root with Node 24 and the pinned pnpm dependencies prepared,
+build the controller output and emit the configuration-check artifact:
 
 ```sh
 pnpm credentials:build
@@ -17,9 +17,17 @@ pnpm credentials:check-config /absolute/path/service.json
 ```
 
 The check reads protected configuration, validates the RSA key and TLS inputs,
-and prints a safe configuration summary. It does not start listeners or call
-GitHub. The emitted app uses Node built-ins and needs no controller packages or
-runtime `node_modules`.
+and prints JSON with `valid: true`, the gateway origin, allowed profiles, and
+maximum session duration. It closes the loaded material owner without starting
+listeners or calling GitHub. The emitted artifact uses Node built-ins and needs
+no controller packages or runtime `node_modules`. The artifact is
+`.build/repository-credentials/service/`, with entrypoint
+`dist/composition/repository-credentials/check-config.js`.
+
+This validates local inputs for the callable core. It does not establish GitHub
+App installation permissions, credential issuance, deployed process isolation,
+or Agent access. See the [testing guide](../testing/repository-credentials.md)
+for the available controlled checks and their limits.
 
 For `invalid-configuration`, inspect the file and every directory in its absolute
 path. Use root or service-user ownership, private configuration/key files, and

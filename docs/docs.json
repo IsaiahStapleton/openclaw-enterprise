@@ -145,12 +145,12 @@
                   "flows/production-tui",
                   "flows/production-tui/native-client",
                   "flows/repository-credential-configuration",
+                  "flows/repository-credentials",
                   "flows/secret-storage-and-delivery",
                   "flows/service-account-driver-credential-delivery",
                   "flows/service-api-keys",
                   "flows/workspace-files",
-                  "flows/pr-24-ssh-compute",
-                  "flows/repository-credentials"
+                  "flows/pr-24-ssh-compute"
                 ]
               }
             ]

@@ -1,49 +1,35 @@
-import { readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir } from "node:fs/promises";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parsers } from "prettier/plugins/typescript";
 
-const sourceRoot = fileURLToPath(new URL("../apps/repository-credentials/src/", import.meta.url));
+const sourceRoot = fileURLToPath(new URL("../apps/controller/src/", import.meta.url));
+const credentialRoots = [
+  "drivers/repo/credentials",
+  "drivers/repo/github/credentials",
+  "composition/repository-credentials",
+];
+const requiredEntrypoints = ["composition/repository-credentials/check-config.ts"];
 const sourceExtensions = new Set([".ts", ".mts", ".cts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"]);
 
 // Adding an I/O owner or member requires security review; see the owning test guide.
 const reviewedImports = {
-  "backends/github/material.ts": { "node:crypto": ["KeyObject", "constants", "sign"] },
-  "backends/github/provider-transport/request.ts": { "node:https": ["request"] },
-  "client/commands.ts": { "node:child_process": ["spawnSync"] },
-  "client/config.ts": {
-    "node:fs/promises": ["lstat", "mkdir", "mkdtemp", "open", "rename", "rm"],
+  "drivers/repo/github/credentials/material.ts": {
+    "node:crypto": ["KeyObject", "constants", "sign"],
   },
-  "client/launch.ts": {
-    "node:child_process": ["spawn"],
-    "node:fs/promises": ["mkdtemp", "rm"],
-  },
-  "client/operator.ts": {
-    "node:crypto": ["randomUUID"],
-    "node:fs/promises": ["readFile"],
-    "node:http": ["request"],
-  },
-  "client/private-files.ts": {
-    "node:fs": ["constants"],
-    "node:fs/promises": ["lstat", "open"],
-  },
-  "config.ts": {
+  "drivers/repo/github/credentials/provider-transport/request.ts": { "node:https": ["request"] },
+  "composition/repository-credentials/config.ts": {
     "node:crypto": ["createPrivateKey"],
     "node:tls": ["createSecureContext"],
   },
-  "configuration/protected-file.ts": {
+  "composition/repository-credentials/protected-file.ts": {
     "node:fs": ["constants"],
     "node:fs/promises": ["lstat", "open"],
   },
-  "lifecycle.ts": { "node:crypto": ["randomUUID"] },
-  "server.ts": {
-    "node:fs/promises": ["chmod", "lstat", "realpath", "unlink"],
-    "node:http": ["createServer"],
-    "node:https": ["createServer"],
+  "drivers/repo/credentials/lifecycle.ts": { "node:crypto": ["randomUUID"] },
+  "drivers/repo/credentials/sessions.ts": {
+    "node:crypto": ["createHash", "randomBytes", "randomUUID"],
   },
-  "sessions.ts": { "node:crypto": ["createHash", "randomBytes", "randomUUID"] },
-  "transport/request-headers.ts": { "node:http": ["validateHeaderName", "validateHeaderValue"] },
-  "transport/upstream.ts": { "node:https": ["request"] },
 };
 const ordinaryBuiltins = new Set([
   "node:os",
@@ -55,10 +41,9 @@ const ordinaryBuiltins = new Set([
   "node:zlib",
 ]);
 const senderConsumers = {
-  "backends/github/provider-transport/request.ts": {
-    "backends/github/provider-transport.ts": ["sendProviderRequest"],
+  "drivers/repo/github/credentials/provider-transport/request.ts": {
+    "drivers/repo/github/credentials/provider-transport.ts": ["sendProviderRequest"],
   },
-  "transport/upstream.ts": { "transport/agent.ts": ["createUpstreamSender"] },
 };
 const rawGlobals = new Set([
   "fetch",
@@ -74,17 +59,8 @@ const rawGlobals = new Set([
   "module",
 ]);
 const reviewedProcessMembers = {
-  "check-config.ts": ["argv", "exitCode", "stderr", "stdout"],
-  "client/commands.ts": ["execPath"],
-  "client/environment.ts": ["env"],
-  "client/git-helper.ts": ["argv", "exit", "exitCode", "stderr", "stdin", "stdout"],
-  "client/launch.ts": ["argv", "exitCode", "off", "on", "stderr"],
-  "client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
-  "client/private-files.ts": ["getuid"],
-  "configuration/protected-file.ts": ["getuid"],
-  "main.ts": ["argv", "exit", "exitCode", "once", "stderr", "stdout"],
-  "server.mjs": ["exitCode", "stderr"],
-  "server.ts": ["getuid"],
+  "composition/repository-credentials/check-config.ts": ["argv", "exitCode", "stderr", "stdout"],
+  "composition/repository-credentials/protected-file.ts": ["getuid"],
 };
 const runtimeTypeScript = new Set([
   "TSAsExpression",
@@ -109,6 +85,9 @@ async function sourceFiles(root) {
   const files = [];
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const path = join(root, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Credential source must not be a symlink: ${path}`);
+    }
     if (entry.isDirectory()) {
       files.push(...(await sourceFiles(path)));
     } else if (sourceExtensions.has(extname(entry.name))) {
@@ -181,9 +160,6 @@ function inspectSource(path, root, sources, ast) {
     }
     if (specifier.startsWith(".")) {
       let target = slash(relative(root, resolve(dirname(path), specifier)));
-      if (file === "server.mjs" && specifier === "../dist/main.js" && names.join() === "main") {
-        return;
-      }
       if (
         target === ".." ||
         target.startsWith("../") ||
@@ -207,7 +183,10 @@ function inspectSource(path, root, sources, ast) {
       if (consumers && !names.every((binding) => consumers[file]?.includes(binding))) {
         deny(node, `raw sender ${target} is not reviewed for ${file}`);
       }
-      if (!file.startsWith("client/") && target.startsWith("client/")) {
+      if (
+        !file.startsWith("drivers/repo/github/credentials/client/") &&
+        target.startsWith("drivers/repo/github/credentials/client/")
+      ) {
         deny(node, `service code cannot load client command owner ${target}`);
       }
       return;
@@ -318,9 +297,31 @@ function inspectSource(path, root, sources, ast) {
 }
 
 export async function verifyRepositoryCredentialBoundary(root = sourceRoot) {
-  const files = await sourceFiles(root);
+  const files = [];
+  for (const directory of credentialRoots) {
+    const path = join(root, directory);
+    const stat = await lstat(path).catch((error) => {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+      return undefined;
+    });
+    if (!stat?.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(`Missing or invalid credential source root: ${directory}`);
+    }
+    const owned = await sourceFiles(path);
+    if (!owned.length) {
+      throw new Error(`Empty credential source root: ${directory}`);
+    }
+    files.push(...owned);
+  }
   const sources = new Set(files.map((path) => slash(relative(root, path))));
   const failures = [];
+  for (const entrypoint of requiredEntrypoints) {
+    if (!sources.has(entrypoint)) {
+      failures.push(`Missing credential entrypoint: ${entrypoint}`);
+    }
+  }
   for (const path of files) {
     const ast = await parsers.typescript.parse(await readFile(path, "utf8"));
     failures.push(...inspectSource(path, root, sources, ast));

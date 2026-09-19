@@ -18,9 +18,6 @@
     },
     {
       "path": "./apps/controller"
-    },
-    {
-      "path": "./apps/repository-credentials"
     }
   ],
   "exclude": ["legacy", "legacy/**", "node_modules", "**/node_modules", "**/dist"]

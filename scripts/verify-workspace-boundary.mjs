@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { verifyRepositoryCredentialBoundary } from "./verify-repository-credentials-boundary.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
-const activeApplications = ["controller", "repository-credentials"];
+const activeApplications = ["controller"];
 const activePackages = ["utils", "contracts", "occ", "iam", "audit"];
 const activeGoPackages = ["cmd/occ", "internal/occcli", "internal/occclient", "internal/occdev"];
 const activeSourceRoots = [
@@ -106,8 +106,11 @@ const sources = (
   await Promise.all(activeSourceRoots.map((path) => sourceFiles(join(repositoryRoot, path))))
 ).flat();
 for (const name of activeApplications) {
-  const entrypoints =
-    name === "repository-credentials" ? ["check-config.ts"] : ["index.ts", "server.mjs"];
+  const entrypoints = [
+    "index.ts",
+    "server.mjs",
+    "composition/repository-credentials/check-config.ts",
+  ];
   for (const entrypoint of entrypoints) {
     assert.ok(
       sources.includes(join(repositoryRoot, "apps", name, "src", entrypoint)),
