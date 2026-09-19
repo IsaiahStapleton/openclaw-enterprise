@@ -4,8 +4,8 @@ import { isAbsolute, resolve } from "node:path";
 import {
   GITHUB_REPOSITORY_REGISTRY_MAX_BYTES,
   validateGitHubRepositoryRegistry,
-} from "./registry.ts";
-import type { GitHubRepositoryRegistry } from "./registry.ts";
+} from "../../drivers/repo/github/credentials/registry.ts";
+import type { GitHubRepositoryRegistry } from "../../drivers/repo/github/credentials/registry.ts";
 
 /** ConfigMap projections may use symlinks; one opened regular file supplies the snapshot. */
 export async function loadGitHubRepositoryRegistry(
