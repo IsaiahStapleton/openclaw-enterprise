@@ -16,6 +16,6 @@ RUN --mount=type=secret,id=build-ca,required=false \
     gh --version | grep '^gh version 2.100.0 '
 WORKDIR /app
 COPY package.json ./package.json
-COPY dist/client ./dist/client
+COPY dist ./dist
 USER node
-ENTRYPOINT ["node", "/app/dist/client/launch.js"]
+ENTRYPOINT ["node", "/app/dist/drivers/repo/github/credentials/client/launch.js"]

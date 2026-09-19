@@ -52,8 +52,8 @@
     "credentials:start": "node .build/repository-credentials/service/dist/repository-credentials.js",
     "credentials:operator": "node .build/repository-credentials/client/dist/drivers/repo/github/credentials/client/operator.js",
     "credentials:client": "node .build/repository-credentials/client/dist/drivers/repo/github/credentials/client/launch.js",
-    "credentials:image": "docker build -f apps/repository-credentials/Dockerfile -t repository-credentials:local apps/repository-credentials",
-    "credentials:client-image": "docker build -f apps/repository-credentials/Dockerfile.client -t repository-credentials-client:local apps/repository-credentials",
+    "credentials:image": "docker build -f deploy/runtime/repository-credentials/Dockerfile -t repository-credentials:local .build/repository-credentials/service",
+    "credentials:client-image": "docker build -f deploy/runtime/repository-credentials/Dockerfile.client -t repository-credentials-client:local .build/repository-credentials/client",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "pnpm lint --fix",
     "format": "pnpm format:fix"

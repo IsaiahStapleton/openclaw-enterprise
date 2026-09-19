@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { isBuiltin } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -128,6 +128,10 @@ async function stage(name, files) {
   await writeFile(
     join(destination, "package.json"),
     `${JSON.stringify({ name: `repository-credentials-${name}`, type: "module" }, null, 2)}\n`,
+  );
+  await cp(
+    join(repositoryRoot, "deploy/runtime/repository-credentials/.dockerignore"),
+    join(destination, ".dockerignore"),
   );
 }
 
