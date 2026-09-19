@@ -136,6 +136,10 @@ closures. The service includes `repository-credentials.js` and
 `drivers/repo/github/credentials/client/{launch,operator,git-helper}.js` and their
 runtime dependencies. Detached loading must work without workspace source or
 runtime `node_modules`.
+The detached check starts the emitted service, admits and closes a session over
+its Unix socket, and invokes the emitted launcher and Git helper. The context
+case rebuilds both Docker inputs and rejects source files, compiler artifacts
+and linked inputs.
 
 Build the service and client images using the
 [operator guide](../guides/repository-credentials.md#container-images). Then

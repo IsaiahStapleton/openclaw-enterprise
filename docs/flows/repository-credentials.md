@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-19"
-last_updated_session: "authoring-run/9feb5f57-7456-4831-8474-1fc7871d17c6"
+last_updated_session: "authoring-run/8a16053e-895f-4ea3-8114-5bbe459856a0"
 ---
 
 # Repository credential service flow
@@ -313,6 +313,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-19 21:58: Align emitted Docker contexts and container qualification with the separate service and client artifacts. (public authoring-run/8a16053e-895f-4ea3-8114-5bbe459856a0 - 99d01c1759ef28fe1ec2e6e22496879e752b5cb5)
 
 - 2026-09-19 21:46: Reconcile transport and client ownership with accompanying detached service/client build and runtime checks. (public authoring-run/9feb5f57-7456-4831-8474-1fc7871d17c6 - bd3af4a7214c3e7b2142ef38183137786226cde9)
 

@@ -38,6 +38,11 @@ test(
     await cp(join(root, "apps/controller/dist"), join(build, "apps/controller/dist"), {
       recursive: true,
     });
+    await cp(
+      join(root, "deploy/runtime/repository-credentials"),
+      join(build, "deploy/runtime/repository-credentials"),
+      { recursive: true },
+    );
     await symlink(join(root, "node_modules"), join(build, "node_modules"));
     const built = spawnSync(
       process.execPath,
@@ -324,8 +329,14 @@ test("credential artifact builder rejects dependencies outside its emitted closu
 });
 
 test("emitted credential Docker contexts contain only staged runtime inputs", async () => {
-  // The service/client package check stages the real emitted closures first.
-  // Docker receives only those contexts, never the source workspace or its tools.
+  // Rebuild the actual image inputs so stale contexts cannot satisfy this check.
+  const built = spawnSync(process.execPath, ["scripts/build-repository-credentials.mjs"], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 30000,
+    env: { PATH: process.env.PATH },
+  });
+  assert.equal(built.status, 0, built.stdout + built.stderr);
   const ignore = await readFile(
     join(root, "deploy/runtime/repository-credentials/.dockerignore"),
     "utf8",
