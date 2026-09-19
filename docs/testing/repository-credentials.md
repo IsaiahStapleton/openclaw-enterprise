@@ -6,9 +6,10 @@ Run from the repository root with Node 24, Git, OpenSSL, and prepared workspace 
 
 Run `node scripts/verify-repository-credentials-boundary.mjs` after changing the
 service. The same check runs through `pnpm check:workspace` in baseline CI. It
-parses every credential-service source file using the workspace's pinned
-Prettier TypeScript parser. Runtime imports and re-exports must stay within the
-scanned source or use reviewed external modules and named members. Erased
+parses the common credential engine, GitHub backend, and credential composition
+roots under `apps/controller/src/` using the workspace's pinned Prettier
+TypeScript parser. Runtime imports and re-exports must stay within the scanned
+source or use reviewed external modules and named members. Erased
 `import type` and `export type` declarations remain available; inline type
 specifiers can preserve a runtime module load. The GitHub provider's raw HTTPS sender has an explicit
 consumer list; the protected-file, signing, and configuration-check owners
@@ -42,4 +43,22 @@ node --test tests/conformance/repository-credentials-contracts.test.mjs \
   tests/integration/repository-credentials-package.test.mjs
 ```
 
-Common-owner tests cover custody, immutable admission, controlled-time replacement, closure, and uncertainty. GitHub and the alternate fixture use the same service owners.
+Common-owner tests cover custody, immutable admission, controlled-time replacement,
+closure, and uncertainty. GitHub and the alternate fixture use the same service
+owners through the private backend contract. Configuration cases exercise the
+actual protected-file loader and generated RSA/TLS inputs. The package case
+checks the emitted configuration command outside its source checkout.
+
+## Proof boundaries
+
+These checks exercise the callable core and local configuration artifact. The
+controlled clock advances beyond hour thirteen while retaining the original
+session and bearer; that is not a thirteen-hour wall-clock soak. Fixture provider
+responses and keys do not establish live GitHub permissions or behavior.
+
+This cut has no delivered HTTPS/control listener, Git/gh client bundle, container,
+or platform consumer. Their connected checks belong with those implementations.
+A source move, successful build, or detached configuration check does not prove
+installed process separation, runtime credential custody, or a live Agent
+contribution. Evidence for another source or artifact must identify that version;
+it does not automatically qualify a changed build.

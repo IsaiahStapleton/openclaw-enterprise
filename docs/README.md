@@ -10,7 +10,7 @@ Start locally, install a production control plane, or look up supported behavior
 - [Deploy](guides/deploy.md): choose a deployment and follow its installation steps.
 - [Production handoff](guides/deploy/production-handoff.md): assign owners and verify a business workflow, alert response, and recovery readiness.
 - [Credential lifecycle](guides/deploy/credential-lifecycle.md): select the supported renewal or revocation path and verify its consumers.
-- [Repository credentials](guides/repository-credentials.md): build and validate protected repository credential configuration.
+- [Repository credentials](guides/repository-credentials.md): build the configuration-check artifact and validate protected inputs for the callable credential core.
 - [OCC CLI](guides/cli.md): manage OCC resources through domain commands.
 - [Concepts](guides/concepts.md): understand Namespaces, Agents, revisions, and credentials.
 - [Observability](guides/observability.md): export logs and check Collector health.
@@ -39,12 +39,11 @@ Start with [Docker or Podman Compose development](flows/docker-compose-developme
 [platform startup](flows/platform-startup.md), or the
 [controller worker](flows/controller-worker.md). The **Understand the code** tab
 lists runtime traces for authentication, configuration, Drivers, and Agent execution.
-The [repository credential flow](flows/repository-credentials.md) traces admission,
-credential ownership, forwarding and cleanup.
+The [repository credential flow](flows/repository-credentials.md) traces callable-core admission,
+credential use and cleanup. The [configuration flow](flows/repository-credential-configuration.md)
+traces protected input loading and validation before any listener or provider request.
 The [Agent plugin flow](flows/agent-plugins.md) traces desired state through
 revision startup and runtime configuration.
-The [repository credential configuration flow](flows/repository-credential-configuration.md)
-traces protected-file validation and GitHub key ownership.
 
 ## Contribute
 

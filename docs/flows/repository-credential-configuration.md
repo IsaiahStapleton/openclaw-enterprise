@@ -1,14 +1,13 @@
 ---
 created: 2026-09-18
-updated: 2026-09-18
-last_updated_session: "authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772"
+updated: 2026-09-19
 ---
 
 # Repository credential configuration flow
 
 ## Overview
 
-The standalone repository credential application validates operator-selected
+The repository credential composition loader validates operator-selected
 configuration, GitHub App key material, and TLS files before returning a frozen
 configuration owner. Its `--check-config` entry point reports a nonsecret
 summary and closes that owner. This flow stops before provider requests or
@@ -17,8 +16,8 @@ listener startup.
 ## Entry Points
 
 - Trigger: `pnpm credentials:check-config /absolute/path/service.json`.
-- Source: `apps/repository-credentials/src/check-config.ts:checkConfiguration`
-  and `apps/repository-credentials/src/config.ts:loadConfiguration`.
+- Source: `apps/controller/src/composition/repository-credentials/check-config.ts:checkConfiguration`
+  and `apps/controller/src/composition/repository-credentials/config.ts:loadConfiguration`.
 - Assumptions: Node 24, prepared build output, operator-selected absolute paths,
   and the ownership and permission policy in the [reference](../reference/repository-credentials.md#configuration).
 
@@ -46,7 +45,7 @@ graph TD
 
 ### 1. Establish a protected path from the filesystem root
 
-`apps/repository-credentials/src/configuration/protected-file.ts:readProtectedFile`
+`apps/controller/src/composition/repository-credentials/protected-file.ts:readProtectedFile`
 
 The loader requires a normalized absolute path and validates its directory
 ancestors in root-to-leaf order. Each accepted prefix therefore protects the
@@ -60,14 +59,16 @@ file owner, mode, link count, type, and size, performs a bounded read, and compa
 the open file with the named inode and its original metadata. Invalid or replaced
 files fail before their contents become configuration. The private reader returns
 either owned bytes or a failure without filesystem details. It clears its read
-buffer and closes the file handle in `finally`; the configuration loader owns
-and clears successfully returned bytes.
+buffer and closes the file handle before transferring the return buffer. If
+closing fails, the reader clears the still-owned return buffer and reports
+failure. The configuration loader owns and clears bytes only after a successful
+transfer.
 
 ### 2. Validate configuration and construct material owners
 
-`apps/repository-credentials/src/config.ts:loadConfiguration`
+`apps/controller/src/composition/repository-credentials/config.ts:loadConfiguration`
 
-The application validates the service policy and GitHub configuration, then
+The composition loader validates the service policy and GitHub configuration, then
 repeats protected reads for the App key, certificate, and TLS key. The GitHub key
 owner accepts the configured RSA signing key; TLS context creation validates
 the certificate and private-key pair. The frozen result owns the selected
@@ -76,7 +77,7 @@ buffers before returning `invalid-configuration`.
 
 ### 3. Report the validation result and close material
 
-`apps/repository-credentials/src/check-config.ts:checkConfiguration`
+`apps/controller/src/composition/repository-credentials/check-config.ts:checkConfiguration`
 
 The check returns the gateway origin, configured profiles, and maximum session
 duration. Its `finally` block closes the material owner, and the CLI prints only
@@ -84,7 +85,7 @@ the safe summary. It creates no session, listener, or provider request.
 
 ## Debugging and Verification
 
-Run `pnpm credentials:build`, then the configuration command from the
+Follow the build and configuration commands in the
 [operator guide](../guides/repository-credentials.md). Success prints JSON with
 `valid: true`; failure prints `invalid-configuration`. Inspect every ancestor
 when safe-looking files still fail validation. A shared writable deployment
@@ -107,6 +108,8 @@ startup validation, not live GitHub behavior or platform integration.
 
 ## Changelog
 
-- 2026-09-18 18:51: Separate protected-file reading from configuration assembly while preserving validation and disposal. (authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772 - d29fac7d363eb1cfb3dab6306a81cc3b8daf395d)
+- 2026-09-19: Move configuration ownership to composition and document return-buffer ownership through descriptor close.
 
-- 2026-09-18 03:32: Document protected ancestor validation and configuration ownership with the accompanying security correction (codex/01a0b287-be12-7492-8826-a168e5b53103 - 2d4877aaf438c919a2240109cb2e7067e4d75b4d)
+- 2026-09-18 18:51: Separate protected-file reading from configuration assembly while preserving validation and disposal. (source `d29fac7d363eb1cfb3dab6306a81cc3b8daf395d`)
+
+- 2026-09-18 03:32: Document protected ancestor validation and configuration ownership with the accompanying security correction (source `2d4877aaf438c919a2240109cb2e7067e4d75b4d`)
