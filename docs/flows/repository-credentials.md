@@ -1,6 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-19"
+last_updated_session: "authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b"
 ---
 
 # Repository credential lifecycle flow
@@ -89,7 +90,7 @@ listeners, clients, containers, or live-provider behavior.
 
 ## Changelog
 
-- 2026-09-19: Update common/backend ownership and source paths; distinguish finite shutdown from completed disposal.
+- 2026-09-19 21:29: Update common/backend ownership and source paths; distinguish finite shutdown from completed disposal. Verify composed source. (public authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b - 5d8329753f4e17402f619d392acc8fc3d112f620)
 
 - 2026-09-18 02:02: Document accompanying capture deadlines and failed-construction cleanup. (source `cce878092910f39770aa27baa64c6d710f9651f8`)
 

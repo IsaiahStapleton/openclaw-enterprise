@@ -1,6 +1,7 @@
 ---
 created: 2026-09-18
 updated: 2026-09-19
+last_updated_session: "authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b"
 ---
 
 # Repository credential configuration flow
@@ -108,7 +109,7 @@ startup validation, not live GitHub behavior or platform integration.
 
 ## Changelog
 
-- 2026-09-19: Move configuration ownership to composition and document return-buffer ownership through descriptor close.
+- 2026-09-19 21:29: Move configuration ownership to composition and document return-buffer ownership through descriptor close. Verify composed source. (public authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b - 5d8329753f4e17402f619d392acc8fc3d112f620)
 
 - 2026-09-18 18:51: Separate protected-file reading from configuration assembly while preserving validation and disposal. (source `d29fac7d363eb1cfb3dab6306a81cc3b8daf395d`)
 
