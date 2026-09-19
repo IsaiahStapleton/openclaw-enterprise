@@ -44,7 +44,7 @@ if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD !== "1") {
       [
         "compose",
         "--file",
-        join(repositoryRoot, "apps/repository-credentials/compose.yaml"),
+        join(repositoryRoot, "deploy/examples/repository-credentials/compose.yaml"),
         "--profile",
         "client",
         "config",

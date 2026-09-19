@@ -22,7 +22,8 @@ export async function prepareRepositoryCredentials({
     timeoutMs: 300_000,
   });
 
-  const appContext = join(repositoryRoot, "apps/repository-credentials");
+  const artifactRoot = join(repositoryRoot, ".build/repository-credentials");
+  const imageDefinitions = join(repositoryRoot, "deploy/runtime/repository-credentials");
   async function buildImage(name, dockerfile, context, buildArgs = []) {
     const tag = `${imagePrefix}/${name}:local`;
     const resource = await registerImage(tag);
@@ -52,8 +53,16 @@ export async function prepareRepositoryCredentials({
     return { tag, id };
   }
 
-  const service = await buildImage("service", join(appContext, "Dockerfile"), appContext);
-  const client = await buildImage("client", join(appContext, "Dockerfile.client"), appContext);
+  const service = await buildImage(
+    "service",
+    join(imageDefinitions, "Dockerfile"),
+    join(artifactRoot, "service"),
+  );
+  const client = await buildImage(
+    "client",
+    join(imageDefinitions, "Dockerfile.client"),
+    join(artifactRoot, "client"),
+  );
   const qualification = await buildImage(
     "qualification",
     join(repositoryRoot, "tests/fixtures/repository-credentials/Dockerfile.qualification"),

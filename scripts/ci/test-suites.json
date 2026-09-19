@@ -908,19 +908,36 @@
           "path": "tests/conformance/repository-credentials-backend-conformance.test.mjs"
         },
         {
-          "path": "tests/integration/repository-credentials-git.test.mjs"
+          "path": "tests/integration/repository-credentials-git.test.mjs",
+          "expectedTests": [
+            "real Git clones, fetches, switches and pushes using the cold gateway helper"
+          ]
         },
         {
-          "path": "tests/integration/repository-credentials-gh.test.mjs"
+          "path": "tests/integration/repository-credentials-gh.test.mjs",
+          "expectedTests": [
+            "pinned gh uses canonical GitHub identity for REST, pagination and native PR creation"
+          ]
         },
         {
-          "path": "tests/integration/repository-credentials-long-session.test.mjs"
+          "path": "tests/integration/repository-credentials-long-session.test.mjs",
+          "expectedTests": [
+            "same session pushes and completes API workflows after controlled hour thirteen"
+          ]
         },
         {
-          "path": "tests/integration/repository-credentials-container.test.mjs"
+          "path": "tests/integration/repository-credentials-container.test.mjs",
+          "expectedTests": [
+            "emitted service and client artifacts qualify the same-session thirteen-hour workflow",
+            "emitted common owners qualify alternate-backend renewal, authentication and streamed drain",
+            "delivered Compose client mounts exclude provider inputs and the control socket"
+          ]
         },
         {
-          "path": "tests/integration/repository-credentials-isolation.test.mjs"
+          "path": "tests/integration/repository-credentials-isolation.test.mjs",
+          "expectedTests": [
+            "delivered service keeps provider credentials outside a separate Agent container"
+          ]
         }
       ]
     },
