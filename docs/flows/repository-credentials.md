@@ -264,6 +264,27 @@ Failed construction custody also participates in shutdown drainage. Its
 pending obligation contributes to `pendingAuxiliary` without inventing a
 published or disposed session; disposal wakes the shutdown waiters.
 
+## Emitted packaging
+
+`scripts/build-repository-credentials.mjs` follows the credential entrypoints in
+the controller's emitted tree into separate service/client artifacts. Source
+placement does not combine their running processes or private mounts.
+
+| Artifact context                        | Runtime entrypoints beneath `dist/`                                               |
+| --------------------------------------- | --------------------------------------------------------------------------------- |
+| `.build/repository-credentials/service` | `repository-credentials.js`, `composition/repository-credentials/check-config.js` |
+| `.build/repository-credentials/client`  | `drivers/repo/github/credentials/client/{launch,operator,git-helper}.js`          |
+
+The Dockerfiles under `deploy/runtime/repository-credentials/` consume those
+separate contexts. `deploy/examples/repository-credentials/compose.yaml` keeps
+service inputs/control and client session/workspace mounts separate. The
+[operator guide](../guides/repository-credentials.md#container-images) owns image
+builds and entrypoint inspection. The
+[test guide](../testing/repository-credentials.md#record-each-evidence-boundary)
+distinguishes detached loading, combined test images, rendered mounts and
+observations of separate running containers; none alone establishes live-provider
+or platform integration.
+
 ## Debugging and Verification
 
 Run `pnpm credentials:build` and `pnpm credentials:check-config CONFIG_FILE` for
