@@ -5,9 +5,9 @@ import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
-import { GitHubRepositoryCredentialDriver } from "../../apps/controller/src/drivers/repository-credentials/github.ts";
+import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
 import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/providers/repository-credentials/control-client.ts";
-import { validateGitHubRepositoryRegistry } from "../../apps/controller/src/providers/repository-credentials/github/registry.ts";
+import { validateGitHubRepositoryRegistry } from "../../apps/controller/src/drivers/repo/github/credentials/registry.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
@@ -87,14 +87,14 @@ function registryFor(namespaceId) {
 }
 
 function repositoryDriver(registry) {
-  return new GitHubRepositoryCredentialDriver(
+  return new GitHubRepoDriver(
     {
       id: providerId,
       // Admission must complete without contacting the service or obtaining credentials.
       client: new UnixRepositoryCredentialControlClient({
         controlSocket: "/unused/repository-admission/control.sock",
       }),
-      drivers: { repository_credentials: driverId },
+      drivers: { repo: driverId },
     },
     validateGitHubRepositoryRegistry(registry, providerId),
     { sessionDurationSeconds: 600 },
@@ -130,7 +130,7 @@ async function fixture(
           id: providerId,
           type: "github",
           configuration: { registryPath: "/unused/repository-admission/registry.json" },
-          drivers: { repository_credentials: driverId },
+          drivers: { repo: driverId },
         },
       ]
     : [];

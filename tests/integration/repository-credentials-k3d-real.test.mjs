@@ -268,10 +268,10 @@ test(
           id: providerId,
           type: "github",
           configuration: { registryPath: "/etc/openclaw/repository-registry/registry.json" },
-          drivers: { repository_credentials: driverId },
+          drivers: { repo: driverId },
         },
       ];
-      f.configuration.drivers.repository_credentials = {
+      f.configuration.drivers.repo = {
         id: driverId,
         configuration: {
           controlSocket: socket,

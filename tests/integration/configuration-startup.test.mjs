@@ -118,10 +118,10 @@ async function repositoryInstallation(t) {
       id: registry.providerId,
       type: "github",
       configuration: { registryPath },
-      drivers: { repository_credentials: "repository-credentials" },
+      drivers: { repo: "repository-credentials" },
     },
   ];
-  configuration.drivers.repository_credentials = {
+  configuration.drivers.repo = {
     id: "repository-credentials",
     configuration: {
       controlSocket: join(directory, "absent-control", "control.sock"),
@@ -151,19 +151,21 @@ test("repository startup constructs the same local resolver without a private so
     mode: "production",
     environment: { OCC_CONFIG_PATH: path },
   });
-  assert.equal(api.repositoryCredentialDriver.capability, "repository_credentials");
-  assert.equal(
-    api.installation.drivers.repository_credentials.implementation,
-    api.repositoryCredentialDriver.implementation,
-  );
+  assert.equal(api.repoDriver.capability, "repo");
+  // The capability name does not replace the operator's opaque Driver identity.
+  assert.equal(api.repoDriver.id, "repository-credentials");
+  assert.equal(worker.repoDriver.id, api.repoDriver.id);
+  assert.deepEqual(api.installation.provider[0].drivers, { repo: api.repoDriver.id });
+  assert.equal(Object.hasOwn(api.installation.drivers, "repository_credentials"), false);
+  assert.equal(api.installation.drivers.repo.implementation, api.repoDriver.implementation);
   const selection = { namespaceId: "ns_repository", bindings: [{ repositoryRef: "application" }] };
-  const resolved = api.repositoryCredentialDriver.resolve(selection);
-  assert.deepEqual(worker.repositoryCredentialDriver.resolve(selection), resolved);
+  const resolved = api.repoDriver.resolve(selection);
+  assert.deepEqual(worker.repoDriver.resolve(selection), resolved);
   assert.equal(resolved.bindings[0].profile, "git-write");
   assert.equal(resolved.bindings[0].grant.repositoryId, "34567");
   assert.equal(resolved.sessionDurationSeconds, 600);
   assert.throws(
-    () => api.repositoryCredentialDriver.resolve({ ...selection, namespaceId: "ns_other" }),
+    () => api.repoDriver.resolve({ ...selection, namespaceId: "ns_other" }),
     /permitted/,
   );
   const chatgpt = chatgptInstallation();
@@ -205,10 +207,21 @@ test("repository startup rejects unmatched ownership, registry identity, duratio
   for (const [mutate, expected] of [
     [(value) => delete value.provider, /requires an owning provider/],
     [
-      (value) => delete value.drivers.repository_credentials,
-      /requires drivers\.repository_credentials/,
+      (value) => {
+        value.drivers.repository_credentials = value.drivers.repo;
+        delete value.drivers.repo;
+      },
+      /unsupported option repository_credentials/,
     ],
-    [(value) => (value.provider[0].drivers.repository_credentials = "other-driver"), /must match/],
+    [
+      (value) => {
+        value.provider[0].drivers.repository_credentials = value.provider[0].drivers.repo;
+        delete value.provider[0].drivers.repo;
+      },
+      /plaintext credential/,
+    ],
+    [(value) => delete value.drivers.repo, /requires drivers\.repo/],
+    [(value) => (value.provider[0].drivers.repo = "other-driver"), /must match/],
     [
       (value) => (value.provider[0].configuration.registryPath = "relative.json"),
       /absolute mounted/,
@@ -220,25 +233,13 @@ test("repository startup rejects unmatched ownership, registry identity, duratio
     ],
     [(value) => (value.provider[0].id = "other-provider"), /invalid-repository-registry/],
     [
-      (value) => (value.drivers.repository_credentials.configuration.sessionDurationSeconds = 3601),
+      (value) => (value.drivers.repo.configuration.sessionDurationSeconds = 3601),
       /duration|configuration/,
     ],
-    [
-      (value) => (value.drivers.repository_credentials.configuration.publicCaPath = tls.keyFile),
-      /public CA/,
-    ],
-    [
-      (value) => (value.drivers.repository_credentials.configuration.publicCaPath = writableCaPath),
-      /public CA/,
-    ],
-    [
-      (value) => (value.drivers.repository_credentials.package = "@example/driver"),
-      /unsupported option package/,
-    ],
-    [
-      (value) => (value.drivers.repository_credentials.implementation = "other"),
-      /unsupported option implementation/,
-    ],
+    [(value) => (value.drivers.repo.configuration.publicCaPath = tls.keyFile), /public CA/],
+    [(value) => (value.drivers.repo.configuration.publicCaPath = writableCaPath), /public CA/],
+    [(value) => (value.drivers.repo.package = "@example/driver"), /unsupported option package/],
+    [(value) => (value.drivers.repo.implementation = "other"), /unsupported option implementation/],
     [(value) => (value.drivers.compute.id = "compute-ssh"), /bundled Kubernetes/],
     [
       (value) => delete value.drivers.compute.configuration.network.repositoryCredentials,
@@ -249,7 +250,7 @@ test("repository startup rejects unmatched ownership, registry identity, duratio
       /repository service peer/,
     ],
     [
-      (value) => (value.provider[0].drivers.repository_credentials = "ghp_notarealtoken123456"),
+      (value) => (value.provider[0].drivers.repo = "ghp_notarealtoken123456"),
       /plaintext credential/,
     ],
   ]) {

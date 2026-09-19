@@ -10,7 +10,7 @@ import type {
   AuthorizationRequest,
   ComputeDriver,
   ComputeReadiness,
-  RepositoryCredentialDriver,
+  RepoDriver,
   RepositoryCredentialMaterialRef,
   ComputeRevisionContext,
   ConfigurationDriver,
@@ -266,7 +266,7 @@ export class ControllerWorker {
   private readonly maxAttempts: number;
   private readonly convergenceTimeoutMs: number;
   private readonly maintenanceIntervalMs: number | undefined;
-  private readonly repositoryCredentialDriver: RepositoryCredentialDriver | undefined;
+  private readonly repoDriver: RepoDriver | undefined;
   private readonly repositoryCredentials: RepositoryCredentialLifecycle;
   private readonly mode: "development" | "production";
   private readonly emit: (event: Readonly<Record<string, unknown>>) => void;
@@ -366,11 +366,11 @@ export class ControllerWorker {
         process.stdout.write(`${JSON.stringify(event)}\n`);
       });
     this.onHealthy = options.onHealthy;
-    this.repositoryCredentialDriver = drivers?.repositoryCredentialDriver;
-    if (this.repositoryCredentialDriver !== undefined) {
-      const driver = this.repositoryCredentialDriver;
+    this.repoDriver = drivers?.repoDriver;
+    if (this.repoDriver !== undefined) {
+      const driver = this.repoDriver;
       if (
-        driver.capability !== "repository_credentials" ||
+        driver.capability !== "repo" ||
         typeof driver.resolve !== "function" ||
         typeof driver.open !== "function" ||
         typeof driver.status !== "function" ||
@@ -383,7 +383,7 @@ export class ControllerWorker {
     this.repositoryCredentials = new RepositoryCredentialLifecycle({
       state: this.state,
       queueOptions: this.queueOptions,
-      driver: this.repositoryCredentialDriver,
+      driver: this.repoDriver,
       authorize: (claim, revision) => this.assertRepositoryAuthority(claim, revision),
       effect: (claim, operation) => this.withClaimHeartbeat(claim, operation),
     });
@@ -636,7 +636,7 @@ export class ControllerWorker {
     const repositoryInterval =
       revision.repositoryCredentials === undefined
         ? undefined
-        : this.repositoryCredentialDriver?.maintenanceIntervalMs;
+        : this.repoDriver?.maintenanceIntervalMs;
     const intervals = [this.maintenanceIntervalMs, repositoryInterval].filter(
       (interval): interval is number => interval !== undefined,
     );

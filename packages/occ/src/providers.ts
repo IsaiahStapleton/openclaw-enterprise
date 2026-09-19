@@ -56,19 +56,19 @@ function validateProviderDefinition(value: unknown, index: number): ProviderDefi
       );
     }
     for (const key of Object.keys(drivers)) {
-      if (key !== "repository_credentials") {
+      if (key !== "repo") {
         throw new ScopeViolationError(path(id, `drivers.${key}`) + " is unsupported.");
       }
     }
-    const repositoryCredentials = drivers.repository_credentials;
-    if (!isNonEmptyString(repositoryCredentials)) {
-      throw new ScopeViolationError(path(id, "drivers.repository_credentials") + " is required.");
+    const repo = drivers.repo;
+    if (!isNonEmptyString(repo)) {
+      throw new ScopeViolationError(path(id, "drivers.repo") + " is required.");
     }
     return immutableCopy({
       id,
       type: "github",
       configuration: { registryPath },
-      drivers: { repository_credentials: repositoryCredentials },
+      drivers: { repo },
     });
   }
   for (const key of Object.keys(configuration)) {
@@ -137,7 +137,7 @@ export function validateProviderDefinitions(value: unknown = []): readonly Provi
     const member =
       provider.type === "chatgpt"
         ? `service_account:${provider.drivers.service_account}`
-        : `repository_credentials:${provider.drivers.repository_credentials}`;
+        : `repo:${provider.drivers.repo}`;
     if (members.has(member)) {
       throw new ScopeViolationError(
         provider.type === "chatgpt"
@@ -179,13 +179,13 @@ export function assertConfiguredProvider(
 export function validateSelectedProviderDrivers(
   providers: readonly ProviderDefinition[],
   selectedServiceAccountDriver: Driver | undefined,
-  selectedRepositoryCredentialDriver?: Driver,
+  selectedRepoDriver?: Driver,
 ): void {
   for (const provider of providers) {
     if (provider.type === "github") {
       if (
-        selectedRepositoryCredentialDriver?.capability !== "repository_credentials" ||
-        selectedRepositoryCredentialDriver.id !== provider.drivers.repository_credentials
+        selectedRepoDriver?.capability !== "repo" ||
+        selectedRepoDriver.id !== provider.drivers.repo
       ) {
         throw new DriverSelectionError(
           "The configured Provider requires its repository credential Driver.",

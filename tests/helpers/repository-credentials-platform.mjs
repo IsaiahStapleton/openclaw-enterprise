@@ -691,10 +691,10 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
       id: credentialsFixture.providerId,
       type: "github",
       configuration: { registryPath: credentialsFixture.registryFile },
-      drivers: { repository_credentials: "repository-credentials" },
+      drivers: { repo: "repository-credentials" },
     },
   ];
-  configuration.drivers.repository_credentials = {
+  configuration.drivers.repo = {
     id: "repository-credentials",
     configuration: {
       controlSocket: control.socketPath,
