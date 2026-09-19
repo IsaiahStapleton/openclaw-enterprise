@@ -20,7 +20,7 @@ import {
 async function fixture(t) {
   const resources = createResourceScope();
   t.after(() => resources.close());
-  const { createSystemClock } = await appModule("clock");
+  const { createSystemClock } = await appModule("drivers/repo/credentials/clock");
   const clock = createSystemClock();
   const tls = await createTlsMaterial(resources);
   const base = await createServiceConfiguration(resources, {

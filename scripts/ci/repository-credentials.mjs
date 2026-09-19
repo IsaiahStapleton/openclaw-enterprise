@@ -18,7 +18,7 @@ export async function prepareRepositoryCredentials({
   const docker = process.env.OCC_DOCKER_BIN ?? "docker";
   await execFile(docker, ["version", "--format", "{{.Server.Version}}"]);
   await execFile(docker, ["compose", "version"]);
-  await execFile("pnpm", ["--filter", "@openclaw-enterprise/repository-credentials", "build"], {
+  await execFile("pnpm", ["credentials:build"], {
     timeoutMs: 300_000,
   });
 

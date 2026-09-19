@@ -41,7 +41,6 @@ export function createAlternateDriver({
     binding,
     replacement: "drain-before",
     cleanup: "revocable",
-    safeCleanupRetry: Object.freeze({ retire: true, finalize: false }),
     async acquire(attempt, previous, minimumValidityMs) {
       custody.assertAttempt(attempt, "acquire");
       if (previous !== undefined && !handles.has(previous)) {

@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import {
   createGitHubDriverFactory,
   createGitHubKeyOwner,
-} from "../../apps/repository-credentials/src/backends/github/index.ts";
-import { validateServiceConfig } from "../../apps/repository-credentials/src/config.ts";
-import { createCustody } from "../../apps/repository-credentials/src/custody.ts";
+} from "../../apps/controller/src/drivers/repo/github/credentials/index.ts";
+import { validateServiceConfig } from "../../apps/controller/src/drivers/repo/credentials/configuration.ts";
+import { createCustody } from "../../apps/controller/src/drivers/repo/credentials/custody.ts";
+import { createGitHubPlanningFixture } from "../fixtures/repository-credentials/planning.mjs";
 import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
-import { createProviderTransport } from "../../apps/repository-credentials/src/backends/github/provider-transport.ts";
+import { createProviderTransport } from "../../apps/controller/src/drivers/repo/github/credentials/provider-transport.ts";
 import {
   githubConfigurationData,
   requestHead,
@@ -60,6 +61,115 @@ function owner(factory, clock, profile, id, captured = () => {}) {
     },
   };
 }
+test("gateway authentication preserves canonical syntax, token bounds and route-specific challenges", async (t) => {
+  const { factory } = await createGitHubPlanningFixture(t);
+  const git = requestHead("GET", "/fixture/repository.git/info/refs?service=git-upload-pack");
+  const api = requestHead("GET", "/repos/fixture/repository");
+  const bearer = "a".repeat(43);
+  const basic = (token, username = "gateway-session") =>
+    `Basic ${Buffer.from(`${username}:${token}`).toString("base64")}`;
+  const canonical = basic(bearer);
+  for (const { name, head, authorization, expected } of [
+    { name: "minimum Basic token", head: git, authorization: canonical, expected: bearer },
+    {
+      name: "maximum Basic token and mixed-case scheme",
+      head: git,
+      authorization: basic("_".repeat(256)).replace("Basic", "bAsIc"),
+      expected: "_".repeat(256),
+    },
+    { name: "API token scheme", head: api, authorization: `token ${bearer}`, expected: bearer },
+    {
+      name: "API bearer scheme",
+      head: api,
+      authorization: `bEaReR ${bearer}`,
+      expected: bearer,
+    },
+    {
+      name: "maximum API token",
+      head: api,
+      authorization: `Bearer ${"_".repeat(256)}`,
+      expected: "_".repeat(256),
+    },
+  ]) {
+    await t.test(name, () => {
+      assert.equal(factory.parseAuthentication(head, authorization), expected);
+    });
+  }
+  const denied = { kind: "denied", status: 401, code: "invalid-credential" };
+  for (const { name, head, authorization } of [
+    { name: "missing Basic padding", head: git, authorization: canonical.slice(0, -1) },
+    {
+      name: "noncanonical Basic padding bits",
+      head: git,
+      authorization: `${canonical.slice(0, -2)}F=`,
+    },
+    { name: "wrong Basic username", head: git, authorization: basic(bearer, "other") },
+    { name: "short Basic token", head: git, authorization: basic("a".repeat(42)) },
+    { name: "long Basic token", head: git, authorization: basic("a".repeat(257)) },
+    { name: "invalid Basic token characters", head: git, authorization: basic(`${bearer}:x`) },
+    { name: "non-ASCII Basic token", head: git, authorization: basic(`${bearer}é`) },
+    { name: "API scheme on Git route", head: git, authorization: `Bearer ${bearer}` },
+    { name: "Basic scheme on API route", head: api, authorization: canonical },
+    { name: "short API token", head: api, authorization: `Bearer ${"a".repeat(42)}` },
+    { name: "long API token", head: api, authorization: `Bearer ${"a".repeat(257)}` },
+    { name: "extra API whitespace", head: api, authorization: `Bearer  ${bearer}` },
+    { name: "invalid API token characters", head: api, authorization: `token ${bearer}=` },
+    { name: "oversized header", head: git, authorization: `Basic ${"A".repeat(4096)}` },
+    { name: "absent authorization", head: git, authorization: undefined },
+    { name: "non-string authorization", head: api, authorization: [bearer] },
+  ]) {
+    await t.test(`denies ${name}`, () => {
+      assert.deepEqual(factory.parseAuthentication(head, authorization), denied);
+    });
+  }
+  assert.deepEqual(factory.unauthenticated(git), {
+    kind: "challenge",
+    realm: "repository-credential-service",
+  });
+  for (const head of [
+    api,
+    requestHead("GET", "/other/repository.git/info/refs?service=git-upload-pack"),
+    requestHead("GET", "/fixture/repository.git/info/refs?service=unknown"),
+  ]) {
+    assert.deepEqual(factory.unauthenticated(head), denied);
+  }
+});
+test("GitHub request plans reconstruct headers without forwarding caller credentials", async (t) => {
+  const { bind } = await createGitHubPlanningFixture(t);
+  const backend = bind();
+  const inbound = {
+    authorization: "caller-credential",
+    cookie: "caller-cookie",
+    host: "other.example",
+    connection: "keep-alive",
+    "content-length": "500",
+    "user-agent": "caller-agent",
+    "accept-encoding": "gzip",
+  };
+  const git = backend.plan(
+    requestHead("GET", "/fixture/repository.git/info/refs?service=git-upload-pack", {
+      ...inbound,
+      accept: "application/x-git-upload-pack-advertisement",
+      "git-protocol": "version=2",
+    }),
+  );
+  assert.deepEqual(git.requestHeaders, {
+    "user-agent": "openclaw-enterprise-repository-credentials",
+    "accept-encoding": "identity",
+    "git-protocol": "version=2",
+    accept: "application/x-git-upload-pack-advertisement",
+  });
+  const api = backend.plan(requestHead("POST", "/repos/fixture/repository/pulls", inbound));
+  assert.deepEqual(api.requestHeaders, {
+    "user-agent": "openclaw-enterprise-repository-credentials",
+    "accept-encoding": "identity",
+    accept: "application/vnd.github+json",
+    "x-github-api-version": "2026-03-10",
+    "content-type": "application/json",
+  });
+  assert.ok(Object.isFrozen(git.requestHeaders));
+  assert.ok(Object.isFrozen(api.requestHeaders));
+});
 test("provider transport pins destination and exact issuance scope before receiving credentials", async (t) => {
   const clock = createControlledClock();
   const fixture = await startGitHubFixture(t, { clock });

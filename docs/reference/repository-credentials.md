@@ -13,13 +13,13 @@ loses cleanup inventory; upstream tokens can remain valid until GitHub expires
 them. This service does not provide durable recovery, multiple replicas, or OCC
 Work/IAM integration.
 
-The application package exports `startCredentialService(configurationPath)` for
-trusted process launchers. It loads the same protected configuration as the CLI
-and returns the session controls and listener lifecycle. The session object
-contains only `open`, `status`, `close`, and `shutdown`; upstream authorization,
-driver construction, and request-sender callbacks remain inside the service.
-Package-name imports of those internal modules are rejected. Process shutdown
-continues to use `SIGTERM` or `SIGINT` for bounded cleanup and material disposal.
+Source lives under the controller, while the credential service runs in its own
+process. Trusted startup composition loads protected configuration and keeps
+backend construction and request-sender callbacks private. Its session controls
+are limited to `open`, `status`, `close`, and `shutdown`. The build produces
+separate service and Git/gh client artifacts; the client runtime contains no
+signing or service modules. `SIGTERM` or `SIGINT` starts bounded cleanup and
+material disposal.
 
 ## Configuration
 
@@ -67,7 +67,7 @@ repository, profile, or deadline after admission. Configuration changes apply to
 new composition and admission.
 
 The privileged GitHub transport captures the installation, repository and exact
-permission profile when the driver is constructed. Its only operations are issuance
+permission profile when the backend is constructed. Its only operations are issuance
 for that captured scope and revocation of an owned token; callers cannot supply an
 HTTP URL, method, path, request body, or extra headers. Extending those operations
 changes a credential boundary and requires security review.
@@ -83,8 +83,10 @@ All three profiles select exactly the configured repository. `git-read` denies
 both push discovery and push execution. Both Git-only profiles deny every REST
 and GraphQL request, including API reads. `git-full` admits only the supported
 API routes and methods; it does not grant every permission held by the App or
-import PAT permissions. The former `read-write` name is unsupported, with no
-compatibility alias.
+import PAT permissions. GraphQL may return public information GitHub permits;
+`git-full` provides no per-field GraphQL or branch-only authorization. Every
+GraphQL POST is treated as a possible write. The former `read-write` name is
+unsupported, with no compatibility alias.
 
 Native repository rules still apply. Administration, workflow changes requiring
 additional permissions, Actions, packages, projects, SSH, LFS, and other
@@ -97,8 +99,8 @@ A trusted local operator uses HTTP over a private mode-0600 Unix socket:
 
 | Request                                                           | Response                                                    |
 | ----------------------------------------------------------------- | ----------------------------------------------------------- |
-| `POST /v1/sessions` with `durationSeconds` and optional `profile` | Session status, public client configuration and bearer once |
-| `GET /v1/sessions/{id}`                                           | Public session and cleanup status                           |
+| `POST /v1/sessions` with `durationSeconds` and optional `profile` | Private status, client configuration and bearer once        |
+| `GET /v1/sessions/{id}`                                           | Private session and cleanup status                          |
 | `POST /v1/sessions/{id}/close`                                    | Immediate local closure status; cleanup reported separately |
 
 The socket's parent is private to the service/operator. It is never mounted into
@@ -109,7 +111,7 @@ Admission requires `X-Admission-Id`: a 13-digit Unix-millisecond timestamp,
 a hyphen, and a lowercase UUIDv4. The operator CLI generates and prints this
 nonsecret ID before dispatch. The first response is HTTP 201 with the bearer.
 Repeating the same ID and effective duration/profile returns HTTP 200 with
-public status only; conflicting inputs fail. Follow the
+credential-free status only; conflicting inputs fail. Follow the
 [lost-response recovery procedure](../guides/repository-credentials.md#recover-an-admission)
 to close that session and explicitly request replacement client material.
 
@@ -135,8 +137,9 @@ Cleanup retains the one-hour bound from local receipt. A forward wall-clock
 change can deny authentication but cannot establish remote expiration.
 
 Closing or expiring a session prevents new use immediately and cancels owned
-exchanges. `CLOSED` does not imply confirmed revocation. Status distinguishes
-pending, revoked, expired and uncertain credentials, plus auxiliary cleanup.
+exchanges. `CLOSED` does not imply confirmed revocation. The private control
+response retains active-use counts and pending, revoked, expired and uncertain
+credential counts, plus auxiliary cleanup.
 `DISPOSED` requires settled actions, resolved access-token obligations and
 completed auxiliary finalization. An uncertain issuance blocks automatic minting.
 An uncertain push or API mutation is never automatically replayed.
@@ -179,8 +182,6 @@ experimental `api_host` routing option and stores only the gateway bearer in
 `oauth_token`. Supported API calls use relative endpoint paths. The launcher
 admits `gh api` and explicit-head `gh pr create`; browser flows, extensions,
 absolute API destinations and arbitrary command compatibility are excluded.
-GraphQL uses the exactly scoped installation token and can return public data
-GitHub permits; the service does not claim per-field GraphQL authorization.
 Response rewriting is limited to validated pagination links and explicitly
 followed resource fields. Matching owner/repository names may differ in casing;
 route casing, origin, purpose, profile and query restrictions still apply.
@@ -204,10 +205,13 @@ wire and decoded limits. Exchanges have a five-minute total bound and 60-second
 credential margin. The response-header deadline starts after the upload finishes;
 connection, input and stall deadlines remain independent. Provider actions have at most 30 seconds. Shutdown allows
 60 seconds for cleanup before reporting unresolved obligations and terminating.
-Overrides remain positive and finite.
+Unsettled actions retain capacity until exit; grace expiry does not establish
+`DISPOSED` or confirmed revocation. Restart cannot recover the lost provider
+cleanup inventory. Overrides remain positive and finite.
 
-Controlled tests, container tests and authorized live-provider smoke establish
-different evidence. See the [testing guide](../testing/repository-credentials.md)
+Controlled source tests, detached-artifact checks, separate running containers
+and authorized live-provider tests establish different evidence. See the
+[testing guide](../testing/repository-credentials.md)
 for current selection and prerequisites, and the [runtime flow](../flows/repository-credentials.md)
 for source ownership. A local fixture success does not establish live GitHub
 App compatibility or release readiness.

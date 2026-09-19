@@ -9,7 +9,7 @@ bearer; GitHub App keys and installation tokens stay in the service. Review the
 ## Build and validate
 
 From a checkout with the repository's Node 24 and pinned pnpm dependencies
-prepared, build only this application:
+prepared, compile the workspace and assemble the credential artifacts:
 
 ```sh
 pnpm credentials:build
@@ -18,8 +18,11 @@ pnpm credentials:check-config /absolute/path/service.json
 
 The check reads protected configuration, validates the RSA key and TLS inputs,
 and prints a safe configuration summary. It does not start listeners or call
-GitHub. The emitted app uses Node built-ins and needs no controller packages or
-runtime `node_modules`.
+GitHub. The service artifact is emitted under `.build/repository-credentials/service`;
+the client artifact is under `.build/repository-credentials/client`. Both contain
+only their required JavaScript modules and use Node built-ins without runtime
+`node_modules`. Source ownership under the controller does not combine the
+credential process with the control-plane process.
 
 For `invalid-configuration`, inspect the file and every directory in its absolute
 path. Use root or service-user ownership, private configuration/key files, and
@@ -75,17 +78,19 @@ mode 0700. Bind-mount only the selected session directory, never its host parent
 or sibling sessions. The client validates that directory beneath the protected
 container root.
 
-Use the launcher for each supported command:
+Use the emitted client launcher for each supported command. Set its absolute
+path before changing into the checkout so later commands use the same artifact:
 
 ```sh
-pnpm credentials:client /absolute/path/sessions/task git clone \
+credential_client=/absolute/path/checkout/.build/repository-credentials/client/dist/drivers/repo/github/credentials/client/launch.js
+node "$credential_client" /absolute/path/sessions/task git clone \
   https://credentials.example.internal/example/project.git
 cd project
-node /absolute/path/checkout/apps/repository-credentials/dist/client/launch.js \
+node "$credential_client" \
   /absolute/path/sessions/task git fetch origin
-node /absolute/path/checkout/apps/repository-credentials/dist/client/launch.js \
+node "$credential_client" \
   /absolute/path/sessions/task git switch an-existing-branch
-node /absolute/path/checkout/apps/repository-credentials/dist/client/launch.js \
+node "$credential_client" \
   /absolute/path/sessions/task git push origin HEAD:refs/heads/agent-feature
 ```
 
@@ -98,24 +103,24 @@ executable is exactly `gh` 2.100.0. Create a
 request body file in the working directory, then use relative API paths:
 
 ```sh
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method POST repos/example/project/pulls --input create-pr.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   repos/example/project/pulls/1
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method PATCH repos/example/project/pulls/1 --input update-pr.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method POST repos/example/project/issues --input create-issue.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method POST repos/example/project/issues/1/comments --input comment.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --paginate repos/example/project/issues/1/comments
 ```
 
 Native PR creation uses an explicit already-pushed head branch:
 
 ```sh
-pnpm credentials:client /absolute/path/sessions/task gh pr create \
+node "$credential_client" /absolute/path/sessions/task gh pr create \
   -R github.com/example/project --base main --head agent-feature \
   --title "Example change" --body-file body.md
 ```
@@ -126,7 +131,7 @@ exact App permissions define supported access.
 
 ## Recover an admission
 
-If `open` loses its response, use the `credential-admission` ID printed to
+Run operator commands from the OCE source checkout. If `open` loses its response, use the `credential-admission` ID printed to
 stderr before dispatch. Repeat the command with the same duration and profile,
 adding `--admission-id`:
 
@@ -139,7 +144,7 @@ pnpm credentials:operator open \
   --admission-id ADMISSION_ID
 ```
 
-A recovered response contains `recovered: true` and public session status,
+A recovered response contains `recovered: true` and credential-free session status,
 without creating client files or returning the bearer again. Close that session
 using its reported ID and inspect cleanup status. Then explicitly run `open`
 without `--admission-id`, choosing a new output directory if needed.
@@ -193,6 +198,8 @@ docker compose -f apps/repository-credentials/compose.yaml run --rm client \
 
 ## Inspect and close
 
+From the OCE source checkout:
+
 ```sh
 pnpm credentials:operator status --socket /absolute/path/control/control.sock \
   --session SESSION_ID
@@ -201,8 +208,9 @@ pnpm credentials:operator close --socket /absolute/path/control/control.sock \
 ```
 
 Inspect cleanup status after local closure. Pending or uncertain cleanup remains
-an obligation; process exit is not proof of revocation. If writing client files
-fails after admission, the CLI attempts local closure and prints the affected
+an obligation. Shutdown stops after its finite grace period even when cleanup
+remains unresolved; process exit is not proof of revocation. If writing client
+files fails after admission, the CLI attempts local closure and prints the affected
 session ID so you can inspect it.
 
 For an uncertain push or mutation, inspect remote state before deciding on a

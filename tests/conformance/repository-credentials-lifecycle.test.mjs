@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { join } from "node:path";
-import { validateServiceConfig } from "../../apps/repository-credentials/src/config.ts";
-import { createCredentialService } from "../../apps/repository-credentials/src/service.ts";
-import { createProviderQueue } from "../../apps/repository-credentials/src/provider-queue.ts";
-import { createCustody } from "../../apps/repository-credentials/src/custody.ts";
-import { createLifecycle } from "../../apps/repository-credentials/src/lifecycle.ts";
+import { validateServiceConfig } from "../../apps/controller/src/drivers/repo/credentials/configuration.ts";
+import { createCredentialService } from "../../apps/controller/src/drivers/repo/credentials/service.ts";
+import { createProviderQueue } from "../../apps/controller/src/drivers/repo/credentials/provider-queue.ts";
+import { createCustody } from "../../apps/controller/src/drivers/repo/credentials/custody.ts";
+import { createLifecycle } from "../../apps/controller/src/drivers/repo/credentials/lifecycle.ts";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import {
   startGitHubFixture,

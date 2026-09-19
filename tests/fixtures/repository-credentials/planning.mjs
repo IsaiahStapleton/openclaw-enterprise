@@ -13,10 +13,10 @@ export async function createGitHubPlanningFixture(t) {
       { admitSession },
       { createCustody },
     ] = await Promise.all([
-      appModule("backends/github/index"),
-      appModule("config"),
-      appModule("sessions"),
-      appModule("custody"),
+      appModule("drivers/repo/github/credentials/index"),
+      appModule("drivers/repo/credentials/configuration"),
+      appModule("drivers/repo/credentials/sessions"),
+      appModule("drivers/repo/credentials/custody"),
     ]);
     const clock = createControlledClock(1700000000000);
     const config = validateServiceConfig(serviceConfigurationData());

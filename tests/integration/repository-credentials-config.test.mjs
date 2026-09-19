@@ -2,13 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkConfiguration } from "../../apps/repository-credentials/src/check-config.ts";
-import { validateServiceConfig } from "../../apps/repository-credentials/src/config.ts";
+import { readProtectedFile } from "../../apps/controller/src/composition/repository-credentials/protected-file.ts";
 import { createTlsMaterial } from "../fixtures/repository-credentials/process.mjs";
 
 test("protected startup accepts RSA/TLS files without provider calls and rejects unsafe material", async (t) => {
+  const { checkConfiguration } =
+    await import("../../apps/controller/src/composition/repository-credentials/check-config.ts");
   const directory = await mkdtemp(join(tmpdir(), "repository-configuration-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const tls = await createTlsMaterial(t);
@@ -134,7 +137,9 @@ test("protected startup accepts RSA/TLS files without provider calls and rejects
   await assert.rejects(checkConfiguration(file), { message: "invalid-configuration" });
   await chmod(directory, 0o700);
 });
-test("service admission bounds are finite and retain an explicit long-task policy", () => {
+test("service admission bounds are finite and retain an explicit long-task policy", async () => {
+  const { validateServiceConfig } =
+    await import("../../apps/controller/src/drivers/repo/credentials/configuration.ts");
   const input = {
     gateway: {
       publicOrigin: "https://credentials.example",
@@ -164,4 +169,80 @@ test("service admission bounds are finite and retain an explicit long-task polic
     }),
   );
   assert.throws(() => validateServiceConfig({ ...input, limits: { providerActions: 2 } }));
+});
+
+test("protected file transfers its candidate only after descriptor cleanup", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "protected-file-transfer-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "input");
+  const contents = "protected file fixture";
+  await writeFile(path, contents, { mode: 0o600 });
+
+  for (const failure of [undefined, "read", "close"]) {
+    await t.test(
+      failure ? `${failure} failure disposes owned buffers` : "successful transfer",
+      async (t) => {
+        const open = fs.open;
+        const from = Buffer.from;
+        let scratch;
+        let candidate;
+        let closed = false;
+        t.after(() => {
+          t.mock.restoreAll();
+          syncBuiltinESMExports();
+        });
+        // Read a real protected file and close the real descriptor. Faults occur at
+        // the filesystem boundary; the production reader still owns every buffer.
+        t.mock.method(fs, "open", async (...args) => {
+          const handle = await open(...args);
+          const read = handle.read;
+          const close = handle.close;
+          t.mock.method(handle, "read", async (...args) => {
+            scratch = args[0];
+            const result = await read.apply(handle, args);
+            if (failure === "read") {
+              throw new Error("fixture read failed");
+            }
+            return result;
+          });
+          t.mock.method(handle, "close", async () => {
+            await close.call(handle);
+            closed = true;
+            if (failure === "close") {
+              throw new Error("fixture close failed");
+            }
+          });
+          return handle;
+        });
+        t.mock.method(Buffer, "from", (...args) => {
+          const result = from(...args);
+          if (Buffer.isBuffer(args[0]) && args[0].buffer === scratch?.buffer) {
+            candidate = result;
+          }
+          return result;
+        });
+        syncBuiltinESMExports();
+        const result = await readProtectedFile(path, 1024);
+        assert.equal(closed, true);
+        assert.ok(scratch);
+        assert.ok(scratch.every((byte) => byte === 0));
+        if (failure) {
+          assert.deepEqual(result, { ok: false });
+          if (failure === "close") {
+            assert.ok(candidate);
+            assert.ok(candidate.every((byte) => byte === 0));
+          } else {
+            assert.equal(candidate, undefined);
+          }
+        } else {
+          assert.equal(result.ok, true);
+          assert.equal(result.bytes, candidate);
+          assert.equal(result.bytes.toString(), contents);
+          // Successful transfer leaves disposal with the actual caller.
+          result.bytes.fill(0);
+          assert.ok(candidate.every((byte) => byte === 0));
+        }
+      },
+    );
+  }
 });

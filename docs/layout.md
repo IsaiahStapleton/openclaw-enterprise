@@ -8,7 +8,7 @@ and [Contributing](../CONTRIBUTING.md) for setup and contribution workflow.
 ## Workspace boundaries
 
 The root [pnpm workspace](../pnpm-workspace.yaml) explicitly selects
-`apps/controller`, `apps/repository-credentials`, and five packages: `utils`,
+`apps/controller` and five packages: `utils`,
 `contracts`, `occ`, `iam`, and `audit`. [TypeScript project references](../tsconfig.json) select the same
 projects. Adding a directory does not enroll it in the workspace: intentional
 workspace changes must also update these declarations and the
@@ -21,32 +21,42 @@ keep its dependency installation separate from the root workspace.
 
 ## Source ownership
 
-| Path                               | Responsibility                                                                                                                           |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/controller/src/`             | HTTP API, console serving, and API/worker entrypoints. `server.mjs` and `worker.mjs` start the processes.                                |
-| `apps/controller/src/admission/`   | Request admission and resource validation at the API boundary.                                                                           |
-| `apps/controller/src/auth/`        | Authentication integrations.                                                                                                             |
-| `apps/controller/src/composition/` | Runtime assembly and wiring of selected implementations.                                                                                 |
-| `apps/controller/src/drivers/`     | Bundled infrastructure Driver implementations, organized by capability.                                                                  |
-| `apps/controller/src/providers/`   | Provider implementations.                                                                                                                |
-| `apps/controller/src/gateway/`     | Agent gateway transport and workspace access.                                                                                            |
-| `apps/controller/src/console/`     | Browser console modules, styles, and assets.                                                                                             |
-| `apps/repository-credentials/`     | Standalone repository credential boundary and backend implementations; see the [feature reference](reference/repository-credentials.md). |
-| `packages/contracts/src/`          | Shared resource models, Driver interfaces, and API schemas under `api/`.                                                                 |
-| `packages/occ/src/`                | Platform lifecycle and resource ownership, persistence ports and state implementations, and controller work.                             |
-| `packages/iam/src/`                | Native identity lookup and authorization.                                                                                                |
-| `packages/audit/src/`              | Audit event construction and sensitive-value sanitization.                                                                               |
-| `packages/utils/src/`              | Shared, focused utilities used across packages.                                                                                          |
-| `cmd/occ/`                         | Go CLI executable entrypoint.                                                                                                            |
-| `internal/occcli/`                 | CLI commands and terminal interface.                                                                                                     |
-| `internal/occclient/`              | Go HTTP client for OCC.                                                                                                                  |
-| `internal/occdev/`                 | CLI development-stack lifecycle commands.                                                                                                |
+| Path                                                      | Responsibility                                                                                               |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `apps/controller/src/`                                    | HTTP API, console serving, and API/worker entrypoints. `server.mjs` and `worker.mjs` start the processes.    |
+| `apps/controller/src/admission/`                          | Request admission and resource validation at the API boundary.                                               |
+| `apps/controller/src/auth/`                               | Authentication integrations.                                                                                 |
+| `apps/controller/src/composition/`                        | Runtime assembly and wiring of selected implementations.                                                     |
+| `apps/controller/src/drivers/`                            | Bundled infrastructure Driver implementations, organized by capability.                                      |
+| `apps/controller/src/providers/`                          | Provider implementations.                                                                                    |
+| `apps/controller/src/gateway/`                            | Agent gateway transport and workspace access.                                                                |
+| `apps/controller/src/console/`                            | Browser console modules, styles, and assets.                                                                 |
+| `apps/controller/src/drivers/repo/credentials/`           | Private repository credential contracts, sessions, custody, lifecycle, listeners, and transport.             |
+| `apps/controller/src/drivers/repo/github/credentials/`    | GitHub credential backend, grant policy, authentication, provider transport, and Git/gh clients.             |
+| `apps/controller/src/composition/repository-credentials/` | Protected file loading, key/TLS assembly, configuration checking, and separate service startup.              |
+| `packages/contracts/src/`                                 | Shared resource models, Driver interfaces, and API schemas under `api/`.                                     |
+| `packages/occ/src/`                                       | Platform lifecycle and resource ownership, persistence ports and state implementations, and controller work. |
+| `packages/iam/src/`                                       | Native identity lookup and authorization.                                                                    |
+| `packages/audit/src/`                                     | Audit event construction and sensitive-value sanitization.                                                   |
+| `packages/utils/src/`                                     | Shared, focused utilities used across packages.                                                              |
+| `cmd/occ/`                                                | Go CLI executable entrypoint.                                                                                |
+| `internal/occcli/`                                        | CLI commands and terminal interface.                                                                         |
+| `internal/occclient/`                                     | Go HTTP client for OCC.                                                                                      |
+| `internal/occdev/`                                        | CLI development-stack lifecycle commands.                                                                    |
 
 Start from the existing primitive that owns a capability. Keep platform core
 behavior dependent on contracts; put implementation-specific behavior in the
 owning Driver or Provider and wire it through composition. See
 [current architecture](ARCHITECTURE.md) for component interactions and the
 [platform design](design.md) for the approved target and implementation status.
+
+Repository credential source shares the controller build. Its separate service
+artifact contains the process and configuration-check entrypoints with their
+dependencies; the Git/gh client artifact contains only its own runtime subtree.
+The private `RepositoryBackend` contract belongs to the credential engine; it
+does not expose a platform Driver capability. Containers and ordinary-Agent
+integration remain pending; see the
+[credential reference](reference/repository-credentials.md).
 
 ## Deployment, tooling, and checks
 
