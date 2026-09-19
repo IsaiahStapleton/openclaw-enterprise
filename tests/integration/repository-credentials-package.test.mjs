@@ -278,6 +278,11 @@ test("credential artifact builder rejects dependencies outside its emitted closu
     join(root, "scripts/build-repository-credentials.mjs"),
     join(temporary, "scripts/build-repository-credentials.mjs"),
   );
+  await cp(
+    join(root, "deploy/runtime/repository-credentials"),
+    join(temporary, "deploy/runtime/repository-credentials"),
+    { recursive: true },
+  );
   await symlink(join(root, "node_modules"), join(temporary, "node_modules"));
   const clientEntry = join(emitted, "drivers/repo/github/credentials/client/launch.js");
   for (const path of [
@@ -290,6 +295,14 @@ test("credential artifact builder rejects dependencies outside its emitted closu
     await mkdir(join(path, ".."), { recursive: true });
     await writeFile(path, "export {};\n");
   }
+  // Establish a valid fixture before testing policy failures; missing image
+  // inputs must not satisfy an expected dependency rejection.
+  const valid = spawnSync(
+    process.execPath,
+    [join(temporary, "scripts/build-repository-credentials.mjs")],
+    { encoding: "utf8", timeout: 10000, env: { PATH: process.env.PATH } },
+  );
+  assert.equal(valid.status, 0, valid.stdout + valid.stderr);
   const cases = [
     ["missing emitted dependency", 'import "./missing.js";'],
     ["workspace dependency", 'import "@openclaw-enterprise/occ";'],
