@@ -127,6 +127,27 @@ test("prepare-bootstrap-volume requires explicit cluster selectors and immutable
     ),
     /--claim must be a DNS subdomain/,
   );
+  await assert.rejects(
+    execute(
+      helper,
+      [
+        "--kubeconfig",
+        kubeconfig,
+        "--context",
+        "ctx",
+        "--namespace",
+        "openclaw-system",
+        "--claim",
+        "claim",
+        "--image",
+        image,
+        "--node-selector",
+        "pool",
+      ],
+      base,
+    ),
+    /--node-selector must use KEY=VALUE/,
+  );
 });
 
 test("prepare-bootstrap-volume creates a hardened preparation Pod and removes it only after verified success", async (t) => {
@@ -145,6 +166,10 @@ test("prepare-bootstrap-volume creates a hardened preparation Pod and removes it
       claim,
       "--image",
       image,
+      "--node-selector",
+      "pool=control",
+      "--node-selector",
+      "topology.kubernetes.io/zone=us-west-2a",
     ],
     {
       cwd: repository,
@@ -165,6 +190,10 @@ test("prepare-bootstrap-volume creates a hardened preparation Pod and removes it
   assert.equal(manifest.spec.enableServiceLinks, false);
   assert.equal(manifest.spec.restartPolicy, "Never");
   assert.equal(manifest.spec.securityContext.seccompProfile.type, "RuntimeDefault");
+  assert.deepEqual(manifest.spec.nodeSelector, {
+    pool: "control",
+    "topology.kubernetes.io/zone": "us-west-2a",
+  });
   assert.equal(manifest.spec.volumes.length, 1);
   assert.equal(manifest.spec.volumes[0].name, "bootstrap-output");
   assert.equal(manifest.spec.volumes[0].persistentVolumeClaim.claimName, claim);
@@ -197,6 +226,32 @@ test("prepare-bootstrap-volume creates a hardened preparation Pod and removes it
     assert.equal(args[args.indexOf("--request-timeout") + 1], "10s");
     assert.equal(args[args.indexOf("--namespace") + 1], "openclaw-system");
   }
+});
+
+test("prepare-bootstrap-volume omits nodeSelector unless requested", async (t) => {
+  const { directory, kubeconfig, manifestPath } = await fixture(t);
+  await execute(
+    helper,
+    [
+      "--kubeconfig",
+      kubeconfig,
+      "--context",
+      "production",
+      "--namespace",
+      "openclaw-system",
+      "--claim",
+      "occ-bootstrap-admin-password",
+      "--image",
+      image,
+    ],
+    {
+      cwd: repository,
+      env: { PATH: `${directory}:${process.env.PATH}` },
+    },
+  );
+
+  const manifest = loadYaml(await readFile(manifestPath, "utf8"));
+  assert.equal(manifest.spec.nodeSelector, undefined);
 });
 
 test("prepare-bootstrap-volume retains the preparation Pod when Kubernetes reports failure", async (t) => {

@@ -60,6 +60,8 @@ the credential API. Slack inputs are masked and cleared after submission; the
 browser does not store them in local storage, URLs, or Configuration. Returned
 storage flags cover transport and Slack only. **Stored** does not mean the
 provider accepted a credential or that a gateway is connected.
+Provisioning also checks for existing Agent runtime Deployments before writing
+credentials so it does not modify values after a runtime has started.
 
 The API uses `GET` and `POST` on
 `/namespaces/:namespaceId/agents/:agentId/runtime-credentials`. Reading requires

@@ -37,6 +37,16 @@ human administrator session path, not service keys. The
 
 ## Production
 
+Choose the guide for your cluster:
+
+- [Standard Kubernetes](deploy/kubernetes.md): prepare an existing Kubernetes
+  cluster, storage, networking, and PostgreSQL.
+- [Amazon EKS](deploy/eks.md): prepare AWS managed Kubernetes, node groups,
+  VPC networking, EBS/EFS storage, and optional RDS PostgreSQL.
+
+Both paths use the same Helm chart and shared installation procedure. Cluster
+hosting does not select the Agent model provider.
+
 ### Production prerequisites
 
 - Kubernetes 1.35 or later, an explicit context, enforcing NetworkPolicies,
@@ -45,10 +55,17 @@ human administrator session path, not service keys. The
   the supported boundary.
 - Controller and runtime image digests (build them in the first step).
 - External PostgreSQL with separate migrator and application roles.
+- A Kubernetes node pool labeled for OCC control-plane Pods. The production example
+  selects nodes with `oce-role: control`; the chart default is `{}`. Set
+  `controlPlane.nodeSelector` to the reviewed labels for your cluster.
+- A Kubernetes node pool labeled for Agent runtime Pods. The production
+  Installation example selects nodes with `oce-role: agents`; set
+  `drivers.compute.configuration.runtime.nodeSelector` to the reviewed labels
+  for gateway and Agent scheduling.
 - Operator-managed HTTPS access for approved clients; the chart does not create
   TLS or Ingress.
 - Operator-created startup, database, authentication, optional Provider Secrets,
-  fresh bootstrap PVC, gateway storage, and exact egress destinations.
+  fresh bootstrap PVC, gateway storage, and exact `/32` egress destinations.
 
 ### Production installation sequence
 
@@ -81,7 +98,8 @@ then resume the production installation sequence with the generated YAML copies.
 Inventory tenant workloads before uninstalling the control plane:
 
 ```bash
-helm uninstall oce --namespace openclaw-system
+helm uninstall oce --namespace openclaw-system \
+  --kubeconfig "$KUBECONFIG_FILE" --kube-context "$CONTEXT"
 ```
 
 Helm does not own external PostgreSQL, operator-created Secrets, bootstrap PVCs,

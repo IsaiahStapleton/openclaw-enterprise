@@ -1,7 +1,7 @@
 ---
 created: 2026-08-20
-updated: 2026-09-08
-last_updated_session: codex/01a07d92-d866-7731-afe5-abab67d8966c
+updated: 2026-09-18
+last_updated_session: authoring-run/8e0bc064-817d-47a5-b4fe-eb352ceeb661
 ---
 
 # Compute Driver Lifecycle Hooks Flow
@@ -93,6 +93,11 @@ without starting the replacement gateway. After the worker commits the new activ
 `KubernetesComputeDriver.activateRevision` invokes `beforeWorkloadStart`, updates the `Recreate`
 gateway Deployment and Service, then checks gateway readiness.
 
+When `runtime.nodeSelector` is configured, Kubernetes Compute writes that selector to the rendered
+gateway and Agent Pod template. The Pod-level selector also schedules the gateway's private-state
+initContainer with the main gateway container, so storage-zone and runtime-node placement stay in
+one Kubernetes scheduling decision.
+
 SSH stages embedded snapshots without starting the candidate gateway. After the
 worker commits the active revision, `SshComputeDriver.activateRevision` invokes
 `beforeWorkloadStart`, then projects accepted launch placeholders into the
@@ -144,6 +149,7 @@ bounded cleanup signal so cancellation cannot suppress compensation.
 
 ## Changelog
 
+- 2026-09-18 17:15: Document Kubernetes runtime node selector rendering for gateway and Agent Pods. (authoring-run/8e0bc064-817d-47a5-b4fe-eb352ceeb661 - 3bc07ccd2feec9d87c91171354ce1eb850264594)
 - 2026-09-08 07:49: Document SSH activation-time workload hooks and compensation. (01a07d92-d866-7731-afe5-abab67d8966c - 4d83087229961f3665b923d2581c0b71b988cc9c)
 
 - 2026-09-01 19:09: Corrected Kubernetes embedded replacement hook ordering so `prepareRevision` stages readiness and `activateRevision` starts the replacement gateway. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)

@@ -56,14 +56,18 @@ spec:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
     - to:
+        {{- range .Values.database.cidrs }}
         - ipBlock:
-            cidr: {{ .Values.database.cidr }}
+            cidr: {{ . }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.database.port }}
     - to:
+        {{- range .Values.cluster.cidrs }}
         - ipBlock:
-            cidr: {{ .Values.cluster.cidr }}
+            cidr: {{ . }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.cluster.port }}

@@ -3189,6 +3189,7 @@ test("gateway SQLite and media mounts are private, durable, and preserve ephemer
       preparedAuth(driver, namespace, embedded),
     );
     const pod = gateway.spec.template.spec;
+    assert.equal(pod.nodeSelector, undefined);
     const privateVolume = pod.volumes.find(({ name }) => name === "openclaw-gateway-state");
     assert.deepEqual(privateVolume.persistentVolumeClaim, { claimName: claim.metadata.name });
     assert.deepEqual(
@@ -3294,6 +3295,40 @@ test("gateway SQLite and media mounts are private, durable, and preserve ephemer
   );
   assert.equal(JSON.stringify(harness).includes(claim.metadata.name), false);
   assert.equal(JSON.stringify(harness).includes("openclaw-gateway-state"), false);
+});
+
+test("runtime node selector schedules gateways and their private-state initialization together", () => {
+  const driver = createKubernetesComputeDriver(
+    options({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+        nodeSelector: { "oce-role": "agents", "topology.kubernetes.io/zone": "us-east-2a" },
+      },
+    }),
+  );
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const gateway = driver.deployment(
+    "gateway",
+    { namespaceId: tenant.id, agentId: "agent-node-selector" },
+    namespace,
+    "gateway:local",
+    "gateway",
+    "gateway",
+    {},
+    "info",
+    undefined,
+    false,
+    undefined,
+    preparedAuth(driver, namespace, false),
+  );
+  const pod = gateway.spec.template.spec;
+
+  assert.deepEqual(pod.nodeSelector, {
+    "oce-role": "agents",
+    "topology.kubernetes.io/zone": "us-east-2a",
+  });
+  assert.equal(pod.initContainers[0].name, "prepare-private-state");
 });
 
 test("private gateway claim reuse and deletion verify exact ownership and storage before mutation", async () => {

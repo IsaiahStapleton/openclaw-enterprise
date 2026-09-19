@@ -1,7 +1,8 @@
 # Install the production control plane
 
 Build and install OCC on Kubernetes, then verify authenticated API access.
-Complete the [production prerequisites](../deploy.md#production-prerequisites)
+Prepare [standard Kubernetes](kubernetes.md) or [Amazon EKS](eks.md) and
+complete the [production prerequisites](../deploy.md#production-prerequisites)
 first. Run commands from the repository root in one operator shell; retain its
 exports and protected files for [Agent deployment](production-agents.md).
 
@@ -23,6 +24,11 @@ registry and repository, and select the platform matching your Kubernetes
 nodes. The base image below matches the [runtime recipe](../../../deploy/runtime/README.md),
 which also documents package-version overrides.
 
+Authenticate the builder before running the build block. For a standard registry,
+run `docker login <registry-host>` using your approved credentials; for private
+ECR, follow [ECR authentication](eks.md#authenticate-the-image-builder-to-ecr).
+Keep any registry and platform exports from that step.
+
 The runtime must include the channel plugins its Agents enable, with their
 runtime dependencies available from a fresh home directory. The standard recipe
 packages Slack and Codex. Verify plugin loading and the gateway's supported
@@ -33,11 +39,11 @@ verified the gateway/Codex image pair. Runtime package installation at gateway
 startup is not part of this deployment procedure.
 
 ```bash
-export OCC_IMAGE_REPOSITORY='registry.example.com/your-team/openclaw-enterprise'
+export OCC_IMAGE_REGISTRY="${OCC_IMAGE_REGISTRY:-registry.example.com}"
+export OCC_IMAGE_REPOSITORY="${OCC_IMAGE_REPOSITORY:-$OCC_IMAGE_REGISTRY/your-team/openclaw-enterprise}"
 export OCC_IMAGE_TAG="$(git rev-parse HEAD)"
-export OCC_IMAGE_PLATFORM='linux/amd64'
+export OCC_IMAGE_PLATFORM="${OCC_IMAGE_PLATFORM:-linux/amd64}"
 export NODE_BASE_IMAGE='docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584'
-docker login registry.example.com
 
 docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" --target runtime \
   --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
@@ -74,7 +80,7 @@ For production, use the registry digests from the build-and-publish step above.
 umask 077
 export OCC_INPUT_DIRECTORY="${OCC_INPUT_DIRECTORY:-/secure/occ}"
 export KUBECONFIG_FILE="$OCC_INPUT_DIRECTORY/kubeconfig"
-export CONTEXT='<production-context>'
+: "${CONTEXT:?Set the reviewed Kubernetes context from your cluster guide}"
 install -d -m 700 "$OCC_INPUT_DIRECTORY"
 install -d -m 700 /secure/occ
 test -e "$OCC_INPUT_DIRECTORY/values.yaml" || \
@@ -119,16 +125,16 @@ yq -i '.drivers.compute.configuration.images.gateway = strenv(RUNTIME_IMAGE) |
 
 Edit the protected YAML copies before provisioning anything:
 
-- `$OCC_INPUT_DIRECTORY/values.yaml`: set `images.controller` to the
-  controller digest, `auth.baseUrl` to the production OCC URL,
-  `bootstrap.adminEmail` to the first administrator, `database.cidr` to the
-  exact PostgreSQL endpoint CIDR, `cluster.cidr` to the Kubernetes API endpoint
-  CIDR, `api.clients` to approved client selectors, and
-  `bootstrap.password.claimName` to the bootstrap PVC name.
+- `$OCC_INPUT_DIRECTORY/values.yaml`: set `images.controller`,
+  `auth.baseUrl`, `bootstrap.adminEmail`, `database.cidrs`, `cluster.cidrs`,
+  `controlPlane.nodeSelector`, `database.caSecretName`, `dns`, `api.clients`, and
+  `bootstrap.password.claimName` with reviewed site values. Keep the example
+  startup, database, and auth Secret names and keys for the commands below;
+  if you customize them, update the corresponding Secret creation commands.
 - `$OCC_INPUT_DIRECTORY/installation.yaml`: set `occ.cluster`, `logging.level`,
-  both `drivers.compute.configuration.images` digests, the DNS and gateway-client
-  selectors, the service-principal token settings, the runtime Secret prefixes,
-  and `runtime.gatewayStorageClassName`. Keep
+  `drivers.compute.configuration.images` digests, DNS and gateway-client
+  selectors, service-principal token settings, runtime selector, Secret
+  prefixes, and `runtime.gatewayStorageClassName`. Keep
   `drivers.compute.configuration.images.requireImmutableDigest: true`.
   If enabling Agent plugins, set one compatible bundled `drivers.plugin` selector
   and any required Codex catalog-reader configuration. See the
@@ -147,12 +153,15 @@ image from the same Helm values file:
 yq e -e '.images.controller | test("@sha256:[a-f0-9]{64}$")' \
   "$OCC_INPUT_DIRECTORY/values.yaml" >/dev/null
 yq e -e '.auth.baseUrl != "" and .bootstrap.adminEmail != "" and
-  .database.cidr != "" and .cluster.cidr != "" and (.api.clients | length > 0)' \
+  (.database.cidrs | length > 0) and (.cluster.cidrs | length > 0) and
+  (.controlPlane.nodeSelector | length > 0) and
+  (.api.clients | length > 0)' \
   "$OCC_INPUT_DIRECTORY/values.yaml" >/dev/null
 yq e -e '.drivers.compute.configuration.images.requireImmutableDigest == true and
   (.drivers.compute.configuration.images.gateway | test("@sha256:[a-f0-9]{64}$")) and
   (.drivers.compute.configuration.images.agent | test("@sha256:[a-f0-9]{64}$")) and
-  .drivers.compute.configuration.runtime.gatewayStorageClassName != ""' \
+  .drivers.compute.configuration.runtime.gatewayStorageClassName != "" and
+  (.drivers.compute.configuration.runtime.nodeSelector | length > 0)' \
   "$OCC_INPUT_DIRECTORY/installation.yaml" >/dev/null
 yq e -e '.metadata.namespace == "openclaw-system" and .spec.storageClassName != ""' \
   "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml" >/dev/null
@@ -174,11 +183,16 @@ or a variable name such as `OCC_DATABASE_URL=`.
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `occ-application-url` | PostgreSQL connection URL for the limited application role, used by bootstrap, the API, and the worker. Obtain it from your database administrator or provider. Example shape: `postgresql://occ_app:<url-encoded-password>@<postgres-host>:5432/<database>`.                   |
 | `occ-migration-url`   | Connection URL for a separate role allowed to apply schema migrations. It targets the same database. Example shape: `postgresql://occ_migrator:<url-encoded-password>@<postgres-host>:5432/<database>`. Obtain this credential separately; do not give it to the API or worker. |
+| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set; the example mount path is `/etc/openclaw/database-ca/ca.pem`.                                                                |
 | `occ-auth-secret`     | A random secret used to sign and verify user sessions. Generate it once for this Installation with the command below, then retain it across redeployments. It is separate from the administrator password, service API key, and model-provider key.                             |
 
 Save the two complete database URLs using your secret manager or a protected
 editor, replacing the example placeholders and preserving provider-required TLS
-options. Generate the auth secret for a new Installation; this command refuses
+options. For managed PostgreSQL roots supplied through `database.caSecretName`,
+set `sslmode=verify-full` and `sslrootcert` to the mounted CA file in both URLs.
+With the example mount settings, the path is `/etc/openclaw/database-ca/ca.pem`;
+if you change them, use `<database.caMountPath>/<database.caKey>`. Introduce URL
+query parameters with `?`, or join them to existing parameters with `&`. Generate the auth secret for a new Installation; this command refuses
 to overwrite an existing file:
 
 ```bash
@@ -191,6 +205,12 @@ chmod 600 /secure/occ/occ-application-url /secure/occ/occ-migration-url \
   /secure/occ/occ-auth-secret
 test -s /secure/occ/occ-application-url
 test -s /secure/occ/occ-migration-url
+export DATABASE_CA_SECRET="$(yq e -r '.database.caSecretName // ""' "$OCC_INPUT_DIRECTORY/values.yaml")"
+export DATABASE_CA_KEY="$(yq e -r '.database.caKey // "ca.pem"' "$OCC_INPUT_DIRECTORY/values.yaml")"
+if [ -n "$DATABASE_CA_SECRET" ]; then
+  chmod 600 /secure/occ/occ-database-ca.pem
+  test -s /secure/occ/occ-database-ca.pem
+fi
 ```
 
 Keep these values out of Helm values, Installation YAML, Configurations, shell
@@ -210,12 +230,19 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
   create secret generic occ-installation-startup --from-file=installation.yaml="$OCC_INPUT_DIRECTORY/installation.yaml"
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
   create secret generic occ-database --from-file=application-url=/secure/occ/occ-application-url --from-file=migration-url=/secure/occ/occ-migration-url
+if [ -n "$DATABASE_CA_SECRET" ]; then
+  kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+    create secret generic "$DATABASE_CA_SECRET" \
+    --from-file="$DATABASE_CA_KEY=/secure/occ/occ-database-ca.pem"
+fi
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
   create secret generic occ-auth --from-file=secret=/secure/occ/occ-auth-secret
 ```
 
 These commands provision operator-owned inputs; they are not a recurring Secret
-synchronizer.
+synchronizer. When `database.caSecretName` is set, the chart mounts that Secret
+read-only into migration, bootstrap, API, and worker containers at
+`database.caMountPath`; the PostgreSQL URLs still own `sslrootcert` selection.
 
 ### Azure PostgreSQL workload identity
 
@@ -251,12 +278,18 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
   -n openclaw-system apply -f "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml"
 
 scripts/prepare-bootstrap-volume --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
-  --namespace openclaw-system --claim "$BOOTSTRAP_CLAIM" --image "$CONTROLLER_IMAGE"
+  --namespace openclaw-system --claim "$BOOTSTRAP_CLAIM" --image "$CONTROLLER_IMAGE" \
+  --node-selector oce-role=control
 ```
 
+Replace `--node-selector oce-role=control` with the same labels selected by
+`controlPlane.nodeSelector`; repeat the option for multiple labels so preparation
+and initialization can use the same volume topology.
+
 The helper refuses any nonfresh mounted root except filesystem-owned
-`lost+found`, reports `Prepared bootstrap volume claim ... with UID/GID 1000
-mode 0700.` on success, and retains a failed Pod for diagnosis. If policy
+`lost+found`, schedules the preparation Pod with any supplied `--node-selector`
+labels before storage binds, reports `Prepared bootstrap volume claim ... with
+UID/GID 1000 mode 0700.` on success, and retains a failed Pod for diagnosis. If policy
 forbids the preparation Pod, have the storage administrator create the same root
 state through the approved storage workflow.
 

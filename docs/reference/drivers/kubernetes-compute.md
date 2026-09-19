@@ -129,6 +129,7 @@ drivers:
         expirationSeconds: 900
       runtime:
         gatewayStorageClassName: sqlite-block
+        nodeSelector: { oce-role: agents }
         transportSecretPrefix: openclaw-agent-transport
         # Optional; first install this reviewed profile on every eligible node.
         codexSeccompProfile: profiles/codex-0.152.1.json
@@ -152,7 +153,8 @@ Kubernetes API certificates must be verified in either mode.
 ### Images and resources
 
 Configure separate gateway and Agent images, CPU and memory requests and limits,
-and namespace-level resource quotas and container defaults. Production requires
+namespace-level resource quotas and container defaults, and an optional
+`runtime.nodeSelector` for gateway and Agent Pods. Production requires
 `images.requireImmutableDigest: true` and SHA-256 image digests.
 
 See [network configuration](kubernetes-compute/networking-and-isolation.md#networking)

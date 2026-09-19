@@ -3,12 +3,13 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: scripts/prepare-bootstrap-volume --kubeconfig FILE --context NAME --namespace NAME --claim NAME --image IMAGE@sha256:DIGEST
+Usage: scripts/prepare-bootstrap-volume --kubeconfig FILE --context NAME --namespace NAME --claim NAME --image IMAGE@sha256:DIGEST [--node-selector KEY=VALUE ...]
 
 Prepare an existing fresh bootstrap-output PersistentVolumeClaim for the
 production initialization Job. The helper creates one temporary Pod, sets only
 the mounted root to UID/GID 1000 and mode 0700, deletes that Pod after verified
-success, and leaves a failed Pod for diagnosis.
+success, and leaves a failed Pod for diagnosis. Repeat --node-selector to run
+that Pod on a selected node pool before a WaitForFirstConsumer volume binds.
 EOF
 }
 
@@ -44,11 +45,51 @@ is_dns_subdomain() {
   done
 }
 
+is_label_name() {
+  local value=$1
+  [[ ${#value} -le 63 ]] || return 1
+  [[ "$value" =~ ^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$ ]]
+}
+
+is_label_key() {
+  local value=$1
+  local prefix name
+  if [[ "$value" == */* ]]; then
+    prefix=${value%/*}
+    name=${value##*/}
+    [[ -n "$prefix" && -n "$name" ]] || return 1
+    is_dns_subdomain "$prefix" && is_label_name "$name"
+    return
+  fi
+  is_label_name "$value"
+}
+
+is_label_value() {
+  local value=$1
+  [[ -n "$value" ]] || return 1
+  is_label_name "$value"
+}
+
+add_node_selector() {
+  local selector=$1
+  local key value existing
+  [[ "$selector" == *=* ]] || die "--node-selector must use KEY=VALUE."
+  key=${selector%%=*}
+  value=${selector#*=}
+  is_label_key "$key" || die "--node-selector key must be a Kubernetes label key."
+  is_label_value "$value" || die "--node-selector value must be a nonempty Kubernetes label value."
+  for existing in "${node_selectors[@]}"; do
+    [[ "${existing%%=*}" != "$key" ]] || die "--node-selector repeats key $key."
+  done
+  node_selectors+=("$selector")
+}
+
 kubeconfig=
 context=
 namespace=
 claim=
 image=
+node_selectors=()
 
 while (($#)); do
   case "$1" in
@@ -75,6 +116,11 @@ while (($#)); do
     --image)
       (($# >= 2)) || die "--image requires an immutable Node-capable image reference."
       image=$2
+      shift 2
+      ;;
+    --node-selector)
+      (($# >= 2)) || die "--node-selector requires KEY=VALUE."
+      add_node_selector "$2"
       shift 2
       ;;
     -h | --help)
@@ -104,6 +150,17 @@ is_dns_subdomain "$claim" ||
 suffix=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 10 || true)
 [[ -n "$suffix" ]] || suffix=$$
 pod="occ-bootstrap-volume-prep-${suffix}"
+node_selector_yaml=
+if ((${#node_selectors[@]})); then
+  node_selector_yaml="  nodeSelector:
+"
+  for selector in "${node_selectors[@]}"; do
+    key=${selector%%=*}
+    value=${selector#*=}
+    node_selector_yaml+="    ${key}: \"${value}\"
+"
+  done
+fi
 
 kubectl_args=(
   --kubeconfig "$kubeconfig"
@@ -140,7 +197,7 @@ spec:
   securityContext:
     seccompProfile:
       type: RuntimeDefault
-  containers:
+${node_selector_yaml}  containers:
     - name: prepare
       image: ${image}
       command: ["node"]

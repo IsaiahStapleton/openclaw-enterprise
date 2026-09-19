@@ -447,8 +447,8 @@ async function renderCollectorManifest({
     `logging.collector.exporter.cidr=${exporterCidr}`,
     "--set",
     `logging.collector.exporter.port=${exporterPort}`,
-    "--set-string",
-    `cluster.cidr=${kubernetesApi.cidr}`,
+    "--set-json",
+    `cluster.cidrs=${JSON.stringify([kubernetesApi.cidr])}`,
     "--set",
     `cluster.port=${kubernetesApi.port}`,
   ];

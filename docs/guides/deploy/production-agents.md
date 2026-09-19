@@ -44,7 +44,9 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
   --clusterrole=oce-openclaw-tenant-api --serviceaccount=openclaw-system:openclaw-enterprise-api
 ```
 
-The Secret RoleBinding grants tenant-local Secret access only to the API. It
+The Secret RoleBinding grants tenant-local Secret access and list-only
+Deployment access to the API. The API lists Deployments to check for existing
+Agent workloads before provisioning initial runtime credentials. This binding
 does not give the worker Secret API permission or replace OCC IAM grants for
 bound Secrets.
 

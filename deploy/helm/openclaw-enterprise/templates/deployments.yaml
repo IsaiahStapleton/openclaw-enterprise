@@ -22,6 +22,10 @@ spec:
       automountServiceAccountToken: true
       securityContext:
         {{- include "openclaw.podSecurity" $ | nindent 8 }}
+      {{- with $.Values.controlPlane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
         - name: installation-startup
           secret:
@@ -29,6 +33,14 @@ spec:
             items:
               - key: {{ $.Values.installation.key }}
                 path: installation.yaml
+        {{- if $.Values.database.caSecretName }}
+        - name: database-ca
+          secret:
+            secretName: {{ $.Values.database.caSecretName | quote }}
+            items:
+              - key: {{ $.Values.database.caKey | quote }}
+                path: {{ $.Values.database.caKey | quote }}
+        {{- end }}
         {{- if eq $component "api" }}
         {{- if $.Values.gatewayRouting.enabled }}
         - name: gateway-api-key
@@ -115,6 +127,11 @@ spec:
             - name: installation-startup
               mountPath: /etc/openclaw/installation
               readOnly: true
+            {{- if $.Values.database.caSecretName }}
+            - name: database-ca
+              mountPath: {{ $.Values.database.caMountPath | quote }}
+              readOnly: true
+            {{- end }}
             {{- if eq $component "api" }}
             {{- if $.Values.gatewayRouting.enabled }}
             - name: gateway-api-key
