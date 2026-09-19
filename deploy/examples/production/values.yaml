@@ -35,3 +35,10 @@ cluster:
 controlPlane:
   nodeSelector:
     oce-role: control
+
+# Required by dedicated Harness storage; install Envoy Gateway and cert-manager,
+# and create this service-key Secret before deployment. See workspace-routing.md.
+gatewayRouting:
+  enabled: true
+  gatewayClassName: eg
+  apiKeySecretName: occ-private-gateway-key

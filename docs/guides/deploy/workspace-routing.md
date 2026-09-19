@@ -6,12 +6,17 @@ and keep its protected Helm values, Installation YAML, and Kubernetes context.
 
 ## Runtime prerequisite for separate storage
 
-Dedicated Harness storage requires Gateway and Harness images containing the
-OpenClaw workspace changes: [document interface](https://github.com/openclaw/openclaw/pull/150584),
-[node adapter](https://github.com/openclaw/openclaw/pull/150734),
-[attachments](https://github.com/openclaw/openclaw/pull/150857), and
-[Memory and Skills](https://github.com/openclaw/openclaw/pull/150946).
-The Codex plugin must include the matching attachment changes.
+Dedicated Harness storage requires private routing, native node enrollment, and
+Gateway and Harness images containing the matching OpenClaw workspace changes.
+[Storage integration #76](https://github.com/openclaw/openclaw-enterprise/issues/76)
+tracks the current runtime PRs and remaining limits. The Codex plugin must include
+the matching attachment changes. Compute rejects dedicated runtime revisions
+without routing or an enrollment client before provisioning workloads.
+
+The production Installation and Helm examples enable routing together. Create
+the service-key Secret and configure native trusted-proxy authentication below
+before creating a dedicated Agent. Direct access remains available for embedded
+Harnesses.
 
 The runtime Dockerfile's default `2026.9.1` packages do not include this stack.
 Updating the controller alone removes dedicated Gateway workspace mounts without

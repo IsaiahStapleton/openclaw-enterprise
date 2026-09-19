@@ -1,6 +1,6 @@
 ---
 created: 2026-08-31
-updated: 2026-09-18
+updated: 2026-09-19
 last_updated_session: 01a082d6-50c7-7953-808f-7e609f6fc7cb
 ---
 
@@ -111,12 +111,20 @@ node endpoint before its policy, with ownership and UID checks. The
 [node endpoint contract](../reference/gateway-routing.md#native-node-endpoint)
 separates this route provisioning from Harness enrollment and launch.
 
+Dedicated runtime revisions require private routing and an enrollment client.
+`verifyGatewayRoutingConfiguration` rejects missing wiring before Kubernetes
+access, so removing shared storage cannot silently select a Gateway-local workspace.
 The enrollment integration is in progress; it is not a deployable storage split.
 The local Compute path in
 `apps/controller/src/drivers/compute/kubernetes/index.ts:prepareWorkspaceNode`
 uses native setup RPCs through
 `apps/controller/src/gateway/node-enrollment-client.ts:createGatewayNodeEnrollment`:
 
+- First startup can initialize Harness plugins before the Gateway is ready.
+  `prepareWorkspaceNode` waits to create a setup code until the Gateway is ready;
+  the next reconciliation attaches the node to the same Harness workspace.
+  An existing enrollment remains attached during Gateway restarts. Readiness
+  still waits for the node, and the existing plugin startup-token checks remain.
 - A revision-owned Secret holds the setup code and then the confirmed device ID.
   Subsequent observations use that ID rather than expiring setup-status records.
   Readiness requires a connected node with admitted `file.fetch`, `file.stat`,
@@ -141,30 +149,21 @@ uses native setup RPCs through
   config; the immutable revision ConfigMap stays unchanged. Candidate preparation
   leaves the serving revision's binding intact. Losing an established binding
   fails rather than restoring local file reads.
-- Default node grants allow reading the four owner documents, `BOOTSTRAP.md`, and
-  `MEMORY.md`, and writing the four owner documents. Enabled `bootstrap-extra-files`
-  declarations add exact read grants for literal, supported document paths inside
-  the workspace, including bracketed names. They do not add write grants or
-  override an explicit node policy. Glob traversal and contained symlinks remain
-  unsupported by these defaults. The native attachment
-  preparer can read `media/inbound/openclaw-staged-*` to check the input directory
-  and read/write `media/inbound/openclaw-staged-*/**` for its files. `file.create`
-  carries these inputs over the existing node connection without replacing
-  Harness edits. Reply attachments under `media/outbound/**` have a read-only
-  grant; this adds no permission to edit outputs or fetch arbitrary project files.
-  The upstream workspace reader retains unary fetches up to 16 MiB and retries
-  larger files over binary `file.fetch`, bounded by caller and node policy.
-  This requires an updated node. The runtime also defaults Codex's existing
-  `appServer.remoteWorkspaceRoot` to the Harness workspace, preserving explicit
-  configuration. That selects native reply-artifact staging before client cleanup,
-  without granting the file node access to every project file. Real Codex delivery
-  through this configuration remains unverified.
-  Explicit node policies are preserved; the owner API retains
-  its four-file allowlist. This requires the upstream attachment implementation;
-  native runtime and Envoy transfer verification remain pending.
-  The node also advertises `dir.list` for workspace discovery. Directory and file
-  operations still require native path grants; enabling the command alone does
-  not grant directory access or permit fetching its contents.
+- Default node grants permit reading the four owner documents, `BOOTSTRAP.md`,
+  and `MEMORY.md`; owner writes remain limited to four documents. Enabled
+  `bootstrap-extra-files` adds literal workspace document read grants, including
+  bracketed names. Explicit node policies are preserved; glob traversal and
+  contained symlinks remain unsupported by these defaults.
+- Attachments use read grants for `media/inbound/openclaw-staged-*` and read/write
+  grants for `media/inbound/openclaw-staged-*/**`. `file.create` transfers inputs
+  without replacing Harness edits. Outputs under `media/outbound/**` are read-only.
+  Fetches above 16 MiB use binary `file.fetch`, bounded by caller and node policy.
+  `dir.list` still requires native path grants; enabling a command grants no
+  additional file access.
+- Codex's `appServer.remoteWorkspaceRoot` defaults to the Harness workspace,
+  preserving explicit configuration. Its existing reader stages reply artifacts
+  before client cleanup, without broader node grants. These paths require the
+  matching upstream runtime; real Codex delivery and Envoy transfer remain unverified.
 
 The chart supplies worker credentials and public trust; Compute installs
 Harness-to-Envoy egress before enrollment. The node also declares `workspace.memory`.
@@ -271,6 +270,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-19 15:37: Required dedicated runtime routing before workload changes; reconciled node startup with plugin readiness and moved the native node probe into OCC's existing in-cluster fixture. (01a082d6-50c7-7953-808f-7e609f6fc7cb - 30878c9b0f830126e8433b76d1c7174227d311b6)
 
 - 2026-09-18 14:15: Clarified Skill source ownership and deferred remote channel menus; corrected dedicated workspace persistence. (01a082d6-50c7-7953-808f-7e609f6fc7cb - 56e4fa74eacb0c411f51353f4f726444fc572336)
 

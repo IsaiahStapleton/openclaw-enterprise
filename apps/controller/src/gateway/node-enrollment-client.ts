@@ -55,11 +55,15 @@ export function createGatewayNodeEnrollment(
         const status = asRecord(
           await client.request("device.pair.setupStatus", { setupId }, { signal: requestSignal }),
         );
-        if (status === undefined) throw new Error("The Gateway returned an invalid setup status.");
+        if (status === undefined) {
+          throw new Error("The Gateway returned an invalid setup status.");
+        }
         // A delivery-uncertain handoff may still have reached the node. Live
         // presence is observed separately; setup status alone is not readiness.
         const completion = asRecord(status.completion ?? status.deliveryUncertain);
-        if (completion === undefined) return undefined;
+        if (completion === undefined) {
+          return undefined;
+        }
         if (
           completion.setupId !== setupId ||
           completion.access !== "node" ||

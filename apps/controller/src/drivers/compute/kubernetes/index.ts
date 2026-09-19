@@ -1497,7 +1497,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new ConfigurationFailure("AgentRevision Configuration ownership is invalid.");
     }
-    this.verifyGatewayRoutingConfiguration(revision);
     const embedded = revision.harness.mode === "embedded";
     if (
       (embedded && revision.harness.id !== "openclaw") ||
@@ -1511,6 +1510,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     this.validateHarnessAuth(revision.harness, revision.harnessAuth, revision.configuration);
     const channels = this.enabledChannels(revision);
+    this.verifyGatewayRoutingConfiguration(revision);
     const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
     const secretEnvironment = this.secretEnvironmentForRevision(revision, context, namespace);
     const harnessAuth = this.harnessAuthForRevision(revision, context, namespace);
@@ -1952,9 +1952,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (this.options.runtime === undefined) {
       return;
     }
-    this.verifyGatewayRoutingConfiguration(revision);
     this.validateHarnessAuth(revision.harness, revision.harnessAuth, revision.configuration);
     const channels = this.enabledChannels(revision);
+    this.verifyGatewayRoutingConfiguration(revision);
     const pluginRuntime = this.pluginRuntimeSnapshot(revision);
     const { name: namespace } = await this.resolveNamespace(revision.namespaceId);
     const secretEnvironment = this.secretEnvironmentForRevision(revision, context, namespace);
@@ -2482,10 +2482,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
     namespace: string,
     revisionId: string,
   ): Promise<void> {
-    if (this.options.gatewayRouting === undefined) return;
+    if (this.options.gatewayRouting === undefined) {
+      return;
+    }
     const existing = await this.getOwned(kind, name, namespace, ownership);
-    if (existing === undefined) return;
-    if (existing.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revisionId) return;
+    if (existing === undefined) {
+      return;
+    }
+    if (existing.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revisionId) {
+      return;
+    }
     if (existing.metadata.uid === undefined) {
       throw new OwnershipFailure(`${kind} ${name} UID must be explicitly observed before delete.`);
     }
@@ -3603,8 +3609,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
       this.options.runtime === undefined ||
       this.options.gatewayRouting === undefined ||
       revision.harness.mode !== "dedicated"
-    )
+    ) {
       return;
+    }
     const ownership = this.pluginRuntimeOwnership(revision);
     const name = this.workspaceNodeName(revision);
     const secret = await this.getOwned("Secret", name, namespace, ownership);
@@ -3644,6 +3651,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     const existing = await this.getOwned("Secret", name, namespace, ownership);
     if (existing === undefined) {
+      const gatewayOwnership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+      const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
+      // Plugin initialization can precede the first Gateway. Start the Harness
+      // without a node, then enroll once its Gateway is available.
+      if (!(await this.gatewayReady(gatewayOwnership, gatewayName, namespace))) {
+        return undefined;
+      }
       const setup = await enrollment.createSetup(url, `${url}/node`, this.operationSignal());
       const clients = await this.clients();
       // Persist before launching. An uncertain create is not replayed here; the
@@ -3749,10 +3763,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
       namespace,
       this.pluginRuntimeOwnership(revision),
     );
-    if (secret === undefined) return false;
+    if (secret === undefined) {
+      return false;
+    }
     const read = (key: string) => Buffer.from(secret.data?.[key] ?? "", "base64").toString("utf8");
     const deviceId = read("deviceId");
-    if (deviceId) return enrollment.isConnected(url, deviceId, this.operationSignal());
+    if (deviceId) {
+      return enrollment.isConnected(url, deviceId, this.operationSignal());
+    }
     const setupId = required(read("setupId"), "Workspace node setup ID");
     const observation = await enrollment.observeSetup(url, setupId, this.operationSignal());
     if (observation === undefined) {
@@ -4260,6 +4278,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   private verifyGatewayRoutingConfiguration(revision: AgentRevision): void {
+    if (
+      this.options.runtime !== undefined &&
+      revision.harness.mode === "dedicated" &&
+      (this.options.gatewayRouting === undefined || this.nodeEnrollment === undefined)
+    ) {
+      throw new ConfigurationFailure(
+        "Dedicated Harness storage requires gateway routing and node enrollment.",
+      );
+    }
     if (this.options.gatewayRouting === undefined) {
       return;
     }
@@ -4318,7 +4345,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     access: "operator" | "node" = "operator",
   ): ManagedKubernetesObject<"HTTPRoute"> | undefined {
     const routing = this.options.gatewayRouting;
-    if (routing === undefined) return undefined;
+    if (routing === undefined) {
+      return undefined;
+    }
     const name = `${this.gatewayRouteName(revision.agentId)}${access === "node" ? "-node" : ""}`;
     const route = this.manifest(GATEWAY_API_VERSION, "HTTPRoute", name, ownership, namespace);
     return {
@@ -4429,10 +4458,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return;
     }
     const route = this.gatewayRoute(revision, ownership, namespace, service);
-    if (route !== undefined) await this.reconcile(route, ownership, namespace);
-    if (this.options.runtime === undefined || revision.harness.mode !== "dedicated") return;
+    if (route !== undefined) {
+      await this.reconcile(route, ownership, namespace);
+    }
+    if (this.options.runtime === undefined || revision.harness.mode !== "dedicated") {
+      return;
+    }
     const gateway = await this.getOwned("Deployment", name, namespace, ownership);
-    if (gateway === undefined) return;
+    if (gateway === undefined) {
+      return;
+    }
     // Candidates need this endpoint before activation, including when the
     // serving Gateway predates node enrollment. Keep ownership with that
     // serving revision so retiring a failed candidate cannot remove the route.
@@ -4445,7 +4480,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new OwnershipFailure("The serving Gateway has an invalid revision.");
     }
     const nodeRoute = this.gatewayRoute(revision, ownership, namespace, service, "node");
-    if (nodeRoute === undefined) return;
+    if (nodeRoute === undefined) {
+      return;
+    }
     nodeRoute.metadata.annotations = {
       ...nodeRoute.metadata.annotations,
       [AGENT_REVISION_ID_ANNOTATION]: gatewayRevisionId,

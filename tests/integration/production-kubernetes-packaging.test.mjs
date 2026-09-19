@@ -123,6 +123,12 @@ test("production native examples satisfy the current Helm, Installation, and PVC
   assert.equal(drivers.installation.occ.cluster, "production-west");
   assert.deepEqual(drivers.installation.provider, []);
   assert.equal(drivers.computeDriver.id, "compute-kubernetes");
+  const compute = drivers.installation.drivers.compute.configuration;
+  assert.equal(compute.network.gatewayClients, undefined);
+  const values = loadYaml(await readFile(new URL("values.yaml", productionExamples), "utf8"));
+  assert.equal(values.gatewayRouting.enabled, true);
+  assert.equal(compute.gatewayRouting.gatewayName, "oce-agent-gateways");
+  assert.equal(compute.gatewayRouting.gatewayNamespace, "openclaw-system");
   assert.equal(drivers.configurationDriver.id, "config-kubernetes");
   assert.equal(drivers.secretDriver.id, "secret-kubernetes");
   assert.equal(Object.hasOwn(drivers.installation.drivers, "service_account"), false);

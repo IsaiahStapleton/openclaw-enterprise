@@ -121,7 +121,9 @@ test(
             "-o",
             "name",
           );
-          if (remaining.trim()) return undefined;
+          if (remaining.trim()) {
+            return undefined;
+          }
         }
         return true;
       });

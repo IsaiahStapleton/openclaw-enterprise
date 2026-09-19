@@ -68,7 +68,9 @@ test(
     const exited = once(supervisor, "exit");
     const events = async () => {
       const contents = await readFile(eventsPath, "utf8").catch((error) => {
-        if (error.code === "ENOENT") return "";
+        if (error.code === "ENOENT") {
+          return "";
+        }
         throw error;
       });
       return contents
@@ -83,7 +85,9 @@ test(
         try {
           process.kill(pid, "SIGKILL");
         } catch (error) {
-          if (error.code !== "ESRCH") throw error;
+          if (error.code !== "ESRCH") {
+            throw error;
+          }
         }
       }
       await rm(directory, { recursive: true, force: true });
@@ -92,7 +96,9 @@ test(
       const deadline = Date.now() + 5_000;
       while (Date.now() < deadline) {
         const observed = await events();
-        if (await predicate(observed)) return observed;
+        if (await predicate(observed)) {
+          return observed;
+        }
         assert.equal(supervisor.exitCode, null, output);
         await delay(25);
       }
@@ -125,7 +131,9 @@ test(
         process.kill(descendant.pid, 0);
         return false;
       } catch (error) {
-        if (error.code === "ESRCH") return true;
+        if (error.code === "ESRCH") {
+          return true;
+        }
         throw error;
       }
     });

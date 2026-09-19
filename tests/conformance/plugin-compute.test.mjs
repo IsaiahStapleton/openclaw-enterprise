@@ -8,6 +8,7 @@ import test from "node:test";
 import vm from "node:vm";
 import {
   createKubernetesComputeDriver,
+  KubernetesComputeDriver,
   kubernetesNamespaceName,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import {
@@ -1677,6 +1678,57 @@ test("compute fails closed when Codex plugin selections are malformed", () => {
   );
 });
 
+function dedicatedPluginDriver() {
+  const configured = kubernetesOptions();
+  const { gatewayClients, ...network } = configured.network;
+  return new KubernetesComputeDriver(
+    {
+      ...configured,
+      network,
+      gatewayRouting: {
+        hostname: "agents.example.test",
+        gatewayName: "gateway",
+        gatewayNamespace: "system",
+        envoyNamespace: "envoy",
+      },
+    },
+    {
+      nodeEnrollment: {
+        async isConnected() {
+          return true;
+        },
+      },
+    },
+  );
+}
+
+function useRoutedGateway(candidate) {
+  candidate.configuration = structuredClone(candidate.configuration);
+  candidate.configuration.gateway = {
+    ...candidate.configuration.gateway,
+    trustedProxies: ["10.42.0.0/16"],
+    allowRealIpFallback: true,
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: { userHeader: "x-occ-identity", allowUsers: ["occ-workspace-files"] },
+      identityScopes: { "occ-workspace-files": ["operator.admin"] },
+    },
+  };
+}
+
+function enrolledNodeSecret(driver, candidate, namespace) {
+  return {
+    ...driver.manifest(
+      "v1",
+      "Secret",
+      driver.workspaceNodeName(candidate),
+      driver.pluginRuntimeOwnership(candidate),
+      namespace,
+    ),
+    data: { deviceId: Buffer.from("fixture-node").toString("base64") },
+  };
+}
+
 test("embedded plugin preparation applies runtime egress before gateway readiness", async () => {
   const driver = createKubernetesComputeDriver(kubernetesOptions());
   const embedded = revision({
@@ -1763,11 +1815,12 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     { protocol: "TCP", port: 443 },
   ]);
 
-  const dedicatedDriver = createKubernetesComputeDriver(kubernetesOptions());
+  const dedicatedDriver = dedicatedPluginDriver();
   const dedicated = revision({
     compute: { id: dedicatedDriver.id, implementation: dedicatedDriver.implementation },
     plugins: codexLinearPluginState({ approvalsReviewer: "auto_review" }),
   });
+  useRoutedGateway(dedicated);
   const dedicatedNamespace = kubernetesNamespaceName(dedicated.namespaceId);
   const dedicatedTenantOwnership = { namespaceId: dedicated.namespaceId };
   const dedicatedDefaultPolicies = new Map(
@@ -1794,6 +1847,9 @@ test("embedded plugin preparation applies runtime egress before gateway readines
         }
       : undefined;
   dedicatedDriver.getOwned = async (kind, name) => {
+    if (kind === "Secret") {
+      return enrolledNodeSecret(dedicatedDriver, dedicated, dedicatedNamespace);
+    }
     if (kind === "NetworkPolicy") {
       return dedicatedDefaultPolicies.get(name);
     }
@@ -2394,7 +2450,7 @@ test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin
 });
 
 test("Kubernetes dedicated successor readiness preserves the stable Agent Service until activation", async () => {
-  const driver = createKubernetesComputeDriver(kubernetesOptions());
+  const driver = dedicatedPluginDriver();
   const predecessor = revision({
     id: "revision-plugin-compute-predecessor",
     revision: 1,
@@ -2407,6 +2463,8 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
     compute: { id: driver.id, implementation: driver.implementation },
     plugins: codexNoPluginState(),
   });
+  useRoutedGateway(candidate);
+  useRoutedGateway(predecessor);
   const namespace = kubernetesNamespaceName(tenant.id);
   const tenantOwnership = { namespaceId: tenant.id };
   const agentName = `agent-${shortHash(candidate.agentId)}`;
@@ -2436,6 +2494,9 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
         }
       : undefined;
   driver.getOwned = async (kind, name) => {
+    if (kind === "Secret") {
+      return enrolledNodeSecret(driver, candidate, namespace);
+    }
     if (kind === "NetworkPolicy") {
       return defaultPolicies.get(name);
     }

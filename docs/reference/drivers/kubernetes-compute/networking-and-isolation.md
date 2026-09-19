@@ -1,6 +1,6 @@
 # Kubernetes networking and isolation
 
-Configure tenant network boundaries, optional private Agent routes, and existing
+Configure tenant network boundaries, private Agent routes, and existing
 namespace ownership for the [Kubernetes Compute Driver](../kubernetes-compute.md).
 
 ## Networking
@@ -49,7 +49,12 @@ channel-provider access is denied.
 See [gateway routing with Envoy](../../gateway-routing.md) for shared infrastructure,
 service-key bootstrap, TLS, and network enforcement.
 
-Optional Installation Compute settings enable stable Agent routes:
+Runtime-enabled dedicated Harnesses require private routing and node enrollment
+before Compute can prepare or activate them. Missing wiring raises a configuration
+error before changing workloads; there is no Gateway-local workspace fallback.
+Embedded Harnesses can still use direct access.
+
+Installation Compute settings enable stable Agent routes:
 
 ```yaml
 gatewayRouting:

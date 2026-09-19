@@ -698,7 +698,9 @@ export async function loadInstallationConfiguration(options: {
         ),
         readNodeCa: async () => {
           const path = environment.NODE_EXTRA_CA_CERTS;
-          if (path === undefined) return undefined;
+          if (path === undefined) {
+            return undefined;
+          }
           const bundle = await readFile(path, "utf8");
           const certificates = bundle.match(
             /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g,
