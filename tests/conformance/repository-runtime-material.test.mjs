@@ -5,7 +5,7 @@ import {
   KubernetesComputeDriver,
   kubernetesNamespaceName,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
-import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repository-credentials/client/config.ts";
+import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 
 const deadlineWallMs = Date.now() + 86400000;
 const client = {

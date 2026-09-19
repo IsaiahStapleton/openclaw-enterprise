@@ -177,8 +177,8 @@ test("client files reject unsafe targets and the launcher refuses absolute API d
   const parent = await mkdtemp(join(tmpdir(), "credential-client-test-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const unsafe = join(parent, "unsafe");
-  await mkdir(unsafe);
-  // A restrictive umask must not turn this unsafe-directory fixture into a private one.
+  await mkdir(unsafe, { mode: 0o755 });
+  // Set the unsafe mode explicitly so a restrictive host umask cannot repair the fixture.
   await chmod(unsafe, 0o755);
   await assert.rejects(
     writeClientConfiguration(opened, join(unsafe, "session"), undefined),

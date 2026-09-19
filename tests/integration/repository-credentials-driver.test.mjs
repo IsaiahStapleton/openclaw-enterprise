@@ -8,7 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DependencyUnavailableError, ScopeViolationError } from "../../packages/occ/src/index.ts";
-import { GitHubRepositoryCredentialDriver } from "../../apps/controller/src/drivers/repository-credentials/github.ts";
+import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
 import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/providers/repository-credentials/control-client.ts";
 import { startRegistryCredentialServiceFixture } from "../fixtures/repository-credentials/registry.mjs";
 
@@ -24,15 +24,27 @@ async function unusedPort() {
 }
 
 function driverFor(registry, socket, sessionDurationSeconds = 3600, publicCa) {
-  return new GitHubRepositoryCredentialDriver(
+  return new GitHubRepoDriver(
     {
       id: registry.providerId,
       client: new UnixRepositoryCredentialControlClient({ controlSocket: socket }),
-      drivers: { repository_credentials: "repository-credentials" },
+      drivers: { repo: "repository-credentials" },
     },
     registry,
     { sessionDurationSeconds, ...(publicCa === undefined ? {} : { publicCa }) },
   );
+}
+
+function assertPublicStatus(status, binding) {
+  assert.deepEqual(Object.keys(status).sort(), ["binding", "deadlineWallMs", "sessionId", "state"]);
+  assert.deepEqual(Object.keys(status.binding).sort(), [
+    "grantId",
+    "providerInstanceId",
+    "repositoryId",
+  ]);
+  assert.deepEqual(status.binding, binding);
+  assert.equal(Object.isFrozen(status), true);
+  assert.equal(Object.isFrozen(status.binding), true);
 }
 
 function gateway(fixture, opened, repository) {
@@ -96,9 +108,10 @@ test(
       3600,
       fixture.tls.ca,
     );
-    await new UnixRepositoryCredentialControlClient({
+    const client = new UnixRepositoryCredentialControlClient({
       controlSocket: fixture.config.gateway.controlSocket,
-    }).health(signal);
+    });
+    await client.health(signal);
     const inputs = resolution.bindings.map((binding) => ({
       namespaceId: fixture.namespaceId,
       admissionId: `${fixture.clock.wallNow()}-${randomUUID()}`,
@@ -110,7 +123,13 @@ test(
     for (let index = 0; index < opened.length; index++) {
       assert.equal(opened[index].kind, "created");
       const result = opened[index];
-      assert.deepEqual(result.session.binding, inputs[index].binding.grant);
+      assertPublicStatus(result.session, inputs[index].binding.grant);
+      assert.notEqual(result.session.binding, inputs[index].binding.grant);
+      const privateStatus = await client.status(result.session.sessionId, signal);
+      assert.equal(typeof privateStatus.activeUses, "number");
+      assert.equal(typeof privateStatus.cleanup.pending, "number");
+      assert.notEqual(result.session, privateStatus);
+      assert.notEqual(result.session.binding, privateStatus.binding);
       assert.equal(result.session.deadlineWallMs, inputs[index].deadlineWallMs);
       assert.equal(result.result, undefined);
       assert.equal(result.bearer, undefined);
@@ -129,7 +148,13 @@ test(
       const recovered = await driver.open({ ...inputs[index], recoverOnly: true }, signal);
       assert.equal(recovered.kind, "recovered");
       assert.equal(recovered.status.sessionId, result.session.sessionId);
+      assertPublicStatus(recovered.status, inputs[index].binding.grant);
+      assert.notEqual(recovered.status, result.session);
+      assert.notEqual(recovered.status.binding, result.session.binding);
       assert.equal(recovered.bearer, undefined);
+      const status = await driver.status(result.session.sessionId, signal);
+      assertPublicStatus(status, inputs[index].binding.grant);
+      assert.equal(status.state, "OPEN");
     }
     // Each real provider observed only its exact numeric repository and profile.
     assert.equal(fixture.repositories[0].github.issuesOfTokens.length, 1);
@@ -167,6 +192,12 @@ test(
     );
     await assert.rejects(changedProvider.open(inputs[0], signal), ScopeViolationError);
 
+    for (let index = 0; index < opened.length; index++) {
+      const closed = await driver.close(opened[index].session.sessionId, signal);
+      assertPublicStatus(closed, inputs[index].binding.grant);
+      assert.notEqual(closed.state, "OPEN");
+    }
+
     await fixture.restart();
     assert.equal(await driver.status(opened[0].session.sessionId, signal), undefined);
     assert.deepEqual(await driver.open({ ...inputs[0], recoverOnly: true }, signal), {
@@ -184,11 +215,35 @@ test("Unix control rejects malformed status and preserves authoritative absence 
   t.after(() => rm(directory, { recursive: true, force: true }));
   const socket = join(directory, "control.sock");
   const id = randomUUID();
+  const driver = driverFor(
+    {
+      version: 1,
+      providerId: "github-test",
+      providerInstanceId: "instance",
+      appId: "1",
+      githubInstallationId: "2",
+      maximumDurationSeconds: 3600,
+      repositories: [
+        {
+          repositoryRef: "project",
+          repositoryId: "73",
+          repository: "example/project",
+          namespaces: [{ namespaceId: "namespace", profiles: ["git-read"] }],
+        },
+      ],
+    },
+    socket,
+    1,
+  );
+  const admitted = driver.resolve({
+    namespaceId: "namespace",
+    bindings: [{ repositoryRef: "project", profile: "git-read" }],
+  }).bindings[0];
   const valid = {
     sessionId: id,
     state: "CLOSED",
     deadlineWallMs: Date.now() + 1000,
-    binding: { providerInstanceId: "instance", repositoryId: "repository", grantId: "grant" },
+    binding: admitted.grant,
     activeUses: 0,
     cleanup: {
       active: 0,
@@ -226,6 +281,168 @@ test("Unix control rejects malformed status and preserves authoritative absence 
     reply = { status: 200, body };
     await assert.rejects(client.close(id, signal), (error) => error.retryable === true);
   }
+  const openInput = {
+    namespaceId: "namespace",
+    admissionId: `${Date.now()}-${randomUUID()}`,
+    binding: admitted,
+    durationSeconds: 1,
+    deadlineWallMs: valid.deadlineWallMs,
+  };
+  const configuration = {
+    gatewayOrigin: "https://credentials.example.test",
+    gitRemote: "https://credentials.example.test/example/project.git",
+    gitUsername: "gateway-session",
+    canonicalApiHost: "github.com",
+    apiHost: "credentials.example.test",
+    repository: "example/project",
+  };
+
+  await t.test(
+    "every public exit validates the complete private observation before projection",
+    async () => {
+      const open = { ...valid, state: "OPEN" };
+      const malformed = [
+        { ...open, activeUses: -1 },
+        { ...open, activeUses: 0.5 },
+        { ...open, activeUses: Number.MAX_SAFE_INTEGER + 1 },
+        { ...open, deadlineWallMs: 0 },
+        { ...open, deadlineWallMs: "1000" },
+        { ...open, deadlineWallMs: Number.MAX_SAFE_INTEGER + 1 },
+        { ...open, sessionId: "invalid/id" },
+        { ...open, state: "UNKNOWN" },
+        { ...open, bearer: "unexpected" },
+        ...Object.keys(open).map((key) =>
+          Object.fromEntries(Object.entries(open).filter(([name]) => name !== key)),
+        ),
+        ...Object.keys(open.binding).flatMap((key) => [
+          { ...open, binding: { ...open.binding, [key]: "" } },
+          { ...open, binding: { ...open.binding, [key]: "invalid\nidentity" } },
+          { ...open, binding: { ...open.binding, [key]: "x".repeat(513) } },
+          {
+            ...open,
+            binding: Object.fromEntries(
+              Object.entries(open.binding).filter(([name]) => name !== key),
+            ),
+          },
+        ]),
+        { ...open, binding: { ...open.binding, extra: "unknown" } },
+        ...["active", "pending", "revoked", "expired", "uncertain"].flatMap((key) => [
+          { ...open, cleanup: { ...open.cleanup, [key]: -1 } },
+          { ...open, cleanup: { ...open.cleanup, [key]: 0.5 } },
+          { ...open, cleanup: { ...open.cleanup, [key]: Number.MAX_SAFE_INTEGER + 1 } },
+          { ...open, cleanup: { ...open.cleanup, [key]: "0" } },
+        ]),
+        { ...open, cleanup: { ...open.cleanup, auxiliaryPending: 0 } },
+        { ...open, cleanup: { ...open.cleanup, extra: 0 } },
+        ...Object.keys(open.cleanup).map((key) => ({
+          ...open,
+          cleanup: Object.fromEntries(
+            Object.entries(open.cleanup).filter(([name]) => name !== key),
+          ),
+        })),
+      ];
+      for (const status of malformed) {
+        reply = {
+          status: 201,
+          body: { session: status, bearer: "b".repeat(43), client: configuration },
+        };
+        await assert.rejects(driver.open(openInput, signal), DependencyUnavailableError);
+        reply = { status: 200, body: status };
+        await assert.rejects(
+          driver.open({ ...openInput, recoverOnly: true }, signal),
+          DependencyUnavailableError,
+        );
+        await assert.rejects(driver.status(id, signal), DependencyUnavailableError);
+        // Use CLOSED for otherwise OPEN observations so rejection must inspect the malformed field.
+        reply = {
+          status: 200,
+          body: { ...status, ...(status.state === "OPEN" ? { state: "CLOSED" } : {}) },
+        };
+        await assert.rejects(driver.close(id, signal), DependencyUnavailableError);
+      }
+    },
+  );
+
+  await t.test(
+    "DISPOSED rejects each outstanding obligation but retains historical cleanup counts",
+    async () => {
+      const disposed = {
+        ...valid,
+        state: "DISPOSED",
+        cleanup: {
+          active: 0,
+          pending: 0,
+          revoked: 2,
+          expired: 3,
+          uncertain: 0,
+          auxiliaryPending: false,
+        },
+      };
+      reply = { status: 200, body: disposed };
+      assert.deepEqual(await client.status(id, signal), disposed);
+      assert.deepEqual(await client.close(id, signal), disposed);
+      for (const status of [
+        await driver.status(id, signal),
+        await driver.close(id, signal),
+        (await driver.open({ ...openInput, recoverOnly: true }, signal)).status,
+      ]) {
+        assertPublicStatus(status, disposed.binding);
+        assert.equal(status.state, "DISPOSED");
+      }
+      for (const outstanding of [
+        { ...disposed, activeUses: 1 },
+        ...["active", "pending", "uncertain"].map((key) => ({
+          ...disposed,
+          cleanup: { ...disposed.cleanup, [key]: 1 },
+        })),
+        { ...disposed, cleanup: { ...disposed.cleanup, auxiliaryPending: true } },
+      ]) {
+        reply = { status: 200, body: outstanding };
+        await assert.rejects(client.status(id, signal), (error) => error.retryable === true);
+        await assert.rejects(client.close(id, signal), (error) => error.retryable === true);
+        await assert.rejects(driver.status(id, signal), DependencyUnavailableError);
+        await assert.rejects(driver.close(id, signal), DependencyUnavailableError);
+        await assert.rejects(
+          driver.open({ ...openInput, recoverOnly: true }, signal),
+          DependencyUnavailableError,
+        );
+      }
+    },
+  );
+
+  await t.test(
+    "open retains exact admitted binding, deadline and recovery-only checks",
+    async () => {
+      const open = { ...valid, state: "OPEN" };
+      for (const status of [
+        ...Object.keys(open.binding).map((key) => ({
+          ...open,
+          binding: { ...open.binding, [key]: "different" },
+        })),
+        { ...open, deadlineWallMs: openInput.deadlineWallMs + 1 },
+      ]) {
+        reply = {
+          status: 201,
+          body: { session: status, bearer: "b".repeat(43), client: configuration },
+        };
+        await assert.rejects(driver.open(openInput, signal), DependencyUnavailableError);
+        reply = { status: 200, body: status };
+        await assert.rejects(
+          driver.open({ ...openInput, recoverOnly: true }, signal),
+          DependencyUnavailableError,
+        );
+      }
+      reply = {
+        status: 201,
+        body: { session: open, bearer: "b".repeat(43), client: configuration },
+      };
+      await assert.rejects(
+        driver.open({ ...openInput, recoverOnly: true }, signal),
+        DependencyUnavailableError,
+      );
+    },
+  );
+
   await t.test("created response rejects a non-string client username", async () => {
     const configuration = {
       gatewayOrigin: "https://credentials.example.test",

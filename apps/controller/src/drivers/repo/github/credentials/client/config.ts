@@ -1,9 +1,7 @@
 import { lstat, mkdir, mkdtemp, open, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type {
-  RepositoryCredentialClientConfiguration,
-  RepositoryCredentialSessionFiles,
-} from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialSessionFiles } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialClientConfiguration } from "../../../credentials/client-contracts.ts";
 import type { RepositoryCredentialSessionResult } from "../../../credentials/service-contracts.ts";
 import { assertPrivateDirectory, readPrivateFile } from "./private-files.ts";
 

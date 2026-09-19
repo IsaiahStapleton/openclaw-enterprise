@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
-import type { RepositoryCredentialClientConfiguration } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialClientConfiguration } from "../../../credentials/client-contracts.ts";
 import { readClientConfiguration, type ClientFiles } from "./config.ts";
 import { assertPrivateDirectory, readPrivateFile } from "./private-files.ts";
 

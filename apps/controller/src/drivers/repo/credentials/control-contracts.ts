@@ -2,8 +2,8 @@ import type {
   RepositoryCredentialSessionInput,
   RepositoryCredentialBoundSessionInput,
   RepositoryCredentialSessionResult,
+  SessionStatus,
 } from "./service-contracts.ts";
-import type { RepositoryCredentialSessionStatus } from "@openclaw-enterprise/contracts";
 
 export type ControlRequest =
   | Readonly<{
@@ -16,6 +16,4 @@ export type ControlRequest =
 export type ControlErrorCode =
   "invalid-request" | "not-found" | "admission-missing" | "unavailable" | "overloaded";
 export type ControlResponse =
-  | RepositoryCredentialSessionResult
-  | RepositoryCredentialSessionStatus
-  | Readonly<{ error: ControlErrorCode }>;
+  RepositoryCredentialSessionResult | SessionStatus | Readonly<{ error: ControlErrorCode }>;

@@ -11,7 +11,7 @@ import type {
   RepositoryCredentialMaterialRef,
   RepositoryCredentialRuntimeBinding,
   RepositoryRevisionState,
-} from "./repository-credentials.ts";
+} from "./repo.ts";
 
 export {
   LOGGING_LEVELS,
@@ -27,16 +27,15 @@ export type {
   OpenRepositorySessionResult,
   RepositoryBindingRequest,
   RepositoryBindingSelection,
-  RepositoryCredentialDriver,
+  RepoDriver,
   RepositoryCredentialGrantIdentity,
-  RepositoryCredentialClientConfiguration,
   RepositoryCredentialMaterialRef,
   RepositoryCredentialResolution,
   RepositoryCredentialRuntimeBinding,
   RepositoryCredentialSessionFiles,
   RepositoryCredentialSessionStatus,
   RepositoryRevisionState,
-} from "./repository-credentials.ts";
+} from "./repo.ts";
 
 export const DRIVER_CAPABILITIES = Object.freeze([
   "iam",
@@ -46,7 +45,7 @@ export const DRIVER_CAPABILITIES = Object.freeze([
   "secret",
   "sandbox",
   "plugin",
-  "repository_credentials",
+  "repo",
 ] as const);
 
 export type DriverCapability = (typeof DRIVER_CAPABILITIES)[number];
@@ -72,7 +71,7 @@ export interface GitHubRepositoryCredentialProviderDefinition {
   readonly id: string;
   readonly type: "github";
   readonly configuration: { readonly registryPath: string };
-  readonly drivers: { readonly repository_credentials: string };
+  readonly drivers: { readonly repo: string };
 }
 
 export type ProviderDefinition =

@@ -1,8 +1,22 @@
-import type {
-  RepositoryCredentialClientConfiguration,
-  RepositoryCredentialGrantIdentity,
-  RepositoryCredentialSessionStatus,
-} from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialClientConfiguration } from "./client-contracts.ts";
+
+/** Full private service observation, validated before projection at the Driver boundary. */
+export interface SessionStatus {
+  readonly sessionId: string;
+  readonly state: "OPEN" | "CLOSED" | "DISPOSED";
+  readonly deadlineWallMs: number;
+  readonly binding: RepositoryCredentialGrantIdentity;
+  readonly activeUses: number;
+  readonly cleanup: Readonly<{
+    active: number;
+    pending: number;
+    revoked: number;
+    expired: number;
+    uncertain: number;
+    auxiliaryPending: boolean;
+  }>;
+}
 
 /** Protected single-repository operator input; registry admission uses the bound form. */
 export type RepositoryCredentialSessionInput = Readonly<{
@@ -22,7 +36,7 @@ export interface RepositoryCredentialBoundSessionInput extends RepositoryCredent
 }
 
 export interface RepositoryCredentialSessionResult {
-  readonly session: RepositoryCredentialSessionStatus;
+  readonly session: SessionStatus;
   readonly bearer: string;
   readonly client: RepositoryCredentialClientConfiguration;
 }
@@ -84,8 +98,8 @@ export interface SessionControl {
   open(
     input: RepositoryCredentialSessionInput | RepositoryCredentialBoundSessionInput,
   ): RepositoryCredentialSessionResult;
-  status(sessionId: string): RepositoryCredentialSessionStatus | undefined;
-  close(sessionId: string): RepositoryCredentialSessionStatus;
+  status(sessionId: string): SessionStatus | undefined;
+  close(sessionId: string): SessionStatus;
 }
 export interface CredentialService extends SessionControl {
   shutdown(graceMs: number): Promise<ShutdownSummary>;

@@ -7,29 +7,11 @@ export type RepositoryCredentialGrantIdentity = Readonly<{
   grantId: string;
 }>;
 
-export interface RepositoryCredentialClientConfiguration {
-  readonly gatewayOrigin: string;
-  readonly gitRemote: string;
-  readonly gitUsername: string;
-  readonly canonicalApiHost: string;
-  readonly apiHost: string;
-  readonly repository: string;
-}
-
 export interface RepositoryCredentialSessionStatus {
   readonly sessionId: string;
   readonly state: "OPEN" | "CLOSED" | "DISPOSED";
   readonly deadlineWallMs: number;
   readonly binding: RepositoryCredentialGrantIdentity;
-  readonly activeUses: number;
-  readonly cleanup: Readonly<{
-    active: number;
-    pending: number;
-    revoked: number;
-    expired: number;
-    uncertain: number;
-    auxiliaryPending: boolean;
-  }>;
 }
 
 export interface RepositoryBindingRequest {
@@ -78,8 +60,8 @@ export type OpenRepositorySessionResult =
   | { readonly kind: "recovered"; readonly status: RepositoryCredentialSessionStatus }
   | { readonly kind: "missing" };
 
-export interface RepositoryCredentialDriver extends Driver {
-  readonly capability: "repository_credentials";
+export interface RepoDriver extends Driver {
+  readonly capability: "repo";
   readonly maintenanceIntervalMs: number;
   resolve(input: {
     readonly namespaceId: string;
