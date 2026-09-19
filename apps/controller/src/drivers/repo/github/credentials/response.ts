@@ -1,4 +1,8 @@
-import type { HeaderFields, RequestHead, ResponsePolicy } from "../../driver-contracts.ts";
+import type {
+  HeaderFields,
+  RequestHead,
+  ResponsePolicy,
+} from "../../credentials/backend-contracts.ts";
 import { classifyResource, createResourceRewriter } from "./response-resources.ts";
 import { createUrlRewriter, rewritePaginationLinks } from "./response-urls.ts";
 

@@ -1,4 +1,4 @@
-import type { RequestHead } from "../../../driver-contracts.ts";
+import type { RequestHead } from "../../../credentials/backend-contracts.ts";
 import type { GitHubProfile } from "../types.ts";
 
 export type Route = Readonly<{

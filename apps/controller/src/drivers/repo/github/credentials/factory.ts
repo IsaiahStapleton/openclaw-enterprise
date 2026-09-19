@@ -1,4 +1,4 @@
-import type { RepoDriver } from "../../driver-contracts.ts";
+import type { RepositoryBackend } from "../../credentials/backend-contracts.ts";
 import { createGitHubDriver } from "./driver.ts";
 import { validateGitHubConfiguration } from "./config.ts";
 import { createProviderTransport } from "./provider-transport.ts";
@@ -39,7 +39,7 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
     trustedUpstreamOrigins: new Set([apiOrigin, gitOrigin]),
     resolve: grants.resolve,
     ...authentication,
-    create({ authority: input, custody, clock }): RepoDriver {
+    create({ authority: input, custody, clock }): RepositoryBackend {
       const authority = Object.freeze({ ...input });
       const { profile, grant } = grants.forAuthority(authority);
       const permissions = permissionsForProfile(profile);

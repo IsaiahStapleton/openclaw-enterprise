@@ -3,8 +3,8 @@ import type {
   AttemptContext,
   Clock,
   DriverCustody,
-  RepoDriver,
-} from "../../../driver-contracts.ts";
+  RepositoryBackend,
+} from "../../../credentials/backend-contracts.ts";
 import type { ProviderTransport } from "../provider-transport.ts";
 import type { GitHubConfiguration, GitHubKeyOwner } from "../types.ts";
 import type { GitHubDriverState } from "./state.ts";
@@ -20,7 +20,9 @@ type AcquisitionDependencies = Readonly<{
   exchange: ProviderTransport;
 }>;
 
-export function createCredentialAcquisition(deps: AcquisitionDependencies): RepoDriver["acquire"] {
+export function createCredentialAcquisition(
+  deps: AcquisitionDependencies,
+): RepositoryBackend["acquire"] {
   const { state, custody, clock, key, config, permissions, exchange } = deps;
   async function acquireWithJwt(
     attempt: AttemptContext,
