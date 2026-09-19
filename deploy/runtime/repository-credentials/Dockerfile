@@ -2,6 +2,5 @@ FROM docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd51144464
 WORKDIR /app
 COPY package.json ./package.json
 COPY dist ./dist
-RUN rm -rf /app/dist/client
 USER node
-ENTRYPOINT ["node", "/app/dist/main.js"]
+ENTRYPOINT ["node", "/app/dist/repository-credentials.js"]

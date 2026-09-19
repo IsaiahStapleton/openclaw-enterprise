@@ -1,7 +1,5 @@
 **
 !package.json
-!Dockerfile
-!Dockerfile.client
 !dist/
 !dist/**
 # Incremental compiler state and source maps are not runtime inputs.
