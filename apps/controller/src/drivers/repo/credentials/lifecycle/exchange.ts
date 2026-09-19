@@ -1,11 +1,11 @@
-import type { Clock, RepoDriver, RequestPlan } from "../driver-contracts.ts";
+import type { Clock, RepositoryBackend, RequestPlan } from "../backend-contracts.ts";
 import type { DispatchGate, ExchangeOutcome, ExchangeSender } from "../internal-contracts.ts";
 import type { CapturedCredential } from "../custody.ts";
 import type { LifecycleOwner } from "../lifecycle.ts";
 import { waitWithin } from "../provider-queue.ts";
 
 export interface ExecutingExchange {
-  readonly session: Readonly<{ lifecycle: LifecycleOwner; driver: RepoDriver }>;
+  readonly session: Readonly<{ lifecycle: LifecycleOwner; driver: RepositoryBackend }>;
   readonly plan: RequestPlan;
   readonly controller: AbortController;
   readonly deadline: number;

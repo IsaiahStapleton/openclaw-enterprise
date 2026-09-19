@@ -1,16 +1,16 @@
 import type {
-  BoundDriverFactory,
+  RepositoryBackendFactory,
   Clock,
   Denied,
   RequestHead,
   RequestPlan,
-} from "./driver-contracts.ts";
+} from "./backend-contracts.ts";
 import type {
   OpenSessionInput,
   ServiceConfig,
   SessionStatus,
   ShutdownSummary,
-} from "./contracts.ts";
+} from "./service-contracts.ts";
 import type { CredentialServiceOwner, ExchangeRef, ExchangeSender } from "./internal-contracts.ts";
 import { createCustody } from "./custody.ts";
 import type { CustodyOwner } from "./custody.ts";
@@ -28,7 +28,7 @@ interface Session {
   state: SessionStatus["state"];
   readonly custody: CustodyOwner;
   readonly lifecycle: LifecycleOwner;
-  readonly driver: ReturnType<BoundDriverFactory["create"]>;
+  readonly driver: ReturnType<RepositoryBackendFactory["create"]>;
   readonly exchanges: Set<Exchange>;
   cancelDeadline(): void;
 }
@@ -41,7 +41,7 @@ const deny = (status: number, code: string): Denied =>
   Object.freeze({ kind: "denied", status, code });
 
 export function createCredentialService(
-  options: Readonly<{ config: ServiceConfig; factory: BoundDriverFactory; clock: Clock }>,
+  options: Readonly<{ config: ServiceConfig; factory: RepositoryBackendFactory; clock: Clock }>,
 ): CredentialServiceOwner {
   const { factory, clock } = options;
   // Caller mutation cannot change limits or broaden an already admitted policy.
@@ -201,7 +201,7 @@ export function createCredentialService(
           }
         },
       });
-      let driver: ReturnType<BoundDriverFactory["create"]>;
+      let driver: ReturnType<RepositoryBackendFactory["create"]>;
       try {
         driver = factory.create({
           authority: admission.authority,

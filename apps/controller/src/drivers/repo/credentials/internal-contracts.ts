@@ -1,12 +1,12 @@
-import type { CredentialService, ServiceConfig } from "./contracts.ts";
+import type { CredentialService, ServiceConfig } from "./service-contracts.ts";
 import type {
-  BoundDriverFactory,
+  RepositoryBackendFactory,
   Bounds,
   Denied,
   PrivateUpstreamRequest,
   RequestHead,
   RequestPlan,
-} from "./driver-contracts.ts";
+} from "./backend-contracts.ts";
 
 /** Service composition and transport collaborators; not a package entry point. */
 declare const exchangeIdentity: unique symbol;
@@ -25,7 +25,7 @@ export type ExchangeSender = (
 export interface LoadedConfiguration {
   readonly config: ServiceConfig;
   readonly tls: TlsMaterial;
-  readonly factory: BoundDriverFactory;
+  readonly factory: RepositoryBackendFactory;
   readonly trustedUpstreamOrigins: ReadonlySet<string>;
   close(): void;
 }

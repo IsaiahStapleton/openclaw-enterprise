@@ -1,4 +1,4 @@
-import type { PublicClientConfiguration, RepositoryGrantIdentity } from "./contracts.ts";
+import type { PublicClientConfiguration, RepositoryGrantIdentity } from "./service-contracts.ts";
 import type { JsonValue } from "./json-value.ts";
 
 /** Backend extension protocol. Runtime owners also check original object identity. */
@@ -120,11 +120,10 @@ export interface PrivateUpstreamRequest {
   readonly headers: HeaderFields;
 }
 export type Denied = Readonly<{ kind: "denied"; status: number; code: string }>;
-export interface RepoDriver {
+export interface RepositoryBackend {
   readonly binding: RepositoryGrantIdentity;
   readonly replacement: "overlap" | "drain-before";
   readonly cleanup: "revocable" | "expiry-only";
-  readonly safeCleanupRetry: Readonly<{ retire: boolean; finalize: boolean }>;
   acquire(
     attempt: AttemptContext,
     previous: CredentialRef | undefined,
@@ -144,11 +143,11 @@ export interface ResolvedGrant {
   readonly binding: RepositoryGrantIdentity;
   readonly client: PublicClientConfiguration;
 }
-export interface BoundDriverFactory {
+export interface RepositoryBackendFactory {
   parseAuthentication(head: RequestHead, authorization: string): string | Denied;
   resolve(profile: string): ResolvedGrant;
   create(
     input: Readonly<{ authority: AuthorityIdentity; custody: DriverCustody; clock: Clock }>,
-  ): RepoDriver;
+  ): RepositoryBackend;
   unauthenticated(head: RequestHead): Readonly<{ kind: "challenge"; realm: string }> | Denied;
 }

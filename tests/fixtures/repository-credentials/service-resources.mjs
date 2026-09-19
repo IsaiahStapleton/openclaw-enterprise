@@ -12,8 +12,8 @@ export async function createGitHubServiceFactory(
   { config, clock, privateKey, trustedEndpoints, providerInstanceId = "github-fixture" },
 ) {
   const [{ createGitHubDriverFactory }, { createGitHubKeyOwner }] = await Promise.all([
-    appModule("backends/github/index"),
-    appModule("backends/github/material"),
+    appModule("drivers/repo/github/credentials/index"),
+    appModule("drivers/repo/github/credentials/material"),
   ]);
   const key = createGitHubKeyOwner({ privateKey, appId: fixtureAppId, clock });
   resources.after(() => key.close());
