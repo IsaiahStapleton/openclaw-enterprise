@@ -193,6 +193,11 @@ for browsing and search. Keep it generated from the OpenAPI contract; the checke
 reports its word count without requiring a split. This exception covers no other
 page.
 
+Files named exactly `AGENTS.md`, including nested instruction documents, are
+also exempt from the length thresholds. The checker still reports their word
+counts. Exemptions follow the resolved file: an `AGENTS.md` symlink pointing to
+an ordinary document does not exempt that document.
+
 ## Documentation editing
 
 Use [technical-writing](.agents/skills/technical-writing/SKILL.md) when creating,
