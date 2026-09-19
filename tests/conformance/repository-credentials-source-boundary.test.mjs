@@ -41,6 +41,9 @@ test("credential source boundary rejects new raw capabilities in the real source
   for (const directory of directories) {
     await cp(join(sourceRoot, directory), join(root, directory), { recursive: true });
   }
+  for (const entrypoint of ["repository-credentials.ts", "repository-credentials.mjs"]) {
+    await cp(join(sourceRoot, entrypoint), join(root, entrypoint));
+  }
   assert.ok((await verifyRepositoryCredentialBoundary(root)) > 0);
 
   await t.test("type-only imports and ordinary object methods remain valid", () =>
@@ -78,19 +81,28 @@ test("credential source boundary rejects new raw capabilities in the real source
       }
     });
   }
-  await t.test("missing check-config entrypoint fails closed", async () => {
-    const path = join(root, "composition/repository-credentials/check-config.ts");
-    const parked = join(temporary, "check-config.ts");
-    await rename(path, parked);
-    try {
-      await assert.rejects(
-        verifyRepositoryCredentialBoundary(root),
-        /Missing credential entrypoint/,
-      );
-    } finally {
-      await rename(parked, path);
-    }
-  });
+  for (const entrypoint of [
+    "repository-credentials.ts",
+    "repository-credentials.mjs",
+    "composition/repository-credentials/check-config.ts",
+    "drivers/repo/github/credentials/client/launch.ts",
+    "drivers/repo/github/credentials/client/operator.ts",
+    "drivers/repo/github/credentials/client/git-helper.ts",
+  ]) {
+    await t.test(`missing entrypoint ${entrypoint} fails closed`, async () => {
+      const path = join(root, entrypoint);
+      const parked = join(temporary, "parked-entrypoint");
+      await rename(path, parked);
+      try {
+        await assert.rejects(
+          verifyRepositoryCredentialBoundary(root),
+          /Missing credential entrypoint/,
+        );
+      } finally {
+        await rename(parked, path);
+      }
+    });
+  }
   await t.test("service cannot import a client command owner", () =>
     appendSource(
       root,
@@ -110,6 +122,29 @@ test("credential source boundary rejects new raw capabilities in the real source
     ),
   );
   const cases = [
+    [
+      "client runtime remains inside its subtree",
+      'import { createCredentialService } from "../../../credentials/service.ts";',
+      /client runtime cannot load service owner/,
+      "drivers/repo/github/credentials/client/boundary-service.ts",
+    ],
+    [
+      "streaming sender is private to its transport owner",
+      'import { createUpstreamSender } from "./transport/upstream.js";',
+      /raw sender drivers\/repo\/credentials\/transport\/upstream.ts/,
+    ],
+    [
+      "process composition cannot read command arguments",
+      "void process.argv;",
+      /raw process capability argv/,
+      "composition/repository-credentials/service.ts",
+    ],
+    [
+      "launcher cannot load an unrelated emitted controller entrypoint",
+      'import { main } from "../dist/index.js";',
+      /runtime import escapes credential source/,
+      "repository-credentials.mjs",
+    ],
     [
       "unscanned controller source",
       'import { initialize } from "../../../index.ts";',

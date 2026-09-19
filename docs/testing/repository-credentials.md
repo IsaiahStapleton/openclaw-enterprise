@@ -87,8 +87,10 @@ and client artifacts under `.build/repository-credentials/`. The service contain
 `dist/repository-credentials.js` and the check-config entrypoint. The client
 contains `launch.js`, `operator.js`, and `git-helper.js` under
 `dist/drivers/repo/github/credentials/client/`, plus their runtime dependencies.
-The package test exercises detached artifacts without workspace source or
-runtime `node_modules`; it must not fall back to source when a module is missing.
+The package test starts the detached service, admits and closes a session over
+its Unix socket, and runs the emitted launcher and Git helper. Both artifacts
+run without workspace source or runtime `node_modules`; missing modules fail
+without a source fallback. No provider issuance is needed for that local test.
 
 ### Real Git and pinned gh
 

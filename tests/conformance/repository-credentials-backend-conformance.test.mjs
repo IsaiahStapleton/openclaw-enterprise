@@ -68,7 +68,7 @@ test("second backend retains renewal through expiry and finalizes through the re
     gatewayOrigin: config.gateway.publicOrigin,
     clock,
   });
-  const { createCredentialService } = await appModule("service");
+  const { createCredentialService } = await appModule("drivers/repo/credentials/service");
   const service = createCredentialService({ config, factory, clock });
   t.after(() => service.shutdown(1000));
   const opened = service.open({ durationSeconds: 86400, profile: "git-write" });

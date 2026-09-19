@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
-updated: "2026-09-18"
-last_updated_session: "authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772"
+updated: "2026-09-19"
+last_updated_session: "authoring-run/9feb5f57-7456-4831-8474-1fc7871d17c6"
 ---
 
 # Repository credential service flow
@@ -17,7 +17,7 @@ container and live-provider qualification have separate evidence.
 
 ## Entry Points
 
-- `apps/controller/src/composition/repository-credentials/service.ts:startCredentialService` loads trusted configuration and composes the service and listeners for the CLI or a trusted process launcher.
+- `apps/controller/src/repository-credentials.ts:main` starts the dedicated service process from protected configuration.
 - `apps/controller/src/drivers/repo/github/credentials/client/operator.ts:callControl` carries operator admission/status/close requests over the private Unix socket.
 - `apps/controller/src/drivers/repo/credentials/server.ts:startListeners` accepts HTTPS client traffic after protected startup succeeds.
 
@@ -293,38 +293,40 @@ A structural flow check does not establish any of those runtime results.
 
 ## Changelog
 
-- 2026-09-18 18:51: Refresh operation, authentication and protected-input owners after behavior-preserving extraction. (authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772 - d29fac7d363eb1cfb3dab6306a81cc3b8daf395d)
+- 2026-09-19 21:46: Reconcile transport and client ownership with accompanying detached service/client build and runtime checks. (public authoring-run/9feb5f57-7456-4831-8474-1fc7871d17c6 - bd3af4a7214c3e7b2142ef38183137786226cde9)
 
-- 2026-09-18 12:03: Keep admitted TLS exchanges outside the header timeout while bounding incomplete handshakes and headers. (authoring-run/36d61593-c993-48a9-9b32-1bcb6e898a3d - b0b0b8b7ba98d2c8506ba261334aba1e769a87ef)
+- 2026-09-18 18:51: Refresh operation, authentication and protected-input owners after behavior-preserving extraction. (source `d29fac7d363eb1cfb3dab6306a81cc3b8daf395d`)
 
-- 2026-09-18 03:38: Capture upstream origin authority and construct canonical bounded private request headers before dispatch. (authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115 - 7c26fe8660e0af5d223baa2da83689974df36ebe)
+- 2026-09-18 12:03: Keep admitted TLS exchanges outside the header timeout while bounding incomplete handshakes and headers. (source `b0b0b8b7ba98d2c8506ba261334aba1e769a87ef`)
 
-- 2026-09-18 03:33: Start upstream final-response-header deadlines after completed upload and preserve early-response handling. (authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115 - 7f2fd5988dfce4a485db48d33f0480b3f9485b86)
+- 2026-09-18 03:38: Capture upstream origin authority and construct canonical bounded private request headers before dispatch. (source `7c26fe8660e0af5d223baa2da83689974df36ebe`)
 
-- 2026-09-18 03:29: Preserve private control admission under public socket saturation. (authoring-run/2c59e207-660b-4e08-9ffa-8402a6ce2115 - 0d34c2159d6a8fbec213cacf6ba42ca66aa9170a)
+- 2026-09-18 03:33: Start upstream final-response-header deadlines after completed upload and preserve early-response handling. (source `7f2fd5988dfce4a485db48d33f0480b3f9485b86`)
 
-- 2026-09-18 03:28: Document accompanying protected-path package startup and runtime session-control facade. (authoring-run/3e7c0a60-2298-47e1-8656-9d63bbb7b5ed - 0d34c2159d6a8fbec213cacf6ba42ca66aa9170a)
+- 2026-09-18 03:29: Preserve private control admission under public socket saturation. (source `0d34c2159d6a8fbec213cacf6ba42ca66aa9170a`)
+
+- 2026-09-18 03:28: Document accompanying protected-path package startup and runtime session-control facade. (source `0d34c2159d6a8fbec213cacf6ba42ca66aa9170a`)
 
 - 2026-09-18 01:59: Document accompanying admission reconciliation, failed-construction drainage and separate use/cleanup deadlines. (01a0b098-e407-7d42-bc53-9bce979ac912 - 87e5c418d7a6c45688ce3be87c204660b431c703)
 
-- 2026-09-17 23:47: Refresh configuration, route classification, driver composition and provider request source pointers from the accompanying adapter extraction. (authoring-run/17d63f83-3b86-4bfa-950d-89c50a927b0d - 251bf5662df1fd61e132ca57a36008409add1996)
+- 2026-09-17 23:47: Refresh configuration, route classification, driver composition and provider request source pointers from the accompanying adapter extraction. (source `251bf5662df1fd61e132ca57a36008409add1996`)
 
-- 2026-09-17 23:40: Refresh contract and response-policy source owners after extraction; preserve the existing lifecycle. (authoring-run/6c0de761-bba9-4070-9920-e7d6a83620dd - 3f0ce26cf864a8909c52104c1c6b6092ca21c857)
+- 2026-09-17 23:40: Refresh contract and response-policy source owners after extraction; preserve the existing lifecycle. (source `3f0ce26cf864a8909c52104c1c6b6092ca21c857`)
 
 - 2026-09-17 22:22: Document accompanying git-read, default git-write and git-full profile changes and provider-owned route authorization. (01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c4ecf32727aef09a6b4caeec16870bf391f7a505)
 
-- 2026-09-17 22:10: Refuse new waiters after acquisition cancellation while retaining original settlement and cleanup ownership. (authoring-run/d1f4d5a2-f493-43f0-8b8f-5471e61bb690 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+- 2026-09-17 22:10: Refuse new waiters after acquisition cancellation while retaining original settlement and cleanup ownership. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
 
-- 2026-09-17 21:39: Reject late clone configuration and helper-qualified URLs; preserve child outcomes when temporary-home cleanup fails. (authoring-run/2b8be1d2-818e-45ff-940f-ac9b9ab1997f - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+- 2026-09-17 21:39: Reject late clone configuration and helper-qualified URLs; preserve child outcomes when temporary-home cleanup fails. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
 
-- 2026-09-17 21:19: Reject Git URL userinfo before remote and direct network operations. (authoring-run/56442091-a0e5-47e2-a786-8b84d7c9fc9e - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+- 2026-09-17 21:19: Reject Git URL userinfo before remote and direct network operations. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
 
-- 2026-09-17 20:59: Reject inherited user-agent header injection before client launch. (authoring-run/6d7795bc-d3fd-4e6e-ae64-92943e8146b7 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+- 2026-09-17 20:59: Reject inherited user-agent header injection before client launch. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
 
-- 2026-09-17 20:40: Enforce repository HTTP settings and selected-session mounts; clarify response completion, URL preservation and cleanup capacity wakeups. (authoring-run/3c3b1dae-322e-4d11-8e7b-de1404dde505 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+- 2026-09-17 20:40: Enforce repository HTTP settings and selected-session mounts; clarify response completion, URL preservation and cleanup capacity wakeups. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
 
-- 2026-09-17 20:17: Correct source ownership after adapter and transport refactors. (authoring-run/1350f319-5493-4d4d-8d78-4622f8567d79 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+- 2026-09-17 20:17: Correct source ownership after adapter and transport refactors. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
 
-- 2026-09-17 20:12: Clarify client composition and exchange ownership source pointers. (authoring-run/18d52c2b-5de9-44a1-99b7-8c2e7f750620 - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+- 2026-09-17 20:12: Clarify client composition and exchange ownership source pointers. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
 
-- 2026-09-17 19:55: Document accompanying standalone service and client implementation. (authoring-run/5bd80749-b95a-4543-a055-0b77329a00ec - 2f8435756d0e82f0cc5205b009f5f1e0df692808)
+- 2026-09-17 19:55: Document accompanying standalone service and client implementation. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
