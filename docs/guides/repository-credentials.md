@@ -8,8 +8,8 @@ bearer; GitHub App keys and installation tokens stay in the service. Review the
 
 ## Build and validate
 
-From a checkout with the repository's Node 24 and pinned pnpm dependencies
-prepared, build only this application:
+From the repository root with Node 24 and the pinned pnpm dependencies prepared,
+build the emitted service and client artifacts:
 
 ```sh
 pnpm credentials:build
@@ -18,8 +18,11 @@ pnpm credentials:check-config /absolute/path/service.json
 
 The check reads protected configuration, validates the RSA key and TLS inputs,
 and prints a safe configuration summary. It does not start listeners or call
-GitHub. The emitted app uses Node built-ins and needs no controller packages or
-runtime `node_modules`.
+GitHub. The builder writes separate `.build/repository-credentials/service` and
+`.build/repository-credentials/client` directories. Each contains its own manifest
+and emitted runtime closure, using Node built-ins without runtime `node_modules`.
+Source lives under the controller tree; the credential service still runs as a
+separate process and owns the App signing key.
 
 For `invalid-configuration`, inspect the file and every directory in its absolute
 path. Use root or service-user ownership, private configuration/key files, and
@@ -75,17 +78,19 @@ mode 0700. Bind-mount only the selected session directory, never its host parent
 or sibling sessions. The client validates that directory beneath the protected
 container root.
 
-Use the launcher for each supported command:
+Use the emitted client launcher for each supported command. Its absolute path
+continues to work after changing into the cloned repository:
 
 ```sh
-pnpm credentials:client /absolute/path/sessions/task git clone \
+credential_client=/absolute/path/checkout/.build/repository-credentials/client/dist/drivers/repo/github/credentials/client/launch.js
+node "$credential_client" /absolute/path/sessions/task git clone \
   https://credentials.example.internal/example/project.git
 cd project
-node /absolute/path/checkout/apps/repository-credentials/dist/client/launch.js \
+node "$credential_client" \
   /absolute/path/sessions/task git fetch origin
-node /absolute/path/checkout/apps/repository-credentials/dist/client/launch.js \
+node "$credential_client" \
   /absolute/path/sessions/task git switch an-existing-branch
-node /absolute/path/checkout/apps/repository-credentials/dist/client/launch.js \
+node "$credential_client" \
   /absolute/path/sessions/task git push origin HEAD:refs/heads/agent-feature
 ```
 
@@ -98,24 +103,24 @@ executable is exactly `gh` 2.100.0. Create a
 request body file in the working directory, then use relative API paths:
 
 ```sh
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method POST repos/example/project/pulls --input create-pr.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   repos/example/project/pulls/1
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method PATCH repos/example/project/pulls/1 --input update-pr.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method POST repos/example/project/issues --input create-issue.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --method POST repos/example/project/issues/1/comments --input comment.json
-pnpm credentials:client /absolute/path/sessions/task gh api \
+node "$credential_client" /absolute/path/sessions/task gh api \
   --paginate repos/example/project/issues/1/comments
 ```
 
 Native PR creation uses an explicit already-pushed head branch:
 
 ```sh
-pnpm credentials:client /absolute/path/sessions/task gh pr create \
+node "$credential_client" /absolute/path/sessions/task gh pr create \
   -R github.com/example/project --base main --head agent-feature \
   --title "Example change" --body-file body.md
 ```
@@ -126,7 +131,8 @@ exact App permissions define supported access.
 
 ## Recover an admission
 
-If `open` loses its response, use the `credential-admission` ID printed to
+Run the operator commands from the checkout root. If `open` loses its response,
+use the `credential-admission` ID printed to
 stderr before dispatch. Repeat the command with the same duration and profile,
 adding `--admission-id`:
 
@@ -149,33 +155,53 @@ see the [ephemeral-session limits](../reference/repository-credentials.md#sessio
 
 ## Container images
 
-Build after emitting the application:
+From the checkout root, rebuild the artifacts from the source you intend to run,
+then build the two images:
 
 ```sh
+pnpm credentials:build
 pnpm credentials:image
 pnpm credentials:client-image
 ```
+
+The image scripts use the following Dockerfiles and separate emitted contexts:
+
+```sh
+docker build -f deploy/runtime/repository-credentials/Dockerfile \
+  -t repository-credentials:local .build/repository-credentials/service
+docker build -f deploy/runtime/repository-credentials/Dockerfile.client \
+  -t repository-credentials-client:local .build/repository-credentials/client
+docker image inspect --format '{{.Id}} {{json .Config.Entrypoint}}' \
+  repository-credentials:local repository-credentials-client:local
+```
+
+The service entrypoint is `node /app/dist/repository-credentials.js`; the client
+entrypoint is
+`node /app/dist/drivers/repo/github/credentials/client/launch.js`. Record the
+source commit, working-tree changes and immutable image IDs with verification
+results; a reused tag alone does not identify the tested source.
 
 If build-time HTTPS downloads require an additional trusted CA, optionally pass
 a PEM CA bundle through a BuildKit secret:
 
 ```sh
 docker build --secret id=build-ca,src=/absolute/path/build-ca-bundle.pem \
-  -f apps/repository-credentials/Dockerfile.client \
-  -t repository-credentials-client:local apps/repository-credentials
+  -f deploy/runtime/repository-credentials/Dockerfile.client \
+  -t repository-credentials-client:local .build/repository-credentials/client
 ```
 
 The secret supplies curl trust for that download step and is not stored in the
 image. Without it, curl uses the image's default CA trust. Runtime gateway trust
 still comes from the selected session configuration.
 
-Both Dockerfiles use the dedicated app context and copy only its manifest and
-emitted code. The client image installs Git and checksum-verifies pinned `gh`
+Each Dockerfile copies only its artifact's manifest and emitted code. The service
+artifact excludes the client command modules; the client artifact excludes the
+signing, session and listener owners. The client image installs Git and checksum-verifies pinned `gh`
 2.100.0. Neither image includes service configuration, private keys, session
 files or a control socket. The client entrypoint takes `SESSION_DIRECTORY
  git|gh ARGS...`.
 
-The optional `apps/repository-credentials/compose.yaml` publishes service port
+The optional `deploy/examples/repository-credentials/compose.yaml` publishes service port
 8443 at host port 443 and keeps service/control mounts separate from client
 mounts. Supply its required `CREDENTIAL_SERVICE_UID`, `CREDENTIAL_SERVICE_GID`,
 `CREDENTIAL_SERVICE_INPUTS`, `CREDENTIAL_SERVICE_CONTROL`,
@@ -187,9 +213,16 @@ container mounts. Arrange gateway DNS and certificate trust before running the
 client; Compose does not provision public DNS or a CA. For example:
 
 ```sh
-docker compose -f apps/repository-credentials/compose.yaml run --rm client \
+docker compose -f deploy/examples/repository-credentials/compose.yaml config
+docker compose -f deploy/examples/repository-credentials/compose.yaml up -d --build service
+docker compose -f deploy/examples/repository-credentials/compose.yaml run --rm --build client \
   /session git clone https://credentials.example.internal/example/project.git
 ```
+
+Rendering Compose checks declared configuration. To verify delivered separation,
+inspect the running service/client mounts and client surfaces using the
+[container qualification procedure](../testing/repository-credentials.md#verify-separate-running-containers).
+Neither image inspection nor a Compose rendering establishes live GitHub compatibility.
 
 ## Inspect and close
 

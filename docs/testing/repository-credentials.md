@@ -29,7 +29,9 @@ responsible for custody, authorization and cleanup.
 ## Check source authority boundaries
 
 Run `node scripts/verify-repository-credentials-boundary.mjs` after changing the
-service. The same check runs through `pnpm check:workspace` in baseline CI. It
+common owners in `apps/controller/src/drivers/repo/credentials/`, the GitHub
+backend/client in `apps/controller/src/drivers/repo/github/credentials/`, or the
+separate-process assembly in `apps/controller/src/composition/repository-credentials/`. The same check runs through `pnpm check:workspace` in baseline CI. It
 parses every credential-service source file using the workspace's pinned
 Prettier TypeScript parser. Runtime imports and re-exports must stay within the
 scanned source or use reviewed external modules and named members. Erased
@@ -120,12 +122,28 @@ and cleanup retaining credential material after authentication becomes ineligibl
 
 ## Qualify emitted artifacts
 
-Build the service and client images using the
-[operator guide](../guides/repository-credentials.md). Then combine the emitted
-service closure with the delivered client toolchain in an owned test-only image:
+Build the final artifacts and run the detached package check first:
 
 ```sh
-docker build \
+pnpm credentials:build
+node --test tests/integration/repository-credentials-package.test.mjs
+```
+
+The builder starts from the controller's emitted code and writes separate
+`.build/repository-credentials/service` and `.build/repository-credentials/client`
+closures. The service includes `repository-credentials.js` and
+`composition/repository-credentials/check-config.js`; the client includes
+`drivers/repo/github/credentials/client/{launch,operator,git-helper}.js` and their
+runtime dependencies. Detached loading must work without workspace source or
+runtime `node_modules`.
+
+Build the service and client images using the
+[operator guide](../guides/repository-credentials.md#container-images). Then
+combine those artifacts in an owned test-only image. Use the same local Docker
+builder for all three builds so it resolves the delivered input images:
+
+```sh
+docker build --builder default --load --pull=false \
   --build-arg SERVICE_IMAGE=repository-credentials:local \
   --build-arg CLIENT_IMAGE=repository-credentials-client:local \
   -f tests/fixtures/repository-credentials/Dockerfile.qualification \
@@ -134,7 +152,15 @@ REPOSITORY_CREDENTIALS_TEST_IMAGE=repository-credentials-qualification:test \
   node --test tests/integration/repository-credentials-container.test.mjs
 ```
 
-Record both input image identities and the qualification image ID with results.
+Record the source commit/tree, working-tree changes, both input image IDs and the
+qualification image ID with results:
+
+```sh
+docker image inspect --format '{{.Id}} {{json .Config.Entrypoint}}' \
+  repository-credentials:local repository-credentials-client:local \
+  repository-credentials-qualification:test
+```
+
 The first case imports `/app/dist`, exercises the emitted production service and
 client entrypoints, and uses the same long-session acceptance sequence. The
 second runs alternate-backend conformance through those emitted common owners,
@@ -144,12 +170,51 @@ Without an explicit image selector, these cases report a skip. Source test
 success alone does not establish this artifact result.
 
 The service, upstream fixtures and clients run together inside that test driver.
-Passing it proves emitted-artifact composition and forwarding, not credential
-isolation of a separate Agent container. The third case checks the rendered
-Compose mount configuration only. Runtime isolation requires separate delivered
-service and client containers, with only the session files, public trust and
-workspace mounted into the client, plus inspection of the running client surfaces.
-Keep that result separate from the combined fixture and Compose configuration checks.
+Passing it proves emitted-artifact composition and forwarding. The Compose case
+renders `deploy/examples/repository-credentials/compose.yaml` and checks declared
+mount separation; it does not start those services.
+
+## Verify separate running containers
+
+Select both delivered images to run the distinct isolation case:
+
+```sh
+REPOSITORY_CREDENTIALS_SERVICE_IMAGE=repository-credentials:local \
+REPOSITORY_CREDENTIALS_CLIENT_IMAGE=repository-credentials-client:local \
+  node --test tests/integration/repository-credentials-isolation.test.mjs
+```
+
+The harness resolves the selectors to different immutable image IDs, starts
+separate service and client containers, and inspects running mounts, processes,
+client files and sanitized outputs. The client receives the selected session,
+public trust and workspace; service inputs, the private control socket and
+sibling sessions remain outside its mounts. Actual Git and pinned `gh` use the
+service against a controlled provider. This proves the tested ordinary-container
+custody boundary, without a network-confinement or live-GitHub claim.
+
+Omitting both selectors skips this case; selecting only one fails. Selected
+images, Docker and other required prerequisites must be available. Record the
+exact images, case results and cleanup outcome separately from the combined
+qualification image and rendered Compose check.
+
+## Record each evidence boundary
+
+| Check                         | Evidence it can establish                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Source tests and source guard | Behavior of real owners against named protocol fixtures; reviewed import/I/O boundaries.                      |
+| Detached package check        | Emitted entrypoints and runtime dependency closure without source fallback.                                   |
+| Combined qualification image  | Emitted service/client composition, controlled hour-13 push/API operations and alternate-backend conformance. |
+| Rendered Compose              | Declared paths and mount separation.                                                                          |
+| Separate running containers   | Delivered image identity and observed client/service custody for the exercised commands.                      |
+| Authorized live smoke         | Real provider behavior and cleanup for the selected repository, grant and client version.                     |
+
+Retain selectors, versions, source/artifact/image identities, pass/fail/skip counts
+and cleanup results. Missing selectors leave evidence unavailable; they do not
+qualify the corresponding boundary. Historical installed or live results stay
+bound to their original artifacts. After changes, record justified equivalence
+for each affected assertion or rerun its owning check. These packaging checks do
+not establish OCC/worker/Compute integration, an installed ordinary-Agent model
+contribution, a real-time thirteen-hour soak or release readiness.
 
 ## Run an authorized live smoke
 
