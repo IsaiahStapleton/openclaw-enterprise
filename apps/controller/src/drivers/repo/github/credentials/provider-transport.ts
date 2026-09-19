@@ -1,7 +1,7 @@
 import type {
   AttemptContext,
   Clock,
-} from "../../../drivers/repository-credentials/backend-contracts.ts";
+} from "../../credentials/backend-contracts.ts";
 import type { GitHubProfile } from "./types.ts";
 import { sendProviderRequest } from "./provider-transport/request.ts";
 import { prepareProviderScope } from "./provider-transport/request-options.ts";

@@ -17,5 +17,7 @@ RUN --mount=type=secret,id=build-ca,required=false \
 WORKDIR /app
 COPY package.json ./package.json
 COPY dist ./dist
+# Runtime code must stay readable when the build host uses a restrictive umask.
+RUN chmod -R a=rX /app
 USER node
-ENTRYPOINT ["node", "/app/dist/drivers/repository-credentials/client/launch.js"]
+ENTRYPOINT ["node", "/app/dist/drivers/repo/github/credentials/client/launch.js"]

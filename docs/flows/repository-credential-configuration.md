@@ -1,26 +1,24 @@
 ---
 created: 2026-09-18
-updated: 2026-09-18
-last_updated_session: "codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a"
+updated: 2026-09-19
+last_updated_session: "authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b"
 ---
 
 # Repository credential configuration flow
 
 ## Overview
 
-Controller composition validates repository credential configuration, GitHub
-App key material and TLS files before returning a frozen configuration owner to
-the separate service process. Standalone startup reads protected operator files;
-Kubernetes startup first snapshots selected projections into private files. The
-configuration check reports a nonsecret summary and closes its owner. This flow
-stops before provider requests or listener startup.
+The repository credential composition loader validates operator-selected
+configuration, GitHub App key material, and TLS files before returning a frozen
+configuration owner. Its `--check-config` entry point reports a nonsecret
+summary and closes that owner. This flow stops before provider requests or
+listener startup.
 
 ## Entry Points
 
 - Trigger: `pnpm credentials:check-config /absolute/path/service.json`.
 - Source: `apps/controller/src/composition/repository-credentials/check-config.ts:checkConfiguration`
   and `apps/controller/src/composition/repository-credentials/config.ts:loadConfiguration`.
-- Kubernetes startup: `apps/controller/src/composition/repository-credentials/projected-inputs.ts:prepareProjectedInputs`.
 - Assumptions: Node 24, prepared build output, operator-selected absolute paths,
   and the ownership and permission policy in the [reference](../reference/repository-credentials.md#configuration).
 
@@ -52,23 +50,6 @@ graph TD
 
 ### 1. Snapshot Kubernetes inputs when selected
 
-`apps/controller/src/composition/repository-credentials/projected-inputs.ts:prepareProjectedInputs`
-
-Kubernetes composition selects one generation of the service projection and one
-generation of the canonical registry. It validates regular files with bounded
-reads and stable inode identities, then checks the expected gateway origin,
-listener, control socket and Provider identity. It rewrites material paths to a
-service-owned mode-0700 directory and writes mode-0600 snapshots. Restart cleanup
-removes only known private regular files after checking the complete directory
-and each file's unchanged identity; unknown entries fail startup.
-
-The snapshots enter the same protected loader as standalone configuration.
-Projection handling does not relax that loader's ancestor policy. App and TLS
-private keys remain confined to service inputs. Temporary read buffers are
-cleared on success or failure. Standalone configuration skips this phase.
-
-### 2. Establish a protected path from the filesystem root
-
 `apps/controller/src/composition/repository-credentials/protected-file.ts:readProtectedFile`
 
 The loader requires a normalized absolute path and validates its directory
@@ -81,21 +62,20 @@ parent remains unwritable by those users.
 The loader opens the final basename without following symlinks. It checks the
 file owner, mode, link count, type, and size, performs a bounded read, and compares
 the open file with the named inode and its original metadata. Invalid or replaced
-files fail before their contents become configuration. The reader clears its scratch
-buffer and awaits file closure before returning. Success transfers an independent
-buffer to its caller; failure returns no filesystem details. Configuration maps
-that failure to `invalid-configuration` and clears successfully returned bytes.
+files fail before their contents become configuration. The private reader returns
+either owned bytes or a failure without filesystem details. It clears its read
+buffer and closes the file handle before transferring the return buffer. If
+closing fails, the reader clears the still-owned return buffer and reports
+failure. The configuration loader owns and clears bytes only after a successful
+transfer.
 
 ### 3. Validate configuration and construct material owners
 
 `apps/controller/src/composition/repository-credentials/config.ts:loadConfiguration`
 
-Composition validates the service policy and selects either one GitHub repository
-or the canonical registry, together with its App identity and key path. That
-validated selection determines the factory after protected reads load the App
-key, certificate and TLS key. Registry policy remains bounded to its installation,
-repository and Namespace/profile grants. The GitHub key owner accepts the
-configured RSA signing key; TLS context creation validates
+The composition loader validates the service policy and GitHub configuration, then
+repeats protected reads for the App key, certificate, and TLS key. The GitHub key
+owner accepts the configured RSA signing key; TLS context creation validates
 the certificate and private-key pair. The frozen result owns the selected
 factory and TLS buffers. Failure closes any constructed owner and clears loaded
 buffers before returning `invalid-configuration`.
@@ -116,7 +96,7 @@ which retains it until startup failure or process shutdown. The
 
 ## Debugging and Verification
 
-Run `pnpm credentials:build`, then the configuration command from the
+Follow the build and configuration commands in the
 [operator guide](../guides/repository-credentials.md). Success prints JSON with
 `valid: true`; failure prints `invalid-configuration`. Inspect every ancestor
 when safe-looking files still fail validation. A shared writable deployment
@@ -140,12 +120,8 @@ startup validation, not live GitHub behavior or platform integration.
 
 ## Changelog
 
-- 2026-09-18 20:32: Reconcile the protected reader with controller startup and retain Kubernetes input ownership. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c426001fc353544f9623ead2e644c7857caa6d82)
+- 2026-09-19 21:29: Move configuration ownership to composition and document return-buffer ownership through descriptor close. Verify composed source. (public authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b - 5d8329753f4e17402f619d392acc8fc3d112f620)
 
-- 2026-09-18 19:10: Trace the protected reader result and validated backend selection while preserving file and material ownership. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - 4221fc5591b750cd59b459815a7bc327e98f295c)
+- 2026-09-18 18:51: Separate protected-file reading from configuration assembly while preserving validation and disposal. (source `d29fac7d363eb1cfb3dab6306a81cc3b8daf395d`)
 
-- 2026-09-18 18:51: Separate protected-file reading from configuration assembly while preserving validation and disposal. (authoring-run/4d187903-027a-4a6d-a9d2-eef50eaad772 - d29fac7d363eb1cfb3dab6306a81cc3b8daf395d)
-
-- 2026-09-18 09:45: Trace the accompanying controller-owned protected loader and Kubernetes private projection snapshots without relaxing ancestor validation. (authoring-run/99b8e474-5c94-4558-bce6-e7d6032f832c - 6fd1516de000bde46d4cd43e0d21ec3f0167d65e)
-
-- 2026-09-18 03:32: Document protected ancestor validation and configuration ownership with the accompanying security correction (codex/01a0b287-be12-7492-8826-a168e5b53103 - 2d4877aaf438c919a2240109cb2e7067e4d75b4d)
+- 2026-09-18 03:32: Document protected ancestor validation and configuration ownership with the accompanying security correction (source `2d4877aaf438c919a2240109cb2e7067e4d75b4d`)

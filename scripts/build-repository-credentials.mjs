@@ -7,7 +7,7 @@ import { parsers } from "prettier/plugins/babel";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const emittedRoot = await realpath(join(repositoryRoot, "apps/controller/dist"));
 const artifactRoot = join(repositoryRoot, ".build/repository-credentials");
-const clientPath = "drivers/repository-credentials/client";
+const clientRoot = join(emittedRoot, "drivers/repo/github/credentials/client");
 
 function contained(root, path) {
   const suffix = relative(root, path);
@@ -71,14 +71,14 @@ function dependencies(source, path) {
 async function closure(name, entrypoints) {
   const files = new Map();
   const pending = entrypoints.map((path) => resolve(emittedRoot, path));
-  const allowedRoot = name === "client" ? join(emittedRoot, clientPath) : emittedRoot;
   while (pending.length) {
     const path = pending.pop();
     if (files.has(path)) {
       continue;
     }
     if (
-      !contained(allowedRoot, path) ||
+      !contained(emittedRoot, path) ||
+      (name === "client" && !contained(clientRoot, path)) ||
       !path.endsWith(".js") ||
       !(await lstat(path)).isFile() ||
       (await realpath(path)) !== path
@@ -104,18 +104,17 @@ async function closure(name, entrypoints) {
   return files;
 }
 
-// Snapshot and validate both complete closures before replacing either artifact.
-// Literal dynamic imports are included; source-only types and unrelated platform
-// modules never become image inputs.
+// Validate both closures before replacing either artifact. Source-only types and
+// unrelated controller modules stay outside these separate runtimes.
 const service = await closure("service", [
   "repository-credentials.js",
   "composition/repository-credentials/check-config.js",
-  "composition/repository-credentials/projected-inputs.js",
-  "composition/repository-credentials/probe.js",
 ]);
 const client = await closure(
   "client",
-  ["launch", "router", "operator", "git-helper"].map((name) => `${clientPath}/${name}.js`),
+  ["launch", "operator", "git-helper"].map(
+    (name) => `drivers/repo/github/credentials/client/${name}.js`,
+  ),
 );
 
 async function stage(name, files) {

@@ -4,7 +4,7 @@ import type {
   RepositoryCredentialClientConfiguration,
   RepositoryCredentialSessionFiles,
 } from "@openclaw-enterprise/contracts";
-import type { RepositoryCredentialSessionResult } from "../service-contracts.ts";
+import type { RepositoryCredentialSessionResult } from "../../../credentials/service-contracts.ts";
 import { assertPrivateDirectory, readPrivateFile } from "./private-files.ts";
 
 export interface ClientFiles {

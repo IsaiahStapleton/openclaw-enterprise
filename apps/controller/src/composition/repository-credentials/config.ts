@@ -1,27 +1,27 @@
 import { createPrivateKey } from "node:crypto";
 import { createSecureContext } from "node:tls";
-import type { Clock } from "../../drivers/repository-credentials/backend-contracts.ts";
+import type { Clock } from "../../drivers/repo/credentials/backend-contracts.ts";
 import type { LoadedConfiguration } from "./contracts.ts";
 import {
   createGitHubDriverFactory,
   createGitHubKeyOwner,
-} from "../../providers/repository-credentials/github/index.ts";
+} from "../../drivers/repo/github/credentials/index.ts";
 import {
   record,
   string,
   validateServiceConfig,
-} from "../../drivers/repository-credentials/configuration.ts";
-import { validateGitHubConfiguration } from "../../providers/repository-credentials/github/config.ts";
+} from "../../drivers/repo/credentials/configuration.ts";
+import { validateGitHubConfiguration } from "../../drivers/repo/github/credentials/config.ts";
 import {
   GITHUB_REPOSITORY_REGISTRY_MAX_BYTES,
   validateGitHubRepositoryRegistry,
-} from "../../providers/repository-credentials/github/registry.ts";
-import type { GitHubRepositoryRegistry } from "../../providers/repository-credentials/github/registry.ts";
+} from "../../drivers/repo/github/credentials/registry.ts";
+import type { GitHubRepositoryRegistry } from "../../drivers/repo/github/credentials/registry.ts";
 import type {
   GitHubConfiguration,
   GitHubDriverFactory,
-} from "../../providers/repository-credentials/github/types.ts";
-import { createGitHubRegistryDriverFactory } from "../../providers/repository-credentials/github/registry-factory.ts";
+} from "../../drivers/repo/github/credentials/types.ts";
+import { createGitHubRegistryDriverFactory } from "../../drivers/repo/github/credentials/registry-factory.ts";
 import { readProtectedFile } from "./protected-file.ts";
 
 type SelectedBackend = {

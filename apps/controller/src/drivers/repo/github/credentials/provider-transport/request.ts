@@ -3,7 +3,7 @@ import type { ClientRequest, IncomingMessage } from "node:http";
 import type {
   AttemptContext,
   Clock,
-} from "../../../../drivers/repository-credentials/backend-contracts.ts";
+} from "../../../credentials/backend-contracts.ts";
 import type { ProviderResponse } from "../provider-transport.ts";
 import type { ProviderScope } from "./request-options.ts";
 import { providerRequestOptions } from "./request-options.ts";

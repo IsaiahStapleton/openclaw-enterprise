@@ -3,9 +3,9 @@ import { request as httpRequest } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RepositoryCredentialBoundSessionInput } from "../service-contracts.ts";
+import type { RepositoryCredentialBoundSessionInput } from "../../../credentials/service-contracts.ts";
 import { readPrivateFile } from "./private-files.ts";
-import type { ControlRequest, ControlResponse } from "../control-contracts.ts";
+import type { ControlRequest, ControlResponse } from "../../../credentials/control-contracts.ts";
 import { writeClientConfiguration } from "./config.ts";
 
 export async function callControl(

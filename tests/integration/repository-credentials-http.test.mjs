@@ -4,10 +4,10 @@ import { createServer as httpServer, request } from "node:http";
 import { createServer as httpsServer } from "node:https";
 import { connect } from "node:net";
 import { gzipSync } from "node:zlib";
-import { inspectRequestHead } from "../../apps/controller/src/drivers/repository-credentials/transport/request.ts";
-import { createUpstreamSender } from "../../apps/controller/src/drivers/repository-credentials/transport/upstream.ts";
-import { sendError } from "../../apps/controller/src/drivers/repository-credentials/transport/errors.ts";
-import { createSystemClock } from "../../apps/controller/src/drivers/repository-credentials/clock.ts";
+import { inspectRequestHead } from "../../apps/controller/src/drivers/repo/credentials/transport/request.ts";
+import { createUpstreamSender } from "../../apps/controller/src/drivers/repo/credentials/transport/upstream.ts";
+import { sendError } from "../../apps/controller/src/drivers/repo/credentials/transport/errors.ts";
+import { createSystemClock } from "../../apps/controller/src/drivers/repo/credentials/clock.ts";
 import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
 import { createTlsMaterial, listen } from "../fixtures/repository-credentials/process.mjs";
 

@@ -3,7 +3,7 @@ import { startCredentialService } from "./composition/repository-credentials/ser
 
 export { startCredentialService } from "./composition/repository-credentials/service.ts";
 export type { RunningService } from "./composition/repository-credentials/service.ts";
-export type { CredentialService } from "./drivers/repository-credentials/service-contracts.ts";
+export type { CredentialService } from "./drivers/repo/credentials/service-contracts.ts";
 
 /** Direct process composition; check-config loads no session or listener owner. */
 export async function main(args: readonly string[] = process.argv.slice(2)): Promise<void> {

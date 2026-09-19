@@ -24,6 +24,13 @@ their selected Node.js tests. `openapi:check` compares generated routes and both
 API artifacts with the checked-in versions. `typecheck` and `build` currently
 invoke the same TypeScript build command.
 
+The [repository credential checks](repository-credentials.md) use that controller
+output for the private common engine, GitHub backend, and configuration loader.
+`pnpm credentials:build` builds the workspace and emits separate service and
+Git/gh client artifacts. The service includes configuration checking and its
+own process entrypoint; building does not start that process. Detached package
+tests exercise both artifacts without workspace source or runtime dependencies.
+
 The [conformance tests](../../tests/conformance) cover domain rules and selected
 Driver contracts. Kubernetes conformance tests use fixtures and rendered
 resources; they do not exercise a live cluster.

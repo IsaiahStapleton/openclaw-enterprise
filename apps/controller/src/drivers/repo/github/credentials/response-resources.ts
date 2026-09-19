@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "../../../drivers/repository-credentials/json-value.ts";
+import type { JsonObject, JsonValue } from "../../credentials/json-value.ts";
 
 type ResourceKind = "repository" | "issue" | "pull" | "comment" | "other";
 type LinkFields = Readonly<Record<string, RegExp>>;

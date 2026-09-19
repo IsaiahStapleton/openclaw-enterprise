@@ -4,7 +4,7 @@ import type {
   DriverCustody,
   RepositoryBackend,
   RetireOutcome,
-} from "../../../../drivers/repository-credentials/backend-contracts.ts";
+} from "../../../credentials/backend-contracts.ts";
 import type { ProviderResponse, ProviderTransport } from "../provider-transport.ts";
 import type { GitHubDriverState } from "./state.ts";
 import { tokenLifetimeMs } from "./lifetime.ts";

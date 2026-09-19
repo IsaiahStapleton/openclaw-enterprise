@@ -115,7 +115,7 @@ async function dropControlResponse(t, target) {
 async function admissionFixture(t, onCreate) {
   const resources = createResourceScope();
   t.after(() => resources.close());
-  const { callControl } = await credentialDriverModule("client/operator");
+  const { callControl } = await appModule("drivers/repo/github/credentials/client/operator");
   const clock = createControlledClock();
   const tls = await createTlsMaterial(resources);
   const base = await createServiceConfiguration(resources, { sessions: 1 });
@@ -322,7 +322,7 @@ test(
   async (t) => {
     const resources = createResourceScope();
     t.after(() => resources.close());
-    const { createSystemClock } = await credentialDriverModule("clock");
+    const { createSystemClock } = await appModule("drivers/repo/credentials/clock");
     const clock = createSystemClock();
     const tls = await createTlsMaterial(resources);
     const base = await createServiceConfiguration(resources);
@@ -409,7 +409,11 @@ test(
     assert.equal(agentStatus, 401);
     const clientParent = await temporaryDirectory(resources);
     const clientDirectory = join(clientParent, "session");
-    const operator = credentialClientPath("operator");
+    const operator = join(
+      appRoot,
+      "drivers/repo/github/credentials/client",
+      `operator.${appExtension}`,
+    );
     const relay = await dropControlResponse(resources, config.gateway.controlSocket);
     const admissionId = `${Date.now()}-${randomUUID()}`;
     const failed = await run(
@@ -498,9 +502,9 @@ test(
   async (t) => {
     const [{ createSystemClock }, { createCredentialService }, { startListeners }] =
       await Promise.all([
-        credentialDriverModule("clock"),
-        credentialDriverModule("service"),
-        credentialDriverModule("server"),
+        appModule("drivers/repo/credentials/clock"),
+        appModule("drivers/repo/credentials/service"),
+        appModule("drivers/repo/credentials/server"),
       ]);
     const clock = createSystemClock();
     const tls = await createTlsMaterial(t);
@@ -534,7 +538,7 @@ test(
   async (t) => {
     const resources = createResourceScope();
     t.after(() => resources.close());
-    const { createSystemClock } = await credentialDriverModule("clock");
+    const { createSystemClock } = await appModule("drivers/repo/credentials/clock");
     const clock = createSystemClock();
     const tls = await createTlsMaterial(resources);
     const upstream = await startAlternateUpstream(resources, { tls });
@@ -602,9 +606,9 @@ test(
     t.after(() => resources.close());
     const [{ createSystemClock }, { createCredentialService }, { startListeners }] =
       await Promise.all([
-        credentialDriverModule("clock"),
-        credentialDriverModule("service"),
-        credentialDriverModule("server"),
+        appModule("drivers/repo/credentials/clock"),
+        appModule("drivers/repo/credentials/service"),
+        appModule("drivers/repo/credentials/server"),
       ]);
     const clock = createSystemClock();
     const tls = await createTlsMaterial(resources);

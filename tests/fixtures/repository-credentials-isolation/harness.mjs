@@ -279,7 +279,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
         "--entrypoint",
         "node",
         clientId,
-        "/app/dist/drivers/repository-credentials/client/operator.js",
+        "/app/dist/drivers/repo/github/credentials/client/operator.js",
         operation,
         "--socket",
         "/run/repository-control/control.sock",
@@ -365,7 +365,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       "node",
       "--input-type=module",
       "-e",
-      "import { existsSync } from 'node:fs'; if (existsSync('/app/dist/drivers/repository-credentials/client')) process.exit(1);",
+      "import { existsSync } from 'node:fs'; if (existsSync('/app/dist/drivers/repo/github/credentials/client')) process.exit(1);",
     ]);
     t.diagnostic(
       JSON.stringify({
@@ -411,7 +411,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
           "exec",
           names.agent,
           "node",
-          "/app/dist/drivers/repository-credentials/client/launch.js",
+          "/app/dist/drivers/repo/github/credentials/client/launch.js",
           "/session",
           command,
           ...args,

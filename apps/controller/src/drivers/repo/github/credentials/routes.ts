@@ -2,8 +2,8 @@ import type {
   Denied,
   RequestHead,
   RequestPlan,
-} from "../../../drivers/repository-credentials/backend-contracts.ts";
-import type { ServiceLimits } from "../../../drivers/repository-credentials/service-contracts.ts";
+} from "../../credentials/backend-contracts.ts";
+import type { ServiceLimits } from "../../credentials/service-contracts.ts";
 import type { GitHubProfile } from "./types.ts";
 import { createResponsePolicy } from "./response.ts";
 import { classifyRoute, nativeGraphqlAccept } from "./routes/classification.ts";

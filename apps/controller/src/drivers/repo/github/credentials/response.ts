@@ -2,7 +2,7 @@ import type {
   HeaderFields,
   RequestHead,
   ResponsePolicy,
-} from "../../../drivers/repository-credentials/backend-contracts.ts";
+} from "../../credentials/backend-contracts.ts";
 import { classifyResource, createResourceRewriter } from "./response-resources.ts";
 import { createUrlRewriter, rewritePaginationLinks } from "./response-urls.ts";
 

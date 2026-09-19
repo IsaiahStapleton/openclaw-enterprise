@@ -172,21 +172,21 @@ an OCC Agent or connect a client container to the platform lifecycle.
 
 ## Build and validate
 
-Prepare the repository's Node 24 and pinned pnpm dependencies. Run the `pnpm`
-and Docker examples from the checkout root; the client commands below run from
-your working repository. Build the controller project and stage the separate
-credential service and client artifacts:
+From the repository root with Node 24 and the pinned pnpm dependencies prepared,
+build the emitted service and client artifacts:
 
 ```sh
 pnpm credentials:build
 pnpm credentials:check-config /absolute/path/service.json
 ```
 
-The build stages `.build/repository-credentials/service` and
-`.build/repository-credentials/client`. Each contains a minimal manifest and its
-selected emitted modules, using Node built-ins without runtime `node_modules`.
-The check validates protected configuration, RSA and TLS inputs, and prints a
-safe summary without starting listeners or calling GitHub.
+The check reads protected configuration, validates the RSA key and TLS inputs,
+and prints a safe configuration summary. It does not start listeners or call
+GitHub. The builder writes separate `.build/repository-credentials/service` and
+`.build/repository-credentials/client` directories. Each contains its own manifest
+and emitted runtime closure, using Node built-ins without runtime `node_modules`.
+Source lives under the controller tree; the credential service still runs as a
+separate process and owns the App signing key.
 
 For `invalid-configuration`, inspect the file and every directory in its absolute
 path. Use root or service-user ownership, private configuration/key files, and
@@ -242,33 +242,61 @@ mode 0700. Bind-mount only the selected session directory, never its host parent
 or sibling sessions. The client validates that directory beneath the protected
 container root.
 
-Use an absolute launcher path so commands continue to work after entering the
-cloned repository. Replace `/absolute/path/checkout` with the OCE checkout:
+Use the emitted client launcher for each supported command. Its absolute path
+continues to work after changing into the cloned repository:
 
 ```sh
-credential_client=/absolute/path/checkout/apps/controller/dist/drivers/repository-credentials/client/launch.js
+credential_client=/absolute/path/checkout/.build/repository-credentials/client/dist/drivers/repo/github/credentials/client/launch.js
 node "$credential_client" /absolute/path/sessions/task git clone \
   https://credentials.example.internal/example/project.git
 cd project
-node "$credential_client" /absolute/path/sessions/task git fetch origin
-node "$credential_client" /absolute/path/sessions/task git switch an-existing-branch
-node "$credential_client" /absolute/path/sessions/task git push origin HEAD:refs/heads/agent-feature
+node "$credential_client" \
+  /absolute/path/sessions/task git fetch origin
+node "$credential_client" \
+  /absolute/path/sessions/task git switch an-existing-branch
+node "$credential_client" \
+  /absolute/path/sessions/task git push origin HEAD:refs/heads/agent-feature
 ```
 
 Use credential-free HTTPS URLs. If the launcher refuses inherited URL credentials,
 remove userinfo from remote fetch/push URLs and `url.*.insteadOf` or
 `url.*.pushInsteadOf` destinations; the selected session helper supplies authentication.
 
-For API work, use the same absolute launcher with `gh api` and relative paths,
-or `gh pr create` with an explicit already-pushed head, as shown above. The
-launcher checks for `gh` 2.100.0. It does not support `gh auth login`, browser
-flows, extensions or arbitrary CLI commands. Never inject a PAT to bypass a
-route or permission failure.
+API commands require a `git-full` session. The launcher checks that the
+executable is exactly `gh` 2.100.0. Create a
+request body file in the working directory, then use relative API paths:
+
+```sh
+node "$credential_client" /absolute/path/sessions/task gh api \
+  --method POST repos/example/project/pulls --input create-pr.json
+node "$credential_client" /absolute/path/sessions/task gh api \
+  repos/example/project/pulls/1
+node "$credential_client" /absolute/path/sessions/task gh api \
+  --method PATCH repos/example/project/pulls/1 --input update-pr.json
+node "$credential_client" /absolute/path/sessions/task gh api \
+  --method POST repos/example/project/issues --input create-issue.json
+node "$credential_client" /absolute/path/sessions/task gh api \
+  --method POST repos/example/project/issues/1/comments --input comment.json
+node "$credential_client" /absolute/path/sessions/task gh api \
+  --paginate repos/example/project/issues/1/comments
+```
+
+Native PR creation uses an explicit already-pushed head branch:
+
+```sh
+node "$credential_client" /absolute/path/sessions/task gh pr create \
+  -R github.com/example/project --base main --head agent-feature \
+  --title "Example change" --body-file body.md
+```
+
+Select a separate branch when trying both REST and native PR creation. Do not
+run `gh auth login` or inject a PAT when a command fails. The gateway routes and
+exact App permissions define supported access.
 
 ## Recover an admission
 
-Return to the OCE checkout root for operator commands.
-If `open` loses its response, use the `credential-admission` ID printed to
+Run the operator commands from the checkout root. If `open` loses its response,
+use the `credential-admission` ID printed to
 stderr before dispatch. Repeat the command with the same duration and profile,
 adding `--admission-id`:
 
@@ -281,7 +309,7 @@ pnpm credentials:operator open \
   --admission-id ADMISSION_ID
 ```
 
-A recovered response contains `recovered: true` and public session status,
+A recovered response contains `recovered: true` and credential-free session status,
 without creating client files or returning the bearer again. Close that session
 using its reported ID and inspect cleanup status. Then explicitly run `open`
 without `--admission-id`, choosing a new output directory if needed.
@@ -291,12 +319,31 @@ see the [ephemeral-session limits](../reference/repository-credentials.md#sessio
 
 ## Container images
 
-Build from the staged artifacts produced by `pnpm credentials:build`:
+From the checkout root, rebuild the artifacts from the source you intend to run,
+then build the two images:
 
 ```sh
+pnpm credentials:build
 pnpm credentials:image
 pnpm credentials:client-image
 ```
+
+The image scripts use the following Dockerfiles and separate emitted contexts:
+
+```sh
+docker build -f deploy/runtime/repository-credentials/Dockerfile \
+  -t repository-credentials:local .build/repository-credentials/service
+docker build -f deploy/runtime/repository-credentials/Dockerfile.client \
+  -t repository-credentials-client:local .build/repository-credentials/client
+docker image inspect --format '{{.Id}} {{json .Config.Entrypoint}}' \
+  repository-credentials:local repository-credentials-client:local
+```
+
+The service entrypoint is `node /app/dist/repository-credentials.js`; the client
+entrypoint is
+`node /app/dist/drivers/repo/github/credentials/client/launch.js`. Record the
+source commit, working-tree changes and immutable image IDs with verification
+results; a reused tag alone does not identify the tested source.
 
 If build-time HTTPS downloads require an additional trusted CA, optionally pass
 a PEM CA bundle through a BuildKit secret:
@@ -311,28 +358,39 @@ The secret supplies curl trust for that download step and is not stored in the
 image. Without it, curl uses the image's default CA trust. Runtime gateway trust
 still comes from the selected session configuration.
 
-The Dockerfiles under `deploy/runtime/repository-credentials/` use separate
-staged service and client contexts. The client image includes only the client
-modules, installs Git and checksum-verifies pinned `gh` 2.100.0; it excludes the
-service and GitHub provider implementation. Neither image includes service
-configuration, private keys, session files or a control socket. The client
-entrypoint takes `SESSION_DIRECTORY git|gh ARGS...`.
+Each Dockerfile copies only its artifact's manifest and emitted code. The service
+artifact excludes the client command modules; the client artifact excludes the
+signing, session and listener owners. The client image installs Git and checksum-verifies pinned `gh`
+2.100.0. Neither image includes service configuration, private keys, session
+files or a control socket. The client entrypoint takes `SESSION_DIRECTORY
+ git|gh ARGS...`.
 
-The optional [Compose example](../../deploy/examples/repository-credentials/compose.yaml)
-publishes service port 8443 at host port 443. Supply its required service UID/GID,
-protected input/control paths, selected client-session directory and workspace.
-`CREDENTIAL_CLIENT_SESSION` must name only the selected directory, mounted at
-`/session`. Match ownership and arrange gateway DNS/certificate trust first;
-Compose does not provision them:
+The optional `deploy/examples/repository-credentials/compose.yaml` publishes service port
+8443 at host port 443 and keeps service/control mounts separate from client
+mounts. Supply its required `CREDENTIAL_SERVICE_UID`, `CREDENTIAL_SERVICE_GID`,
+`CREDENTIAL_SERVICE_INPUTS`, `CREDENTIAL_SERVICE_CONTROL`,
+`CREDENTIAL_CLIENT_SESSION`, and `CREDENTIAL_CLIENT_WORKSPACE` variables. Set
+`CREDENTIAL_CLIENT_SESSION` to the selected directory, such as
+`/absolute/path/sessions/task`; it appears as `/session` in the client. Match the
+UID/GID to the protected files. The example configuration's paths match these
+container mounts. Arrange gateway DNS and certificate trust before running the
+client; Compose does not provision public DNS or a CA. For example:
 
 ```sh
-docker compose -f deploy/examples/repository-credentials/compose.yaml run --rm client \
+docker compose -f deploy/examples/repository-credentials/compose.yaml config
+docker compose -f deploy/examples/repository-credentials/compose.yaml up -d --build service
+docker compose -f deploy/examples/repository-credentials/compose.yaml run --rm --build client \
   /session git clone https://credentials.example.internal/example/project.git
 ```
 
+Rendering Compose checks declared configuration. To verify delivered separation,
+inspect the running service/client mounts and client surfaces using the
+[container qualification procedure](../testing/repository-credentials.md#verify-separate-running-containers).
+Neither image inspection nor a Compose rendering establishes live GitHub compatibility.
+
 ## Inspect and close
 
-From the OCE checkout root:
+From the OCE source checkout:
 
 ```sh
 pnpm credentials:operator status --socket /absolute/path/control/control.sock \
@@ -342,8 +400,9 @@ pnpm credentials:operator close --socket /absolute/path/control/control.sock \
 ```
 
 Inspect cleanup status after local closure. Pending or uncertain cleanup remains
-an obligation; process exit is not proof of revocation. If writing client files
-fails after admission, the CLI attempts local closure and prints the affected
+an obligation. Shutdown stops after its finite grace period even when cleanup
+remains unresolved; process exit is not proof of revocation. If writing client
+files fails after admission, the CLI attempts local closure and prints the affected
 session ID so you can inspect it.
 
 For an uncertain push or mutation, inspect remote state before deciding on a

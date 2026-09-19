@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCustody } from "../../apps/controller/src/drivers/repository-credentials/custody.ts";
+import { createCustody } from "../../apps/controller/src/drivers/repo/credentials/custody.ts";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 
 function setup() {

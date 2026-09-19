@@ -14,7 +14,7 @@ import {
   eventually,
 } from "../fixtures/repository-credentials/service.mjs";
 
-const { createCredentialService } = await credentialDriverModule("service");
+const { createCredentialService } = await appModule("drivers/repo/credentials/service");
 const completed = { kind: "completed", status: 200 };
 const unavailable = { kind: "not-dispatched", code: "exchange-unavailable" };
 const tick = () => new Promise((resolve) => setImmediate(resolve));

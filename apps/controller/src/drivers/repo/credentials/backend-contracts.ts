@@ -128,7 +128,6 @@ export interface RepositoryBackend {
   readonly binding: RepositoryCredentialGrantIdentity;
   readonly replacement: "overlap" | "drain-before";
   readonly cleanup: "revocable" | "expiry-only";
-  readonly safeCleanupRetry: Readonly<{ retire: boolean; finalize: boolean }>;
   acquire(
     attempt: AttemptContext,
     previous: CredentialRef | undefined,

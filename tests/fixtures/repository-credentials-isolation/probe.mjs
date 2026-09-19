@@ -49,10 +49,13 @@ const forbidden = [
   "/sessions",
   "/sibling",
   "/app/dist/repository-credentials.js",
-  "/app/dist/providers",
   "/app/dist/composition",
-  "/app/dist/drivers/repository-credentials/custody.js",
-  "/app/dist/drivers/repository-credentials/control.js",
+  "/app/dist/providers",
+  "/app/dist/drivers/repo/credentials",
+  "/app/dist/drivers/repo/github/credentials/driver",
+  "/app/dist/drivers/repo/github/credentials/driver.js",
+  "/app/dist/drivers/repo/github/credentials/factory.js",
+  "/app/dist/drivers/repo/github/credentials/material.js",
 ];
 const present = [];
 for (const path of forbidden) {

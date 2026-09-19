@@ -43,7 +43,7 @@ case proving that copies are refused.
 The credential [data builders](../../tests/fixtures/repository-credentials/builders.mjs)
 keep raw request targets intact. The
 [planning fixture](../../tests/fixtures/repository-credentials/planning.mjs)
-composes the real driver factory, session admission, custody, and controlled
+composes the real backend factory, session admission, custody, and controlled
 clock for route-policy cases.
 
 Keep expected outcomes independently specified. A test must not calculate
@@ -109,7 +109,12 @@ hours.
 
 Preserve source-versus-built module selection and real process/container
 boundaries in packaging tests. A convenient fixture must not silently turn an
-installed-runtime check into a source-only check.
+installed-runtime check into a source-only check. The credential
+[module resolver](../../tests/fixtures/repository-credentials/runtime.mjs) owns
+the mapping to common, GitHub, client, and composition modules. Tests should
+consume that mapping rather than reconstruct the previous standalone package
+paths. The [credential testing guide](repository-credentials.md) separates source
+fixtures, detached artifacts, and delivered runtime evidence.
 
 ## Add properties where they improve coverage
 

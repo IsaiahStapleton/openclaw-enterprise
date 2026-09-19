@@ -1,6 +1,6 @@
-import type { RepositoryBackend } from "../../../drivers/repository-credentials/backend-contracts.ts";
+import type { RepositoryBackend } from "../../credentials/backend-contracts.ts";
 import { createGitHubDriver } from "./driver.ts";
-import { snapshotBinding } from "../../../drivers/repository-credentials/sessions.ts";
+import { snapshotBinding } from "../../credentials/sessions.ts";
 import { validateGitHubConfiguration } from "./config.ts";
 import { createProviderTransport } from "./provider-transport.ts";
 import { permissionsForProfile } from "./profiles.ts";

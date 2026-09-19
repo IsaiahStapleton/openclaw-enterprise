@@ -5,7 +5,7 @@ import type {
   PrivateUpstreamRequest,
   RepositoryBackend,
   RequestPlan,
-} from "../../../../drivers/repository-credentials/backend-contracts.ts";
+} from "../../../credentials/backend-contracts.ts";
 import type { GitHubDriverState } from "./state.ts";
 
 type AuthenticationDependencies = Readonly<{

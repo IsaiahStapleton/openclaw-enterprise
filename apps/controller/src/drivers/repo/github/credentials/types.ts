@@ -3,8 +3,8 @@ import type { KeyObject } from "node:crypto";
 import type {
   RepositoryBackendFactory,
   Clock,
-} from "../../../drivers/repository-credentials/backend-contracts.ts";
-import type { ServiceLimits } from "../../../drivers/repository-credentials/service-contracts.ts";
+} from "../../credentials/backend-contracts.ts";
+import type { ServiceLimits } from "../../credentials/service-contracts.ts";
 
 export type GitHubProfile = "git-read" | "git-write" | "git-full";
 export interface GitHubConfiguration {

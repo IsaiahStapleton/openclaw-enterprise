@@ -3,7 +3,7 @@ import type {
   Clock,
   DriverCustody,
   RepositoryBackend,
-} from "../../../drivers/repository-credentials/backend-contracts.ts";
+} from "../../credentials/backend-contracts.ts";
 import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
 import type { ProviderTransport } from "./provider-transport.ts";
 import type { RoutePolicy } from "./routes.ts";
@@ -51,7 +51,6 @@ export function createGitHubDriver(options: GitHubDriverOptions): RepositoryBack
     binding,
     replacement: "overlap" as const,
     cleanup: "revocable" as const,
-    safeCleanupRetry: Object.freeze({ retire: false, finalize: true }),
     acquire,
     retire,
     finalize: state.finalize,

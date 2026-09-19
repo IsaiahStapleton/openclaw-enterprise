@@ -21,8 +21,8 @@ test(
     import { request } from 'node:https';
     const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString());
-    const { credentialCompositionModule, credentialDriverModule } = await import(input.runtime);
-    const [{runService}, {createSystemClock}, {createAlternateDriverFactory}] = await Promise.all([credentialCompositionModule('service'), credentialDriverModule('clock'), import(input.adapter)]);
+    const load = (name) => import(pathToFileURL(join(input.appRoot, name + '.' + input.extension)).href);
+    const [{runService}, {createSystemClock}, {createAlternateDriverFactory}] = await Promise.all([load('composition/repository-credentials/service'), load('drivers/repo/credentials/clock'), import(input.adapter)]);
     const clock = createSystemClock();
     const factory = createAlternateDriverFactory({origin:'https://upstream.example.test',gatewayOrigin:input.config.gateway.publicOrigin,clock,controls:{lateCapture:new Promise(() => {})}});
     const tls = {key:await readFile(input.key),cert:await readFile(input.cert)};
@@ -44,12 +44,7 @@ test(
     process.stdout.write('ready\\n');
   `;
     const child = spawn(process.execPath, ["--input-type=module", "--eval", program], {
-      env: {
-        PATH: process.env.PATH,
-        ...(credentialEmittedRoot === undefined
-          ? {}
-          : { REPOSITORY_CREDENTIALS_EMITTED_ROOT: credentialEmittedRoot }),
-      },
+      env: { PATH: process.env.PATH, REPOSITORY_CREDENTIALS_APP_ROOT: appRoot },
       stdio: ["pipe", "pipe", "pipe"],
     });
     t.after(() => {

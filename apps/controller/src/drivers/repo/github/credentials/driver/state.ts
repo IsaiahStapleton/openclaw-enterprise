@@ -9,7 +9,7 @@ import type {
   RequestPlan,
   RepositoryBackend,
   RetireOutcome,
-} from "../../../../drivers/repository-credentials/backend-contracts.ts";
+} from "../../../credentials/backend-contracts.ts";
 import type { RoutePolicy } from "../routes.ts";
 
 type OutcomePayload<T> = T extends OriginalOutcome ? Omit<T, keyof OriginalOutcome> : never;

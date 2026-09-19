@@ -14,42 +14,13 @@ worker/credential-service owner; Helm uses `Recreate` to avoid overlapping
 owners. Dedicated Harnesses and other Compute topologies reject repository-bearing
 revisions. Agents without bindings retain their existing lifecycle.
 
-Bearer possession authorizes a session; it does not establish workload identity.
-Private files and scoped Kubernetes Secrets protect custody. Client routing and
-this topology do not establish strong network isolation. A service restart
-invalidates its in-memory sessions and loses provider cleanup inventory; existing
-GitHub tokens can remain valid until expiry. Platform State retains safe session
-identifiers and cleanup work, allowing the worker to replace runtime material
-within the original revision deadline. It cannot reconstruct lost provider tokens
-or prove their revocation.
-
-## Agent bindings
-
-Agent creation and update accept up to 16 `repositoryBindings`:
-
-```json
-{
-  "repositoryBindings": [
-    { "repositoryRef": "application", "profile": "git-full" },
-    { "repositoryRef": "library", "profile": "git-read" }
-  ]
-}
-```
-
-References and profiles are 1–128-character ASCII selectors beginning with a
-letter or digit and then containing letters, digits, `.`, `_` or `-`. References
-must be distinct. The GitHub Driver defaults an omitted profile to `git-write`.
-The existing Agent/configuration permissions apply; a reference is selectable
-only when the registry authorizes that exact Namespace and profile. Omission on
-update preserves selections; `[]` clears them for future deployments.
-
-Deployment resolves the selections again and freezes the Driver identity, exact
-grants and absolute deadline into the immutable revision. Registry drift fails
-closed; changing an Agent draft cannot retarget its active revision. The configured
-`sessionDurationSeconds` determines the deadline; use `86400` for a 24-hour
-revision. Reconciliation, token renewal and service recovery cannot extend it.
-A new deployment admits a new revision and deadline. Public Agent responses expose selections; revision responses also expose the
-deadline. Neither exposes grant internals, bearer material or session files.
+Source lives under the controller, while the credential service runs in its own
+process. Trusted startup composition loads protected configuration and keeps
+backend construction and request-sender callbacks private. Its session controls
+are limited to `open`, `status`, `close`, and `shutdown`. The build produces
+separate service and Git/gh client artifacts; the client runtime contains no
+signing or service modules. `SIGTERM` or `SIGINT` starts bounded cleanup and
+material disposal.
 
 ## Configuration
 
@@ -167,23 +138,29 @@ private files before protected-path validation. API and worker receive
 registry/public CA inputs; only the service receives App and TLS private keys.
 
 The privileged GitHub transport captures the installation, repository and exact
-permission profile when the Driver is constructed. Its only operations are
-issuance for that captured scope and revocation of an owned token; callers cannot
-supply an HTTP URL, method, path, request body or extra headers. Extending those
-operations changes a credential boundary and requires security review.
+permission profile when the backend is constructed. Its only operations are issuance
+for that captured scope and revocation of an owned token; callers cannot supply an
+HTTP URL, method, path, request body, or extra headers. Extending those operations
+changes a credential boundary and requires security review.
 
 The service image must trust GitHub's HTTPS certificate chain. For an approved
 private CA, supply an image with a readable CA bundle and `NODE_EXTRA_CA_CERTS`;
 keep certificate and hostname verification enabled.
 
-The controller's credential runtime entrypoint provides
-`startCredentialService(configurationPath)` for trusted process launchers. It
-loads protected configuration and returns listener lifecycle controls plus a
-frozen session facade exposing only `open`, `status`, `close` and `shutdown`.
-Upstream authorization, Driver construction and request-sender callbacks stay
-inside the service. The service image contains runnable JavaScript; it does not
-ship a client SDK. Process shutdown uses `SIGTERM` or `SIGINT` for bounded cleanup
-and material disposal.
+`git-read` and `git-full` require explicit selection with the configuration above.
+All three profiles select exactly the configured repository. `git-read` denies
+both push discovery and push execution. Both Git-only profiles deny every REST
+and GraphQL request, including API reads. `git-full` admits only the supported
+API routes and methods; it does not grant every permission held by the App or
+import PAT permissions. GraphQL may return public information GitHub permits;
+`git-full` provides no per-field GraphQL or branch-only authorization. Every
+GraphQL POST is treated as a possible write. The former `read-write` name is
+unsupported, with no compatibility alias.
+
+Native repository rules still apply. Administration, workflow changes requiring
+additional permissions, Actions, packages, projects, SSH, LFS, and other
+repositories are outside the supported scope. Missing App permissions cause
+failure rather than a broader grant.
 
 ## Sessions and closure
 
@@ -191,8 +168,8 @@ The trusted worker or local operator uses HTTP over a private mode-0600 Unix soc
 
 | Request                                                           | Response                                                    |
 | ----------------------------------------------------------------- | ----------------------------------------------------------- |
-| `POST /v1/sessions` with `durationSeconds` and optional `profile` | Session status, public client configuration and bearer once |
-| `GET /v1/sessions/{id}`                                           | Public session and cleanup status                           |
+| `POST /v1/sessions` with `durationSeconds` and optional `profile` | Private status, client configuration and bearer once        |
+| `GET /v1/sessions/{id}`                                           | Private session and cleanup status                          |
 | `POST /v1/sessions/{id}/close`                                    | Immediate local closure status; cleanup reported separately |
 
 The socket's parent is private to the service/operator. It is never mounted into
@@ -203,7 +180,7 @@ Admission requires `X-Admission-Id`: a 13-digit Unix-millisecond timestamp,
 a hyphen, and a lowercase UUIDv4. The operator CLI generates and prints this
 nonsecret ID before dispatch. The first response is HTTP 201 with the bearer.
 Repeating the same ID and effective duration/profile returns HTTP 200 with
-public status only; conflicting inputs fail. Follow the
+credential-free status only; conflicting inputs fail. Follow the
 [lost-response recovery procedure](../guides/repository-credentials.md#recover-an-admission)
 to close that session and explicitly request replacement client material.
 
@@ -238,8 +215,9 @@ Cleanup retains the one-hour bound from local receipt. A forward wall-clock
 change can deny authentication but cannot establish remote expiration.
 
 Closing or expiring a session prevents new use immediately and cancels owned
-exchanges. `CLOSED` does not imply confirmed revocation. Status distinguishes
-pending, revoked, expired and uncertain credentials, plus auxiliary cleanup.
+exchanges. `CLOSED` does not imply confirmed revocation. The private control
+response retains active-use counts and pending, revoked, expired and uncertain
+credential counts, plus auxiliary cleanup.
 `DISPOSED` requires settled actions, resolved access-token obligations and
 completed auxiliary finalization. An uncertain issuance blocks automatic minting.
 An uncertain push or API mutation is never automatically replayed.
@@ -316,13 +294,13 @@ response-header deadline starts after upload finishes, unless the response
 headers already arrived. Connection, input and stall deadlines remain independent.
 Provider actions have at most 30 seconds. Shutdown allows
 60 seconds for cleanup before reporting unresolved obligations and terminating.
-Overrides must be positive safe integers. `providerActions` must remain `1`,
-`credentialSlotsPerSession` must be at least `2`, `accessTokenBytes` cannot exceed
-16,384, `privateKeyBytes` cannot exceed 65,536, and `providerActionMs` cannot
-exceed 30,000. Unknown limit names are rejected.
+Unsettled actions retain capacity until exit; grace expiry does not establish
+`DISPOSED` or confirmed revocation. Restart cannot recover the lost provider
+cleanup inventory. Overrides remain positive and finite.
 
-Controlled tests, container tests and authorized live-provider smoke establish
-different evidence. See the [testing guide](../testing/repository-credentials.md)
+Controlled source tests, detached-artifact checks, separate running containers
+and authorized live-provider tests establish different evidence. See the
+[testing guide](../testing/repository-credentials.md)
 for current selection and prerequisites, and the [runtime flow](../flows/repository-credentials.md)
 for service internals and the [Agent flow](../flows/agent-repository-credentials.md)
 for platform ownership. A local fixture success does not establish live GitHub
