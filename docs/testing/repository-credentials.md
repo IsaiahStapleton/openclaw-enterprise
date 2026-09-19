@@ -1,6 +1,9 @@
 # Repository credential tests
 
-Run from the repository root with Node 24, Git, OpenSSL, and prepared workspace dependencies. Tests generate their own bounded local key/TLS fixtures.
+Run from the repository root with Node 24, Git, OpenSSL, and prepared workspace
+dependencies. Tests generate local key/TLS fixtures and use controlled provider
+peers. Select Docker and pinned-gh inputs separately for the real-client cases
+below; these tests require no live GitHub credentials.
 
 ## Reuse fixtures by ownership
 
@@ -26,9 +29,10 @@ responsible for custody, authorization and cleanup.
 
 Run `node scripts/verify-repository-credentials-boundary.mjs` after changing the
 service. The same check runs through `pnpm check:workspace` in baseline CI. It
-parses every credential-service source file using the workspace's pinned
-Prettier TypeScript parser. Runtime imports and re-exports must stay within the
-scanned source or use reviewed external modules and named members. Erased
+parses the configured common, GitHub, client, composition, and dedicated-entrypoint
+source roots using the workspace's pinned Prettier TypeScript parser. Those roots
+must exist; a missing owner must not silently reduce the scan. Runtime imports
+and re-exports must stay within the scanned source or use reviewed external modules and named members. Erased
 `import type` and `export type` declarations remain available; inline type
 specifiers can preserve a runtime module load. The two raw HTTPS sender helpers have explicit
 consumer lists; the listener, private-file, signing, and client-command owners
@@ -51,10 +55,12 @@ runtime isolation, or the controlled tests below and separate live-provider qual
 
 ## Run controlled tests
 
+Build the workspace and assemble the separate service/client closures, then run
+the common-owner and local transport cases:
+
 ```sh
 pnpm credentials:build
-node --test tests/conformance/repository-credentials-backend-conformance.test.mjs \
-  tests/conformance/repository-credentials-contracts.test.mjs \
+node --test tests/conformance/repository-credentials-contracts.test.mjs \
   tests/conformance/repository-credentials-custody.test.mjs \
   tests/conformance/repository-credentials-github.test.mjs \
   tests/conformance/repository-credentials-lifecycle.test.mjs \
@@ -63,14 +69,69 @@ node --test tests/conformance/repository-credentials-backend-conformance.test.mj
   tests/integration/repository-credentials-client-config.test.mjs \
   tests/integration/repository-credentials-config.test.mjs \
   tests/integration/repository-credentials-control.test.mjs \
-  tests/integration/repository-credentials-gh.test.mjs \
-  tests/integration/repository-credentials-git.test.mjs \
   tests/integration/repository-credentials-http.test.mjs \
   tests/integration/repository-credentials-package.test.mjs \
+  tests/integration/repository-credentials-server-timeout.test.mjs \
   tests/integration/repository-credentials-shutdown.test.mjs \
   tests/integration/repository-credentials-transport-bounds.test.mjs
 ```
 
-Common-owner tests cover custody, immutable admission, controlled-time replacement, closure, and uncertainty. GitHub and the alternate fixture use the same service owners.
+Common-owner tests cover custody, immutable admission, controlled-time replacement,
+closure, and uncertainty. Local transport cases cover admission correlation,
+separate listener capacity, TLS/header timing, framing, cancellation, streaming,
+and finite shutdown. The client-file cases exercise the real private-file and
+command-policy owners.
 
-Real Git and pinned gh 2.100.0 use the production TLS listener and client launcher. Prepare Docker, a Node/Git fixture image in `REPOSITORY_CREDENTIALS_NODE_IMAGE`, and the exact binary in `REPOSITORY_CREDENTIALS_GH_BINARY`. Fixtures run with networking disabled, a valid gateway DNS SAN, and canonical GH_HOST. CI prepares a source toolchain image and extracts its checked binary. Source fixtures prove routing and remote fixture state; delivered-artifact, separate-container isolation, and live-provider qualification remain separate delivery gates.
+The builder takes emitted modules from `apps/controller/dist` and stages service
+and client artifacts under `.build/repository-credentials/`. The service contains
+`dist/repository-credentials.js` and the check-config entrypoint. The client
+contains `launch.js`, `operator.js`, and `git-helper.js` under
+`dist/drivers/repo/github/credentials/client/`, plus their runtime dependencies.
+The package test exercises detached artifacts without workspace source or
+runtime `node_modules`; it must not fall back to source when a module is missing.
+
+### Real Git and pinned gh
+
+Prepare Docker, a Node 24/Git/OpenSSL fixture image selected by immutable image ID
+in `REPOSITORY_CREDENTIALS_NODE_IMAGE`, and the exact executable path in
+`REPOSITORY_CREDENTIALS_GH_BINARY`. Check that the executable reports **gh 2.100.0**.
+Then run:
+
+```sh
+node --test tests/conformance/repository-credentials-backend-conformance.test.mjs \
+  tests/integration/repository-credentials-git.test.mjs \
+  tests/integration/repository-credentials-gh.test.mjs
+```
+
+The fixtures run with external networking disabled, a valid gateway DNS SAN,
+verified TLS, and canonical `GH_HOST=github.com`. They exercise the production
+listener and client launcher with real Git and pinned gh. The alternate backend
+uses the same common owners while varying repository identity, authentication,
+credential lifetime, and renewal behavior. It establishes conformance, not support
+for another production provider.
+
+The `repository-credentials-container` CI lane prepares a source toolchain image,
+records its ID, and extracts its checked gh binary. Its required inputs and test
+files are listed in the [suite map](../../scripts/ci/test-suites.json). Missing
+selected prerequisites, failures, skips, or cleanup errors do not establish a
+passing selected lane. See [CI result accounting](ci.md).
+
+## Record the evidence boundary
+
+Record the exact source commit/tree, commands, client version, selected image
+IDs, pass/fail/skip counts, and cleanup result. Distinguish these observations:
+
+| Check                                       | What it establishes                                                                                   |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Common-owner and controlled source fixtures | Admission, custody, transport, and client behavior against controlled peers.                          |
+| Detached emitted artifacts                  | Startup and module closure without source or runtime dependencies from the workspace.                 |
+| Separate running service/client containers  | Delivered process and filesystem separation when the actual mounts and client surfaces are inspected. |
+| Authorized live-provider execution          | Real GitHub App scope and operations for the recorded source, artifacts, and configuration.           |
+
+The commands above cover controlled source tests and detached-artifact checks.
+Separate-container and live-provider qualification need their own setup and
+results. A green source lane does not establish installed custody, ordinary-Agent
+platform integration, or release readiness. Earlier runtime results apply to
+their recorded artifacts; changed artifacts need justified equivalence or the
+smallest affected rerun. Never repeat an uncertain provider mutation merely to
+obtain a clean test result.
