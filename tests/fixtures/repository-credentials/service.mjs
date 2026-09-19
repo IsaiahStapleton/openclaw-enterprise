@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { credentialDriverModule } from "./runtime.mjs";
+import { appModule } from "./runtime.mjs";
 import { chmod } from "node:fs/promises";
 import { request } from "node:https";
 import { createControlledClock } from "./clock.mjs";
@@ -15,6 +15,9 @@ import {
 } from "./service-resources.mjs";
 
 export {
+  appModule,
+  appRoot,
+  appExtension,
   credentialDriverModule,
   githubProviderModule,
   credentialClientPath,

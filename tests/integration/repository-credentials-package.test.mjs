@@ -60,6 +60,8 @@ test(
     const emitted = await readdir(join(runtime, "dist"), { recursive: true });
     assert.ok(emitted.includes("composition/repository-credentials/check-config.js"));
     assert.ok(emitted.includes("repository-credentials.js"));
+    assert.ok(emitted.includes("composition/repository-credentials/projected-inputs.js"));
+    assert.ok(emitted.includes("composition/repository-credentials/probe.js"));
     assert.ok(emitted.every((path) => !path.endsWith(".ts") && !path.endsWith(".map")));
     assert.ok(!emitted.includes("index.js"));
     assert.ok(!emitted.includes("worker.js"));
@@ -75,6 +77,7 @@ test(
         .filter((path) => path.endsWith(".js"))
         .every((path) => path.startsWith("drivers/repo/github/credentials/client/")),
     );
+    assert.ok(clientModules.includes("drivers/repo/github/credentials/client/router.js"));
     // Delete the emitted workspace and tooling links before starting either runtime.
     await rm(build, { recursive: true, force: true });
     // The detached runtime has no dependency graph or workspace source. Real PEM loading
@@ -288,6 +291,9 @@ test("credential artifact builder rejects dependencies outside its emitted closu
   for (const path of [
     join(emitted, "repository-credentials.js"),
     entrypoint,
+    join(emitted, "composition/repository-credentials/projected-inputs.js"),
+    join(emitted, "composition/repository-credentials/probe.js"),
+    join(emitted, "drivers/repo/github/credentials/client/router.js"),
     clientEntry,
     join(emitted, "drivers/repo/github/credentials/client/operator.js"),
     join(emitted, "drivers/repo/github/credentials/client/git-helper.js"),

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
-import { credentialDriverModule, githubProviderModule } from "./runtime.mjs";
+import { appModule } from "./runtime.mjs";
 import { temporaryDirectory } from "./process.mjs";
 import { githubConfigurationData } from "./builders.mjs";
 import {

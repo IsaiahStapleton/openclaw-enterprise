@@ -39,7 +39,7 @@ test("credential source boundary rejects new raw capabilities in the real source
   await t.test("type-only imports and ordinary object methods remain valid", () =>
     appendSource(
       root,
-      "drivers/repository-credentials/boundary-types.ts",
+      "drivers/repo/credentials/boundary-types.ts",
       `import type * as Http from "node:http";
        import type { RequestOptions } from "node:https";
        export type { Socket } from "node:net";
@@ -53,7 +53,7 @@ test("credential source boundary rejects new raw capabilities in the real source
   await t.test("the outgoing header owner can validate names and values", () =>
     appendSource(
       root,
-      "drivers/repository-credentials/transport/request-headers.ts",
+      "drivers/repo/credentials/transport/request-headers.ts",
       `import { validateHeaderName as checkName, validateHeaderValue as checkValue } from "node:http";
        checkName("accept"); checkValue("accept", "application/json");`,
       () => verifyRepositoryCredentialBoundary(root),
@@ -63,8 +63,8 @@ test("credential source boundary rejects new raw capabilities in the real source
   await t.test("the platform Driver can render portable session files", () =>
     appendSource(
       root,
-      "drivers/repository-credentials/github.ts",
-      'import { encodeRepositoryCredentialSessionFiles as encodeFiles } from "./client/config.js"; void encodeFiles;',
+      "drivers/repo/github/driver.ts",
+      'import { encodeRepositoryCredentialSessionFiles as encodeFiles } from "./credentials/client/config.js"; void encodeFiles;',
       () => verifyRepositoryCredentialBoundary(root),
     ),
   );
@@ -79,7 +79,8 @@ test("credential source boundary rejects new raw capabilities in the real source
 
   for (const file of [
     "composition/repository-credentials",
-    "drivers/repository-credentials",
+    "drivers/repo/credentials",
+    "drivers/repo/github",
     "providers/repository-credentials",
     "repository-credentials.ts",
     "repository-credentials.mjs",
@@ -225,16 +226,16 @@ test("credential source boundary rejects new raw capabilities in the real source
     [
       "raw upstream helper",
       'import { createUpstreamSender } from "./transport/upstream.ts";',
-      /raw sender drivers\/repository-credentials\/transport\/upstream.ts/,
+      /raw sender drivers\/repo\/credentials\/transport\/upstream.ts/,
     ],
     [
       "raw provider helper through emitted extension",
-      'import { sendProviderRequest } from "../../providers/repository-credentials/github/provider-transport/request.js";',
-      /raw sender providers\/repository-credentials\/github\/provider-transport\/request.ts/,
+      'import { sendProviderRequest } from "../github/credentials/provider-transport/request.js";',
+      /raw sender drivers\/repo\/github\/credentials\/provider-transport\/request.ts/,
     ],
     [
       "client command owner",
-      'import { launchClient } from "./client/launch.ts";',
+      'import { launchClient } from "../github/credentials/client/launch.ts";',
       /service code cannot load client command owner/,
     ],
     [
@@ -246,13 +247,13 @@ test("credential source boundary rejects new raw capabilities in the real source
       "listener cannot become sender",
       'import { request as rawRequest } from "node:https";',
       /unreviewed runtime import from node:https \(request\)/,
-      "drivers/repository-credentials/server.ts",
+      "drivers/repo/credentials/server.ts",
     ],
     [
       "header validator cannot become sender",
       'import { request as rawRequest } from "node:http";',
       /unreviewed runtime import from node:http \(request\)/,
-      "drivers/repository-credentials/transport/request-headers.ts",
+      "drivers/repo/credentials/transport/request-headers.ts",
     ],
     [
       "unrelated controller source is not part of the credential boundary",
@@ -261,27 +262,27 @@ test("credential source boundary rejects new raw capabilities in the real source
     ],
     [
       "the platform Driver cannot load private client files",
-      'import { readClientConfiguration as readClient } from "./client/config.ts";',
+      'import { readClientConfiguration as readClient } from "./credentials/client/config.ts";',
       /service code cannot load client command owner/,
-      "drivers/repository-credentials/github.ts",
+      "drivers/repo/github/driver.ts",
     ],
     [
       "the encoder exception cannot re-export client code",
-      'export { encodeRepositoryCredentialSessionFiles } from "./client/config.ts";',
+      'export { encodeRepositoryCredentialSessionFiles } from "./credentials/client/config.ts";',
       /service code cannot load client command owner/,
-      "drivers/repository-credentials/github.ts",
+      "drivers/repo/github/driver.ts",
     ],
     [
       "the platform Driver cannot spawn client commands",
-      'import { launchClient } from "./client/launch.ts";',
+      'import { launchClient } from "./credentials/client/launch.ts";',
       /service code cannot load client command owner/,
-      "drivers/repository-credentials/github.ts",
+      "drivers/repo/github/driver.ts",
     ],
     [
       "the platform Driver cannot import another platform capability",
       'import { PostgresPlatformState } from "@openclaw-enterprise/occ";',
       /unreviewed runtime import from @openclaw-enterprise\/occ/,
-      "drivers/repository-credentials/github.ts",
+      "drivers/repo/github/driver.ts",
     ],
     [
       "the bootstrap cannot load a different emitted module",
@@ -315,14 +316,14 @@ test("credential source boundary rejects new raw capabilities in the real source
     ],
     [
       "the control client is available only to its reviewed consumers",
-      'import { UnixRepositoryCredentialControlClient } from "../../providers/repository-credentials/control-client.ts";',
+      'import { UnixRepositoryCredentialControlClient } from "../../../providers/repository-credentials/control-client.ts";',
       /raw sender providers\/repository-credentials\/control-client.ts/,
     ],
     [
       "registry loading cannot write files",
       'import { writeFile } from "node:fs/promises";',
       /unreviewed runtime import from node:fs\/promises/,
-      "providers/repository-credentials/github/registry-loader.ts",
+      "composition/repository-credentials/registry.ts",
     ],
     [
       "public CA composition cannot import an additional file reader",
@@ -340,7 +341,7 @@ test("credential source boundary rejects new raw capabilities in the real source
       "socket recovery cannot create raw listeners",
       'import { createServer as rawServer } from "node:net";',
       /unreviewed runtime import from node:net/,
-      "drivers/repository-credentials/server.ts",
+      "drivers/repo/credentials/server.ts",
     ],
     [
       "the platform composition cannot re-export its local control client",
@@ -352,7 +353,7 @@ test("credential source boundary rejects new raw capabilities in the real source
       "the platform Driver cannot re-export its local encoder",
       "export { encodeRepositoryCredentialSessionFiles };",
       /raw I\/O binding cannot be re-exported/,
-      "drivers/repository-credentials/github.ts",
+      "drivers/repo/github/driver.ts",
     ],
     [
       "the bootstrap cannot re-export its local emitted main",
@@ -364,13 +365,13 @@ test("credential source boundary rejects new raw capabilities in the real source
       "the Provider transport cannot re-export its local raw sender",
       "export { sendProviderRequest };",
       /raw I\/O binding cannot be re-exported/,
-      "providers/repository-credentials/github/provider-transport.ts",
+      "drivers/repo/github/credentials/provider-transport.ts",
     ],
     [
       "the Agent transport cannot expose its local sender through a type assertion",
       "export const rawSender = createUpstreamSender as typeof createUpstreamSender;",
       /raw I\/O binding cannot be re-exported/,
-      "drivers/repository-credentials/transport/agent.ts",
+      "drivers/repo/credentials/transport/agent.ts",
     ],
     [
       "an emitted-extension alias cannot hide a restricted default export",
@@ -382,26 +383,26 @@ test("credential source boundary rejects new raw capabilities in the real source
       "approved sender cannot re-export raw HTTPS",
       "export { httpsRequest as rawRequest };",
       /raw I\/O binding cannot be re-exported/,
-      "providers/repository-credentials/github/provider-transport/request.ts",
+      "drivers/repo/github/credentials/provider-transport/request.ts",
     ],
     [
       "a type assertion cannot hide an exported raw sender",
       "export const rawRequest = httpsRequest as typeof httpsRequest;",
       /raw I\/O binding cannot be re-exported/,
-      "providers/repository-credentials/github/provider-transport/request.ts",
+      "drivers/repo/github/credentials/provider-transport/request.ts",
     ],
     [
       "a default export cannot hide an asserted raw sender",
       "export default httpsRequest satisfies typeof httpsRequest;",
       /raw I\/O binding cannot be re-exported/,
-      "providers/repository-credentials/github/provider-transport/request.ts",
+      "drivers/repo/github/credentials/provider-transport/request.ts",
     ],
   ];
   for (const [
     label,
     source,
     expected,
-    file = "drivers/repository-credentials/boundary-regression.ts",
+    file = "drivers/repo/credentials/boundary-regression.ts",
   ] of cases) {
     await t.test(label, () =>
       appendSource(root, file, source, () =>

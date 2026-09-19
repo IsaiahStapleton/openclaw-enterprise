@@ -6,35 +6,36 @@ import { parsers } from "prettier/plugins/typescript";
 const sourceRoot = fileURLToPath(new URL("../apps/controller/src/", import.meta.url));
 const credentialDirectories = [
   "composition/repository-credentials",
-  "drivers/repository-credentials",
+  "drivers/repo/credentials",
+  "drivers/repo/github",
   "providers/repository-credentials",
 ];
 const credentialEntrypoints = ["repository-credentials.ts", "repository-credentials.mjs"];
-const clientDirectory = "drivers/repository-credentials/client/";
+const clientDirectory = "drivers/repo/github/credentials/client/";
 const sourceExtensions = new Set([".ts", ".mts", ".cts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"]);
 
 // Adding an I/O owner or member requires security review; see the owning test guide.
 const reviewedImports = {
-  "providers/repository-credentials/github/material.ts": {
+  "drivers/repo/github/credentials/material.ts": {
     "node:crypto": ["KeyObject", "constants", "sign"],
   },
-  "providers/repository-credentials/github/provider-transport/request.ts": {
+  "drivers/repo/github/credentials/provider-transport/request.ts": {
     "node:https": ["request"],
   },
-  "drivers/repository-credentials/client/commands.ts": { "node:child_process": ["spawnSync"] },
-  "drivers/repository-credentials/client/config.ts": {
+  "drivers/repo/github/credentials/client/commands.ts": { "node:child_process": ["spawnSync"] },
+  "drivers/repo/github/credentials/client/config.ts": {
     "node:fs/promises": ["lstat", "mkdir", "mkdtemp", "open", "rename", "rm"],
   },
-  "drivers/repository-credentials/client/launch.ts": {
+  "drivers/repo/github/credentials/client/launch.ts": {
     "node:child_process": ["spawn"],
     "node:fs/promises": ["mkdtemp", "rm"],
   },
-  "drivers/repository-credentials/client/operator.ts": {
+  "drivers/repo/github/credentials/client/operator.ts": {
     "node:crypto": ["randomUUID"],
     "node:fs/promises": ["readFile"],
     "node:http": ["request"],
   },
-  "drivers/repository-credentials/client/private-files.ts": {
+  "drivers/repo/github/credentials/client/private-files.ts": {
     "node:fs": ["constants"],
     "node:fs/promises": ["lstat", "open"],
   },
@@ -57,36 +58,36 @@ const reviewedImports = {
   },
   "composition/repository-credentials/probe.ts": { "node:http": ["request"] },
   "providers/repository-credentials/control-client.ts": { "node:http": ["request"] },
-  "providers/repository-credentials/github/registry-loader.ts": {
+  "composition/repository-credentials/registry.ts": {
     "node:fs": ["constants"],
     "node:fs/promises": ["open", "stat"],
   },
-  "providers/repository-credentials/github/registry.ts": { "node:crypto": ["createHash"] },
-  "drivers/repository-credentials/client/manifest.ts": {
+  "drivers/repo/github/credentials/registry.ts": { "node:crypto": ["createHash"] },
+  "drivers/repo/github/credentials/client/manifest.ts": {
     "node:crypto": ["createHash"],
     "node:fs/promises": ["lstat"],
   },
-  "drivers/repository-credentials/client/targets.ts": {
+  "drivers/repo/github/credentials/client/targets.ts": {
     "node:child_process": ["spawnSync"],
     "node:fs": ["mkdtempSync", "rmSync"],
   },
-  "drivers/repository-credentials/github.ts": {
+  "drivers/repo/github/driver.ts": {
     "@openclaw-enterprise/occ": ["DependencyUnavailableError", "ScopeViolationError"],
   },
-  "drivers/repository-credentials/lifecycle.ts": { "node:crypto": ["randomUUID"] },
-  "drivers/repository-credentials/server.ts": {
+  "drivers/repo/credentials/lifecycle.ts": { "node:crypto": ["randomUUID"] },
+  "drivers/repo/credentials/server.ts": {
     "node:fs/promises": ["chmod", "lstat", "realpath", "unlink"],
     "node:http": ["createServer"],
     "node:https": ["createServer"],
     "node:net": ["connect"],
   },
-  "drivers/repository-credentials/sessions.ts": {
+  "drivers/repo/credentials/sessions.ts": {
     "node:crypto": ["createHash", "randomBytes", "randomUUID"],
   },
-  "drivers/repository-credentials/transport/request-headers.ts": {
+  "drivers/repo/credentials/transport/request-headers.ts": {
     "node:http": ["validateHeaderName", "validateHeaderValue"],
   },
-  "drivers/repository-credentials/transport/upstream.ts": { "node:https": ["request"] },
+  "drivers/repo/credentials/transport/upstream.ts": { "node:https": ["request"] },
 };
 const ordinaryBuiltins = new Set([
   "node:os",
@@ -98,15 +99,15 @@ const ordinaryBuiltins = new Set([
   "node:zlib",
 ]);
 const senderConsumers = {
-  "providers/repository-credentials/github/provider-transport/request.ts": {
-    "providers/repository-credentials/github/provider-transport.ts": ["sendProviderRequest"],
+  "drivers/repo/github/credentials/provider-transport/request.ts": {
+    "drivers/repo/github/credentials/provider-transport.ts": ["sendProviderRequest"],
   },
-  "drivers/repository-credentials/transport/upstream.ts": {
-    "drivers/repository-credentials/transport/agent.ts": ["createUpstreamSender"],
+  "drivers/repo/credentials/transport/upstream.ts": {
+    "drivers/repo/credentials/transport/agent.ts": ["createUpstreamSender"],
   },
   "providers/repository-credentials/control-client.ts": {
     "composition/repository-credentials/platform.ts": ["UnixRepositoryCredentialControlClient"],
-    "drivers/repository-credentials/github.ts": ["RepositoryCredentialControlError"],
+    "drivers/repo/github/driver.ts": ["RepositoryCredentialControlError"],
   },
 };
 const rawGlobals = new Set([
@@ -124,8 +125,8 @@ const rawGlobals = new Set([
 ]);
 const reviewedProcessMembers = {
   "composition/repository-credentials/check-config.ts": ["argv", "exitCode", "stderr", "stdout"],
-  "drivers/repository-credentials/client/commands.ts": ["execPath"],
-  "drivers/repository-credentials/client/git-helper.ts": [
+  "drivers/repo/github/credentials/client/commands.ts": ["execPath"],
+  "drivers/repo/github/credentials/client/git-helper.ts": [
     "argv",
     "exit",
     "exitCode",
@@ -133,9 +134,9 @@ const reviewedProcessMembers = {
     "stdin",
     "stdout",
   ],
-  "drivers/repository-credentials/client/launch.ts": ["argv", "exitCode", "off", "on", "stderr"],
-  "drivers/repository-credentials/client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
-  "drivers/repository-credentials/client/private-files.ts": ["getuid"],
+  "drivers/repo/github/credentials/client/launch.ts": ["argv", "exitCode", "off", "on", "stderr"],
+  "drivers/repo/github/credentials/client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
+  "drivers/repo/github/credentials/client/private-files.ts": ["getuid"],
   "composition/repository-credentials/protected-file.ts": ["getuid"],
   "composition/repository-credentials/service.ts": ["exit", "once", "stderr", "stdout"],
   "composition/repository-credentials/projected-inputs.ts": [
@@ -146,11 +147,11 @@ const reviewedProcessMembers = {
     "stdout",
   ],
   "composition/repository-credentials/probe.ts": ["exitCode"],
-  "drivers/repository-credentials/client/manifest.ts": ["getuid"],
-  "drivers/repository-credentials/client/router.ts": ["argv", "env", "exitCode", "stderr"],
+  "drivers/repo/github/credentials/client/manifest.ts": ["getuid"],
+  "drivers/repo/github/credentials/client/router.ts": ["argv", "env", "exitCode", "stderr"],
   "repository-credentials.ts": ["argv", "exitCode", "stderr", "stdout"],
   "repository-credentials.mjs": ["exitCode", "stderr"],
-  "drivers/repository-credentials/server.ts": ["getuid"],
+  "drivers/repo/credentials/server.ts": ["getuid"],
 };
 const runtimeTypeScript = new Set([
   "TSAsExpression",
@@ -302,7 +303,7 @@ function inspectSource(path, root, sources, ast) {
       }
       if (!file.startsWith(clientDirectory) && target.startsWith(clientDirectory)) {
         const rendersSessionFiles =
-          file === "drivers/repository-credentials/github.ts" &&
+          file === "drivers/repo/github/driver.ts" &&
           target === `${clientDirectory}config.ts` &&
           kind === "import" &&
           names.length === 1 &&

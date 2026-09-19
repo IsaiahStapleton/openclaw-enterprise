@@ -27,7 +27,7 @@ cluster:
 
 # Opt in only after provisioning Namespace IDs and the referenced immutable registry,
 # protected service configuration, App key, TLS certificate and separate public CA.
-# The matching Installation must select repository_credentials and its Compute peer.
+# The matching Installation must select repo and its Compute peer.
 repositoryCredentials:
   enabled: false
   # image: registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

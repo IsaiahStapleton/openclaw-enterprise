@@ -12,7 +12,7 @@ export async function runInFixtureContainer(t, testFile, { packaged = false } = 
   if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD === "1") {
     if (packaged || process.env.REPOSITORY_CREDENTIALS_APP_ROOT !== undefined) {
       assert.equal(
-        process.env.REPOSITORY_CREDENTIALS_EMITTED_ROOT,
+        process.env.REPOSITORY_CREDENTIALS_APP_ROOT,
         "/app/dist",
         "packaged qualification must use emitted application modules",
       );
@@ -69,7 +69,7 @@ export async function runInFixtureContainer(t, testFile, { packaged = false } = 
       args.push("--mount", `type=bind,src=${gh},dst=/usr/local/bin/gh,readonly`);
     }
     if (packaged) {
-      args.push("--env", "REPOSITORY_CREDENTIALS_EMITTED_ROOT=/app/dist");
+      args.push("--env", "REPOSITORY_CREDENTIALS_APP_ROOT=/app/dist");
     }
     args.push(imageId, "--test", "--test-reporter=tap", testFile);
     const result = await run("docker", args, { timeout: 120000, allowFailure: true });

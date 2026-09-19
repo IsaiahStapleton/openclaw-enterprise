@@ -4,7 +4,7 @@ import { request as httpsRequest, createServer as createHttpsServer } from "node
 import { connect as connectTcp } from "node:net";
 import { connect as connectTls } from "node:tls";
 import { setTimeout as delay } from "node:timers/promises";
-import { credentialDriverModule } from "../fixtures/repository-credentials/runtime.mjs";
+import { appModule } from "../fixtures/repository-credentials/runtime.mjs";
 import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
 import { createTlsMaterial, listen } from "../fixtures/repository-credentials/process.mjs";
 import { createServiceConfiguration } from "../fixtures/repository-credentials/service.mjs";

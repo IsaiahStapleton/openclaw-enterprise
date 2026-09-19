@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { run, temporaryDirectory } from "./process.mjs";
 import { registerResourceCleanup, closeAndDispose } from "./cleanup.mjs";
-import { credentialDriverModule } from "./runtime.mjs";
+import { appModule } from "./runtime.mjs";
 import { startCredentialServiceFixture, gatewayRequest } from "./service.mjs";
 import { runInFixtureContainer } from "./container.mjs";
 

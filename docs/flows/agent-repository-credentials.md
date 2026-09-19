@@ -1,6 +1,7 @@
 ---
 created: "2026-09-18"
-updated: "2026-09-18"
+updated: "2026-09-19"
+last_updated_session: "authoring-run/73c80a5e-4d0c-4e72-b989-0cf9963c6593"
 ---
 
 # Agent repository credential flow
@@ -268,6 +269,8 @@ State/worker, real-client, installed/runtime and live-provider checks.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-19 23:54: Reconcile RepoDriver ownership, private status projection, and separate emitted service/client paths. (public authoring-run/73c80a5e-4d0c-4e72-b989-0cf9963c6593 - e5b5a5489f078d08272523476bdbcd0b9162c946)
 
 - 2026-09-18 04:55: Trace the accompanying native exec PATH projection for repository material, including per-agent overrides. (e3012a8cee0c5ea60bc02943ebed88a1c88eb0d2)
 - 2026-09-18 03:04: Trace the accompanying Agent admission, durable session lifecycle, Kubernetes material generation and concurrent client integration. (8500b2da103063b4503b62e5529f3910513e84a9)

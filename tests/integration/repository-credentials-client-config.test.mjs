@@ -2,11 +2,17 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, lstat, mkdir, readFile, rm, symlink, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { createServer } from "node:https";
 import { once } from "node:events";
-import { writeClientConfiguration } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
+import {
+  writeClientConfiguration,
+  encodeRepositoryCredentialSessionFiles,
+} from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
+
+import { run as runProcess } from "../fixtures/repository-credentials/process.mjs";
+import { credentialClientPath } from "../fixtures/repository-credentials/runtime.mjs";
 
 const launcher = resolve("apps/controller/src/drivers/repo/github/credentials/client/launch.ts");
 const opened = {

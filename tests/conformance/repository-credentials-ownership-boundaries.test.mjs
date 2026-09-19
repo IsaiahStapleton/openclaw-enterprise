@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { credentialDriverModule } from "../fixtures/repository-credentials/runtime.mjs";
+import { appModule } from "../fixtures/repository-credentials/runtime.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import { createAlternateDriverFactory } from "../fixtures/repository-credentials/alternate.mjs";
 import {

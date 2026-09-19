@@ -54,7 +54,7 @@ COPY --from=repository-client-build /build/.build/repository-credentials/client/
 COPY deploy/runtime/bin /opt/oce/repository-credentials/bin
 RUN chmod -R a+rX /opt/oce/repository-credentials \
     && chmod 0555 /opt/oce/repository-credentials/bin/git /opt/oce/repository-credentials/bin/gh \
-    && test -f /opt/oce/repository-credentials/dist/drivers/repository-credentials/client/router.js
+    && test -f /opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/router.js
 
 RUN npm init -y >/dev/null \
   && npm install --omit=dev --no-audit --no-fund \

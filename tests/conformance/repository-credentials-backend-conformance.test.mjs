@@ -5,7 +5,7 @@ import { request } from "node:https";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
-import { credentialDriverModule } from "../fixtures/repository-credentials/runtime.mjs";
+import { appModule } from "../fixtures/repository-credentials/runtime.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import {
   createAlternateDriverFactory,

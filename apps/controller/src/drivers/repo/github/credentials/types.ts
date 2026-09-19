@@ -1,9 +1,6 @@
 import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
 import type { KeyObject } from "node:crypto";
-import type {
-  RepositoryBackendFactory,
-  Clock,
-} from "../../credentials/backend-contracts.ts";
+import type { RepositoryBackendFactory, Clock } from "../../credentials/backend-contracts.ts";
 import type { ServiceLimits } from "../../credentials/service-contracts.ts";
 
 export type GitHubProfile = "git-read" | "git-write" | "git-full";

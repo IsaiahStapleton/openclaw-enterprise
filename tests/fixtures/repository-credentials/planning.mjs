@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import { credentialDriverModule, githubProviderModule } from "./runtime.mjs";
+import { appModule } from "./runtime.mjs";
 import { createControlledClock } from "./clock.mjs";
 import { createResourceScope } from "./resources.mjs";
 import { githubConfigurationData, serviceConfigurationData } from "./builders.mjs";

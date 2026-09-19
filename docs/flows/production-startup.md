@@ -1,6 +1,7 @@
 ---
 created: 2026-08-25
-updated: 2026-09-19
+updated: "2026-09-19"
+last_updated_session: "authoring-run/73c80a5e-4d0c-4e72-b989-0cf9963c6593"
 ---
 
 # Production Startup Flow
@@ -236,6 +237,8 @@ tenant deployment and TUI procedures run.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-19 23:54: Reconcile RepoDriver ownership, private status projection, and separate emitted service/client paths. (public authoring-run/73c80a5e-4d0c-4e72-b989-0cf9963c6593 - e5b5a5489f078d08272523476bdbcd0b9162c946)
 
 - 2026-09-18 03:03: Trace optional repository Driver composition and service-only projected input startup. (8500b2da103063b4503b62e5529f3910513e84a9)
 

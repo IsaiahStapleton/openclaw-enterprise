@@ -3,10 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmod, lstat, readFile, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
-import {
-  credentialEmittedRoot,
-  credentialDriverModule,
-} from "../fixtures/repository-credentials/runtime.mjs";
+import { appRoot, credentialDriverModule } from "../fixtures/repository-credentials/runtime.mjs";
 import { createTlsMaterial } from "../fixtures/repository-credentials/process.mjs";
 import { createServiceConfiguration } from "../fixtures/repository-credentials/service.mjs";
 import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
@@ -40,9 +37,7 @@ function startProcess({ resources, config, tls }) {
   const child = spawn(process.execPath, ["--input-type=module", "--eval", program], {
     env: {
       PATH: process.env.PATH,
-      ...(credentialEmittedRoot === undefined
-        ? {}
-        : { REPOSITORY_CREDENTIALS_EMITTED_ROOT: credentialEmittedRoot }),
+      REPOSITORY_CREDENTIALS_APP_ROOT: appRoot,
     },
     stdio: ["pipe", "ignore", "pipe", "ipc"],
   });

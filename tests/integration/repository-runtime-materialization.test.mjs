@@ -4,7 +4,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import test from "node:test";
-import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repository-credentials/client/config.ts";
+import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 import {
   repositoryMaterialDeployment,
   repositoryMaterialSpec,

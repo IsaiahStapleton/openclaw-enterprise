@@ -1,7 +1,4 @@
-import type {
-  AttemptContext,
-  Clock,
-} from "../../credentials/backend-contracts.ts";
+import type { AttemptContext, Clock } from "../../credentials/backend-contracts.ts";
 import type { GitHubProfile } from "./types.ts";
 import { sendProviderRequest } from "./provider-transport/request.ts";
 import { prepareProviderScope } from "./provider-transport/request-options.ts";

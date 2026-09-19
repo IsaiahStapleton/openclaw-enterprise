@@ -1,7 +1,4 @@
-import type {
-  AuthorityIdentity,
-  ResolvedGrant,
-} from "../../credentials/backend-contracts.ts";
+import type { AuthorityIdentity, ResolvedGrant } from "../../credentials/backend-contracts.ts";
 import type { GitHubConfiguration, GitHubFactoryOptions } from "./types.ts";
 import { sameAuthority } from "./driver/state.ts";
 

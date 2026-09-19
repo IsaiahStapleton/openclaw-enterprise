@@ -15,7 +15,7 @@ import {
 import { join } from "node:path";
 import { prepareProjectedInputs } from "../../apps/controller/src/composition/repository-credentials/projected-inputs.ts";
 import { loadConfiguration } from "../../apps/controller/src/composition/repository-credentials/config.ts";
-import { createSystemClock } from "../../apps/controller/src/drivers/repository-credentials/clock.ts";
+import { createSystemClock } from "../../apps/controller/src/drivers/repo/credentials/clock.ts";
 import {
   createTlsMaterial,
   temporaryDirectory,

@@ -27,7 +27,9 @@ import {
 import {
   credentialDriverModule,
   githubProviderModule,
-  credentialClientPath,
+  appModule,
+  appRoot,
+  appExtension,
   createServiceConfiguration,
   eventually,
 } from "../fixtures/repository-credentials/service.mjs";

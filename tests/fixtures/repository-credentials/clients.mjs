@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { credentialClientPath } from "./runtime.mjs";
+import { appRoot, appExtension } from "./runtime.mjs";
 import { cleanEnvironment, run, temporaryDirectory } from "./process.mjs";
 
 /**

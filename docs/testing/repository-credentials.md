@@ -8,23 +8,10 @@ GitHub credentials.
 
 ## Reuse fixtures by ownership
 
-Keep scenario setup explicit and share the part that has a common owner:
-
-- `builders.mjs` creates data with visible overrides. `requestHead` preserves raw
-  targets, receipt time and framing so malformed-request tests reach the intended
-  boundary.
-- `resources.mjs` owns cleanup registration and failure reporting.
-  `service-resources.mjs` composes the real key, service and listener owners;
-  scenarios keep their distinct clocks, identities and failure triggers.
-- The GitHub fixture separates token authority, repository resources and HTTP
-  dispatch. The alternate fixture keeps credential identity and renewal state
-  together while separating route policy and its upstream.
-
-Name table cases by the rejected input or expected outcome. Keep expected values
-independent of the helper being exercised. Extract shared setup when multiple
-scenarios need it; keep fault ordering and observable assertions in the test.
-Protocol fixtures model the provider boundary, while production owners remain
-responsible for custody, authorization and cleanup.
+Fixtures under `tests/fixtures/repository-credentials/` separate data builders,
+cleanup, service assembly and controlled provider behavior. Keep fault ordering,
+expected values and observable assertions explicit in each scenario. Share setup
+by its production owner; fixtures do not establish production authority.
 
 ## Check source authority boundaries
 
@@ -42,13 +29,10 @@ consumer lists; the listener, private-file, signing, and client-command owners
 have separate I/O allowances. New network packages, raw global network or loader
 access, and new process-output owners fail the check.
 
-The credential-service maintainers own the allowlists in the
-[source guard](../../scripts/verify-repository-credentials-boundary.mjs). A new
-privileged member, owner, sender consumer, or external dependency requires
-explicit security review in the same change. Explain the required authority,
-its caller and scope, why an existing owner cannot provide it, and the negative
-test that protects the new boundary. Do not add a wildcard allowance to silence
-a failure. The [guard regression test](../../tests/conformance/repository-credentials-source-boundary.test.mjs)
+Maintainers own the [source guard](../../scripts/verify-repository-credentials-boundary.mjs)
+allowlists. New privileged members, owners, sender consumers or dependencies
+require explicit security review: identify the authority, caller, scope and
+protecting negative test. Never substitute wildcard allowances. The [guard regression test](../../tests/conformance/repository-credentials-source-boundary.test.mjs)
 adds forbidden capabilities to a disposable copy of the real source tree.
 
 This is an accidental-regression guard for reviewed source. It does not perform

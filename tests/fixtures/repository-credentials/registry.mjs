@@ -4,7 +4,11 @@ import { serviceConfigurationData } from "./builders.mjs";
 import { fixtureAppId } from "./github.mjs";
 import { createTlsMaterial } from "./process.mjs";
 import { createResourceScope } from "./resources.mjs";
-import { credentialDriverModule, githubProviderModule } from "./runtime.mjs";
+import {
+  credentialDriverModule,
+  githubProviderModule,
+  credentialCompositionModule,
+} from "./runtime.mjs";
 import { writeSessionClientConfiguration } from "./service-resources.mjs";
 import { createRegistryMaterial } from "./registry/material.mjs";
 import { startRegistryProviderFixtures } from "./registry/provider.mjs";
@@ -46,7 +50,7 @@ export async function startRegistryCredentialServiceFixture(t, options = {}) {
       { createGitHubKeyOwner },
     ] = await Promise.all([
       credentialDriverModule("configuration"),
-      githubProviderModule("registry-loader"),
+      credentialCompositionModule("registry"),
       githubProviderModule("registry"),
       githubProviderModule("registry-factory"),
       githubProviderModule("material"),

@@ -1,20 +1,18 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-19"
-last_updated_session: "authoring-run/8a16053e-895f-4ea3-8114-5bbe459856a0"
+last_updated_session: "authoring-run/73c80a5e-4d0c-4e72-b989-0cf9963c6593"
 ---
 
 # Repository credential service flow
 
 ## Overview
 
-An operator or controller worker admits a bounded session over a private Unix
-socket. Clients send Git or selected GitHub API requests over HTTPS using its
-gateway bearer. A separate process owns acquisition, use and cleanup. This flow
-traces the credential engine through response delivery, local closure and
-separately tracked cleanup. Container and live-provider qualification require
-separate evidence. The [Agent flow](agent-repository-credentials.md) owns ordinary
-Agent admission, durable records, Compute delivery and retirement.
+Operators or workers admit bounded sessions over private Unix control. Clients
+send Git or selected API requests over HTTPS with a gateway bearer. This flow
+traces the separate credential process through forwarding, local closure and
+cleanup. Container and live qualification need separate evidence. The
+[Agent flow](agent-repository-credentials.md) owns admission and material delivery.
 
 ## Entry Points
 
@@ -345,6 +343,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-19 23:54: Reconcile RepoDriver ownership, private status projection, and separate emitted service/client paths. (public authoring-run/73c80a5e-4d0c-4e72-b989-0cf9963c6593 - e5b5a5489f078d08272523476bdbcd0b9162c946)
 
 - 2026-09-19 21:58: Align emitted Docker contexts and container qualification with the separate service and client artifacts. (public authoring-run/8a16053e-895f-4ea3-8114-5bbe459856a0 - 99d01c1759ef28fe1ec2e6e22496879e752b5cb5)
 

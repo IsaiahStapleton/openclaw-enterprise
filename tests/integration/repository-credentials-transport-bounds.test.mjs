@@ -12,7 +12,7 @@ import {
 } from "../fixtures/repository-credentials/github.mjs";
 import { createTlsMaterial, listen } from "../fixtures/repository-credentials/process.mjs";
 import {
-  credentialDriverModule,
+  appModule,
   createServiceConfiguration,
   eventually,
 } from "../fixtures/repository-credentials/service.mjs";

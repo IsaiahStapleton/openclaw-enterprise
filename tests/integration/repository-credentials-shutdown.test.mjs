@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { credentialEmittedRoot } from "../fixtures/repository-credentials/runtime.mjs";
+import { appRoot } from "../fixtures/repository-credentials/runtime.mjs";
 import { createTlsMaterial } from "../fixtures/repository-credentials/process.mjs";
 import { createServiceConfiguration } from "../fixtures/repository-credentials/service.mjs";
 
@@ -21,7 +21,7 @@ test(
     import { request } from 'node:https';
     const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString());
-    const load = (name) => import(pathToFileURL(join(input.appRoot, name + '.' + input.extension)).href);
+    const { appModule: load } = await import(input.runtime);
     const [{runService}, {createSystemClock}, {createAlternateDriverFactory}] = await Promise.all([load('composition/repository-credentials/service'), load('drivers/repo/credentials/clock'), import(input.adapter)]);
     const clock = createSystemClock();
     const factory = createAlternateDriverFactory({origin:'https://upstream.example.test',gatewayOrigin:input.config.gateway.publicOrigin,clock,controls:{lateCapture:new Promise(() => {})}});

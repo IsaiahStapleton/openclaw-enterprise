@@ -1,7 +1,7 @@
 ---
 created: 2026-09-18
-updated: 2026-09-19
-last_updated_session: "authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b"
+updated: "2026-09-19"
+last_updated_session: "authoring-run/73c80a5e-4d0c-4e72-b989-0cf9963c6593"
 ---
 
 # Repository credential configuration flow
@@ -126,6 +126,8 @@ startup validation, not live GitHub behavior or platform integration.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-19 23:54: Reconcile RepoDriver ownership, private status projection, and separate emitted service/client paths. (public authoring-run/73c80a5e-4d0c-4e72-b989-0cf9963c6593 - e5b5a5489f078d08272523476bdbcd0b9162c946)
 
 - 2026-09-19 21:29: Move configuration ownership to composition and document return-buffer ownership through descriptor close. Verify composed source. (public authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b - 5d8329753f4e17402f619d392acc8fc3d112f620)
 
