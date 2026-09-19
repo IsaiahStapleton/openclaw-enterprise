@@ -29,7 +29,7 @@ import type {
   ProviderRef,
   RepositoryBindingRequest,
   RepositoryBindingSelection,
-  RepositoryCredentialDriver,
+  RepoDriver,
   RepositoryCredentialResolution,
   RepositoryRevisionState,
   RevisionHarnessDescriptor,
@@ -266,7 +266,7 @@ type DriverByCapability = {
   sandbox: SandboxDriver;
   compute: ComputeDriver;
   plugin: PluginDriver;
-  repository_credentials: RepositoryCredentialDriver;
+  repo: RepoDriver;
 };
 type DriverFor<Capability extends DriverCapability> = DriverByCapability[Capability];
 
@@ -321,7 +321,7 @@ function driverHasCapabilityContract(driver: Driver): boolean {
   if (driver.capability === "plugin") {
     return typeof candidate.listCatalog === "function";
   }
-  if (driver.capability === "repository_credentials") {
+  if (driver.capability === "repo") {
     return (
       ["resolve", "open", "status", "close"].every(
         (operation) => typeof candidate[operation] === "function",
@@ -710,7 +710,7 @@ export class OpenClawController {
     validateSelectedProviderDrivers(
       this.providers,
       this.selections.get("service_account")?.driver,
-      this.selections.get("repository_credentials")?.driver,
+      this.selections.get("repo")?.driver,
     );
   }
 
@@ -2656,7 +2656,7 @@ export class OpenClawController {
     bindings: readonly RepositoryBindingRequest[] | undefined,
   ):
     | {
-        readonly driver: RepositoryCredentialDriver;
+        readonly driver: RepoDriver;
         readonly resolution: RepositoryCredentialResolution;
       }
     | undefined {
@@ -2671,9 +2671,9 @@ export class OpenClawController {
     if (bindings.length === 0) {
       return undefined;
     }
-    let driver: RepositoryCredentialDriver;
+    let driver: RepoDriver;
     try {
-      driver = this.selectedDriver("repository_credentials");
+      driver = this.selectedDriver("repo");
     } catch {
       throw new DependencyUnavailableError(
         "The selected repository credential Driver is unavailable.",
@@ -2687,7 +2687,7 @@ export class OpenClawController {
         "The requested repository selections are not approved for this Namespace.",
       );
     }
-    const selected = this.selections.get("repository_credentials");
+    const selected = this.selections.get("repo");
     if (
       !resolution ||
       !validAdmittedRepositoryBindings(resolution.bindings) ||
@@ -2713,8 +2713,8 @@ export class OpenClawController {
           (requested.get(binding.repositoryRef) !== undefined &&
             requested.get(binding.repositoryRef) !== binding.profile) ||
           provider === undefined ||
-          !("repository_credentials" in provider.drivers) ||
-          provider.drivers.repository_credentials !== driver.id
+          !("repo" in provider.drivers) ||
+          provider.drivers.repo !== driver.id
         );
       })
     ) {

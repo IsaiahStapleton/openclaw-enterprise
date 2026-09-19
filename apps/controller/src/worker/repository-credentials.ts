@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AdmittedRepositoryBinding,
   AgentRevision,
-  RepositoryCredentialDriver,
+  RepoDriver,
   RepositoryCredentialMaterialRef,
   RepositoryCredentialRuntimeBinding,
   RepositoryCredentialSessionStatus,
@@ -35,7 +35,7 @@ export class RepositoryCredentialAuthorityError extends Error {
 interface Dependencies {
   readonly state: PostgresPlatformState;
   readonly queueOptions: PostgresWorkQueueOptions;
-  readonly driver: RepositoryCredentialDriver | undefined;
+  readonly driver: RepoDriver | undefined;
   readonly authorize: (claim: ClaimedWork, revision: Revision) => Promise<void>;
   readonly effect: <T>(
     claim: ClaimedWork,
@@ -296,13 +296,13 @@ export class RepositoryCredentialLifecycle {
     return complete;
   }
 
-  private driver(revision: Revision): RepositoryCredentialDriver {
+  private driver(revision: Revision): RepoDriver {
     const driver = this.dependencies.driver;
     const selected = revision.repositoryCredentials?.driver;
     if (
       driver === undefined ||
       selected === undefined ||
-      driver.capability !== "repository_credentials" ||
+      driver.capability !== "repo" ||
       driver.id !== selected.id ||
       driver.implementation !== selected.implementation
     ) {

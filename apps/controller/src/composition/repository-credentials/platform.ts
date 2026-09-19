@@ -4,14 +4,14 @@ import { createSecureContext } from "node:tls";
 import type {
   GitHubRepositoryCredentialProviderDefinition,
   Provider,
-  RepositoryCredentialDriver,
+  RepoDriver,
 } from "@openclaw-enterprise/contracts";
-import { GitHubRepositoryCredentialDriver } from "../../drivers/repository-credentials/github.ts";
+import { GitHubRepoDriver } from "../../drivers/repo/github/driver.ts";
 import {
   UnixRepositoryCredentialControlClient,
   type RepositoryCredentialControlClient,
 } from "../../providers/repository-credentials/control-client.ts";
-import { loadGitHubRepositoryRegistry } from "../../providers/repository-credentials/github/registry-loader.ts";
+import { loadGitHubRepositoryRegistry } from "./registry.ts";
 import type { SelectedDriverConfiguration } from "../installation-config.ts";
 
 async function loadPublicCa(path: string): Promise<Uint8Array> {
@@ -64,22 +64,19 @@ async function loadPublicCa(path: string): Promise<Uint8Array> {
   }
 }
 
-export async function composeRepositoryCredentialDriver(input: {
+export async function composeRepoDriver(input: {
   readonly provider: GitHubRepositoryCredentialProviderDefinition;
   readonly selection: SelectedDriverConfiguration;
 }): Promise<
   Readonly<{
-    repositoryCredentialDriver: RepositoryCredentialDriver;
+    repoDriver: RepoDriver;
   }>
 > {
   const { provider: definition, selection } = input;
-  if (
-    selection.implementation !== "github" ||
-    selection.id !== definition.drivers.repository_credentials
-  ) {
+  if (selection.implementation !== "github" || selection.id !== definition.drivers.repo) {
     throw new Error("The repository credential Driver must match its owning Provider.");
   }
-  GitHubRepositoryCredentialDriver.validateConfiguration(selection.configuration);
+  GitHubRepoDriver.validateConfiguration(selection.configuration);
   const configuration = selection.configuration as Readonly<{
     controlSocket: string;
     sessionDurationSeconds: number;
@@ -97,13 +94,13 @@ export async function composeRepositoryCredentialDriver(input: {
   }
   const provider: Provider<RepositoryCredentialControlClient> = Object.freeze({
     id: definition.id,
-    drivers: Object.freeze({ repository_credentials: selection.id }),
+    drivers: Object.freeze({ repo: selection.id }),
     client: new UnixRepositoryCredentialControlClient({
       controlSocket: configuration.controlSocket,
     }),
   });
   return Object.freeze({
-    repositoryCredentialDriver: new GitHubRepositoryCredentialDriver(provider, registry, {
+    repoDriver: new GitHubRepoDriver(provider, registry, {
       sessionDurationSeconds: configuration.sessionDurationSeconds,
       publicCa,
     }),

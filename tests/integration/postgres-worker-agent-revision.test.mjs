@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repository-credentials/client/config.ts";
+import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 import {
   authorizedPrincipal,
   cleanupProviderFixtures,
@@ -18,10 +18,7 @@ import {
   waitFor,
 } from "../helpers/postgres-provider-state.mjs";
 
-async function setup(
-  context,
-  { leaseDurationMs = 30_000, onHealthy, repositoryCredentialDriver } = {},
-) {
+async function setup(context, { leaseDurationMs = 30_000, onHealthy, repoDriver } = {}) {
   const [
     { Pool },
     { createControllerWorker },
@@ -64,7 +61,7 @@ async function setup(
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = {
     ...createDevelopmentComputeDriver(),
-    ...(repositoryCredentialDriver === undefined
+    ...(repoDriver === undefined
       ? {}
       : {
           validateRepositoryCredentials(harness, sandboxDriverId) {
@@ -251,7 +248,7 @@ async function setup(
     const drivers = transformDrivers({
       ...configuredDrivers,
       secretDriver,
-      ...(repositoryCredentialDriver === undefined ? {} : { repositoryCredentialDriver }),
+      ...(repoDriver === undefined ? {} : { repoDriver }),
     });
     worker = createControllerWorker({
       pool,
@@ -313,7 +310,7 @@ function repositoryBoundary({ count = 1, deadlineWallMs = Date.now() + 120_000 }
   const driver = {
     id: "repository-worker-boundary",
     implementation: "repository-worker-boundary",
-    capability: "repository_credentials",
+    capability: "repo",
     maintenanceIntervalMs: 3_600_000,
     resolve() {
       return { bindings, sessionDurationSeconds: 60 };
@@ -332,15 +329,6 @@ function repositoryBoundary({ count = 1, deadlineWallMs = Date.now() + 120_000 }
         state: "OPEN",
         deadlineWallMs: Math.min(Date.now() + input.durationSeconds * 1000, input.deadlineWallMs),
         binding: input.binding.grant,
-        activeUses: 0,
-        cleanup: {
-          active: 0,
-          pending: 0,
-          revoked: 0,
-          expired: 0,
-          uncertain: 0,
-          auxiliaryPending: false,
-        },
       };
       admissions.set(input.admissionId, session);
       sessions.set(session.sessionId, session);
@@ -408,15 +396,15 @@ test(
   async (context) => {
     const fixture = await setup(context);
     const [
-      { GitHubRepositoryCredentialDriver },
+      { GitHubRepoDriver },
       { UnixRepositoryCredentialControlClient },
       { createSystemClock },
       { startRegistryCredentialServiceFixture },
       { createServer },
     ] = await Promise.all([
-      import("../../apps/controller/src/drivers/repository-credentials/github.ts"),
+      import("../../apps/controller/src/drivers/repo/github/driver.ts"),
       import("../../apps/controller/src/providers/repository-credentials/control-client.ts"),
-      import("../../apps/controller/src/drivers/repository-credentials/clock.ts"),
+      import("../../apps/controller/src/drivers/repo/credentials/clock.ts"),
       import("../fixtures/repository-credentials/registry.mjs"),
       import("node:net"),
     ]);
@@ -433,13 +421,13 @@ test(
       clock: createSystemClock(),
       gateway: { listen: `127.0.0.1:${port}` },
     });
-    const driver = new GitHubRepositoryCredentialDriver(
+    const driver = new GitHubRepoDriver(
       {
         id: credentials.providerId,
         client: new UnixRepositoryCredentialControlClient({
           controlSocket: credentials.config.gateway.controlSocket,
         }),
-        drivers: { repository_credentials: "repository-credentials" },
+        drivers: { repo: "repository-credentials" },
       },
       credentials.registry,
       { sessionDurationSeconds: 60, publicCa: credentials.tls.ca },
@@ -475,7 +463,7 @@ test(
       undefined,
       undefined,
       fixture.workerPool,
-      (drivers) => ({ ...drivers, repositoryCredentialDriver: driver }),
+      (drivers) => ({ ...drivers, repoDriver: driver }),
     );
     const terminal = await waitFor(
       "the concrete repository revision's terminal result",
@@ -527,7 +515,7 @@ test(
   requiresPostgres,
   async (context) => {
     const repository = repositoryBoundary();
-    const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+    const fixture = await setup(context, { repoDriver: repository.driver });
     const owner = await fixture.agent("repository-ordering");
     const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
     const open = repository.driver.open;
@@ -580,7 +568,7 @@ test(
   requiresPostgres,
   async (context) => {
     const repository = repositoryBoundary();
-    const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+    const fixture = await setup(context, { repoDriver: repository.driver });
     const owner = await fixture.agent("repository-lost-response");
     const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
     const open = repository.driver.open;
@@ -634,7 +622,7 @@ test(
   requiresPostgres,
   async (context) => {
     const repository = repositoryBoundary({ count: 2 });
-    const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+    const fixture = await setup(context, { repoDriver: repository.driver });
     const owner = await fixture.agent("repository-maintenance-restart");
     const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
     const initial = [];
@@ -742,7 +730,7 @@ test(
   requiresPostgres,
   async (context) => {
     const repository = repositoryBoundary();
-    const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+    const fixture = await setup(context, { repoDriver: repository.driver });
     const owner = await fixture.agent("repository-repair-bound");
     const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
     let preparations = 0;
@@ -786,7 +774,7 @@ for (const change of ["revoked", "stopped", "expired", "superseded"]) {
     requiresPostgres,
     async (context) => {
       const repository = repositoryBoundary();
-      const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+      const fixture = await setup(context, { repoDriver: repository.driver });
       const owner = await fixture.agent(`repository-${change}`);
       if (change === "expired") {
         repository.snapshot.deadlineWallMs = Date.now() + 3_000;
@@ -915,7 +903,7 @@ test(
   requiresPostgres,
   async (context) => {
     const repository = repositoryBoundary();
-    const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+    const fixture = await setup(context, { repoDriver: repository.driver });
     const owner = await fixture.agent("repository-stop-outage");
     const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
     const stopped = [];
@@ -972,7 +960,7 @@ test(
   requiresPostgres,
   async (context) => {
     const repository = repositoryBoundary();
-    const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+    const fixture = await setup(context, { repoDriver: repository.driver });
     const owner = await fixture.agent("repository-grant-drift");
     const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
     const prepared = [];
@@ -1086,7 +1074,7 @@ test(
   requiresPostgres,
   async (context) => {
     const repository = repositoryBoundary();
-    const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+    const fixture = await setup(context, { repoDriver: repository.driver });
     const owner = await fixture.agent("repository-stop-admission-race");
     const first = await fixture.revision(owner, 1, undefined, repository.snapshot);
     await fixture.start(fixture.compute);
@@ -1218,7 +1206,7 @@ test(
   requiresPostgres,
   async (context) => {
     const repository = repositoryBoundary();
-    const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+    const fixture = await setup(context, { repoDriver: repository.driver });
     const owner = await fixture.agent("repository-cleanup-reread");
     const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
     const open = repository.driver.open;
@@ -1247,7 +1235,6 @@ test(
           return {
             ...firstSession,
             state: "CLOSED",
-            cleanup: { ...firstSession.cleanup, pending: 1 },
           };
         }
         cleanupWaiting = true;
@@ -1350,7 +1337,7 @@ test(
     const repository = repositoryBoundary();
     const fixture = await setup(context, {
       leaseDurationMs: 600,
-      repositoryCredentialDriver: repository.driver,
+      repoDriver: repository.driver,
     });
     const owner = await fixture.agent("repository-stale-claim");
     const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
@@ -2911,7 +2898,7 @@ test(
   requiresPostgres,
   async (context) => {
     const repository = repositoryBoundary();
-    const fixture = await setup(context, { repositoryCredentialDriver: repository.driver });
+    const fixture = await setup(context, { repoDriver: repository.driver });
     const owner = await fixture.agent("repository-convergence-retirement");
     const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
     let stops = 0;
