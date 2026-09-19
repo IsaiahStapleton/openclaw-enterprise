@@ -114,7 +114,7 @@ async function dropControlResponse(t, target) {
 async function admissionFixture(t, onCreate) {
   const resources = createResourceScope();
   t.after(() => resources.close());
-  const { callControl } = await appModule("client/operator");
+  const { callControl } = await appModule("drivers/repo/github/credentials/client/operator");
   const clock = createControlledClock();
   const tls = await createTlsMaterial(resources);
   const base = await createServiceConfiguration(resources, { sessions: 1 });
@@ -321,7 +321,7 @@ test(
   async (t) => {
     const resources = createResourceScope();
     t.after(() => resources.close());
-    const { createSystemClock } = await appModule("clock");
+    const { createSystemClock } = await appModule("drivers/repo/credentials/clock");
     const clock = createSystemClock();
     const tls = await createTlsMaterial(resources);
     const base = await createServiceConfiguration(resources);
@@ -408,7 +408,11 @@ test(
     assert.equal(agentStatus, 401);
     const clientParent = await temporaryDirectory(resources);
     const clientDirectory = join(clientParent, "session");
-    const operator = join(appRoot, "client", `operator.${appExtension}`);
+    const operator = join(
+      appRoot,
+      "drivers/repo/github/credentials/client",
+      `operator.${appExtension}`,
+    );
     const relay = await dropControlResponse(resources, config.gateway.controlSocket);
     const admissionId = `${Date.now()}-${randomUUID()}`;
     const failed = await run(
@@ -496,7 +500,11 @@ test(
   { timeout: 10000 },
   async (t) => {
     const [{ createSystemClock }, { createCredentialService }, { startListeners }] =
-      await Promise.all([appModule("clock"), appModule("service"), appModule("server")]);
+      await Promise.all([
+        appModule("drivers/repo/credentials/clock"),
+        appModule("drivers/repo/credentials/service"),
+        appModule("drivers/repo/credentials/server"),
+      ]);
     const clock = createSystemClock();
     const tls = await createTlsMaterial(t);
     const base = await createServiceConfiguration(t);
@@ -529,7 +537,7 @@ test(
   async (t) => {
     const resources = createResourceScope();
     t.after(() => resources.close());
-    const { createSystemClock } = await appModule("clock");
+    const { createSystemClock } = await appModule("drivers/repo/credentials/clock");
     const clock = createSystemClock();
     const tls = await createTlsMaterial(resources);
     const upstream = await startAlternateUpstream(resources, { tls });
@@ -596,7 +604,11 @@ test(
     const resources = createResourceScope();
     t.after(() => resources.close());
     const [{ createSystemClock }, { createCredentialService }, { startListeners }] =
-      await Promise.all([appModule("clock"), appModule("service"), appModule("server")]);
+      await Promise.all([
+        appModule("drivers/repo/credentials/clock"),
+        appModule("drivers/repo/credentials/service"),
+        appModule("drivers/repo/credentials/server"),
+      ]);
     const clock = createSystemClock();
     const tls = await createTlsMaterial(resources);
     // A single exchange slot makes leaked ownership observable on the next request.

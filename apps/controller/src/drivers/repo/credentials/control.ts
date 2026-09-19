@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Clock } from "./driver-contracts.ts";
-import type { OpenSessionInput, SessionControl, ServiceConfig } from "./contracts.ts";
+import type { Clock } from "./backend-contracts.ts";
+import type { OpenSessionInput, SessionControl, ServiceConfig } from "./service-contracts.ts";
 import { inspectRequestHead } from "./transport/request.ts";
 
 // A new correlation must be fresh; this also bounds closed-session tombstones.

@@ -1,5 +1,5 @@
 import { validateHeaderName, validateHeaderValue } from "node:http";
-import type { HeaderFields, RequestHead } from "../driver-contracts.ts";
+import type { HeaderFields, RequestHead } from "../backend-contracts.ts";
 
 const RESERVED = new Set([
   "host",

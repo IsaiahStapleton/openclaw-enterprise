@@ -2,7 +2,7 @@ import { request as httpsRequest } from "node:https";
 import type { ClientRequest, IncomingMessage, ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
-import type { Clock, HeaderFields, RequestHead } from "../driver-contracts.ts";
+import type { Clock, HeaderFields, RequestHead } from "../backend-contracts.ts";
 import type { ExchangeSender } from "../internal-contracts.ts";
 import type { JsonValue } from "../json-value.ts";
 import { ByteLimit, watchdog } from "./streams.ts";

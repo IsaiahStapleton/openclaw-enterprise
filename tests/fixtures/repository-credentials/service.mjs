@@ -17,7 +17,7 @@ import {
 export { appModule, appRoot, appExtension, repositoryRoot } from "./runtime.mjs";
 
 export async function createServiceConfiguration(t, limits = {}) {
-  const { validateServiceConfig } = await appModule("config");
+  const { validateServiceConfig } = await appModule("drivers/repo/credentials/configuration");
   const directory = await temporaryDirectory(t, "rcs-");
   await chmod(directory, 0o700);
   return validateServiceConfig(

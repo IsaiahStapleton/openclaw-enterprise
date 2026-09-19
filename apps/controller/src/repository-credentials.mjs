@@ -1,4 +1,4 @@
-import { main } from "../dist/main.js";
+import { main } from "../dist/repository-credentials.js";
 
 await main().catch(() => {
   process.stderr.write("repository credential service failed\n");

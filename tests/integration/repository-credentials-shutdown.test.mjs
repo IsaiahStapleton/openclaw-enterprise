@@ -27,7 +27,7 @@ test(
     const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString());
     const load = (name) => import(pathToFileURL(join(input.appRoot, name + '.' + input.extension)).href);
-    const [{runService}, {createSystemClock}, {createAlternateDriverFactory}] = await Promise.all([load('main'), load('clock'), import(input.adapter)]);
+    const [{runService}, {createSystemClock}, {createAlternateDriverFactory}] = await Promise.all([load('composition/repository-credentials/service'), load('drivers/repo/credentials/clock'), import(input.adapter)]);
     const clock = createSystemClock();
     const factory = createAlternateDriverFactory({origin:'https://upstream.example.test',gatewayOrigin:input.config.gateway.publicOrigin,clock,controls:{lateCapture:new Promise(() => {})}});
     const tls = {key:await readFile(input.key),cert:await readFile(input.cert)};
@@ -49,7 +49,7 @@ test(
     process.stdout.write('ready\\n');
   `;
     const child = spawn(process.execPath, ["--input-type=module", "--eval", program], {
-      env: { PATH: process.env.PATH },
+      env: { PATH: process.env.PATH, REPOSITORY_CREDENTIALS_APP_ROOT: appRoot },
       stdio: ["pipe", "pipe", "pipe"],
     });
     t.after(() => {
