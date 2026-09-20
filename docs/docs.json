@@ -52,7 +52,12 @@
               },
               {
                 "group": "Contributing",
-                "pages": ["layout", "local-preview"]
+                "pages": [
+                  "layout",
+                  "local-preview",
+                  "driver-docs-inventory",
+                  "base-driver-docs-template"
+                ]
               }
             ]
           },
@@ -106,8 +111,10 @@
                   "reference/drivers/kubernetes-secret",
                   "reference/drivers/openshell-sandbox",
                   "reference/drivers/plugin",
+                  "reference/drivers/plugin-bundled",
                   "reference/drivers/plugin-matrix",
                   "reference/drivers/sandbox",
+                  "reference/drivers/secret",
                   "reference/drivers/selection",
                   "reference/drivers/service-account",
                   "reference/drivers/ssh-compute"

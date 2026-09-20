@@ -1,6 +1,6 @@
 ---
 name: technical-writing
-description: Write, edit, or review Enterprise developer documentation, specifications, and technical instructions from current source evidence.
+description: Write, edit, or review Enterprise developer documentation, specifications, and technical instructions from current source evidence; always finish with a plain-language cleanup.
 dependencies: []
 ---
 
@@ -21,6 +21,7 @@ repository terminology. This skill needs no global tools or skill installation.
    implementation first when explaining architecture or internals is the task.
 4. Verify claims, examples, defaults, paths, and failure behavior. Label material
    uncertainty and name the missing evidence; polished prose is not verification.
+5. Before handing off any writing, complete the [required plain-language pass](#always-deslop-the-writing).
 
 ## Write precise prose
 
@@ -41,6 +42,25 @@ repository terminology. This skill needs no global tools or skill installation.
   uses regions, and arrows describe interactions. Do not imply deployment proof
   from source alone or rely on color alone to convey meaning.
 
+## Always deslop the writing
+
+Run this pass whenever you write, edit, or review prose, including small changes,
+PR descriptions, and review findings. The user does not need to request it.
+For edits, clean up the prose in scope and read the surrounding text for flow.
+For a review-only task, clean up your feedback and flag wording in the document
+when it obscures meaning; do not silently rewrite the source.
+
+- Name who does what and under which conditions. Replace vague verbs and noun
+  piles such as “performs readiness observation” with “checks whether the
+  workload is ready.” Prefer familiar words; define necessary technical terms.
+- Delete filler, canned transitions, empty claims, and repeated explanations.
+  Remove contrasts or caveats the reader does not need. Avoid invented labels.
+- Put the main point first. Split a sentence when the reader has to untangle
+  several actions, actors, or conditions; give each paragraph one main point.
+- Check the edit against the original and the evidence. Preserve scope, required
+  actions, permissions, warnings, failure behavior, and uncertainty. Do not make
+  an unsupported claim sound certain or cut a useful detail merely to shorten it.
+
 ## Choose the smallest useful page
 
 | Page                          | Include                                                                                                                                                      |
@@ -57,6 +77,15 @@ repository terminology. This skill needs no global tools or skill installation.
 Omit empty or irrelevant sections. Split independently useful topics when a page
 mixes too many reader tasks. Keep the root documentation map and affected links
 current, following repository page ownership and length limits.
+
+## Driver contracts
+
+When writing or rewriting a base Driver contract, read and follow the
+[Driver contract template](./references/driver-contracts.md). Use its eight
+sections: Overview, Interface, IAM, Lifecycle, Limits, Troubleshooting,
+Implementations, and Related. Keep concrete backend setup and behavior in
+implementation pages; the template takes precedence over the generic option to
+omit sections.
 
 ## Make examples usable
 

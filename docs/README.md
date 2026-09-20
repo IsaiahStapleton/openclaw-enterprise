@@ -25,8 +25,10 @@ Compare bundled implementations in the [ComputeDriver feature matrix](reference/
 Use the [PluginDriver feature matrix](reference/drivers/plugin-matrix.md) to
 compare plugin discovery and approval-policy support.
 [Agent plugins](reference/agent-plugins.md) and
-[PluginDriver](reference/drivers/plugin.md) cover curated plugin selection, startup
-validation, and native runtime policy.
+[PluginDriver](reference/drivers/plugin.md) cover curated plugin selection and startup;
+[bundled Plugin Drivers](reference/drivers/plugin-bundled.md) cover native policy.
+Use the [SecretDriver contract](reference/drivers/secret.md) for storage and delivery
+boundaries and [Kubernetes Secret](reference/drivers/kubernetes-secret.md) for setup.
 
 ## Architecture
 
@@ -44,6 +46,9 @@ The [Agent plugin flow](flows/agent-plugins.md) traces desired state through
 revision startup and runtime configuration.
 
 ## Contribute
+
+- [Driver documentation inventory](driver-docs-inventory.md): find base contracts and their documentation owners.
+- [Base Driver template](base-driver-docs-template.md): write driver contracts using the local technical-writing skill.
 
 - [Repository layout and conventions](layout.md): find code owners and choose where changes belong.
 - [Testing](testing/README.md): select a suite and prepare its environment.
