@@ -203,6 +203,15 @@
         },
         {
           "path": "tests/conformance/postgres-transaction-commit.test.mjs"
+        },
+        {
+          "path": "tests/integration/native-admin-access.test.mjs",
+          "expectedTests": [
+            "native admin status requires exact Agent administer and reports lifecycle availability",
+            "native admin disabled status still requires exact Agent administer",
+            "native admin shared session configuration validates cookie scope and rejects keys",
+            "native admin proxy strips browser credentials and preserves the Agent gateway base path"
+          ]
         }
       ]
     },
@@ -355,6 +364,18 @@
           "path": "tests/integration/postgres-transaction-commit.test.mjs",
           "expectedTests": [
             "a lost real COMMIT response preserves the unknown outcome and committed resource"
+          ]
+        },
+        {
+          "path": "tests/integration/native-admin-session-postgres.test.mjs",
+          "expectedTests": [
+            "PostgreSQL native admin shared session and HTTP proxy work across two OCC API replicas",
+            "PostgreSQL native admin WebSocket lease closes within thirty seconds after parent logout",
+            "PostgreSQL native admin WebSocket lease closes within thirty seconds after parent session expiry",
+            "PostgreSQL native admin WebSocket lease closes within thirty seconds after IAM administer restriction",
+            "PostgreSQL native admin WebSocket lease closes within thirty seconds after Agent stop",
+            "PostgreSQL native admin WebSocket lease closes within thirty seconds after active revision replacement",
+            "PostgreSQL native admin WebSocket closes on API shutdown and disabled redeploy denies reuse"
           ]
         }
       ]
@@ -562,7 +583,8 @@
       ],
       "env": {
         "OCC_TEST_GATEWAY_ROUTING_REAL": "1",
-        "OCC_TEST_SLACK_LIVE": "0"
+        "OCC_TEST_SLACK_LIVE": "0",
+        "OCC_TEST_NATIVE_ADMIN_REAL": "1"
       },
       "prepare": {
         "postgres": true,
@@ -580,6 +602,12 @@
           "path": "tests/integration/harness-topology-k3d-routing-real.test.mjs",
           "expectedTests": [
             "production dedicated Codex consumes Envoy-routed workspace files through OCC"
+          ]
+        },
+        {
+          "path": "tests/integration/native-admin-k3d-real.test.mjs",
+          "expectedTests": [
+            "production native admin UI opens through OCC and preserves Agent boundaries"
           ]
         }
       ]

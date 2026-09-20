@@ -26,10 +26,12 @@ If you are still learning the product, start with [Concepts](guides/concepts.md)
 | [Reference](reference/README.md)              | Look up OCC CLI commands and HTTP API operations.                        |
 | [Contribute](contributing/README.md)          | Set up a development environment and change the platform or its docs.    |
 
+Trusted operators can use the [Agent native admin UI](reference/agent-native-admin.md) pilot to open the stock OpenClaw UI through OCC.
+
 <a id="platform-developer-guide"></a>
 <a id="contribute"></a>
 <a id="architecture"></a>
 <a id="understand-the-code"></a>
 <a id="implementation-history"></a>
 
-Contributors can start with the [repository layout](layout.md), [current architecture](ARCHITECTURE.md), or [runtime flows](contributing/runtime-flows.md). The [platform design](design.md) and [spec archive](../specs/README.md) also cover proposals; use the current documentation to check what is supported.
+Contributors can start with the [repository layout](layout.md), [current architecture](ARCHITECTURE.md), or [runtime flows](contributing/runtime-flows.md). The [platform design](design.md) and [spec archive](../specs/README.md) also cover proposals; use the current documentation to check what is supported. The [Agent native admin UI flow](flows/agent-native-admin.md) traces console access and private gateway proxying.

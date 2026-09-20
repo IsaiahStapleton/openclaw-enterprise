@@ -99,6 +99,10 @@
                     "label": "Create and Deploy in the Console"
                   },
                   {
+                    "page": "reference/agent-native-admin",
+                    "label": "Native Admin UI"
+                  },
+                  {
                     "page": "guides/topics/agent-troubleshoot",
                     "label": "Troubleshoot"
                   }
@@ -378,6 +382,10 @@
                     "label": "Model Response Verification"
                   },
                   {
+                    "page": "guides/deploy/native-admin",
+                    "label": "Native Admin UI"
+                  },
+                  {
                     "page": "guides/deploy/production-handoff",
                     "label": "Production Readiness"
                   }
@@ -647,6 +655,7 @@
               "flows/compute-driver-lifecycle-hooks",
               "flows/driver-plugin-loading",
               "flows/agent-plugins",
+              "flows/agent-native-admin",
               "flows/kubernetes-existing-namespace-placement",
               "flows/production-tui",
               "flows/production-tui/native-client",

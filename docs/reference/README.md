@@ -28,6 +28,8 @@ paths, schemas, permissions, and error codes. It is generated from the checked-i
   and [Installation settings](settings.md) cover supported configuration.
 - [Authentication](authentication.md) and [authorization](authorization.md)
   explain which credentials and permissions requests need.
+- [Agent native admin UI](agent-native-admin.md) covers trusted operator access,
+  exact Agent authorization, and routing limits.
 
 <span id="drivers"></span>
 

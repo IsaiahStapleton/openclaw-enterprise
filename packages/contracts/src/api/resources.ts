@@ -59,6 +59,7 @@ export const AgentSchema = Type.Object(
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     desiredRuntimeState: Type.Union([Type.Literal("running"), Type.Literal("stopped")]),
     activeRevisionId: Type.Optional(RevisionId),
+    status: Type.Union([Type.Literal("active"), Type.Literal("deleting")]),
     createdAt: Timestamp,
   },
   { additionalProperties: false },

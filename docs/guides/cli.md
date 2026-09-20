@@ -5,7 +5,7 @@
 Use `occ` to manage OpenClaw Control Plane (OCC) resources from a terminal. You
 need your Installation's OCC endpoint and a protected service-key response file.
 For all commands and flags, see the [CLI command reference](../reference/cli.md).
-To deploy through the browser, see [Deploy your first Agent](first-agent.md).
+To deploy through the browser, see [Create and deploy Agents in the console](../reference/console/create-and-deploy.md).
 
 ## Connect to your Installation
 
@@ -91,7 +91,7 @@ fields.
 
 ## Deploy and check an Agent
 
-Complete the [Agent deployment prerequisites](first-agent.md#before-you-start)
+Complete the [Agent deployment prerequisites](deploy/production-agents.md#configure-the-agent-runtime)
 before deploying. If you created the empty Configuration above, use
 `occ configuration update '<configuration-id>' --file configuration-update.json`.
 The update body contains `values`; omit the create-only `kind` field. To update
@@ -108,12 +108,19 @@ Deployment returns an immutable revision. `agent get` shows the desired state
 and selected revision; neither command reports live health or proves a model
 responded. There is no CLI deployment-status command. Check the
 [deployment status API](../reference/agents.md#deployment-status) and follow
-[Deploy your first Agent](first-agent.md) to verify a response. If you lost the
+[Verify production workloads](deploy/production-agents.md#verify-production-workloads)
+to verify a response from this Agent on Kubernetes. If you lost the
 deploy result, check [revision history](../reference/agents/deployment.md#revisions-and-deployment)
 before retrying: each accepted request creates a revision.
 
 Run `occ agent stop '<agent-id>'` to stop the workload while retaining its
 revision history and persistent state.
+
+Run `occ agent delete '<agent-id>'` only when you intend to remove the Agent,
+its revision history, and its runtime credentials. Kubernetes also removes
+Agent-owned workspace data; Namespace-owned Configurations and Secrets survive.
+Deletion runs asynchronously. See [Agent deletion](../reference/agents.md#deletion)
+for the full cleanup behavior.
 
 ## Manage local development
 

@@ -62,7 +62,15 @@ Driver settings and approved resource IDs, or `undefined` if gateway access is
 unsupported. OCC calls it after authorizing access to the Agent and selecting
 its active revision. The method does not check readiness, authorize the caller,
 grant backend route permissions, or save a URL in Agent Configuration. Connection
-errors are dependency failures. See [Kubernetes private routes](kubernetes-compute/networking-and-isolation.md#private-agent-gateway-routes).
+errors are dependency failures.
+
+Workspace-file access uses the returned WSS endpoint. The opt-in
+[Agent native admin UI](../agent-native-admin.md#agent-host-identity) derives
+an HTTPS base with the same authority and Agent path for native HTTP and
+WebSocket proxying; the Driver method's WSS return contract stays unchanged.
+A missing method or unsupported endpoint prevents native admin access.
+See [Kubernetes private routes](kubernetes-compute/networking-and-isolation.md#private-agent-gateway-routes)
+for the bundled route implementation.
 
 ### Optional initial runtime credential provisioning
 
@@ -74,6 +82,15 @@ Agent locks and requires a ready Namespace with no earlier Agent revision. It pa
 approved identities, never physical storage names. Missing methods return an
 error. External writes can survive a database or audit failure; refresh status
 before retrying. See the [initial credential workflow](../console/create-and-deploy.md#initial-runtime-credentials).
+
+`deleteAgentRuntimeCredentials(binding)` is the idempotent teardown counterpart.
+During Agent deletion, the worker calls it after retiring every revision and
+before removing the Agent's database identity. Kubernetes Compute deletes only
+the admitted Agent-owned transport and Slack Secrets and treats absence as
+success. Namespace-owned Harness model authentication survives Agent deletion.
+A Driver that supports provisioning but not deletion fails Agent deletion
+permanently on its first worker attempt. Drivers that implement neither optional
+method are unaffected.
 
 ### Runtime logging ownership
 
@@ -190,7 +207,7 @@ prove readiness. See [Kubernetes startup status](kubernetes-compute.md#plugin-st
 - Implementations differ in topology, credentials, Namespace deletion, and
   private gateway access; see the [feature matrix](compute-matrix.md). The gateway
   and Harness need not share a cluster or a component that writes their resources.
-- Initial credential helpers cannot rotate or delete credentials, manage model
+- Initial credential helpers cannot rotate credentials, manage model
   authentication, or prove that credentials work or workloads are ready.
 - Compute cannot query runtime logs. Selecting a different Driver does not migrate
   revisions that recorded the previous Driver's identity.

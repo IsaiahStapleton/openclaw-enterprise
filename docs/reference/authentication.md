@@ -125,6 +125,36 @@ Protected requests resolve the current stored session with cookie caching
 disabled. A missing, expired, revoked, or forged session is rejected. Supplying
 an `Authorization` header is rejected even if a session cookie is also present.
 
+## Native admin shared sessions
+
+Agent native admin UI access starts from an ordinary controller browser session.
+When the trusted-operator pilot is enabled, the server parses
+`nativeAdmin.sharedCookieDomain` and configures the Better Auth session cookie
+for that explicit shared OCE parent domain so the console host and derived Agent
+hosts can use the same human session. Service API keys do not create browser
+sessions and cannot open native admin UI access. When native admin is disabled,
+leftover shared-cookie-domain configuration is ignored and Better Auth keeps the
+legacy host-only `openclaw_occ` cookie prefix and scope.
+
+The shared cookie parent domain is configured explicitly and validated against
+the console origin and Agent host suffix on DNS-label boundaries. Public
+suffixes, malformed domains, and hosts outside the configured parent are
+rejected; OCC does not infer a broader parent domain from either host. A
+domain-scoped cookie cannot use a host-only `__Host-` prefix. The shared-domain
+session uses the Better Auth cookie prefix `openclaw_occ_shared`; on HTTPS its
+cookie name is `__Secure-openclaw_occ_shared.session_token`. During migration,
+successful sign-in/sign-out responses clear prior host-only `openclaw_occ` and
+`openclaw_occ_shared` session-cookie names without a `Domain` attribute so
+browsers do not choose between duplicate host-only and domain cookies.
+
+Native-host requests authenticate the shared OCE session, resolve the exact
+Agent represented by the requested host, authorize exact Agent `administer`, and
+validate the current active revision and supported native configuration before
+proxying. OCC strips browser cookies, `Authorization`, API keys, forwarded
+identity, and native scope headers before forwarding upstream, so the native
+gateway never receives the OCE session cookie. Native chat or other Agent-host
+activity does not renew the console session.
+
 ## Account provisioning
 
 `POST /api/auth/accounts` requires a human session and `administer` on the singleton Installation.
@@ -192,6 +222,8 @@ and account-provisioning authorization.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-20 08:53: Replaced native-admin launch-code sessions with the shared OCE session cookie boundary and cookie-domain validation. (cody/01a0b7fd-13fa-7dc2-8653-5c5814b59305 - 5e5f12f37842ae7239d73432e00609547627ded8)
 
 - 2026-08-31 22:29: Define single-attempt bootstrap failure handling with retained artifacts, no automatic recovery, and manual operator repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
 

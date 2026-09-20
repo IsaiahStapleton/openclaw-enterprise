@@ -1,12 +1,16 @@
 # Platform console
 
-Use the browser console to sign in, choose a Namespace, create and deploy an
-Agent, edit its Slack draft settings, and manage credentials and live workspace
-files. For a first deployment on an existing Installation, follow [Deploy your first Agent](../guides/first-agent.md).
-The console also lists Agents, Providers, and Namespaces you can access. It does
-not offer rollback, live runtime health, browser chat, or Agent deletion. See the
-[deployment guide](../guides/deploy.md) for operator procedures and runtime checks,
-and the [API reference](api.md) for management operations.
+Use the browser console at `/console/` on your OCC address to sign in, choose a
+Namespace, create and deploy Agents, and edit supported Slack or Microsoft Teams
+draft settings. You can also set up initial runtime credentials, read or replace
+supported live workspace files, and list the Agents, Providers, and Namespaces
+you can access. When the pilot is enabled, trusted operators can open an Agent's
+[native admin UI](#open-the-native-admin-ui). The console does not offer rollback,
+live runtime health, browser chat through OCE, or Agent deletion.
+
+For browser deployment instructions, follow [Create and deploy Agents](console/create-and-deploy.md).
+See the [deployment guide](../guides/deploy.md) for operator procedures and
+runtime checks, and the [API reference](api.md) for management operations.
 
 ## Start and sign in
 
@@ -148,6 +152,21 @@ replayed automatically. Review loaded contents before writing again. Files load
 and save independently; success for one file says nothing about another file's
 result. For unavailable gateways, follow the
 [workspace access setup](../guides/deploy/workspace-routing.md#agent-workspace-files).
+
+## Open the native admin UI
+
+When [Agent native admin UI access](agent-native-admin.md) is enabled, the
+Workspace files tab includes a **Native admin UI** panel for callers with exact
+Agent `administer` permission. The panel is hidden when the Installation disables
+the feature or when the caller lacks that grant. It reports stopped,
+unsupported, or unavailable gateway states without granting broader access.
+
+**Open native admin UI** opens the returned per-Agent URL in a new tab. The
+visible warning is part of the operator contract: the native UI can change the
+gateway outside OCE, and those changes are not recorded in AgentRevisions. Use
+OCE for durable configuration. The Agent tab uses the same OCE session cookie as
+the console through the configured shared cookie parent domain; native chat or
+other Agent-host activity does not extend that console session.
 
 ## Routes
 

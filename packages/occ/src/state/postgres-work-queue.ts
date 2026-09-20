@@ -64,7 +64,7 @@ interface WorkRow {
   readonly revision_id: string | null;
   readonly actor_id: string;
   readonly namespace_target: "ready" | "deleted" | null;
-  readonly agent_target: "stopped" | null;
+  readonly agent_target: "stopped" | "deleted" | null;
   readonly state: ControllerWorkState;
   readonly available_at: Date | string;
   readonly attempt_count: number;
@@ -245,6 +245,8 @@ export class PostgresWorkQueue {
       input.revisionId === undefined
         ? null
         : nonempty(input.revisionId, "Controller work revision ID");
+    // A revision still requires its owning Agent, but the converse no longer
+    // holds: Agent teardown is Agent-scoped and names no single revision.
     if (revisionId !== null && agentId === null) {
       throw new ScopeViolationError(
         "Controller work revisions require both their exact owning Agent and revision.",
@@ -259,7 +261,7 @@ export class PostgresWorkQueue {
           agentTarget !== null)) ||
       (agentId !== null &&
         revisionId === null &&
-        (namespaceTarget !== null || agentTarget !== "stopped")) ||
+        (namespaceTarget !== null || (agentTarget !== "stopped" && agentTarget !== "deleted"))) ||
       (revisionId !== null && (namespaceTarget !== null || agentTarget !== null))
     ) {
       throw new ScopeViolationError(
@@ -443,6 +445,23 @@ export class PostgresWorkQueue {
       ],
     );
     if (completed.rows.length === 0) {
+      throw new WorkClaimLostError();
+    }
+  }
+
+  async completeAgentDeletion(
+    claim: WorkClaim,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<void> {
+    validateClaim(claim);
+    nonempty(namespaceId, "Agent deletion Namespace ID");
+    nonempty(agentId, "Agent deletion Agent ID");
+    const completed = await this.client.query(
+      "SELECT occ.finalize_agent_deletion($1::text, $2::text, $3::text, $4::uuid) AS completed",
+      [namespaceId, agentId, claim.idempotencyKey, claim.claimToken],
+    );
+    if ((completed.rows[0] as { completed?: unknown } | undefined)?.completed !== true) {
       throw new WorkClaimLostError();
     }
   }

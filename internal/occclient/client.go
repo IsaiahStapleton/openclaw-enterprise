@@ -182,6 +182,15 @@ func (client *Client) StopAgent(namespaceID, agentID string) (any, error) {
 	)
 }
 
+// DeleteAgent begins asynchronous Agent deletion.
+func (client *Client) DeleteAgent(namespaceID, agentID string) (any, error) {
+	return client.send(
+		http.MethodDelete,
+		[]string{"namespaces", namespaceID, "agents", agentID},
+		nil,
+	)
+}
+
 func (client *Client) get(segments ...string) (any, error) {
 	return client.send(http.MethodGet, segments, nil)
 }

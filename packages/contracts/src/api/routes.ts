@@ -484,6 +484,22 @@ export const occApiRoutes = [
     },
   },
   {
+    operationId: "deleteAgent",
+    method: "DELETE",
+    path: "/namespaces/:namespaceId/agents/:agentId",
+    action: "openclaw.agents.delete",
+    iamAction: "delete",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Begin deletion of an exact Namespace-owned Agent and its AgentRevisions",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: AgentParams,
+      response: { 202: AgentResponse, ...mutationErrors },
+    },
+  },
+  {
     operationId: "getAgentRuntimeCredentials",
     method: "GET",
     path: "/namespaces/:namespaceId/agents/:agentId/runtime-credentials",

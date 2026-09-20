@@ -238,6 +238,7 @@ interface GatewayConfigurationSnapshot {
   readonly revisionId: string;
   readonly usesTrustedProxyAuth: boolean;
   readonly usesGatewayPasswordEnv: boolean;
+  readonly usesWritableNativeAdminConfig: boolean;
   readonly annotations: Readonly<Record<string, string>>;
   readonly loggingLevel: LoggingLevel;
 }
@@ -325,6 +326,8 @@ const MANAGER = "openclaw-enterprise";
 const FIELD_MANAGER = "openclaw-enterprise-compute";
 const TOKEN_PATH = "/var/run/secrets/openclaw/service-principal";
 const CONFIGURATION_DIRECTORY = "/etc/openclaw";
+const MANAGED_CONFIGURATION_DIRECTORY = "/etc/openclaw-managed";
+const WRITABLE_CONFIGURATION_PATH = "/home/node/.openclaw/openclaw.json";
 const CONFIGURATION_DOCUMENT = "openclaw.json";
 const CONFIGURATION_VOLUME = "openclaw-configuration";
 const PLUGIN_RUNTIME_VOLUME = "openclaw-plugin-runtime";
@@ -1232,6 +1235,48 @@ export class KubernetesComputeDriver implements ComputeDriver {
         transportConfigured: true,
         slackConfigured: status.slackConfigured || credentials.slack !== undefined,
       };
+    });
+  }
+
+  async deleteAgentRuntimeCredentials(binding: ComputeAgentBinding): Promise<void> {
+    if (this.options.runtime === undefined) {
+      return;
+    }
+    await this.withRuntimeCredentialErrors(async () => {
+      const context = await this.runtimeCredentialContext(binding);
+      const specs = [
+        context.specs.transport,
+        ...(context.specs.slack === undefined ? [] : [context.specs.slack]),
+      ];
+      const clients = await this.clients();
+      for (const spec of specs) {
+        const existing = await this.getOwned(
+          "Secret",
+          spec.name,
+          context.namespace,
+          context.ownership,
+        );
+        if (existing === undefined) {
+          continue;
+        }
+        try {
+          await this.request(
+            () =>
+              clients.core.deleteNamespacedSecret({
+                name: spec.name,
+                namespace: context.namespace,
+                ...(existing.metadata.uid === undefined
+                  ? {}
+                  : { body: { preconditions: { uid: existing.metadata.uid } } }),
+              }),
+            { mutating: true },
+          );
+        } catch (error) {
+          if (numericErrorStatus(error) !== 404) {
+            throw error;
+          }
+        }
+      }
     });
   }
 
@@ -2321,7 +2366,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return;
     }
     await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
-    await this.deleteGateway(name, ownership, namespace);
+    await this.deleteNamedRuntimeResources(name, ownership, namespace);
     await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
   }
 
@@ -2399,31 +2444,107 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
     const gateway = await this.getOwned("Deployment", name, namespace, ownership);
     if (gateway === undefined) {
-      const route = await this.gatewayRouteForRevision(name, ownership, namespace, revision.id);
-      if (route === undefined) {
+      // A missing Deployment can mean stop or external loss. Preserve shared Agent resources
+      // whenever surviving route or Service evidence belongs to a newer revision.
+      const route =
+        this.options.gatewayRouting === undefined
+          ? undefined
+          : await this.getOwned("HTTPRoute", name, namespace, ownership);
+      if (
+        route !== undefined &&
+        route.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revision.id
+      ) {
+        await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+        await this.deleteRetiredRevisionArtifacts(revision, namespace);
         return;
       }
-      if (this.options.runtime !== undefined) {
-        await this.deleteGatewayPrivateStateClaim(ownership, namespace);
-      }
       if (revision.harness.mode === "dedicated") {
-        await this.deleteSharedWorkspaceClaim(ownership, namespace);
+        const agentService = await this.getOwned(
+          "Service",
+          `agent-${sha256Hex(revision.agentId, 12)}`,
+          namespace,
+          ownership,
+        );
+        const selectedRevision = asRecord(agentService?.spec?.selector)?.["openclaw.dev/revision"];
+        if (isNonEmptyString(selectedRevision) && selectedRevision !== revision.id) {
+          await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+          await this.deleteRetiredRevisionArtifacts(revision, namespace);
+          return;
+        }
       }
-      await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
-      await this.deleteGateway(name, ownership, namespace);
+      await this.deleteRetiredAgentResources(revision, ownership, namespace);
       return;
     }
     const annotations = gateway.metadata.annotations ?? {};
     if (annotations[AGENT_REVISION_ID_ANNOTATION] === revision.id) {
-      if (this.options.runtime !== undefined) {
-        await this.deleteGatewayPrivateStateClaim(ownership, namespace);
-      }
-      if (revision.harness.mode === "dedicated") {
-        await this.deleteSharedWorkspaceClaim(ownership, namespace);
-      }
-      await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
-      await this.deleteGateway(name, ownership, namespace);
+      await this.deleteRetiredAgentResources(revision, ownership, namespace);
+      return;
     }
+    await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+    await this.deleteRetiredRevisionArtifacts(revision, namespace);
+  }
+
+  private async deleteRetiredAgentResources(
+    revision: AgentRevision,
+    ownership: Ownership,
+    namespace: string,
+  ): Promise<void> {
+    const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
+    await this.deleteGatewayRoute(gatewayName, ownership, namespace, revision.id);
+    await this.deleteNamedRuntimeResources(gatewayName, ownership, namespace);
+    await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+    if (this.options.runtime !== undefined) {
+      await this.deleteGatewayPrivateStateClaim(ownership, namespace);
+    }
+    if (revision.harness.mode === "dedicated") {
+      await this.deleteSharedWorkspaceClaim(ownership, namespace);
+    }
+    await this.deleteNamedRuntimeResources(
+      `agent-${sha256Hex(revision.agentId, 12)}`,
+      { ...ownership, servicePrincipalId: revision.servicePrincipalId },
+      namespace,
+    );
+    await this.deleteRetiredRevisionArtifacts(revision, namespace);
+    await this.deleteRetiredAgentPolicies(revision, namespace);
+  }
+
+  private async deleteRetiredRevisionArtifacts(
+    revision: AgentRevision,
+    namespace: string,
+  ): Promise<void> {
+    await this.deleteOwnedNamespacedResource(
+      "ConfigMap",
+      `gateway-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`,
+      { namespaceId: revision.namespaceId, agentId: revision.agentId },
+      namespace,
+    );
+    await this.deleteOwnedNamespacedResource(
+      "ConfigMap",
+      `plugin-runtime-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`,
+      this.pluginRuntimeOwnership(revision),
+      namespace,
+    );
+  }
+
+  private async deleteRetiredAgentPolicies(
+    revision: AgentRevision,
+    namespace: string,
+  ): Promise<void> {
+    const suffix = sha256Hex(revision.agentId, 12);
+    const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+    for (const name of [
+      `allow-agent-runtime-${suffix}`,
+      `allow-gateway-agent-${suffix}`,
+      `allow-gateway-channels-${suffix}`,
+    ]) {
+      await this.deleteOwnedNamespacedResource("NetworkPolicy", name, ownership, namespace);
+    }
+    await this.deleteOwnedNamespacedResource(
+      "NetworkPolicy",
+      `allow-agent-auth-${suffix}`,
+      { ...ownership, servicePrincipalId: revision.servicePrincipalId },
+      namespace,
+    );
   }
 
   private async deleteGatewayRoute(
@@ -2484,7 +2605,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       : undefined;
   }
 
-  private async deleteGateway(
+  private async deleteNamedRuntimeResources(
     name: string,
     ownership: Ownership,
     namespace: string,
@@ -2495,12 +2616,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (existing === undefined) {
         continue;
       }
+      const uid = required(existing.metadata.uid, `${kind} UID`);
       const request = {
         name,
         namespace,
-        ...(existing.metadata.uid === undefined
-          ? {}
-          : { body: { preconditions: { uid: existing.metadata.uid } } }),
+        body: { preconditions: { uid } },
       };
       await this.request(
         async () => {
@@ -2515,6 +2635,36 @@ export class KubernetesComputeDriver implements ComputeDriver {
         { mutating: true },
       );
     }
+  }
+
+  private async deleteOwnedNamespacedResource(
+    kind: "ConfigMap" | "ServiceAccount" | "NetworkPolicy",
+    name: string,
+    ownership: Ownership,
+    namespace: string,
+  ): Promise<void> {
+    const existing = await this.getOwned(kind, name, namespace, ownership);
+    if (existing === undefined) {
+      return;
+    }
+    const request = {
+      name,
+      namespace,
+      body: { preconditions: { uid: required(existing.metadata.uid, `${kind} UID`) } },
+    };
+    const clients = await this.clients();
+    await this.request(
+      async () => {
+        if (kind === "ConfigMap") {
+          await clients.core.deleteNamespacedConfigMap(request);
+        } else if (kind === "ServiceAccount") {
+          await clients.core.deleteNamespacedServiceAccount(request);
+        } else {
+          await clients.networking.deleteNamespacedNetworkPolicy(request);
+        }
+      },
+      { mutating: true },
+    );
   }
 
   private async resolveNamespace(
@@ -3902,6 +4052,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       revisionId: revision.id,
       usesTrustedProxyAuth: auth?.mode === "trusted-proxy",
       usesGatewayPasswordEnv,
+      usesWritableNativeAdminConfig: this.usesWritableNativeAdminConfig(revision.configuration),
       annotations: {
         "openclaw.dev/configuration-id": revision.configurationId,
         "openclaw.dev/configuration-kind": revision.configurationKind,
@@ -3909,6 +4060,33 @@ export class KubernetesComputeDriver implements ComputeDriver {
       },
       loggingLevel: admittedLoggingLevel(revision.configuration),
     };
+  }
+
+  private usesWritableNativeAdminConfig(configuration: OpenClawConfigurationDocument): boolean {
+    const gateway = asRecord(configuration.gateway);
+    const auth = asRecord(gateway?.auth);
+    const trustedProxy = asRecord(auth?.trustedProxy);
+    const identityScopes = asRecord(auth?.identityScopes)?.["occ-workspace-files"];
+    const deviceAutoApprove = asRecord(trustedProxy?.deviceAutoApprove);
+    const controlUi = asRecord(gateway?.controlUi);
+    return (
+      auth?.mode === "trusted-proxy" &&
+      trustedProxy?.userHeader === "x-occ-identity" &&
+      Array.isArray(trustedProxy.allowUsers) &&
+      trustedProxy.allowUsers.includes("occ-workspace-files") &&
+      Array.isArray(identityScopes) &&
+      identityScopes.includes("operator.admin") &&
+      deviceAutoApprove?.enabled === true &&
+      Array.isArray(deviceAutoApprove.scopes) &&
+      deviceAutoApprove.scopes.includes("operator.admin") &&
+      controlUi?.enabled === true &&
+      Array.isArray(controlUi.allowedOrigins) &&
+      controlUi.allowedOrigins.some(
+        (origin) => typeof origin === "string" && origin.trim().length > 0,
+      ) &&
+      controlUi.dangerouslyDisableDeviceAuth !== true &&
+      controlUi.dangerouslyAllowHostHeaderOriginFallback !== true
+    );
   }
 
   private gatewayMembershipLabels(): Record<string, string> {
@@ -3933,6 +4111,31 @@ export class KubernetesComputeDriver implements ComputeDriver {
       revision.agentId,
       "Agent ID",
     )}`;
+  }
+
+  private gatewayRouteHeaderFilter(): KubernetesRecord {
+    return {
+      type: "RequestHeaderModifier",
+      requestHeaderModifier: {
+        set: [
+          { name: "x-occ-identity", value: "occ-workspace-files" },
+          {
+            name: "x-real-ip",
+            value: "%DOWNSTREAM_DIRECT_REMOTE_ADDRESS_WITHOUT_PORT%",
+          },
+        ],
+        remove: ["authorization", "cookie", "forwarded", "x-forwarded-for", "x-openclaw-scopes"],
+      },
+    };
+  }
+
+  private gatewayRouteBackendRef(service: ManagedKubernetesObject<"Service">): KubernetesRecord {
+    return {
+      group: "",
+      kind: "Service",
+      name: service.metadata.name,
+      port: this.options.network.gatewayPort,
+    };
   }
 
   private gatewayRoutingHostname(routing: KubernetesGatewayRoutingOptions): string {
@@ -4051,28 +4254,24 @@ export class KubernetesComputeDriver implements ComputeDriver {
                 type: "URLRewrite",
                 urlRewrite: { path: { type: "ReplaceFullPath", replaceFullPath: "/" } },
               },
+              this.gatewayRouteHeaderFilter(),
+            ],
+            backendRefs: [this.gatewayRouteBackendRef(service)],
+          },
+          {
+            matches: [
+              { path: { type: "PathPrefix", value: `${this.gatewayRoutePath(revision)}/` } },
+            ],
+            filters: [
               {
-                type: "RequestHeaderModifier",
-                requestHeaderModifier: {
-                  set: [
-                    { name: "x-occ-identity", value: "occ-workspace-files" },
-                    {
-                      name: "x-real-ip",
-                      value: "%DOWNSTREAM_DIRECT_REMOTE_ADDRESS_WITHOUT_PORT%",
-                    },
-                  ],
-                  remove: ["x-forwarded-for", "forwarded", "x-openclaw-scopes"],
+                type: "URLRewrite",
+                urlRewrite: {
+                  path: { type: "ReplacePrefixMatch", replacePrefixMatch: "/" },
                 },
               },
+              this.gatewayRouteHeaderFilter(),
             ],
-            backendRefs: [
-              {
-                group: "",
-                kind: "Service",
-                name: service.metadata.name,
-                port: this.options.network.gatewayPort,
-              },
-            ],
+            backendRefs: [this.gatewayRouteBackendRef(service)],
           },
         ],
       },
@@ -4263,9 +4462,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
     role: SharedWorkspaceRole,
     image: string,
     embedded: boolean,
+    writableConfiguration = false,
   ): KubernetesRecord {
     const directories = this.privateStateDirectories(role);
     const volumeMounts: V1VolumeMount[] = [{ name: "runtime-state", mountPath: "/home/node" }];
+    if (writableConfiguration) {
+      volumeMounts.push({
+        name: CONFIGURATION_VOLUME,
+        mountPath: MANAGED_CONFIGURATION_DIRECTORY,
+        readOnly: true,
+      });
+    }
     if (role === "gateway" && this.options.runtime !== undefined) {
       // Initialize whole directories as uid 1000 before mounting SQLite and its WAL files.
       volumeMounts.push({ name: GATEWAY_PRIVATE_STATE_VOLUME, mountPath: "/gateway-state" });
@@ -4278,10 +4485,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
     }
     const script = [
-      'const { mkdirSync } = require("node:fs");',
+      writableConfiguration
+        ? 'const { chmodSync, copyFileSync, mkdirSync } = require("node:fs");'
+        : 'const { mkdirSync } = require("node:fs");',
       `for (const path of ${JSON.stringify(directories)}) {`,
       "  mkdirSync(path, { recursive: true });",
       "}",
+      ...(writableConfiguration
+        ? [
+            `copyFileSync(${JSON.stringify(
+              `${MANAGED_CONFIGURATION_DIRECTORY}/${CONFIGURATION_DOCUMENT}`,
+            )}, ${JSON.stringify(WRITABLE_CONFIGURATION_PATH)});`,
+            `chmodSync(${JSON.stringify(WRITABLE_CONFIGURATION_PATH)}, 0o600);`,
+          ]
+        : []),
     ].join("\n");
     return {
       name: "prepare-private-state",
@@ -4791,11 +5008,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const runtime = this.options.runtime;
     const dedicated = !embedded;
     const privateHome = runtime !== undefined || dedicated;
+    const writableConfiguration =
+      role === "gateway" &&
+      configuration !== undefined &&
+      runtime !== undefined &&
+      this.options.gatewayRouting !== undefined &&
+      configuration.usesWritableNativeAdminConfig;
     const volumes: V1Volume[] = [];
     const volumeMounts: V1VolumeMount[] = [];
     const variables: V1EnvVar[] = [];
     const initContainers = privateHome
-      ? [this.privateStateInitContainer(role, image, embedded)]
+      ? [this.privateStateInitContainer(role, image, embedded, writableConfiguration)]
       : [];
     if (configuration !== undefined) {
       volumes.push({
@@ -4808,12 +5031,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
       });
       volumeMounts.push({
         name: CONFIGURATION_VOLUME,
-        mountPath: CONFIGURATION_DIRECTORY,
+        mountPath: writableConfiguration
+          ? MANAGED_CONFIGURATION_DIRECTORY
+          : CONFIGURATION_DIRECTORY,
         readOnly: true,
       });
       variables.push({
         name: "OPENCLAW_CONFIG_PATH",
-        value: `${CONFIGURATION_DIRECTORY}/${CONFIGURATION_DOCUMENT}`,
+        value: writableConfiguration
+          ? WRITABLE_CONFIGURATION_PATH
+          : `${CONFIGURATION_DIRECTORY}/${CONFIGURATION_DOCUMENT}`,
       });
     }
     const needsPluginRuntime =

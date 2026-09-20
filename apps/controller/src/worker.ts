@@ -90,6 +90,12 @@ interface AgentStopDispatchResult extends DispatchResult {
   readonly revision?: Readonly<AgentRevision>;
 }
 
+interface AgentDeletionDispatchResult extends DispatchResult {
+  readonly namespace?: Readonly<Namespace>;
+  readonly agent?: Readonly<Agent>;
+  readonly revisions?: readonly Readonly<AgentRevision>[];
+}
+
 function positiveInteger(value: number, name: string): number {
   if (!isPositiveSafeInteger(value)) {
     throw new Error(`${name} must be a positive safe integer.`);
@@ -103,6 +109,9 @@ function workOperation(claim: ClaimedWork): string {
   }
   if (claim.agentTarget === "stopped") {
     return "agent.stop";
+  }
+  if (claim.agentTarget === "deleted") {
+    return "agent.delete";
   }
   if (claim.namespaceTarget === "deleted") {
     return "namespace.delete";
@@ -136,7 +145,9 @@ function validDriver(driver: ComputeDriver): boolean {
     typeof driver.deleteNamespace === "function" &&
     typeof driver.prepareRevision === "function" &&
     typeof driver.stopRevision === "function" &&
-    typeof driver.retireRevision === "function"
+    typeof driver.retireRevision === "function" &&
+    (driver.deleteAgentRuntimeCredentials === undefined ||
+      typeof driver.deleteAgentRuntimeCredentials === "function")
   );
 }
 
@@ -664,7 +675,11 @@ export class ControllerWorker {
       return;
     }
     if (claim.agentTarget !== undefined) {
-      await this.processAgentStop(claim);
+      if (claim.agentTarget === "deleted") {
+        await this.processAgentDeletion(claim);
+      } else {
+        await this.processAgentStop(claim);
+      }
       return;
     }
     if (claim.agentId !== undefined || claim.namespaceTarget === undefined) {
@@ -834,6 +849,249 @@ export class ControllerWorker {
       result = { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
     }
     await this.finalizeAgentStop(claim, result);
+  }
+
+  private async processAgentDeletion(claim: ClaimedWork): Promise<void> {
+    let result: AgentDeletionDispatchResult;
+    try {
+      if (
+        claim.agentId === undefined ||
+        claim.agentTarget !== "deleted" ||
+        claim.namespaceTarget !== undefined
+      ) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "INVALID_TARGET",
+        });
+        return;
+      }
+      const resources = await this.state.read(async (view) => {
+        const namespace = await view.namespaces.findNamespace(claim.namespaceId);
+        const agent = await view.agents.findAgent(claim.namespaceId, claim.agentId!);
+        const revisions =
+          agent === undefined
+            ? []
+            : await view.revisions.listRevisions(claim.namespaceId, claim.agentId!);
+        return { namespace, agent, revisions };
+      });
+      const { namespace, agent, revisions } = resources;
+      if (namespace === undefined || agent === undefined) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "INVALID_AGENT_OWNER",
+        });
+        return;
+      }
+      if (agent.status !== "deleting" || agent.desiredRuntimeState !== "stopped") {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "INVALID_AGENT_STATE",
+          namespace,
+          agent,
+          revisions,
+        });
+        return;
+      }
+      const denied = await this.authorizeAgentDeletion(claim, agent);
+      if (denied !== undefined) {
+        await this.finalizeAgentDeletion(claim, { ...denied, namespace, agent, revisions });
+        return;
+      }
+      if (
+        revisions.some(
+          (revision) =>
+            revision.namespaceId !== namespace.id ||
+            revision.agentId !== agent.id ||
+            revision.servicePrincipalId !== agent.servicePrincipalId,
+        )
+      ) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "INVALID_REVISION_OWNER",
+          namespace,
+          agent,
+          revisions,
+        });
+        return;
+      }
+      if (
+        revisions.some(
+          (revision) =>
+            revision.compute.id !== this.compute.id ||
+            revision.compute.implementation !== this.compute.implementation,
+        )
+      ) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "COMPUTE_DRIVER_MISMATCH",
+          namespace,
+          agent,
+          revisions,
+        });
+        return;
+      }
+      if (
+        this.compute.provisionAgentRuntimeCredentials !== undefined &&
+        this.compute.deleteAgentRuntimeCredentials === undefined
+      ) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "CREDENTIAL_DELETION_UNSUPPORTED",
+          namespace,
+          agent,
+          revisions,
+        });
+        return;
+      }
+      if (revisions.length > 0 && this.compute.bindAgent !== undefined) {
+        await this.withClaimHeartbeat(claim, async () => {
+          await this.compute.bindAgent!({ namespace, agent });
+        });
+      }
+      for (const revision of revisions) {
+        await this.withClaimHeartbeat(claim, () => this.compute.retireRevision(revision));
+      }
+      if (this.compute.deleteAgentRuntimeCredentials !== undefined) {
+        await this.withClaimHeartbeat(claim, () =>
+          this.compute.deleteAgentRuntimeCredentials!({ namespace, agent }),
+        );
+      }
+      result = {
+        outcome: "success",
+        code: "AGENT_DELETED",
+        namespace,
+        agent,
+        revisions,
+      };
+    } catch (error) {
+      if (error instanceof WorkClaimLostError) {
+        throw error;
+      }
+      result = { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
+    }
+    await this.finalizeAgentDeletion(claim, result);
+  }
+
+  private async authorizeAgentDeletion(
+    claim: ClaimedWork,
+    agent: Readonly<Agent>,
+  ): Promise<AgentDeletionDispatchResult | undefined> {
+    const authorization: AuthorizationRequest = {
+      principalId: claim.actorId,
+      action: "delete",
+      resource: { kind: "agent", id: agent.id, namespaceId: agent.namespaceId },
+    };
+    const state = await this.loadIAMState();
+    const decision = await this.iamDecision(this.iam, authorization);
+    if (!state.identities.some((identity) => identity.id === claim.actorId)) {
+      return { outcome: "permanent", code: "ACTOR_REVOKED", authorization, decision };
+    }
+    if (!decision.allowed) {
+      return {
+        outcome: "permanent",
+        code: "AUTHORIZATION_DENIED",
+        authorization,
+        decision,
+      };
+    }
+    return undefined;
+  }
+
+  private async finalizeAgentDeletion(
+    claim: ClaimedWork,
+    result: AgentDeletionDispatchResult,
+  ): Promise<void> {
+    if (result.outcome === "success") {
+      if (claim.agentId === undefined) {
+        throw new Error("The worker Agent deletion context is unavailable.");
+      }
+      await this.state.transactWithQueue(
+        async (_unit, queue) =>
+          queue.completeAgentDeletion(claim, claim.namespaceId, claim.agentId!),
+        this.queueOptions,
+      );
+    } else {
+      await this.state.transactWithQueue(async (unit, queue) => {
+        if ((await queue.heartbeat(claim)) === undefined) {
+          throw new WorkClaimLostError();
+        }
+        const terminalFailure =
+          result.outcome === "permanent" ||
+          (result.outcome === "retry" && claim.attemptCount >= this.maxAttempts);
+        if (result.decision !== undefined) {
+          await this.appendAgentDeletionDenial(unit, claim, result);
+        } else if (terminalFailure) {
+          await this.appendAgentDeletionOutcome(unit, claim, result);
+        }
+        if (terminalFailure) {
+          await queue.fail(claim, { code: result.code });
+        } else {
+          await queue.retry(claim, { code: result.code });
+        }
+      }, this.queueOptions);
+    }
+    this.emit({
+      event: "worker.completed",
+      ...workLogFields(claim),
+      namespaceId: claim.namespaceId,
+      agentId: claim.agentId,
+      result: result.outcome,
+      outcome: result.outcome,
+      code: result.code,
+    });
+  }
+
+  private async appendAgentDeletionOutcome(
+    unit: PlatformUnitOfWork,
+    claim: ClaimedWork,
+    result: AgentDeletionDispatchResult,
+  ): Promise<void> {
+    if (this.installation === undefined || claim.agentId === undefined) {
+      throw new Error("The worker Agent deletion audit context is unavailable.");
+    }
+    await unit.audit.append({
+      id: `aud_${randomUUID()}`,
+      installationId: this.installation.id,
+      namespaceId: claim.namespaceId,
+      occurredAt: new Date().toISOString(),
+      kind: "mutation",
+      actorId: claim.actorId,
+      source: "occ",
+      action: "openclaw.agents.lifecycle.delete",
+      resource: { kind: "agent", id: claim.agentId, namespaceId: claim.namespaceId },
+      iamDriverId: this.iamDriverId,
+      outcome: "failure",
+      details: {
+        computeDriverId: this.compute.id,
+        reasonCode: result.code,
+      },
+    });
+  }
+
+  private async appendAgentDeletionDenial(
+    unit: PlatformUnitOfWork,
+    claim: ClaimedWork,
+    result: AgentDeletionDispatchResult,
+  ): Promise<void> {
+    if (this.installation === undefined || claim.agentId === undefined) {
+      throw new Error("The worker Agent deletion authorization context is unavailable.");
+    }
+    await unit.audit.append({
+      id: `aud_${randomUUID()}`,
+      installationId: this.installation.id,
+      namespaceId: claim.namespaceId,
+      occurredAt: new Date().toISOString(),
+      kind: "authorization_denial",
+      actorId: claim.actorId,
+      source: "occ",
+      action: "openclaw.agents.delete",
+      resource: { kind: "agent", id: claim.agentId, namespaceId: claim.namespaceId },
+      iamDriverId: this.iamDriverId,
+      ...(result.authorization === undefined ? {} : { authorization: result.authorization }),
+      ...(result.decision === undefined ? {} : { decisionReason: result.decision.reason }),
+      reasonCode: result.code,
+      outcome: "denied",
+    });
   }
 
   private async authorizeAgentStop(

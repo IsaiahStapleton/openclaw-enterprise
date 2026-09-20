@@ -16,7 +16,7 @@ newest revision and the viewed snapshot can both differ from that pointer.
 Serving status stays explicitly unavailable because these API responses provide
 no serving observation. Revision snapshots
 are read-only and do not expose rollback, edit, deploy, or live-health controls.
-Agent deletion is unavailable because the API has no Agent delete operation.
+The console does not yet expose the API's Agent deletion operation.
 
 `apps/controller/src/console/channels.mjs:renderChannels` renders supported
 Slack and Microsoft Teams channel settings for the saved draft only. Slack uses
