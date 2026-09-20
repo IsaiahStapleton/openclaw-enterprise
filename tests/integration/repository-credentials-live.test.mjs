@@ -34,8 +34,8 @@ test(
       "live smoke requires the private control socket and public gateway CA",
     );
     const [{ callControl }, { writeClientConfiguration }] = await Promise.all([
-      appModule("client/operator"),
-      appModule("client/config"),
+      appModule("drivers/repo/github/credentials/client/operator"),
+      appModule("drivers/repo/github/credentials/client/config"),
     ]);
     const opened = await callControl(socket, {
       method: "POST",
