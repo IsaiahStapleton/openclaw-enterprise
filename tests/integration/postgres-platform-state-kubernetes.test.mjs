@@ -62,7 +62,8 @@ test(
       `agent-${randomUUID()}`,
     );
     assert.equal(Object.hasOwn(agent, "installationId"), false);
-    assert.equal(Object.hasOwn(agent, "servicePrincipalId"), false);
+    assert.equal(typeof agent.servicePrincipalId, "string");
+    assert.notEqual(agent.servicePrincipalId.trim(), "");
     assert.equal(agent.namespaceId, namespace.data.id);
 
     const persisted = await pool.query(
@@ -179,8 +180,10 @@ test(
     assert.notEqual(first.data.id, second.data.id);
     assert.equal(first.data.namespaceId, namespace.data.id);
     assert.equal(second.data.namespaceId, namespace.data.id);
-    assert.equal(Object.hasOwn(first.data, "servicePrincipalId"), false);
-    assert.equal(Object.hasOwn(second.data, "servicePrincipalId"), false);
+    assert.equal(typeof first.data.servicePrincipalId, "string");
+    assert.notEqual(first.data.servicePrincipalId.trim(), "");
+    assert.equal(typeof second.data.servicePrincipalId, "string");
+    assert.notEqual(second.data.servicePrincipalId.trim(), "");
     await Promise.all(
       [first.data, second.data].map((agent) =>
         grantAgentSecretOperate(pool, agent, agent.harnessAuth.source.id),
@@ -548,7 +551,8 @@ test(
       createConfiguredAgent(pool, api, namespaceA, `revision-restricted-${randomUUID()}`),
     ]);
     for (const created of [primary, sibling, foreign, restricted]) {
-      assert.equal(Object.hasOwn(created, "servicePrincipalId"), false);
+      assert.equal(typeof created.servicePrincipalId, "string");
+      assert.notEqual(created.servicePrincipalId.trim(), "");
     }
     assert.equal(primary.configurationId, primaryConfiguration.id);
 
