@@ -6,12 +6,13 @@ Kubernetes, use the [Amazon EKS guide](eks.md).
 
 ## Prepare the cluster
 
-Use Kubernetes 1.35 or later with IPv4 connectivity for the chart's explicit
-`/32` database and API egress rules, enforcing NetworkPolicies, and the tools in
-[production prerequisites](../deploy.md#production-prerequisites). One cluster
-can host OCC and Agent workloads: OCC runs in `openclaw-system`, and Compute
-creates isolated tenant namespaces. Separate control and runtime node pools
-provide placement boundaries within that cluster.
+Use Kubernetes 1.35 or later, IPv4 connectivity, and a network plugin that
+enforces NetworkPolicies. The chart uses explicit IPv4 `/32` rules for database
+and Kubernetes API traffic. Install the tools in the [production
+prerequisites](../deploy.md#production-prerequisites). One cluster can host the
+OpenClaw Control Plane (OCC) and Agent workloads: OCC runs in `openclaw-system`,
+and Compute creates isolated tenant namespaces. Use separate node pools for OCC
+and Agents to control which nodes run each workload.
 
 Have the cluster administrator provide a protected kubeconfig and node pools
 labeled `oce-role=control` and `oce-role=agents`, or record the labels you will
@@ -22,6 +23,7 @@ umask 077
 export OCC_INPUT_DIRECTORY='/secure/occ'
 export KUBECONFIG_FILE="$OCC_INPUT_DIRECTORY/kubeconfig"
 export CONTEXT='<approved-cluster-context>'
+install -d -m 700 "$OCC_INPUT_DIRECTORY"
 # Place the administrator-provided kubeconfig at KUBECONFIG_FILE first.
 chmod 600 "$KUBECONFIG_FILE"
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" version
@@ -29,7 +31,8 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" get nodes -L oce-ro
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" get storageclasses
 ```
 
-Allow capacity for overlapping revisions. Dedicated Codex also needs a node
+Check that the node list shows both roles and that the expected StorageClasses
+exist. Allow capacity for overlapping revisions. Dedicated Codex also needs a node
 syscall policy compatible with its command sandbox; review the
 [Compute requirements](../../reference/drivers/kubernetes-compute.md#requirements)
 before selecting node images.

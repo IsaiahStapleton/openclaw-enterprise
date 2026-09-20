@@ -1,6 +1,6 @@
 # Deploy and verify production Agents
 
-Deploy an Agent into a ready Namespace and verify its active runtime. Complete
+Deploy an Agent into a ready Namespace and verify that its model answers. Complete
 [control-plane installation](production-installation.md) and its authenticated
 API check first. Run commands from the repository root in the same operator shell,
 retaining its credentials and Kubernetes context.
@@ -141,9 +141,12 @@ provisioned inputs. Do not use both paths to replace an existing credential grou
 
 Create the tenant transport Secret using the Agent ID suffix. Token-mode
 gateways use `gateway-token`; dedicated Codex also uses `app-server-token`.
-For native `gateway.auth.mode: "trusted-proxy"`, omit `gateway.auth.token`.
-The Secret may still contain `gateway-token`, but Compute does not project
-`OPENCLAW_GATEWAY_TOKEN` for that explicit mode.
+For native `gateway.auth.mode: "trusted-proxy"`, omit `gateway.auth.token`;
+Compute does not project it in that mode. To verify model responses through an
+operator's local Kubernetes connection, configure the `gateway-password` Secret
+reference and enable the native HTTP endpoint as described in
+[Model response verification](../operate/model-verification.md). The initial
+credential API generates this password too; it never returns it in an API response.
 
 ```bash
 umask 077
@@ -151,14 +154,18 @@ AGENT_SUFFIX="$(printf %s "$AGENT_ID" | shasum -a 256 | cut -c1-12)"
 SECRET_DIRECTORY="$(mktemp -d)"
 openssl rand -hex 32 | tr -d '\n' > "$SECRET_DIRECTORY/app-server-token"
 openssl rand -hex 32 | tr -d '\n' > "$SECRET_DIRECTORY/gateway-token"
+openssl rand -hex 32 | tr -d '\n' > "$SECRET_DIRECTORY/gateway-password"
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
   -n "$TENANT_NAMESPACE" create secret generic "openclaw-agent-transport-$AGENT_SUFFIX" \
   --from-file=app-server-token="$SECRET_DIRECTORY/app-server-token" \
-  --from-file=gateway-token="$SECRET_DIRECTORY/gateway-token"
+  --from-file=gateway-token="$SECRET_DIRECTORY/gateway-token" \
+  --from-file=gateway-password="$SECRET_DIRECTORY/gateway-password"
 ```
 
-Embedded OpenClaw uses only the gateway token. Dedicated Codex uses both
-transport tokens. Model authentication comes from the saved `harnessAuth` binding.
+Token-authenticated embedded OpenClaw uses the gateway token; dedicated Codex
+also uses the app-server token. Trusted-proxy gateways use the separately
+configured password for a direct local connection. Model authentication comes
+from the saved `harnessAuth` binding.
 Kubernetes projects its source only into the model-executing workload; initial
 transport/channel provisioning does not accept model keys. Keep credential values
 out of Helm values, Installation YAML, Configurations, shell history, and this
@@ -183,11 +190,16 @@ Secrets.
 ## Verify production workloads
 
 Wait for `GET /namespaces/$NAMESPACE_ID/agents/$AGENT_ID` to report the
-expected `activeRevisionId`, then verify one denied and one allowed gateway
-connection for the selected Agent. A Helm release, rendered chart, or ready
-controller does not prove tenant runtime, gateway WebSocket authentication, or
-a model turn. Use the production TUI proof below when the accepted evidence is
-an interactive model-backed session.
+expected `activeRevisionId`, then require a real model response from that
+Agent. Choose the check for your gateway authentication:
+
+- Token: [attach with the OpenClaw TUI](#attach-with-the-openclaw-tui).
+- Trusted proxy: [verify rejection of an unauthenticated request and a real
+  model response](../operate/model-verification.md) over an operator's local
+  Kubernetes connection. This uses a separate gateway password.
+
+A Helm release, ready controller, or active revision does not show that the
+Agent can reach its model.
 
 ## Attach with the OpenClaw TUI
 
@@ -224,7 +236,8 @@ gateway path. Ctrl+D exits only the client.
 This Pod-local TUI procedure requires token authentication. It does not apply
 to gateways configured with the trusted-proxy authentication used by private
 workspace-file routing; that mode intentionally has no gateway token. Use the
-OCC file API for the supported administration path in that configuration.
+[separate password check](../operate/model-verification.md) to verify model
+responses in that mode. Use the OCC file API for workspace-file administration.
 
 ## End the operator session
 
@@ -234,12 +247,20 @@ Remove only temporary local delivery copies:
 rm -- "$OCC_SERVICE_KEY_FILE"
 test -z "${OCC_SERVICE_KEY_DIRECTORY:-}" || rmdir -- "$OCC_SERVICE_KEY_DIRECTORY"
 unset OCC_SERVICE_KEY_FILE OCC_SERVICE_KEY_DIRECTORY
+if [ -n "${SECRET_DIRECTORY:-}" ]; then
+  rm -- "$SECRET_DIRECTORY/app-server-token" "$SECRET_DIRECTORY/gateway-token" "$SECRET_DIRECTORY/gateway-password"
+  rmdir -- "$SECRET_DIRECTORY"
+  unset SECRET_DIRECTORY
+fi
 ```
 
-This does not revoke the key or remove protected bootstrap storage.
+Remove those temporary transport copies only after completing model verification.
+This does not revoke the service key, delete Kubernetes Secrets, or remove
+protected bootstrap storage.
 
 ## Related
 
 - [Private routing for workspace files](workspace-routing.md).
+- [Troubleshoot the platform](../operate/troubleshooting.md).
 - [Stop or remove a production deployment](../deploy.md#stop-or-remove-a-production-deployment).
 - [Production TUI flow](../../flows/production-tui.md).

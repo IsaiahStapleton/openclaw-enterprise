@@ -5,7 +5,9 @@ last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 pr: 24
 ---
 
-# PR 24: SSH Compute Flow
+<a id="pr-24-ssh-compute-flow"></a>
+
+# SSH compute lifecycle
 
 ## Overview
 

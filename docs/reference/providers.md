@@ -7,6 +7,9 @@ The bundled ChatGPT client manages upstream service accounts, not inference.
 Providers have no OCC resource or write API. Installation administrators can
 discover nonsecret configured IDs and types through `GET /providers`.
 
+[Configure the ChatGPT Provider](../guides/integrations/chatgpt.md) for the
+operator workflow. ChatGPT is the only bundled Provider.
+
 ## Read configured Providers
 
 `GET /providers` returns `{data:[{id,type}],meta:{requestId}}` after the selected

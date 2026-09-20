@@ -1,51 +1,59 @@
 # Create and deploy Agents in the console
 
-Create a saved Agent draft, provision initial Kubernetes transport credentials and channel Secret bindings, then request its first deployment from the [platform console](../console.md). Start by signing in and selecting the intended Namespace.
+Use the [platform console](../console.md) to create an Agent, prepare its
+credentials, and request deployment. If this is your first Agent on an existing
+Installation, start with [Deploy your first Agent](../../guides/first-agent.md)
+for access requirements and how to choose a Namespace.
 
 ## Create an Agent
 
-Select **Create Agent** from the Agents page to create one Namespace-owned Agent.
-Enter an Agent name and review the prefilled native Configuration JSON. The
-editable starter matches the selected execution mode: dedicated uses
-`codex/gpt-5.1`; embedded uses `openai/gpt-5.1`. These are examples, not discovered
-Installation defaults or a guarantee of model access. Review the model and
-provision the required credentials before deployment. Changing execution mode
-updates untouched JSON; use **Reset template** to replace your edits. The form
-requires valid JSON with an object at its root.
+1. Sign in, select the intended Namespace, open **Agents**, and select
+   **Create Agent**.
+2. Enter a name that is unique within the Namespace. Choose an execution mode
+   and review the starter Configuration JSON. Dedicated uses `codex/gpt-5.1`;
+   embedded uses `openai/gpt-5.1`. These are example models. Confirm your
+   Installation has access to the model you choose. The form requires a JSON
+   object. Changing modes updates untouched JSON; use **Reset template** if you
+   want to replace your edits.
+3. If you need Slack or Microsoft Teams, use the channel cards and select
+   **Dedicated**. Channel settings and their plugin entries are saved with the
+   Configuration when you select **Create Agent**. You can provision Slack
+   credentials in the console after creation; Teams credentials and deployment
+   use the [operator workflow](../../guides/deploy/production-agents.md#configure-the-agent-runtime).
+4. Choose how the Agent will authenticate to its model. Use one of the options
+   below, or choose **None** to save a draft and select a method later. A draft
+   without a compatible method cannot be deployed.
+5. Select **Create Agent**. A successful save opens the Agent detail page on
+   **Saved draft**. No revision or workload exists yet. You can create or edit
+   [workspace files](../console.md#edit-workspace-files) after deployment, once
+   the gateway is reachable; the creation form does not save file contents.
+
+| Authentication option            | What you need                                                                                                                                                                                                                             |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OpenAI API key**               | The ID of an existing [OCC Secret](../drivers/kubernetes-secret.md#create-a-namespace-owned-secret) in this Namespace. You need `operate` on that exact Secret; Secret `read` is not required. Enter the Secret ID, not the key.          |
+| **ChatGPT service account**      | An account in this Namespace that you can read, an already issued credential, the matching Provider, and dedicated execution. The console does not issue the credential for you. Listing Providers requires Installation `administer`.    |
+| **Operator-managed credentials** | An Installation using SSH with embedded OpenClaw. The operator configures the runtime host; OCC does not validate the credentials or model access. See [SSH credentials](../drivers/ssh-compute.md#credentials-and-supported-boundaries). |
 
 Use the Slack and Microsoft Teams cards to configure initial channels before creating
 the Agent. Their settings update the same Configuration JSON, including the required
 plugin entries. No channel request is sent until you submit **Create Agent**. Enabled
 channels require Dedicated execution. Slack Secret bindings can be provisioned from the saved Agent draft; Teams credential provisioning remains an operator procedure.
 
-Workspace files cannot be initialized during creation: the backend accepts files
-only after the Agent has an active revision and a reachable gateway. Create and
-deploy the Agent, then open **Workspace files** to load or create the four supported
-files. The creation form does not store unsaved file contents.
+Selecting a credential source does not change the configured model or execution
+mode, or confirm that the provider accepts it. For API-key deployments, the
+Agent's own service principal also needs `operate` on that Secret; ask an
+administrator to [grant it before deploying](../../guides/deploy/production-agents.md#configure-the-agent-runtime).
+See [harness authentication](../agents.md#harness-authentication) for the full rules.
 
-Choose an optional Provider and a harness authentication method. For an API key,
-enter the exact same-Namespace OCC Secret ID. The save request validates the
-reference and exact Secret `operate` permission; Secret `read` is not required. Create
-the Secret through its [storage API](../drivers/kubernetes-secret.md#create-a-namespace-owned-secret)
-first. For ChatGPT, select a readable account with an issued credential and the
-matching Provider. The console does not issue credentials when selecting them.
-Provider discovery requires Installation `administer`. Source selection does not
-change the configured model or execution mode, or prove provider acceptance.
-A draft may remain unbound, but deployment requires a compatible binding.
-
-Submitting creates a same-Namespace `kind: "agent"` Configuration from the JSON,
-then submits `POST /namespaces/:namespaceId/agents` with its returned ID and the
-selected execution mode and associations. If the Configuration saves but Agent
-creation fails, its ID remains visible and the saved JSON and execution mode are fixed.
-Correct the name or associations and retry to reuse that Configuration. These are separate
-API writes; failure does not remove the saved Configuration or retry automatically.
-If a write’s reply is interrupted or unavailable, its outcome is unknown. The
-form disables further creation until you leave or refresh it. Inspect the Agent
-and Configuration collections before starting again; a lost response can follow
-a successful write.
-Successful creation opens the Agent detail page at
-`/console/agents/:agentId?...&revision=draft`. It does not
-admit an AgentRevision, deploy a workload, or prove runtime health.
+If the Configuration saves but Agent creation fails, the form shows its ID and
+keeps its JSON and execution mode fixed. Correct the Agent name or selections and
+retry to reuse that Configuration. The two saves are separate; a failed Agent
+save does not remove the Configuration. If a response is lost, the save may have
+succeeded. The form disables further creation until you leave or refresh it.
+Check the **Agents** list and, if the form showed a Configuration ID, the
+[exact Configuration](../configuration.md#create-read-update-and-delete) before
+starting again. If you cannot determine the outcome, give the displayed request
+ID, if available, to your operator.
 
 ## Initial runtime credentials
 
@@ -95,7 +103,9 @@ requires a refresh. These checks are separate reads, not an atomic compare-and-s
 Teams-enabled drafts cannot deploy through this console path because Teams credential
 readiness is not exposed; use the operator deployment workflow for those Agents.
 
-An accepted deployment opens **Workspace files**. Admission does not establish
-runtime readiness; retry file loading after the gateway starts. If the deployment
-reply is lost, inspect the Agent and revision history before another attempt.
-The console does not replay an uncertain deployment automatically.
+If a deployment response is lost, inspect the Agent's revision history before
+trying again; the console does not automatically repeat an uncertain request.
+To follow the deployment worker, use the [deployment status API](../agents.md#deployment-status).
+The console does not display live runtime health. Ask your operator to
+[verify the workload](../../guides/deploy/production-agents.md#verify-production-workloads)
+if files remain unavailable or you need proof that the Agent is running.

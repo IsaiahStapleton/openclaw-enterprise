@@ -1,10 +1,10 @@
 # Local Kubernetes development
 
-Run the OpenClaw Control Plane (OCC) API and worker in Compose while the
+Configure or troubleshoot the local Kubernetes development profile. The
+OpenClaw Control Plane (OCC) API and worker run in Compose; the
 Kubernetes Compute Driver provisions workloads in a disposable, loopback-only
-k3d cluster. The `./bin/occ dev up` and `./bin/occ dev down` commands manage both the Docker and
-Kubernetes development profiles; `scripts/dev-up` and `scripts/dev-down`
-provide checkout-local entry points.
+k3d cluster. If this is your first setup, start with the [local Kubernetes
+quickstart](../quickstart.md).
 
 ## Start the profile
 
@@ -20,10 +20,11 @@ pnpm cli:build
 OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev up
 ```
 
-The default `OCC_DEVELOPMENT_COMPUTE_DRIVER=docker` retains the ordinary
-[quickstart](../quickstart.md). The helper selects Docker first when both
-container engines are usable. Set
-`OCC_DEVELOPMENT_CONTAINER_ENGINE=docker` or `podman` to select one explicitly.
+Without `OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes`, the CLI uses the Docker
+Compute Driver; set it explicitly for both startup and cleanup. The helper
+uses Docker Engine to host the Kubernetes profile when both container engines
+are usable. Set `OCC_DEVELOPMENT_CONTAINER_ENGINE=docker` or `podman` to select
+the engine explicitly.
 Kubernetes startup accepts `-- --env-file PATH` for environment inputs and
 `-- -f PATH` for a Compose override applied after the profile files. Overrides
 must keep networks and volumes owned by the selected project and cannot use
@@ -93,9 +94,12 @@ kubectl --kubeconfig /tmp/openclaw-development/kubeconfig \
   --context <context-printed-by-startup> get namespaces
 ```
 
-The API and worker use the same generated Installation configuration. Agent
-deployments therefore exercise Kubernetes Compute rather than the Docker
-development Driver.
+Expect the Installation output to show an ID and `kubectl` to list namespaces.
+These checks confirm access to the control plane and cluster; they do not
+deploy an Agent or run a model. The API and worker use the same generated
+Installation configuration, so Agent deployments use Kubernetes Compute. To
+deploy your own Agent and get a model response, continue with [Deploy your
+first Agent](../first-agent.md).
 
 ## Stop and clean up
 
@@ -109,13 +113,13 @@ OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev down
 `./bin/occ dev down` defaults to Docker Compute even when Kubernetes state exists.
 For explicitly selected Kubernetes mode, it reads the private recorded state
 and removes only the named `occ-dev-*` cluster and its Compose project, deletes
-profile volumes, then removes the state directory. This permanently deletes the development
-Installation, service keys, Namespaces, Agents, audit history, and queued work
-stored by this profile. Incomplete cleanup preserves the state for recovery;
-restore access to the recorded engine and rerun the same cleanup command. A failed startup attempts
-the same resource cleanup and preserves state if that attempt fails. A key
-written outside the state directory with `--key-output` remains operator-owned;
-remove that local copy separately.
+profile volumes, then removes the state directory. This permanently deletes the
+development Installation, service keys, Namespaces, Agents, audit history, and
+queued work stored by this profile. Incomplete cleanup preserves the state for
+recovery; restore access to the recorded engine and rerun the same command.
+A failed startup attempts the same cleanup and preserves state if it fails.
+A key written outside the state directory with `--key-output` remains
+operator-owned; remove that local copy separately.
 
 ## Limits
 

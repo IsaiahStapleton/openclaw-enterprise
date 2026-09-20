@@ -1,9 +1,11 @@
 # Settings reference
 
-Configure the OpenClaw Enterprise Compose development stack on Docker or Podman,
-internal-only production controller, PostgreSQL database, database migrations,
-and runtime configuration. Development retains local admission and uses PostgreSQL
-plus bundled Docker Compute and filesystem Configuration Drivers by default.
+Use this reference to configure the OpenClaw Enterprise controller and worker,
+local Compose stack, PostgreSQL and its migrations, and Drivers. Development
+uses local admission. The default Compose profile uses PostgreSQL and the
+bundled Docker Compute and filesystem
+Configuration Drivers; choose the Kubernetes profile in [Local Setup](../guides/quickstart.md)
+to deploy an Agent.
 Production reads Installation settings and selected Driver options from
 trusted startup YAML and requires durable state, the singleton Installation,
 and user session authentication. Both development and production
@@ -19,8 +21,8 @@ For packaged Kubernetes deployment, immutable image inputs, operator-provisioned
 Secrets, dedicated migration credentials, and exact network selectors, see
 [Production Kubernetes deployment](../guides/deploy.md).
 
-For a public Docker-only runtime image recipe used by the quickstart and
-Agent execution, see [`deploy/runtime`](../../deploy/runtime/README.md).
+For the bundled Agent runtime image and its build recipe, see
+[`deploy/runtime`](../../deploy/runtime/README.md).
 
 The controller reads environment variables directly from its process. It does
 not automatically load `.env` or [`.env.example`](../../.env.example). Export values
@@ -88,12 +90,11 @@ For contributor test variables, fixtures, and commands, see the
 
 ## Deployment and startup
 
-The [quickstart](../guides/quickstart.md) owns the default local
-`./scripts/dev-up` path and authenticated first request. The
-[deployment guide](../guides/deploy.md) owns production preparation, Helm
-installation, Agent/TUI recipes, and recovery procedures. The linked configuration references
-define supported settings; helper scripts and examples do not override their
-defaults, precedence, or security requirements.
+[Local Setup](../guides/quickstart.md) covers the Kubernetes development profile
+and its initial control-plane checks. The [deployment guide](../guides/deploy.md)
+covers production preparation, Helm installation, Agent verification, and
+recovery. The references below define supported settings, including their
+defaults, precedence, and security requirements.
 
 ## Configuration owners
 

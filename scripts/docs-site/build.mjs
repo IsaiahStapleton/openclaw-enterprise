@@ -22,6 +22,7 @@ const repository = "https://github.com/openclaw/openclaw-enterprise";
 const config = JSON.parse(fs.readFileSync(path.join(docs, "docs.json"), "utf8"));
 const md = createMarkdownRenderer();
 const pages = new Map();
+const unpublished = new Set();
 const escape = (value) => md.utils.escapeHtml(String(value));
 const route = (source) =>
   "/" +
@@ -30,6 +31,83 @@ const route = (source) =>
     .replace(/\.md$/, "")
     .replace(/\/$/, "") +
   (source === "README.md" ? "" : "/");
+
+function publicMarkdown(markdown) {
+  const { content } = parseFrontmatter(markdown);
+  const frontmatter = markdown.slice(0, markdown.length - content.length);
+  const lines = content.split("\n");
+  const tokens = md.parse(content, {});
+  const headings = [];
+  const placeholders = [];
+  const placeholder =
+    /^\[keep\s+this\s+for\s+the\s+user\s+to\s+add\s+notes\.\s+do\s+not\s+change\s+between\s+edits\]$/i;
+
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token.level !== 0 || !token.map) {
+      continue;
+    }
+    const inline = tokens[index + 1];
+    if (token.type === "heading_open") {
+      const title = inline.children
+        .map((child) => (child.type === "softbreak" ? " " : child.content))
+        .join("")
+        .trim();
+      headings.push({
+        title,
+        depth: Number(token.tag.slice(1)),
+        start: token.map[0],
+        end: token.map[1],
+      });
+    } else if (token.type === "paragraph_open" && placeholder.test(inline.content.trim())) {
+      placeholders.push(token.map);
+    }
+  }
+
+  const hidden = Array(lines.length).fill(false);
+  const sections = headings.flatMap((heading, index) =>
+    heading.depth > 1 && /^(?:change\s*log|manual\s+notes)$/i.test(heading.title)
+      ? [
+          {
+            ...heading,
+            stop:
+              headings.slice(index + 1).find((next) => next.depth <= heading.depth)?.start ??
+              lines.length,
+          },
+        ]
+      : [],
+  );
+  for (const section of sections) {
+    if (/^change\s*log$/i.test(section.title)) {
+      hidden.fill(true, section.start, section.stop);
+    }
+  }
+  for (const section of sections.toReversed()) {
+    if (hidden[section.start]) {
+      continue;
+    }
+    for (const [start, end] of placeholders) {
+      if (start >= section.end && end <= section.stop) {
+        hidden.fill(true, start, end);
+      }
+    }
+    const notes = lines
+      .slice(section.end, section.stop)
+      .filter((_, index) => !hidden[section.end + index])
+      .join("\n")
+      .replace(/<!--[^]*?-->|\{\/\*[^]*?\*\/\}/g, "")
+      .trim();
+    if (!notes) {
+      hidden.fill(true, section.start, section.stop);
+    }
+  }
+
+  let published = lines.filter((_, index) => !hidden[index]).join("\n");
+  if (content.endsWith("\n") && !published.endsWith("\n")) {
+    published += "\n";
+  }
+  return frontmatter + published;
+}
 
 function walk(directory, acceptsFile = (entry) => entry.name.endsWith(".md")) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -64,7 +142,16 @@ function yamlCommentMarkdownBlocks(file) {
 
 for (const file of walk(docs)) {
   const source = path.relative(docs, file).split(path.sep).join("/");
-  const text = fs.readFileSync(file, "utf8");
+  const authored = fs.readFileSync(file, "utf8");
+  const frontmatter = parseFrontmatter(authored).data;
+  if (frontmatter?.published !== undefined && typeof frontmatter.published !== "boolean") {
+    throw new Error(source + ": published frontmatter must be true or false");
+  }
+  if (frontmatter?.published === false) {
+    unpublished.add(source);
+    continue;
+  }
+  const text = publicMarkdown(authored);
   const parsed = parseDocsDocument(text, md, { sourceFile: file, root: docs });
   const githubAliases = new Map();
   const github = new GithubSlugger();
@@ -83,7 +170,6 @@ for (const file of walk(docs)) {
   const firstHeading = parsed.tokens.findIndex(
     (token) => token.type === "heading_open" && token.tag === "h1",
   );
-  const frontmatter = parseFrontmatter(text).data;
   const title = frontmatter?.title ?? parsed.tokens[firstHeading + 1]?.content ?? source;
   pages.set(source, {
     source,
@@ -96,26 +182,84 @@ for (const file of walk(docs)) {
     parsed,
   });
 }
-const tabs = config.navigation.languages.find((language) => language.language === "en")?.tabs;
-if (!tabs?.length) {
+const configuredTabs = config.navigation.languages.find(
+  (language) => language.language === "en",
+)?.tabs;
+if (!configuredTabs?.length) {
   throw new Error("docs/docs.json must declare English navigation tabs");
 }
 const covered = new Set();
-for (const tab of tabs) {
-  for (const group of tab.groups) {
-    for (const slug of group.pages) {
-      const source = slug + ".md";
-      if (!pages.has(source)) {
-        throw new Error("Missing navigation page: " + source);
-      }
-      if (covered.has(source)) {
-        throw new Error("Duplicate navigation page: " + source);
-      }
-      covered.add(source);
-      Object.assign(pages.get(source), { tab, group });
-    }
+
+function navigationPage(entry, tab, groups) {
+  const slug = typeof entry === "string" ? entry : entry?.page;
+  if (typeof slug !== "string" || !slug || (typeof entry === "object" && "group" in entry)) {
+    throw new Error("Invalid navigation page in " + tab.tab + ": " + JSON.stringify(entry));
   }
+  if (
+    typeof entry === "object" &&
+    "label" in entry &&
+    (typeof entry.label !== "string" || !entry.label.trim())
+  ) {
+    throw new Error("Invalid navigation label for " + slug);
+  }
+  const source = slug + ".md";
+  const page = pages.get(source);
+  if (!page) {
+    throw new Error("Missing navigation page: " + source);
+  }
+  if (covered.has(source)) {
+    throw new Error("Duplicate navigation page: " + source);
+  }
+  covered.add(source);
+  Object.assign(page, {
+    tab,
+    groups,
+    navigationLabel: typeof entry === "string" ? page.title : (entry.label ?? page.title),
+  });
+  return page;
 }
+
+function navigationGroup(entry, tab, ancestors = []) {
+  if (
+    typeof entry?.group !== "string" ||
+    !entry.group.trim() ||
+    "page" in entry ||
+    !Array.isArray(entry.pages) ||
+    !entry.pages.length
+  ) {
+    throw new Error("Invalid navigation group in " + tab.tab + ": " + JSON.stringify(entry));
+  }
+  const group = { group: entry.group };
+  const groups = [...ancestors, group];
+  group.pages = entry.pages.map((child) =>
+    child && typeof child === "object" && "group" in child
+      ? navigationGroup(child, tab, groups)
+      : navigationPage(child, tab, groups),
+  );
+  group.landing = group.pages[0].landing ?? group.pages[0];
+  return group;
+}
+
+const tabs = configuredTabs.map((entry) => {
+  if (
+    typeof entry?.tab !== "string" ||
+    !entry.tab.trim() ||
+    !Array.isArray(entry.groups) ||
+    !entry.groups.length
+  ) {
+    throw new Error("Invalid documentation tab: " + JSON.stringify(entry));
+  }
+  if (entry.hidden !== undefined && !Array.isArray(entry.hidden)) {
+    throw new Error("Invalid hidden navigation pages in " + entry.tab);
+  }
+  const tab = { tab: entry.tab };
+  tab.groups = entry.groups.map((group) => navigationGroup(group, tab));
+  tab.landing = tab.groups[0].landing;
+  for (const hidden of entry.hidden ?? []) {
+    navigationPage(hidden, tab, []);
+  }
+  return tab;
+});
 for (const page of pages.values()) {
   if (!covered.has(page.source)) {
     throw new Error("Page missing from navigation: " + page.source);
@@ -163,6 +307,9 @@ function resolveLink(page, href) {
     }
   }
   const docSource = path.relative(docs, target).split(path.sep).join("/");
+  if (unpublished.has(docSource)) {
+    throw new Error(page.source + ": link targets an unpublished document: " + href);
+  }
   const linked = pages.get(docSource);
   if (linked) {
     if (url.hash && !resolveDocsFragment(url.hash, linked.ids)) {
@@ -258,14 +405,73 @@ fs.cpSync(mermaid, path.join(output, "assets/mermaid"), {
   filter: (source) => !source.endsWith(".map"),
 });
 
+function renderSidebarPages(entries, page) {
+  return (
+    '<ul class="sidebar-pages" role="list">' +
+    entries
+      .map((entry) => {
+        if ("group" in entry) {
+          const active = page.groups.includes(entry);
+          return (
+            '<li><details class="sidebar-group"' +
+            (active ? " open data-active" : "") +
+            "><summary>" +
+            escape(entry.group) +
+            "</summary>" +
+            renderSidebarPages(entry.pages, page) +
+            "</details></li>"
+          );
+        }
+        return (
+          '<li><a href="' +
+          escape(entry.route) +
+          '"' +
+          (page === entry ? ' aria-current="page"' : "") +
+          ">" +
+          escape(entry.navigationLabel) +
+          "</a></li>"
+        );
+      })
+      .join("") +
+    "</ul>"
+  );
+}
+
+function renderBreadcrumb(page) {
+  const ancestors = [
+    { label: page.tab.tab, target: page.tab.landing },
+    ...page.groups.map((group) => ({
+      label: group.group,
+      target: "source" in group.pages[0] ? group.pages[0] : null,
+    })),
+  ].filter((item, index, items) => index === 0 || item.label !== items[index - 1].label);
+  if (ancestors.at(-1)?.label === page.navigationLabel) {
+    ancestors.pop();
+  }
+  const linkedRoutes = new Set();
+  const items = ancestors.map(({ label, target }) => {
+    if (!target || target === page || linkedRoutes.has(target.route)) {
+      return "<li><span>" + escape(label) + "</span></li>";
+    }
+    linkedRoutes.add(target.route);
+    return '<li><a href="' + escape(target.route) + '">' + escape(label) + "</a></li>";
+  });
+  items.push('<li><span aria-current="page">' + escape(page.navigationLabel) + "</span></li>");
+  return (
+    '<nav class="breadcrumb" aria-label="Breadcrumb" data-pagefind-ignore><ol role="list">' +
+    items.join("") +
+    "</ol></nav>"
+  );
+}
+
 for (const page of pages.values()) {
   const tabLinks = tabs
     .map(
       (tab) =>
         "<a" +
-        (tab === page.tab ? ' aria-current="page"' : "") +
+        (tab === page.tab ? ' aria-current="location"' : "") +
         ' href="' +
-        pages.get(tab.groups[0].pages[0] + ".md").route +
+        escape(tab.landing.route) +
         '">' +
         escape(tab.tab) +
         "</a>",
@@ -277,20 +483,7 @@ for (const page of pages.values()) {
         "<section><h2>" +
         escape(group.group) +
         "</h2>" +
-        group.pages
-          .map((slug) => {
-            const target = pages.get(slug + ".md");
-            return (
-              '<a href="' +
-              target.route +
-              '"' +
-              (page === target ? ' aria-current="page"' : "") +
-              ">" +
-              escape(target.title) +
-              "</a>"
-            );
-          })
-          .join("") +
+        renderSidebarPages(group.pages, page) +
         "</section>",
     )
     .join("");
@@ -326,11 +519,8 @@ for (const page of pages.values()) {
     ' pages">' +
     sidebar +
     "</nav>" +
-    '<main id="content" class="doc" data-pagefind-body><div class="breadcrumb" data-pagefind-ignore>' +
-    escape(page.tab.tab) +
-    " / " +
-    escape(page.group.group) +
-    "</div>" +
+    '<main id="content" class="doc" data-pagefind-body>' +
+    renderBreadcrumb(page) +
     page.html +
     '<footer data-pagefind-ignore><a href="' +
     repository +
@@ -340,7 +530,7 @@ for (const page of pages.values()) {
     '<aside class="toc" aria-label="On this page"><strong>On this page</strong>' +
     toc +
     "</aside></div>" +
-    '<dialog id="search-dialog"><div class="search-head"><strong>Search documentation</strong><button id="search-close" type="button" aria-label="Close search">✕</button></div><div id="search"></div></dialog><dialog id="diagram-dialog" aria-label="Expanded diagram"><button id="diagram-close" type="button">Close diagram</button><div id="diagram-canvas"></div></dialog></body></html>';
+    '<dialog id="search-dialog" aria-labelledby="search-title"><div class="search-head"><strong id="search-title">Search documentation</strong><button id="search-close" type="button" aria-label="Close search">✕</button></div><div id="search"></div></dialog><dialog id="diagram-dialog" aria-label="Expanded diagram"><button id="diagram-close" type="button">Close diagram</button><div id="diagram-canvas"></div></dialog></body></html>';
   const destination = path.join(output, page.route, "index.html");
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.writeFileSync(destination, html);
