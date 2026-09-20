@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-18
-last_updated_session: codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464
+updated: 2026-09-20
+last_updated_session: authoring-run/a2f901df-d27a-4a05-9468-e1ee895ae89d
 ---
 
 # Controller Worker Flow
@@ -280,6 +280,16 @@ runtime receipt acknowledgment or post-commit cleanup protocol. The original
 deployment's warnings remain a historical startup result; later maintenance
 observations do not rewrite that completed deployment.
 
+Legacy terminal work rows derive `reason_code` from durable audit evidence.
+A successful revision is marked `REVISION_ACTIVATED` only
+when a matching activation audit event exists between work creation and
+completion. Otherwise, the backfill copies the matching terminal `reconcile`
+audit reason for the same resource, actor, attempt, outcome, and completion
+window. If that evidence is absent, the row receives `LEGACY_OUTCOME_UNKNOWN`.
+Historical `result_data` remains `NULL`, because previous rows did not store
+structured timeout or warning data. Pending rows stay incomplete with no
+terminal outcome.
+
 If Compute declares a maintenance interval, successful activation schedules
 another exact-revision observation. An incomplete active-runtime observation or
 Compute binding closes the bounded item and schedules another so that a provider
@@ -333,6 +343,8 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-20 10:50: Documented legacy terminal work outcome backfill during migration 0019, including unknown result data and fallback behavior. (authoring-run/a2f901df-d27a-4a05-9468-e1ee895ae89d - 08b1b8fe)
 
 - 2026-09-18 17:17: Generalized terminal details to result_data for success warnings and failure metadata, retaining live-claim fencing and the deployment API projection. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 6a582ce9)
 
