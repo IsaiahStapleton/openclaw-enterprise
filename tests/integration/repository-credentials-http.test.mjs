@@ -4,12 +4,14 @@ import { createServer as httpServer, request } from "node:http";
 import { createServer as httpsServer } from "node:https";
 import { connect } from "node:net";
 import { gzipSync } from "node:zlib";
-import { inspectRequestHead } from "../../apps/controller/src/drivers/repo/credentials/transport/request.ts";
-import { createUpstreamSender } from "../../apps/controller/src/drivers/repo/credentials/transport/upstream.ts";
-import { sendError } from "../../apps/controller/src/drivers/repo/credentials/transport/errors.ts";
-import { createSystemClock } from "../../apps/controller/src/drivers/repo/credentials/clock.ts";
+import { appModule } from "../fixtures/repository-credentials/runtime.mjs";
 import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
 import { createTlsMaterial, listen } from "../fixtures/repository-credentials/process.mjs";
+
+const { inspectRequestHead } = await appModule("drivers/repo/credentials/transport/request");
+const { createUpstreamSender } = await appModule("drivers/repo/credentials/transport/upstream");
+const { sendError } = await appModule("drivers/repo/credentials/transport/errors");
+const { createSystemClock } = await appModule("drivers/repo/credentials/clock");
 
 const exchange = (port, path, body = Buffer.alloc(0), headers = {}) =>
   new Promise((resolve, reject) => {
