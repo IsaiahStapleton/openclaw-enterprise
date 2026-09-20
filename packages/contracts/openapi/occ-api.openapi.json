@@ -5789,7 +5789,7 @@
         ]
       },
       "post": {
-        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.",
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.",
         "operationId": "createIAMAccessBinding",
         "parameters": [
           {
@@ -5978,7 +5978,37 @@
         "tags": ["IAM"],
         "x-openclaw-permissions": [
           { "action": "administer", "resourceKind": "installation", "scope": "requested" },
-          { "action": "read", "resourceKind": "namespace", "scope": "requested" }
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "agent",
+            "scope": "request_body"
+          },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "agent_revision",
+            "scope": "request_body"
+          },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "configuration",
+            "scope": "request_body"
+          },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "secret",
+            "scope": "request_body"
+          },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "service_account",
+            "scope": "request_body"
+          }
         ]
       }
     },

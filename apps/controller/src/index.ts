@@ -146,7 +146,8 @@ interface RequiredPermission {
   readonly action: PermissionAction;
   readonly resourceKind: ResourceKind;
   readonly scope: "requested" | "installation" | "namespace" | "each_returned" | "request_body";
-  readonly condition?: "associated_service_account" | "existing_namespace" | "bound_secret";
+  readonly condition?:
+    "associated_service_account" | "existing_namespace" | "bound_secret" | "iam_binding_target";
 }
 
 interface DocumentedFastifySchema extends FastifySchema {
@@ -393,13 +394,49 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     return [{ ...permission, scope: "namespace" }];
   }
 
+  if (operation.operationId === "createIAMAccessBinding") {
+    return [
+      { action: "administer", resourceKind: "installation", scope: "requested" },
+      { action: "read", resourceKind: "namespace", scope: "requested" },
+      {
+        action: "read",
+        resourceKind: "agent",
+        scope: "request_body",
+        condition: "iam_binding_target",
+      },
+      {
+        action: "read",
+        resourceKind: "agent_revision",
+        scope: "request_body",
+        condition: "iam_binding_target",
+      },
+      {
+        action: "read",
+        resourceKind: "configuration",
+        scope: "request_body",
+        condition: "iam_binding_target",
+      },
+      {
+        action: "read",
+        resourceKind: "secret",
+        scope: "request_body",
+        condition: "iam_binding_target",
+      },
+      {
+        action: "read",
+        resourceKind: "service_account",
+        scope: "request_body",
+        condition: "iam_binding_target",
+      },
+    ];
+  }
+
   if (
     operation.operationId === "listIAMRoles" ||
     operation.operationId === "createIAMRole" ||
     operation.operationId === "getIAMRole" ||
     operation.operationId === "deleteIAMRole" ||
     operation.operationId === "listIAMAccessBindings" ||
-    operation.operationId === "createIAMAccessBinding" ||
     operation.operationId === "getIAMAccessBinding" ||
     operation.operationId === "deleteIAMAccessBinding"
   ) {
@@ -495,6 +532,9 @@ function permissionDescription(
           return `Requires ${action} permission on each ${name} bound by the resulting Configuration.`;
         }
         return `Requires ${action} permission on each bound ${name} when Secret bindings are present or selected.`;
+      }
+      if (condition === "iam_binding_target") {
+        return `Requires ${action} permission on the request body ${name} when the AccessBinding targets that resource kind.`;
       }
       switch (scope) {
         case "installation":
