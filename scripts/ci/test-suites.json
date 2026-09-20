@@ -455,7 +455,7 @@
           "expectedTests": [
             "real Kubernetes Compute Driver owns isolated Agent gateways, identities, revisions, and deletion",
             "real Kubernetes Drivers safely use and preserve an externally managed tenant namespace",
-            "authenticated PostgreSQL OCC API and worker deploy real Agent-owned gateways and revisions"
+            "authenticated PostgreSQL OCC API and worker deploy real Agent-owned gateways, Secret bindings, and revisions"
           ]
         },
         {

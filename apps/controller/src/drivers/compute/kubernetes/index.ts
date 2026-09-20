@@ -4,7 +4,7 @@ import {
   numericErrorStatus,
   sha256Hex,
 } from "@openclaw-enterprise/utils";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -51,6 +51,7 @@ import type {
   SandboxNamespaceContext,
   SandboxResourceRef,
   SandboxWorkspaceMount,
+  SecretBindings,
   SecretEnvironmentProjection,
   LoggingLevel,
 } from "@openclaw-enterprise/contracts";
@@ -94,11 +95,9 @@ type ReadableResourceKind = ManagedResourceKind | "Pod" | "Secret";
 
 const CHANNEL_REQUIREMENTS = {
   slack: {
-    secrets: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"],
     egress: "https-proxy",
   },
   msteams: {
-    secrets: ["MSTEAMS_APP_PASSWORD"],
     egress: "https-proxy",
   },
 } as const;
@@ -200,7 +199,6 @@ export interface KubernetesComputeDriverOptions {
     readonly nodeSelector?: Readonly<Record<string, string>>;
     readonly codexSeccompProfile?: string;
     readonly channels?: {
-      readonly secretPrefix: string;
       readonly proxyUrl: string;
     };
   };
@@ -260,10 +258,7 @@ interface PluginRuntimeStatus {
 class OwnershipFailure extends Error {}
 class ConfigurationFailure extends Error {}
 
-type RuntimeCredentialGroup = "transport" | "slack";
-
 interface RuntimeCredentialSecretSpec {
-  readonly group: RuntimeCredentialGroup;
   readonly name: string;
   readonly keys: readonly string[];
 }
@@ -274,10 +269,7 @@ interface RuntimeCredentialContext {
   readonly agentId: string;
   readonly suffix: string;
   readonly ownership: Ownership;
-  readonly specs: {
-    readonly transport: RuntimeCredentialSecretSpec;
-    readonly slack?: RuntimeCredentialSecretSpec;
-  };
+  readonly transport: RuntimeCredentialSecretSpec;
 }
 
 interface PreparedHarnessAuth {
@@ -770,10 +762,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
           codexSeccompProfile: { type: "string", minLength: 1 },
           channels: {
             type: "object",
-            required: ["secretPrefix", "proxyUrl"],
+            required: ["proxyUrl"],
             additionalProperties: false,
             properties: {
-              secretPrefix: { type: "string" },
               proxyUrl: { type: "string" },
             },
           },
@@ -952,13 +943,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       if (channels !== undefined) {
         if (asRecord(channels) === undefined) {
-          throw new ConfigurationFailure(
-            "Channel runtime credentials must be explicitly configured.",
-          );
-        }
-        const prefix = required(channels.secretPrefix, "Agent channel Secret name prefix");
-        if (transportSecretPrefix === prefix) {
-          throw new ConfigurationFailure("Agent channel credentials must remain separate.");
+          throw new ConfigurationFailure("Channel runtime proxy must be explicitly configured.");
         }
         channelProxy(channels.proxyUrl);
       }
@@ -1050,6 +1035,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     harness: RevisionHarnessDescriptor,
     auth: HarnessAuthSnapshot,
     configuration: OpenClawConfigurationDocument,
+    secretBindings?: SecretBindings,
   ): void {
     const embedded = harness.mode === "embedded" && harness.id === "openclaw";
     const dedicated = harness.mode === "dedicated" && harness.id === "codex";
@@ -1152,6 +1138,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         throw conflictingAuth();
       }
     }
+    this.validateChannelSecretBindings(configuration, secretBindings);
   }
 
   getGatewayEndpoint(revision: AgentRevision): string | undefined {
@@ -1167,7 +1154,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   ): Promise<AgentRuntimeCredentialStatus> {
     return this.withRuntimeCredentialErrors(async () => {
       const context = await this.runtimeCredentialContext(binding);
-      const observed = await this.readRuntimeCredentialSecrets(context);
+      const observed = await this.readRuntimeCredentialSecret(context);
       return this.runtimeCredentialStatus(observed);
     });
   }
@@ -1177,61 +1164,22 @@ export class KubernetesComputeDriver implements ComputeDriver {
     input: AgentRuntimeCredentialsInput,
   ): Promise<AgentRuntimeCredentialStatus> {
     return this.withRuntimeCredentialErrors(async () => {
-      const credentials = this.validRuntimeCredentialInput(input);
-      const context = await this.runtimeCredentialContext(binding, credentials.slack !== undefined);
-      const observed = await this.readRuntimeCredentialSecrets(context);
+      this.validRuntimeCredentialInput(input);
+      const context = await this.runtimeCredentialContext(binding);
+      const observed = await this.readRuntimeCredentialSecret(context);
       const status = this.runtimeCredentialStatus(observed);
-      if (context.specs.slack !== undefined && status.slackConfigured && credentials.slack) {
-        this.requireExactRuntimeCredentialBytes(
-          observed.slack,
-          "SLACK_APP_TOKEN",
-          credentials.slack.appToken,
-        );
-        this.requireExactRuntimeCredentialBytes(
-          observed.slack,
-          "SLACK_BOT_TOKEN",
-          credentials.slack.botToken,
-        );
-      }
 
       await this.assertNoAgentRuntimeDeployments(context);
 
-      const writes: Array<{
-        readonly spec: RuntimeCredentialSecretSpec;
-        readonly values: Readonly<Record<string, string>>;
-      }> = [];
       if (!status.transportConfigured) {
-        writes.push({
-          spec: context.specs.transport,
-          values: {
-            [AGENT_TRANSPORT_TOKEN_KEY]: this.generateRuntimeCredentialToken(),
-            [GATEWAY_TOKEN_KEY]: this.generateRuntimeCredentialToken(),
-            [GATEWAY_PASSWORD_KEY]: this.generateRuntimeCredentialToken(),
-          },
-        });
-      }
-      if (
-        context.specs.slack !== undefined &&
-        !status.slackConfigured &&
-        credentials.slack !== undefined
-      ) {
-        writes.push({
-          spec: context.specs.slack,
-          values: {
-            SLACK_APP_TOKEN: credentials.slack.appToken,
-            SLACK_BOT_TOKEN: credentials.slack.botToken,
-          },
+        await this.createRuntimeCredentialSecret(context, context.transport, {
+          [AGENT_TRANSPORT_TOKEN_KEY]: this.generateRuntimeCredentialToken(),
+          [GATEWAY_TOKEN_KEY]: this.generateRuntimeCredentialToken(),
+          [GATEWAY_PASSWORD_KEY]: this.generateRuntimeCredentialToken(),
         });
       }
 
-      for (const write of writes) {
-        await this.createRuntimeCredentialSecret(context, write.spec, write.values);
-      }
-
-      return {
-        transportConfigured: true,
-        slackConfigured: status.slackConfigured || credentials.slack !== undefined,
-      };
+      return { transportConfigured: true };
     });
   }
 
@@ -1519,7 +1467,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (sandboxDriver !== undefined && embedded) {
       throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
     }
-    this.validateHarnessAuth(revision.harness, revision.harnessAuth, revision.configuration);
+    this.validateHarnessAuth(
+      revision.harness,
+      revision.harnessAuth,
+      revision.configuration,
+      revision.secretBindings,
+    );
     const channels = this.enabledChannels(revision);
     const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
     const secretEnvironment = this.secretEnvironmentForRevision(revision, context, namespace);
@@ -1944,7 +1897,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return;
     }
     this.verifyGatewayRoutingConfiguration(revision);
-    this.validateHarnessAuth(revision.harness, revision.harnessAuth, revision.configuration);
+    this.validateHarnessAuth(
+      revision.harness,
+      revision.harnessAuth,
+      revision.configuration,
+      revision.secretBindings,
+    );
     const channels = this.enabledChannels(revision);
     const pluginRuntime = this.pluginRuntimeSnapshot(revision);
     const { name: namespace } = await this.resolveNamespace(revision.namespaceId);
@@ -2528,52 +2486,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
     input: AgentRuntimeCredentialsInput,
   ): AgentRuntimeCredentialsInput {
     const value = asRecord(input) ?? {};
-    if (Object.keys(value).some((key) => key !== "slack")) {
+    if (Object.keys(value).length !== 0) {
       throw new DependencyUnavailableError(
-        "Runtime credentials support only transport and channels.",
+        "Runtime credentials support only a server-generated transport bundle.",
       );
     }
-    const slackRecord = value.slack === undefined ? undefined : asRecord(value.slack);
-    if (value.slack !== undefined && slackRecord === undefined) {
-      throw new DependencyUnavailableError("The Agent Slack credentials are incomplete.");
-    }
-    const slack =
-      slackRecord === undefined
-        ? undefined
-        : {
-            appToken: this.runtimeCredentialValue(
-              slackRecord.appToken,
-              "Agent Slack app credential",
-            ),
-            botToken: this.runtimeCredentialValue(
-              slackRecord.botToken,
-              "Agent Slack bot credential",
-            ),
-          };
-    return slack ? { slack } : {};
-  }
-
-  private runtimeCredentialValue(value: unknown, description: string): string {
-    const credential = required(value, description);
-    if (
-      credential.includes("\0") ||
-      Buffer.byteLength(credential, "utf8") > MAX_RUNTIME_CREDENTIAL_BYTES
-    ) {
-      throw new DependencyUnavailableError(`${description} is invalid.`);
-    }
-    return credential;
+    return {};
   }
 
   private async runtimeCredentialContext(
     binding: ComputeAgentBinding,
-    requireSlack = false,
   ): Promise<RuntimeCredentialContext> {
     const runtime = this.options.runtime;
     if (runtime === undefined) {
       throw new DependencyUnavailableError("The Agent runtime credentials are not configured.");
-    }
-    if (requireSlack && runtime.channels === undefined) {
-      throw new DependencyUnavailableError("The Agent Slack credential storage is not configured.");
     }
     const namespaceId = required(binding.namespace?.id, "Runtime credential Namespace ID");
     const agentId = required(binding.agent?.id, "Runtime credential Agent ID");
@@ -2590,67 +2516,41 @@ export class KubernetesComputeDriver implements ComputeDriver {
     this.verifyNamespaceOwnership(observed, { namespaceId }, external);
     const suffix = sha256Hex(agentId, 12);
     const ownership = { namespaceId, agentId };
-    const secret = (
-      group: RuntimeCredentialGroup,
-      prefix: string,
-      keys: readonly string[],
-    ): RuntimeCredentialSecretSpec => {
-      const name = `${prefix}-${suffix}`;
-      validateKubernetesResourceName(name, "Agent runtime credential Secret name");
-      return { group, name, keys };
-    };
+    const transportName = `${runtime.transportSecretPrefix}-${suffix}`;
+    validateKubernetesResourceName(transportName, "Agent runtime credential Secret name");
     return {
       namespaceId,
       namespace,
       agentId,
       suffix,
       ownership,
-      specs: {
-        transport: secret("transport", runtime.transportSecretPrefix, [
-          AGENT_TRANSPORT_TOKEN_KEY,
-          GATEWAY_TOKEN_KEY,
-          GATEWAY_PASSWORD_KEY,
-        ]),
-        ...(runtime.channels === undefined
-          ? {}
-          : {
-              slack: secret("slack", runtime.channels.secretPrefix, [
-                "SLACK_APP_TOKEN",
-                "SLACK_BOT_TOKEN",
-              ]),
-            }),
+      transport: {
+        name: transportName,
+        keys: [AGENT_TRANSPORT_TOKEN_KEY, GATEWAY_TOKEN_KEY, GATEWAY_PASSWORD_KEY],
       },
     };
   }
 
-  private async readRuntimeCredentialSecrets(
+  private async readRuntimeCredentialSecret(
     context: RuntimeCredentialContext,
-  ): Promise<
-    Readonly<Partial<Record<RuntimeCredentialGroup, ManagedKubernetesObject<"Secret"> | undefined>>>
-  > {
-    const entries = [
-      context.specs.transport,
-      ...(context.specs.slack === undefined ? [] : [context.specs.slack]),
-    ] as const;
-    const observed: Partial<Record<RuntimeCredentialGroup, ManagedKubernetesObject<"Secret">>> = {};
-    for (const spec of entries) {
-      const secret = await this.getOwned("Secret", spec.name, context.namespace, context.ownership);
-      if (secret !== undefined) {
-        this.requireCompleteRuntimeCredentialSecret(secret, spec);
-        observed[spec.group] = secret;
-      }
+  ): Promise<ManagedKubernetesObject<"Secret"> | undefined> {
+    const secret = await this.getOwned(
+      "Secret",
+      context.transport.name,
+      context.namespace,
+      context.ownership,
+    );
+    if (secret !== undefined) {
+      this.requireCompleteRuntimeCredentialSecret(secret, context.transport);
     }
-    return Object.freeze(observed);
+    return secret;
   }
 
   private runtimeCredentialStatus(
-    observed: Readonly<
-      Partial<Record<RuntimeCredentialGroup, ManagedKubernetesObject<"Secret"> | undefined>>
-    >,
+    observed: ManagedKubernetesObject<"Secret"> | undefined,
   ): AgentRuntimeCredentialStatus {
     return {
-      transportConfigured: observed.transport !== undefined,
-      slackConfigured: observed.slack !== undefined,
+      transportConfigured: observed !== undefined,
     };
   }
 
@@ -2676,22 +2576,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
         throw new ResourceConflictError("The Agent runtime credential Secret is incomplete.");
       }
       this.decodedRuntimeCredentialBytes(encoded);
-    }
-  }
-
-  private requireExactRuntimeCredentialBytes(
-    secret: ManagedKubernetesObject<"Secret"> | undefined,
-    key: string,
-    expected: string,
-  ): void {
-    const encoded = asRecord(secret?.data)?.[key];
-    if (typeof encoded !== "string") {
-      throw new ResourceConflictError("The Agent runtime credential Secret is incomplete.");
-    }
-    const observed = this.decodedRuntimeCredentialBytes(encoded);
-    const wanted = Buffer.from(expected, "utf8");
-    if (observed.length !== wanted.length || !timingSafeEqual(observed, wanted)) {
-      throw new ResourceConflictError("The Agent runtime credential Secret does not match.");
     }
   }
 
@@ -4415,6 +4299,77 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return enabled;
   }
 
+  private validateChannelSecretBindings(
+    configuration: OpenClawConfigurationDocument,
+    secretBindings: SecretBindings | undefined,
+  ): void {
+    const required = this.channelSecretBindingIds(configuration);
+    if (required.size === 0) {
+      return;
+    }
+    let bindings: ReturnType<typeof normalizeSecretBindings>;
+    try {
+      bindings = normalizeSecretBindings(secretBindings);
+    } catch {
+      throw new ConfigurationFailure("AgentRevision Secret bindings are invalid.");
+    }
+    for (const id of required) {
+      if (bindings[id] === undefined) {
+        throw new ConfigurationFailure(
+          "Configured channel credentials require matching AgentRevision Secret bindings.",
+        );
+      }
+    }
+  }
+
+  private channelSecretBindingIds(configuration: OpenClawConfigurationDocument): Set<string> {
+    const configured = asRecord(configuration.channels);
+    const ids = new Set<string>();
+    if (configured === undefined) {
+      return ids;
+    }
+    for (const [provider, value] of Object.entries(configured)) {
+      if (["defaults", "modelByChannel"].includes(provider)) {
+        continue;
+      }
+      const channel = asRecord(value);
+      if (channel?.enabled === false) {
+        continue;
+      }
+      if (!Object.hasOwn(CHANNEL_REQUIREMENTS, provider)) {
+        throw new ConfigurationFailure(`Unsupported OpenClaw channel provider "${provider}".`);
+      }
+      this.collectChannelSecretBindingIds(value, ids);
+    }
+    return ids;
+  }
+
+  private collectChannelSecretBindingIds(value: unknown, ids: Set<string>): void {
+    if (typeof value === "string") {
+      const match = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value);
+      if (match !== null) {
+        ids.add(match[1]!);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        this.collectChannelSecretBindingIds(item, ids);
+      }
+      return;
+    }
+    const record = asRecord(value);
+    if (record === undefined) {
+      return;
+    }
+    if (record.source === "env" && typeof record.id === "string" && record.id.length > 0) {
+      ids.add(record.id);
+    }
+    for (const item of Object.values(record)) {
+      this.collectChannelSecretBindingIds(item, ids);
+    }
+  }
+
   private channelNetworkPolicy(
     revision: AgentRevision,
     enabled: readonly ChannelRequirements[],
@@ -5012,13 +4967,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           if (channels === undefined) {
             throw new ConfigurationFailure("Gateway channel credentials are not configured.");
           }
-          variables.push(
-            ...Array.from(
-              new Set(enabledChannels.flatMap(({ secrets }): readonly string[] => secrets)),
-              (key) => secret(key, channels.secretPrefix, key),
-            ),
-            { name: "HTTPS_PROXY", value: channels.proxyUrl },
-          );
+          variables.push({ name: "HTTPS_PROXY", value: channels.proxyUrl });
         }
       } else {
         variables.push(

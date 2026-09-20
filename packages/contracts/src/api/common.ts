@@ -193,28 +193,7 @@ export const UpdateSecretBody = Type.Object(
   { additionalProperties: false },
 );
 
-export const RuntimeCredentialValue = Type.String({
-  minLength: 1,
-  maxLength: 65536,
-  pattern: "^[^\\u0000]*$",
-  description:
-    "Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value.",
-});
-
-export const AgentRuntimeCredentialsBody = Type.Object(
-  {
-    slack: Type.Optional(
-      Type.Object(
-        {
-          appToken: RuntimeCredentialValue,
-          botToken: RuntimeCredentialValue,
-        },
-        { additionalProperties: false },
-      ),
-    ),
-  },
-  { additionalProperties: false },
-);
+export const AgentRuntimeCredentialsBody = Type.Object({}, { additionalProperties: false });
 
 export const CreateConfigurationBody = Type.Object(
   {

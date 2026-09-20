@@ -66,12 +66,13 @@ errors are dependency failures. See [Kubernetes private routes](kubernetes-compu
 
 ### Optional initial runtime credential provisioning
 
-`getAgentRuntimeCredentialStatus(binding)` returns `transportConfigured` and
-`slackConfigured`: whether complete credentials are stored for this Agent.
-`provisionAgentRuntimeCredentials(binding, input)` sets up transport credentials
-and optionally accepts Slack app and bot tokens. The caller holds Namespace and
-Agent locks and requires a ready Namespace with no earlier Agent revision. It passes
-approved identities, never physical storage names. Missing methods return an
+`getAgentRuntimeCredentialStatus(binding)` returns `transportConfigured`: whether
+complete generated transport credentials are stored for this Agent.
+`provisionAgentRuntimeCredentials(binding, input)` accepts an empty input object and
+sets up those transport credentials. Channel credentials use Namespace Secrets and
+Configuration `secretBindings` instead of this endpoint. The caller holds Namespace
+and Agent locks and requires a ready Namespace with no earlier Agent revision. It
+passes approved identities, never physical storage names. Missing methods return an
 error. External writes can survive a database or audit failure; refresh status
 before retrying. See the [initial credential workflow](../console/create-and-deploy.md#initial-runtime-credentials).
 
@@ -107,9 +108,9 @@ and its current backend reference, the managed-account credential reference and
 private Provider binding, or just `{ method: "runtime" }` for operator-managed
 authentication. None contains credential values. The separate `secretEnvironment`
 contains Configuration bindings for gateway credentials. Deliver model credentials
-only to the selected Harness workload. Initial provisioning accepts Slack tokens
-as input; never expose them in responses, Configuration, audit, logs, or errors.
-See the [credential delivery flow](../../flows/native-service-account-credential-delivery.md).
+only to the selected Harness workload. Channel tokens are ordinary Namespace Secrets
+referenced by Configuration bindings; never expose them in responses, Configuration,
+audit, logs, or errors. See the [credential delivery flow](../../flows/native-service-account-credential-delivery.md).
 Installed Drivers run with control-plane privileges. Validating a package does
 not isolate untrusted code.
 

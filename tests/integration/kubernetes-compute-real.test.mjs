@@ -1553,7 +1553,7 @@ test(
 );
 
 test(
-  "authenticated PostgreSQL OCC API and worker deploy real Agent-owned gateways and revisions",
+  "authenticated PostgreSQL OCC API and worker deploy real Agent-owned gateways, Secret bindings, and revisions",
   { ...requiresKubernetesAndPostgres, timeout: 360_000 },
   async (context) => {
     await assertKubernetesFixtureAvailable();
@@ -1781,7 +1781,22 @@ test(
       "the real worker must recover explicit namespace selection from PostgreSQL",
     );
 
-    async function createAgent(namespaceId, label) {
+    async function createAgent(namespaceId, label, options = {}) {
+      const secret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
+        name: `${label} fixture model key`,
+        value: `fixture-only-${randomUUID()}`,
+      });
+      assert.equal(secret.status, 201, JSON.stringify(secret.error));
+      let boundSecret;
+      let boundSecretValue;
+      if (options.boundSecret === true) {
+        boundSecretValue = `bound-secret-${randomUUID()}`;
+        boundSecret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
+          name: `${label} bound sentinel`,
+          value: boundSecretValue,
+        });
+        assert.equal(boundSecret.status, 201, JSON.stringify(boundSecret.error));
+      }
       const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
         kind: "agent",
         values: {
@@ -1794,13 +1809,18 @@ test(
             },
           },
         },
+        ...(boundSecret === undefined
+          ? {}
+          : {
+              secretBindings: {
+                BOUND_SENTINEL: {
+                  source: boundSecret.data.ref,
+                  delivery: { type: "env" },
+                },
+              },
+            }),
       });
       assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
-      const secret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
-        name: `${label} fixture model key`,
-        value: `fixture-only-${randomUUID()}`,
-      });
-      assert.equal(secret.status, 201, JSON.stringify(secret.error));
       const created = await request("POST", `/namespaces/${namespaceId}/agents`, {
         name: `${label}-${randomUUID()}`,
         configurationId: configuration.data.id,
@@ -1813,7 +1833,15 @@ test(
       assert.equal(created.status, 201, JSON.stringify(created.error));
       assert.equal(Object.hasOwn(created.data, "servicePrincipalId"), false);
       await grantAgentSecretOperate(observerPool, created.data, secret.data.id);
-      return created.data;
+      if (boundSecret !== undefined) {
+        await grantAgentSecretOperate(observerPool, created.data, boundSecret.data.id);
+      }
+      return {
+        ...created.data,
+        ...(boundSecret === undefined
+          ? {}
+          : { boundSecretId: boundSecret.data.id, boundSecretValue }),
+      };
     }
 
     async function deploy(namespaceId, agentId) {
@@ -1837,11 +1865,15 @@ test(
 
     const first = await createAgent(namespaceIds[0], "first");
     const second = await createAgent(namespaceIds[0], "second");
+    const boundSecretAgent = await createAgent(namespaceIds[0], "bound-secret", {
+      boundSecret: true,
+    });
     const separateTenant = await createAgent(namespaceIds[1], "separate-tenant");
     const adoptedTenant = await createAgent(namespaceIds[2], "adopted-tenant");
     const admitted = await Promise.all([
       deploy(namespaceIds[0], first.id),
       deploy(namespaceIds[0], second.id),
+      deploy(namespaceIds[0], boundSecretAgent.id),
       deploy(namespaceIds[1], separateTenant.id),
       deploy(namespaceIds[2], adoptedTenant.id),
     ]);
@@ -1850,14 +1882,48 @@ test(
       [
         [namespaceIds[0], first, admitted[0]],
         [namespaceIds[0], second, admitted[1]],
-        [namespaceIds[1], separateTenant, admitted[2]],
-        [namespaceIds[2], adoptedTenant, admitted[3]],
+        [namespaceIds[0], boundSecretAgent, admitted[2]],
+        [namespaceIds[1], separateTenant, admitted[3]],
+        [namespaceIds[2], adoptedTenant, admitted[4]],
       ].map(async ([namespaceId, agent, candidate]) => {
         await waitForActive(namespaceId, agent.id, candidate.id);
         const placement = placements.get(namespaceId);
         await assertReadyGateway(placement, agent.id, namespaceId, candidate);
         const deployment = await resource("deployment", revisionName(candidate), placement);
         assert.equal(deployment.spec.template.spec.serviceAccountName, agentName(agent.id));
+        if (agent.boundSecretValue !== undefined) {
+          assert.deepEqual(Object.keys(candidate.secretBindings), ["BOUND_SENTINEL"]);
+          const container = deployment.spec.template.spec.containers[0];
+          const projection = container.env.find(({ name }) => name === "BOUND_SENTINEL");
+          assert.equal(projection.valueFrom.secretKeyRef.optional ?? false, false);
+          assert.ok(
+            projection.valueFrom.secretKeyRef.name,
+            "Configuration Secret bindings must render a concrete Kubernetes Secret name",
+          );
+          const pod = await waitFor(`bound Secret Agent ${agent.id} Pod`, async () =>
+            (await resources("pods", placement)).find(
+              ({ metadata, status }) =>
+                metadata.labels?.["openclaw.dev/agent"] === agent.id &&
+                metadata.labels?.["openclaw.dev/revision"] === candidate.id &&
+                status.conditions?.some(
+                  ({ type, status: conditionStatus }) =>
+                    type === "Ready" && conditionStatus === "True",
+                ),
+            ),
+          );
+          const script = `const expected=${JSON.stringify(agent.boundSecretValue)};process.stdout.write(process.env.BOUND_SENTINEL===expected?"matched":"missing")`;
+          const observedSecret = await kubectl(
+            "exec",
+            pod.metadata.name,
+            "--namespace",
+            placement,
+            "--",
+            "node",
+            "-e",
+            script,
+          );
+          assert.equal(observedSecret, "matched");
+        }
         const storedAgent = await state.read((view) =>
           view.agents.findAgent(namespaceId, agent.id),
         );
@@ -1893,7 +1959,7 @@ test(
         (await resources("pods", existingName)).find(
           ({ metadata, status }) =>
             metadata.labels?.["openclaw.dev/agent"] === adoptedTenant.id &&
-            metadata.labels?.["openclaw.dev/revision"] === admitted[3].id &&
+            metadata.labels?.["openclaw.dev/revision"] === admitted[4].id &&
             status.conditions?.some(
               ({ type, status: conditionStatus }) => type === "Ready" && conditionStatus === "True",
             ),
@@ -1924,7 +1990,7 @@ test(
       if (current.data.activeRevisionId !== undefined) {
         return undefined;
       }
-      if (!(await missing("deployment", revisionName(admitted[3]), existingName))) {
+      if (!(await missing("deployment", revisionName(admitted[4]), existingName))) {
         return undefined;
       }
       if (!(await missing("deployment", gatewayName(adoptedTenant.id), existingName))) {
@@ -1944,15 +2010,15 @@ test(
     assert.equal(
       (
         await state.read((view) =>
-          view.revisions.findRevision(adopted.data.id, adoptedTenant.id, admitted[3].id),
+          view.revisions.findRevision(adopted.data.id, adoptedTenant.id, admitted[4].id),
         )
       ).id,
-      admitted[3].id,
+      admitted[4].id,
       "API stop must retain immutable revision history",
     );
 
     const restarted = await deploy(adopted.data.id, adoptedTenant.id);
-    assert.notEqual(restarted.id, admitted[3].id);
+    assert.notEqual(restarted.id, admitted[4].id);
     await waitForActive(adopted.data.id, adoptedTenant.id, restarted.id);
     await assertReadyGateway(existingName, adoptedTenant.id, adopted.data.id, restarted);
     const restartedPod = await waitFor("redeployed Agent revision Pod to become ready", async () =>
