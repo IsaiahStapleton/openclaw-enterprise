@@ -36,6 +36,10 @@
                   {
                     "page": "guides/quickstart",
                     "label": "Local Setup"
+                  },
+                  {
+                    "page": "guides/kubernetes-setup",
+                    "label": "Kubernetes Setup"
                   }
                 ]
               },

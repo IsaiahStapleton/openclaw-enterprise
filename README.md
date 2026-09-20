@@ -8,7 +8,7 @@ Start with [Getting Started](docs/README.md) to use the platform, [Operate](docs
 
 ## Getting started
 
-Follow [Local Setup](docs/guides/quickstart.md) to start OCC and a local Kubernetes cluster. From the repository root:
+Choose [Local Setup](docs/guides/quickstart.md) to run OCC on your machine, or [Kubernetes Setup](docs/guides/kubernetes-setup.md) to install it on a cluster you already operate. For local setup, run from the repository root:
 
 ```bash
 pnpm cli:build
@@ -17,7 +17,7 @@ OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev up
 
 You need Docker Engine with Compose or Podman with `podman-compose`, k3d, kubectl, Bash, Python 3, Go (the version in [`go.mod`](go.mod)), Node.js 24 or newer, and the pnpm version in [`package.json`](package.json). The quickstart covers installation checks, the local API credentials, and cleanup.
 
-Then [deploy your first Agent](docs/guides/first-agent.md) and send it a model request. You need an OpenAI API key for that step. For shared installations, use the [production deployment guide](docs/guides/deploy.md).
+After local setup, [deploy your first Agent](docs/guides/first-agent.md) and send it a model request. You need an OpenAI API key for that step. If you installed on an existing cluster, [deploy and verify an Agent on that installation](docs/guides/deploy/production-agents.md).
 
 ## Develop
 

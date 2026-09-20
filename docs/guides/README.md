@@ -7,12 +7,10 @@ platform itself, start with [Contribute](../contributing/README.md).
 
 ## Get started
 
-1. Read [Concepts](concepts.md) for Namespaces, Agents, revisions, and Secrets.
-2. [Set up OpenClaw Enterprise locally](quickstart.md) on Kubernetes.
-3. [Deploy your first Agent](first-agent.md) and send it a prompt.
+Read [Concepts](concepts.md) for Namespaces, Agents, revisions, and Secrets. Then choose a setup:
 
-For an installation your organization will operate, follow the
-[production deployment guide](deploy.md).
+- [Local Setup](quickstart.md): run the platform on your machine and [deploy your first Agent](first-agent.md).
+- [Kubernetes Setup](kubernetes-setup.md): install the control plane on an existing cluster, then [deploy and verify an Agent on it](deploy/production-agents.md).
 
 ## Work with Agents
 

@@ -5,8 +5,8 @@
 Start an OpenClaw Enterprise installation that can deploy Agents on your
 machine. The OpenClaw Control Plane (OCC) runs in Compose; Agent workloads run
 in a local Kubernetes cluster created with k3d. This setup is for development
-and uses loopback addresses. For a production installation, see
-[Install OpenClaw Enterprise](deploy.md).
+and uses loopback addresses. To install OCC itself in a cluster you already
+operate, use [Kubernetes Setup](kubernetes-setup.md).
 
 ## Before you start
 

@@ -1,16 +1,18 @@
 # OpenClaw Enterprise
 
-OpenClaw Enterprise (OCE) uses the OpenClaw Control Plane (OCC) to deploy and manage Agents. Start by setting up a local installation, then deploy an Agent you name and send it a model request.
+OpenClaw Enterprise (OCE) uses the OpenClaw Control Plane (OCC) to deploy and manage Agents. Set up the platform locally or on an existing Kubernetes cluster, then deploy an Agent and verify its model response.
 
 <a id="user-guide"></a>
 <a id="start-and-deploy"></a>
 
 ## Getting started
 
-1. [Set up the platform locally](guides/quickstart.md) with Kubernetes.
-2. [Deploy your first Agent](guides/first-agent.md) and verify its model response. You need an OpenAI API key for this step.
+Choose where to install:
 
-If you are still learning the product, start with [Concepts](guides/concepts.md). For a shared environment, read the [production installation guide](guides/deploy.md).
+- [Local Setup](guides/quickstart.md): run the platform on your machine, then [deploy your first Agent](guides/first-agent.md). You need an OpenAI API key for that walkthrough.
+- [Kubernetes Setup](guides/kubernetes-setup.md): install the control plane on a cluster you already operate, then [deploy and verify an Agent on that installation](guides/deploy/production-agents.md).
+
+If you are still learning the product, start with [Concepts](guides/concepts.md).
 
 <a id="reference"></a>
 

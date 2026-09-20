@@ -19,8 +19,8 @@ after the command exits.
   `OPENAI_API_KEY` through your environment's secret manager.
 
 The walkthrough runs from the repository root on your own development
-installation. For a shared or production installation, follow
-[Deploy and verify production Agents](deploy/production-agents.md).
+installation. If you followed [Kubernetes Setup](kubernetes-setup.md) on an
+existing cluster, use [Deploy and verify production Agents](deploy/production-agents.md).
 
 ## Steps
 
