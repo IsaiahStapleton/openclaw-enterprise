@@ -51,7 +51,8 @@ const scenario = process.env.CI_FIXTURE_SCENARIO;
 const command = basename(process.argv[1], ".mjs");
 const args = process.argv.slice(2);
 const statePath = join(root, "commands-state.json");
-const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : {};
+const initialState = existsSync(statePath) ? readFileSync(statePath, "utf8") : "{}";
+const state = JSON.parse(initialState);
 const equals = (actual, expected) => JSON.stringify(actual) === JSON.stringify(expected);
 const configId = "sha256:" + "b".repeat(64);
 const manifestDigest = "sha256:" + "c".repeat(64);
@@ -59,7 +60,11 @@ appendFileSync(join(root, "commands.jsonl"), JSON.stringify({
   command, args, envPublished: existsSync(join(root, "github.env")),
 }) + "\n");
 function finish(stdout = "") {
-  writeFileSync(statePath, JSON.stringify(state));
+  // Parallel diagnostic reads must not truncate the shared fixture state.
+  const serializedState = JSON.stringify(state);
+  if (serializedState !== initialState) {
+    writeFileSync(statePath, serializedState);
+  }
   process.stdout.write(stdout);
   process.exit(0);
 }
