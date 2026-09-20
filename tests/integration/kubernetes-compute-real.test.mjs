@@ -10,7 +10,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
-import { grantAgentSecretOperate } from "../helpers/postgres-harness-auth.mjs";
 import {
   configureExistingK3dLocalPathSharedFileSystem,
   createKubernetesFixtureHarnessAuth,
@@ -1781,44 +1780,83 @@ test(
       "the real worker must recover explicit namespace selection from PostgreSQL",
     );
 
+    async function grantSecretOperate(namespaceId, servicePrincipalId, secretId, label) {
+      const role = await request("POST", `/namespaces/${namespaceId}/iam/roles`, {
+        name: `${label} Secret operate ${randomUUID()}`,
+        permissions: [{ action: "operate", resourceKind: "secret" }],
+      });
+      assert.equal(role.status, 201, JSON.stringify(role.error));
+      const binding = await request("POST", `/namespaces/${namespaceId}/iam/access-bindings`, {
+        subjectKind: "identity",
+        subjectId: servicePrincipalId,
+        roleId: role.data.id,
+        resourceKind: "secret",
+        resourceId: secretId,
+      });
+      assert.equal(binding.status, 201, JSON.stringify(binding.error));
+      return { role: role.data, binding: binding.data };
+    }
+
+    async function assertDeployDenied(namespaceId, agentId, label) {
+      const denied = await request("POST", `/namespaces/${namespaceId}/agents/${agentId}/deploy`);
+      assert.equal(denied.status, 403, `${label}: ${JSON.stringify(denied.error)}`);
+    }
+
     async function createAgent(namespaceId, label, options = {}) {
       const secret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
         name: `${label} fixture model key`,
         value: `fixture-only-${randomUUID()}`,
       });
       assert.equal(secret.status, 201, JSON.stringify(secret.error));
-      let boundSecret;
-      let boundSecretValue;
+      let slackAppSecret;
+      let slackBotSecret;
+      let slackAppValue;
+      let slackBotValue;
       if (options.boundSecret === true) {
-        boundSecretValue = `bound-secret-${randomUUID()}`;
-        boundSecret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
-          name: `${label} bound sentinel`,
-          value: boundSecretValue,
+        slackAppValue = `slack-app-${randomUUID()}`;
+        slackBotValue = `slack-bot-${randomUUID()}`;
+        slackAppSecret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
+          name: `${label} Slack app token`,
+          value: slackAppValue,
         });
-        assert.equal(boundSecret.status, 201, JSON.stringify(boundSecret.error));
+        assert.equal(slackAppSecret.status, 201, JSON.stringify(slackAppSecret.error));
+        slackBotSecret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
+          name: `${label} Slack bot token`,
+          value: slackBotValue,
+        });
+        assert.equal(slackBotSecret.status, 201, JSON.stringify(slackBotSecret.error));
       }
-      const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
-        kind: "agent",
-        values: {
-          gateway: { controlUi: { enabled: false } },
-          logging: { level: "info" },
-          agents: {
-            defaults: {
-              model: "codex/gpt-4.1",
-              models: { "codex/gpt-4.1": { agentRuntime: { id: "codex" } } },
-            },
+      const values = {
+        gateway: { controlUi: { enabled: false } },
+        logging: { level: "info" },
+        agents: {
+          defaults: {
+            model: "codex/gpt-4.1",
+            models: { "codex/gpt-4.1": { agentRuntime: { id: "codex" } } },
           },
         },
-        ...(boundSecret === undefined
+        ...(slackAppSecret === undefined
           ? {}
           : {
-              secretBindings: {
-                BOUND_SENTINEL: {
-                  source: boundSecret.data.ref,
-                  delivery: { type: "env" },
+              plugins: { allow: ["slack"], entries: { slack: { enabled: true } } },
+              channels: {
+                slack: {
+                  enabled: true,
+                  mode: "socket",
+                  appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+                  botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+                  dmPolicy: "allowlist",
+                  allowFrom: ["U0123456789"],
+                  channels: {
+                    C0123456789: { requireMention: true, allowBots: "mentions" },
+                  },
                 },
               },
             }),
+      };
+      const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
+        kind: "agent",
+        values,
       });
       assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
       const created = await request("POST", `/namespaces/${namespaceId}/agents`, {
@@ -1831,16 +1869,66 @@ test(
         },
       });
       assert.equal(created.status, 201, JSON.stringify(created.error));
-      assert.equal(Object.hasOwn(created.data, "servicePrincipalId"), false);
-      await grantAgentSecretOperate(observerPool, created.data, secret.data.id);
-      if (boundSecret !== undefined) {
-        await grantAgentSecretOperate(observerPool, created.data, boundSecret.data.id);
+      assert.equal(typeof created.data.servicePrincipalId, "string");
+      assert.ok(created.data.servicePrincipalId.length > 0);
+      await assertDeployDenied(namespaceId, created.data.id, `${label} before model Secret grant`);
+      await grantSecretOperate(namespaceId, created.data.servicePrincipalId, secret.data.id, label);
+      if (slackAppSecret !== undefined) {
+        const missingBindings = await request(
+          "POST",
+          `/namespaces/${namespaceId}/agents/${created.data.id}/deploy`,
+        );
+        assert.equal(
+          missingBindings.status,
+          409,
+          `${label} before channel Secret bindings: ${JSON.stringify(missingBindings.error)}`,
+        );
+        const updated = await request(
+          "PATCH",
+          `/namespaces/${namespaceId}/configurations/${configuration.data.id}`,
+          {
+            values,
+            secretBindings: {
+              SLACK_APP_TOKEN: {
+                source: slackAppSecret.data.ref,
+                delivery: { type: "env" },
+              },
+              SLACK_BOT_TOKEN: {
+                source: slackBotSecret.data.ref,
+                delivery: { type: "env" },
+              },
+            },
+          },
+        );
+        assert.equal(updated.status, 200, JSON.stringify(updated.error));
+        await assertDeployDenied(
+          namespaceId,
+          created.data.id,
+          `${label} before Slack Secret grants`,
+        );
+        await grantSecretOperate(
+          namespaceId,
+          created.data.servicePrincipalId,
+          slackAppSecret.data.id,
+          `${label} Slack app`,
+        );
+        await grantSecretOperate(
+          namespaceId,
+          created.data.servicePrincipalId,
+          slackBotSecret.data.id,
+          `${label} Slack bot`,
+        );
       }
       return {
         ...created.data,
-        ...(boundSecret === undefined
+        ...(slackAppSecret === undefined
           ? {}
-          : { boundSecretId: boundSecret.data.id, boundSecretValue }),
+          : {
+              slackAppSecretId: slackAppSecret.data.id,
+              slackBotSecretId: slackBotSecret.data.id,
+              slackAppValue,
+              slackBotValue,
+            }),
       };
     }
 
@@ -1891,27 +1979,41 @@ test(
         await assertReadyGateway(placement, agent.id, namespaceId, candidate);
         const deployment = await resource("deployment", revisionName(candidate), placement);
         assert.equal(deployment.spec.template.spec.serviceAccountName, agentName(agent.id));
-        if (agent.boundSecretValue !== undefined) {
-          assert.deepEqual(Object.keys(candidate.secretBindings), ["BOUND_SENTINEL"]);
-          const container = deployment.spec.template.spec.containers[0];
-          const projection = container.env.find(({ name }) => name === "BOUND_SENTINEL");
-          assert.equal(projection.valueFrom.secretKeyRef.optional ?? false, false);
-          assert.ok(
-            projection.valueFrom.secretKeyRef.name,
-            "Configuration Secret bindings must render a concrete Kubernetes Secret name",
-          );
-          const pod = await waitFor(`bound Secret Agent ${agent.id} Pod`, async () =>
+        if (agent.slackAppValue !== undefined) {
+          assert.deepEqual(Object.keys(candidate.secretBindings).sort(), [
+            "SLACK_APP_TOKEN",
+            "SLACK_BOT_TOKEN",
+          ]);
+          const harnessContainer = deployment.spec.template.spec.containers[0];
+          for (const name of ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]) {
+            assert.equal(
+              harnessContainer.env.some((entry) => entry.name === name),
+              false,
+              `dedicated Harness must not receive ${name}`,
+            );
+          }
+          const gatewayDeployment = await resource("deployment", gatewayName(agent.id), placement);
+          const gatewayContainer = gatewayDeployment.spec.template.spec.containers[0];
+          for (const name of ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]) {
+            const projection = gatewayContainer.env.find((entry) => entry.name === name);
+            assert.equal(projection.valueFrom.secretKeyRef.optional ?? false, false);
+            assert.ok(
+              projection.valueFrom.secretKeyRef.name,
+              "Slack channel Secret bindings must render a concrete Kubernetes Secret name",
+            );
+          }
+          const pod = await waitFor(`bound Slack gateway ${agent.id} Pod`, async () =>
             (await resources("pods", placement)).find(
               ({ metadata, status }) =>
-                metadata.labels?.["openclaw.dev/agent"] === agent.id &&
-                metadata.labels?.["openclaw.dev/revision"] === candidate.id &&
+                metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
+                metadata.labels?.["app.kubernetes.io/name"] === gatewayName(agent.id) &&
                 status.conditions?.some(
                   ({ type, status: conditionStatus }) =>
                     type === "Ready" && conditionStatus === "True",
                 ),
             ),
           );
-          const script = `const expected=${JSON.stringify(agent.boundSecretValue)};process.stdout.write(process.env.BOUND_SENTINEL===expected?"matched":"missing")`;
+          const script = `const expected=${JSON.stringify({ SLACK_APP_TOKEN: agent.slackAppValue, SLACK_BOT_TOKEN: agent.slackBotValue })};process.stdout.write(Object.entries(expected).every(([key,value])=>process.env[key]===value)?"matched":"missing")`;
           const observedSecret = await kubectl(
             "exec",
             pod.metadata.name,

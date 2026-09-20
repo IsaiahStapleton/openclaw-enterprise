@@ -43,7 +43,10 @@ Start with [Docker or Podman Compose development](flows/docker-compose-developme
 [controller worker](flows/controller-worker.md). The **Understand the code** tab
 lists runtime traces for authentication, configuration, Drivers, and Agent execution.
 The [Agent plugin flow](flows/agent-plugins.md) traces desired state through
-revision startup and runtime configuration.
+revision startup and runtime configuration. The
+[Namespace IAM policy flow](flows/namespace-iam-policy.md) traces Role and
+AccessBinding API requests through authorization, Driver policy changes, and
+audit commit.
 
 ## Contribute
 

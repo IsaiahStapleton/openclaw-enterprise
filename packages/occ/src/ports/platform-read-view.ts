@@ -26,5 +26,11 @@ export function createPlatformReadView(
     ]),
     agents: bindRepository(repositories.agents, lifetime, ["findAgent", "listAgents"]),
     revisions: bindRepository(repositories.revisions, lifetime, ["findRevision", "listRevisions"]),
+    iamPolicy: bindRepository(repositories.iamPolicy, lifetime, [
+      "listRoles",
+      "getRole",
+      "listAccessBindings",
+      "getAccessBinding",
+    ]),
   });
 }

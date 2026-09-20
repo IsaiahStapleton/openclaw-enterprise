@@ -109,6 +109,49 @@ func (client *Client) DeleteNamespace(namespaceID string) (any, error) {
 	return client.send(http.MethodDelete, []string{"namespaces", namespaceID}, nil)
 }
 
+// ListIAMRoles lists Namespace IAM Roles.
+func (client *Client) ListIAMRoles(namespaceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "iam", "roles")
+}
+
+// CreateIAMRole creates an immutable Namespace IAM Role.
+func (client *Client) CreateIAMRole(namespaceID string, body jsontext.Value) (any, error) {
+	return client.send(http.MethodPost, []string{"namespaces", namespaceID, "iam", "roles"}, body)
+}
+
+// GetIAMRole fetches a Namespace IAM Role.
+func (client *Client) GetIAMRole(namespaceID, roleID string) (any, error) {
+	return client.get("namespaces", namespaceID, "iam", "roles", roleID)
+}
+
+// DeleteIAMRole deletes an unreferenced Namespace IAM Role.
+func (client *Client) DeleteIAMRole(namespaceID, roleID string) error {
+	return client.sendEmpty(http.MethodDelete, []string{"namespaces", namespaceID, "iam", "roles", roleID})
+}
+
+// ListIAMAccessBindings lists Namespace IAM AccessBindings.
+func (client *Client) ListIAMAccessBindings(namespaceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "iam", "access-bindings")
+}
+
+// CreateIAMAccessBinding creates an immutable Namespace IAM AccessBinding.
+func (client *Client) CreateIAMAccessBinding(namespaceID string, body jsontext.Value) (any, error) {
+	return client.send(http.MethodPost, []string{"namespaces", namespaceID, "iam", "access-bindings"}, body)
+}
+
+// GetIAMAccessBinding fetches a Namespace IAM AccessBinding.
+func (client *Client) GetIAMAccessBinding(namespaceID, bindingID string) (any, error) {
+	return client.get("namespaces", namespaceID, "iam", "access-bindings", bindingID)
+}
+
+// DeleteIAMAccessBinding deletes one exact Namespace IAM AccessBinding.
+func (client *Client) DeleteIAMAccessBinding(namespaceID, bindingID string) error {
+	return client.sendEmpty(
+		http.MethodDelete,
+		[]string{"namespaces", namespaceID, "iam", "access-bindings", bindingID},
+	)
+}
+
 // CreateConfiguration creates a Configuration in a Namespace.
 func (client *Client) CreateConfiguration(namespaceID string, body jsontext.Value) (any, error) {
 	return client.send(

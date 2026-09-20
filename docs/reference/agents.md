@@ -29,6 +29,11 @@ Collection reads include only Agents
 for which the caller has an exact `read` grant. The [API reference](api.md)
 owns route schemas, response envelopes, and permission annotations.
 
+Authorized Agent responses include immutable, read-only `servicePrincipalId`.
+Use this value for [Namespace IAM bindings](authorization.md#manage-namespace-policy);
+clients must not derive the identity from the Agent ID. Create and update
+requests reject a supplied `servicePrincipalId`.
+
 Creation body:
 
 ```json
