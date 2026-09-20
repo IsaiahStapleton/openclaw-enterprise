@@ -174,11 +174,8 @@
         "properties": {
           "data": {
             "additionalProperties": false,
-            "properties": {
-              "slackConfigured": { "type": "boolean" },
-              "transportConfigured": { "type": "boolean" }
-            },
-            "required": ["transportConfigured", "slackConfigured"],
+            "properties": { "transportConfigured": { "type": "boolean" } },
+            "required": ["transportConfigured"],
             "type": "object"
           },
           "meta": {
@@ -4562,11 +4559,8 @@
                   "properties": {
                     "data": {
                       "additionalProperties": false,
-                      "properties": {
-                        "slackConfigured": { "type": "boolean" },
-                        "transportConfigured": { "type": "boolean" }
-                      },
-                      "required": ["transportConfigured", "slackConfigured"],
+                      "properties": { "transportConfigured": { "type": "boolean" } },
+                      "required": ["transportConfigured"],
                       "type": "object"
                     },
                     "meta": {
@@ -4657,33 +4651,7 @@
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "slack": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "appToken": {
-                        "description": "Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value.",
-                        "maxLength": 65536,
-                        "minLength": 1,
-                        "pattern": "^[^\\u0000]*$",
-                        "type": "string"
-                      },
-                      "botToken": {
-                        "description": "Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value.",
-                        "maxLength": 65536,
-                        "minLength": 1,
-                        "pattern": "^[^\\u0000]*$",
-                        "type": "string"
-                      }
-                    },
-                    "required": ["appToken", "botToken"],
-                    "type": "object"
-                  }
-                },
-                "type": "object"
-              }
+              "schema": { "additionalProperties": false, "properties": {}, "type": "object" }
             }
           },
           "required": true
@@ -4697,11 +4665,8 @@
                   "properties": {
                     "data": {
                       "additionalProperties": false,
-                      "properties": {
-                        "slackConfigured": { "type": "boolean" },
-                        "transportConfigured": { "type": "boolean" }
-                      },
-                      "required": ["transportConfigured", "slackConfigured"],
+                      "properties": { "transportConfigured": { "type": "boolean" } },
+                      "required": ["transportConfigured"],
                       "type": "object"
                     },
                     "meta": {

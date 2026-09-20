@@ -1004,27 +1004,15 @@ test("Kubernetes drivers require explicit authentication, images, and production
   );
 });
 
-test("the canonical Kubernetes runtime isolates transport and channel Secrets", () => {
+test("the canonical Kubernetes runtime validates channel proxy configuration", () => {
   const runtime = {
     transportSecretPrefix: "transport",
     gatewayStorageClassName: "local-path",
   };
   assert.doesNotThrow(() => createKubernetesComputeDriver(options({ runtime })));
-  assert.throws(
-    () =>
-      createKubernetesComputeDriver(
-        options({
-          runtime: {
-            ...runtime,
-            channels: { secretPrefix: "transport", proxyUrl: "http://10.42.0.15:3128" },
-          },
-        }),
-      ),
-    /credentials must remain separate/i,
-  );
 
   for (const proxyUrl of ["http://10.42.0.15:3128", "https://[2001:db8::15]:8443"]) {
-    const channels = { secretPrefix: "channel", proxyUrl };
+    const channels = { proxyUrl };
     assert.doesNotThrow(() =>
       createKubernetesComputeDriver(options({ runtime: { ...runtime, channels } })),
     );
@@ -1037,25 +1025,12 @@ test("the canonical Kubernetes runtime isolates transport and channel Secrets", 
     "http://10.42.0.15:3128/unreviewed",
     "http://10.42.0.15:3128?token=secret",
   ]) {
-    const channels = { secretPrefix: "channel", proxyUrl };
+    const channels = { proxyUrl };
     assert.throws(
       () => createKubernetesComputeDriver(options({ runtime: { ...runtime, channels } })),
       /HTTP\(S\) IP endpoint/i,
     );
   }
-
-  assert.throws(
-    () =>
-      createKubernetesComputeDriver(
-        options({
-          runtime: {
-            ...runtime,
-            channels: { secretPrefix: " ", proxyUrl: "http://10.42.0.15:3128" },
-          },
-        }),
-      ),
-    /channel Secret name prefix/i,
-  );
 });
 
 test("dedicated Codex localhost seccomp profile is validated and rendered only on the Agent container", () => {
@@ -1174,7 +1149,7 @@ test("dedicated Codex projects the account-owned token and workspace without exp
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
+        channels: { proxyUrl: "http://10.42.0.15:3128" },
       },
     }),
   );
@@ -1257,9 +1232,9 @@ test("dedicated Codex projects the account-owned token and workspace without exp
   assert.equal(gatewayEnvironment.has("CODEX_ACCESS_TOKEN"), false);
   assert.equal(gatewayEnvironment.has("CODEX_CHATGPT_WORKSPACE_ID"), false);
   assert.equal(gatewayEnvironment.has("OPENAI_API_KEY"), false);
-  assert.equal(gatewayEnvironment.has("SLACK_APP_TOKEN"), true);
-  assert.equal(gatewayEnvironment.has("SLACK_BOT_TOKEN"), true);
-  assert.equal(gatewayEnvironment.has("MSTEAMS_APP_PASSWORD"), true);
+  assert.equal(gatewayEnvironment.has("SLACK_APP_TOKEN"), false);
+  assert.equal(gatewayEnvironment.has("SLACK_BOT_TOKEN"), false);
+  assert.equal(gatewayEnvironment.has("MSTEAMS_APP_PASSWORD"), false);
 });
 
 test("account-token authentication grants only the exact Codex revision outbound HTTPS", () => {
@@ -1318,13 +1293,13 @@ test("account-token authentication grants only the exact Codex revision outbound
   assert.notDeepEqual(successor.spec.podSelector, policy.spec.podSelector);
 });
 
-test("native channel providers supply only owning gateway secrets and reviewed proxy egress", async () => {
+test("native channel providers require Secret bindings and project them only to the gateway", async () => {
   const driver = createKubernetesComputeDriver(
     options({
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
+        channels: { proxyUrl: "http://10.42.0.15:3128" },
       },
     }),
   );
@@ -1345,6 +1320,48 @@ test("native channel providers supply only owning gateway secrets and reviewed p
     servicePrincipalId: "service-principal-agent-a",
     createdAt: tenant.createdAt,
   };
+  const secretEnvironment = [
+    {
+      name: "SLACK_APP_TOKEN",
+      namespaceId: tenant.id,
+      agentId,
+      secretId: "sec_00000000-0000-4000-8000-000000000001",
+      backendRef: { namespaceName: namespace, name: "occ-slack-app", key: "value", uid: "app-uid" },
+    },
+    {
+      name: "SLACK_BOT_TOKEN",
+      namespaceId: tenant.id,
+      agentId,
+      secretId: "sec_00000000-0000-4000-8000-000000000002",
+      backendRef: { namespaceName: namespace, name: "occ-slack-bot", key: "value", uid: "bot-uid" },
+    },
+    {
+      name: "MSTEAMS_APP_PASSWORD",
+      namespaceId: tenant.id,
+      agentId,
+      secretId: "sec_00000000-0000-4000-8000-000000000003",
+      backendRef: {
+        namespaceName: namespace,
+        name: "occ-teams-password",
+        key: "value",
+        uid: "teams-uid",
+      },
+    },
+  ];
+  const secretBindings = Object.freeze({
+    SLACK_APP_TOKEN: {
+      source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[0].secretId },
+      delivery: { type: "env" },
+    },
+    SLACK_BOT_TOKEN: {
+      source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[1].secretId },
+      delivery: { type: "env" },
+    },
+    MSTEAMS_APP_PASSWORD: {
+      source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[2].secretId },
+      delivery: { type: "env" },
+    },
+  });
 
   for (const [channels, expectedSecrets] of [
     [{ slack: {} }, ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]],
@@ -1367,9 +1384,22 @@ test("native channel providers supply only owning gateway secrets and reviewed p
   ]) {
     const configuredRevision = {
       ...revision,
-      configuration: { ...revision.configuration, channels },
+      configuration: { agents: { defaults: { model: "codex/gpt-5" } }, channels },
+      secretBindings,
+      secretDriverId: "secret-kubernetes",
     };
+    assert.doesNotThrow(() =>
+      driver.validateHarnessAuth(
+        configuredRevision.harness,
+        configuredRevision.harnessAuth,
+        configuredRevision.configuration,
+        configuredRevision.secretBindings,
+      ),
+    );
     const enabled = driver.enabledChannels(configuredRevision);
+    const expectedSecretEnvironment = expectedSecrets.map((name) =>
+      secretEnvironment.find((item) => item.name === name),
+    );
     const gateway = driver.deployment(
       `gateway-${suffix}`,
       { namespaceId: tenant.id, agentId },
@@ -1384,6 +1414,7 @@ test("native channel providers supply only owning gateway secrets and reviewed p
       undefined,
       undefined,
       enabled,
+      expectedSecretEnvironment,
     );
     const environment = gateway.spec.template.spec.containers[0].env;
 
@@ -1397,7 +1428,12 @@ test("native channel providers supply only owning gateway secrets and reviewed p
     ]) {
       const variable = environment.find(({ name }) => name === key);
       if (expectedSecrets.includes(key)) {
-        assert.deepEqual(variable.valueFrom.secretKeyRef, { name: `channel-${suffix}`, key });
+        const projection = secretEnvironment.find((item) => item.name === key);
+        assert.deepEqual(variable.valueFrom.secretKeyRef, {
+          name: projection.backendRef.name,
+          key: projection.backendRef.key,
+          optional: false,
+        });
         assert.equal(environment.filter(({ name }) => name === key).length, 1);
       } else {
         assert.equal(variable, undefined);
@@ -1438,6 +1474,8 @@ test("native channel providers supply only owning gateway secrets and reviewed p
       undefined,
       undefined,
       preparedAuth(driver, namespace, false),
+      [],
+      [],
     );
     const agentEnvironment = agent.spec.template.spec.containers[0].env;
     for (const key of [...expectedSecrets, "HTTPS_PROXY"]) {
@@ -1518,13 +1556,31 @@ test("native channel providers supply only owning gateway secrets and reviewed p
     }),
     /Unsupported OpenClaw channel provider "discord"\./,
   );
+  assert.throws(
+    () =>
+      driver.validateHarnessAuth(
+        revision.harness,
+        revision.harnessAuth,
+        {
+          agents: { defaults: { model: "codex/gpt-5" } },
+          channels: {
+            slack: {
+              appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+              botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+            },
+          },
+        },
+        { SLACK_APP_TOKEN: secretBindings.SLACK_APP_TOKEN },
+      ),
+    /Secret bindings/i,
+  );
 
   const ipv6 = createKubernetesComputeDriver(
     options({
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        channels: { secretPrefix: "channel", proxyUrl: "https://[2001:db8::15]:8443" },
+        channels: { proxyUrl: "https://[2001:db8::15]:8443" },
       },
     }),
   );
@@ -3076,7 +3132,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
+        channels: { proxyUrl: "http://10.42.0.15:3128" },
       },
       servicePrincipalCredentials: {
         mode: "projectedServiceAccountToken",

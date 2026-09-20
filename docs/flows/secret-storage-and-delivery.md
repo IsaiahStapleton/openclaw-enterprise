@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
 updated: 2026-09-20
-last_updated_session: codex/01a0c00c-8a45-7233-82c4-e12fb2c3b0d7
+last_updated_session: codex/01a0bce5-9f29-7110-85fd-6b140674d362
 ---
 
 # Secret Storage and Gateway Delivery Flow
@@ -9,7 +9,7 @@ last_updated_session: codex/01a0c00c-8a45-7233-82c4-e12fb2c3b0d7
 ## Overview
 
 An authorized owner stores a Namespace-owned Secret before any Agent exists,
-binds its stable reference in Configuration for gateway delivery, then assigns
+binds its stable reference in Configuration for gateway delivery, then grants, assigns
 and deploys a consuming Agent. For these Configuration bindings, OCC admits
 references and Kubernetes supplies values only to each selected gateway.
 Harness model authentication uses the
@@ -31,6 +31,9 @@ Credential issuance and provider internals are outside this flow.
 - Source: [HTTP handlers](../../apps/controller/src/index.ts),
   [OpenClawController](../../packages/occ/src/index.ts), and
   [KubernetesSecretDriver](../../apps/controller/src/drivers/secret/kubernetes/index.ts).
+- The console and [OCC CLI](../guides/cli.md#provision-integration-secrets)
+  call these HTTP operations. They initiate OCC-authorized mutations; neither
+  writes directly to SQL, Kubernetes, or credential backends.
 
 ## Flow
 
@@ -43,7 +46,8 @@ graph TD
   end
   subgraph Admission["Configuration and deployment"]
     D --> E["Bind source ref to gateway env destination"]
-    E --> F["Authorize caller and Agent SP; verify backend"]
+    E --> P["Bind Agent identity to exact Secret"]
+    P --> F["Authorize caller and Agent SP; verify backend"]
     F -->|allowed| G["Freeze references in AgentRevision"]
     F -->|denied or unavailable| X["No admitted deployment"]
     D --> L["Local installer: grant Agent use of this exact Secret"]
@@ -94,6 +98,11 @@ recovery.
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
+The Agent response exposes its immutable `servicePrincipalId`. An administrator
+grants that identity `operate` on the exact Secret before deployment. OCC checks
+Installation administration, Namespace scope, and target access through the
+selected IAM Driver; policy and audit commit together.
+
 [createConfiguration and updateConfiguration](../../packages/occ/src/index.ts)
 keep `secretBindings` in OCC metadata, separate from native `values`. Each binding
 has a Secret source and an env delivery destination; omitted delivery normalizes
@@ -112,7 +121,9 @@ caller and consuming Agent service principal to `operate` every Secret, then
 checks live backend identity through the API-side driver. Namespace locking
 serializes binding/admission changes against deletion. Admission freezes
 normalized refs and the selected SecretDriver identity, not backend locators or
-values, in the revision.
+values, in the revision. Enabled native channel environment SecretRefs must have
+matching bindings at admission; disabled channel provider blocks do not require
+them.
 
 Model-auth environment destinations are reserved for Agent `harnessAuth`;
 Configuration bindings cannot select or override model credentials in either
@@ -169,6 +180,11 @@ preparation alone is not proof that the replacement runtime is ready.
 Kubelet obtains the bytes and creates the process environment. OpenClaw resolves
 its existing `{ source: "env", provider, id }` reference. This is the handoff to
 the native consumer, not a new OpenClaw provider or OCC text-substitution engine.
+Native channel credentials follow these same admitted bindings. No legacy
+per-Agent channel Secret injects additional values. Dedicated gateways receive
+channel bytes; the dedicated Harness receives only its separately admitted model
+authentication. Embedded channel credentials remain unsupported.
+
 The worker/workload have no Secret API verbs, but a trusted workload writer can
 indirectly project namespace Secrets; Kubernetes RBAC alone does not remove that
 trust boundary.
@@ -186,6 +202,10 @@ Kubernetes concurrency/ownership checks. It changes only the stored value; the
 response retains the same ref. No revision, binding, or running environment is
 updated, and no controller automatically restarts the gateway. A successful update
 means stored, not delivered.
+
+For coordinated channel replacement, stop the Agent and wait for shutdown before
+updating each Secret. A partial update leaves it stopped until repaired; there is
+no multi-Secret transaction or rollback of stored bytes.
 
 An explicit deployment for each consuming Agent creates a new revision and
 restarts that gateway with the current value. An infrastructure restart of an
@@ -239,6 +259,7 @@ credential at its issuer.
 ## Changelog
 
 - 2026-09-20 18:25: Document the local first-Agent Secret grant and model-response check added with the installer tool. (01a0c00c-8a45-7233-82c4-e12fb2c3b0d7 - 3bbdc447dbe2dee8c5f757b822e9ebe034047193)
+- 2026-09-20 00:00: Recorded channel credentials as Configuration Secret bindings with Agent service-principal grants and gateway-only delivery. (01a0bce5-9f29-7110-85fd-6b140674d362 - 93fe0a83)
 
 - 2026-09-17 00:48: Correct current harness admission and metadata-only dispatch boundaries after implementation review. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 107900e9551b90c3e9ac24d30f8ea866f17e5dbb)
 

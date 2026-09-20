@@ -12,7 +12,7 @@ Command-line flags override the corresponding environment variables.
 | -------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `--url`              | `OCC_URL`              | Required for resource commands. An HTTP or HTTPS origin, without embedded credentials, a base path, query, or fragment. |
 | `--service-key-file` | `OCC_SERVICE_KEY_FILE` | Required for resource commands. Path to the complete bootstrap or issued service-key JSON response.                     |
-| `--namespace`        | `OCC_NAMESPACE`        | Required for `configuration`, `iam`, and `agent` commands. Supply the Namespace ID, not its name.                       |
+| `--namespace`        | `OCC_NAMESPACE`        | Required for `configuration`, `secret`, `iam`, and `agent` commands. Supply the Namespace ID, not its name.             |
 | `--ca-bundle`        | `OCC_CA_BUNDLE`        | Adds a PEM certificate-authority bundle to the system trust roots for HTTPS. TLS verification cannot be disabled.       |
 | `--timeout-seconds`  | `OCC_TIMEOUT_SECONDS`  | Positive whole seconds for an HTTP request. Default: `30`.                                                              |
 | `--output`, `-o`     | —                      | Output format: `table` (default), `json`, or `yaml`.                                                                    |
@@ -43,6 +43,10 @@ input is not supported. The server validates document fields against the
 | `occ configuration get ID`                  | Reads a Configuration.                                                                                                                                           |
 | `occ configuration update ID --file FILE`   | Updates a Configuration; the body must replace `values`. Omit the create-only `kind`.                                                                            |
 | `occ configuration delete ID`               | Deletes an unreferenced Configuration.                                                                                                                           |
+| `occ secret create --file FILE`             | Stores a Namespace Secret from a protected JSON document.                                                                                                        |
+| `occ secret get ID`                         | Reads Secret metadata, never its value.                                                                                                                          |
+| `occ secret update ID --file FILE`          | Replaces the Secret value; consumers require explicit redeployment.                                                                                              |
+| `occ secret delete ID`                      | Deletes an unreferenced Namespace Secret.                                                                                                                        |
 | `occ iam role list`                         | Lists Namespace Roles.                                                                                                                                           |
 | `occ iam role get ID`                       | Reads a Namespace Role.                                                                                                                                          |
 | `occ iam role create --file FILE`           | Creates a Namespace Role with explicit permissions.                                                                                                              |
@@ -60,7 +64,7 @@ input is not supported. The server validates document fields against the
 | `occ agent stop ID`                         | Requests a stop while retaining revisions and persistent state.                                                                                                  |
 
 Use the [HTTP API](api.md) to inspect Agent deployment status and revisions, or
-to work with Secrets, ServiceAccounts, and configured Providers; the CLI has no
+to work with ServiceAccounts and configured Providers; the CLI has no
 commands for these. Neither the CLI nor the HTTP API offers Configuration
 listing. An accepted deploy returns a revision; `agent get`
 shows desired state and the selected revision, not runtime health. Use the

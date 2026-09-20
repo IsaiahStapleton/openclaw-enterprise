@@ -10,7 +10,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
-import { grantAgentSecretOperate } from "../helpers/postgres-harness-auth.mjs";
 import {
   configureExistingK3dLocalPathSharedFileSystem,
   createKubernetesFixtureHarnessAuth,
@@ -1571,7 +1570,7 @@ test(
 );
 
 test(
-  "authenticated PostgreSQL OCC API and worker deploy real Agent-owned gateways and revisions",
+  "authenticated PostgreSQL OCC API and worker deploy real Agent-owned gateways, Secret bindings, and revisions",
   { ...requiresKubernetesAndPostgres, timeout: runtimeImage === undefined ? 360_000 : 600_000 },
   async (context) => {
     await assertKubernetesFixtureAvailable();
@@ -1839,34 +1838,85 @@ test(
       "the real worker must recover explicit namespace selection from PostgreSQL",
     );
 
-    async function createAgent(namespaceId, label, executionMode = "dedicated") {
+    async function grantSecretOperate(namespaceId, servicePrincipalId, secretId, label) {
+      const role = await request("POST", `/namespaces/${namespaceId}/iam/roles`, {
+        name: `${label} Secret operate ${randomUUID()}`,
+        permissions: [{ action: "operate", resourceKind: "secret" }],
+      });
+      assert.equal(role.status, 201, JSON.stringify(role.error));
+      const binding = await request("POST", `/namespaces/${namespaceId}/iam/access-bindings`, {
+        subjectKind: "identity",
+        subjectId: servicePrincipalId,
+        roleId: role.data.id,
+        resourceKind: "secret",
+        resourceId: secretId,
+      });
+      assert.equal(binding.status, 201, JSON.stringify(binding.error));
+      return { role: role.data, binding: binding.data };
+    }
+
+    async function assertDeployDenied(namespaceId, agentId, label) {
+      const denied = await request("POST", `/namespaces/${namespaceId}/agents/${agentId}/deploy`);
+      assert.equal(denied.status, 403, `${label}: ${JSON.stringify(denied.error)}`);
+    }
+
+    async function createAgent(namespaceId, label, options = {}) {
+      const executionMode = options.executionMode ?? "dedicated";
       const model = executionMode === "embedded" ? "openai/gpt-4.1" : "codex/gpt-4.1";
       const agentRuntime = executionMode === "embedded" ? "openclaw" : "codex";
-      const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
-        kind: "agent",
-        values: {
-          gateway: {
-            mode: "local",
-            bind: "loopback",
-            controlUi: { enabled: false },
-            auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
-          },
-          logging: { level: "info" },
-          agents: {
-            defaults: {
-              skipBootstrap: true,
-              model,
-              models: { [model]: { agentRuntime: { id: agentRuntime } } },
-            },
-          },
-        },
-      });
-      assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
       const secret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
         name: `${label} fixture model key`,
         value: `fixture-only-${randomUUID()}`,
       });
       assert.equal(secret.status, 201, JSON.stringify(secret.error));
+      let boundSecret;
+      let boundSecretValue;
+      if (options.boundSecret === true) {
+        boundSecretValue = `bound-secret-${randomUUID()}`;
+        boundSecret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
+          name: `${label} bound sentinel`,
+          value: boundSecretValue,
+        });
+        assert.equal(boundSecret.status, 201, JSON.stringify(boundSecret.error));
+      }
+      const baseValues = {
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          controlUi: { enabled: false },
+          auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+        },
+        logging: { level: "info" },
+        agents: {
+          defaults: {
+            skipBootstrap: true,
+            model,
+            models: { [model]: { agentRuntime: { id: agentRuntime } } },
+          },
+        },
+      };
+      const missingChannelBindingValues = {
+        ...baseValues,
+        plugins: { allow: ["slack"], entries: { slack: { enabled: true } } },
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "socket",
+            appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+            botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+            dmPolicy: "allowlist",
+            allowFrom: ["U0123456789"],
+            channels: {
+              C0123456789: { requireMention: true, allowBots: "mentions" },
+            },
+          },
+        },
+      };
+      const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
+        kind: "agent",
+        values: boundSecret === undefined ? baseValues : missingChannelBindingValues,
+      });
+      assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
       const created = await request("POST", `/namespaces/${namespaceId}/agents`, {
         name: `${label}-${randomUUID()}`,
         configurationId: configuration.data.id,
@@ -1879,8 +1929,53 @@ test(
       assert.equal(created.status, 201, JSON.stringify(created.error));
       assert.equal(typeof created.data.servicePrincipalId, "string");
       assert.notEqual(created.data.servicePrincipalId.trim(), "");
-      await grantAgentSecretOperate(observerPool, created.data, secret.data.id);
-      return created.data;
+      await assertDeployDenied(namespaceId, created.data.id, `${label} before model Secret grant`);
+      await grantSecretOperate(namespaceId, created.data.servicePrincipalId, secret.data.id, label);
+      if (boundSecret !== undefined) {
+        const missingBindings = await request(
+          "POST",
+          `/namespaces/${namespaceId}/agents/${created.data.id}/deploy`,
+        );
+        assert.equal(
+          missingBindings.status,
+          409,
+          `${label} before channel Secret bindings: ${JSON.stringify(missingBindings.error)}`,
+        );
+        // This k3d fixture has no runtime.channels proxy and uses the fixture image,
+        // so successful deployment proves generic API/IAM/admission/gateway Secret
+        // projection. Real Slack channel runtime proof belongs to the real-runtime suite.
+        const updated = await request(
+          "PATCH",
+          `/namespaces/${namespaceId}/configurations/${configuration.data.id}`,
+          {
+            values: baseValues,
+            secretBindings: {
+              BOUND_SENTINEL: {
+                source: boundSecret.data.ref,
+                delivery: { type: "env" },
+              },
+            },
+          },
+        );
+        assert.equal(updated.status, 200, JSON.stringify(updated.error));
+        await assertDeployDenied(
+          namespaceId,
+          created.data.id,
+          `${label} before bound Secret grant`,
+        );
+        await grantSecretOperate(
+          namespaceId,
+          created.data.servicePrincipalId,
+          boundSecret.data.id,
+          `${label} bound`,
+        );
+      }
+      return {
+        ...created.data,
+        ...(boundSecret === undefined
+          ? {}
+          : { boundSecretId: boundSecret.data.id, boundSecretValue }),
+      };
     }
 
     async function deploy(namespaceId, agentId) {
@@ -1908,14 +2003,20 @@ test(
 
     const first = await createAgent(namespaceIds[0], "first");
     const second = await createAgent(namespaceIds[0], "second");
+    const boundSecretAgent = await createAgent(namespaceIds[0], "bound-secret", {
+      boundSecret: true,
+    });
     const separateTenant = await createAgent(namespaceIds[1], "separate-tenant");
-    const embeddedDelete = await createAgent(namespaceIds[1], "embedded-delete", "embedded");
+    const embeddedDelete = await createAgent(namespaceIds[1], "embedded-delete", {
+      executionMode: "embedded",
+    });
     const adoptedTenant = await createAgent(namespaceIds[2], "adopted-tenant");
     if (runtimeImage !== undefined) {
       // Real runtime integration fails closed when any Agent-owned credential is absent.
       for (const [namespaceId, agent] of [
         [namespaceIds[0], first],
         [namespaceIds[0], second],
+        [namespaceIds[0], boundSecretAgent],
         [namespaceIds[1], separateTenant],
         [namespaceIds[1], embeddedDelete],
         [adopted.data.id, adoptedTenant],
@@ -1923,28 +2024,22 @@ test(
         const provisioned = await request(
           "POST",
           `/namespaces/${namespaceId}/agents/${agent.id}/runtime-credentials`,
-          {
-            slack: {
-              appToken: "k3d-fixture-slack-app-token",
-              botToken: "k3d-fixture-slack-bot-token",
-            },
-          },
+          {},
         );
         assert.equal(provisioned.status, 200, JSON.stringify(provisioned.error));
         assert.deepEqual(provisioned.data, {
           transportConfigured: true,
-          slackConfigured: true,
         });
       }
     }
     const adoptedCredentialSecrets =
       runtimeImage === undefined
         ? []
-        : ["transport", "channel"].map((prefix) => `${prefix}-${hash(adoptedTenant.id)}`);
+        : ["transport"].map((prefix) => `${prefix}-${hash(adoptedTenant.id)}`);
     const embeddedCredentialSecrets =
       runtimeImage === undefined
         ? []
-        : ["transport", "channel"].map((prefix) => `${prefix}-${hash(embeddedDelete.id)}`);
+        : ["transport"].map((prefix) => `${prefix}-${hash(embeddedDelete.id)}`);
     for (const name of adoptedCredentialSecrets) {
       await resource("secret", name, existingName);
     }
@@ -1957,12 +2052,14 @@ test(
       deploy(namespaceIds[1], separateTenant.id),
       deploy(namespaceIds[1], embeddedDelete.id),
       deploy(namespaceIds[2], adoptedTenant.id),
+      deploy(namespaceIds[0], boundSecretAgent.id),
     ]);
 
     await Promise.all(
       [
         [namespaceIds[0], first, admitted[0]],
         [namespaceIds[0], second, admitted[1]],
+        [namespaceIds[0], boundSecretAgent, admitted[5]],
         [namespaceIds[1], separateTenant, admitted[2]],
         [namespaceIds[1], embeddedDelete, admitted[3], "embedded"],
         [namespaceIds[2], adoptedTenant, admitted[4], "dedicated"],
@@ -1973,6 +2070,52 @@ test(
         if (executionMode === "dedicated") {
           const deployment = await resource("deployment", revisionName(candidate), placement);
           assert.equal(deployment.spec.template.spec.serviceAccountName, agentName(agent.id));
+          if (agent.boundSecretValue !== undefined) {
+            assert.deepEqual(Object.keys(candidate.secretBindings), ["BOUND_SENTINEL"]);
+            const harnessContainer = deployment.spec.template.spec.containers[0];
+            assert.equal(
+              harnessContainer.env.some((entry) => entry.name === "BOUND_SENTINEL"),
+              false,
+              "dedicated Harness must not receive gateway Secret bindings",
+            );
+            const gatewayDeployment = await resource(
+              "deployment",
+              gatewayName(agent.id),
+              placement,
+            );
+            const gatewayContainer = gatewayDeployment.spec.template.spec.containers[0];
+            const projection = gatewayContainer.env.find(
+              (entry) => entry.name === "BOUND_SENTINEL",
+            );
+            assert.equal(projection.valueFrom.secretKeyRef.optional ?? false, false);
+            assert.ok(
+              projection.valueFrom.secretKeyRef.name,
+              "Configuration Secret bindings must render a concrete Kubernetes Secret name",
+            );
+            const pod = await waitFor(`bound Secret gateway ${agent.id} Pod`, async () =>
+              (await resources("pods", placement)).find(
+                ({ metadata, status }) =>
+                  metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
+                  metadata.labels?.["app.kubernetes.io/name"] === gatewayName(agent.id) &&
+                  status.conditions?.some(
+                    ({ type, status: conditionStatus }) =>
+                      type === "Ready" && conditionStatus === "True",
+                  ),
+              ),
+            );
+            const script = `const expected=${JSON.stringify(agent.boundSecretValue)};process.stdout.write(process.env.BOUND_SENTINEL===expected?"matched":"missing")`;
+            const observedSecret = await kubectl(
+              "exec",
+              pod.metadata.name,
+              "--namespace",
+              placement,
+              "--",
+              "node",
+              "-e",
+              script,
+            );
+            assert.equal(observedSecret, "matched");
+          }
         } else {
           assert.equal(await missing("deployment", revisionName(candidate), placement), true);
           assert.equal(await missing("service", agentName(agent.id), placement), true);
@@ -2195,15 +2338,17 @@ test(
     );
     await resource("deployment", revisionName(replacement), placement);
     await resource("deployment", revisionName(admitted[1]), placement);
+    await resource("deployment", revisionName(admitted[5]), placement);
     await resource("serviceaccount", agentName(first.id), placement);
     await assertReadyGateway(placement, first.id, namespaceIds[0]);
     await assertReadyGateway(placement, second.id, namespaceIds[0]);
+    await assertReadyGateway(placement, boundSecretAgent.id, namespaceIds[0]);
     assert.equal(
       (await resources("deployments", placement)).filter(
         ({ spec }) => spec.template.metadata.labels?.["openclaw.dev/workload-role"] === "gateway",
       ).length,
-      2,
-      "worker restart and replacement revisions must preserve one gateway for each Agent",
+      3,
+      "worker restart and replacement revisions must preserve one gateway for each running Agent",
     );
 
     const adoptedOwned = await ownedComputeResources(existingName, adoptedTenant.id);

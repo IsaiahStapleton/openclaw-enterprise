@@ -84,7 +84,6 @@ const installationName = "OpenClaw Kubernetes harness topology integration";
 const authSecret = "kubernetes-harness-topology-auth-secret-32-bytes";
 const authBaseURL = "http://127.0.0.1";
 const modelPrefix = "openclaw-agent-model";
-const channelPrefix = "openclaw-agent-channels";
 const secretRotationProbe = "SECRET_ROTATION_PROBE";
 const peerSecretRotationProbe = "SECRET_ROTATION_PEER_PROBE";
 const sharedSecretRotationProbe = "SECRET_ROTATION_SHARED_PROBE";
@@ -714,7 +713,6 @@ function installationConfiguration(authentication, platformNamespace, slack, opt
   }
   if (slack !== undefined) {
     configuration.drivers.compute.configuration.runtime.channels = {
-      secretPrefix: channelPrefix,
       proxyUrl: slack.proxyUrl,
     };
   }
@@ -835,6 +833,8 @@ function secretApiProtectedValues(topology, extra = []) {
     topology.secretApi?.rotatedSharedProbeValue,
     topology.secretApi?.missingBackendValue,
     topology.secretApi?.unboundDeleteValue,
+    topology.secretApi?.slackAppValue,
+    topology.secretApi?.slackBotValue,
     ...extra,
   ];
 }
@@ -1160,31 +1160,6 @@ async function storedAgent(pool, namespaceId, agentId) {
     servicePrincipalId: row.service_principal_id,
     activeRevisionId: row.active_revision_id ?? undefined,
   };
-}
-
-async function provisionAgentChannelSecret(directory, namespace, agentId, slack) {
-  const suffix = hash(agentId);
-  const tokenDirectory = await mkdtemp(join(directory, `channel-tokens-${suffix}-`));
-  try {
-    const appTokenPath = join(tokenDirectory, "slack-app-token");
-    const botTokenPath = join(tokenDirectory, "slack-bot-token");
-    await Promise.all([
-      writeFile(appTokenPath, slack.appToken, { mode: 0o600 }),
-      writeFile(botTokenPath, slack.botToken, { mode: 0o600 }),
-    ]);
-    await kubectl(
-      "create",
-      "secret",
-      "generic",
-      `${channelPrefix}-${suffix}`,
-      "--namespace",
-      namespace,
-      `--from-file=SLACK_APP_TOKEN=${appTokenPath}`,
-      `--from-file=SLACK_BOT_TOKEN=${botTokenPath}`,
-    );
-  } finally {
-    await rm(tokenDirectory, { recursive: true, force: true });
-  }
 }
 
 async function arrangeProductionTopology(context, mode, slack, options = {}) {
@@ -1575,6 +1550,29 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       process.env.OPENAI_API_KEY,
     );
     secretApi = { assignmentPrincipalId: secretAssignmentPrincipalId, model: modelSecret };
+    if (slack !== undefined) {
+      const slackAppValue = slack.appToken;
+      const slackBotValue = slack.botToken;
+      const slackAppSecret = await createApiSecret(
+        request,
+        namespaceId,
+        "slack-app-token",
+        slackAppValue,
+      );
+      const slackBotSecret = await createApiSecret(
+        request,
+        namespaceId,
+        "slack-bot-token",
+        slackBotValue,
+      );
+      secretApi = {
+        ...secretApi,
+        slackApp: slackAppSecret,
+        slackBot: slackBotSecret,
+        slackAppValue,
+        slackBotValue,
+      };
+    }
     if (includeSecretProbes) {
       const initialProbeValue = `secret-rotation-initial-${randomUUID()}`;
       const probeSecret = await createApiSecret(
@@ -1613,6 +1611,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       );
       secretApi = {
         assignmentPrincipalId: secretAssignmentPrincipalId,
+        ...secretApi,
         model: modelSecret,
         probe: probeSecret,
         peerProbe: peerProbeSecret,
@@ -1649,6 +1648,8 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     await Promise.all(
       [
         secretApi.model,
+        secretApi.slackApp,
+        secretApi.slackBot,
         secretApi.probe,
         secretApi.peerProbe,
         secretApi.sharedProbe,
@@ -1663,12 +1664,20 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   }
 
   const harnessId = mode === "dedicated" ? "codex" : "openclaw";
-  const secretBindings = !includeSecretProbes
-    ? undefined
-    : {
-        [secretRotationProbe]: secretBinding(secretApi.probe.ref),
-        [sharedSecretRotationProbe]: secretBinding(secretApi.sharedProbe.ref),
-      };
+  const secretBindings = {
+    ...(includeSecretProbes
+      ? {
+          [secretRotationProbe]: secretBinding(secretApi.probe.ref),
+          [sharedSecretRotationProbe]: secretBinding(secretApi.sharedProbe.ref),
+        }
+      : {}),
+    ...(slack === undefined
+      ? {}
+      : {
+          SLACK_APP_TOKEN: secretBinding(secretApi.slackApp.ref),
+          SLACK_BOT_TOKEN: secretBinding(secretApi.slackBot.ref),
+        }),
+  };
   const selectedNativeOptions =
     workspaceGateway === undefined
       ? options.nativeOptions
@@ -1699,10 +1708,10 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
     values: nativeConfiguration(harnessId, slack, nativeOptions),
-    ...(secretBindings === undefined ? {} : { secretBindings }),
+    ...(Object.keys(secretBindings).length === 0 ? {} : { secretBindings }),
   });
   assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
-  if (secretBindings !== undefined) {
+  if (Object.keys(secretBindings).length > 0) {
     assert.deepEqual(configuration.data.secretBindings, secretBindings);
   }
   const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {
@@ -1717,9 +1726,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   const gatewayToken = await provisionAgentTransportSecret(directory, placement, agent.data.id, {
     gatewayPassword,
   });
-  if (slack !== undefined) {
-    await provisionAgentChannelSecret(directory, placement, agent.data.id, slack);
-  }
   {
     const revisionsBefore = await request(
       "GET",
@@ -1750,7 +1756,13 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       "missing Agent service-principal Secret operate must reject deployment before revision admission",
     );
     await Promise.all(
-      [secretApi.model, secretApi.probe, secretApi.sharedProbe]
+      [
+        secretApi.model,
+        secretApi.slackApp,
+        secretApi.slackBot,
+        secretApi.probe,
+        secretApi.sharedProbe,
+      ]
         .filter(Boolean)
         .map((secret) =>
           grantSecretOperate(
@@ -1805,7 +1817,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   );
   assert.equal(observedRevision.status, 200, JSON.stringify(observedRevision.error));
   assert.deepEqual(observedRevision.data.harnessAuth, deployed.data.harnessAuth);
-  if (secretApi !== undefined) {
+  if (secretApi !== undefined && secretApi.configuration.secretBindings !== undefined) {
     assert.deepEqual(observedRevision.data.secretBindings, secretApi.configuration.secretBindings);
   }
   assert.equal(
@@ -1866,6 +1878,32 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       ),
       false,
     );
+  }
+  if (slack !== undefined) {
+    const slackAppStorage = await storedSecret(observerPool, namespaceId, secretApi.slackApp.id);
+    const slackBotStorage = await storedSecret(observerPool, namespaceId, secretApi.slackBot.id);
+    const gatewayContainer = gatewayPod.spec.containers[0];
+    assertRequiredSecretKeyRef(
+      gatewayContainer.env.find(({ name }) => name === "SLACK_APP_TOKEN").valueFrom.secretKeyRef,
+      { name: slackAppStorage.backendRef.name, key: slackAppStorage.backendRef.key },
+      "Slack app token must be projected from the bound Secret into the gateway",
+    );
+    assertRequiredSecretKeyRef(
+      gatewayContainer.env.find(({ name }) => name === "SLACK_BOT_TOKEN").valueFrom.secretKeyRef,
+      { name: slackBotStorage.backendRef.name, key: slackBotStorage.backendRef.key },
+      "Slack bot token must be projected from the bound Secret into the gateway",
+    );
+    if (harnessPod !== undefined) {
+      assert.equal(
+        harnessPod.spec.containers.some((container) =>
+          (container.env ?? []).some(({ name }) =>
+            ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"].includes(name),
+          ),
+        ),
+        false,
+        "channel Secrets must stay out of the dedicated Codex workload",
+      );
+    }
   }
   const gatewayVersion = (
     await kubectl(
@@ -4307,7 +4345,6 @@ export {
   assertSecretApiRotationAndRedeploy,
   assertUnauthorizedCodexSocket,
   assertUnboundSecretDeletion,
-  channelPrefix,
   hash,
   inspectProjectedIdentity,
   inspectWorkloadEnvironment,

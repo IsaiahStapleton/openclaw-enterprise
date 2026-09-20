@@ -243,6 +243,8 @@ export async function renderAgentDetail(context) {
       ? createRuntimeCredentialsPanel({
           context,
           path,
+          agent,
+          configuration: snapshot,
           values,
           revisionsLoaded: revisionResult.status === "fulfilled",
           revisionCount: revisions.length,
@@ -303,7 +305,10 @@ export async function renderAgentDetail(context) {
           deployStatus.textContent = credentialBlockReason;
           return;
         }
-        if (!runtimeAuth && !hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values)) {
+        if (
+          !runtimeAuth &&
+          !hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values, freshConfig)
+        ) {
           deployStatus.textContent =
             "Runtime credential metadata changed. Refresh status before deploying.";
           return;

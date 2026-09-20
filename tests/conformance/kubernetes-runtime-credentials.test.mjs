@@ -59,7 +59,7 @@ function options(overrides = {}) {
     runtime: {
       transportSecretPrefix: "transport",
       gatewayStorageClassName: "local-path",
-      channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
+      channels: { proxyUrl: "http://10.42.0.15:3128" },
     },
     ...overrides,
   };
@@ -178,7 +178,6 @@ test("mocked Kubernetes client reports only complete owned Agent runtime credent
 
   assert.deepEqual(await fixture.driver.getAgentRuntimeCredentialStatus(binding()), {
     transportConfigured: true,
-    slackConfigured: false,
   });
 });
 
@@ -197,22 +196,15 @@ test("mocked Kubernetes client deletes every owned Agent runtime credential Secr
         },
       },
     ),
-    [`channel-${digest(agent.id)}`]: runtimeSecret(first.driver, first.namespaceName, "channel", {
-      SLACK_APP_TOKEN: "xapp-test",
-      SLACK_BOT_TOKEN: "xoxb-test",
-    }),
   };
   const fixture = credentialFixture({ secrets });
 
   await fixture.driver.deleteAgentRuntimeCredentials(binding());
-  assert.deepEqual(fixture.deleted, [
-    `transport-${digest(agent.id)}`,
-    `channel-${digest(agent.id)}`,
-  ]);
+  assert.deepEqual(fixture.deleted, [`transport-${digest(agent.id)}`]);
 
   // A retry after partial or complete teardown observes absence and converges.
   await fixture.driver.deleteAgentRuntimeCredentials(binding());
-  assert.equal(fixture.deleted.length, 2);
+  assert.equal(fixture.deleted.length, 1);
 });
 
 test("Kubernetes credential deletion is a no-op without a configured runtime backend", async () => {
@@ -222,15 +214,12 @@ test("Kubernetes credential deletion is a no-op without a configured runtime bac
   await driver.deleteAgentRuntimeCredentials(binding());
 });
 
-test("mocked Kubernetes client preflights all credential Secrets before initial creates", async () => {
+test("mocked Kubernetes client preflights the transport Secret before initial create", async () => {
   const { driver, calls, created } = credentialFixture();
 
-  assert.deepEqual(
-    await driver.provisionAgentRuntimeCredentials(binding(), {
-      slack: { appToken: "xapp-test", botToken: "xoxb-test" },
-    }),
-    { transportConfigured: true, slackConfigured: true },
-  );
+  assert.deepEqual(await driver.provisionAgentRuntimeCredentials(binding(), {}), {
+    transportConfigured: true,
+  });
 
   const firstCreate = calls.findIndex(({ kind }) => kind === "createSecret");
   assert.ok(firstCreate > 0, "the fixture must observe credential Secret writes");
@@ -239,7 +228,7 @@ test("mocked Kubernetes client preflights all credential Secrets before initial 
       .slice(0, firstCreate)
       .filter(({ kind }) => kind === "readSecret")
       .map(({ name }) => name),
-    [`transport-${digest(agent.id)}`, `channel-${digest(agent.id)}`],
+    [`transport-${digest(agent.id)}`],
   );
   assert.equal(
     calls.slice(0, firstCreate).some(({ kind }) => kind === "listDeployments"),
@@ -247,7 +236,7 @@ test("mocked Kubernetes client preflights all credential Secrets before initial 
   );
   assert.deepEqual(
     created.map((secret) => secret.metadata.name),
-    [`transport-${digest(agent.id)}`, `channel-${digest(agent.id)}`],
+    [`transport-${digest(agent.id)}`],
   );
   const transport = created[0].stringData;
   assert.match(transport["app-server-token"], /^[A-Za-z0-9_-]+$/);
@@ -256,38 +245,6 @@ test("mocked Kubernetes client preflights all credential Secrets before initial 
   assert.notEqual(transport["app-server-token"], transport["gateway-token"]);
   assert.notEqual(transport["app-server-token"], transport["gateway-password"]);
   assert.notEqual(transport["gateway-token"], transport["gateway-password"]);
-  assert.deepEqual(created[1].stringData, {
-    SLACK_APP_TOKEN: "xapp-test",
-    SLACK_BOT_TOKEN: "xoxb-test",
-  });
-});
-
-test("mocked Kubernetes client completes missing credential groups without replacing existing Secrets", async () => {
-  const first = credentialFixture();
-  const secrets = {
-    [`transport-${digest(agent.id)}`]: runtimeSecret(
-      first.driver,
-      first.namespaceName,
-      "transport",
-      {
-        "app-server-token": "app-server-token-value",
-        "gateway-token": "gateway-token-value",
-        "gateway-password": "gateway-password-value",
-      },
-    ),
-  };
-  const { driver, created } = credentialFixture({ secrets });
-
-  assert.deepEqual(
-    await driver.provisionAgentRuntimeCredentials(binding(), {
-      slack: { appToken: "xapp-test", botToken: "xoxb-test" },
-    }),
-    { transportConfigured: true, slackConfigured: true },
-  );
-  assert.deepEqual(
-    created.map((secret) => secret.metadata.name),
-    [`channel-${digest(agent.id)}`],
-  );
 });
 
 test("mocked Kubernetes client can recover missing transport when model credentials already exist", async () => {
@@ -301,7 +258,6 @@ test("mocked Kubernetes client can recover missing transport when model credenti
 
   assert.deepEqual(await driver.provisionAgentRuntimeCredentials(binding(), {}), {
     transportConfigured: true,
-    slackConfigured: false,
   });
   assert.deepEqual(
     created.map((secret) => secret.metadata.name),
@@ -322,16 +278,11 @@ test("mocked Kubernetes client returns configured metadata without writes for ex
         "gateway-password": "gateway-password-value",
       },
     ),
-    [`channel-${digest(agent.id)}`]: runtimeSecret(first.driver, first.namespaceName, "channel", {
-      SLACK_APP_TOKEN: "xapp-test",
-      SLACK_BOT_TOKEN: "xoxb-test",
-    }),
   };
   const { driver, created } = credentialFixture({ secrets });
 
   assert.deepEqual(await driver.provisionAgentRuntimeCredentials(binding(), {}), {
     transportConfigured: true,
-    slackConfigured: true,
   });
   assert.equal(created.length, 0);
 });
@@ -442,24 +393,6 @@ test("gateway password env references project only from the Agent transport Secr
   );
 });
 
-test("mocked Kubernetes client rejects existing channel credential conflicts before writes", async () => {
-  const first = credentialFixture();
-  const secrets = {
-    [`channel-${digest(agent.id)}`]: runtimeSecret(first.driver, first.namespaceName, "channel", {
-      SLACK_APP_TOKEN: "different-app-token",
-      SLACK_BOT_TOKEN: "existing-bot-token",
-    }),
-  };
-  const { driver, created } = credentialFixture({ secrets });
-  await assert.rejects(
-    driver.provisionAgentRuntimeCredentials(binding(), {
-      slack: { appToken: "new-app-token", botToken: "existing-bot-token" },
-    }),
-    ResourceConflictError,
-  );
-  assert.equal(created.length, 0);
-});
-
 test("mocked Kubernetes client rejects malformed existing credential Secrets before writes", async () => {
   const first = credentialFixture();
   for (const [name, secret] of [
@@ -489,31 +422,6 @@ test("mocked Kubernetes client rejects malformed existing credential Secrets bef
         },
       ),
     ],
-    [
-      "noncanonical base64 credential",
-      runtimeSecret(
-        first.driver,
-        first.namespaceName,
-        "channel",
-        {},
-        { data: { SLACK_APP_TOKEN: "Zg", SLACK_BOT_TOKEN: encode("bot") } },
-      ),
-    ],
-    [
-      "oversized decoded credential",
-      runtimeSecret(
-        first.driver,
-        first.namespaceName,
-        "channel",
-        {},
-        {
-          data: {
-            SLACK_APP_TOKEN: Buffer.alloc(65_537, 65).toString("base64"),
-            SLACK_BOT_TOKEN: encode("bot"),
-          },
-        },
-      ),
-    ],
   ]) {
     const secrets = { [`${secret.metadata.name}`]: secret };
     const { driver, created } = credentialFixture({ secrets });
@@ -530,10 +438,15 @@ test("mocked Kubernetes client rejects malformed existing credential Secrets bef
 test("mocked Kubernetes client rejects retired model provisioning input without writes", async () => {
   const { driver, calls, created } = credentialFixture();
 
-  await assert.rejects(
-    driver.provisionAgentRuntimeCredentials(binding(), { modelApiKey: "unsupported-model-key" }),
-    DependencyUnavailableError,
-  );
+  for (const input of [
+    { modelApiKey: "unsupported-model-key" },
+    { slack: { appToken: "xapp-test", botToken: "xoxb-test" } },
+  ]) {
+    await assert.rejects(
+      driver.provisionAgentRuntimeCredentials(binding(), input),
+      DependencyUnavailableError,
+    );
+  }
   assert.equal(
     calls.some(({ kind }) => kind === "listDeployments"),
     false,

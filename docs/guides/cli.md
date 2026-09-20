@@ -122,6 +122,26 @@ Agent-owned workspace data; Namespace-owned Configurations and Secrets survive.
 Deletion runs asynchronously. See [Agent deletion](../reference/agents.md#deletion)
 for the full cleanup behavior.
 
+## Provision integration Secrets
+
+Use Secret commands to create or replace Namespace-owned credentials used by
+Agent harness authentication or Configuration Secret bindings. The CLI sends
+protected JSON documents to OCC and prints metadata only; it never returns stored
+values.
+
+```bash
+export OCC_NAMESPACE='<namespace-id>'
+occ secret create --file slack-bot-token-secret.json
+occ secret get '<secret-id>'
+occ secret update '<secret-id>' --file replacement-secret.json
+occ secret delete '<secret-id>'
+```
+
+Bind the returned Secret references through the owning Agent or Configuration and
+grant the consuming Agent service principal exact `operate` permission before
+deployment. See [Configuration secrets and channels](../reference/configuration/secrets.md)
+for binding shape and delivery boundaries.
+
 ## Manage Namespace IAM
 
 Create a Namespace Role and bind it to the Agent's returned

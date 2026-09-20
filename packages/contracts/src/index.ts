@@ -784,16 +784,10 @@ export interface ComputeAgentBinding {
   readonly agent: Readonly<Agent>;
 }
 
-export interface AgentRuntimeCredentialsInput {
-  readonly slack?: {
-    readonly appToken: string;
-    readonly botToken: string;
-  };
-}
+export type AgentRuntimeCredentialsInput = Readonly<Record<never, never>>;
 
 export interface AgentRuntimeCredentialStatus {
   readonly transportConfigured: boolean;
-  readonly slackConfigured: boolean;
 }
 
 export interface ComputePreflightWarning {
@@ -815,6 +809,7 @@ export interface ComputeDriver extends Driver {
     harness: RevisionHarnessDescriptor,
     auth: HarnessAuthSnapshot,
     configuration: OpenClawConfigurationDocument,
+    secretBindings?: SecretBindings,
   ): void;
   preflight?(): Promise<void | ComputePreflightResult>;
   setLifecycleDrivers?(drivers: readonly Driver[]): void;

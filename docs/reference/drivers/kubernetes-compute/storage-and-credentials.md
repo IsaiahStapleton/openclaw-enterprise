@@ -124,10 +124,10 @@ Secret. Kubernetes prepares the projection and explicit login mode during
 workload rendering. Only the combined embedded gateway/Harness or dedicated
 Codex consumer receives it; a dedicated gateway never receives model auth.
 
-If channels are enabled, configure `runtime.channels.secretPrefix` and
-`runtime.channels.proxyUrl`, then provide the Agent's channel credentials in
-its corresponding Secret. Channel credentials are available only to the
-dedicated gateway, never to its Codex Harness.
+If channels are enabled, configure `runtime.channels.proxyUrl`, then store the
+Agent's channel credentials as Namespace Secrets referenced by Configuration
+`secretBindings`. Channel credentials are available only to the dedicated gateway,
+never to its Codex Harness.
 
 Use an approved secret manager, protected files, or standard input when
 creating Secrets. Never expose credentials in command-line arguments or logs.

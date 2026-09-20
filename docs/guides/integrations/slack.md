@@ -19,9 +19,10 @@ go to the Agent's gateway; model credentials are configured separately.
 - Choose a dedicated Agent on Kubernetes and configure its
   [model authentication](../../reference/agents.md#harness-authentication).
   Embedded execution cannot isolate channel credentials from the Harness.
-- To save initial credentials in the console, you need `read` and `operate`
-  on the Agent. The credential form creates missing values before the first
-  deployment; it does not rotate or overwrite existing credentials.
+- To provision generated credentials, you need `read` and `operate` on the Agent.
+  Saving channel Secrets also requires Secret creation, Configuration update, and
+  [Namespace IAM administration](../../reference/authorization.md#manage-namespace-policy)
+  to grant the Agent access to each exact Secret.
 
 ## Connect and verify
 
@@ -29,15 +30,15 @@ go to the Agent's gateway; model credentials are configured separately.
    Slack, enter the channel IDs, and leave **Require mention** enabled for this
    setup. Save. If multiple Agents use this Configuration, the edit also
    affects their future deployments.
-2. Open **Credentials**, enter the Slack app and bot tokens, and select
-   **Save credentials**. Confirm that **Transport** and **Slack** show
-   **Stored**. This confirms storage only; it does not mean Slack accepted
-   the tokens or that the gateway connected.
-3. Select **Deploy saved draft**. If Slack already has credentials and you
-   changed only the channel draft, redeploy to apply the change. If the Agent
-   was deployed before Slack was enabled, ask your platform operator to
-   provision the tokens before redeploying; the console cannot add or rotate
-   them after the first deployment.
+2. Open **Credentials** and select **Provision generated runtime credentials**
+   before the first deployment. Enter the Slack app and bot tokens, then select
+   **Save channel Secrets**. OCC stores them as Namespace Secrets, grants the
+   Agent access, and saves Configuration bindings for gateway delivery. Stored
+   credentials confirm storage only; they do not prove Slack accepted them.
+3. Select **Deploy saved draft** to apply the saved bindings. After a channel
+   draft or Secret value change, explicitly redeploy each consumer. Follow
+   [Secret updates](../../reference/drivers/kubernetes-secret.md#update-and-redeploy)
+   when replacing an existing token.
 4. From a real Slack user account, send an explicit `@mention` to the Agent
    in an allowed channel. Ask it to repeat a short unique phrase. A reply
    containing that phrase confirms that the message reached the Agent and
@@ -46,7 +47,7 @@ go to the Agent's gateway; model credentials are configured separately.
 
 If you manage Configuration through the API, use the
 [native Slack Socket Mode example](../../reference/configuration/secrets.md#native-channel-configuration).
-The console supports the default Socket Mode account and fixed credential
+The console supports the default Socket Mode account and gateway environment
 references; non-Socket settings and mixed per-channel mention settings may
 need an API edit.
 
@@ -76,8 +77,8 @@ bot. To enable one-to-one messages:
   `message.im` subscription, the installed bot token's `im:history` scope,
   and whether the sender's Slack user ID is in **Allowed user IDs**.
 - **Credential save failed or the response was lost:** select **Refresh status**
-  before retrying. The console keeps credential groups already saved and will
-  reject different values for an existing group.
+  before retrying. Inspect saved Secrets, IAM bindings, and Configuration after a
+  partial save; those writes are separate and are not automatically rolled back.
 - **Slack replies with a model error:** check the Agent's model authentication
   and active revision independently. Slack connection alone does not establish
   model access.

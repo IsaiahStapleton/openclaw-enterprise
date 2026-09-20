@@ -93,7 +93,6 @@ function productionInstallation(adminKeyPath) {
             transportSecretPrefix: "agent-transport",
             gatewayStorageClassName: "sqlite-block",
             channels: {
-              secretPrefix: "agent-channels",
               proxyUrl: "http://198.51.100.10:8080",
             },
           },

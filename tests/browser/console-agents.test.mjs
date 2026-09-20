@@ -7,10 +7,10 @@ import test from "node:test";
 
 import { chromium } from "playwright";
 
-import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { createConsoleAppFixture, providerFixtures } from "../helpers/console-app.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 
 async function artifactDirectory(t) {
   const configured = process.env.OCC_TEST_CONSOLE_ARTIFACT_DIR;
@@ -156,11 +156,10 @@ async function seedServiceAccount(state, namespaceId, name, issued = true) {
 }
 
 function nativeAdminComputeDriver(endpoint) {
-  return {
-    id: "console-native-admin-compute",
-    capability: "compute",
+  const driver = createTestKubernetesComputeDriver("console-native-admin-compute");
+
+  return Object.assign(driver, {
     implementation: "test-native-admin-endpoint",
-    validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -179,7 +178,7 @@ function nativeAdminComputeDriver(endpoint) {
     getGatewayEndpoint() {
       return endpoint;
     },
-  };
+  });
 }
 
 function nativeValues(marker, options = {}) {

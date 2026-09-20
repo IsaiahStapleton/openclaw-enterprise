@@ -143,7 +143,6 @@ export const SecretSchema = Type.Object(
 export const AgentRuntimeCredentialStatusSchema = Type.Object(
   {
     transportConfigured: Type.Boolean(),
-    slackConfigured: Type.Boolean(),
   },
   { additionalProperties: false },
 );

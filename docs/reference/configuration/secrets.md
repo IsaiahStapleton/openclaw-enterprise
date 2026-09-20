@@ -73,16 +73,22 @@ substitution, value history, and automatic rotation remain unimplemented.
 ### Native channel configuration
 
 Configure channels directly in the Agent's complete native OpenClaw
-Configuration. The Kubernetes Compute Driver currently supports enabled
-`slack` and `msteams` providers; unknown enabled providers fail closed.
+Configuration. Slack is the channel with live Enterprise integration coverage.
+The Kubernetes Compute Driver recognizes enabled `slack` and `msteams`
+configuration shapes; unknown enabled providers fail closed. Teams requires
+operator-provided ingress and remains unverified end to end.
 `channels.defaults` and `channels.modelByChannel` are shared settings, not
-providers. Each supported channel declares the gateway-only credential values
-it needs:
+providers. The recognized native channel configurations consume these
+gateway-only credential values:
 
 | Provider  | Gateway Secret keys                     |
 | --------- | --------------------------------------- |
 | `slack`   | `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` |
 | `msteams` | `MSTEAMS_APP_PASSWORD`                  |
+
+Every environment SecretRef used by an enabled native channel must have a
+matching `secretBindings` entry before deployment admission. Disabled channel
+provider blocks do not require bindings.
 
 Add a native default Slack account with environment SecretRefs:
 
@@ -123,13 +129,17 @@ application password is an environment SecretRef:
 }
 ```
 
-Set the Agent's `executionMode` to `dedicated`; embedded mode is rejected because
-its combined gateway/Agent cannot isolate channel credentials. Preserve existing
-Codex/model settings and enable each required native channel plugin. Explicitly
-redeploy the Agent to snapshot the updated document; its gateway receives the
-union of enabled providers' credentials from an Agent-specific Kubernetes
-Secret. See
-[Kubernetes runtime credentials](../drivers/kubernetes-compute.md#configuration).
+For Slack setup, set the Agent's `executionMode` to `dedicated`; embedded mode
+is rejected because its combined gateway/Agent cannot isolate channel
+credentials. Preserve existing Codex/model settings and enable the native Slack
+plugin. Explicitly redeploy the Agent to snapshot the updated document. Store
+each channel value as a Namespace Secret and bind its exact reference to the
+native environment destination with `secretBindings`. Grant the consuming
+Agent's returned `servicePrincipalId` access through the
+[Namespace IAM APIs](../authorization.md#manage-namespace-policy). Only its
+dedicated gateway receives these admitted bindings; generated runtime
+credentials contain no channel tokens. See
+[Kubernetes credential ownership](../drivers/kubernetes-compute/storage-and-credentials.md#runtime-credentials).
 
 Teams message ingress requires a separately deployed and reviewed public Bot
 Framework `/api/messages` webhook. Enterprise does not provide that webhook;

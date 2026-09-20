@@ -2076,6 +2076,7 @@ export class OpenClawController {
           { ...approvedHarness, mode: lockedAgent.executionMode },
           harnessAuth,
           admittedConfiguration,
+          configuration.secretBindings,
         );
       } catch {
         throw new ResourceConflictError(
@@ -2772,20 +2773,6 @@ export class OpenClawController {
     }
   }
 
-  private validateRuntimeCredentialValue(value: unknown): asserts value is string {
-    if (
-      typeof value !== "string" ||
-      value.length === 0 ||
-      value.includes("\u0000") ||
-      /[\uD800-\uDFFF]/u.test(value) ||
-      Buffer.byteLength(value, "utf8") > 65_536
-    ) {
-      throw new ScopeViolationError(
-        "Agent runtime credential values must be nonempty UTF-8, without NUL, and at most 65536 bytes.",
-      );
-    }
-  }
-
   private runtimeCredentialsInput(
     input: AgentRuntimeCredentialsInput,
   ): AgentRuntimeCredentialsInput {
@@ -2794,46 +2781,22 @@ export class OpenClawController {
       throw new ScopeViolationError("Agent runtime credentials must be a JSON object.");
     }
     const keys = Object.keys(candidate);
-    if (!keys.every((key) => key === "slack")) {
+    if (keys.length !== 0) {
       throw new ScopeViolationError("Agent runtime credentials contain unsupported fields.");
     }
-    let slack: AgentRuntimeCredentialsInput["slack"];
-    if (candidate.slack !== undefined) {
-      const slackCandidate = asRecord(candidate.slack);
-      if (
-        slackCandidate === undefined ||
-        !["appToken", "botToken"].every((key) => Object.hasOwn(slackCandidate, key)) ||
-        !Object.keys(slackCandidate).every((key) => key === "appToken" || key === "botToken")
-      ) {
-        throw new ScopeViolationError("Agent Slack runtime credentials are invalid.");
-      }
-      this.validateRuntimeCredentialValue(slackCandidate.appToken);
-      this.validateRuntimeCredentialValue(slackCandidate.botToken);
-      slack = {
-        appToken: slackCandidate.appToken,
-        botToken: slackCandidate.botToken,
-      };
-    }
-    return Object.freeze({
-      ...(slack === undefined ? {} : { slack: Object.freeze(slack) }),
-    });
+    return Object.freeze({});
   }
 
   private runtimeCredentialStatus(
     status: AgentRuntimeCredentialStatus,
   ): Readonly<AgentRuntimeCredentialStatus> {
-    if (
-      status === undefined ||
-      typeof status.transportConfigured !== "boolean" ||
-      typeof status.slackConfigured !== "boolean"
-    ) {
+    if (status === undefined || typeof status.transportConfigured !== "boolean") {
       throw new DependencyUnavailableError(
         "The selected compute Driver returned invalid runtime credential metadata.",
       );
     }
     return Object.freeze({
       transportConfigured: status.transportConfigured,
-      slackConfigured: status.slackConfigured,
     });
   }
 
