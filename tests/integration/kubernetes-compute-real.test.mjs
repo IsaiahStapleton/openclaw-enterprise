@@ -1861,7 +1861,7 @@ test(
       });
       assert.equal(created.status, 201, JSON.stringify(created.error));
       assert.equal(typeof created.data.servicePrincipalId, "string");
-      assert.ok(created.data.servicePrincipalId.length > 0);
+      assert.notEqual(created.data.servicePrincipalId.trim(), "");
       await assertDeployDenied(namespaceId, created.data.id, `${label} before model Secret grant`);
       await grantSecretOperate(namespaceId, created.data.servicePrincipalId, secret.data.id, label);
       if (boundSecret !== undefined) {
