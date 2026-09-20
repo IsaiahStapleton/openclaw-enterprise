@@ -155,9 +155,16 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
 - `docs/contributing/` owns onboarding and workflows for people changing the
   platform. Link the root `CONTRIBUTING.md` for contribution policy and the
   relevant reference, flow, or testing page for detailed behavior.
-- The site has two audience sections: **User guide** and **Platform developer
-  guide**. List each page once in `docs/docs.json`, cross-link shared topics,
-  and keep existing file paths and heading anchors when changing navigation.
+- The site has six menu sections: **Getting Started**, **Topics**, **Integrations**,
+  **Operate**, and **Reference** serve people using or administering the product;
+  **Contribute** serves people changing the platform. Each menu switches sidebars.
+  Register each Markdown page once in `docs/docs.json`; put deep implementation
+  and testing pages in the owning tab's `hidden` list when an index links them.
+  Hidden pages keep their routes and search entries. Cross-link shared subjects;
+  keep existing file paths and heading anchors when changing navigation.
+- Use short Title Case sidebar labels and descriptive sentence-case article
+  titles. Use nested groups when they clarify the reader's task; give menus a
+  useful overview and list prerequisite steps before actions that need them.
 - Top-level `specs/` records implementation proposals, milestones, and delivery
   history. Completed specifications do not override current feature reference.
 

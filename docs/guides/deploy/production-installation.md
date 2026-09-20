@@ -1,16 +1,16 @@
 # Install the production control plane
 
-Build and install OCC on Kubernetes, then verify authenticated API access.
-Prepare [standard Kubernetes](kubernetes.md) or [Amazon EKS](eks.md) and
-complete the [production prerequisites](../deploy.md#production-prerequisites)
-first. Run commands from the repository root in one operator shell; retain its
+Build and install the OpenClaw Control Plane (OCC) on Kubernetes, then verify
+authenticated API access. Prepare [standard Kubernetes](kubernetes.md) or
+[Amazon EKS](eks.md) and complete the [production prerequisites](../deploy.md#production-prerequisites)
+first. Run the commands from the repository root in one shell; retain its
 exports and protected files for [Agent deployment](production-agents.md).
 
 ## Build and publish production images
 
 Repository maintainers can use the separately approved
 [private container publication workflow](../../../.github/containers.md).
-The manual operator-controlled registry path below remains available.
+The commands below publish to your own registry.
 
 Build and push two images to a registry your cluster can access:
 
@@ -322,10 +322,11 @@ Expect the displayed `ID` to match the key file's
 and neither the API nor worker mounts the bootstrap PVC.
 
 After the production API authenticates, continue with Namespace preparation,
-Agent deployment, production workload verification, and the production TUI proof.
+Agent deployment, and a [real model-response check](production-agents.md#verify-production-workloads)
+that matches the Agent's native gateway authentication mode.
 
 ## Related
 
 Continue with [production Agent deployment](production-agents.md). For failed
-initialization, preserve state and follow [bootstrap recovery](service-keys.md#recover-an-incomplete-bootstrap)
+initialization, preserve state and follow [bootstrap recovery](../../reference/authentication/service-api-keys.md#recover-an-incomplete-bootstrap)
 and the [production startup flow](../../flows/production-startup.md).

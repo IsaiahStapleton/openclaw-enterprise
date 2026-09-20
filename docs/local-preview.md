@@ -28,15 +28,17 @@ workspace. `docs:install` uses the pinned pnpm version and frozen docs lockfile.
 
 ```sh
 npm run docs:build
-npm run docs:check
-node scripts/verify-workspace-boundary.mjs
+npm run docs:check-length
+git diff --check
 ```
 
-The build renders every Markdown page under `docs/`, including the generated HTTP
-API reference, and checks local page links and heading anchors. Source files,
-deployment assets, and historical specs outside `docs/` link to the Enterprise
-repository on GitHub. These links require repository access. External URLs are
-not fetched by the build.
+The build renders every Markdown page under `docs/`, including pages hidden
+from the sidebar and the generated HTTP API reference. It checks local page
+links and heading anchors, then builds the search index. Source files, deployment
+assets, and historical specs outside `docs/` link to the Enterprise repository
+on GitHub. These links require repository access. External URLs are not fetched.
+Do not add or run tests for documentation changes, including docs-site
+presentation; use the build, formatting, link checks, and visual inspection.
 
 The full repository checks (`pnpm format:check` and `pnpm openapi:check`) require
 the controller workspace dependencies from `pnpm install --frozen-lockfile`.
@@ -46,14 +48,19 @@ The API Markdown can also be checked against the checked-in schema with
 ## Edit the source
 
 Keep Markdown links relative so pages remain readable on GitHub. The
-[documentation map](README.md) remains the canonical content map. `docs/docs.json`
-provides the corresponding site tabs and sidebar groups using the OpenClaw
-Mintlify-compatible navigation structure. Add a page to both when expanding the
-map. Titles come from Markdown headings unless frontmatter supplies a title.
+[documentation map](README.md) links the six menu sections; [`docs/docs.json`](docs.json)
+defines each sidebar. Register each page once, and link it from its owning
+overview. Groups may nest. A page entry can set a short sidebar label using
+`{"page": "guides/quickstart", "label": "Local Setup"}`; the article and browser
+keep the descriptive title from Markdown or frontmatter. Use a tab's `hidden`
+array for a deep page linked by an index: it remains available by URL and search
+without adding another sidebar item. See [Write platform documentation](contributing/documentation.md)
+for menu and naming conventions.
 
 `docs/README.md` renders at `/`; `docs/reference/README.md` renders at `/reference/`.
 Other pages use their source path without `.md`, such as `/guides/quickstart/`.
-Assets under `docs/assets/` are served at `/assets/`.
+Assets under `docs/assets/` are served at `/assets/`. Keep paths and existing
+heading anchors when changing only the navigation or label.
 
 For the generated [HTTP API reference](reference/api.md), edit the owning routes,
 schemas, or generator and run `pnpm openapi:generate`; never edit its output by hand.

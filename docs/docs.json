@@ -1,5 +1,5 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
+  "$schema": "../scripts/docs-site/navigation.schema.json",
   "name": "OpenClaw Enterprise",
   "theme": "mint",
   "colors": {
@@ -15,237 +15,665 @@
         "language": "en",
         "tabs": [
           {
-            "tab": "User guide",
+            "tab": "Getting Started",
             "groups": [
               {
-                "group": "Start here",
+                "group": "Getting Started",
                 "pages": [
-                  "README",
-                  "guides/README",
-                  "guides/concepts",
-                  "guides/quickstart",
-                  "guides/first-agent"
+                  {
+                    "page": "README",
+                    "label": "Overview"
+                  },
+                  {
+                    "page": "guides/concepts",
+                    "label": "Concepts"
+                  }
                 ]
               },
               {
-                "group": "Agents and integrations",
+                "group": "Quickstart",
                 "pages": [
-                  "reference/console",
-                  "reference/console/create-and-deploy",
-                  "reference/agents",
-                  "reference/agents/deployment",
-                  "reference/namespaces",
-                  "reference/configuration",
-                  "reference/configuration/secrets",
-                  "reference/agent-plugins",
-                  "reference/providers",
-                  "reference/harness-execution"
+                  {
+                    "page": "guides/quickstart",
+                    "label": "Local Setup"
+                  }
                 ]
               },
               {
-                "group": "Access and security",
+                "group": "Deploy",
                 "pages": [
-                  "reference/authentication",
-                  "reference/authentication/service-api-keys",
-                  "reference/authorization",
-                  "reference/service-accounts",
-                  "reference/security",
-                  "reference/security/runtime-isolation"
+                  {
+                    "page": "guides/first-agent",
+                    "label": "Deploy Your First Agent"
+                  }
+                ]
+              }
+            ],
+            "hidden": ["guides/README"]
+          },
+          {
+            "tab": "Topics",
+            "groups": [
+              {
+                "group": "Topics",
+                "pages": [
+                  {
+                    "page": "guides/topics/README",
+                    "label": "Overview"
+                  }
                 ]
               },
               {
-                "group": "Install the platform",
+                "group": "Agent",
                 "pages": [
-                  "guides/deploy",
-                  "guides/deploy/kubernetes",
-                  "guides/deploy/eks",
-                  "guides/deploy/local-kubernetes-development",
-                  "guides/deploy/production-installation",
-                  "guides/deploy/local-operations"
+                  {
+                    "page": "guides/topics/agent",
+                    "label": "Overview"
+                  },
+                  {
+                    "page": "reference/agents/deployment",
+                    "label": "Deployment"
+                  },
+                  {
+                    "page": "guides/topics/agent-compute",
+                    "label": "Compute"
+                  },
+                  {
+                    "page": "reference/harness-execution",
+                    "label": "Harness"
+                  },
+                  {
+                    "page": "guides/topics/workspace-files",
+                    "label": "Workspace Files"
+                  },
+                  {
+                    "page": "reference/console",
+                    "label": "Console"
+                  },
+                  {
+                    "page": "reference/console/create-and-deploy",
+                    "label": "Create and Deploy in the Console"
+                  },
+                  {
+                    "page": "guides/topics/agent-troubleshoot",
+                    "label": "Troubleshoot"
+                  }
                 ]
               },
               {
-                "group": "Operate the platform",
+                "group": "Security",
                 "pages": [
-                  "guides/deploy/production-agents",
-                  "guides/deploy/production-handoff",
-                  "guides/deploy/credential-lifecycle",
-                  "guides/deploy/workspace-routing",
-                  "guides/deploy/service-keys",
-                  "guides/observability",
-                  "reference/gateway-routing"
+                  {
+                    "page": "reference/security",
+                    "label": "Overview"
+                  },
+                  {
+                    "group": "IAM",
+                    "pages": [
+                      {
+                        "page": "guides/topics/iam",
+                        "label": "Overview"
+                      },
+                      {
+                        "page": "reference/authentication",
+                        "label": "Authentication"
+                      },
+                      {
+                        "page": "reference/authorization",
+                        "label": "Authorization"
+                      },
+                      {
+                        "page": "reference/service-accounts",
+                        "label": "Service Accounts"
+                      },
+                      {
+                        "page": "reference/authentication/service-api-keys",
+                        "label": "Service API Keys"
+                      }
+                    ]
+                  },
+                  {
+                    "page": "reference/namespaces",
+                    "label": "Namespace"
+                  },
+                  {
+                    "page": "guides/topics/sandbox",
+                    "label": "Sandbox"
+                  },
+                  {
+                    "page": "guides/topics/secrets",
+                    "label": "Secrets"
+                  },
+                  {
+                    "page": "guides/topics/audit-log",
+                    "label": "Audit Log"
+                  }
                 ]
               },
               {
-                "group": "CLI, API, and settings",
+                "group": "Capability",
                 "pages": [
-                  "guides/cli",
-                  "reference/README",
-                  "reference/api",
-                  "reference/settings",
-                  "reference/settings/development",
-                  "reference/settings/production",
-                  "reference/settings/operations"
+                  {
+                    "group": "Plugins",
+                    "pages": [
+                      {
+                        "page": "guides/topics/plugins",
+                        "label": "Overview"
+                      },
+                      {
+                        "page": "guides/topics/plugins-configure",
+                        "label": "Configure"
+                      }
+                    ]
+                  }
                 ]
               },
               {
-                "group": "Choose and configure Drivers",
+                "group": "Configuration",
                 "pages": [
-                  "reference/drivers/selection",
-                  "reference/drivers/compute-matrix",
-                  "reference/drivers/plugin-matrix",
-                  "reference/drivers/docker-compute",
-                  "reference/drivers/kubernetes-compute",
-                  "reference/drivers/kubernetes-compute/networking-and-isolation",
-                  "reference/drivers/kubernetes-compute/storage-and-credentials",
-                  "reference/drivers/ssh-compute",
-                  "reference/drivers/openshell-sandbox",
-                  "reference/drivers/kubernetes-secret",
-                  "reference/drivers/plugin-bundled",
-                  "reference/configuration/kubernetes"
+                  {
+                    "page": "reference/configuration",
+                    "label": "Overview"
+                  },
+                  {
+                    "page": "reference/settings",
+                    "label": "Installation Settings"
+                  },
+                  {
+                    "page": "guides/topics/agent-revisions",
+                    "label": "Agent Revisions"
+                  }
+                ]
+              }
+            ],
+            "hidden": [
+              "reference/configuration/secrets",
+              "reference/security/runtime-isolation",
+              "reference/agents",
+              "reference/agent-plugins"
+            ]
+          },
+          {
+            "tab": "Integrations",
+            "groups": [
+              {
+                "group": "Integrations",
+                "pages": [
+                  {
+                    "page": "guides/integrations/README",
+                    "label": "Overview"
+                  }
+                ]
+              },
+              {
+                "group": "Drivers",
+                "pages": [
+                  {
+                    "page": "guides/integrations/drivers",
+                    "label": "Overview"
+                  },
+                  {
+                    "page": "reference/drivers/selection",
+                    "label": "Quickstart"
+                  },
+                  {
+                    "group": "Compute",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/compute-matrix",
+                        "label": "Compare Drivers"
+                      },
+                      {
+                        "group": "Kubernetes",
+                        "pages": [
+                          {
+                            "page": "reference/drivers/kubernetes-compute",
+                            "label": "Overview"
+                          },
+                          {
+                            "page": "reference/drivers/kubernetes-compute/networking-and-isolation",
+                            "label": "Networking and Isolation"
+                          },
+                          {
+                            "page": "reference/drivers/kubernetes-compute/storage-and-credentials",
+                            "label": "Storage and Credentials"
+                          }
+                        ]
+                      },
+                      {
+                        "page": "reference/drivers/ssh-compute",
+                        "label": "SSH"
+                      },
+                      {
+                        "page": "reference/drivers/docker-compute",
+                        "label": "Docker and Podman"
+                      }
+                    ]
+                  },
+                  {
+                    "group": "Sandbox",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/openshell-sandbox",
+                        "label": "OpenShell"
+                      }
+                    ]
+                  },
+                  {
+                    "group": "Secrets",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/kubernetes-secret",
+                        "label": "Kubernetes"
+                      }
+                    ]
+                  },
+                  {
+                    "group": "Plugins",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/plugin-matrix",
+                        "label": "Compare Drivers"
+                      },
+                      {
+                        "page": "reference/drivers/plugin-bundled",
+                        "label": "Bundled"
+                      }
+                    ]
+                  },
+                  {
+                    "group": "Configuration",
+                    "pages": [
+                      {
+                        "page": "reference/configuration/kubernetes",
+                        "label": "Kubernetes"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "group": "Providers",
+                "pages": [
+                  {
+                    "page": "reference/providers",
+                    "label": "Overview"
+                  },
+                  {
+                    "page": "guides/integrations/chatgpt",
+                    "label": "ChatGPT"
+                  }
+                ]
+              },
+              {
+                "group": "Channels",
+                "pages": [
+                  {
+                    "page": "guides/integrations/slack",
+                    "label": "Slack"
+                  }
                 ]
               }
             ]
           },
           {
-            "tab": "Platform developer guide",
+            "tab": "Operate",
             "groups": [
               {
-                "group": "Start contributing",
+                "group": "Operate",
                 "pages": [
-                  "contributing/README",
-                  "contributing/first-change",
-                  "layout",
-                  "testing/developer-skills",
-                  "testing/autoreview"
+                  {
+                    "page": "guides/operate/README",
+                    "label": "Overview"
+                  }
                 ]
               },
               {
-                "group": "Architecture and design",
+                "group": "Installation",
                 "pages": [
-                  "ARCHITECTURE",
-                  "design",
-                  "design/resources",
-                  "design/access",
-                  "design/workloads",
-                  "design/drivers",
-                  "design/safeguards"
+                  {
+                    "page": "guides/deploy",
+                    "label": "Overview"
+                  },
+                  {
+                    "page": "guides/deploy/production-installation",
+                    "label": "Control Plane Setup"
+                  },
+                  {
+                    "page": "guides/deploy/kubernetes",
+                    "label": "Kubernetes"
+                  },
+                  {
+                    "page": "guides/deploy/eks",
+                    "label": "Amazon EKS"
+                  },
+                  {
+                    "group": "Settings",
+                    "pages": [
+                      {
+                        "page": "reference/settings/production",
+                        "label": "Production"
+                      },
+                      {
+                        "page": "reference/settings/operations",
+                        "label": "Workers and Database"
+                      }
+                    ]
+                  }
                 ]
               },
               {
-                "group": "Platform internals",
+                "group": "Production Agents",
                 "pages": [
-                  "reference/controller",
-                  "reference/controller/reconciliation",
-                  "reference/platform-repositories",
-                  "reference/settings/programmatic"
+                  {
+                    "page": "guides/deploy/production-agents",
+                    "label": "Deployment"
+                  },
+                  {
+                    "page": "guides/operate/model-verification",
+                    "label": "Model Response Verification"
+                  },
+                  {
+                    "page": "guides/deploy/production-handoff",
+                    "label": "Production Readiness"
+                  }
                 ]
               },
               {
-                "group": "Driver contracts",
+                "group": "Networking and Private Access",
                 "pages": [
-                  "reference/drivers/compute",
-                  "reference/drivers/configuration",
-                  "reference/drivers/iam",
-                  "reference/drivers/plugin",
-                  "reference/drivers/sandbox",
-                  "reference/drivers/secret",
-                  "reference/drivers/service-account"
+                  {
+                    "page": "guides/deploy/workspace-routing",
+                    "label": "Workspace Routing"
+                  },
+                  {
+                    "page": "reference/gateway-routing",
+                    "label": "Gateway Routing"
+                  }
                 ]
               },
               {
-                "group": "Startup and operations internals",
+                "group": "Monitoring",
                 "pages": [
-                  "flows/platform-startup",
-                  "flows/production-startup",
-                  "flows/docker-compose-development",
-                  "flows/docker-compose-development/startup",
-                  "flows/docker-compose-development/agent-execution",
-                  "flows/common-logging",
-                  "flows/platform-startup/history"
+                  {
+                    "page": "guides/observability",
+                    "label": "Observability"
+                  },
+                  {
+                    "page": "guides/operate/troubleshooting",
+                    "label": "Troubleshoot"
+                  }
                 ]
               },
               {
-                "group": "Resource and identity internals",
+                "group": "Maintenance and Recovery",
                 "pages": [
-                  "flows/controller-worker",
-                  "flows/platform-console",
-                  "flows/platform-console/agent-editing",
-                  "flows/configuration-driver",
-                  "flows/configuration-driver/persistence-and-revisions",
-                  "flows/local-password-authentication",
-                  "flows/native-service-account-credential-delivery",
-                  "flows/secret-storage-and-delivery",
-                  "flows/service-account-driver-credential-delivery",
-                  "flows/service-api-keys"
-                ]
-              },
-              {
-                "group": "Agent and infrastructure internals",
-                "pages": [
-                  "flows/harness-execution-topology",
-                  "flows/compute-driver-lifecycle-hooks",
-                  "flows/driver-plugin-loading",
-                  "flows/agent-plugins",
-                  "flows/kubernetes-existing-namespace-placement",
-                  "flows/production-tui",
-                  "flows/production-tui/native-client",
-                  "flows/workspace-files",
-                  "flows/pr-24-ssh-compute"
-                ]
-              },
-              {
-                "group": "Testing and CI",
-                "pages": [
-                  "testing/README",
-                  "testing/local",
-                  "testing/ci",
-                  "flows/github-actions-testing",
-                  "flows/github-actions-testing/preparation"
-                ]
-              },
-              {
-                "group": "Infrastructure tests",
-                "pages": [
-                  "testing/postgresql",
-                  "testing/images",
-                  "testing/docker",
-                  "testing/ssh",
-                  "testing/kubernetes",
-                  "testing/gateway-routing",
-                  "testing/production-tui"
-                ]
-              },
-              {
-                "group": "Integration tests",
-                "pages": [
-                  "testing/slack",
-                  "testing/service-accounts",
-                  "testing/plugins",
-                  "testing/openshell"
-                ]
-              },
-              {
-                "group": "Writing documentation",
-                "pages": ["local-preview", "driver-docs-inventory", "base-driver-docs-template"]
-              },
-              {
-                "group": "Documentation inventory",
-                "pages": [
-                  "documentation-inventory",
-                  "documentation-inventory/gaps",
-                  "documentation-inventory/getting-started",
-                  "documentation-inventory/topics",
-                  "documentation-inventory/integrations-reference",
-                  "documentation-inventory/contribute-design",
-                  "documentation-inventory/contribute-flows",
-                  "documentation-inventory/contribute-development",
-                  "documentation-inventory/repository-guidance",
-                  "documentation-inventory/repository-specs-1",
-                  "documentation-inventory/repository-specs-2",
-                  "documentation-inventory/repository-specs-3"
+                  {
+                    "page": "guides/deploy/credential-lifecycle",
+                    "label": "Credential Rotation"
+                  }
                 ]
               }
+            ],
+            "hidden": ["guides/deploy/service-keys", "guides/deploy/local-operations"]
+          },
+          {
+            "tab": "Reference",
+            "groups": [
+              {
+                "group": "Reference",
+                "pages": [
+                  {
+                    "page": "reference/README",
+                    "label": "Overview"
+                  }
+                ]
+              },
+              {
+                "group": "CLI",
+                "pages": [
+                  {
+                    "page": "guides/cli",
+                    "label": "Setup"
+                  },
+                  {
+                    "page": "reference/cli",
+                    "label": "Command Reference"
+                  }
+                ]
+              },
+              {
+                "group": "HTTP API",
+                "pages": [
+                  {
+                    "page": "guides/http-api",
+                    "label": "Quickstart"
+                  },
+                  {
+                    "page": "reference/api",
+                    "label": "API Reference"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Contribute",
+            "groups": [
+              {
+                "group": "Contribute",
+                "pages": [
+                  {
+                    "page": "contributing/README",
+                    "label": "Overview"
+                  }
+                ]
+              },
+              {
+                "group": "Design",
+                "pages": [
+                  {
+                    "page": "contributing/design",
+                    "label": "Overview"
+                  },
+                  {
+                    "page": "ARCHITECTURE",
+                    "label": "Current Architecture"
+                  },
+                  {
+                    "page": "design",
+                    "label": "Target Architecture"
+                  },
+                  {
+                    "page": "reference/controller",
+                    "label": "Controller"
+                  },
+                  {
+                    "page": "reference/controller/reconciliation",
+                    "label": "Reconciliation"
+                  },
+                  {
+                    "page": "reference/platform-repositories",
+                    "label": "Data and Storage"
+                  },
+                  {
+                    "page": "contributing/driver-development",
+                    "label": "Driver Development"
+                  },
+                  {
+                    "group": "Driver Contracts",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/compute",
+                        "label": "Compute"
+                      },
+                      {
+                        "page": "reference/drivers/configuration",
+                        "label": "Configuration"
+                      },
+                      {
+                        "page": "reference/drivers/iam",
+                        "label": "IAM"
+                      },
+                      {
+                        "page": "reference/drivers/plugin",
+                        "label": "Plugin"
+                      },
+                      {
+                        "page": "reference/drivers/sandbox",
+                        "label": "Sandbox"
+                      },
+                      {
+                        "page": "reference/drivers/secret",
+                        "label": "Secret"
+                      },
+                      {
+                        "page": "reference/drivers/service-account",
+                        "label": "Service Account"
+                      }
+                    ]
+                  },
+                  {
+                    "page": "contributing/runtime-flows",
+                    "label": "Runtime Flows"
+                  }
+                ]
+              },
+              {
+                "group": "Local Development",
+                "pages": [
+                  {
+                    "page": "contributing/first-change",
+                    "label": "Quickstart"
+                  },
+                  {
+                    "page": "contributing/local-development",
+                    "label": "Environment"
+                  },
+                  {
+                    "page": "flows/docker-compose-development",
+                    "label": "Docker and Podman"
+                  },
+                  {
+                    "page": "guides/deploy/local-kubernetes-development",
+                    "label": "Kubernetes"
+                  },
+                  {
+                    "page": "testing/developer-skills",
+                    "label": "Tools"
+                  },
+                  {
+                    "page": "testing/autoreview",
+                    "label": "Code Review"
+                  },
+                  {
+                    "group": "Testing and CI",
+                    "pages": [
+                      {
+                        "page": "testing/README",
+                        "label": "Overview"
+                      },
+                      {
+                        "page": "testing/local",
+                        "label": "Local Tests"
+                      },
+                      {
+                        "page": "testing/ci",
+                        "label": "CI"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "group": "Repository",
+                "pages": [
+                  {
+                    "page": "layout",
+                    "label": "Repository Layout"
+                  }
+                ]
+              },
+              {
+                "group": "Documentation",
+                "pages": [
+                  {
+                    "page": "contributing/documentation",
+                    "label": "Overview"
+                  },
+                  {
+                    "page": "local-preview",
+                    "label": "Preview and Validate"
+                  },
+                  {
+                    "page": "base-driver-docs-template",
+                    "label": "Driver Docs"
+                  },
+                  {
+                    "page": "documentation-inventory",
+                    "label": "Inventory"
+                  }
+                ]
+              }
+            ],
+            "hidden": [
+              "reference/settings/development",
+              "design/resources",
+              "design/access",
+              "design/workloads",
+              "design/drivers",
+              "design/safeguards",
+              "reference/settings/programmatic",
+              "flows/platform-startup",
+              "flows/production-startup",
+              "flows/docker-compose-development/startup",
+              "flows/docker-compose-development/agent-execution",
+              "flows/common-logging",
+              "flows/platform-startup/history",
+              "flows/controller-worker",
+              "flows/platform-console",
+              "flows/platform-console/agent-editing",
+              "flows/configuration-driver",
+              "flows/configuration-driver/persistence-and-revisions",
+              "flows/local-password-authentication",
+              "flows/native-service-account-credential-delivery",
+              "flows/secret-storage-and-delivery",
+              "flows/service-account-driver-credential-delivery",
+              "flows/service-api-keys",
+              "flows/harness-execution-topology",
+              "flows/compute-driver-lifecycle-hooks",
+              "flows/driver-plugin-loading",
+              "flows/agent-plugins",
+              "flows/kubernetes-existing-namespace-placement",
+              "flows/production-tui",
+              "flows/production-tui/native-client",
+              "flows/workspace-files",
+              "flows/pr-24-ssh-compute",
+              "flows/github-actions-testing",
+              "flows/github-actions-testing/preparation",
+              "testing/postgresql",
+              "testing/images",
+              "testing/docker",
+              "testing/ssh",
+              "testing/kubernetes",
+              "testing/gateway-routing",
+              "testing/production-tui",
+              "testing/slack",
+              "testing/service-accounts",
+              "testing/plugins",
+              "testing/openshell",
+              "driver-docs-inventory",
+              "documentation-inventory/gaps",
+              "documentation-inventory/getting-started",
+              "documentation-inventory/topics",
+              "documentation-inventory/integrations-reference",
+              "documentation-inventory/contribute-design",
+              "documentation-inventory/contribute-flows",
+              "documentation-inventory/contribute-development",
+              "documentation-inventory/repository-guidance",
+              "documentation-inventory/repository-specs-1",
+              "documentation-inventory/repository-specs-2",
+              "documentation-inventory/repository-specs-3"
             ]
           }
         ]

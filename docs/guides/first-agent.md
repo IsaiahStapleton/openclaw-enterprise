@@ -1,117 +1,105 @@
 # Deploy your first Agent
 
-Create an Agent in an existing OpenClaw Enterprise installation, request its
-first deployment, and check what the console can tell you. This walkthrough
-uses a Kubernetes installation, Dedicated execution, and an existing OpenAI API
-key stored as a platform Secret. Leave Slack and Microsoft Teams disabled for
-this first deployment.
+Create your own Agent in the Kubernetes installation from [Local setup](quickstart.md),
+deploy it, and get a real response from an OpenAI model. You choose the Agent
+name and supply your own OpenAI API key. The Agent stays in your installation
+after the command exits.
 
 ## Before you start
 
-If the platform is not set up yet, start with the [Quickstart](quickstart.md).
-To run this walkthrough locally, use the
-[local Kubernetes setup](deploy/local-kubernetes-development.md); the default
-Docker or Podman profile cannot deploy Agents. If your organization already has
-a Kubernetes-backed installation, you can skip setup.
+- Complete [Local setup](quickstart.md) and leave the installation running.
+- Use the same checkout and development state directory. If you set
+  `OCC_DEVELOPMENT_STATE_DIRECTORY` during setup, use the same value here.
+- Have an OpenAI API key that can use `gpt-5.1`, the default model. To use a
+  different model available to your project, set `OPENCLAW_FIRST_AGENT_MODEL`
+  to its plain ID, without `openai/`.
+- Keep the key out of commands, Configuration JSON, and chat. The interactive
+  command prompts for it without echoing it. For automation, set
+  `OPENAI_API_KEY_FILE` to a private file containing the key, or supply
+  `OPENAI_API_KEY` through your environment's secret manager.
 
-Once the installation is ready, ask your platform operator for:
-
-- The console URL and your provisioned email and password. The console has no
-  public signup or password recovery.
-- A Namespace you can read that is already `ready`.
-- Permission to create Agents and Configurations in that Namespace, read the
-  Agent and its Configuration and revisions, operate the Agent to save its
-  runtime credentials, and deploy it. See [authorization](../reference/authorization.md).
-- The ID of a same-Namespace Secret containing an OpenAI API key with access to
-  the intended model. You need `operate` permission on the Secret to select it;
-  the new Agent's own identity also needs `operate` on it before deployment.
-  Share the Secret ID, never the key itself. See
-  [model credential permissions](../reference/agents.md#harness-authentication).
-
-If your team uses an issued ChatGPT service account instead, it requires
-Dedicated execution and the matching Provider. Ask your operator to confirm the
-account and grant access before following the
-[console credential instructions](../reference/console/create-and-deploy.md#create-an-agent).
-If you cannot select the matching Provider, ask your operator to handle that step.
+The walkthrough runs from the repository root on your own development
+installation. For a shared or production installation, follow
+[Deploy and verify production Agents](deploy/production-agents.md).
 
 ## Steps
 
-### 1. Sign in and choose your Namespace
+<span id="1-sign-in-and-choose-your-namespace"></span>
+<span id="1.-sign-in-and-choose-your-namespace"></span>
 
-Open the console URL, enter your email as **Username**, enter your password,
-and select **Login**. Open **Namespaces** from the sidebar and confirm your
-assigned Namespace shows `ready`. In the bottom **OpenClaw Enterprise** menu,
-choose **Namespace**, select it, then open **Agents**.
+### 1. Check that the Namespace is ready
 
-If the Namespace is missing, stays in `provisioning`, or shows `failed`, ask
-an operator to confirm access or provisioning before continuing. See
-[Namespace status](../reference/namespaces.md#lifecycle).
+In the terminal where you set the OCC URL and service-key file during
+[Local setup](quickstart.md#read-the-installation-with-the-bootstrap-service-key), run:
 
-### 2. Create the Agent
+```bash
+./bin/occ namespace list
+```
 
-1. On **Agents**, select **Create Agent**.
-2. Enter a name unique to this Namespace, for example `first-agent`.
-3. Leave **Execution mode** set to **Dedicated** and **Provider (optional)** set
-   to **None** for this OpenAI API key example.
-4. Under **Harness authentication**, choose **OpenAI API key** and enter the
-   Secret ID your operator supplied. Do not paste the key or put it in
-   **Configuration JSON**.
-5. Review **Configuration JSON**. The starter uses `codex/gpt-5.1`; it does not
-   verify that your key can use that model. If your team uses another model, ask
-   for the corresponding configuration before saving. Leave the channel cards
-   disabled.
-6. Select **Create Agent**. Successful creation opens the Agent's saved draft.
-   Note the Agent ID for your operator if they still need to grant it Secret
-   access.
+Wait until `default` shows `ready`. This is where the command will create your
+Agent.
 
-The draft is saved, but nothing is running yet.
+<span id="2-create-the-agent"></span>
+<span id="2.-create-the-agent"></span>
+<span id="3-save-credentials-and-request-deployment"></span>
+<span id="3.-save-credentials-and-request-deployment"></span>
 
-### 3. Save credentials and request deployment
+### 2. Create and deploy your Agent
 
-1. Open **Credentials** on the saved draft.
-2. If **Transport** is **Missing**, select **Save credentials**. Wait until it
-   shows **Stored**. The platform generates these connection credentials; this
-   step does not check your model key.
-3. Select **Deploy saved draft** once the Agent can use the Secret. The console
-   opens **Workspace files** when the deployment request is accepted. The files
-   can remain unavailable while the gateway starts; opening this tab does not
-   mean that deployment finished.
+Choose a name for your Agent; this example uses `my-agent`:
 
-If a request loses its response, do not immediately repeat it. See
-[troubleshooting](#troubleshooting) before submitting another request.
+```bash
+node scripts/first-agent.mjs my-agent --prompt 'What is 2 + 2?'
+```
 
-### 4. Check what actually deployed
+Enter the OpenAI API key when prompted. The command stores it in a platform
+Secret, creates the named Agent with the Embedded OpenClaw Harness, grants that
+Agent access to its Secret, and requests the first deployment. It then waits
+for the gateway and sends a verification prompt before sending your own. Initial
+startup can take several minutes.
 
-On the Agent detail page, open **Configuration**, refresh, and look for
-**Selected revision**. The first revision normally appears as **v1** if it
-becomes active. A later deployment can change which revision is selected.
+This starter answers model prompts only. Tools are disabled, so it cannot read
+or edit files or run shell commands. The command refuses to reuse it if you
+change its Configuration elsewhere. For an Agent that can use tools, create a
+separate Agent; see [Agent Configuration](../reference/configuration.md) and
+[Plugins](../reference/agent-plugins.md).
 
-| What you see                                       | What it establishes                                                                                                                                               |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The deployment opens Workspace files               | The platform accepted the revision and queued deployment; it may still be waiting for a worker.                                                                   |
-| The **Selected revision** is the expected revision | The control plane marked that revision active. It does not show live gateway health or prove that the model responds.                                             |
-| An operator verifies a model response              | The installed Agent answered through its gateway and model using the operator's [runtime verification](deploy/production-agents.md#attach-with-the-openclaw-tui). |
+Keep the command running until it prints `Model response verified:` followed by
+the phrase it asked the model to repeat. Under `Agent response:`, it then prints
+the model's answer to your question. It also prints the Agent ID, active
+revision, and console URL. A deployment being accepted or a revision showing
+as active does not establish that the model responded; the returned answer does.
 
-The console always shows **Serving status unavailable** and has no browser chat.
-If you need to know that the Agent can answer, give an operator the Namespace,
-Agent ID, and expected revision and ask them to verify the runtime. After the
-active gateway is reachable, you can open **Workspace files** again; see
-[workspace file access](../reference/console.md#edit-workspace-files).
+<span id="4-check-what-actually-deployed"></span>
+<span id="4.-check-what-actually-deployed"></span>
 
-## Troubleshooting
+### 3. Find your Agent in the console
 
-- **You cannot sign in or see your Namespace:** ask the operator to confirm
-  your provisioned account and access. The console cannot reset your password.
-- **Creation was interrupted:** check the Agent list before starting again. An
-  operator can also check the saved Configurations. If the form shows a saved
-  Configuration ID and confirms Agent creation failed, correct the name or
-  permissions and retry on that form to reuse it. See
-  [creation recovery](../reference/console/create-and-deploy.md#create-an-agent).
-- **Credentials or deployment had an unknown outcome:** use **Refresh status**
-  for credentials; inspect the Agent and its revision history before repeating
-  deployment. The earlier request may have succeeded. See
-  [deployment recovery](../reference/console/create-and-deploy.md#deploy-a-saved-draft).
-- **Deployment is blocked or no revision becomes selected:** confirm **Transport**
-  is **Stored**, then ask your operator to check the Agent and Secret permissions
-  and the [deployment status](../reference/agents.md#deployment-status). Include
-  the Namespace, Agent ID, and any request ID shown; do not send credential values.
+Open the console link from the command and sign in with the local credentials
+from [Local setup](quickstart.md#open-the-platform-console). Under
+**Configuration**, **Selected revision** shows the active revision. The console
+has no browser chat and reports **Serving status unavailable**; use the model
+response printed by the command as verification. This local setup does not
+configure browser access to workspace files.
+
+The Agent remains available after the command exits. Run the same command with
+the same Agent name and a different `--prompt` to ask another question; you do
+not need to enter the model key again. Stopping the local stack
+with `dev down` [deletes the installation and its Agents](quickstart.md#clean-up-and-stop).
+
+<span id="troubleshooting"></span>
+
+## Troubleshoot
+
+- **`default` stays in `provisioning` or fails:** [check that OCC and Kubernetes are reachable](deploy/local-kubernetes-development.md#verify-the-local-boundary),
+  then check the [Namespace status](../reference/namespaces.md#lifecycle).
+- **A name is already in use:** use a new name if the existing Agent was
+  created through the console or another tool. If this command created it,
+  rerun with the same name to
+  verify that Agent instead of creating a duplicate.
+- **Deployment or the model request fails:** confirm the model is available to
+  your OpenAI project and the cluster can reach the provider. To replace an
+  invalid key, run `node scripts/first-agent.mjs my-agent --replace-key` and
+  supply the new key when prompted. An active revision without
+  `Model response verified` is not a successful model check. See
+  [Troubleshoot Agents](topics/agent-troubleshoot.md).

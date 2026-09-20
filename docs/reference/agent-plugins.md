@@ -1,42 +1,43 @@
 # Agent plugins
 
-An Agent owns desired plugin selections independently of its reusable
-[Configuration](configuration.md). Plugin changes take effect on the next
-successful deployment. They never modify another Agent or an active revision.
-The Installation selects one bundled [PluginDriver](drivers/plugin.md). Agent
-create/update stores structurally valid desired policy; Agent startup resolves
-the current curated catalog metadata, validates native support, and translates
-policy into runtime configuration.
+Plugins add selected tools or integrations to an Agent. Each Agent saves its
+own selections separately from its reusable [Configuration](configuration.md).
+Changes apply on the next successful deployment; they do not change another
+Agent or an active revision. New Agents start without user-selected plugins.
+
+Use [Configure Agent plugins](../guides/topics/plugins-configure.md) to select,
+deploy, and check a plugin. To deploy plugins, the Installation must explicitly
+select a bundled [Plugin Driver](drivers/plugin.md); none is selected by
+default. OpenClaw Control Plane (OCC) can save a valid request even when the
+selected Driver or runtime cannot support it; startup verifies the catalog and
+approval policy.
 
 ## Current support
 
-OpenClaw supports the bundled Diffs selection, plugin enable/disable, and
-`always`/`never` policy. All curated catalog entries currently return
-`tools:null`, so saved tool and category policy starts a candidate that fails
-or remains unready with startup diagnostics.
+Embedded OpenClaw supports the bundled Diffs plugin, enabling or disabling it,
+and the `always` and `never` approval policies. Its curated entries currently
+return `tools: null`. A saved tool or category policy therefore prevents the
+new deployment from becoming ready.
 
-Codex discovers installable entries from the existing `openai-curated-remote`
-catalog, supports a plugin-free runtime baseline, and enables selected-only
-curated apps for dedicated Codex Agents when the requested policy can be
-represented by the existing OpenClaw Codex bridge.
-`approvalMode:"auto"` enables a selected curated app with native Codex auto
-approval semantics; `approvalMode:"never"` or `enabled:false` renders a blocked
-bridge entry. Enterprise API fields use camelCase. The optional
-`approvalsReviewer` value maps to native Codex app
-reviewer configuration. Codex `always` maps to per-plugin `allow_destructive_actions:true`: supported approval
-requests are accepted without a user prompt. `always` with explicit
-`approvalsReviewer:"auto_review"` fails startup because native AutoReview can run
+Dedicated Codex Agents can enable selected apps from the
+`openai-curated-remote` catalog when the Codex runtime can apply the requested
+policy. Nothing is enabled by default. `approvalMode: "auto"` uses native Codex
+approval behavior; `approvalMode: "never"` or `enabled: false` blocks the app.
+`always` accepts supported requests without prompting and maps to native
+`allow_destructive_actions: true`. Combining `always` with
+`approvalsReviewer: "auto_review"` fails startup: native AutoReview can run
 before the bridge receives the request. `prompt`, category overrides, and tool
-overrides fail startup when the native runtime cannot represent them exactly.
-Linear and Google Calendar are test fixtures, not production allowlist entries.
+overrides also fail startup when the runtime cannot apply them exactly.
+`approvalsReviewer` maps to the native Codex app reviewer. Linear and Google
+Calendar are test fixtures, not a production allowlist.
 
 ## Lifecycle
 
-New Agents have no desired user plugins. Adding a plugin map entry records
-install intent; it does not install a package in the controller or running
-Agent. Setting `enabled:false` retains the selection but blocks it at runtime
-when represented natively. Removing the map entry removes desired selection.
-Neither operation immediately revokes an active tool or interrupts a turn.
+Adding a plugin to the Agent requests installation on deployment; it does not
+install a package in the controller or running Agent. Setting `enabled: false`
+keeps the selection but blocks it where the runtime supports that policy.
+Removing the entry clears the selection. Neither operation immediately revokes
+an active tool or interrupts a turn.
 
 Deployment freezes requested selections and owning Driver identity in the
 AgentRevision. It does not freeze resolved Codex release identity, app mapping,
@@ -52,10 +53,11 @@ rejection or plugin authentication requirement disables that selection while
 other successfully prepared plugins can serve. Ordinary retirement removes
 old workload state, but does not delete the Agent-owned database.
 
-Read `Agent.plugins` for saved selections and the active AgentRevision for its
-requested plugin snapshot. Check deployment status for startup outcomes;
-`activeRevisionId` alone is not installation evidence because the worker records
-the pointer before runtime activation completes. Saved configuration remains
+Read `Agent.plugins` for saved selections and the AgentRevision for the
+selections requested by that deployment. Check
+[deployment status](agents.md#deployment-status) for startup results.
+`activeRevisionId` is not evidence that installation succeeded: the worker
+records it before runtime activation completes. Saved selections remain
 readable if the catalog entry or Driver disappears.
 
 For Compute-owned Kubernetes embedded OpenClaw and dedicated Codex workloads,
@@ -90,6 +92,10 @@ endpoint, or plugin-tool invocation endpoint.
 | ------------------------------------------------ | --------------------------------------------- | ---------------------------------------------- |
 | `POST /namespaces/:namespaceId/agents`           | Agent create body with optional `plugins` map | `201`, Agent response containing the saved map |
 | `PATCH /namespaces/:namespaceId/agents/:agentId` | Agent update body with optional `plugins` map | `200`, Agent response containing the saved map |
+
+Every Agent update must include `configurationId`, even when only plugins
+change. Agent creation also requires `name`. See the
+[Agent request contract](agents.md#editable-configuration).
 
 Agent creation requires Agent `create` on the Namespace and the existing exact
 Configuration and ServiceAccount reads. Agent update requires exact-Agent
@@ -131,11 +137,12 @@ optional override, replace the plugin entry without that field. To remove one
 tool override, replace the `tools` map without that tool ID. To remove all
 plugin selections, update the Agent with `"plugins": {}`.
 
-For example, create or update an Agent with the available OpenClaw entry, then
-explicitly deploy the Agent:
+For example, update an Agent with the available OpenClaw entry, using the
+Agent's current Configuration ID, then explicitly deploy the Agent:
 
 ```json
 {
+  "configurationId": "cfg_123e4567-e89b-42d3-a456-426614174000",
   "plugins": {
     "occ-plugin:diffs": {
       "enabled": true,
@@ -149,6 +156,7 @@ A later Agent update can disable that selection without deleting it:
 
 ```json
 {
+  "configurationId": "cfg_123e4567-e89b-42d3-a456-426614174000",
   "plugins": {
     "occ-plugin:diffs": {
       "enabled": false,
@@ -159,15 +167,16 @@ A later Agent update can disable that selection without deleting it:
 ```
 
 The following illustrates the nested request shape only. The current Diffs
-catalog lacks reliable tool metadata, so this can be saved as desired state but
-will fail the deployment/startup candidate with startup diagnostics:
+catalog lacks tool metadata, so the API can save this request, but the
+deployment will not become ready:
 
 ```json
 {
+  "configurationId": "cfg_123e4567-e89b-42d3-a456-426614174000",
   "plugins": {
     "occ-plugin:diffs": {
       "enabled": true,
-      "approvalMode": "auto",
+      "approvalMode": "always",
       "destructiveActions": "never",
       "writes": "prompt",
       "tools": {
@@ -263,7 +272,7 @@ the deployment/startup candidate when the selected Driver cannot represent them.
 - `409`: ordinary Agent conflict, such as duplicate name.
 - `503`: temporarily unavailable platform dependency.
 
-Errors use `{error,meta:{requestId}}`, with no `data` field. The
+Errors use `{error,meta:{requestId}}`, with no top-level `data` field. The
 [generated API reference](api.md) owns the full error envelope shape.
 
 Structurally invalid Agent writes fail atomically before save. Catalog
@@ -281,7 +290,8 @@ An approval setting does not grant filesystem access or isolate plugin code.
 
 ## Related documentation
 
-- [PluginDriver](drivers/plugin.md): selection, catalogs, mapping, and runtime limits.
+- [Configure Agent plugins](../guides/topics/plugins-configure.md): save selections, deploy, and check the result.
+- [Plugin Driver](drivers/plugin.md): selection, catalogs, mapping, and runtime limits.
 - [Agent plugin flow](../flows/agent-plugins.md): request, admission, and preparation.
 - [Agent plugin testing](../testing/plugins.md): contributor fixtures and proof notes.
 - [Agent lifecycle](agents.md) and [deployment](../guides/deploy.md).

@@ -1,24 +1,22 @@
 # Prepare a production handoff
 
-Use this guide after [deploying and verifying production Agents](production-agents.md#verify-production-workloads)
-to decide whether a Kubernetes installation is ready for one business workflow.
-Record the operating owners, access decisions, and evidence in your organization's
-private operations record. The deployment guides establish installation and
-runtime checks; they do not establish an SLA, regulatory compliance, or recovery
-objectives for your workload.
+Decide whether a Kubernetes installation is ready for a business workflow
+after [deploying and verifying production Agents](production-agents.md#verify-production-workloads).
+Record who operates it, access decisions, and evidence in
+your organization's private operations record. The deployment guides cover
+installation and runtime checks; your organization is responsible for service
+commitments, regulatory compliance, and recovery targets for the workload.
 
 ## Choose the first workflow
 
-Start with a bounded task and a small group. For example, let an Agent read a
+Start with one task and a small group. For example, let an Agent read a
 support queue and draft replies before enabling customer-facing sends. Name the
 business owner, acceptable output quality, response time, cost, and the person
 who handles exceptions. Use test records and a private test channel for the
 initial checks.
 
 Confirm that the organization can operate the host infrastructure, database,
-credentials, and integrations. A managed service may fit better when no team owns
-those responsibilities. A fixed sequence of deterministic steps may be simpler
-in an existing workflow system.
+credentials, and integrations before relying on the workflow.
 
 ## Assign operating ownership
 

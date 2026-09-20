@@ -1,9 +1,8 @@
 # Platform console
 
 Use the browser console to sign in, choose a Namespace, create and deploy an
-Agent, edit its Slack or Microsoft Teams draft settings, and manage supported
-credentials and live workspace files. To walk through the first deployment on
-an existing Installation, follow [Deploy your first Agent](../guides/first-agent.md).
+Agent, edit its Slack draft settings, and manage credentials and live workspace
+files. For a first deployment on an existing Installation, follow [Deploy your first Agent](../guides/first-agent.md).
 The console also lists Agents, Providers, and Namespaces you can access. It does
 not offer rollback, live runtime health, browser chat, or Agent deletion. See the
 [deployment guide](../guides/deploy.md) for operator procedures and runtime checks,
@@ -80,8 +79,10 @@ selected by OCC; the console has no live gateway health API and always shows
 installed runtime.
 
 The Channels tab edits Slack and Microsoft Teams settings on the saved
-Configuration draft. Saving patches only `values`, so existing
-`secretBindings` are retained by the backend. An existing plugin allowlist is
+Configuration draft. Teams is incomplete: the console cannot deploy a
+Teams-enabled draft, and configuring it does not provide the public Bot
+Framework endpoint the integration requires. Saving patches only `values`, so
+the backend retains existing `secretBindings`. An existing plugin allowlist is
 extended; an omitted allowlist stays omitted. Because a Configuration can be
 shared by multiple Agents, channel edits can affect future deployments of other
 Agents that reference the same Configuration.

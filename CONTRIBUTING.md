@@ -5,9 +5,10 @@ artifacts, or implementation details into public issues, forks, or paste sites.
 Report suspected vulnerabilities privately to
 [security@openclaw.ai](mailto:security@openclaw.ai), identifying OpenClaw Enterprise.
 
-For a practical introduction, use the [Platform developer guide](docs/contributing/README.md)
-and [Make your first platform change](docs/contributing/first-change.md). This
-page owns the contribution and review policy.
+For a practical introduction, use [Contribute](docs/contributing/README.md)
+and [Make your first platform change](docs/contributing/first-change.md). For
+documentation changes, start with the [writing guide](docs/contributing/documentation.md).
+This page owns the contribution and review policy.
 
 ## Before changing code
 
@@ -42,11 +43,10 @@ reconcile dependencies in a shared checkout or worktree while another job uses
 them. If the installed graph does not match the manifests, report the gap or
 use dependency-independent checks rather than installing as an agent side effect.
 
-For a running local control plane, follow the [quickstart](docs/guides/quickstart.md)
-for Docker or Podman. The default stack cannot deploy Agents; use
-[local Kubernetes](docs/guides/deploy/local-kubernetes-development.md) if your
-change requires running an Agent. Both paths have more prerequisites than
-source-only checks.
+For a running local platform, follow [Local Setup](docs/guides/quickstart.md).
+It uses Kubernetes; see the [contributor profile](docs/guides/deploy/local-kubernetes-development.md)
+for development commands and teardown. The separate Docker/Podman control-plane
+preview cannot deploy Agents. Source-only checks do not need a running platform.
 
 ### Dependency release waiting period
 
@@ -76,6 +76,10 @@ pnpm test:integration
 Use `pnpm format:fix` to format active workspace changes, then inspect the diff
 for unrelated formatting. `typecheck` and `build` currently invoke the same
 TypeScript build. Do not run `npm run precommit`.
+
+For documentation changes, including docs-site presentation, use formatting,
+the [docs build and link checks](docs/contributing/documentation.md#preview-and-check),
+and visual inspection; do not add or run tests for those changes.
 
 Choose focused tests and infrastructure setup from [Testing](docs/testing/README.md).
 `pnpm test:console-browser` runs the separate browser suite with an explicitly

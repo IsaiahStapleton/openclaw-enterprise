@@ -2,7 +2,8 @@
 
 Make a small edit to the OpenClaw Control Plane (OCC) CLI, then run it and see
 the result. This example does not need a running controller, database, or account.
-Run the commands from the repository root.
+Run the commands from the repository root. For changes that need a running
+platform, see [Local development](local-development.md).
 
 ## 1. Prepare a checkout
 
@@ -67,6 +68,7 @@ saved the `Short` value in the root `New` command, then rerun it from this check
 For a real change, choose checks for the code you touched: see [local checks](../testing/local.md)
 and [integration tests](../testing/README.md#integration-tests). New platform
 functionality requires integration coverage through its actual workflow; this
-help-text exercise does not exercise a live service. Before opening a pull
-request, follow the [contribution policy](../../CONTRIBUTING.md#prepare-a-pull-request)
+help-text exercise does not use a live service. Documentation changes use the
+[documentation checks](documentation.md#preview-and-check). Before opening a
+pull request, follow the [contribution policy](../../CONTRIBUTING.md#prepare-a-pull-request)
 and describe the change and what you ran.

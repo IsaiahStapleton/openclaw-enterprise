@@ -1,39 +1,33 @@
 # Deploy OpenClaw Enterprise
 
-Choose a local or production OpenClaw Control Plane (OCC) deployment, verify
-authenticated access, then deploy Agents when you are ready to prove a workload.
-Run commands from the repository root. Startup needs no model credential.
+Install OpenClaw Enterprise on Kubernetes, verify access to the OpenClaw
+Control Plane (OCC), then deploy an Agent and check its model response. Use
+[Local Setup](quickstart.md) for a first installation on your machine. The
+production guides below are for operators using an existing cluster. Run
+repository commands from the repository root. Starting OCC needs no model
+credential; an Agent needs one to send a model request.
 
 ## Development
 
-Use the [quickstart](quickstart.md) for Docker or Podman Compose startup,
-console sign-in, service-key handling, and the first authenticated
-`/installation` check. The
-[Compose development flow](../flows/docker-compose-development.md) owns startup
-internals.
-
-Compose supports control-plane startup, authenticated Installation access, and
-Namespace operations. Docker Compute currently rejects Agent harness bindings,
-so Docker and Podman Agent deployment and model/TUI journeys are unavailable.
-Use [local Kubernetes setup](deploy/local-operations.md#build-images-for-local-kubernetes)
-and the production procedure for authenticated Agent execution. Historical
-Docker/Podman model-turn results do not establish current support.
+Use [Local Setup](quickstart.md) to start the platform with Kubernetes and
+verify authenticated access. Then [deploy your first Agent](first-agent.md).
+The [local Kubernetes development guide](deploy/local-kubernetes-development.md)
+explains the profile for contributors working on the platform.
 
 ### Verify development
 
-Follow [Read the Installation with the bootstrap service key](quickstart.md#read-the-installation-with-the-bootstrap-service-key).
-That check proves controller access, not an Agent deployment or model turn.
-For local TUI proof, cleanup, and local Kubernetes images, use
-[local operations](deploy/local-operations.md). For log export, use
-[platform observability](observability.md#docker-compose).
+Follow [Local Setup](quickstart.md) to verify the control plane. That check
+proves authenticated access; it does not prove an Agent can answer a model
+request. Complete [Deploy your first Agent](first-agent.md) for that result.
+For local Kubernetes images and cleanup, see
+[local operations](deploy/local-operations.md).
 
 ### Open the platform console
 
-Use [Open the platform console](quickstart.md#open-the-platform-console) for
-local sign-in. Production uses the same `/console/` path on the approved
-internal HTTPS origin matching `OCC_AUTH_BASE_URL`; browser login uses the
-human administrator session path, not service keys. The
-[console reference](../reference/console.md) owns console behavior and limits.
+Use [Local Setup](quickstart.md) for local sign-in. In production, open
+`/console/` on the approved internal HTTPS origin matching `OCC_AUTH_BASE_URL`.
+Sign in with a human administrator account; service keys are for automation.
+The [console reference](../reference/console.md) covers browser behavior and limits.
 
 ## Production
 
@@ -79,8 +73,9 @@ Follow these pages in order in the same operator shell:
    Grant tenant RoleBindings, choose embedded OpenClaw or dedicated Codex,
    provision exact-Agent credentials, and deploy an immutable revision.
 3. [Verify the production workload](deploy/production-agents.md#verify-production-workloads).
-   Confirm the active revision, gateway access, and TUI model-turn proof for
-   token-authenticated gateways.
+   Confirm the active revision and require a real model response. The guide
+   distinguishes the token-authenticated TUI from the direct password check
+   available to operators of trusted-proxy gateways.
 
 For ongoing business operation, use [production handoff](deploy/production-handoff.md)
 to record owners, credential renewal, alert response, and recovery decisions.
@@ -89,9 +84,10 @@ For private workspace-file administration, configure
 [Agent workspace routing](deploy/workspace-routing.md). For operational logs,
 use [platform observability](observability.md).
 
-For a disposable local Kubernetes trial, first
+To exercise this production procedure in a disposable local Kubernetes cluster,
 [build and import local images](deploy/local-operations.md#build-images-for-local-kubernetes),
 then resume the production installation sequence with the generated YAML copies.
+For first-time setup, use [Local Setup](quickstart.md).
 
 ### Stop or remove a production deployment
 
@@ -111,8 +107,8 @@ For runtime proof, see the [production TUI flow](../flows/production-tui.md).
 
 ## Customization
 
-Use `.env` and extra Compose files for development. Use Helm values, Kubernetes
-manifests, Installation startup YAML, and Collector Secrets for production. Use
+Use Helm values, Kubernetes manifests, Installation startup YAML, and Collector
+Secrets for production. Use
 [`deploy/runtime`](../../deploy/runtime/README.md) for runtime image recipe and
 package-version overrides. The [settings reference](../reference/settings.md)
 and Driver references own field defaults, precedence, and limits.
@@ -131,7 +127,9 @@ so use Kubernetes Compute for plugin-enabled runtime proof. See
 
 ## Related
 
-- [Service API keys, rotation, and bootstrap recovery](deploy/service-keys.md)
+- [Operate the platform](operate/README.md)
+- [Troubleshoot the platform](operate/troubleshooting.md)
+- [Service API keys, rotation, and bootstrap recovery](../reference/authentication/service-api-keys.md)
 - [Credential renewal and revocation](deploy/credential-lifecycle.md)
 - [Local Kubernetes, development TUI, and cleanup](deploy/local-operations.md)
 - [Local Kubernetes development inner loop](deploy/local-kubernetes-development.md)

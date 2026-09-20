@@ -1,39 +1,28 @@
 # Platform developer guide
 
-Use this guide when you change OpenClaw Enterprise itself: the control plane,
-console, CLI, Drivers, or deployment packaging. Start with
-[Make your first platform change](first-change.md). To use or administer an
-existing installation, see the [User guide](../guides/README.md).
+Use this guide to change OpenClaw Enterprise: the control plane, console, CLI,
+Drivers, deployment packaging, or documentation. For a first code change, start
+with [Local development](local-development.md) and the [first-change walkthrough](first-change.md).
+To use or administer an installation, start with [Getting Started](../README.md).
 
 ## Find the code and its design
 
-- [Repository layout](../layout.md) maps source directories to their owners and
-  explains where to put code, tests, and documentation.
-- [Current architecture](../ARCHITECTURE.md) explains how the API, worker,
-  PostgreSQL, and Drivers work together today.
-- [Platform design and implementation status](../design.md#implementation-status)
-  distinguishes approved target behavior from what has shipped. Numbered
-  [implementation specs](../../specs/README.md) record design and delivery history.
-- [Feature and Driver contracts](../reference/README.md) define resource
-  behavior, permissions, and interfaces. Use them when changing a contract or
-  adding an implementation.
-- For API work, read the [HTTP API reference](../reference/api.md) and
-  [controller reference](../reference/controller.md). The [CLI guide](../guides/cli.md)
-  shows the commands contributors need to preserve.
+- [Design](design.md) separates the current architecture, approved target, and
+  source-backed implementation guides.
+- [Repository layout](../layout.md) shows who owns each directory and where to
+  put code, tests, and documentation.
+- [Driver development](driver-development.md) links the base interfaces for
+  building or changing a Driver.
 
 ## Build, test, and debug
 
-- [Local checks](../testing/local.md) covers lint, formatting, types, focused
-  tests, and browser checks. The [testing guide](../testing/README.md) explains
-  when integration checks need PostgreSQL, Docker, or Kubernetes; the
-  [CI guide](../testing/ci.md) explains what runs on a pull request.
-- To trace runtime behavior, start with [platform startup](../flows/platform-startup.md),
-  the [controller worker](../flows/controller-worker.md), or the
-  [platform console](../flows/platform-console.md).
-- [Preview the documentation](../local-preview.md) and use the
-  [base Driver documentation template](../base-driver-docs-template.md) when
-  changing a Driver contract. The [documentation inventory](../documentation-inventory.md)
-  maps each current page to the proposed navigation and lists missing coverage.
+- [Local development](local-development.md) covers the checkout, a running local
+  platform, and how to choose checks for your change.
+- [Runtime flows](runtime-flows.md) helps you trace requests, worker operations,
+  and Agent deployment in the source.
+- [Documentation](documentation.md) explains where pages belong, how to name them,
+  and how to build and check the site.
 
-Before opening a pull request, read the [contribution policy](../../CONTRIBUTING.md)
-for repository boundaries, verification, review, and private security reporting.
+Read the [contribution policy](../../CONTRIBUTING.md) before opening a pull
+request. It covers repository access, verification, review, and private security
+reporting.

@@ -110,19 +110,26 @@ behavior changes; shipped specifications remain historical records. Keep Manual
 Notes unchanged. Put detailed contracts in their owning reference rather than
 expanding architecture pages for every feature.
 
-Keep documentation authoring guides and inventories alongside this guide under
-`docs/`; `docs/testing/` owns code verification and test setup. Reusable writing
-templates belong to the local technical-writing skill.
+Put contributor workflows for documentation in `docs/contributing/`, starting
+with the [writing guide](contributing/documentation.md). Existing site-tooling
+guides and inventories may remain directly under `docs/`; `docs/testing/` owns
+code verification and test setup. Reusable writing templates belong to the local
+technical-writing skill.
 
-Add new reader-facing pages to [docs/docs.json](docs.json) and link them from the
-[documentation map](README.md) or their owning overview. Assign each page to
-one site section: the [User guide](guides/README.md) for product use and
-administration, or the [Platform developer guide](contributing/README.md) for
-changing this repository. Cross-link topics needed by both audiences. Changing
-navigation does not require moving files; preserve existing URLs and heading
-anchors. Use relative Markdown links and sentence-case headings, following neighboring pages. Follow the
-[local preview guide](local-preview.md) for rendering. Review pages above 1,500
-visible words and keep them within the 2,500-word hard limit from AGENTS.md.
+The [documentation map](README.md) has six menus. **Getting Started**, **Topics**,
+**Integrations**, **Operate**, and **Reference** serve product users and operators;
+**Contribute** serves people changing the platform. A menu opens its sidebar.
+Register every Markdown page once in [docs/docs.json](docs.json) and link it from
+its owning overview. Deep implementation and testing pages can use the owning
+tab's `hidden` list when a contributor index links them; they keep their routes
+and remain searchable. Cross-link subjects useful to both audiences.
+
+Use relative Markdown links and sentence-case article titles and headings. Keep
+sidebar labels short and in Title Case; the navigation can assign a separate
+label. Changing a menu or label does not require moving a file: preserve existing
+URLs and heading anchors. See the [local preview guide](local-preview.md) for
+rendering. Review pages above 1,500 visible words and keep them within the
+2,500-word hard limit from AGENTS.md.
 
 When directories, package boundaries, or placement conventions change, update
 this guide and affected navigation in the same change.

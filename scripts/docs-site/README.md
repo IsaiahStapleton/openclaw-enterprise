@@ -37,6 +37,16 @@ folder indexes and links outside `docs/` point to the Enterprise GitHub source.
 Markdown links in full-line comments under `deploy/examples/` (`.yaml` and
 `.yml`) use the same validation.
 
+Each navigation tab declares `groups`. A group has a `group` name and `pages`;
+its entries can be Markdown slugs, `{ "page": "slug", "label": "Short label" }`,
+or nested `{ "group": "Name", "pages": [...] }` groups. A short label changes
+the sidebar and breadcrumb without changing the article or its search title.
+The first visible page is the tab landing page; give it an overview when the tab
+covers multiple subjects. A tab can also declare `hidden`, an array of slugs or
+labeled pages. These pages keep their URLs and appear in search, but not in the
+sidebar. List every Markdown page exactly once, visible or hidden. The local
+[navigation schema](./navigation.schema.json) describes the accepted format.
+
 `word-count.mjs` checks every tracked or nonignored Markdown file returned by
 Git, including root documentation, specs, generated reference, and new author
 drafts. It reports pages above the 1,500-word review threshold and fails pages
@@ -67,10 +77,12 @@ Keep each fallback generated from the same JSON so GitHub Markdown remains
 useful without becoming a second fact owner. No assistant, community widget,
 translation pipeline, deployment command, or hosted API is included.
 
-Run `npm run docs:check` for word-count enforcement, the real build plus
-page/navigation checks, and negative link, anchor, and static-server cases. Run
-`pnpm openapi:check` with the controller workspace installed to verify that the
-generated API source is current.
+For documentation or site presentation changes, run `pnpm docs:build` to build
+the site and its search index, `node scripts/docs-site/build.mjs --check` to
+check links and anchors without writing files, and `pnpm docs:check-length` for
+word limits. Inspect navigation and presentation in the browser. Run
+`pnpm openapi:check` with the controller workspace installed when changing the
+generated API source.
 
 The docs package is intentionally outside the active application workspace. Its
 independent lockfile lets docs-only contributors install the renderer without

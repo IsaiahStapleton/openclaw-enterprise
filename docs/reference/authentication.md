@@ -10,8 +10,8 @@ to an explicitly provisioned Principal or ServicePrincipal and owns
 
 This page defines the currently supported authentication behavior. For a
 working sign-in procedure, see
-[human administrator sign-in](../guides/deploy/service-keys.md#sign-in-as-a-human-administrator).
-For non-Agent automation, see the [service-key procedure](../guides/deploy/service-keys.md#service-api-keys-for-automation).
+[human administrator sign-in](authentication/service-api-keys.md#sign-in-as-a-human-administrator).
+For non-Agent automation, see the [service-key procedure](authentication/service-api-keys.md).
 The [platform console](console.md) provides email/password login at `/console/`
 and uses these same session endpoints. Public signup, OIDC, and bearer
 credentials are not supported controller API authentication paths.
@@ -53,8 +53,8 @@ response. OCC creates no Kubernetes Secret or PVC for delivery.
 In Helm, `bootstrap.password.claimName` selects the existing protected PVC.
 Only the initialization Job mounts it; `bootstrap.password.fileName` and
 `bootstrap.serviceKey.fileName` are written under `bootstrap.password.mountPath`.
-See [initial-key retrieval](../guides/deploy/service-keys.md#retrieve-the-bootstrap-service-key)
-and [bootstrap recovery](../guides/deploy/service-keys.md#recover-an-incomplete-bootstrap).
+See [initial-key retrieval](authentication/service-api-keys.md#retrieve-the-bootstrap-service-key)
+and [bootstrap recovery](authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
 
 The shared `scripts/bootstrap-installation.mjs` initializer runs after migration
 and before either API or worker startup in Compose and Helm. Development
@@ -82,7 +82,7 @@ The Helm initialization Job uses `backoffLimit: 0` and does not retry a failed
 attempt. Better Auth persistence and the Installation/IAM commit are separate;
 an error does not establish whether the transaction committed. Operators must
 resolve that outcome before manual repair, or explicitly reset an identified
-disposable Installation. See [incomplete bootstrap recovery](../guides/deploy/service-keys.md#recover-an-incomplete-bootstrap).
+disposable Installation. See [incomplete bootstrap recovery](authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
 File existence alone is not proof of successful initialization.
 
 ## Browser request origin
@@ -181,7 +181,8 @@ and account-provisioning authorization.
 - [Local authentication tests](../testing/local.md#authentication-and-authorization-coverage)
 - [Service-key persistence tests](../testing/postgresql.md#service-key-persistence)
 - [Service API key flow](../flows/service-api-keys.md)
-- [Deployment procedure](../guides/deploy/service-keys.md#service-api-keys-for-automation)
+- [Issue or rotate a service API key](authentication/service-api-keys.md#issue-a-service-key)
+- [IAM overview](../guides/topics/iam.md)
 - [Authorization](authorization.md)
 - [Generated API reference](api.md)
 - [Controller settings](settings.md)

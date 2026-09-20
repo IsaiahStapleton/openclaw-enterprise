@@ -2,15 +2,17 @@
 
 Prepare Amazon Elastic Kubernetes Service (EKS) for OpenClaw Enterprise (OCE),
 then run [the shared Helm installation](production-installation.md). This guide
-uses Linux EC2 managed node groups and IPv4 networking. AWS infrastructure is provisioned separately;
-the OCE chart does not create an EKS cluster, VPC, IAM roles, database, or CSI add-ons.
+uses Linux EC2 managed node groups and IPv4 networking. Provision AWS
+infrastructure separately: the OCE chart does not create an EKS cluster, VPC,
+IAM roles, database, or Container Storage Interface (CSI) add-ons.
 
-One EKS cluster is sufficient for OCC and Agent workloads. Use separate control
-and runtime node groups in that cluster, with namespace, RBAC, and network
-isolation. The EKS-managed Kubernetes control plane is distinct from OCC, which
-runs as application Pods on your nodes. Agent model authentication follows the
-normal [production Agent guide](production-agents.md). Console workspace files
-also require the [private gateway routing setup](#enable-console-workspace-files).
+One EKS cluster can host the OpenClaw Control Plane (OCC) and Agent workloads.
+Use separate node groups for OCC and Agents, along with namespace,
+role-based access control (RBAC), and network policies. The EKS-managed
+Kubernetes control plane is distinct from
+OCC, which runs as application Pods on your nodes. For Agent model
+authentication, follow [production Agent deployment](production-agents.md).
+Console workspace files also require [private gateway routing](#enable-console-workspace-files).
 
 ## Prepare AWS infrastructure
 
@@ -62,7 +64,8 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" get storageclasses
 
 ## Authenticate the image builder to ECR
 
-If using private ECR, replace the account placeholder below. Create repositories
+If using private Amazon Elastic Container Registry (ECR), replace the account
+placeholder below. Create repositories
 named `openclaw-enterprise/controller` and `openclaw-enterprise/runtime` first,
 then authenticate the builder using
 [ECR's authorization flow](https://docs.aws.amazon.com/AmazonECR/latest/userguide/registry_auth.html):
@@ -106,7 +109,7 @@ as the cluster default for the driver's `40Gi` RWX workspace claims. Review
 other workloads before changing a shared cluster's default class. Keep gateway
 and bootstrap claims explicitly on EBS; EFS is for the shared workspace.
 Use a separate access-point directory for each claim and verify read/write access
-from OCE's nonroot UID/GID 1000 workloads. Review the driver's
+from OCE's non-root UID/GID 1000 workloads. Review the driver's
 [access-point identity and directory parameters](https://github.com/kubernetes-sigs/aws-efs-csi-driver/blob/master/docs/parameters.md)
 instead of assuming filesystem permissions from a successful PVC bind.
 
