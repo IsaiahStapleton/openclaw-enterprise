@@ -282,6 +282,7 @@ The current policy implementation is
 For a working authenticated request, see the
 [quickstart](../guides/quickstart.md#read-the-installation-with-the-bootstrap-service-key).
 
+- [IAM overview](../guides/topics/iam.md)
 - [Authorization tests](../testing/local.md#authentication-and-authorization-coverage)
 - [API reference](api.md)
 - [Namespaces](namespaces.md)

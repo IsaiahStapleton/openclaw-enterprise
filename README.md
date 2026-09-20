@@ -4,64 +4,33 @@
 
 OpenClaw Enterprise (OCE) includes the [OpenClaw Control Plane (OCC)](docs/guides/concepts.md#control-plane)
 for deploying and managing [Agents](docs/guides/concepts.md#agents-and-revisions).
+Start with [Getting Started](docs/README.md) to use the platform, [Operate](docs/guides/operate/README.md) to administer it, or [Contribute](docs/contributing/README.md) to change its source.
 
-## Getting Started
+## Getting started
 
-Requires either Docker Engine with Docker Compose, or Podman with
-`podman-compose` and `yq` v4. Bash, Python 3, and the Go version selected by
-[`go.mod`](go.mod) are also required, along with Node.js 24 or newer and the pnpm
-version pinned in [`package.json`](package.json). Build the checkout-local OCC
-CLI and start the local stack with:
+Choose [Local Setup](docs/guides/quickstart.md) to run OCC on your machine, or [Kubernetes Setup](docs/guides/kubernetes-setup.md) to install it on a cluster you already operate. For local setup, run from the repository root:
 
 ```bash
 pnpm cli:build
-./scripts/dev-up
+OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev up
 ```
 
-The helper prefers a usable Docker Engine and otherwise selects Podman directly;
-a `docker` compatibility alias is not required. It prepares the default
-quickstart runtime image when needed and prints the selected engine, loopback
-OCC URL, Installation ID, and private
-[service-key](docs/guides/concepts.md#identity-and-access) file path. Open the
-printed API URL with `/console/` to sign in, browse accessible Agents, Providers,
-and Namespaces, create Agents with editable Configuration JSON, and edit supported
-channel draft settings. To deploy an Agent and attach the OpenClaw terminal UI
-to a real model-backed [runtime](docs/guides/concepts.md#gateways-and-harnesses),
-continue to [development docs](docs/guides/deploy/local-operations.md#development-end-to-end-tui).
-A model credential is required to run Agent model turns, but not to start the
-stack.
+You need Docker Engine with Compose or Podman with `podman-compose`, k3d, kubectl, Bash, Python 3, Go (the version in [`go.mod`](go.mod)), Node.js 24 or newer, and the pnpm version in [`package.json`](package.json). The quickstart covers installation checks, the local API credentials, and cleanup.
 
-The verified Podman boundary includes control-plane startup, authenticated API
-access, Namespace isolation, embedded OpenClaw and recovered dedicated Codex
-model turns, and exact test cleanup. Interactive TUI and Fluentd/OTLP
-verification remain Docker-only.
-
-The local worker has access to the selected engine's Docker-compatible API
-socket. Use the
-[quickstart](docs/guides/quickstart.md) for the first local API request, the
-[deployment guide](docs/guides/deploy.md) for host requirements and production
-Kubernetes setup, and the [runtime image recipe](deploy/runtime/README.md) for
-image versions and build options.
+After local setup, [deploy your first Agent](docs/guides/first-agent.md) and send it a model request. You need an OpenAI API key for that step. If you installed on an existing cluster, [deploy and verify an Agent on that installation](docs/guides/deploy/production-agents.md).
 
 ## Develop
 
-Requires Node.js 24 or newer, the pnpm version pinned in
-[`package.json`](package.json), and the Go version selected by [`go.mod`](go.mod).
+Follow [Make your first platform change](docs/contributing/first-change.md) for
+setup, a small source edit, and focused verification. You need Node.js 24 or
+newer, the pnpm version pinned in [`package.json`](package.json), and the Go
+version selected by [`go.mod`](go.mod).
 
-```sh
-pnpm install --frozen-lockfile
-pnpm check:workspace
-pnpm format:check
-pnpm typecheck
-pnpm cli:check
-pnpm cli:test
-pnpm openapi:check
-pnpm test
-```
-
-PostgreSQL, Docker/Podman, and Kubernetes integration suites require additional setup;
-see [Testing](docs/testing/README.md) for suite coverage, credentials, setup, and commands.
-[GitHub Actions coverage](docs/testing/ci.md#github-actions) separates five PR-safe lanes from protected model and service integrations.
+Use the [local checks](docs/testing/local.md) for the current formatting, lint,
+type, CLI, and API commands; follow the [contribution policy](CONTRIBUTING.md)
+before opening a PR. [Testing](docs/testing/README.md) explains additional
+PostgreSQL, Docker/Podman, and Kubernetes setup; [CI coverage](docs/testing/ci.md#github-actions)
+distinguishes PR-safe checks from protected integrations.
 
 ## Code layout
 
@@ -84,17 +53,10 @@ Run `npm run docs:install` once, then `npm run docs:dev` to preview the docs at 
 Use `npm run docs:build` for the full static build. See the
 [local preview instructions](docs/local-preview.md) for setup and checks.
 
-- [Concepts](docs/guides/concepts.md): tenancy, revisions, execution, [configuration and Secrets](docs/guides/concepts.md#configuration-and-secrets), and access.
-- [Documentation map](docs/README.md): guides, references, and runtime flows.
-- [Observability](docs/guides/observability.md): configure operational log export, Collector metrics, and delivery checks.
-- [Platform design](docs/design.md) and [current architecture](docs/ARCHITECTURE.md): target design and implemented components.
-- [Feature reference](docs/reference/README.md): supported behavior and Driver contracts.
-- [Platform console](docs/reference/console.md): login, Namespace selection, Agent creation, revision inspection, and supported channel draft edits.
-- [Providers](docs/reference/providers.md): authenticated clients, related Drivers, and optional Agent association.
-- [Agent plugins](docs/reference/agent-plugins.md): Agent-owned curated plugin selections and native policy prepared during startup.
-- [Agent workspace files](docs/reference/agents.md#workspace-files): read and replace four native Agent workspace files through private Kubernetes routes managed by Compute, Envoy Gateway, and cert-manager.
-- [HTTP API](docs/reference/api.md): routes, request and response schemas, authentication, and permissions.
-- [Spec archive](specs/README.md): proposals and implementation history, with recorded statuses.
+- [Getting Started](docs/README.md) and [Concepts](docs/guides/concepts.md): setup, the first Agent, and the product model.
+- [Topics](docs/guides/topics/README.md) and [Integrations](docs/guides/integrations/README.md): feature behavior and named implementations.
+- [Operate](docs/guides/operate/README.md) and [Reference](docs/reference/README.md): platform operations, the CLI, and the HTTP API.
+- [Contribute](docs/contributing/README.md): development, design, and documentation.
 
 ## License
 

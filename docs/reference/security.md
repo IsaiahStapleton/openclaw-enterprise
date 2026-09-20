@@ -152,7 +152,8 @@ verification procedures. This section defines the security guarantees and limits
 Operational logging does not replace PostgreSQL audit evidence. OCC emits
 reviewed controller events for debugging and operations; audit remains the
 durable record for bootstrap, mutation, authorization denial, and lifecycle
-completion.
+completion. See [Audit log](../guides/topics/audit-log.md) for what is recorded
+and current access limits.
 
 For platform-owned runtime logging, Gateway and Codex native OTLP log exporters
 stay disabled. A trusted Driver that declares
