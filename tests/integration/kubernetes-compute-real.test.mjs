@@ -2137,15 +2137,17 @@ test(
     );
     await resource("deployment", revisionName(replacement), placement);
     await resource("deployment", revisionName(admitted[1]), placement);
+    await resource("deployment", revisionName(admitted[2]), placement);
     await resource("serviceaccount", agentName(first.id), placement);
     await assertReadyGateway(placement, first.id, namespaceIds[0]);
     await assertReadyGateway(placement, second.id, namespaceIds[0]);
+    await assertReadyGateway(placement, boundSecretAgent.id, namespaceIds[0]);
     assert.equal(
       (await resources("deployments", placement)).filter(
         ({ spec }) => spec.template.metadata.labels?.["openclaw.dev/workload-role"] === "gateway",
       ).length,
-      2,
-      "worker restart and replacement revisions must preserve one gateway for each Agent",
+      3,
+      "worker restart and replacement revisions must preserve one gateway for each running Agent",
     );
   },
 );
