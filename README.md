@@ -4,6 +4,8 @@
 
 OpenClaw Enterprise (OCE) includes the [OpenClaw Control Plane (OCC)](docs/guides/concepts.md#control-plane)
 for deploying and managing [Agents](docs/guides/concepts.md#agents-and-revisions).
+Start with the [User guide](docs/guides/README.md) to use or administer the platform,
+or the [Platform developer guide](docs/contributing/README.md) to change its source.
 
 ## Getting Started
 
@@ -18,23 +20,18 @@ pnpm cli:build
 ./scripts/dev-up
 ```
 
-The helper prefers a usable Docker Engine and otherwise selects Podman directly;
-a `docker` compatibility alias is not required. It prepares the default
-quickstart runtime image when needed and prints the selected engine, loopback
-OCC URL, Installation ID, and private
+The helper selects a usable Docker Engine or falls back to Podman; no `docker`
+alias is required. It prints the loopback OCC URL, Installation ID, and private
 [service-key](docs/guides/concepts.md#identity-and-access) file path. Open the
-printed API URL with `/console/` to sign in, browse accessible Agents, Providers,
-and Namespaces, create Agents with editable Configuration JSON, and edit supported
-channel draft settings. To deploy an Agent and attach the OpenClaw terminal UI
-to a real model-backed [runtime](docs/guides/concepts.md#gateways-and-harnesses),
-continue to [development docs](docs/guides/deploy/local-operations.md#development-end-to-end-tui).
-A model credential is required to run Agent model turns, but not to start the
-stack.
+printed URL with `/console/` to sign in, browse accessible resources, and create
+Agent drafts. You do not need a model credential to start the control plane.
 
-The verified Podman boundary includes control-plane startup, authenticated API
-access, Namespace isolation, embedded OpenClaw and recovered dedicated Codex
-model turns, and exact test cleanup. Interactive TUI and Fluentd/OTLP
-verification remain Docker-only.
+The default Docker and Podman stack can start the control plane, verify API
+access, and manage Namespaces and drafts. It **cannot deploy an Agent or run a
+model turn** because its Compute Driver rejects the required Harness
+authentication. To run an Agent, use [local Kubernetes](docs/guides/deploy/local-kubernetes-development.md)
+or an existing Kubernetes installation and follow [Deploy your first Agent](docs/guides/first-agent.md).
+You need a model credential for that workflow.
 
 The local worker has access to the selected engine's Docker-compatible API
 socket. Use the
@@ -45,23 +42,16 @@ image versions and build options.
 
 ## Develop
 
-Requires Node.js 24 or newer, the pnpm version pinned in
-[`package.json`](package.json), and the Go version selected by [`go.mod`](go.mod).
+Follow [Make your first platform change](docs/contributing/first-change.md) for
+setup, a small source edit, and focused verification. You need Node.js 24 or
+newer, the pnpm version pinned in [`package.json`](package.json), and the Go
+version selected by [`go.mod`](go.mod).
 
-```sh
-pnpm install --frozen-lockfile
-pnpm check:workspace
-pnpm format:check
-pnpm typecheck
-pnpm cli:check
-pnpm cli:test
-pnpm openapi:check
-pnpm test
-```
-
-PostgreSQL, Docker/Podman, and Kubernetes integration suites require additional setup;
-see [Testing](docs/testing/README.md) for suite coverage, credentials, setup, and commands.
-[GitHub Actions coverage](docs/testing/ci.md#github-actions) separates five PR-safe lanes from protected model and service integrations.
+Use the [local checks](docs/testing/local.md) for the current formatting, lint,
+type, CLI, and API commands; follow the [contribution policy](CONTRIBUTING.md)
+before opening a PR. [Testing](docs/testing/README.md) explains additional
+PostgreSQL, Docker/Podman, and Kubernetes setup; [CI coverage](docs/testing/ci.md#github-actions)
+distinguishes PR-safe checks from protected integrations.
 
 ## Code layout
 
@@ -84,17 +74,10 @@ Run `npm run docs:install` once, then `npm run docs:dev` to preview the docs at 
 Use `npm run docs:build` for the full static build. See the
 [local preview instructions](docs/local-preview.md) for setup and checks.
 
-- [Concepts](docs/guides/concepts.md): tenancy, revisions, execution, [configuration and Secrets](docs/guides/concepts.md#configuration-and-secrets), and access.
-- [Documentation map](docs/README.md): guides, references, and runtime flows.
-- [Observability](docs/guides/observability.md): configure operational log export, Collector metrics, and delivery checks.
-- [Platform design](docs/design.md) and [current architecture](docs/ARCHITECTURE.md): target design and implemented components.
-- [Feature reference](docs/reference/README.md): supported behavior and Driver contracts.
-- [Platform console](docs/reference/console.md): login, Namespace selection, Agent creation, revision inspection, and supported channel draft edits.
-- [Providers](docs/reference/providers.md): authenticated clients, related Drivers, and optional Agent association.
-- [Agent plugins](docs/reference/agent-plugins.md): Agent-owned curated plugin selections and native policy prepared during startup.
-- [Agent workspace files](docs/reference/agents.md#workspace-files): read and replace four native Agent workspace files through private Kubernetes routes managed by Compute, Envoy Gateway, and cert-manager.
-- [HTTP API](docs/reference/api.md): routes, request and response schemas, authentication, and permissions.
-- [Spec archive](specs/README.md): proposals and implementation history, with recorded statuses.
+- [Documentation map](docs/README.md): choose the User guide or Platform developer guide.
+- [Concepts](docs/guides/concepts.md): Namespaces, revisions, configuration, and access.
+- [Feature reference](docs/reference/README.md) and [HTTP API](docs/reference/api.md): supported behavior and interfaces.
+- [Current architecture](docs/ARCHITECTURE.md) and [platform design](docs/design.md): implemented components and the target design.
 
 ## License
 

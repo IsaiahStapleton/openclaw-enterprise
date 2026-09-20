@@ -97,9 +97,10 @@ Do not install dependencies as a verification side effect.
 | `docs/design.md` and `docs/design/`   | Authoritative target architecture.                                              |
 | `docs/ARCHITECTURE.md`                | Current system structure and ownership boundaries.                              |
 | `docs/reference/`                     | Living supported-feature specifications and Driver contracts.                   |
-| `docs/guides/`                        | Operator procedures, with focused tasks split into linked child pages.          |
+| `docs/guides/`                        | Product user and operator procedures, including console, CLI, and API tasks.    |
+| `docs/contributing/`                  | Onboarding and workflows for people changing the platform source or docs.       |
 | `docs/flows/`                         | Source-backed runtime execution traces.                                         |
-| `docs/testing/`                       | Contributor setup, test environments, fixtures, and proof limits.               |
+| `docs/testing/`                       | Contributor test setup, environments, fixtures, and proof limits.               |
 | `specs/`                              | Numbered implementation proposals, milestones, and historical delivery records. |
 | `docs/assets/`                        | Documentation images and other shared assets.                                   |
 
@@ -114,8 +115,12 @@ Keep documentation authoring guides and inventories alongside this guide under
 templates belong to the local technical-writing skill.
 
 Add new reader-facing pages to [docs/docs.json](docs.json) and link them from the
-[documentation map](README.md) or their owning overview. Use relative Markdown
-links and sentence-case headings, following neighboring pages. Follow the
+[documentation map](README.md) or their owning overview. Assign each page to
+one site section: the [User guide](guides/README.md) for product use and
+administration, or the [Platform developer guide](contributing/README.md) for
+changing this repository. Cross-link topics needed by both audiences. Changing
+navigation does not require moving files; preserve existing URLs and heading
+anchors. Use relative Markdown links and sentence-case headings, following neighboring pages. Follow the
 [local preview guide](local-preview.md) for rendering. Review pages above 1,500
 visible words and keep them within the 2,500-word hard limit from AGENTS.md.
 

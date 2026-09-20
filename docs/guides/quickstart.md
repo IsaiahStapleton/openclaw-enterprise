@@ -3,7 +3,9 @@
 Start [OpenClaw Control Plane (OCC)](concepts.md#control-plane)
 locally, sign in to the console, and read the Installation through an
 authenticated API request. This proves controller access; it does not deploy an
-[Agent](concepts.md#agents-and-revisions) or make a model call.
+[Agent](concepts.md#agents-and-revisions) or make a model call. If you already
+have access to a Kubernetes-backed installation, follow
+[Deploy your first Agent](first-agent.md) instead.
 
 You need either Docker Engine with Docker Compose, or Podman with
 `podman-compose` and `yq` v4. Bash, Python 3, and the Go version selected by the
@@ -51,9 +53,10 @@ the environment, use those values; see [development settings](../reference/setti
 An existing database keeps its original password. Browser login uses the human
 session path, not service keys.
 
-A fresh Installation has a `default` Namespace and no Agents. Use the
-[console reference](../reference/console.md) for supported pages, Agent creation,
-credential provisioning, deployment, workspace files, and limits.
+A fresh Installation has a `default` Namespace and no Agents. You can create
+an Agent draft here, but this Compose setup cannot deploy it. The
+[console reference](../reference/console.md) covers supported pages and limits;
+[Deploy your first Agent](first-agent.md) shows the supported Kubernetes path.
 
 ## Read the Installation with the bootstrap service key
 

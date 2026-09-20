@@ -5,6 +5,10 @@ artifacts, or implementation details into public issues, forks, or paste sites.
 Report suspected vulnerabilities privately to
 [security@openclaw.ai](mailto:security@openclaw.ai), identifying OpenClaw Enterprise.
 
+For a practical introduction, use the [Platform developer guide](docs/contributing/README.md)
+and [Make your first platform change](docs/contributing/first-change.md). This
+page owns the contribution and review policy.
+
 ## Before changing code
 
 Read [AGENTS.md](AGENTS.md) for repository boundaries and verification rules.
@@ -38,8 +42,11 @@ reconcile dependencies in a shared checkout or worktree while another job uses
 them. If the installed graph does not match the manifests, report the gap or
 use dependency-independent checks rather than installing as an agent side effect.
 
-For a running local stack, follow the [quickstart](docs/guides/quickstart.md).
-It uses Docker Compose and has different prerequisites from source-only checks.
+For a running local control plane, follow the [quickstart](docs/guides/quickstart.md)
+for Docker or Podman. The default stack cannot deploy Agents; use
+[local Kubernetes](docs/guides/deploy/local-kubernetes-development.md) if your
+change requires running an Agent. Both paths have more prerequisites than
+source-only checks.
 
 ### Dependency release waiting period
 

@@ -1,21 +1,23 @@
 # Platform console
 
-The controller serves a browser console at `/console/` on its existing origin.
-Use it to sign in, choose a Namespace, inspect accessible Agents, Providers, and
-Namespaces, create and deploy Agents, edit supported Slack or Microsoft Teams
-draft settings, provision supported initial runtime credentials, and read or
-replace supported live workspace files. Rollback, live runtime health, browser
-chat, and Agent deletion are unavailable in the console.
-The [deployment guide](../guides/deploy.md) owns runtime checks and operator
-procedures; the [generated API reference](api.md) owns supported management API
-shapes.
+Use the browser console to sign in, choose a Namespace, create and deploy an
+Agent, edit its Slack or Microsoft Teams draft settings, and manage supported
+credentials and live workspace files. To walk through the first deployment on
+an existing Installation, follow [Deploy your first Agent](../guides/first-agent.md).
+The console also lists Agents, Providers, and Namespaces you can access. It does
+not offer rollback, live runtime health, browser chat, or Agent deletion. See the
+[deployment guide](../guides/deploy.md) for operator procedures and runtime checks,
+and the [API reference](api.md) for management operations.
 
 ## Start and sign in
 
-Start the controller through the [quickstart](../guides/quickstart.md#open-the-platform-console)
-or [deployment guide](../guides/deploy.md#open-the-platform-console), then visit
-`/console/`. **Username** means your provisioned account email. Enter its password
-and select **Login**. Public signup, SSO, and password recovery are unavailable.
+Open `/console/` at the address your administrator gave you. **Username** is
+your provisioned account email. Enter its password and select **Login**. Ask your
+administrator for access if you do not have an account or have forgotten your
+password; public signup, single sign-on, and self-service password recovery are
+unavailable. If you are setting up your own Installation, start with the
+[quickstart](../guides/quickstart.md#open-the-platform-console) or
+[deployment guide](../guides/deploy.md#open-the-platform-console).
 
 The console uses the existing [email/password session contract](authentication.md)
 with same-origin cookies. It does not store tokens or accept service keys. A

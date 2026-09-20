@@ -149,8 +149,15 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
   configuration and operator verification remain in the feature references and guides.
 - `docs/flows/` explains runtime execution through the current source. Link to
   reference for normative behavior and to guides for operator procedures.
-- `docs/guides/` owns operator procedures. Keep overview pages concise and
+- `docs/guides/` owns procedures for product users and operators, including
+  people using the console, CLI, or HTTP API. Keep overview pages concise and
   split coherent tasks into named child pages linked from their overview.
+- `docs/contributing/` owns onboarding and workflows for people changing the
+  platform. Link the root `CONTRIBUTING.md` for contribution policy and the
+  relevant reference, flow, or testing page for detailed behavior.
+- The site has two audience sections: **User guide** and **Platform developer
+  guide**. List each page once in `docs/docs.json`, cross-link shared topics,
+  and keep existing file paths and heading anchors when changing navigation.
 - Top-level `specs/` records implementation proposals, milestones, and delivery
   history. Completed specifications do not override current feature reference.
 
