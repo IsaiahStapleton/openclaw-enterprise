@@ -309,17 +309,51 @@ access, Agent deployment, or a model turn.
 ## Authenticate to the production API
 
 Retrieve `initial-admin-service-key.json` from the protected bootstrap PVC
-through approved storage access, then set:
+through approved storage access and retain it in protected storage. The example
+uses `/secure/occ/initial-admin-service-key.json` as the retained copy and
+creates a separate, private copy for this operator session. It preserves values
+already set in your shell. Otherwise, replace the sample hostname with your
+production HTTPS origin before running and set a different retained path if needed:
 
 ```bash
-export OCC_URL='https://<internal-occ-host>'
-export OCC_SERVICE_KEY_FILE='/secure/occ/initial-admin-service-key.json'
-occ installation get
+export OCC_URL="${OCC_URL:-https://<internal-occ-host>}"
+export OCC_BOOTSTRAP_KEY_FILE="${OCC_BOOTSTRAP_KEY_FILE:-/secure/occ/initial-admin-service-key.json}"
+umask 077
+prepare_occ_service_key() {
+  local working_directory
+  unset OCC_SERVICE_KEY_FILE OCC_SERVICE_KEY_DIRECTORY
+  if [ -z "${OCC_BOOTSTRAP_KEY_FILE:-}" ] || [ -z "${OCC_URL:-}" ]; then
+    printf '%s\n' 'Set the production URL and retained bootstrap key first.' >&2
+    return 1
+  fi
+  if ! working_directory="$(mktemp -d /tmp/occ-service-key.XXXXXXXX)"; then
+    printf '%s\n' 'Could not create the working key directory; stop here.' >&2
+    return 1
+  fi
+  if ! install -m 600 "$OCC_BOOTSTRAP_KEY_FILE" "$working_directory/occ-service-key.json"; then
+    rm -f -- "$working_directory/occ-service-key.json"
+    rmdir -- "$working_directory"
+    printf '%s\n' 'Could not create the working key copy; stop here.' >&2
+    return 1
+  fi
+  if ! OCC_SERVICE_KEY_FILE="$working_directory/occ-service-key.json" occ installation get; then
+    rm -f -- "$working_directory/occ-service-key.json"
+    rmdir -- "$working_directory"
+    printf '%s\n' 'Could not authenticate; the temporary key copy was removed. Stop here.' >&2
+    return 1
+  fi
+  export OCC_SERVICE_KEY_DIRECTORY="$working_directory"
+  export OCC_SERVICE_KEY_FILE="$working_directory/occ-service-key.json"
+}
+prepare_occ_service_key
 ```
 
 Expect the displayed `ID` to match the key file's
 `meta.installationId`. A completed initialization Job is not an exec endpoint,
-and neither the API nor worker mounts the bootstrap PVC.
+and neither the API nor worker mounts the bootstrap PVC. Keep the protected
+source after ending the session; initialization does not reissue a lost key.
+The [operator cleanup](production-agents.md#end-the-operator-session) removes
+only the disposable copy created above.
 
 After the production API authenticates, continue with Namespace preparation,
 Agent deployment, and a [real model-response check](production-agents.md#verify-production-workloads)

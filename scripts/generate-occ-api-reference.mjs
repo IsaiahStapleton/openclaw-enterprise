@@ -220,8 +220,12 @@ function operationReference(path, method, operation, document, { headingLevel = 
       "| Status | Meaning |",
       "| --- | --- |",
       ...Object.keys(operation.responses).map((status) => {
-        const meaning = STATUS_CODES[status] ?? operation.responses[status].description;
-        return `| \`${status}\` | ${meaning} |`;
+        const description = operation.responses[status].description;
+        const meaning =
+          description && description !== "Default Response"
+            ? description
+            : (STATUS_CODES[status] ?? description);
+        return `| \`${status}\` | ${meaning?.replaceAll("|", "\\|")} |`;
       }),
     ].join("\n"),
   );

@@ -1,9 +1,14 @@
 # Create and deploy Agents in the console
 
 Use the [platform console](../console.md) to create an Agent, prepare its
-credentials, and request deployment. If this is your first Agent on an existing
-Installation, start with [Deploy your first Agent](../../guides/first-agent.md)
-for access requirements and how to choose a Namespace.
+credentials, and request deployment. On an existing Kubernetes Installation,
+start with [production Agent prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace):
+you need a ready Namespace and, for an OpenAI API key, an administrator who can
+grant the Agent access to its Secret. After deployment, [verify this same
+Agent and revision](../../guides/deploy/production-agents.md#verify-production-workloads).
+If you are using [Local Setup](../../guides/quickstart.md) instead, the
+[local first-Agent walkthrough](../../guides/first-agent.md) creates a separate
+Agent; it does not verify an Agent you create in the console.
 
 ## Create an Agent
 
@@ -34,15 +39,10 @@ for access requirements and how to choose a Namespace.
 | **ChatGPT service account**      | An account in this Namespace that you can read, an already issued credential, the matching Provider, and dedicated execution. The console does not issue the credential for you. Listing Providers requires Installation `administer`.    |
 | **Operator-managed credentials** | An Installation using SSH with embedded OpenClaw. The operator configures the runtime host; OCC does not validate the credentials or model access. See [SSH credentials](../drivers/ssh-compute.md#credentials-and-supported-boundaries). |
 
-Use the Slack and Microsoft Teams cards to configure initial channels before creating
-the Agent. Their settings update the same Configuration JSON, including the required
-plugin entries. No channel request is sent until you submit **Create Agent**. Enabled
-channels require Dedicated execution. Slack Secret bindings can be provisioned from the saved Agent draft; Teams credential provisioning remains an operator procedure.
-
 Selecting a credential source does not change the configured model or execution
 mode, or confirm that the provider accepts it. For API-key deployments, the
 Agent's own service principal also needs `operate` on that Secret; ask an
-administrator to [grant it before deploying](../../guides/deploy/production-agents.md#configure-the-agent-runtime).
+administrator to [grant it before deploying](../../guides/deploy/production-agents.md#grant-the-agent-access-to-its-model-secret).
 See [harness authentication](../agents.md#harness-authentication) for the full rules.
 
 If the Configuration saves but Agent creation fails, the form shows its ID and
@@ -106,6 +106,8 @@ readiness is not exposed; use the operator deployment workflow for those Agents.
 If a deployment response is lost, inspect the Agent's revision history before
 trying again; the console does not automatically repeat an uncertain request.
 To follow the deployment worker, use the [deployment status API](../agents.md#deployment-status).
-The console does not display live runtime health. Ask your operator to
-[verify the workload](../../guides/deploy/production-agents.md#verify-production-workloads)
-if files remain unavailable or you need proof that the Agent is running.
+The console does not display live runtime health. Give your operator the
+Namespace ID, the Agent ID shown on its detail page, and the full revision ID
+in the `revision` query parameter of the page URL after deployment. Ask them to
+[verify that exact workload and get a real model response](../../guides/deploy/production-agents.md#verify-production-workloads).
+Do not create another Agent to verify this one.

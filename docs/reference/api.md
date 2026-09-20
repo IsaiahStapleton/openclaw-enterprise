@@ -1276,7 +1276,7 @@ Create or replace an allowed workspace file for one active Agent
 | `413` | Payload Too Large |
 | `415` | Unsupported Media Type |
 | `500` | Internal Server Error |
-| `503` | Service Unavailable |
+| `503` | Service Unavailable. Check `error.code`: `DEPENDENCY_UNAVAILABLE` means workspace access is unavailable. `UNKNOWN_OUTCOME` means OCC could not confirm the write or its audit record; the file may already contain the requested content. Read the same file with `GET` and compare its content before deciding whether to retry. If the content matches, do not retry. If you cannot read it, wait or ask someone with `read` permission on the Agent to check. |
 
 **`200` response body:** `application/json`
 

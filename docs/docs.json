@@ -677,6 +677,7 @@
               "testing/openshell",
               "driver-docs-inventory",
               "documentation-inventory/gaps",
+              "documentation-inventory/improvements",
               "documentation-inventory/getting-started",
               "documentation-inventory/topics",
               "documentation-inventory/integrations-reference",
