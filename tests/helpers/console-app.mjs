@@ -6,7 +6,6 @@ import { once } from "node:events";
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
 import { providerSummariesFromDefinitions } from "../../apps/controller/src/composition/installation-config.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
-import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
@@ -14,6 +13,7 @@ import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/sr
 import { authenticatedHeaders, signInWithEmailPassword } from "./auth-session.mjs";
 import { createTestConfigurationDriver } from "./configuration-driver.mjs";
 import { createTestSecretDriver } from "./secret-driver.mjs";
+import { createTestKubernetesComputeDriver } from "./kubernetes-compute.mjs";
 
 export const providerFixtures = Object.freeze([
   Object.freeze({
@@ -29,11 +29,10 @@ export const providerFixtures = Object.freeze([
 ]);
 
 function computeDriver() {
-  return {
-    id: "console-compute",
-    capability: "compute",
+  const driver = createTestKubernetesComputeDriver("console-compute");
+
+  return Object.assign(driver, {
     implementation: "test-memory-lifecycle",
-    validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -49,7 +48,7 @@ function computeDriver() {
       };
     },
     async retireRevision() {},
-  };
+  });
 }
 
 async function availableLoopbackPort() {

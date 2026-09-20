@@ -144,6 +144,26 @@ func (client *Client) DeleteConfiguration(namespaceID, configurationID string) e
 	)
 }
 
+// CreateSecret creates a Secret in a Namespace and returns metadata only.
+func (client *Client) CreateSecret(namespaceID string, body jsontext.Value) (any, error) {
+	return client.send(http.MethodPost, []string{"namespaces", namespaceID, "secrets"}, body)
+}
+
+// GetSecret fetches Secret metadata without material.
+func (client *Client) GetSecret(namespaceID, secretID string) (any, error) {
+	return client.get("namespaces", namespaceID, "secrets", secretID)
+}
+
+// UpdateSecret replaces Secret material and returns stable metadata.
+func (client *Client) UpdateSecret(namespaceID, secretID string, body jsontext.Value) (any, error) {
+	return client.send(http.MethodPatch, []string{"namespaces", namespaceID, "secrets", secretID}, body)
+}
+
+// DeleteSecret deletes an unbound Secret.
+func (client *Client) DeleteSecret(namespaceID, secretID string) error {
+	return client.sendEmpty(http.MethodDelete, []string{"namespaces", namespaceID, "secrets", secretID})
+}
+
 // CreateAgent creates an Agent in a Namespace.
 func (client *Client) CreateAgent(namespaceID string, body jsontext.Value) (any, error) {
 	return client.send(http.MethodPost, []string{"namespaces", namespaceID, "agents"}, body)

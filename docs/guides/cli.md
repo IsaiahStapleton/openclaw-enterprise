@@ -20,7 +20,7 @@ occ namespace list
 ```
 
 The resource command groups are `installation`, `namespace`, `configuration`,
-and `agent`. Walk their built-in help when discovering an operation:
+`secret`, and `agent`. Walk their built-in help when discovering an operation:
 
 ```bash
 occ --help
@@ -28,12 +28,13 @@ occ namespace --help
 occ agent deploy --help
 ```
 
-Configuration and Agent operations use the Namespace selected by
+Configuration, Secret, and Agent operations use the Namespace selected by
 `OCC_NAMESPACE` or `--namespace`. Create and update commands accept a product
 JSON document rather than an HTTP body or path:
 
 ```bash
 export OCC_NAMESPACE='<namespace-id>'
+occ secret create --file secret.json
 occ configuration create --file configuration.json
 occ agent create --file agent.json
 occ agent deploy '<agent-id>'
@@ -43,6 +44,26 @@ occ agent stop '<agent-id>'
 Human-readable tables are the default. Use `--output json` or `--output yaml`
 for automation. Structured output contains the resource or resource collection
 directly; HTTP response envelopes are an internal client detail.
+
+## Provision integration Secrets
+
+Use Secret commands to create or replace Namespace-owned credentials used by
+Agent harness authentication or Configuration Secret bindings. The CLI sends
+protected JSON documents to OCC and prints metadata only; it never returns stored
+values.
+
+```bash
+export OCC_NAMESPACE='<namespace-id>'
+occ secret create --file slack-bot-token-secret.json
+occ secret get '<secret-id>'
+occ secret update '<secret-id>' --file replacement-secret.json
+occ secret delete '<secret-id>'
+```
+
+Bind the returned Secret references through the owning Agent or Configuration and
+grant the consuming Agent service principal exact `operate` permission before
+deployment. See [Configuration secrets and channels](../reference/configuration/secrets.md)
+for binding shape and delivery boundaries.
 
 ## Manage local development
 
