@@ -42,6 +42,10 @@ const CONSOLE_ASSETS = new Map(
       path: new URL("agents/detail.mjs", CONSOLE_ROOT),
       contentType: "text/javascript; charset=utf-8",
     },
+    "/console/agents/native-admin.mjs": {
+      path: new URL("agents/native-admin.mjs", CONSOLE_ROOT),
+      contentType: "text/javascript; charset=utf-8",
+    },
     "/console/agents/harness-auth.mjs": {
       path: new URL("agents/harness-auth.mjs", CONSOLE_ROOT),
       contentType: "text/javascript; charset=utf-8",

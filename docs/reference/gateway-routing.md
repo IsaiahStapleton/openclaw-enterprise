@@ -52,9 +52,10 @@ Service. The listener certificate uses that same hostname.
 `getGatewayEndpoint(revision)` computes the URL without a Kubernetes lookup; a
 returned URL does not establish gateway readiness. Preparation and activation
 reconcile an HTTPRoute attached to the shared Gateway's `https` listener. It
-matches the exact hostname and Agent path, rewrites the path to `/`, and forwards
-to the Agent's same-namespace Service. TLS terminates at Envoy; the backend hop
-uses the gateway's plaintext WebSocket port, restricted by NetworkPolicy.
+matches the exact hostname and forwards to the Agent's same-namespace Service.
+The exact Agent path rewrites to `/`; a bounded prefix rule preserves suffixes
+for native UI traffic. See the [Kubernetes route rules](drivers/kubernetes-compute/networking-and-isolation.md#private-agent-gateway-routes).
+TLS terminates at Envoy; the backend plaintext HTTP/WebSocket hop is restricted by NetworkPolicy.
 
 The route and Service stay stable across revision cutover and gateway Pod
 replacement. Retiring an older revision preserves a newer gateway's route;
@@ -171,6 +172,30 @@ The Kubernetes Driver implements optional `ComputeDriver.getGatewayEndpoint`;
 it returns no endpoint when routing is unconfigured. The Docker Driver does
 not implement this method. Its localhost gateway port publication does not
 enable workspace-file access through the standard OCC composition.
+
+## Native admin UI routing
+
+Agent native admin UI access reuses the same private Envoy routing primitive as
+workspace files. The public browser hosts are operator-owned wildcard names
+served by the OCC API process, using `agentNativeAdmin.domain`; Envoy and Agent
+gateway Services remain private ClusterIP resources. The Agent hosts share the
+ordinary OCE session cookie through the configured `agentNativeAdmin.sharedCookieDomain`,
+so every matching console and Agent subdomain must be a trusted OCE ingress
+endpoint. OCC authenticates and authorizes the human session before proxying,
+then strips browser cookies and credentials before forwarding to Envoy.
+
+The private Compute endpoint remains:
+
+```text
+wss://<private-host>/namespaces/<namespaceId>/agents/<agentId>
+```
+
+OCC converts that endpoint to `https:` for native UI HTTP traffic while keeping
+the same private authority and exact Agent base path. Workspace-file traffic
+continues to use the original WSS endpoint. Native-host requests are
+intercepted before the normal API not-found path, resolved to the exact Agent
+represented by the host, and checked against the current active revision before
+the API proxies HTTP or WebSocket traffic through the private route.
 
 ## Source and verification
 
