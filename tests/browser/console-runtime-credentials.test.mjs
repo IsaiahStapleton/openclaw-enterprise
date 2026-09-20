@@ -413,7 +413,8 @@ test("Teams-enabled drafts keep console deploy blocked", async (t) => {
     )
     .waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), true);
-  assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
+  await expectNoText(page, /Slack app token|Slack bot token/);
+  assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).count(), 0);
 });
 
 test("Slack credential fields save channel tokens through Secret bindings", async (t) => {
@@ -450,7 +451,10 @@ test("Slack credential fields save channel tokens through Secret bindings", asyn
   await page.getByLabel("Slack app token").fill("xapp-console-secret");
   await page.getByLabel("Slack bot token").fill("xoxb-console-secret");
   await page.getByRole("button", { name: "Save channel Secrets" }).click();
-  await page.getByText(/Outcome unknown/).waitFor();
+  await page
+    .locator(".runtime-credentials .error", { hasText: /Outcome unknown/ })
+    .first()
+    .waitFor();
   await expectNoText(page, hostileBackendMessage);
   assert.equal(await page.locator(".runtime-credentials .credential-status.missing").count(), 2);
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
