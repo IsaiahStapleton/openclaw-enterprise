@@ -21,6 +21,8 @@ Start locally, install a production control plane, or look up supported behavior
 Use the [feature and Driver index](reference/README.md) for supported behavior,
 configuration, and limits. The [HTTP API](reference/api.md) describes request and
 response schemas. The [console guide](reference/console.md) covers browser tasks.
+The [Agent native admin UI](reference/agent-native-admin.md) reference covers
+the trusted-operator pilot for opening the stock native UI through OCC.
 Compare bundled implementations in the [ComputeDriver feature matrix](reference/drivers/compute-matrix.md).
 Use the [PluginDriver feature matrix](reference/drivers/plugin-matrix.md) to
 compare plugin discovery and approval-policy support.
@@ -47,6 +49,8 @@ revision startup and runtime configuration. The
 [Namespace IAM policy flow](flows/namespace-iam-policy.md) traces Role and
 AccessBinding API requests through authorization, Driver policy changes, and
 audit commit.
+The [Agent native admin UI flow](flows/agent-native-admin.md) traces console
+availability, shared-session Agent-host admission, and private gateway proxying.
 
 ## Contribute
 

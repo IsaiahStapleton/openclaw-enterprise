@@ -69,6 +69,12 @@ const requiresGatewayRouting = {
       ? requiresProductionCluster.skip
       : "Set OCC_TEST_GATEWAY_ROUTING_REAL=1 with Envoy Gateway, cert-manager, and an imported controller image for private routing proof.",
 };
+const requiresNativeAdminRouting = {
+  skip:
+    process.env.OCC_TEST_NATIVE_ADMIN_REAL === "1"
+      ? requiresGatewayRouting.skip
+      : "Set OCC_TEST_NATIVE_ADMIN_REAL=1 with the gateway-routing prerequisites, Playwright Chromium, and a dedicated native-admin Agent domain such as native.localhost.",
+};
 const requiresLiveSlack = {
   skip: slackSelected
     ? false
@@ -319,6 +325,11 @@ async function createScopedController(context, identifier, platformNamespace, ku
       {
         op: "add",
         path: "/rules/-",
+        value: { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "watch"] },
+      },
+      {
+        op: "add",
+        path: "/rules/-",
         value: {
           apiGroups: [""],
           resources: ["persistentvolumeclaims"],
@@ -392,6 +403,8 @@ async function startInClusterControllerApi(
     authBaseURL,
     controller,
     controllerPort,
+    nativeAdminDomain,
+    nativeAdminSharedCookieDomain,
     platformNamespace,
     workspaceGateway,
   },
@@ -510,6 +523,23 @@ async function startInClusterControllerApi(
                       valueFrom: { secretKeyRef: { name: authSecretName, key: "secret" } },
                     },
                     { name: "OCC_AUTH_BASE_URL", value: authBaseURL },
+                    {
+                      name: "OCC_AGENT_NATIVE_ADMIN_ENABLED",
+                      value: nativeAdminDomain === undefined ? "false" : "true",
+                    },
+                    ...(nativeAdminDomain === undefined
+                      ? []
+                      : [
+                          { name: "OCC_AGENT_NATIVE_ADMIN_DOMAIN", value: nativeAdminDomain },
+                          ...(nativeAdminSharedCookieDomain === undefined
+                            ? []
+                            : [
+                                {
+                                  name: "OCC_AUTH_COOKIE_DOMAIN",
+                                  value: nativeAdminSharedCookieDomain,
+                                },
+                              ]),
+                        ]),
                     {
                       name: "OCC_HOST",
                       valueFrom: { fieldRef: { fieldPath: "status.podIP" } },
@@ -1168,10 +1198,11 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       email: `admin-kubernetes-${hash(identifier)}@example.test`,
       password: `kubernetes-harness-${identifier}`,
     });
-  const controllerAuthBaseURL =
+  const bootstrapAuthBaseURL =
     options.controllerPort === undefined
       ? authBaseURL
       : `http://127.0.0.1:${options.controllerPort}`;
+  const controllerAuthBaseURL = options.publicOrigin ?? bootstrapAuthBaseURL;
   const gatewayPassword =
     options.gatewayPassword === true ? randomBytes(32).toString("base64url") : undefined;
   const platformNamespace = `oce-production-${mode}-${hash(identifier)}`;
@@ -1340,11 +1371,18 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       email: credentials.email,
       password: credentials.password,
       authSecret,
-      authBaseURL: controllerAuthBaseURL,
+      authBaseURL: bootstrapAuthBaseURL,
       installationName,
     });
     activeInstallation = await platformState.loadInstallation();
     assert.ok(activeInstallation, "development bootstrap must persist the Installation");
+    await ensureHarnessAdminPrincipal(
+      observerPool,
+      createPostgresControllerAuth,
+      activeInstallation,
+      credentials,
+      controllerAuthBaseURL,
+    );
     createdFreshInstallation = true;
   }
 
@@ -1356,6 +1394,8 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       authBaseURL: controllerAuthBaseURL,
       controller,
       controllerPort: options.controllerPort,
+      nativeAdminDomain: options.nativeAdmin?.domain,
+      nativeAdminSharedCookieDomain: options.nativeAdmin?.sharedCookieDomain,
       platformNamespace,
       workspaceGateway,
     });
@@ -1865,6 +1905,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     mode,
     placement,
     namespaceId,
+    installation: activeInstallation,
     platformNamespace,
     gatewayImage,
     workspaceGateway,
@@ -4273,6 +4314,7 @@ export {
   kubectl,
   modelPrefix,
   requiresGatewayRouting,
+  requiresNativeAdminRouting,
   requiresLiveSlack,
   requiresProductionCluster,
   requiresProductionClusterOtelLogs,
