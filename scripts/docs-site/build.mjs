@@ -22,6 +22,7 @@ const repository = "https://github.com/openclaw/openclaw-enterprise";
 const config = JSON.parse(fs.readFileSync(path.join(docs, "docs.json"), "utf8"));
 const md = createMarkdownRenderer();
 const pages = new Map();
+const unpublished = new Set();
 const escape = (value) => md.utils.escapeHtml(String(value));
 const route = (source) =>
   "/" +
@@ -30,6 +31,83 @@ const route = (source) =>
     .replace(/\.md$/, "")
     .replace(/\/$/, "") +
   (source === "README.md" ? "" : "/");
+
+function publicMarkdown(markdown) {
+  const { content } = parseFrontmatter(markdown);
+  const frontmatter = markdown.slice(0, markdown.length - content.length);
+  const lines = content.split("\n");
+  const tokens = md.parse(content, {});
+  const headings = [];
+  const placeholders = [];
+  const placeholder =
+    /^\[keep\s+this\s+for\s+the\s+user\s+to\s+add\s+notes\.\s+do\s+not\s+change\s+between\s+edits\]$/i;
+
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token.level !== 0 || !token.map) {
+      continue;
+    }
+    const inline = tokens[index + 1];
+    if (token.type === "heading_open") {
+      const title = inline.children
+        .map((child) => (child.type === "softbreak" ? " " : child.content))
+        .join("")
+        .trim();
+      headings.push({
+        title,
+        depth: Number(token.tag.slice(1)),
+        start: token.map[0],
+        end: token.map[1],
+      });
+    } else if (token.type === "paragraph_open" && placeholder.test(inline.content.trim())) {
+      placeholders.push(token.map);
+    }
+  }
+
+  const hidden = Array(lines.length).fill(false);
+  const sections = headings.flatMap((heading, index) =>
+    heading.depth > 1 && /^(?:change\s*log|manual\s+notes)$/i.test(heading.title)
+      ? [
+          {
+            ...heading,
+            stop:
+              headings.slice(index + 1).find((next) => next.depth <= heading.depth)?.start ??
+              lines.length,
+          },
+        ]
+      : [],
+  );
+  for (const section of sections) {
+    if (/^change\s*log$/i.test(section.title)) {
+      hidden.fill(true, section.start, section.stop);
+    }
+  }
+  for (const section of sections.toReversed()) {
+    if (hidden[section.start]) {
+      continue;
+    }
+    for (const [start, end] of placeholders) {
+      if (start >= section.end && end <= section.stop) {
+        hidden.fill(true, start, end);
+      }
+    }
+    const notes = lines
+      .slice(section.end, section.stop)
+      .filter((_, index) => !hidden[section.end + index])
+      .join("\n")
+      .replace(/<!--[^]*?-->|\{\/\*[^]*?\*\/\}/g, "")
+      .trim();
+    if (!notes) {
+      hidden.fill(true, section.start, section.stop);
+    }
+  }
+
+  let published = lines.filter((_, index) => !hidden[index]).join("\n");
+  if (content.endsWith("\n") && !published.endsWith("\n")) {
+    published += "\n";
+  }
+  return frontmatter + published;
+}
 
 function walk(directory, acceptsFile = (entry) => entry.name.endsWith(".md")) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -64,7 +142,16 @@ function yamlCommentMarkdownBlocks(file) {
 
 for (const file of walk(docs)) {
   const source = path.relative(docs, file).split(path.sep).join("/");
-  const text = fs.readFileSync(file, "utf8");
+  const authored = fs.readFileSync(file, "utf8");
+  const frontmatter = parseFrontmatter(authored).data;
+  if (frontmatter?.published !== undefined && typeof frontmatter.published !== "boolean") {
+    throw new Error(source + ": published frontmatter must be true or false");
+  }
+  if (frontmatter?.published === false) {
+    unpublished.add(source);
+    continue;
+  }
+  const text = publicMarkdown(authored);
   const parsed = parseDocsDocument(text, md, { sourceFile: file, root: docs });
   const githubAliases = new Map();
   const github = new GithubSlugger();
@@ -83,7 +170,6 @@ for (const file of walk(docs)) {
   const firstHeading = parsed.tokens.findIndex(
     (token) => token.type === "heading_open" && token.tag === "h1",
   );
-  const frontmatter = parseFrontmatter(text).data;
   const title = frontmatter?.title ?? parsed.tokens[firstHeading + 1]?.content ?? source;
   pages.set(source, {
     source,
@@ -221,6 +307,9 @@ function resolveLink(page, href) {
     }
   }
   const docSource = path.relative(docs, target).split(path.sep).join("/");
+  if (unpublished.has(docSource)) {
+    throw new Error(page.source + ": link targets an unpublished document: " + href);
+  }
   const linked = pages.get(docSource);
   if (linked) {
     if (url.hash && !resolveDocsFragment(url.hash, linked.ids)) {

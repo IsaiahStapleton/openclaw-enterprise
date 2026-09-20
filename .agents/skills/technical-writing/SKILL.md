@@ -115,8 +115,9 @@ or reference unless the operator needs it to make a decision.
 Correct inaccurate or unsafe claims first, add missing requirements or failure
 handling, then remove repetition and tighten prose. Update current docs with the
 behavior they describe; mark a page stale with a source-of-truth link if a full
-update cannot be completed. Preserve historical specs and user-owned Manual Notes.
-Do not rewrite history to match later implementation.
+update cannot be completed. Preserve historical specs and user-owned Manual Notes
+in source. The site omits document Changelogs and empty Manual Notes. Do not
+rewrite history to match later implementation.
 
 Check commands, examples, terminology, local links, and navigation. For
 documentation-only changes, use formatting, builds, link checks, and visual

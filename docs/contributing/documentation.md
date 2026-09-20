@@ -39,6 +39,12 @@ one owner for a contract or procedure and link to it instead of copying it. The
 page patterns and a required plain-language pass. Use the [base Driver template](../base-driver-docs-template.md)
 for a Driver contract; implementation-specific setup belongs in Integrations.
 
+The published site omits document `Changelog` sections and empty `Manual Notes`.
+Keep those records in the Markdown source; real notes still appear on the site.
+If a page contains only an internal record, set `published: false` in its YAML
+frontmatter and leave it out of `docs.json`. It will have no site URL or search
+result, so use a GitHub source link if the archive needs to be cited.
+
 The [documentation map](../README.md) links the six sections. A previous
 [documentation inventory](../documentation-inventory.md) records gaps and
 placement decisions from the navigation audit; use the live map and `docs.json`

@@ -37,5 +37,3 @@ from each trace; for commands to run locally, see [Testing](../testing/README.md
 
 - [GitHub Actions testing](../flows/github-actions-testing.md) and [test preparation](../flows/github-actions-testing/preparation.md)
 - [Run and diagnose CI checks](../testing/ci.md)
-
-The platform startup trace also preserves a separate [change history](../flows/platform-startup/history.md).

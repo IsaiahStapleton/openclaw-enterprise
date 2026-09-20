@@ -32,8 +32,9 @@ npm run docs:check
 git diff --check
 ```
 
-The build renders every Markdown page under `docs/`, including pages hidden
-from the sidebar and the generated HTTP API reference. It checks local page
+The build renders published Markdown pages under `docs/`, including pages hidden
+from the sidebar and the generated HTTP API reference. It omits document Changelogs,
+empty Manual Notes, and pages marked `published: false`. It checks local page
 links and heading anchors, then builds the search index. Source files, deployment
 assets, and historical specs outside `docs/` link to the Enterprise repository
 on GitHub. These links require repository access. External URLs are not fetched.
@@ -51,8 +52,8 @@ The API Markdown can also be checked against the checked-in schema with
 
 Keep Markdown links relative so pages remain readable on GitHub. The
 [documentation map](README.md) links the six menu sections; [`docs/docs.json`](docs.json)
-defines each sidebar. Register each page once, and link it from its owning
-overview. Groups may nest. A page entry can set a short sidebar label using
+defines each sidebar. Register each published page once, and link it from its
+owning overview. Groups may nest. A page entry can set a short sidebar label using
 `{"page": "guides/quickstart", "label": "Local Setup"}`; the article and browser
 keep the descriptive title from Markdown or frontmatter. Use a tab's `hidden`
 array for a deep page linked by an index: it remains available by URL and search

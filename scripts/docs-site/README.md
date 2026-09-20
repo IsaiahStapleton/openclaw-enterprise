@@ -37,6 +37,11 @@ folder indexes and links outside `docs/` point to the Enterprise GitHub source.
 Markdown links in full-line comments under `deploy/examples/` (`.yaml` and
 `.yml`) use the same validation.
 
+Before parsing links or rendering, the build removes document `Changelog` sections
+and empty `Manual Notes` sections. It also removes the notes placeholder when real
+notes follow; those notes stay visible. This keeps internal records out of the
+article, table of contents, and Pagefind without changing their Markdown source.
+
 Each navigation tab declares `groups`. A group has a `group` name and `pages`;
 its entries can be Markdown slugs, `{ "page": "slug", "label": "Short label" }`,
 or nested `{ "group": "Name", "pages": [...] }` groups. A short label changes
@@ -44,7 +49,10 @@ the sidebar and breadcrumb without changing the article or its search title.
 The first visible page is the tab landing page; give it an overview when the tab
 covers multiple subjects. A tab can also declare `hidden`, an array of slugs or
 labeled pages. These pages keep their URLs and appear in search, but not in the
-sidebar. List every Markdown page exactly once, visible or hidden. The local
+sidebar. Mark a repository-only archive `published: false` in Markdown frontmatter
+and omit it from navigation; it has no site route or search entry, and local links
+from published pages to it fail validation. A GitHub source link can cite the
+record. List every other Markdown page exactly once, visible or hidden. The local
 [navigation schema](./navigation.schema.json) describes the accepted format.
 
 `word-count.mjs` checks every tracked or nonignored Markdown file returned by

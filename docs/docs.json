@@ -633,7 +633,6 @@
               "flows/docker-compose-development/startup",
               "flows/docker-compose-development/agent-execution",
               "flows/common-logging",
-              "flows/platform-startup/history",
               "flows/controller-worker",
               "flows/platform-console",
               "flows/platform-console/agent-editing",
