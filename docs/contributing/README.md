@@ -32,7 +32,8 @@ existing installation, see the [User guide](../guides/README.md).
   [platform console](../flows/platform-console.md).
 - [Preview the documentation](../local-preview.md) and use the
   [base Driver documentation template](../base-driver-docs-template.md) when
-  changing a Driver contract.
+  changing a Driver contract. The [documentation inventory](../documentation-inventory.md)
+  maps each current page to the proposed navigation and lists missing coverage.
 
 Before opening a pull request, read the [contribution policy](../../CONTRIBUTING.md)
 for repository boundaries, verification, review, and private security reporting.

@@ -32,6 +32,8 @@ The [Platform developer guide](contributing/README.md) is for people changing
 OCC, its CLI, Drivers, or this repository. Start with
 [Make your first platform change](contributing/first-change.md),
 [repository layout](layout.md), or [testing and CI](testing/README.md).
+See the [documentation inventory and proposed navigation](documentation-inventory.md)
+for the source-by-source audit and missing pages.
 
 <a id="architecture"></a>
 

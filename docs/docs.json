@@ -228,6 +228,23 @@
               {
                 "group": "Writing documentation",
                 "pages": ["local-preview", "driver-docs-inventory", "base-driver-docs-template"]
+              },
+              {
+                "group": "Documentation inventory",
+                "pages": [
+                  "documentation-inventory",
+                  "documentation-inventory/gaps",
+                  "documentation-inventory/getting-started",
+                  "documentation-inventory/topics",
+                  "documentation-inventory/integrations-reference",
+                  "documentation-inventory/contribute-design",
+                  "documentation-inventory/contribute-flows",
+                  "documentation-inventory/contribute-development",
+                  "documentation-inventory/repository-guidance",
+                  "documentation-inventory/repository-specs-1",
+                  "documentation-inventory/repository-specs-2",
+                  "documentation-inventory/repository-specs-3"
+                ]
               }
             ]
           }
