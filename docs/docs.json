@@ -143,6 +143,7 @@
                   "flows/harness-execution-topology",
                   "flows/kubernetes-existing-namespace-placement",
                   "flows/local-password-authentication",
+                  "flows/namespace-iam-policy",
                   "flows/native-service-account-credential-delivery",
                   "flows/platform-console",
                   "flows/platform-console/agent-editing",

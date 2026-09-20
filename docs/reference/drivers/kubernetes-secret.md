@@ -157,12 +157,10 @@ enough.
 Before deployment, the selected IAM policy must grant both the deploying actor
 and the consuming Agent's existing stable service principal `operate` on every
 bound Secret. Native IAM policy is controller-owned persisted state, not
-Installation YAML, Driver YAML, or Kubernetes RoleBindings. Until a public
-IAM-management surface exists, ordinary API-only operators cannot discover the
-Agent service principal ID or create this grant through OCC endpoints because the
-public Agent response hides the internal service principal. An administrator or
-integration with access to controller-owned IAM state must complete that exact
-grant before a Secret-backed deployment can be admitted.
+Installation YAML, Driver YAML, or Kubernetes RoleBindings. Authorized Agent
+responses expose the Agent service principal ID, and administrators can create
+the exact Secret grant through the Namespace IAM policy API before a
+Secret-backed deployment is admitted.
 
 Deployment freezes the normalized bindings and selected Secret Driver ID in the
 immutable AgentRevision. It does not snapshot backend locators or value bytes.

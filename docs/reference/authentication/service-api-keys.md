@@ -8,13 +8,13 @@ creates no account, session, identity, Role, or AccessBinding. The selected IAM
 Driver must support lookup by `servicePrincipalId` and load current policy for
 each identity lookup and authorization decision. Unknown identities are denied.
 
-The current API does not provision service principals or their grants. An
-operator uses the service administrator created by fresh bootstrap or provisions
-another identity and explicit bindings through the selected IAM authority.
-Native IAM supports these records internally; there is no public IAM-management
-API. Agent-owned principals cannot use service keys: Agent authentication requires the separate workload-bound
-credential flow. These controller keys are also distinct from upstream
-provider credentials managed by [Service accounts](../service-accounts.md).
+The current API does not provision service principals. An operator uses the
+service administrator created by fresh bootstrap or provisions another identity
+through the selected IAM authority, then manages Roles and AccessBindings
+through the Namespace IAM policy API. Agent-owned principals cannot use service
+keys: Agent authentication requires the separate workload-bound credential flow.
+These controller keys are also distinct from upstream provider credentials
+managed by [Service accounts](../service-accounts.md).
 
 The controller uses Better Auth's pinned
 [API-key plugin](https://better-auth.com/docs/plugins/api-key) through server-only

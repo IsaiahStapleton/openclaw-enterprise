@@ -2,6 +2,7 @@ import { RepositoryTransactionLifetime } from "../ports/transaction.ts";
 import { bindPlatformUnitOfWork } from "../ports/platform-unit-of-work.ts";
 import { createPlatformReadView } from "../ports/platform-read-view.ts";
 import type {
+  AccessBinding,
   Agent,
   AgentDesiredRuntimeState,
   AgentRevision,
@@ -17,6 +18,7 @@ import type {
   SecretBindings,
   ServiceAccount,
   ServiceAccountCredential,
+  Role,
 } from "@openclaw-enterprise/contracts";
 import {
   normalizePluginDesiredState,
@@ -444,6 +446,23 @@ export interface PlatformOperationRepository extends PlatformOperationReadReposi
   append(operation: PlatformOperation): Promise<void>;
 }
 
+export interface IAMPolicyReadRepository {
+  listRoles(namespaceId: string): Promise<readonly Readonly<Role>[]>;
+  getRole(namespaceId: string, roleId: string): Promise<Readonly<Role> | undefined>;
+  listAccessBindings(namespaceId: string): Promise<readonly Readonly<AccessBinding>[]>;
+  getAccessBinding(
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<Readonly<AccessBinding> | undefined>;
+}
+
+export interface IAMPolicyRepository extends IAMPolicyReadRepository {
+  createRole(role: Role): Promise<Readonly<Role>>;
+  deleteRole(namespaceId: string, roleId: string): Promise<boolean>;
+  createAccessBinding(binding: AccessBinding): Promise<Readonly<AccessBinding>>;
+  deleteAccessBinding(namespaceId: string, bindingId: string): Promise<boolean>;
+}
+
 export interface PlatformReadView {
   readonly installations: InstallationReadRepository;
   readonly namespaces: NamespaceReadRepository;
@@ -452,6 +471,7 @@ export interface PlatformReadView {
   readonly serviceAccounts: ServiceAccountReadRepository;
   readonly agents: AgentReadRepository;
   readonly revisions: AgentRevisionReadRepository;
+  readonly iamPolicy: IAMPolicyReadRepository;
   readonly operations: PlatformOperationReadRepository;
 }
 
@@ -463,6 +483,7 @@ export interface PlatformUnitOfWork extends PlatformReadView {
   readonly serviceAccounts: ServiceAccountRepository;
   readonly agents: AgentRepository;
   readonly revisions: AgentRevisionRepository;
+  readonly iamPolicy: IAMPolicyRepository;
   readonly audit: PlatformAuditRepository;
   readonly operations: PlatformOperationRepository;
 }
@@ -497,6 +518,8 @@ interface PlatformSnapshot {
   readonly serviceAccounts: Map<string, Readonly<ServiceAccount>>;
   readonly agents: Map<string, Readonly<Agent>>;
   readonly revisions: Map<string, readonly Readonly<AgentRevision>[]>;
+  readonly roles: Map<string, Readonly<Role>>;
+  readonly bindings: Map<string, Readonly<AccessBinding>>;
   readonly audit: Readonly<AuditEvent>[];
   readonly operations: Readonly<PlatformOperation>[];
 }
@@ -538,6 +561,10 @@ function cloneSnapshot(snapshot: PlatformSnapshot): PlatformSnapshot {
         Object.freeze(revisions.map((revision) => immutableCopy(revision))),
       ]),
     ),
+    roles: new Map(Array.from(snapshot.roles, ([key, role]) => [key, immutableCopy(role)])),
+    bindings: new Map(
+      Array.from(snapshot.bindings, ([key, binding]) => [key, immutableCopy(binding)]),
+    ),
     audit: snapshot.audit.map((event) => immutableCopy(event)),
     operations: snapshot.operations.map((operation) => immutableCopy(operation)),
   };
@@ -547,6 +574,10 @@ function assertInitialized(snapshot: PlatformSnapshot): void {
   if (!snapshot.installation) {
     throw new ScopeViolationError("The server-owned Installation has not been initialized.");
   }
+}
+
+function iamPolicyKey(namespaceId: string, id: string): string {
+  return `${namespaceId}\u0000${id}`;
 }
 
 const secretIdentifier =
@@ -1347,6 +1378,149 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     },
   };
 
+  const agentRevisionExists = (namespaceId: string, revisionId: string): boolean =>
+    Array.from(snapshot.revisions.values())
+      .flat()
+      .some((revision) => revision.namespaceId === namespaceId && revision.id === revisionId);
+
+  const managedPolicyResourceExists = async (
+    namespaceId: string,
+    resourceKind: NonNullable<AccessBinding["resourceKind"]>,
+    resourceId: string,
+  ): Promise<boolean> => {
+    if (resourceKind === "agent") {
+      return (await agents.findAgent(namespaceId, resourceId)) !== undefined;
+    }
+    if (resourceKind === "agent_revision") {
+      return agentRevisionExists(namespaceId, resourceId);
+    }
+    if (resourceKind === "configuration") {
+      return (await configurations.findConfiguration(namespaceId, resourceId)) !== undefined;
+    }
+    if (resourceKind === "secret") {
+      return (await secrets.findSecret(namespaceId, resourceId)) !== undefined;
+    }
+    if (resourceKind === "service_account") {
+      return (await serviceAccounts.findServiceAccount(namespaceId, resourceId)) !== undefined;
+    }
+    return false;
+  };
+
+  const namespaceServicePrincipalExists = (namespaceId: string, identityId: string): boolean =>
+    Array.from(snapshot.agents.values()).some(
+      (agent) =>
+        agent.namespaceId === namespaceId &&
+        agent.servicePrincipalId === identityId &&
+        snapshot.namespaces.get(namespaceId)?.deletedAt === undefined,
+    );
+
+  const iamPolicy: IAMPolicyRepository = {
+    listRoles: async (namespaceId) =>
+      Object.freeze(
+        Array.from(snapshot.roles.values())
+          .filter((role) => role.namespaceId === namespaceId)
+          .map((role) => immutableCopy(role)),
+      ),
+    getRole: async (namespaceId, roleId) => {
+      const role = snapshot.roles.get(iamPolicyKey(namespaceId, roleId));
+      return role === undefined ? undefined : immutableCopy(role);
+    },
+    createRole: async (role) => {
+      assertInitialized(snapshot);
+      const namespace = await namespaces.lockNamespace(role.namespaceId ?? "");
+      if (
+        namespace === undefined ||
+        (namespace.status !== "provisioning" && namespace.status !== "ready")
+      ) {
+        throw new ScopeViolationError("The IAM Role belongs to an unavailable Namespace.");
+      }
+      const key = iamPolicyKey(namespace.id, role.id);
+      if (
+        snapshot.roles.has(key) ||
+        Array.from(snapshot.roles.values()).some((candidate) => candidate.id === role.id)
+      ) {
+        throw new ResourceConflictError("The server generated an existing IAM Role identity.");
+      }
+      if (role.namespaceId !== namespace.id || role.permissions.length === 0) {
+        throw new ScopeViolationError("The IAM Role must be Namespace-scoped and nonempty.");
+      }
+      const saved = immutableCopy(role);
+      snapshot.roles.set(key, saved);
+      return immutableCopy(saved);
+    },
+    deleteRole: async (namespaceId, roleId) => {
+      const key = iamPolicyKey(namespaceId, roleId);
+      if (!snapshot.roles.has(key)) {
+        return false;
+      }
+      if (
+        Array.from(snapshot.bindings.values()).some(
+          (binding) => binding.namespaceId === namespaceId && binding.roleId === roleId,
+        )
+      ) {
+        throw new ResourceConflictError("The IAM Role is referenced by an AccessBinding.");
+      }
+      snapshot.roles.delete(key);
+      return true;
+    },
+    listAccessBindings: async (namespaceId) =>
+      Object.freeze(
+        Array.from(snapshot.bindings.values())
+          .filter((binding) => binding.namespaceId === namespaceId)
+          .map((binding) => immutableCopy(binding)),
+      ),
+    getAccessBinding: async (namespaceId, bindingId) => {
+      const binding = snapshot.bindings.get(iamPolicyKey(namespaceId, bindingId));
+      return binding === undefined ? undefined : immutableCopy(binding);
+    },
+    createAccessBinding: async (binding) => {
+      assertInitialized(snapshot);
+      const namespaceId = binding.namespaceId ?? "";
+      const namespace = await namespaces.lockNamespace(namespaceId);
+      if (
+        namespace === undefined ||
+        (namespace.status !== "provisioning" && namespace.status !== "ready")
+      ) {
+        throw new ScopeViolationError("The IAM AccessBinding belongs to an unavailable Namespace.");
+      }
+      const role = await iamPolicy.getRole(namespace.id, binding.roleId);
+      if (role === undefined) {
+        throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
+      }
+      if (
+        binding.subjectKind !== "identity" ||
+        !namespaceServicePrincipalExists(namespace.id, binding.subjectId)
+      ) {
+        throw new ScopeViolationError(
+          "The IAM AccessBinding subject does not belong to the exact Namespace.",
+        );
+      }
+      if (
+        binding.resourceKind === undefined ||
+        binding.resourceId === undefined ||
+        !(await managedPolicyResourceExists(namespace.id, binding.resourceKind, binding.resourceId))
+      ) {
+        throw new ScopeViolationError(
+          "The IAM AccessBinding target does not belong to the exact Namespace.",
+        );
+      }
+      const key = iamPolicyKey(namespace.id, binding.id);
+      if (
+        snapshot.bindings.has(key) ||
+        Array.from(snapshot.bindings.values()).some((candidate) => candidate.id === binding.id)
+      ) {
+        throw new ResourceConflictError(
+          "The server generated an existing IAM AccessBinding identity.",
+        );
+      }
+      const saved = immutableCopy(binding);
+      snapshot.bindings.set(key, saved);
+      return immutableCopy(saved);
+    },
+    deleteAccessBinding: async (namespaceId, bindingId) =>
+      snapshot.bindings.delete(iamPolicyKey(namespaceId, bindingId)),
+  };
+
   return {
     installations,
     namespaces,
@@ -1355,6 +1529,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     serviceAccounts,
     agents,
     revisions,
+    iamPolicy,
     audit: {
       async append(event) {
         if (event.installationId !== snapshot.installation?.id) {
@@ -1474,6 +1649,8 @@ export class InMemoryPlatformState implements PlatformStateStore {
     serviceAccounts: new Map(),
     agents: new Map(),
     revisions: new Map(),
+    roles: new Map(),
+    bindings: new Map(),
     audit: [],
     operations: [],
   };

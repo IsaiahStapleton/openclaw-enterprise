@@ -27,6 +27,7 @@ import {
   PluginToolPolicySchema,
   SecretResponse,
   occApiRoutes,
+  type AccessBinding,
   type Agent,
   type AgentRevision,
   type AgentRuntimeCredentialsBody,
@@ -44,6 +45,7 @@ import {
   type ProviderSummary,
   type ResourceKind,
   type ResourceRef,
+  type Role,
   type SandboxDriver,
   type SecretDriver,
   type SecretBindings,
@@ -392,6 +394,22 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
   }
 
   if (
+    operation.operationId === "listIAMRoles" ||
+    operation.operationId === "createIAMRole" ||
+    operation.operationId === "getIAMRole" ||
+    operation.operationId === "deleteIAMRole" ||
+    operation.operationId === "listIAMAccessBindings" ||
+    operation.operationId === "createIAMAccessBinding" ||
+    operation.operationId === "getIAMAccessBinding" ||
+    operation.operationId === "deleteIAMAccessBinding"
+  ) {
+    return [
+      { action: "administer", resourceKind: "installation", scope: "requested" },
+      { action: "read", resourceKind: "namespace", scope: "requested" },
+    ];
+  }
+
+  if (
     operation.operationId === "createAgent" ||
     operation.operationId === "updateAgent" ||
     operation.operationId === "deployAgent"
@@ -506,11 +524,33 @@ function clientServiceAccount(account: Readonly<ServiceAccount>): Record<string,
   };
 }
 
+function clientIAMRole(role: Readonly<Role>): Record<string, unknown> {
+  return {
+    id: role.id,
+    namespaceId: role.namespaceId,
+    ...(role.name === undefined ? {} : { name: role.name }),
+    permissions: role.permissions,
+  };
+}
+
+function clientIAMAccessBinding(binding: Readonly<AccessBinding>): Record<string, unknown> {
+  return {
+    id: binding.id,
+    namespaceId: binding.namespaceId,
+    subjectKind: binding.subjectKind,
+    subjectId: binding.subjectId,
+    roleId: binding.roleId,
+    ...(binding.resourceKind === undefined ? {} : { resourceKind: binding.resourceKind }),
+    ...(binding.resourceId === undefined ? {} : { resourceId: binding.resourceId }),
+  };
+}
+
 function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
   return {
     id: agent.id,
     namespaceId: agent.namespaceId,
     name: agent.name,
+    servicePrincipalId: agent.servicePrincipalId,
     configurationId: agent.configurationId,
     providerId: agent.providerId,
     executionMode: agent.executionMode,
@@ -1662,6 +1702,133 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             operation,
             request,
             { kind: "secret", id: params.secretId as string, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+      });
+      reply.status(204).send();
+      return;
+    }
+
+    if (operation.operationId === "listIAMRoles") {
+      const roles = await controller.listIAMRoles(context.actorId, namespaceId);
+      reply.send({ data: roles.map(clientIAMRole), meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "createIAMRole") {
+      const role = await controller.transact(async (unit) => {
+        const created = await controller!.createIAMRole(context.actorId, {
+          namespaceId,
+          ...(body?.name === undefined ? {} : { name: body.name as string }),
+          permissions: body?.permissions as never,
+        });
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "namespace", id: namespaceId, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return clientIAMRole(created);
+      });
+      reply.status(201).send({ data: role, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "getIAMRole") {
+      const role = await controller.getIAMRole(
+        context.actorId,
+        namespaceId,
+        params.roleId as string,
+      );
+      reply.send({ data: clientIAMRole(role), meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "deleteIAMRole") {
+      await controller.transact(async (unit) => {
+        await controller!.deleteIAMRole(context.actorId, namespaceId, params.roleId as string);
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "namespace", id: namespaceId, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+      });
+      reply.status(204).send();
+      return;
+    }
+
+    if (operation.operationId === "listIAMAccessBindings") {
+      const bindings = await controller.listIAMAccessBindings(context.actorId, namespaceId);
+      reply.send({
+        data: bindings.map(clientIAMAccessBinding),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
+    if (operation.operationId === "createIAMAccessBinding") {
+      const binding = await controller.transact(async (unit) => {
+        const created = await controller!.createIAMAccessBinding(context.actorId, {
+          namespaceId,
+          subjectKind: body?.subjectKind as "identity",
+          subjectId: body?.subjectId as string,
+          roleId: body?.roleId as string,
+          resourceKind: body?.resourceKind as ResourceKind,
+          resourceId: body?.resourceId as string,
+        });
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            {
+              kind: body?.resourceKind as ResourceKind,
+              id: body?.resourceId as string,
+              namespaceId,
+            },
+            "mutation",
+            context,
+          ),
+        );
+        return clientIAMAccessBinding(created);
+      });
+      reply.status(201).send({ data: binding, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "getIAMAccessBinding") {
+      const binding = await controller.getIAMAccessBinding(
+        context.actorId,
+        namespaceId,
+        params.bindingId as string,
+      );
+      reply.send({
+        data: clientIAMAccessBinding(binding),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
+    if (operation.operationId === "deleteIAMAccessBinding") {
+      await controller.transact(async (unit) => {
+        await controller!.deleteIAMAccessBinding(
+          context.actorId,
+          namespaceId,
+          params.bindingId as string,
+        );
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "namespace", id: namespaceId, namespaceId },
             "mutation",
             context,
           ),

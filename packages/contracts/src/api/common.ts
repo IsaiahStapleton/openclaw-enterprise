@@ -7,6 +7,8 @@ export const NamespaceId = Type.String({ pattern: `^ns_${UUID_V4}$` });
 export const ConfigurationId = Type.String({ pattern: `^cfg_${UUID_V4}$` });
 export const ServiceAccountId = Type.String({ pattern: `^sa_${UUID_V4}$` });
 export const SecretId = Type.String({ pattern: `^sec_${UUID_V4}$` });
+export const IAMRoleId = Type.String({ minLength: 1, maxLength: 200 });
+export const IAMAccessBindingId = Type.String({ minLength: 1, maxLength: 200 });
 export const ConfigurationKindSchema = Type.Literal("agent");
 export const HarnessExecutionModeSchema = Type.Union([
   Type.Literal("embedded"),
@@ -76,6 +78,16 @@ export const ServiceAccountParams = Type.Object(
 
 export const SecretParams = Type.Object(
   { namespaceId: NamespaceId, secretId: SecretId },
+  { additionalProperties: false },
+);
+
+export const IAMRoleParams = Type.Object(
+  { namespaceId: NamespaceId, roleId: IAMRoleId },
+  { additionalProperties: false },
+);
+
+export const IAMAccessBindingParams = Type.Object(
+  { namespaceId: NamespaceId, bindingId: IAMAccessBindingId },
   { additionalProperties: false },
 );
 
@@ -212,6 +224,58 @@ export const AgentRuntimeCredentialsBody = Type.Object(
         { additionalProperties: false },
       ),
     ),
+  },
+  { additionalProperties: false },
+);
+
+export const PermissionActionSchema = Type.Union([
+  Type.Literal("create"),
+  Type.Literal("read"),
+  Type.Literal("update"),
+  Type.Literal("delete"),
+  Type.Literal("deploy"),
+  Type.Literal("operate"),
+  Type.Literal("administer"),
+]);
+
+export const ResourceKindSchema = Type.Union([
+  Type.Literal("installation"),
+  Type.Literal("namespace"),
+  Type.Literal("configuration"),
+  Type.Literal("service_account"),
+  Type.Literal("secret"),
+  Type.Literal("agent"),
+  Type.Literal("agent_revision"),
+]);
+
+export const NamespacePolicyResourceKindSchema = Type.Union([
+  Type.Literal("agent"),
+  Type.Literal("agent_revision"),
+  Type.Literal("configuration"),
+  Type.Literal("secret"),
+  Type.Literal("service_account"),
+]);
+
+export const IAMPermissionBody = Type.Object(
+  { action: PermissionActionSchema, resourceKind: NamespacePolicyResourceKindSchema },
+  { additionalProperties: false },
+);
+
+export const CreateIAMRoleBody = Type.Object(
+  {
+    name: Type.Optional(Name),
+    permissions: Type.Array(IAMPermissionBody, { minItems: 1, maxItems: 64 }),
+  },
+  { additionalProperties: false },
+);
+
+export const CreateIAMAccessBindingBody = Type.Object(
+  {
+    subjectKind: Type.Literal("identity"),
+    subjectId: Type.String({ minLength: 1, maxLength: 200 }),
+    roleId: IAMRoleId,
+    resourceKind: NamespacePolicyResourceKindSchema,
+    resourceId: Type.String({ minLength: 1, maxLength: 200 }),
   },
   { additionalProperties: false },
 );
@@ -396,6 +460,8 @@ export type NamespaceId = Type.Static<typeof NamespaceId>;
 export type ConfigurationId = Type.Static<typeof ConfigurationId>;
 export type ServiceAccountId = Type.Static<typeof ServiceAccountId>;
 export type SecretId = Type.Static<typeof SecretId>;
+export type IAMRoleId = Type.Static<typeof IAMRoleId>;
+export type IAMAccessBindingId = Type.Static<typeof IAMAccessBindingId>;
 export type ConfigurationGeneration = Type.Static<typeof ConfigurationGeneration>;
 export type AgentId = Type.Static<typeof AgentId>;
 export type RevisionId = Type.Static<typeof RevisionId>;
@@ -411,12 +477,16 @@ export type NamespaceParams = Type.Static<typeof NamespaceParams>;
 export type ConfigurationParams = Type.Static<typeof ConfigurationParams>;
 export type ServiceAccountParams = Type.Static<typeof ServiceAccountParams>;
 export type SecretParams = Type.Static<typeof SecretParams>;
+export type IAMRoleParams = Type.Static<typeof IAMRoleParams>;
+export type IAMAccessBindingParams = Type.Static<typeof IAMAccessBindingParams>;
 export type AgentParams = Type.Static<typeof AgentParams>;
 export type RevisionParams = Type.Static<typeof RevisionParams>;
 export type DeploymentParams = Type.Static<typeof DeploymentParams>;
 export type WorkspaceFileName = Type.Static<typeof WorkspaceFileName>;
 export type AgentRuntimeCredentialsBody = Type.Static<typeof AgentRuntimeCredentialsBody>;
 export type WorkspaceFileParams = Type.Static<typeof WorkspaceFileParams>;
+export type CreateIAMRoleBody = Type.Static<typeof CreateIAMRoleBody>;
+export type CreateIAMAccessBindingBody = Type.Static<typeof CreateIAMAccessBindingBody>;
 export type ConfigurationValues = Type.Static<typeof ConfigurationValues>;
 export type CreateSecretBody = Type.Static<typeof CreateSecretBody>;
 export type UpdateSecretBody = Type.Static<typeof UpdateSecretBody>;

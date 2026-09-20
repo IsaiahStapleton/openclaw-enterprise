@@ -20,7 +20,7 @@ occ namespace list
 ```
 
 The resource command groups are `installation`, `namespace`, `configuration`,
-and `agent`. Walk their built-in help when discovering an operation:
+`iam`, and `agent`. Walk their built-in help when discovering an operation:
 
 ```bash
 occ --help
@@ -28,7 +28,7 @@ occ namespace --help
 occ agent deploy --help
 ```
 
-Configuration and Agent operations use the Namespace selected by
+Configuration, IAM, and Agent operations use the Namespace selected by
 `OCC_NAMESPACE` or `--namespace`. Create and update commands accept a product
 JSON document rather than an HTTP body or path:
 
@@ -43,6 +43,22 @@ occ agent stop '<agent-id>'
 Human-readable tables are the default. Use `--output json` or `--output yaml`
 for automation. Structured output contains the resource or resource collection
 directly; HTTP response envelopes are an internal client detail.
+
+## Manage Namespace IAM
+
+Create a Namespace Role and bind it to the Agent's returned
+`servicePrincipalId` when an Agent needs delegated access to an exact resource.
+The IAM commands require Installation administration and Namespace read access.
+
+```bash
+occ iam role create --file role.json
+occ iam access-binding create --file binding.json
+```
+
+Use the request documents in
+[Namespace IAM](../reference/authorization.md#manage-namespace-policy). Inspect
+Role permissions before reusing a Role; its name alone does not establish
+access.
 
 ## Manage local development
 

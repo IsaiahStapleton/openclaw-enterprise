@@ -4,6 +4,7 @@ import type {
   AgentRevision,
   AgentRuntimeCredentialsInput,
   AgentRuntimeCredentialStatus,
+  AccessBinding,
   AuthorizationDecision,
   AuthorizationRequest,
   ComputeDriver,
@@ -21,6 +22,8 @@ import type {
   NamespaceEnsureResult,
   LoggingLevel,
   OpenClawConfigurationDocument,
+  ManagedIAMResourceKind,
+  Permission,
   PermissionAction,
   PluginDesiredState,
   PluginDriver,
@@ -29,6 +32,7 @@ import type {
   ProviderRef,
   ResourceKind,
   ResourceRef,
+  Role,
   SandboxDriver,
   SandboxFacet,
   Secret,
@@ -43,6 +47,7 @@ import type {
 } from "@openclaw-enterprise/contracts";
 import {
   DRIVER_CAPABILITIES,
+  RESOURCE_KINDS,
   SANDBOX_FACETS,
   admitLoggingConfiguration,
   normalizeLoggingLevel,
@@ -223,6 +228,21 @@ export interface CreateConfigurationInput {
   readonly secretBindings?: SecretBindings;
 }
 
+export interface CreateIAMRoleInput {
+  readonly namespaceId: string;
+  readonly name?: string;
+  readonly permissions: readonly Permission[];
+}
+
+export interface CreateIAMAccessBindingInput {
+  readonly namespaceId: string;
+  readonly subjectKind: "identity";
+  readonly subjectId: string;
+  readonly roleId: string;
+  readonly resourceKind: ResourceKind;
+  readonly resourceId: string;
+}
+
 export interface UpdateConfigurationInput {
   readonly namespaceId: string;
   readonly configurationId: string;
@@ -279,7 +299,21 @@ function driverHasCapabilityContract(driver: Driver): boolean {
   const candidate = driver as unknown as Record<string, unknown>;
   if (driver.capability === "iam") {
     return (
-      typeof candidate.lookupIdentity === "function" && typeof candidate.authorize === "function"
+      typeof candidate.lookupIdentity === "function" &&
+      typeof candidate.authorize === "function" &&
+      [
+        "listNamespaceRoles",
+        "getNamespaceRole",
+        "createNamespaceRole",
+        "deleteNamespaceRole",
+        "listNamespaceAccessBindings",
+        "getNamespaceAccessBinding",
+        "createNamespaceAccessBinding",
+        "deleteNamespaceAccessBinding",
+      ].every(
+        (operation) =>
+          candidate[operation] === undefined || typeof candidate[operation] === "function",
+      )
     );
   }
   if (driver.capability === "configuration") {
@@ -727,6 +761,173 @@ export class OpenClawController {
       namespaceId,
     });
     return this.read(async (state) => this.exactNamespace(state, namespaceId));
+  }
+
+  async listIAMRoles(principalId: string, namespaceId: string): Promise<readonly Readonly<Role>[]> {
+    const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const driver = this.iamPolicyDriver("listNamespaceRoles");
+    return this.read((state) =>
+      this.iamPolicyOperation(() =>
+        driver.listNamespaceRoles!({ policy: state.iamPolicy }, namespace.id),
+      ),
+    );
+  }
+
+  async createIAMRole(principalId: string, input: CreateIAMRoleInput): Promise<Readonly<Role>> {
+    const permissions = this.iamRolePermissions(input.permissions);
+    if (input.name !== undefined && !validName(input.name)) {
+      throw new ScopeViolationError("The IAM Role name is invalid.");
+    }
+    const namespace = await this.admitIAMPolicyOperation(principalId, input.namespaceId);
+    const driver = this.iamPolicyDriver("createNamespaceRole");
+    return this.mutate((state) =>
+      this.iamPolicyOperation(() =>
+        driver.createNamespaceRole!(
+          { policy: state.iamPolicy },
+          {
+            id: `role_${crypto.randomUUID()}`,
+            namespaceId: namespace.id,
+            ...(input.name === undefined ? {} : { name: input.name }),
+            permissions,
+          },
+        ),
+      ),
+    );
+  }
+
+  async getIAMRole(
+    principalId: string,
+    namespaceId: string,
+    roleId: string,
+  ): Promise<Readonly<Role>> {
+    if (!isNonEmptyString(roleId)) {
+      throw new ScopeViolationError("The exact IAM Role identity is missing.");
+    }
+    const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const driver = this.iamPolicyDriver("getNamespaceRole");
+    const role = await this.read((state) =>
+      this.iamPolicyOperation(() =>
+        driver.getNamespaceRole!({ policy: state.iamPolicy }, namespace.id, roleId),
+      ),
+    );
+    if (role === undefined) {
+      throw new ScopeViolationError("The IAM Role does not belong to the exact Namespace.");
+    }
+    return role;
+  }
+
+  async deleteIAMRole(principalId: string, namespaceId: string, roleId: string): Promise<void> {
+    if (!isNonEmptyString(roleId)) {
+      throw new ScopeViolationError("The exact IAM Role identity is missing.");
+    }
+    const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const driver = this.iamPolicyDriver("deleteNamespaceRole");
+    const deleted = await this.mutate((state) =>
+      this.iamPolicyOperation(() =>
+        driver.deleteNamespaceRole!({ policy: state.iamPolicy }, namespace.id, roleId),
+      ),
+    );
+    if (!deleted) {
+      throw new ScopeViolationError("The IAM Role does not belong to the exact Namespace.");
+    }
+  }
+
+  async listIAMAccessBindings(
+    principalId: string,
+    namespaceId: string,
+  ): Promise<readonly Readonly<AccessBinding>[]> {
+    const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const driver = this.iamPolicyDriver("listNamespaceAccessBindings");
+    return this.read((state) =>
+      this.iamPolicyOperation(() =>
+        driver.listNamespaceAccessBindings!({ policy: state.iamPolicy }, namespace.id),
+      ),
+    );
+  }
+
+  async createIAMAccessBinding(
+    principalId: string,
+    input: CreateIAMAccessBindingInput,
+  ): Promise<Readonly<AccessBinding>> {
+    if (input.subjectKind !== "identity" || !isNonEmptyString(input.subjectId)) {
+      throw new ScopeViolationError("The IAM AccessBinding subject is invalid.");
+    }
+    if (!isNonEmptyString(input.roleId)) {
+      throw new ScopeViolationError("The IAM AccessBinding Role is invalid.");
+    }
+    this.assertNamespacePolicyResourceKind(input.resourceKind);
+    if (!isNonEmptyString(input.resourceId)) {
+      throw new ScopeViolationError("The IAM AccessBinding resource is invalid.");
+    }
+    const namespace = await this.admitIAMPolicyOperation(principalId, input.namespaceId);
+    await this.authorize(principalId, "read", {
+      kind: input.resourceKind,
+      id: input.resourceId,
+      namespaceId: namespace.id,
+    });
+    await this.verifyNamespacePolicyResource(namespace.id, input.resourceKind, input.resourceId);
+    const driver = this.iamPolicyDriver("createNamespaceAccessBinding");
+    return this.mutate((state) =>
+      this.iamPolicyOperation(() =>
+        driver.createNamespaceAccessBinding!(
+          { policy: state.iamPolicy },
+          {
+            id: `binding_${crypto.randomUUID()}`,
+            namespaceId: namespace.id,
+            subjectKind: "identity",
+            subjectId: input.subjectId,
+            roleId: input.roleId,
+            resourceKind: input.resourceKind as ManagedIAMResourceKind,
+            resourceId: input.resourceId,
+          },
+        ),
+      ),
+    );
+  }
+
+  async getIAMAccessBinding(
+    principalId: string,
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<Readonly<AccessBinding>> {
+    if (!isNonEmptyString(bindingId)) {
+      throw new ScopeViolationError("The exact IAM AccessBinding identity is missing.");
+    }
+    const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const driver = this.iamPolicyDriver("getNamespaceAccessBinding");
+    const binding = await this.read((state) =>
+      this.iamPolicyOperation(() =>
+        driver.getNamespaceAccessBinding!({ policy: state.iamPolicy }, namespace.id, bindingId),
+      ),
+    );
+    if (binding === undefined) {
+      throw new ScopeViolationError(
+        "The IAM AccessBinding does not belong to the exact Namespace.",
+      );
+    }
+    return binding;
+  }
+
+  async deleteIAMAccessBinding(
+    principalId: string,
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<void> {
+    if (!isNonEmptyString(bindingId)) {
+      throw new ScopeViolationError("The exact IAM AccessBinding identity is missing.");
+    }
+    const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const driver = this.iamPolicyDriver("deleteNamespaceAccessBinding");
+    const deleted = await this.mutate((state) =>
+      this.iamPolicyOperation(() =>
+        driver.deleteNamespaceAccessBinding!({ policy: state.iamPolicy }, namespace.id, bindingId),
+      ),
+    );
+    if (!deleted) {
+      throw new ScopeViolationError(
+        "The IAM AccessBinding does not belong to the exact Namespace.",
+      );
+    }
   }
 
   async listAgents(principalId: string, namespaceId: string): Promise<readonly Readonly<Agent>[]> {
@@ -2547,6 +2748,144 @@ export class OpenClawController {
         "The Agent runtime credential operation failed or its outcome is unknown.",
       );
     }
+  }
+
+  private iamPolicyDriver<Method extends keyof IAMDriver>(method: Method): IAMDriver {
+    let driver: IAMDriver;
+    try {
+      driver = this.selectedDriver("iam");
+    } catch {
+      throw new DependencyUnavailableError("The selected IAM Driver is unavailable.");
+    }
+    if (typeof driver[method] !== "function") {
+      throw new DependencyUnavailableError(
+        "The selected IAM Driver does not support Namespace policy management.",
+      );
+    }
+    return driver;
+  }
+
+  private async iamPolicyOperation<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof ResourceConflictError || error instanceof ScopeViolationError) {
+        throw error;
+      }
+      throw new DependencyUnavailableError(
+        "The IAM policy operation failed or its outcome is unknown.",
+      );
+    }
+  }
+
+  private async admitIAMPolicyOperation(
+    principalId: string,
+    namespaceId: string,
+  ): Promise<Readonly<Namespace>> {
+    if (!isNonEmptyString(namespaceId)) {
+      throw new ScopeViolationError("The exact Namespace identity is missing.");
+    }
+    await this.authorize(principalId, "administer", {
+      kind: "installation",
+      id: this.installation.id,
+    });
+    await this.authorize(principalId, "read", {
+      kind: "namespace",
+      id: namespaceId,
+      namespaceId,
+    });
+    return this.read((state) => this.exactNamespace(state, namespaceId));
+  }
+
+  private assertNamespacePolicyResourceKind(kind: ResourceKind): void {
+    if (
+      kind !== "agent" &&
+      kind !== "agent_revision" &&
+      kind !== "configuration" &&
+      kind !== "secret" &&
+      kind !== "service_account"
+    ) {
+      throw new ScopeViolationError("IAM policy APIs require an exact Namespace resource target.");
+    }
+  }
+
+  private iamRolePermissions(permissions: readonly Permission[]): readonly Permission[] {
+    if (!Array.isArray(permissions) || permissions.length === 0 || permissions.length > 64) {
+      throw new ScopeViolationError("IAM Roles require one or more supported Permissions.");
+    }
+    const seen = new Set<string>();
+    return Object.freeze(
+      permissions.map((permission) => {
+        if (
+          typeof permission !== "object" ||
+          permission === null ||
+          Array.isArray(permission) ||
+          !["create", "read", "update", "delete", "deploy", "operate", "administer"].includes(
+            permission.action,
+          ) ||
+          !RESOURCE_KINDS.includes(permission.resourceKind)
+        ) {
+          throw new ScopeViolationError("IAM Role Permissions are invalid.");
+        }
+        this.assertNamespacePolicyResourceKind(permission.resourceKind);
+        const key = `${permission.action}\u0000${permission.resourceKind}`;
+        if (seen.has(key)) {
+          throw new ScopeViolationError("IAM Role Permissions contain duplicates.");
+        }
+        seen.add(key);
+        return Object.freeze({
+          action: permission.action,
+          resourceKind: permission.resourceKind,
+        });
+      }),
+    );
+  }
+
+  private async verifyNamespacePolicyResource(
+    namespaceId: string,
+    resourceKind: ResourceKind,
+    resourceId: string,
+  ): Promise<void> {
+    await this.read(async (state) => {
+      if (resourceKind === "agent") {
+        if ((await state.agents.findAgent(namespaceId, resourceId)) === undefined) {
+          throw new ScopeViolationError("The IAM target Agent does not belong to the Namespace.");
+        }
+        return;
+      }
+      if (resourceKind === "agent_revision") {
+        const agents = await state.agents.listAgents(namespaceId);
+        for (const agent of agents) {
+          if (
+            (await state.revisions.findRevision(namespaceId, agent.id, resourceId)) !== undefined
+          ) {
+            return;
+          }
+        }
+        throw new ScopeViolationError(
+          "The IAM target AgentRevision does not belong to the Namespace.",
+        );
+      }
+      if (resourceKind === "configuration") {
+        if ((await state.configurations.findConfiguration(namespaceId, resourceId)) === undefined) {
+          throw new ScopeViolationError(
+            "The IAM target Configuration does not belong to the Namespace.",
+          );
+        }
+        return;
+      }
+      if (resourceKind === "secret") {
+        if ((await state.secrets.findSecret(namespaceId, resourceId)) === undefined) {
+          throw new ScopeViolationError("The IAM target Secret does not belong to the Namespace.");
+        }
+        return;
+      }
+      if ((await state.serviceAccounts.findServiceAccount(namespaceId, resourceId)) === undefined) {
+        throw new ScopeViolationError(
+          "The IAM target ServiceAccount does not belong to the Namespace.",
+        );
+      }
+    });
   }
 
   /** Secret SDK error bodies can contain request bytes; never propagate their message or cause. */
