@@ -53,8 +53,9 @@ The suite inspects restricted tenant labels, quotas and limits, NetworkPolicies,
 nonroot execution, `RuntimeDefault` seccomp, dropped capabilities, denied
 privilege escalation, a read-only root filesystem, and resource bounds. A
 skipped cluster case does not verify enforcement. The HTTP fixture exercises
-infrastructure; real Agent turns require the runtime images and credentials
-below.
+infrastructure. Its API-plus-worker case verifies Secret binding admission and
+gateway projection with synthetic values, but genuine Slack/channel runtime
+requires the runtime images and credentials below.
 
 Live Configuration ConfigMap CRUD and least-privilege RBAC cases require the
 selected disposable cluster and tenant credentials. Without those inputs, they
