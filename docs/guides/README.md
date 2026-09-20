@@ -7,17 +7,17 @@ you are changing the platform source, use the [Platform developer guide](../cont
 
 ## Get started
 
-- **Your organization already runs OpenClaw Enterprise:** ask your installation
-  operator for the console URL, a provisioned account, and access to a Namespace.
-  Then [deploy your first Agent](first-agent.md). The walkthrough explains how
-  to tell an accepted deployment from a running Agent.
-- **You want to try the control plane locally:** follow the
-  [local quickstart](quickstart.md) to sign in and check API access. The default
-  Docker or Podman setup does not deploy Agents. Use
-  [local Kubernetes](deploy/local-kubernetes-development.md) when you need to
-  deploy an Agent.
-- **You are installing the platform:** start with the
+- **You are setting up locally:** start with the [Quickstart](quickstart.md).
+  Its default Docker or Podman setup lets you sign in and check API access, but
+  cannot deploy Agents. To run an Agent locally, complete the
+  [Kubernetes setup](deploy/local-kubernetes-development.md), then
+  [deploy your first Agent](first-agent.md).
+- **You are installing the platform for your organization:** start with the
   [deployment guide](deploy.md) for Kubernetes or Amazon EKS.
+- **Your organization already runs OpenClaw Enterprise:** skip setup. Ask your
+  installation operator for the console URL, a provisioned account, and access
+  to a Namespace. Then [deploy your first Agent](first-agent.md). The walkthrough
+  explains how to tell an accepted deployment from a running Agent.
 
 New to Namespaces, Agents, or revisions? Read [Concepts](concepts.md) first.
 

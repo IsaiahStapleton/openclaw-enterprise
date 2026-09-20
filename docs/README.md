@@ -10,14 +10,14 @@ manage Agents. Choose a guide based on what you want to do.
 The [User guide](guides/README.md) is for people using or administering the
 platform, including through the CLI or API.
 
-- Already have access? [Deploy your first Agent](guides/first-agent.md) or
-  [open the console](reference/console.md).
-- Evaluating locally? [Try the control plane](guides/quickstart.md).
-  Docker and Podman can start it; use
-  [local Kubernetes](guides/deploy/local-kubernetes-development.md) to deploy an Agent.
+- Setting up locally? Start with the [Quickstart](guides/quickstart.md).
+  To deploy an Agent, use the [local Kubernetes setup](guides/deploy/local-kubernetes-development.md),
+  then [deploy your first Agent](guides/first-agent.md).
 - Installing or administering the platform? Start with
   [deployment](guides/deploy.md), [access control](reference/authorization.md),
   or [observability](guides/observability.md).
+- Already have access to a Kubernetes-backed installation? Skip setup and
+  [deploy your first Agent](guides/first-agent.md) or [open the console](reference/console.md).
 
 <a id="reference"></a>
 

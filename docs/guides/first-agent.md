@@ -8,7 +8,13 @@ this first deployment.
 
 ## Before you start
 
-Ask your platform operator for:
+If the platform is not set up yet, start with the [Quickstart](quickstart.md).
+To run this walkthrough locally, use the
+[local Kubernetes setup](deploy/local-kubernetes-development.md); the default
+Docker or Podman profile cannot deploy Agents. If your organization already has
+a Kubernetes-backed installation, you can skip setup.
+
+Once the installation is ready, ask your platform operator for:
 
 - The console URL and your provisioned email and password. The console has no
   public signup or password recovery.

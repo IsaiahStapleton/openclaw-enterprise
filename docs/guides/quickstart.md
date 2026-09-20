@@ -2,10 +2,14 @@
 
 Start [OpenClaw Control Plane (OCC)](concepts.md#control-plane)
 locally, sign in to the console, and read the Installation through an
-authenticated API request. This proves controller access; it does not deploy an
-[Agent](concepts.md#agents-and-revisions) or make a model call. If you already
-have access to a Kubernetes-backed installation, follow
-[Deploy your first Agent](first-agent.md) instead.
+authenticated API request. The default Docker or Podman profile proves controller
+access; it cannot deploy an [Agent](concepts.md#agents-and-revisions) or make a
+model call.
+
+If your goal is to run an Agent locally, you can skip the default profile: start
+with the [local Kubernetes setup](deploy/local-kubernetes-development.md), then
+[deploy your first Agent](first-agent.md). If you already have access to a
+Kubernetes-backed installation, go straight to the first-Agent walkthrough.
 
 You need either Docker Engine with Docker Compose, or Podman with
 `podman-compose` and `yq` v4. Bash, Python 3, and the Go version selected by the
@@ -54,9 +58,8 @@ An existing database keeps its original password. Browser login uses the human
 session path, not service keys.
 
 A fresh Installation has a `default` Namespace and no Agents. You can create
-an Agent draft here, but this Compose setup cannot deploy it. The
-[console reference](../reference/console.md) covers supported pages and limits;
-[Deploy your first Agent](first-agent.md) shows the supported Kubernetes path.
+an Agent draft here, but this default profile cannot deploy it. The
+[console reference](../reference/console.md) covers supported pages and limits.
 
 ## Read the Installation with the bootstrap service key
 
@@ -89,7 +92,7 @@ must never enter a workload or TUI.
 On a fresh Installation, expect one Namespace named `default` with a server-assigned ID. Export it as
 `OCC_NAMESPACE` and wait for `STATUS` to become `ready` before creating Namespace
 resources. Docker and Podman Compute do not currently support Agent harness
-bindings; use [local Kubernetes](deploy/local-operations.md#build-images-for-local-kubernetes)
+bindings; use the [local Kubernetes setup](deploy/local-kubernetes-development.md)
 for Agent deployment and model execution.
 
 ## Clean up and stop
@@ -114,6 +117,10 @@ bootstrap-key volumes. Add `--volumes` after the printed `dev down` and before a
 destructive and is documented separately in the
 [local Kubernetes guide](deploy/local-kubernetes-development.md#stop-and-clean-up).
 
-Next, use [Deploy OpenClaw Enterprise](deploy.md) for production installation,
-customization, Agent/TUI proof, and startup-error diagnosis. For supported
-resource operations, see the [feature reference](../reference/README.md).
+Next, to run an Agent locally, stop the default stack using the cleanup steps
+above if you started it, then follow the
+[local Kubernetes setup](deploy/local-kubernetes-development.md) and
+[Deploy your first Agent](first-agent.md). Kubernetes starts a separate local
+installation; drafts created in the default profile do not carry over.
+For production installation, use [Deploy OpenClaw Enterprise](deploy.md).
+For supported resource operations, see the [feature reference](../reference/README.md).
