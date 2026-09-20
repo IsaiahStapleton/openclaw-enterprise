@@ -11,7 +11,7 @@ COPY packages/occ/package.json packages/occ/package.json
 COPY packages/utils/package.json packages/utils/package.json
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
     corepack pnpm install --frozen-lockfile --ignore-scripts
-COPY tsconfig.base.json ./
+COPY tsconfig.base.json tsconfig.json ./
 COPY packages packages
 COPY apps/controller apps/controller
 COPY scripts/build-repository-credentials.mjs scripts/build-repository-credentials.mjs
