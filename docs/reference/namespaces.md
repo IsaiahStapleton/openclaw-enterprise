@@ -3,7 +3,8 @@
 A Namespace is an isolated environment for a team, tenant, or workload. It owns
 its [Agents](agents.md), [service accounts](service-accounts.md), their
 identities, and their access rules. Resources in one Namespace cannot be
-discovered, changed, or used from another Namespace.
+discovered, changed, or used from another Namespace. See the
+[IAM overview](../guides/topics/iam.md) for how access is granted.
 
 Each OpenClaw Enterprise deployment has one Installation and can contain
 multiple Namespaces:

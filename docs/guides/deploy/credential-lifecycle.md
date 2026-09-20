@@ -1,47 +1,50 @@
 # Manage credential renewal and revocation
 
-Identify the credential's owner and every consumer before changing it. OpenClaw
-Control Plane (OCC) service keys, provider credentials, and runtime Secrets have
-different replacement paths. This guide helps operators choose a supported path
-and verify that the intended consumer uses the replacement.
+Replace or revoke OpenClaw Control Plane (OCC) service keys,
+provider credentials, and runtime Secrets. First identify the credential's owner
+and every application or Agent that uses it. After replacing a credential,
+verify it through the affected application before revoking the old value, unless
+the old value has been compromised.
 
 ## Before changing a credential
 
 Record the responsible administrator, non-secret credential ID, expiry, affected
-Namespaces and Agents, and protected storage location. Include shared accounts,
-Configurations, and automation clients. Keep values out of tickets, logs, shell
-history, and Configuration documents.
+Namespaces and Agents, and where the value is stored. Include shared accounts,
+Configurations, and automation clients. Keep credential values out of tickets,
+logs, shell history, and Configuration documents.
 
-Verify independent administrator access before changing controller credentials.
+Verify that you have another working administrator credential before changing
+controller credentials.
 Arrange a maintenance window when a replacement needs process restarts or the
 upstream provider cannot overlap credentials. Record the required verification
 and who can stop affected workloads if access must be revoked immediately.
 
 ## Choose the credential owner
 
-| Credential                              | Owner and consumer                                                                                                | Supported change and effect                                                                                                                                                                                                                                                     |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Human password and session              | The administrator owns the account; Better Auth verifies sessions for OCC API clients.                            | Sign-out revokes the current session. General account management and password-reset endpoints are not exposed. See [authentication](../../reference/authentication.md#session-lifecycle).                                                                                       |
-| OCC service API key                     | An Installation administrator issues keys for a non-Agent IAM service principal; automation clients consume them. | Multiple keys may overlap. Revocation rejects subsequent requests; an already-authorized request may finish. See [service keys](../../reference/authentication/service-api-keys.md).                                                                                            |
-| Provider-managed account credential     | The selected ServiceAccount Driver manages the upstream account, credential, and account-owned Secret.            | Issuance is separate from creation. A second issuance conflicts; refresh and rotation are not implemented. See [service accounts](../../reference/service-accounts.md#account-and-credential-lifecycle).                                                                        |
-| Harness API key                         | The upstream provider issues the key; the selected Secret Driver stores it as an OCC Secret.                      | Bind its exact same-Namespace reference through Agent `harnessAuth`. Update the source, explicitly deploy each consumer, verify model access, then revoke the old key upstream.                                                                                                 |
-| Per-Agent channel and transport Secrets | The operator provisions exact-Agent Kubernetes Secrets; Compute projects them into their intended workloads.      | Initial console provisioning creates missing groups only; it cannot rotate existing values. Updating environment sources requires new consumer processes. See [runtime credentials](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#runtime-credentials). |
-| OCC Secret bindings                     | The Secret Driver stores the value; Agent harness auth and Configurations bind it to authorized consumers.        | Value updates preserve the reference. They do not restart consumers or remove delivered values. See [update and redeploy](../../reference/drivers/kubernetes-secret.md#update-and-redeploy).                                                                                    |
-| Private gateway-routing service key     | The operator manages the Envoy credential and OCC's mounted client key.                                           | Use the separate [routing key rotation](workspace-routing.md#rotate-the-service-key-and-certificates) procedure; OCC reads the file for each operation. This is not an OCC API key.                                                                                             |
-| Auth signing and bootstrap material     | The operator protects the mounted auth Secret and bootstrap password/key output.                                  | Auth-secret changes require API restart. Bootstrap does not regenerate existing credentials or recover missing output. See [production settings](../../reference/settings/production.md) and [bootstrap recovery](service-keys.md#recover-an-incomplete-bootstrap).             |
+| Credential                              | Owner and consumer                                                                                                | Supported change and effect                                                                                                                                                                                                                                                                            |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Human password and session              | The administrator owns the account; Better Auth verifies sessions for OCC API clients.                            | Sign-out revokes the current session. General account management and password-reset endpoints are not exposed. See [authentication](../../reference/authentication.md#session-lifecycle).                                                                                                              |
+| OCC service API key                     | An Installation administrator issues keys for a non-Agent IAM service principal; automation clients consume them. | Multiple keys may overlap. Revocation rejects subsequent requests; an already-authorized request may finish. See [service keys](../../reference/authentication/service-api-keys.md).                                                                                                                   |
+| Provider-managed account credential     | The selected ServiceAccount Driver manages the upstream account, credential, and account-owned Secret.            | Issuance is separate from creation. A second issuance conflicts; refresh and rotation are not implemented. See [service accounts](../../reference/service-accounts.md#account-and-credential-lifecycle).                                                                                               |
+| Native OCC ServiceAccount credential    | The operator owns the referenced source Secret.                                                                   | The API can replace a native `api_key` reference; that reference cannot select model authentication. See [native API-key references](../../reference/service-accounts.md#native-api-key-references).                                                                                                   |
+| Harness API key                         | The upstream provider issues the key; the selected Secret Driver stores it as an OCC Secret.                      | Bind its exact same-Namespace reference through Agent `harnessAuth`. Update the source, explicitly deploy each consumer, verify model access, then revoke the old key upstream.                                                                                                                        |
+| Per-Agent channel and transport Secrets | The operator provisions exact-Agent Kubernetes Secrets; Compute projects them into their intended workloads.      | Initial console provisioning creates missing groups only; it cannot rotate existing values. Updating environment sources requires new consumer processes. See [runtime credentials](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#runtime-credentials).                        |
+| OCC Secret bindings                     | The Secret Driver stores the value; Agent harness auth and Configurations bind it to authorized consumers.        | Value updates preserve the reference. They do not restart consumers or remove delivered values. See [update and redeploy](../../reference/drivers/kubernetes-secret.md#update-and-redeploy).                                                                                                           |
+| Private gateway-routing service key     | The operator manages the Envoy credential and OCC's mounted client key.                                           | Use the separate [routing key rotation](workspace-routing.md#rotate-the-service-key-and-certificates) procedure; OCC reads the file for each operation. This is not an OCC API key.                                                                                                                    |
+| Auth signing and bootstrap material     | The operator protects the mounted auth Secret and bootstrap password/key output.                                  | Auth-secret changes require API restart. Bootstrap does not regenerate existing credentials or recover missing output. See [production settings](../../reference/settings/production.md) and [bootstrap recovery](../../reference/authentication/service-api-keys.md#recover-an-incomplete-bootstrap). |
 
 ## Replace an OCC service API key
 
-For routine renewal, follow [issue a service key](service-keys.md#issue-a-service-key)
+For routine renewal, follow [issue a service key](../../reference/authentication/service-api-keys.md#issue-a-service-key)
 using an authorized administrator. Store the one-time value privately and retain
 its non-secret ID and expiry. Switch the client to the replacement, then exercise
-its normal exact-scope operation. Expect success for an allowed operation and
-denial outside its grants.
+an operation the client normally performs. Verify that its permissions allow
+that operation and reject one outside its grants.
 
-Only after that check, [revoke the old key](service-keys.md#revoke-or-rotate-a-service-key)
+Only after that check, [revoke the old key](../../reference/authentication/service-api-keys.md#revoke-or-rotate-a-service-key)
 and verify that it returns `401`. Issuing or revoking a key does not change IAM
 grants, revoke other keys for the principal, or cancel running Agent work. To end
-a human operator session, use [sign-out](service-keys.md#sign-in-as-a-human-administrator)
+a human operator session, use [sign-out](../../reference/authentication/service-api-keys.md#sign-in-as-a-human-administrator)
 and verify that a protected request with the old session fails.
 
 ## Replace runtime values and verify consumption
@@ -52,19 +55,19 @@ Secret-management workflow. For a harness API key or Configuration OCC Secret, u
 [supported value update](../../reference/drivers/kubernetes-secret.md#update-and-redeploy)
 instead of editing its backing object directly.
 
-Inventory all consumers before restarting or deploying them. An environment
-variable already delivered to a process does not change when its source Secret
-changes. Deploy each intended Agent again, confirm the expected active revision,
-then perform a [real workload check](production-agents.md#verify-production-workloads).
+List all affected applications or Agents before restarting or deploying them.
+A running process keeps the environment variables it received, even after the
+source Secret changes. Deploy each affected Agent again, confirm the expected
+active revision, then perform a [real workload check](production-agents.md#verify-production-workloads).
 For a channel credential, exercise the affected channel workflow; a successful
 model turn does not prove channel authentication. For transport tokens, coordinate
 both endpoints and clients, and verify a fresh allowed connection and rejection
 of the old token. No automatic coordinated transport-token rotation is provided.
 
 Where the provider permits overlap, revoke the old upstream credential after
-successful replacement checks. A stored credential status proves storage only.
-Do not use it as evidence of provider acceptance. Restarting an older revision
-also reads the current Secret value; revision history does not restore old values.
+successful replacement checks. A stored credential status does not show that
+the provider accepts the value. Restarting an older revision also reads the
+current Secret value; revision history does not restore old values.
 
 Provider-managed account credentials require separate handling: OCC cannot
 refresh, rotate, or manually replace an issued token. Monitor expiry and arrange
@@ -83,13 +86,14 @@ human passwords or runtime provider credentials.
 The initial bootstrap service key expires after 30 days. Preserve authorized
 administrator access and renew automation credentials before expiry. Deleting a
 local delivery copy does not revoke its credential. An already-bootstrapped
-Installation will not reissue lost passwords or keys; follow [key recovery](service-keys.md#recover-a-lost-or-exposed-service-key)
+Installation will not reissue lost passwords or keys; follow [key recovery](../../reference/authentication/service-api-keys.md#recover-a-lost-or-exposed-service-key)
 and preserve uncertain bootstrap state for investigation.
 
 For a compromised credential, prioritize containment over routine overlap: stop
 the affected workloads and revoke at the credential's authority. Updating or
 deleting a Secret alone cannot remove values from running processes. Verify
 rejection, provision replacements through the appropriate path above, and resume
-only the intended consumers. Use the exact-Agent stop endpoint to stop consumers; OCC has no Agent deletion
-endpoint. IAM revocation blocks later admission and dispatch but cannot retract
-credentials already delivered to a process.
+only the intended applications or Agents. To stop an Agent, use its exact stop
+endpoint; OCC has no Agent deletion endpoint. IAM revocation prevents OCC from
+accepting or starting later operations, but it cannot retract credentials
+already delivered to a process.

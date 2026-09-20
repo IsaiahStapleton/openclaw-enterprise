@@ -97,7 +97,8 @@ outside the inner Codex sandbox. It requires upstream support for the workload's
 Secret references and projected identity. Stock gateway incompatibilities fail
 explicitly, and test-only bridges are not production support. Do not infer a
 complete pre-execution policy barrier or command-level sandbox admission from
-Driver selection alone. See the [SandboxDriver contract](../drivers/sandbox.md) and
+Driver selection alone. See the [Sandbox overview](../../guides/topics/sandbox.md),
+[SandboxDriver contract](../drivers/sandbox.md), and
 [OpenShell compatibility limits](../drivers/openshell-sandbox.md).
 
 ## Agent runtime isolation

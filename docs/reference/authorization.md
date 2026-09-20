@@ -99,7 +99,7 @@ these actions can be granted to either a human Principal or an Agent-owned
 ServicePrincipal through an appropriately scoped Role and AccessBinding.
 
 Resource kinds currently include `installation`, `namespace`, `configuration`,
-`agent`, `agent_revision`, and `service_account`.
+`agent`, `agent_revision`, `secret`, and `service_account`.
 
 An OCC-owned [service account](service-accounts.md) is not an IAM principal.
 Creation requires `create` in its exact Namespace; account operations require
@@ -221,6 +221,7 @@ The current policy implementation is
 For a working authenticated request, see the
 [quickstart](../guides/quickstart.md#read-the-installation-with-the-bootstrap-service-key).
 
+- [IAM overview](../guides/topics/iam.md)
 - [Authorization tests](../testing/local.md#authentication-and-authorization-coverage)
 - [API reference](api.md)
 - [Namespaces](namespaces.md)

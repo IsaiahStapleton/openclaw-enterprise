@@ -1,11 +1,40 @@
-# Driver selection and package contracts
+# Drivers quickstart
 
-Trusted Installation configuration selects one Driver for each required
-capability and can select optional Sandbox, ServiceAccount, and Plugin Drivers. Trusted
-Kubernetes startup configuration must also select the bundled Secret Driver.
-Only the Installation operator can add dependencies, publish controller images,
-or select Drivers. Tenants cannot install or activate controller Driver packages. Startup
-procedures belong in the [deployment guide](../../guides/deploy.md).
+<span id="driver-selection-and-package-contracts"></span>
+
+Select Drivers in the Installation configuration to choose where OCC stores
+configuration, authorizes operations, and runs Agents. Only the Installation
+operator can select Drivers, add controller dependencies, or publish controller
+images; individual Agents cannot choose their own implementations.
+
+## Choose a bundled Driver
+
+1. Use bundled Kubernetes Compute and Kubernetes Secret for a new Installation
+   or for [local Agent deployment](../../guides/quickstart.md). The
+   [production Installation example](../../guides/deploy/production-installation.md#configure-the-installation)
+   shows a complete YAML document with the required OCC and Driver settings.
+   If you need embedded OpenClaw on existing Linux hosts with credentials
+   supplied on those hosts, start with [SSH Compute](ssh-compute.md) instead.
+2. Select the required Configuration, IAM, Compute, and Secret implementations.
+   The table below lists each capability and its allowed choices. Omit optional
+   Sandbox, ServiceAccount, and Plugin selections unless you need them.
+3. Set `OCC_CONFIG_PATH` to the absolute path of that trusted YAML and select
+   `NODE_ENV=development` or `NODE_ENV=production` explicitly. Run the API and
+   worker with the same file and controller image. Follow the
+   [deployment guide](../../guides/deploy.md) for the chosen environment.
+4. Verify the Agent on the selected Driver. On local Kubernetes,
+   [deploy your first Agent](../../guides/first-agent.md). On production
+   Kubernetes, [verify an existing Agent's model response](../../guides/operate/model-verification.md).
+   On SSH, follow the [host-managed credential requirements](ssh-compute.md#credentials-and-supported-boundaries)
+   and send a model request through the host's configured gateway or channel;
+   the Kubernetes verification commands do not apply. Successful OCC startup
+   or gateway readiness alone does not prove that an Agent can use its model.
+
+Default Docker or Podman Compose can run the control plane for development,
+but its Docker Compute Driver rejects the authentication used for new Agents.
+Stock OpenShell cannot provide the credential and workload-identity projections
+needed to deploy a sandboxed Agent; see its
+[current upstream blockers](openshell-sandbox.md#current-upstream-preconditions).
 
 ## Supported selections
 
@@ -36,9 +65,9 @@ persisted policy and malicious Compute can violate workload isolation. Operator
 review of installed code is the security boundary; lockfile integrity does not
 establish publisher trust.
 
-SSH supports embedded OpenClaw on preprovisioned Linux hosts. Kubernetes-only
-production image, Codex runtime, and projected-credential checks apply only to
-bundled Kubernetes Compute. `drivers.sandbox` with `compute-ssh` fails startup;
+SSH supports embedded OpenClaw on preprovisioned Linux hosts using
+operator-managed runtime credentials. Kubernetes-only production image, Codex
+runtime, and projected-credential checks apply only to bundled Kubernetes Compute. `drivers.sandbox` with `compute-ssh` fails startup;
 OCC Secret delivery to SSH hosts is unsupported even though the Installation
 contract still requires the Secret selection.
 
@@ -211,6 +240,8 @@ that installed Compute isolates workloads; operator review remains mandatory.
 
 ## Related
 
+- [Drivers overview](../../guides/integrations/drivers.md)
+- [Compute comparison](compute-matrix.md)
 - [Packaged-driver testing](../../testing/local.md#packaged-driver-integration)
 
 The package resolver and startup checks live in

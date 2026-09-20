@@ -1,8 +1,14 @@
 # Agents
 
-An Agent is a named, persistent resource representing one AI workload inside a
-[Namespace](namespaces.md). Each Agent has its own identity and revision history and cannot cross
-Namespace boundaries.
+An Agent is an AI workload that you name, configure, and deploy inside a
+[Namespace](namespaces.md). Each Agent has its own identity, revision history,
+and, once deployed, gateway. It cannot use another Namespace's resources
+through its own permissions.
+
+To get one running, [deploy your first Agent](../guides/first-agent.md). For an
+existing Agent, see [Compute](../guides/topics/agent-compute.md) for execution
+choices, [Agent Revisions](../guides/topics/agent-revisions.md) for changes, or
+[Troubleshoot](../guides/topics/agent-troubleshoot.md) if a deployment stalls.
 
 ```text
 Namespace: support
@@ -14,19 +20,23 @@ Namespace: support
     └── Gateway: unique to deployed customer-help
 ```
 
-Creating an Agent records its platform resource, exact Namespace-owned
-Configuration reference, identity, `active` lifecycle status, and a `stopped`
-desired runtime state. It does not start a workload, deploy a model, or create a
-revision until an authorized caller explicitly requests deployment.
+Creating an Agent saves its identity and exact Namespace-owned Configuration
+reference with an `active` lifecycle status and a `stopped` desired runtime
+state. No workload or model starts, and no revision is created, until an
+authorized caller requests deployment. Deployment records an immutable revision
+and queues the work to start it. Stopping an Agent ends execution and routing
+but keeps its revision history and persistent state. A later deployment creates
+a new revision.
 
 ## Supported operations
 
 Agent operations are scoped beneath `/namespaces/:namespaceId/agents`. Creation
 returns `201`, reads and updates return `200`, and deployment returns `202`
 with the newly admitted AgentRevision. Stop and deletion also return `202`;
-their Compute effects remain asynchronous. Collection reads include only Agents
-for which the caller has an exact `read` grant. The [API reference](api.md)
-owns route schemas, response envelopes, and permission annotations.
+their Compute effects remain asynchronous. Stop sets the Agent's
+`desiredRuntimeState` to `stopped`. Collection reads include only Agents the
+caller has an exact `read` grant for. The [API reference](api.md) documents route
+schemas, response envelopes, and permissions.
 
 Creation body:
 
@@ -42,9 +52,9 @@ Creation body:
 Creation requires an existing Namespace in `provisioning` or `ready` status
 and a same-Namespace Configuration with `kind: "agent"`. The caller needs
 Agent `create` permission in that Namespace and `read` permission on the
-exact Configuration. A selected harness credential source requires its own exact permissions; see
-[harness authentication](#harness-authentication). [Authentication](authentication.md) establishes the
-caller; [authorization](authorization.md) defines its grants.
+exact Configuration. A selected model credential requires separate permissions;
+see [Harness authentication](#harness-authentication). [Authentication](authentication.md)
+establishes the caller; [authorization](authorization.md) defines its grants.
 
 ## Deployment status
 
@@ -84,9 +94,9 @@ resolve to a configured Provider. No default is inferred. The nullable reference
 is returned on both Agent and AgentRevision responses.
 
 The Provider reference is independent of native model names and Harness
-selection. Providerless Agents remain supported with an OpenAI API-key harness binding. A managed access token requires the
-matching Provider and private account binding at admission and reconciliation;
-see [Provider deployment checks](providers.md#agent-association-and-immutable-deployment).
+selection. An Agent using an OpenAI API key does not need a Provider. An
+issued account token requires the matching Provider and account when deployment
+is requested and again before startup; see [Provider deployment checks](providers.md#agent-association-and-immutable-deployment).
 Creating an Agent does not create a provider account or issue credentials.
 
 ## Harness authentication
@@ -229,14 +239,19 @@ or deleting Namespace rejects new Agents.
 
 ## Identity and deployment
 
-Each Agent has one stable service principal and explicitly selects embedded OpenClaw or dedicated Codex execution. A bodyless deployment request admits an immutable revision; the separate worker activates it asynchronously. See [Agent identity and deployment](agents/deployment.md) for credential boundaries, admission permissions, snapshot fields, and activation guarantees.
+Each Agent has one stable service principal and runs embedded OpenClaw or
+dedicated Codex. A deployment request takes no body: it snapshots the saved
+draft, and a worker starts it asynchronously. See
+[Agent identity and deployment](agents/deployment.md) for the permissions,
+snapshot fields, and activation guarantees.
 
 An authorized bodyless `POST /namespaces/:namespaceId/agents/:agentId/stop`
 sets desired state to `stopped`. The worker removes execution and routing before
 clearing `activeRevisionId`; revision history, credentials, and persistent state
 remain. Cleanup includes failed candidate resources and interrupted predecessor
-retirement owned by the current Compute. Repeating stop is safe. A later deployment admits a new revision and sets
-desired state back to `running`; stop does not restart an old revision directly.
+retirement owned by the current Compute. Repeating stop is safe. A later
+deployment creates a new revision and sets desired state back to `running`;
+you cannot restart an old revision directly.
 
 ## Deletion
 
@@ -291,9 +306,10 @@ Editing a Configuration or Agent does not update a running workload; a new
 deployment is required. Stop retains Agent-owned persistent data and does not
 destroy credentials. Brokered model credentials and controller API
 authentication for Agent service principals remain unavailable. The optional
-[OpenShell SandboxDriver](drivers/openshell-sandbox.md) is supported with the
-bundled Kubernetes Compute Driver and dedicated Codex; other sandbox execution
-combinations are rejected.
+[OpenShell SandboxDriver](drivers/openshell-sandbox.md) requires bundled
+Kubernetes Compute and dedicated Codex. Stock OpenShell cannot provide all the
+required workload credentials; review the documented compatibility limits before
+planning a deployment. Other sandbox execution combinations are rejected.
 
 ## Failure semantics
 
@@ -321,7 +337,10 @@ combinations are rejected.
 
 ## Related
 
-- [Quickstart](../guides/quickstart.md)
+- [Deploy your first Agent](../guides/first-agent.md)
+- [Agent Revisions](../guides/topics/agent-revisions.md)
+- [Workspace files](../guides/topics/workspace-files.md)
+- [Troubleshoot Agents](../guides/topics/agent-troubleshoot.md)
 - [Development and production deployment](../guides/deploy.md)
 - [Harness execution](harness-execution.md)
 - [Namespaces](namespaces.md)

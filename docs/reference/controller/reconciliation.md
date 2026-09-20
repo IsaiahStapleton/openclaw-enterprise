@@ -81,17 +81,19 @@ These checks use the immutable revision, not a later Agent draft. Revoked source
 access fails permanently with `AUTHORIZATION_DENIED`, records attributable
 deployment-denial audit evidence, and prevents Compute calls and activation.
 The [harness credential flow](../../flows/native-service-account-credential-delivery.md)
-owns the complete source-resolution sequence. Production accepts both dedicated
-Codex and embedded OpenClaw. It prepares the candidate
-and its Agent-owned gateway, records the exact active revision, activates the
-existing concrete Kubernetes route when applicable, and retires the prior
-revision. The live claim remains unfinished until the worker atomically records
+owns the complete source-resolution sequence. Production accepts dedicated
+Codex and embedded OpenClaw. Dedicated Codex prepares its revision-specific
+workload before the Agent Service selects it. Embedded OpenClaw replaces and
+checks the shared Agent gateway during activation. The worker records the exact
+active revision, activates the Kubernetes route when applicable, and retires the
+prior revision. Its live claim remains unfinished until it atomically records
 one attributable activation audit and completes the durable operation.
-Already-active recovery repeats safe route activation and predecessor retirement
-before that same audit/finalization; idle dedicated app-servers can overlap,
+Already-active recovery repeats route activation and predecessor retirement
+before that audit and finalization. Idle dedicated app-servers can overlap,
 but normal reconciliation routes requests only to the active revision. This does
-not provide independent process fencing during Kubernetes node partitions or
-manual replacement; see the [gateway rollout limitation](../drivers/kubernetes-compute.md#execution-modes).
+not fence independent processes during Kubernetes node partitions or manual
+replacement. The single-replica gateway can also interrupt serving during
+replacement; see the [gateway rollout limitation](../drivers/kubernetes-compute.md#execution-modes).
 See the
 [Harness execution topology flow](../../flows/harness-execution-topology.md) for the
 full placement, runtime, and recovery sequence.
@@ -105,10 +107,10 @@ host-process debugging also needs PostgreSQL for a durable worker path. The expl
 Kubernetes driver creates a hardened Deployment and dedicated Kubernetes
 ServiceAccount for the revision's existing Agent ServicePrincipal. Its
 audience-scoped projected token is required in production but does not
-implement ServicePrincipal token verification or exchange. The Agent Service
-remains nonserving until its exact
-revision is active. Production then selects that Agent's ready workload;
-selected SandboxDriver facets are pinned at admission and enforced by the
+implement ServicePrincipal token verification or exchange. The dedicated Codex
+Agent Service does not select a replacement workload until it is ready and the
+revision is active; embedded OpenClaw reuses and replaces its existing gateway.
+Selected SandboxDriver facets are pinned at admission and enforced by the
 selected Driver. See the [SandboxDriver contract](../drivers/sandbox.md) for
 provider-specific preparation and failure boundaries.
 
@@ -188,11 +190,14 @@ operation creation time. Exceeding it fails the operation with
 [worker configuration reference](../settings/operations.md#controller-worker-environment) for
 defaults and supported overrides.
 
-For Agent replacement, the existing route remains live while its nonserving
-replacement starts. The worker preserves the predecessor's Service selector
-until fenced activation succeeds, then publishes only the verified replacement
-and retires the previous workload. Failed activation leaves the predecessor
-and its route intact.
+Replacement behavior depends on the Harness. Dedicated Codex prepares its
+revision-specific workload before the worker switches the Agent Service, but the
+shared single-replica gateway can still interrupt serving during its rollout.
+Embedded OpenClaw replaces that shared gateway using Kubernetes `Recreate`: the
+predecessor can stop before the replacement passes startup authentication and
+readiness. A failed embedded rollout can interrupt serving; the worker retries
+according to its queue policy but does not guarantee that the predecessor stays
+available or restore it automatically.
 
 If a worker exits or stops renewing its lease, stale-claim recovery either
 requeues the operation or marks it `failed_permanent` after its final attempt.
