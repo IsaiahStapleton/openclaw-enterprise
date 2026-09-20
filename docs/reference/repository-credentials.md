@@ -111,6 +111,15 @@ fixture backend use the same common owners. See the
 [lifecycle flow](../flows/repository-credentials.md) and
 [proof boundaries](../testing/repository-credentials.md#proof-boundaries).
 
+## GitHub response data
+
+Bounded REST JSON responses omit the provider's `temp_clone_token` from the
+repository object, its `parent` and `source` repository relationships, and
+pull-request `head.repo` and `base.repo` objects. Human text and unrelated
+metadata remain unchanged. Qualified machine links still pass through the
+existing origin, repository, route, and profile checks before gateway rewriting;
+other informational links remain data.
+
 ## GitHub credential timing
 
 The backend allows 60 seconds of provider clock skew and reports an earlier authentication expiry. Captured cleanup retains a separate one-hour bound from local receipt; a forward wall-clock change cannot prove remote expiration. Canonical response links accept casing differences only in the matching repository owner/name while preserving route, origin and profile restrictions.
