@@ -26,6 +26,19 @@ scenarios need it; keep fault ordering and observable assertions in the test.
 Protocol fixtures model the provider boundary, while production owners remain
 responsible for custody, authorization and cleanup.
 
+The [fixture ownership checks](../../tests/conformance/repository-credentials-fixture-ownership.test.mjs)
+run in `test:conformance` and the CI `checks-baseline` lane. Run them directly
+with Node.js 24; they need no Docker daemon or provider credentials:
+
+```sh
+node --test tests/conformance/repository-credentials-fixture-ownership.test.mjs
+```
+
+They exercise actual subprocess cancellation and the isolation fixture's network
+cleanup against controlled command responses. These checks qualify the fixture's
+ownership rules; service, container isolation and live-provider proof remain in
+their separate suites.
+
 ## Check source authority boundaries
 
 Run `node scripts/verify-repository-credentials-boundary.mjs` after changing the
