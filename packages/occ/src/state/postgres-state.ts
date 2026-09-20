@@ -242,6 +242,7 @@ function agentFromRow(row: PostgresRow): Readonly<Agent> {
     harnessAuth,
     ...(activeRevisionId === undefined ? {} : { activeRevisionId }),
     desiredRuntimeState,
+    status: text(row, "status") as Agent["status"],
     createdAt: timestamp(row, "created_at"),
   });
 }
@@ -874,6 +875,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           "heartbeat",
           "pending",
           "complete",
+          "completeAgentDeletion",
           "defer",
           "retry",
           "fail",
@@ -1635,7 +1637,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           await client.query(
             `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                     a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                    a.active_revision_id, a.desired_runtime_state, a.created_at
+                    a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
              FROM occ.agents AS a
              JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
              WHERE a.namespace_id = $1 AND a.id = $2${lock ? " FOR UPDATE OF a" : ""}`,
@@ -1655,7 +1657,7 @@ export class PostgresPlatformState implements PlatformStateStore {
             await client.query(
               `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                       a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                      a.active_revision_id, a.desired_runtime_state, a.created_at
+                      a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
                FROM occ.agents AS a
                JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
                WHERE a.namespace_id = $1 ORDER BY a.created_at, a.id`,
@@ -1696,6 +1698,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           ...withoutPlugins,
           ...(plugins === undefined ? {} : { plugins }),
           desiredRuntimeState: "stopped" as const,
+          status: "active" as const,
         });
         await client.query(
           `INSERT INTO occ.agents
@@ -1752,9 +1755,9 @@ export class PostgresPlatformState implements PlatformStateStore {
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
-                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                           a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                          a.active_revision_id, a.desired_runtime_state, a.created_at`,
+                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [
                 namespaceId,
                 agentId,
@@ -1785,10 +1788,10 @@ export class PostgresPlatformState implements PlatformStateStore {
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2
                 AND a.active_revision_id IS NOT DISTINCT FROM $3::text
-                AND n.id = a.namespace_id AND n.deleted_at IS NULL
-                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
+                  RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                           a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                          a.active_revision_id, a.desired_runtime_state, a.created_at`,
+                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedRevisionId ?? null, candidateRevisionId],
             )
           ).rows,
@@ -1803,9 +1806,9 @@ export class PostgresPlatformState implements PlatformStateStore {
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2 AND a.active_revision_id = $3
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
-               RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                          a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                         a.active_revision_id, a.desired_runtime_state, a.created_at`,
+                         a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedRevisionId],
             )
           ).rows,
@@ -1822,10 +1825,32 @@ export class PostgresPlatformState implements PlatformStateStore {
                WHERE a.namespace_id = $1 AND a.id = $2
                  AND a.desired_runtime_state = ANY($3::text[])
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
+                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+                         a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
+                         a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
+              [namespaceId, agentId, expectedStates, next],
+            )
+          ).rows,
+        )[0];
+        return updated === undefined ? undefined : agentFromRow(updated);
+      },
+      transitionAgentStatus: async (namespaceId, agentId, expected, next) => {
+        const expectedStatuses = Array.isArray(expected) ? expected : [expected];
+        // Only a row currently holding one of the expected statuses matches, as
+        // in transitionNamespaceStatus. Callers that treat an already-deleting
+        // Agent as success check its status before transitioning.
+        const updated = rows(
+          (
+            await client.query(
+              `UPDATE occ.agents AS a SET status = $4
+               FROM occ.namespaces AS n
+               WHERE a.namespace_id = $1 AND a.id = $2
+                 AND a.status = ANY($3::text[])
+                 AND n.id = a.namespace_id AND n.deleted_at IS NULL
                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                          a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                         a.active_revision_id, a.desired_runtime_state, a.created_at`,
-              [namespaceId, agentId, expectedStates, next],
+                         a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
+              [namespaceId, agentId, expectedStatuses, next],
             )
           ).rows,
         )[0];
@@ -2000,7 +2025,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           let agentId: string | undefined;
           let revisionId: string | undefined;
           let namespaceTarget: "ready" | "deleted" | undefined;
-          let agentTarget: "stopped" | undefined;
+          let agentTarget: "stopped" | "deleted" | undefined;
           if (operation.kind === "namespace") {
             if (namespaceId !== operation.resourceId) {
               throw new ScopeViolationError("Namespace work does not match its exact owner.");
@@ -2021,6 +2046,10 @@ export class PostgresPlatformState implements PlatformStateStore {
             }
             agentId = text(owner, "agent_id");
           } else if (operation.kind === "agent") {
+            // Validate the Agent-wide target before resolving its exact owner.
+            if (namespaceId === operation.resourceId) {
+              throw new ScopeViolationError("Agent work must name its exact Agent.");
+            }
             const owner = rows(
               (
                 await client.query(
@@ -2041,7 +2070,9 @@ export class PostgresPlatformState implements PlatformStateStore {
           await queue.enqueue({
             idempotencyKey:
               operation.kind === "agent"
-                ? `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`
+                ? operation.target === "stopped"
+                  ? `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`
+                  : `agent:${operation.resourceId}:${operation.action}:${operation.target}`
                 : `${operation.kind}:${operation.resourceId}:${operation.action}${
                     namespaceTarget === undefined ? "" : `:${namespaceTarget}`
                   }`,
@@ -2075,6 +2106,9 @@ export class PostgresPlatformState implements PlatformStateStore {
                 resourceId: revisionId ?? agentId ?? namespaceId,
                 actorId: text(row, "actor_id"),
               };
+              // The three shapes are distinguished by which owner columns are
+              // populated: a revision names one, Agent teardown names only its
+              // Agent, and Namespace work names neither and carries a target.
               if (agentId === undefined) {
                 const target = text(row, "namespace_target");
                 if (target !== "ready" && target !== "deleted") {
@@ -2086,10 +2120,13 @@ export class PostgresPlatformState implements PlatformStateStore {
               }
               if (revisionId === undefined) {
                 const target = text(row, "agent_target");
-                if (target !== "stopped") {
+                if (target !== "stopped" && target !== "deleted") {
                   throw new DependencyUnavailableError(
                     "Persisted Agent work has an invalid target.",
                   );
+                }
+                if (target === "deleted") {
+                  return immutableCopy({ ...base, kind: "agent", target });
                 }
                 const key = text(row, "idempotency_key");
                 const prefix = `agent:${agentId}:reconcile:${target}:`;

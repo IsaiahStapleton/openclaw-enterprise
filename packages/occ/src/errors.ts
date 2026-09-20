@@ -58,6 +58,13 @@ export class ResourceConflictError extends ScopeViolationError {
   }
 }
 
+export class AgentDeletingError extends ResourceConflictError {
+  constructor(message = "The Agent is being deleted.") {
+    super(message);
+    this.name = "AgentDeletingError";
+  }
+}
+
 export class NamespaceNotEmptyError extends ResourceConflictError {
   constructor(message = "The Namespace must be empty before deletion.") {
     super(message);

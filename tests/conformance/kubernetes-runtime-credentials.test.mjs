@@ -90,6 +90,7 @@ function credentialFixture({ secrets = {}, deployments = [] } = {}) {
   };
   const calls = [];
   const created = [];
+  const deleted = [];
   const core = {
     async listNamespace(request) {
       calls.push({ kind: "listNamespace", request: structuredClone(request) });
@@ -116,6 +117,20 @@ function credentialFixture({ secrets = {}, deployments = [] } = {}) {
       created.push(structuredClone(request.body));
       return structuredClone(request.body);
     },
+    async deleteNamespacedSecret(request) {
+      calls.push({ kind: "deleteSecret", name: request.name });
+      assert.equal(request.namespace, namespaceName);
+      const secret = secrets[request.name];
+      if (secret === undefined) {
+        throw httpError(404);
+      }
+      if (secret.metadata.uid !== undefined) {
+        assert.equal(request.body?.preconditions?.uid, secret.metadata.uid);
+      }
+      deleted.push(request.name);
+      delete secrets[request.name];
+      return {};
+    },
   };
   const apps = {
     async listNamespacedDeployment(request) {
@@ -129,7 +144,7 @@ function credentialFixture({ secrets = {}, deployments = [] } = {}) {
     },
   };
   driver.apiClients = Promise.resolve({ core, apps });
-  return { driver, namespaceName, calls, created };
+  return { driver, namespaceName, calls, created, deleted };
 }
 
 function runtimeSecret(driver, namespaceName, prefix, data, overrides = {}) {
@@ -165,6 +180,46 @@ test("mocked Kubernetes client reports only complete owned Agent runtime credent
     transportConfigured: true,
     slackConfigured: false,
   });
+});
+
+test("mocked Kubernetes client deletes every owned Agent runtime credential Secret idempotently", async () => {
+  const first = credentialFixture();
+  const secrets = {
+    [`transport-${digest(agent.id)}`]: runtimeSecret(
+      first.driver,
+      first.namespaceName,
+      "transport",
+      { incomplete: "deletion must not depend on credential contents" },
+      {
+        metadata: {
+          ...runtimeSecret(first.driver, first.namespaceName, "transport", {}).metadata,
+          uid: "transport-uid",
+        },
+      },
+    ),
+    [`channel-${digest(agent.id)}`]: runtimeSecret(first.driver, first.namespaceName, "channel", {
+      SLACK_APP_TOKEN: "xapp-test",
+      SLACK_BOT_TOKEN: "xoxb-test",
+    }),
+  };
+  const fixture = credentialFixture({ secrets });
+
+  await fixture.driver.deleteAgentRuntimeCredentials(binding());
+  assert.deepEqual(fixture.deleted, [
+    `transport-${digest(agent.id)}`,
+    `channel-${digest(agent.id)}`,
+  ]);
+
+  // A retry after partial or complete teardown observes absence and converges.
+  await fixture.driver.deleteAgentRuntimeCredentials(binding());
+  assert.equal(fixture.deleted.length, 2);
+});
+
+test("Kubernetes credential deletion is a no-op without a configured runtime backend", async () => {
+  const driver = createKubernetesComputeDriver(options({ runtime: undefined }));
+
+  // Fixture-only Drivers cannot provision runtime Secrets, so teardown has nothing to delete.
+  await driver.deleteAgentRuntimeCredentials(binding());
 });
 
 test("mocked Kubernetes client preflights all credential Secrets before initial creates", async () => {

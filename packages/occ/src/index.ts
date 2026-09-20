@@ -53,6 +53,7 @@ import {
 } from "@openclaw-enterprise/contracts";
 import { asRecord, immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
+  AgentDeletingError,
   AuthorizationDeniedError,
   DependencyUnavailableError,
   DriverSelectionError,
@@ -85,6 +86,7 @@ import {
 import { PostgresCommitOutcomeUnknownError } from "./state/postgres-state.ts";
 
 export {
+  AgentDeletingError,
   AuthorizationDeniedError,
   DependencyUnavailableError,
   DriverSelectionError,
@@ -319,7 +321,9 @@ function driverHasCapabilityContract(driver: Driver): boolean {
     (candidate.getAgentRuntimeCredentialStatus === undefined ||
       typeof candidate.getAgentRuntimeCredentialStatus === "function") &&
     (candidate.provisionAgentRuntimeCredentials === undefined ||
-      typeof candidate.provisionAgentRuntimeCredentials === "function")
+      typeof candidate.provisionAgentRuntimeCredentials === "function") &&
+    (candidate.deleteAgentRuntimeCredentials === undefined ||
+      typeof candidate.deleteAgentRuntimeCredentials === "function")
   );
 }
 
@@ -878,6 +882,9 @@ export class OpenClawController {
         id: agent.id,
         namespaceId: namespace.id,
       });
+      if (agent.status !== "active") {
+        throw new AgentDeletingError();
+      }
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -1073,6 +1080,14 @@ export class OpenClawController {
       if (!agent) {
         throw new ScopeViolationError(
           "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      }
+      if (action === "operate" && agent.status !== "active") {
+        throw new AgentDeletingError();
+      }
+      if (action === "operate" && agent.desiredRuntimeState !== "running") {
+        throw new ResourceConflictError(
+          "The Agent workspace is not writable while it is stopping.",
         );
       }
       if (!isNonEmptyString(agent.activeRevisionId)) {
@@ -1642,6 +1657,7 @@ export class OpenClawController {
         ...(plugins === undefined ? {} : { plugins }),
         servicePrincipalId: `service-agent-${agentId}`,
         desiredRuntimeState: "stopped",
+        status: "active",
         createdAt: this.timestamp(),
       });
       return agent;
@@ -1675,6 +1691,9 @@ export class OpenClawController {
         id: agent.id,
         namespaceId: namespace.id,
       });
+      if (agent.status !== "active") {
+        throw new AgentDeletingError();
+      }
       await this.authorize(principalId, "read", {
         kind: "configuration",
         id: input.configurationId,
@@ -1755,6 +1774,9 @@ export class OpenClawController {
         throw new ScopeViolationError(
           "The Agent or its service principal does not belong to the exact Namespace.",
         );
+      }
+      if (lockedAgent.status !== "active") {
+        throw new AgentDeletingError();
       }
       const providerId = this.providerId(lockedAgent.providerId);
       if (sandbox !== undefined && lockedAgent.executionMode !== "dedicated") {
@@ -1941,6 +1963,9 @@ export class OpenClawController {
         id: agent.id,
         namespaceId: agent.namespaceId,
       });
+      if (agent.status === "deleting") {
+        return agent;
+      }
       const stopped = await state.agents.transitionAgentDesiredRuntimeState(
         namespaceId,
         agentId,
@@ -2011,6 +2036,75 @@ export class OpenClawController {
         action: "reconcile",
         target: "deleted",
         namespaceId: deleting.id,
+        resourceId: deleting.id,
+        actorId: principalId,
+      });
+      return deleting;
+    });
+  }
+
+  /**
+   * Begin deletion of an exact Agent. Teardown of its revisions and owned
+   * runtime resources is asynchronous, so this transitions the Agent to
+   * `deleting` and queues the work rather than removing anything here. The
+   * Agent row and its revisions are removed only once teardown succeeds.
+   */
+  async deleteAgent(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<Readonly<Agent>> {
+    if (!isNonEmptyString(namespaceId)) {
+      throw new ScopeViolationError("The exact Namespace identity is missing.");
+    }
+    if (!isNonEmptyString(agentId)) {
+      throw new ScopeViolationError("The exact Agent identity is missing.");
+    }
+    return this.mutate(async (state) => {
+      const namespace = await state.namespaces.lockNamespace(namespaceId);
+      if (!namespace) {
+        throw new ScopeViolationError(
+          "The Namespace does not belong to the server-owned Installation.",
+        );
+      }
+      const agent = await state.agents.lockAgent(namespace.id, agentId);
+      if (!agent) {
+        throw new ScopeViolationError("The Agent does not belong to the exact Namespace.");
+      }
+      await this.authorize(principalId, "delete", {
+        kind: "agent",
+        id: agent.id,
+        namespaceId: namespace.id,
+      });
+      // A repeated request converges on the in-flight teardown instead of
+      // conflicting, matching deleteNamespace. The queued work item is
+      // idempotent, so it is not appended twice.
+      if (agent.status === "deleting") {
+        return agent;
+      }
+      const stopped = await state.agents.transitionAgentDesiredRuntimeState(
+        namespace.id,
+        agent.id,
+        agent.desiredRuntimeState,
+        "stopped",
+      );
+      if (!stopped) {
+        throw new ResourceConflictError("The Agent runtime state changed during deletion.");
+      }
+      const deleting = await state.agents.transitionAgentStatus(
+        namespace.id,
+        agent.id,
+        "active",
+        "deleting",
+      );
+      if (!deleting) {
+        throw new ResourceConflictError("The Agent lifecycle changed during deletion.");
+      }
+      await this.record(state, {
+        kind: "agent",
+        action: "reconcile",
+        target: "deleted",
+        namespaceId: namespace.id,
         resourceId: deleting.id,
         actorId: principalId,
       });

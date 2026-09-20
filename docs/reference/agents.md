@@ -15,17 +15,16 @@ Namespace: support
 ```
 
 Creating an Agent records its platform resource, exact Namespace-owned
-Configuration reference, identity, and a `stopped` desired runtime state. It does not start a workload, deploy a
-model, or create a revision until an authorized caller explicitly requests
-deployment.
+Configuration reference, identity, `active` lifecycle status, and a `stopped`
+desired runtime state. It does not start a workload, deploy a model, or create a
+revision until an authorized caller explicitly requests deployment.
 
 ## Supported operations
 
 Agent operations are scoped beneath `/namespaces/:namespaceId/agents`. Creation
 returns `201`, reads and updates return `200`, and deployment returns `202`
-with the newly admitted AgentRevision. Stop also returns `202`, with the Agent's
-`desiredRuntimeState` set to `stopped`; Compute shutdown remains asynchronous.
-Collection reads include only Agents
+with the newly admitted AgentRevision. Stop and deletion also return `202`;
+their Compute effects remain asynchronous. Collection reads include only Agents
 for which the caller has an exact `read` grant. The [API reference](api.md)
 owns route schemas, response envelopes, and permission annotations.
 
@@ -185,6 +184,8 @@ count. Successful writes record the Agent, file name, and outcome in the audit l
 | ---------------------------- | ---------------------------------------------------- |
 | `400 INVALID_REQUEST`        | Invalid file name or content.                        |
 | `404 NOT_FOUND`              | The requested Agent or file was not found.           |
+| `409 AGENT_DELETING`         | The Agent is being deleted.                          |
+| `409 RESOURCE_CONFLICT`      | The Agent is stopping.                               |
 | `413 PAYLOAD_TOO_LARGE`      | The request body exceeds 48 KiB.                     |
 | `503 DEPENDENCY_UNAVAILABLE` | Workspace access is unavailable.                     |
 | `503 UNKNOWN_OUTCOME`        | OCC could not confirm the write or its audit record. |
@@ -237,6 +238,27 @@ remain. Cleanup includes failed candidate resources and interrupted predecessor
 retirement owned by the current Compute. Repeating stop is safe. A later deployment admits a new revision and sets
 desired state back to `running`; stop does not restart an old revision directly.
 
+## Deletion
+
+An authorized bodyless `DELETE /namespaces/:namespaceId/agents/:agentId`
+sets `status` to `deleting`, sets desired runtime state to `stopped`, queues
+teardown, and returns `202`. A deleting Agent remains readable while work is in
+flight, but update, deployment, runtime-credential provisioning, and workspace
+writes return `409`. Repeating deletion while the Agent exists converges on the
+same queued operation.
+
+The worker reauthorizes the original caller, binds the persisted Agent identity
+into Compute, retires every revision, and removes the Agent's runtime credentials
+before atomically deleting the Agent, its
+revision history, service principal, service-principal API keys, and exact IAM
+bindings and restrictions. Kubernetes revision retirement waits for exact
+workload Pods and removes Agent-owned compute artifacts, including workspace
+data. Namespace-owned Configurations and Secrets survive. After success,
+the Agent disappears from reads and its name can be reused. Retryable cleanup
+failures leave the Agent in `deleting` while bounded queue retries continue.
+Permanent failures fail closed in `failed_permanent`; the Agent remains
+`deleting`, and the current API has no requeue or operator recovery path.
+
 ## Editable configuration
 
 An Agent's `configurationId` selects exactly one native OpenClaw Configuration
@@ -264,11 +286,10 @@ each deployed Agent still owns its own gateway and stable service principal.
 
 ## Current limitations
 
-The public API has no Agent deletion operation, revision mutation/deletion,
-or explicit rollback endpoint. An Agent therefore prevents deletion of its
-Namespace. Editing a Configuration or Agent does not update a running workload;
-a new deployment is required. Stop retains Agent-owned persistent data and does
-not destroy credentials. Brokered model credentials and controller API
+The public API has no revision mutation/deletion or explicit rollback endpoint.
+Editing a Configuration or Agent does not update a running workload; a new
+deployment is required. Stop retains Agent-owned persistent data and does not
+destroy credentials. Brokered model credentials and controller API
 authentication for Agent service principals remain unavailable. The optional
 [OpenShell SandboxDriver](drivers/openshell-sandbox.md) is supported with the
 bundled Kubernetes Compute Driver and dedicated Codex; other sandbox execution
@@ -289,7 +310,10 @@ combinations are rejected.
 - `400 INVALID_REQUEST`: A removed top-level `serviceAccountId` or runtime
   `modelApiKey` selector is supplied. Use `harnessAuth` explicitly.
 - `409 RESOURCE_CONFLICT`: Another Agent already uses that name in the same
-  Namespace, or the Namespace cannot accept new Agents.
+  Namespace, the Namespace cannot accept new Agents, or a stopping Agent cannot
+  accept the requested mutation.
+- `409 AGENT_DELETING`: The Agent is deleting and cannot accept update,
+  deployment, credential-provisioning, or workspace-write mutations.
 - `409 NAMESPACE_NOT_READY`: The backing Namespace infrastructure is not ready
   for deployment.
 - `503 DEPENDENCY_UNAVAILABLE`: A selected Harness descriptor, Compute

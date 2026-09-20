@@ -10,7 +10,7 @@ last_updated_session: codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464
 
 The worker claims PostgreSQL work committed by the HTTP API, rechecks the
 original actor's authorization, invokes Compute, and persists results under its
-live claim. This trace follows Namespace, Agent-stop, and AgentRevision work through
+live claim. This trace follows Namespace, Agent stop/deletion, and AgentRevision work through
 completion, deferral, retry, or permanent failure. The
 [controller reference](../reference/controller.md) owns the contract and the
 [deployment guide](../guides/deploy.md) owns process setup.
@@ -18,7 +18,7 @@ completion, deferral, retry, or permanent failure. The
 ## Entry Points
 
 - Trigger: Compose or Helm starts `apps/controller/src/worker.mjs`; an
-  authenticated API mutation commits Namespace, Agent-stop, or AgentRevision work.
+  authenticated API mutation commits Namespace, Agent lifecycle, or AgentRevision work.
 - Source: `apps/controller/src/worker.mjs:configuration`,
   `apps/controller/src/worker.ts:ControllerWorker.start`, and
   `packages/occ/src/state/postgres-state.ts:operations.append`.
@@ -85,16 +85,17 @@ Compose and Helm run it separately from the API.
 `packages/occ/src/state/postgres-state.ts:operations.append`
 
 The API authenticates and authorizes the caller before invoking controller
-operations such as `createNamespace`, `deleteNamespace`, `deployAgent`, or `stopAgent`.
+operations such as `createNamespace`, `deleteNamespace`, `deployAgent`, `stopAgent`,
+or `deleteAgent`.
 `operations.append` verifies exact ownership and calls `PostgresWorkQueue.enqueue`
 within the transaction. State, admission audit, and work commit or roll back together.
 
 The queue freezes actor, Namespace owner, lifecycle target, and exact Agent and
-immutable AgentRevision for revision work. Stop work has an exact Agent owner and
-`stopped` target without inventing a revision. Its idempotency
-key identifies the operation. Reusing that key with a different actor, owner, or
-target is rejected. The API returns accepted lifecycle state without waiting for
-Compute; the next owner is the independent worker.
+immutable AgentRevision for revision work. Agent lifecycle work has an exact
+Agent owner and a `stopped` or `deleted` target without inventing a revision.
+Its idempotency key identifies the operation. Reusing that key with a different
+actor, owner, or target is rejected. The API returns accepted lifecycle state
+without waiting for Compute; the next owner is the independent worker.
 
 ### 3. Recover expired claims and claim one eligible operation
 
@@ -148,6 +149,10 @@ Agent-stop work rechecks current exact-Agent `operate`. Superseded desired state
 completes without shutdown. An absent active pointer does not prove candidates
 have no runtime resources, so stop still checks the captured revision history.
 
+Agent-deletion work requires the Agent to remain `deleting` and stopped, then
+rechecks the original actor's exact-Agent `delete`. It loads every owned revision
+and rejects ownership or Compute-Driver mismatches before teardown.
+
 ### 5. Invoke Compute while renewing the live claim
 
 `apps/controller/src/worker.ts:ControllerWorker.observe`,
@@ -181,6 +186,14 @@ revision recovery also binds before shutdown and retirement. IAM and exact
 resource checks precede binding.
 Revision preparation and maintenance recheck `desiredRuntimeState`; a candidate
 that overlaps stop is shut down instead of activated.
+
+Agent-deletion dispatch binds the server-owned Namespace and Agent before calling
+`retireRevision` for every owned revision, then invokes the optional Agent
+credential-deletion capability. This rebuilds Driver-local ownership after a
+worker restart. A Driver that can provision runtime credentials but cannot delete
+them fails permanently before binding or retirement. Compute retirement owns
+workload termination and Sandbox cleanup; the worker does not invoke either
+independently.
 
 `withClaimHeartbeat()` renews the claim before starting each effect and then
 roughly every third of its lease duration while the effect runs. The initial
@@ -235,6 +248,13 @@ it still equals the revision Compute stopped. A later deployment supersedes the
 stop even if it retains that active pointer while preparing. It appends lifecycle-stop
 evidence and completes the same work item. Revision rows and persistent runtime
 state are not deleted.
+
+Deletion finalization uses a restricted database function rather than the
+generic queue completion path. In one transaction it validates the live claim,
+removes the Agent's revisions, service principal, API keys, and exact IAM
+references, records lifecycle-delete success, deletes the Agent, and removes its
+work rows. An expired or replaced claim removes nothing; `occ_app` has no direct
+table-level delete privilege for these records.
 
 ### 7. Defer, retry, or stop and hand off the next iteration
 

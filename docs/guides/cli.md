@@ -38,6 +38,7 @@ occ configuration create --file configuration.json
 occ agent create --file agent.json
 occ agent deploy '<agent-id>'
 occ agent stop '<agent-id>'
+occ agent delete '<agent-id>'
 ```
 
 Human-readable tables are the default. Use `--output json` or `--output yaml`
