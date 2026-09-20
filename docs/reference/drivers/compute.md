@@ -83,6 +83,15 @@ approved identities, never physical storage names. Missing methods return an
 error. External writes can survive a database or audit failure; refresh status
 before retrying. See the [initial credential workflow](../console/create-and-deploy.md#initial-runtime-credentials).
 
+`deleteAgentRuntimeCredentials(binding)` is the idempotent teardown counterpart.
+During Agent deletion, the worker calls it after retiring every revision and
+before removing the Agent's database identity. Kubernetes Compute deletes only
+the admitted Agent-owned transport and Slack Secrets and treats absence as
+success. Namespace-owned Harness model authentication survives Agent deletion.
+A Driver that supports provisioning but not deletion fails Agent deletion
+permanently on its first worker attempt. Drivers that implement neither optional
+method are unaffected.
+
 ### Runtime logging ownership
 
 Omitting `runtimeLogging` or setting it to `"platform"` uses the bundled
@@ -198,7 +207,7 @@ prove readiness. See [Kubernetes startup status](kubernetes-compute.md#plugin-st
 - Implementations differ in topology, credentials, Namespace deletion, and
   private gateway access; see the [feature matrix](compute-matrix.md). The gateway
   and Harness need not share a cluster or a component that writes their resources.
-- Initial credential helpers cannot rotate or delete credentials, manage model
+- Initial credential helpers cannot rotate credentials, manage model
   authentication, or prove that credentials work or workloads are ready.
 - Compute cannot query runtime logs. Selecting a different Driver does not migrate
   revisions that recorded the previous Driver's identity.

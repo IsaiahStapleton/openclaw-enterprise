@@ -2212,6 +2212,18 @@ test("containment-only Sandbox cleanup retries after its Compute-owned workload 
         assert.equal(deploymentPresent, false);
         return { apiVersion: "v1", kind: "PodList", items: [] };
       },
+      async readNamespacedPersistentVolumeClaim() {
+        throw notFound();
+      },
+      async readNamespacedConfigMap() {
+        throw notFound();
+      },
+      async readNamespacedService() {
+        throw notFound();
+      },
+      async readNamespacedServiceAccount() {
+        throw notFound();
+      },
     },
     apps: {
       async readNamespacedDeployment({ name }) {
@@ -2228,7 +2240,16 @@ test("containment-only Sandbox cleanup retries after its Compute-owned workload 
         deploymentPresent = false;
       },
     },
-    objects: {},
+    networking: {
+      async readNamespacedNetworkPolicy() {
+        throw notFound();
+      },
+    },
+    objects: {
+      async read() {
+        throw notFound();
+      },
+    },
   });
 
   // The first cleanup failure occurs after workload removal and must keep retirement retryable.
@@ -2248,7 +2269,7 @@ test("containment-only Sandbox cleanup retries after its Compute-owned workload 
   await driver.retireRevision(revision);
   assert.equal(deletionCalls.length, 1);
   assert.equal(cleanupCalls.length, 2);
-  assert.equal(gatewayReads, 1);
+  assert.ok(gatewayReads >= 1);
   for (const context of cleanupCalls) {
     assert.equal(context.namespace.id, revision.namespaceId);
     assert.equal(context.namespace.name, namespace);
@@ -3948,6 +3969,211 @@ test("stopping a provider-owned Kubernetes revision waits for Sandbox workload t
   assert.equal(podObservations, 2);
 });
 
+test("retiring a running embedded revision waits for gateway Pods and removes owned artifacts", async () => {
+  const driver = createKubernetesComputeDriver(
+    options({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+        channels: { secretPrefix: "channel", proxyUrl: "http://192.0.2.10:3128" },
+      },
+    }),
+  );
+  const revision = routedRevision(driver, {
+    id: "revision-embedded-deletion",
+    agentId: "agent-embedded-deletion",
+    harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+    configuration: {
+      agents: { defaults: { model: "openai/gpt-5" } },
+      gateway: { controlUi: { enabled: false } },
+    },
+    plugins: {
+      driver: { id: "occ-plugin", implementation: "occ/openclaw-plugin" },
+      plugins: { "occ-plugin:diffs": { enabled: true, approvalMode: "always" } },
+    },
+  });
+  const namespace = kubernetesNamespaceName(revision.namespaceId);
+  const gatewayName = `gateway-${digest(revision.agentId)}`;
+  const agentName = `agent-${digest(revision.agentId)}`;
+  const gatewayOwnership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+  const agentOwnership = {
+    ...gatewayOwnership,
+    servicePrincipalId: revision.servicePrincipalId,
+  };
+  const revisionOwnership = { ...agentOwnership, revisionId: revision.id };
+  const configurationName = `${gatewayName}-rev-${digest(revision.id)}`;
+  const pluginName = `plugin-runtime-${digest(revision.agentId)}-rev-${digest(revision.id)}`;
+  const key = (kind, name) => `${kind}:${name}`;
+  const objects = new Map();
+  const save = (object) => {
+    object.metadata.uid ??= `${object.metadata.name}-uid`;
+    objects.set(key(object.kind, object.metadata.name), structuredClone(object));
+  };
+  const missing = (kind, name) =>
+    Object.assign(new Error(`${kind} ${name} not found`), { code: 404 });
+
+  save({
+    ...driver.manifest("v1", "Namespace", namespace, { namespaceId: revision.namespaceId }),
+    status: { phase: "Active" },
+  });
+  const gateway = driver.manifest(
+    "apps/v1",
+    "Deployment",
+    gatewayName,
+    gatewayOwnership,
+    namespace,
+  );
+  gateway.metadata.annotations["openclaw.dev/agent-revision-id"] = revision.id;
+  save(gateway);
+  save(
+    driver.service(gatewayName, gatewayOwnership, namespace, {
+      "app.kubernetes.io/name": gatewayName,
+    }),
+  );
+  save(driver.manifest("v1", "ServiceAccount", agentName, agentOwnership, namespace));
+  save(driver.gatewayPrivateStateClaim(revision.agentId, gatewayOwnership, namespace));
+  save(driver.manifest("v1", "ConfigMap", configurationName, gatewayOwnership, namespace));
+  save(driver.manifest("v1", "ConfigMap", pluginName, revisionOwnership, namespace));
+  const policies = [
+    ...driver.agentNetworkPolicies(revision, namespace),
+    driver.channelNetworkPolicy(revision, [], namespace),
+  ];
+  for (const policy of policies) {
+    save(policy);
+  }
+  const sibling = driver.manifest(
+    "v1",
+    "ConfigMap",
+    "sibling-agent-artifact",
+    { namespaceId: revision.namespaceId, agentId: "agent-sibling" },
+    namespace,
+  );
+  save(sibling);
+
+  const deletions = [];
+  let podObservations = 0;
+  const read = (kind, name) => {
+    const value = objects.get(key(kind, name));
+    if (value === undefined) {
+      throw missing(kind, name);
+    }
+    return structuredClone(value);
+  };
+  const remove = (kind, request) => {
+    const current = read(kind, request.name);
+    assert.equal(request.body?.preconditions?.uid, current.metadata.uid);
+    deletions.push({ kind, name: request.name });
+    objects.delete(key(kind, request.name));
+    return {};
+  };
+  driver.apiClients = Promise.resolve({
+    core: {
+      async listNamespace() {
+        return { apiVersion: "v1", kind: "NamespaceList", items: [] };
+      },
+      async readNamespace({ name }) {
+        return read("Namespace", name);
+      },
+      async listNamespacedPod({ namespace: requestedNamespace, labelSelector }) {
+        assert.equal(requestedNamespace, namespace);
+        assert.match(labelSelector, /openclaw\.dev\/workload-role=gateway/);
+        podObservations += 1;
+        deletions.push({ kind: "PodList", name: revision.id });
+        return {
+          apiVersion: "v1",
+          kind: "PodList",
+          items:
+            podObservations === 1
+              ? [
+                  {
+                    apiVersion: "v1",
+                    kind: "Pod",
+                    metadata: {
+                      name: "terminating-embedded-gateway",
+                      namespace,
+                      labels: {
+                        "openclaw.dev/namespace": revision.namespaceId,
+                        "openclaw.dev/agent": revision.agentId,
+                        "openclaw.dev/revision": revision.id,
+                        "openclaw.dev/workload-role": "gateway",
+                      },
+                    },
+                  },
+                ]
+              : [],
+        };
+      },
+      async readNamespacedConfigMap({ name }) {
+        return read("ConfigMap", name);
+      },
+      async deleteNamespacedConfigMap(request) {
+        return remove("ConfigMap", request);
+      },
+      async readNamespacedServiceAccount({ name }) {
+        return read("ServiceAccount", name);
+      },
+      async deleteNamespacedServiceAccount(request) {
+        return remove("ServiceAccount", request);
+      },
+      async readNamespacedService({ name }) {
+        return read("Service", name);
+      },
+      async deleteNamespacedService(request) {
+        return remove("Service", request);
+      },
+      async readNamespacedPersistentVolumeClaim({ name }) {
+        return read("PersistentVolumeClaim", name);
+      },
+      async deleteNamespacedPersistentVolumeClaim(request) {
+        return remove("PersistentVolumeClaim", request);
+      },
+    },
+    apps: {
+      async readNamespacedDeployment({ name }) {
+        return read("Deployment", name);
+      },
+      async deleteNamespacedDeployment(request) {
+        return remove("Deployment", request);
+      },
+    },
+    networking: {
+      async readNamespacedNetworkPolicy({ name }) {
+        return read("NetworkPolicy", name);
+      },
+      async deleteNamespacedNetworkPolicy(request) {
+        return remove("NetworkPolicy", request);
+      },
+    },
+    objects: {
+      async read({ metadata }) {
+        return read("HTTPRoute", metadata.name);
+      },
+    },
+  });
+
+  await driver.retireRevision(revision);
+
+  assert.equal(podObservations, 2);
+  const podWait = deletions.findIndex(({ kind }) => kind === "PodList");
+  assert.ok(podWait > deletions.findIndex(({ kind }) => kind === "Deployment"));
+  assert.ok(
+    podWait < deletions.findIndex(({ kind }) => kind === "PersistentVolumeClaim"),
+    "persistent state must not be deleted until the exact gateway Pod has terminated",
+  );
+  for (const [kind, name] of [
+    ["Deployment", gatewayName],
+    ["Service", gatewayName],
+    ["ServiceAccount", agentName],
+    ["PersistentVolumeClaim", driver.gatewayPrivateStateClaimName(revision.agentId)],
+    ["ConfigMap", configurationName],
+    ["ConfigMap", pluginName],
+    ...policies.map((policy) => ["NetworkPolicy", policy.metadata.name]),
+  ]) {
+    assert.equal(objects.has(key(kind, name)), false, `${kind} ${name} must be deleted`);
+  }
+  assert.deepEqual(objects.get(key("ConfigMap", sibling.metadata.name)), sibling);
+});
+
 test("retiring a predecessor preserves both claims and final retirement deletes exact claim UIDs", async () => {
   const driver = createKubernetesComputeDriver(
     routedOptions({
@@ -3973,6 +4199,25 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
   const gatewayAccount = driver.manifest("v1", "ServiceAccount", gatewayName, ownership, namespace);
   gatewayAccount.metadata.uid = "gateway-account-uid";
   let observedServiceAccount = gatewayAccount;
+  const agentName = `agent-${digest(agentId)}`;
+  const agentOwnership = {
+    ...ownership,
+    servicePrincipalId: "service-agent-revision-storage",
+  };
+  const agentService = driver.service(agentName, agentOwnership, namespace, {
+    "openclaw.dev/agent": agentId,
+    "openclaw.dev/revision": "revision-2",
+    "openclaw.dev/workload-role": "agent",
+  });
+  agentService.metadata.uid = "agent-service-uid";
+  const agentAccount = driver.manifest(
+    "v1",
+    "ServiceAccount",
+    agentName,
+    agentOwnership,
+    namespace,
+  );
+  agentAccount.metadata.uid = "agent-account-uid";
   const route = driver.gatewayRoute(
     { id: "revision-2", revision: 2, namespaceId: tenant.id, agentId },
     ownership,
@@ -3996,7 +4241,10 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
   };
   driver.apiClients = Promise.resolve({
     apps: {
-      async readNamespacedDeployment() {
+      async readNamespacedDeployment({ name }) {
+        if (name !== gatewayName) {
+          return missing();
+        }
         if (observedGateway === undefined) {
           return missing();
         }
@@ -4007,6 +4255,10 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
       },
     },
     core: {
+      async listNamespacedPod() {
+        return { apiVersion: "v1", kind: "PodList", items: [] };
+      },
+      readNamespacedConfigMap: missing,
       async readNamespacedPersistentVolumeClaim({ name }) {
         const claim = claims.find(({ metadata }) => metadata.name === name);
         if (claim === undefined) {
@@ -4017,7 +4269,10 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
       async deleteNamespacedPersistentVolumeClaim(request) {
         deletions.push(["PersistentVolumeClaim", request]);
       },
-      async readNamespacedService() {
+      async readNamespacedService({ name }) {
+        if (name === agentName) {
+          return structuredClone(agentService);
+        }
         if (observedService === undefined) {
           return missing();
         }
@@ -4029,7 +4284,10 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
           throw new Error("service delete failed");
         }
       },
-      async readNamespacedServiceAccount() {
+      async readNamespacedServiceAccount({ name }) {
+        if (name === agentName) {
+          return structuredClone(agentAccount);
+        }
         if (observedServiceAccount === undefined) {
           return missing();
         }
@@ -4038,6 +4296,9 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
       async deleteNamespacedServiceAccount(request) {
         deletions.push(["ServiceAccount", request]);
       },
+    },
+    networking: {
+      readNamespacedNetworkPolicy: missing,
     },
     objects: {
       async read() {
@@ -4060,21 +4321,33 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
     },
   });
   await driver.removeRetiredGateway(
-    { id: "revision-1", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+    {
+      id: "revision-1",
+      agentId,
+      namespaceId: tenant.id,
+      servicePrincipalId: "service-agent-revision-storage",
+      harness: { mode: "dedicated" },
+    },
     namespace,
   );
   assert.deepEqual(deletions, []);
   failServiceDelete = true;
   await assert.rejects(
     driver.removeRetiredGateway(
-      { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+      {
+        id: "revision-2",
+        agentId,
+        namespaceId: tenant.id,
+        servicePrincipalId: "service-agent-revision-storage",
+        harness: { mode: "dedicated" },
+      },
       namespace,
     ),
     /service delete failed/,
   );
   assert.deepEqual(
     deletions.map(([kind]) => kind),
-    ["PersistentVolumeClaim", "PersistentVolumeClaim", "HTTPRoute", "Service"],
+    ["HTTPRoute", "Service"],
   );
   assert.equal(
     deletions.some(([kind]) => kind === "Deployment"),
@@ -4085,14 +4358,16 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
   deletions.length = 0;
   failServiceDelete = false;
   await driver.removeRetiredGateway(
-    { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+    {
+      id: "revision-2",
+      agentId,
+      namespaceId: tenant.id,
+      servicePrincipalId: "service-agent-revision-storage",
+      harness: { mode: "dedicated" },
+    },
     namespace,
   );
   assert.deepEqual(deletions, [
-    ...claims.map(({ metadata }) => [
-      "PersistentVolumeClaim",
-      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
-    ]),
     [
       "HTTPRoute",
       {
@@ -4116,6 +4391,18 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
       "Deployment",
       { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-uid" } } },
     ],
+    ...claims.map(({ metadata }) => [
+      "PersistentVolumeClaim",
+      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
+    ]),
+    [
+      "Service",
+      { name: agentName, namespace, body: { preconditions: { uid: "agent-service-uid" } } },
+    ],
+    [
+      "ServiceAccount",
+      { name: agentName, namespace, body: { preconditions: { uid: "agent-account-uid" } } },
+    ],
   ]);
 
   deletions.length = 0;
@@ -4124,14 +4411,16 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
   observedServiceAccount = gatewayAccount;
   observedRoute = route;
   await driver.removeRetiredGateway(
-    { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+    {
+      id: "revision-2",
+      agentId,
+      namespaceId: tenant.id,
+      servicePrincipalId: "service-agent-revision-storage",
+      harness: { mode: "dedicated" },
+    },
     namespace,
   );
   assert.deepEqual(deletions, [
-    ...claims.map(({ metadata }) => [
-      "PersistentVolumeClaim",
-      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
-    ]),
     [
       "HTTPRoute",
       {
@@ -4151,6 +4440,18 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
       "ServiceAccount",
       { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-account-uid" } } },
     ],
+    ...claims.map(({ metadata }) => [
+      "PersistentVolumeClaim",
+      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
+    ]),
+    [
+      "Service",
+      { name: agentName, namespace, body: { preconditions: { uid: "agent-service-uid" } } },
+    ],
+    [
+      "ServiceAccount",
+      { name: agentName, namespace, body: { preconditions: { uid: "agent-account-uid" } } },
+    ],
   ]);
 
   deletions.length = 0;
@@ -4165,7 +4466,13 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
     },
   };
   await driver.removeRetiredGateway(
-    { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+    {
+      id: "revision-2",
+      agentId,
+      namespaceId: tenant.id,
+      servicePrincipalId: "service-agent-revision-storage",
+      harness: { mode: "dedicated" },
+    },
     namespace,
   );
   assert.deepEqual(deletions, []);

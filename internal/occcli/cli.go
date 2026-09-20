@@ -652,8 +652,28 @@ func (app *application) agentCommand() *cobra.Command {
 			return app.printAgent(agent, false)
 		},
 	}
+	deleteAgent := &cobra.Command{
+		Use:   "delete ID",
+		Short: "Begin asynchronous Agent deletion",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			agent, err := client.DeleteAgent(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printAgent(agent, false)
+		},
+	}
 
-	command.AddCommand(create, list, get, update, deploy, stop)
+	command.AddCommand(create, list, get, update, deploy, stop, deleteAgent)
 	return command
 }
 
@@ -748,6 +768,7 @@ func (app *application) printAgent(value any, collection bool) error {
 		{title: "CONFIGURATION", key: "configurationId"},
 		{title: "MODE", key: "executionMode"},
 		{title: "DESIRED STATE", key: "desiredRuntimeState"},
+		{title: "STATUS", key: "status"},
 		{title: "ACTIVE REVISION", key: "activeRevisionId"},
 	})
 }

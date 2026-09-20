@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-18
-last_updated_session: codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464
+updated: 2026-09-20
+last_updated_session: authoring-run/a2f901df-d27a-4a05-9468-e1ee895ae89d
 ---
 
 # Controller Worker Flow
@@ -10,7 +10,7 @@ last_updated_session: codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464
 
 The worker claims PostgreSQL work committed by the HTTP API, rechecks the
 original actor's authorization, invokes Compute, and persists results under its
-live claim. This trace follows Namespace, Agent-stop, and AgentRevision work through
+live claim. This trace follows Namespace, Agent stop/deletion, and AgentRevision work through
 completion, deferral, retry, or permanent failure. The
 [controller reference](../reference/controller.md) owns the contract and the
 [deployment guide](../guides/deploy.md) owns process setup.
@@ -18,7 +18,7 @@ completion, deferral, retry, or permanent failure. The
 ## Entry Points
 
 - Trigger: Compose or Helm starts `apps/controller/src/worker.mjs`; an
-  authenticated API mutation commits Namespace, Agent-stop, or AgentRevision work.
+  authenticated API mutation commits Namespace, Agent lifecycle, or AgentRevision work.
 - Source: `apps/controller/src/worker.mjs:configuration`,
   `apps/controller/src/worker.ts:ControllerWorker.start`, and
   `packages/occ/src/state/postgres-state.ts:operations.append`.
@@ -85,16 +85,17 @@ Compose and Helm run it separately from the API.
 `packages/occ/src/state/postgres-state.ts:operations.append`
 
 The API authenticates and authorizes the caller before invoking controller
-operations such as `createNamespace`, `deleteNamespace`, `deployAgent`, or `stopAgent`.
+operations such as `createNamespace`, `deleteNamespace`, `deployAgent`, `stopAgent`,
+or `deleteAgent`.
 `operations.append` verifies exact ownership and calls `PostgresWorkQueue.enqueue`
 within the transaction. State, admission audit, and work commit or roll back together.
 
 The queue freezes actor, Namespace owner, lifecycle target, and exact Agent and
-immutable AgentRevision for revision work. Stop work has an exact Agent owner and
-`stopped` target without inventing a revision. Its idempotency
-key identifies the operation. Reusing that key with a different actor, owner, or
-target is rejected. The API returns accepted lifecycle state without waiting for
-Compute; the next owner is the independent worker.
+immutable AgentRevision for revision work. Agent lifecycle work has an exact
+Agent owner and a `stopped` or `deleted` target without inventing a revision.
+Its idempotency key identifies the operation. Reusing that key with a different
+actor, owner, or target is rejected. The API returns accepted lifecycle state
+without waiting for Compute; the next owner is the independent worker.
 
 ### 3. Recover expired claims and claim one eligible operation
 
@@ -148,6 +149,10 @@ Agent-stop work rechecks current exact-Agent `operate`. Superseded desired state
 completes without shutdown. An absent active pointer does not prove candidates
 have no runtime resources, so stop still checks the captured revision history.
 
+Agent-deletion work requires the Agent to remain `deleting` and stopped, then
+rechecks the original actor's exact-Agent `delete`. It loads every owned revision
+and rejects ownership or Compute-Driver mismatches before teardown.
+
 ### 5. Invoke Compute while renewing the live claim
 
 `apps/controller/src/worker.ts:ControllerWorker.observe`,
@@ -181,6 +186,14 @@ revision recovery also binds before shutdown and retirement. IAM and exact
 resource checks precede binding.
 Revision preparation and maintenance recheck `desiredRuntimeState`; a candidate
 that overlaps stop is shut down instead of activated.
+
+Agent-deletion dispatch binds the server-owned Namespace and Agent before calling
+`retireRevision` for every owned revision, then invokes the optional Agent
+credential-deletion capability. This rebuilds Driver-local ownership after a
+worker restart. A Driver that can provision runtime credentials but cannot delete
+them fails permanently before binding or retirement. Compute retirement owns
+workload termination and Sandbox cleanup; the worker does not invoke either
+independently.
 
 `withClaimHeartbeat()` renews the claim before starting each effect and then
 roughly every third of its lease duration while the effect runs. The initial
@@ -236,6 +249,13 @@ stop even if it retains that active pointer while preparing. It appends lifecycl
 evidence and completes the same work item. Revision rows and persistent runtime
 state are not deleted.
 
+Deletion finalization uses a restricted database function rather than the
+generic queue completion path. In one transaction it validates the live claim,
+removes the Agent's revisions, service principal, API keys, and exact IAM
+references, records lifecycle-delete success, deletes the Agent, and removes its
+work rows. An expired or replaced claim removes nothing; `occ_app` has no direct
+table-level delete privilege for these records.
+
 ### 7. Defer, retry, or stop and hand off the next iteration
 
 `apps/controller/src/worker.ts:ControllerWorker.finalizeActiveRevision`,
@@ -259,6 +279,16 @@ and `warnings` fields from the saved result. Stale claims cannot publish outcome
 runtime receipt acknowledgment or post-commit cleanup protocol. The original
 deployment's warnings remain a historical startup result; later maintenance
 observations do not rewrite that completed deployment.
+
+Legacy terminal work rows derive `reason_code` from durable audit evidence.
+A successful revision is marked `REVISION_ACTIVATED` only
+when a matching activation audit event exists between work creation and
+completion. Otherwise, the backfill copies the matching terminal `reconcile`
+audit reason for the same resource, actor, attempt, outcome, and completion
+window. If that evidence is absent, the row receives `LEGACY_OUTCOME_UNKNOWN`.
+Historical `result_data` remains `NULL`, because previous rows did not store
+structured timeout or warning data. Pending rows stay incomplete with no
+terminal outcome.
 
 If Compute declares a maintenance interval, successful activation schedules
 another exact-revision observation. An incomplete active-runtime observation or
@@ -313,6 +343,8 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-20 10:50: Documented legacy terminal work outcome backfill during migration 0019, including unknown result data and fallback behavior. (authoring-run/a2f901df-d27a-4a05-9468-e1ee895ae89d - 08b1b8fe)
 
 - 2026-09-18 17:17: Generalized terminal details to result_data for success warnings and failure metadata, retaining live-claim fencing and the deployment API projection. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 6a582ce9)
 

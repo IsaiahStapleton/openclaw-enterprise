@@ -58,6 +58,7 @@ import {
   type WorkspaceFileName,
 } from "@openclaw-enterprise/contracts";
 import {
+  AgentDeletingError,
   AuthorizationDeniedError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   DependencyUnavailableError,
@@ -650,6 +651,7 @@ function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
     harnessAuth: agent.harnessAuth,
     ...(agent.activeRevisionId === undefined ? {} : { activeRevisionId: agent.activeRevisionId }),
     desiredRuntimeState: agent.desiredRuntimeState,
+    status: agent.status,
     createdAt: agent.createdAt,
   };
 }
@@ -787,6 +789,9 @@ function requestFailure(error: unknown): RequestFailure {
   }
   if (error instanceof NamespaceNotEmptyError) {
     return failure(409, "NAMESPACE_NOT_EMPTY", "The requested Namespace is not empty.");
+  }
+  if (error instanceof AgentDeletingError) {
+    return failure(409, "AGENT_DELETING", "The requested Agent is being deleted.");
   }
   if (error instanceof NotImplementedError) {
     return failure(501, "NOT_IMPLEMENTED", error.message);
@@ -2491,6 +2496,24 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         return clientAgent(updated);
       });
       reply.send({ data: agent, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "deleteAgent") {
+      const agent = await controller.transact(async (unit) => {
+        const deleting = await controller!.deleteAgent(context.actorId, namespaceId, agentId);
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            { kind: "agent", id: deleting.id, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+        return clientAgent(deleting);
+      });
+      reply.status(202).send({ data: agent, meta: { requestId: request.id } });
       return;
     }
 

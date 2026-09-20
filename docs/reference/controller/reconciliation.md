@@ -35,6 +35,23 @@ queue transition does not itself establish enforcement of cluster admission,
 NetworkPolicy, or a SandboxDriver facet; those guarantees require the selected
 implementation and its documented infrastructure.
 
+## Agent lifecycle
+
+Stopping an Agent sets its desired runtime state to `stopped` and queues an
+exact-Agent `stopped` target. The worker reauthorizes the original actor, stops
+the current revision, and clears the active pointer only if it still identifies
+that revision. Revision history, credentials, and persistent state remain; a
+later deployment starts a new revision.
+
+Deleting an Agent sets its lifecycle status to `deleting`, sets desired runtime
+state to `stopped`, and queues an exact-Agent `deleted` target. Synchronous Agent
+mutations reject this state. The worker reauthorizes `delete`, retires every
+revision, and removes runtime credentials before a claim-protected database
+finalizer removes the Agent, revisions, service principal, API keys, exact IAM
+references, and Agent work rows. The function records durable success evidence;
+an expired claim or failed external cleanup leaves the rows intact for safe
+retry. Namespace-owned Configurations and Secrets are not Agent teardown state.
+
 ## AgentRevision lifecycle
 
 An authorized bodyless Agent deployment reads its exact Namespace-owned native
@@ -102,7 +119,7 @@ following states:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: Namespace or AgentRevision operation committed
+    [*] --> queued: Namespace or Agent operation committed
     queued --> claimed: Worker acquires claim and lease
     claimed --> claimed: Heartbeat renews lease
     claimed --> succeeded: Effect and lifecycle update commit
@@ -124,11 +141,12 @@ stateDiagram-v2
   method, renews its lease before each effect, and keeps renewing while it runs.
   Consecutive short effects must not starve renewal. Only the current claim
   token can publish lifecycle state, audit evidence, or completion.
-- **`succeeded`:** The exact Namespace or AgentRevision operation completed
+- **`succeeded`:** The exact Namespace or Agent operation completed
   successfully. Namespace transitions finalize with their audit; an Agent
   revision first becomes active and publishes its route, then commits its
-  activation audit and queue completion together. This terminal record remains
-  available for idempotency.
+  activation audit and queue completion together. These terminal records remain
+  available for idempotency. Successful Agent deletion instead removes its work
+  rows after recording lifecycle evidence because the owner no longer exists.
 - **`failed_permanent`:** Processing stopped because authorization failed, an
   unrecoverable error occurred, or the retry limit was exhausted. The failure
   is audited, and the terminal operation is never retried automatically.
@@ -184,10 +202,9 @@ exhausted.
 ## Authorization, retries, and scope
 
 - Namespace provisioning and deletion remain the only Namespace infrastructure
-  operations; AgentRevision preparation and retirement use the same Compute
-  Driver while preserving each Agent's stable gateway identity.
-- PostgreSQL accepts only Namespace lifecycle work or fully owned
-  AgentRevision work and rejects malformed queue shapes.
+  operations; Agent lifecycle and AgentRevision work use the same Compute Driver.
+- PostgreSQL accepts only Namespace lifecycle, exact-Agent lifecycle, or fully
+  owned AgentRevision work and rejects malformed queue shapes.
 - Creating or updating Agent metadata does not enqueue infrastructure work.
 - Every admitted AgentRevision is created through the canonical deployment
   path with pinned Harness and Compute metadata, then processed asynchronously.

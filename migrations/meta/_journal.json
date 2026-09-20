@@ -146,7 +146,14 @@
       "idx": 20,
       "version": "7",
       "when": 1787000000020,
-      "tag": "0020_iam_policy_delete_grants",
+      "tag": "0020_agent_deletion",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787000000021,
+      "tag": "0021_iam_policy_delete_grants",
       "breakpoints": true
     }
   ]

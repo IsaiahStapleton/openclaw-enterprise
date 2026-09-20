@@ -131,7 +131,7 @@ export function createAuthPrincipalSeed(
         })),
       ),
       { action: "operate", resourceKind: "secret" },
-      ...(["create", "read", "update", "deploy", "operate", "administer"] as const).map(
+      ...(["create", "read", "update", "delete", "deploy", "operate", "administer"] as const).map(
         (action) => ({
           action,
           resourceKind: "agent" as const,
