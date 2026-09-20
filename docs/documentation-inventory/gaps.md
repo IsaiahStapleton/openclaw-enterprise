@@ -2,6 +2,8 @@
 
 These are gaps in the [documentation inventory](../documentation-inventory.md), not claims that the product supports a capability. **New** means no task-appropriate current page was found; **consolidate** means useful material already exists; **decide** means support or product scope must be established before instructions can be published. P0 blocks first success or makes an unsafe promise; P1 blocks common use or navigation; P2 is useful follow-up. Some items can be sections of an existing page instead of new URLs.
 
+This is the original gap list. Later planning moves ongoing production work to **Operate** and defers **Join an existing installation** and the Docker/Podman preview from Getting Started. Treat the two deferred items as backlog, not sidebar recommendations; see the [updated organization and naming guidance](../../.agents/skills/technical-writing/references/documentation-navigation.md).
+
 ## Getting Started
 
 | Priority | Proposed sidebar → page                                                   | What is missing                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
