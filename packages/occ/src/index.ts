@@ -954,13 +954,51 @@ export class OpenClawController {
     namespaceId: string,
     agentId: string,
   ): Promise<Readonly<Agent>> {
+    return this.getAuthorizedAgent(principalId, namespaceId, agentId, "read");
+  }
+
+  /** Resolve an opaque address before the caller authorizes the exact Agent operation. */
+  async resolveAgentReference(
+    matches: (agent: Pick<Agent, "id" | "namespaceId">) => boolean,
+  ): Promise<Pick<Agent, "id" | "namespaceId"> | undefined> {
+    return this.read(async (state) => {
+      let selected: Pick<Agent, "id" | "namespaceId"> | undefined;
+      for (const namespace of await state.namespaces.listNamespaces()) {
+        for (const agent of await state.agents.listAgents(namespace.id)) {
+          if (agent.namespaceId !== namespace.id || !matches(agent)) {
+            continue;
+          }
+          if (selected !== undefined) {
+            return undefined;
+          }
+          selected = { id: agent.id, namespaceId: agent.namespaceId };
+        }
+      }
+      return selected;
+    });
+  }
+
+  async getAdministerableAgent(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<Readonly<Agent>> {
+    return this.getAuthorizedAgent(principalId, namespaceId, agentId, "administer");
+  }
+
+  private async getAuthorizedAgent(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    action: PermissionAction,
+  ): Promise<Readonly<Agent>> {
     if (!isNonEmptyString(namespaceId)) {
       throw new ScopeViolationError("The exact Namespace identity is missing.");
     }
     if (!isNonEmptyString(agentId)) {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     }
-    await this.authorize(principalId, "read", {
+    await this.authorize(principalId, action, {
       kind: "agent",
       id: agentId,
       namespaceId,
@@ -1203,6 +1241,14 @@ export class OpenClawController {
     agentId: string,
   ): Promise<ActiveAgentRevisionSelection> {
     return this.getAuthorizedActiveAgentRevision(principalId, namespaceId, agentId, "operate");
+  }
+
+  async getAdministerableActiveAgentRevision(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<ActiveAgentRevisionSelection> {
+    return this.getAuthorizedActiveAgentRevision(principalId, namespaceId, agentId, "administer");
   }
 
   private async getAuthorizedActiveAgentRevision(

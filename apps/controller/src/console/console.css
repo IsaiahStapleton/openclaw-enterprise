@@ -28,13 +28,17 @@ button,
 a {
   touch-action: manipulation;
 }
-button {
+button,
+.primary {
   color: inherit;
   cursor: pointer;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px 16px;
+}
+a.primary {
+  text-decoration: none;
 }
 button:hover {
   background: #f0f4f1;
