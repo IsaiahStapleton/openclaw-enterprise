@@ -15,6 +15,7 @@ import { createControllerApp, createFastifyApp } from "../../apps/controller/src
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import {
+  AgentDeletingError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   InMemoryPlatformState,
   OpenClawController,
@@ -35,6 +36,7 @@ const developmentPassword = "openclaw-development-password";
 const uuidV4 = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const identifier = (prefix) => new RegExp(`^${prefix}_${uuidV4}$`);
 const missingRevisionId = "rev_3dd29693-ce8b-4b4c-97c4-14b4c68c6e9c";
+const missingAgentId = "agt_6f1c9b2d-8e34-4a1f-9c57-2d0b8e4a71c3";
 
 async function availableLoopbackPort() {
   const server = createServer();
@@ -663,6 +665,48 @@ test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource
   assert.equal(revisionDetail.status, 404);
   assert.equal(revisionDetail.body.error.code, "NOT_FOUND");
 
+  // Deletion is asynchronous: the route admits the request, moves the Agent to
+  // deleting and queues teardown. It answers 202 rather than 204 because the
+  // Agent and its revisions still exist until the worker finishes.
+  assert.equal(agent.status, "active");
+  const missingDeletion = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/agents/${missingAgentId}`,
+  );
+  assert.equal(missingDeletion.status, 404);
+  assert.equal(missingDeletion.body.error.code, "NOT_FOUND");
+
+  const deletion = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(deletion.status, 202);
+  assert.deepEqual(deletion.data, { ...agent, status: "deleting" });
+
+  // Reads keep returning a deleting Agent, so an operator can observe teardown
+  // in progress instead of seeing it vanish before its resources are gone.
+  const deletingDetail = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(deletingDetail.status, 200);
+  assert.equal(deletingDetail.data.status, "deleting");
+
+  // A repeated request converges on the in-flight teardown rather than
+  // conflicting, so a client retry after a lost response is safe.
+  const repeatedDeletion = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(repeatedDeletion.status, 202);
+  assert.deepEqual(repeatedDeletion.data, deletion.data);
+
+  // The Agent row survives until teardown completes, so its Namespace is still
+  // occupied. Offboarding becomes possible only once the row is removed.
+  const stillOccupied = await controller.request("DELETE", `/namespaces/${namespace.id}`);
+  assert.equal(stillOccupied.status, 409);
+  assert.equal(stillOccupied.body.error.code, "NAMESPACE_NOT_EMPTY");
+
   const secondBootstrap = await controller.request("POST", "/installation/bootstrap", {
     body: { name: "another installation" },
   });
@@ -1008,6 +1052,72 @@ test("Namespace IAM routes fail closed without policy management and roll back a
     rollbackFixture.state.roles.filter((role) => role.namespaceId === rollbackNamespace.id),
     [],
   );
+});
+
+test("Agent deletion closes every synchronous mutation boundary before teardown", async () => {
+  const controller = await configuredController();
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "deletion-race");
+  const agent = await createAgent(controller, namespace.id, "deletion-race-agent");
+  await controller.fixture.controller.handleNamespaceLifecycle(
+    controller.fixture.principal.id,
+    namespace.id,
+    "ready",
+  );
+  await bindHarnessKey(controller.fixture, namespace.id, agent);
+  const deployed = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+  );
+  assert.equal(deployed.status, 202);
+
+  const deletion = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(deletion.status, 202);
+  assert.equal(deletion.data.status, "deleting");
+  assert.equal(deletion.data.desiredRuntimeState, "stopped");
+
+  for (const mutation of [
+    () =>
+      controller.request("PATCH", `/namespaces/${namespace.id}/agents/${agent.id}`, {
+        body: { configurationId: agent.configurationId },
+      }),
+    () => controller.request("POST", `/namespaces/${namespace.id}/agents/${agent.id}/deploy`),
+  ]) {
+    const rejected = await mutation();
+    assert.equal(rejected.status, 409);
+    assert.equal(rejected.body.error.code, "AGENT_DELETING");
+    assert.equal(rejected.body.error.message, "The requested Agent is being deleted.");
+  }
+
+  // Credential provisioning and workspace routing are intentionally absent
+  // from this API fixture, so prove their admission barriers directly before
+  // either unavailable dependency is consulted.
+  await assert.rejects(
+    controller.fixture.controller.provisionAgentRuntimeCredentials(
+      controller.fixture.principal.id,
+      namespace.id,
+      agent.id,
+      {},
+    ),
+    AgentDeletingError,
+  );
+  await assert.rejects(
+    controller.fixture.controller.getOperableActiveAgentRevision(
+      controller.fixture.principal.id,
+      namespace.id,
+      agent.id,
+    ),
+    AgentDeletingError,
+  );
+
+  const revisions = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/revisions`,
+  );
+  assert.equal(revisions.data.length, 1, "no mutation may admit work after deletion starts");
 });
 
 test("Agent Provider API preserves nullable drafts and immutable revision associations", async () => {
@@ -2601,6 +2711,17 @@ test("bootstrap, mutations, and denials emit attributable private audit events",
   );
   assert.equal(agent.status, 201);
 
+  // Beginning deletion is an audited mutation in its own right: it is the
+  // record that attributes the teardown to the principal who requested it,
+  // and it must exist before any resource is destroyed.
+  const deletion = await injectedRequest(
+    fixture.app,
+    "DELETE",
+    `/namespaces/${namespace.data.id}/agents/${agent.data.id}`,
+  );
+  assert.equal(deletion.status, 202);
+  assert.equal(deletion.data.status, "deleting");
+
   const expectedAuditEvents = fixture.auditSink.events.length;
   const unauthenticated = await injectedRequest(fixture.app, "GET", "/installation", {
     identity: false,
@@ -2613,22 +2734,37 @@ test("bootstrap, mutations, and denials emit attributable private audit events",
     (entry) => entry.action === "create" && entry.resourceKind === "namespace",
   );
   permissions.splice(namespaceCreate, 1);
+  // Deleting an Agent is destructive and is gated by its own permission rather
+  // than riding on update or deploy, so a principal that can change an Agent
+  // still cannot tear it down.
+  const agentDelete = permissions.findIndex(
+    (entry) => entry.action === "delete" && entry.resourceKind === "agent",
+  );
+  permissions.splice(agentDelete, 1);
   const denialApp = fixture.createApp();
   const unauthorized = await injectedRequest(denialApp, "POST", "/namespaces", {
     body: { name: "never-log-this-request-body" },
   });
   assert.equal(unauthorized.status, 403);
 
+  const deletionDenied = await injectedRequest(
+    denialApp,
+    "DELETE",
+    `/namespaces/${namespace.data.id}/agents/${agent.data.id}`,
+  );
+  assert.equal(deletionDenied.status, 403);
+
   const mutationEvents = fixture.auditSink.events.filter((event) =>
     ["bootstrap", "mutation"].includes(event.kind),
   );
-  assert.equal(mutationEvents.length, 4);
+  assert.equal(mutationEvents.length, 5);
   assert.deepEqual(
     mutationEvents.map((event) => [event.kind, event.resource.kind]),
     [
       ["bootstrap", "installation"],
       ["mutation", "namespace"],
       ["mutation", "configuration"],
+      ["mutation", "agent"],
       ["mutation", "agent"],
     ],
   );
@@ -2681,17 +2817,41 @@ test("bootstrap, mutations, and denials emit attributable private audit events",
           namespaceId: namespace.data.id,
         },
       },
+      {
+        principalId: fixture.principal.id,
+        action: "delete",
+        resource: {
+          kind: "agent",
+          id: agent.data.id,
+          namespaceId: namespace.data.id,
+        },
+      },
     ],
   );
 
+  // Both refusals are audited, so a denied destructive request leaves evidence
+  // naming the principal who attempted it.
   const authorizationDenials = fixture.auditSink.events.filter(
     (event) => event.kind === "authorization_denial",
   );
-  assert.equal(authorizationDenials.length, 1);
-  assert.equal(authorizationDenials[0].outcome, "denied");
-  assert.equal(authorizationDenials[0].actor.principalId, fixture.principal.id);
-  assert.equal(authorizationDenials[0].installationId, fixture.installationId);
-  assert.equal(authorizationDenials[0].reasonCode, "AUTHORIZATION_DENIED");
+  assert.equal(authorizationDenials.length, 2);
+  for (const denial of authorizationDenials) {
+    assert.equal(denial.outcome, "denied");
+    assert.equal(denial.actor.principalId, fixture.principal.id);
+    assert.equal(denial.installationId, fixture.installationId);
+    assert.equal(denial.reasonCode, "AUTHORIZATION_DENIED");
+  }
+  assert.deepEqual(
+    authorizationDenials.map((denial) => [
+      denial.authorization.action,
+      denial.authorization.resource.kind,
+    ]),
+    [
+      ["create", "namespace"],
+      ["delete", "agent"],
+    ],
+  );
+  assert.equal(authorizationDenials[1].authorization.resource.id, agent.data.id);
 
   const recorded = JSON.stringify(fixture.auditSink.events);
   assert.equal(recorded.includes(fixture.session.cookie), false);

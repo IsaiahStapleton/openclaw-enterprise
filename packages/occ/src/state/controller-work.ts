@@ -32,7 +32,7 @@ export interface ControllerWork {
   readonly revisionId?: string;
   readonly actorId: string;
   readonly namespaceTarget?: "ready" | "deleted";
-  readonly agentTarget?: "stopped";
+  readonly agentTarget?: "stopped" | "deleted";
   readonly state: ControllerWorkState;
   readonly availableAt: Date;
   readonly attemptCount: number;
@@ -58,7 +58,7 @@ export interface EnqueueWork {
   readonly revisionId?: string;
   readonly actorId: string;
   readonly namespaceTarget?: "ready" | "deleted";
-  readonly agentTarget?: "stopped";
+  readonly agentTarget?: "stopped" | "deleted";
   readonly availableAt?: Date | string;
 }
 

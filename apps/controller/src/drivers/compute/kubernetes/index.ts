@@ -1186,6 +1186,42 @@ export class KubernetesComputeDriver implements ComputeDriver {
     });
   }
 
+  async deleteAgentRuntimeCredentials(binding: ComputeAgentBinding): Promise<void> {
+    if (this.options.runtime === undefined) {
+      return;
+    }
+    await this.withRuntimeCredentialErrors(async () => {
+      const context = await this.runtimeCredentialContext(binding);
+      const existing = await this.getOwned(
+        "Secret",
+        context.transport.name,
+        context.namespace,
+        context.ownership,
+      );
+      if (existing === undefined) {
+        return;
+      }
+      const clients = await this.clients();
+      try {
+        await this.request(
+          () =>
+            clients.core.deleteNamespacedSecret({
+              name: context.transport.name,
+              namespace: context.namespace,
+              ...(existing.metadata.uid === undefined
+                ? {}
+                : { body: { preconditions: { uid: existing.metadata.uid } } }),
+            }),
+          { mutating: true },
+        );
+      } catch (error) {
+        if (numericErrorStatus(error) !== 404) {
+          throw error;
+        }
+      }
+    });
+  }
+
   async storeServiceAccountCredential(input: {
     readonly namespaceId: string;
     readonly serviceAccountId: string;
@@ -2282,7 +2318,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return;
     }
     await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
-    await this.deleteGateway(name, ownership, namespace);
+    await this.deleteNamedRuntimeResources(name, ownership, namespace);
     await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
   }
 
@@ -2360,31 +2396,107 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
     const gateway = await this.getOwned("Deployment", name, namespace, ownership);
     if (gateway === undefined) {
-      const route = await this.gatewayRouteForRevision(name, ownership, namespace, revision.id);
-      if (route === undefined) {
+      // A missing Deployment can mean stop or external loss. Preserve shared Agent resources
+      // whenever surviving route or Service evidence belongs to a newer revision.
+      const route =
+        this.options.gatewayRouting === undefined
+          ? undefined
+          : await this.getOwned("HTTPRoute", name, namespace, ownership);
+      if (
+        route !== undefined &&
+        route.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revision.id
+      ) {
+        await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+        await this.deleteRetiredRevisionArtifacts(revision, namespace);
         return;
       }
-      if (this.options.runtime !== undefined) {
-        await this.deleteGatewayPrivateStateClaim(ownership, namespace);
-      }
       if (revision.harness.mode === "dedicated") {
-        await this.deleteSharedWorkspaceClaim(ownership, namespace);
+        const agentService = await this.getOwned(
+          "Service",
+          `agent-${sha256Hex(revision.agentId, 12)}`,
+          namespace,
+          ownership,
+        );
+        const selectedRevision = asRecord(agentService?.spec?.selector)?.["openclaw.dev/revision"];
+        if (isNonEmptyString(selectedRevision) && selectedRevision !== revision.id) {
+          await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+          await this.deleteRetiredRevisionArtifacts(revision, namespace);
+          return;
+        }
       }
-      await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
-      await this.deleteGateway(name, ownership, namespace);
+      await this.deleteRetiredAgentResources(revision, ownership, namespace);
       return;
     }
     const annotations = gateway.metadata.annotations ?? {};
     if (annotations[AGENT_REVISION_ID_ANNOTATION] === revision.id) {
-      if (this.options.runtime !== undefined) {
-        await this.deleteGatewayPrivateStateClaim(ownership, namespace);
-      }
-      if (revision.harness.mode === "dedicated") {
-        await this.deleteSharedWorkspaceClaim(ownership, namespace);
-      }
-      await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
-      await this.deleteGateway(name, ownership, namespace);
+      await this.deleteRetiredAgentResources(revision, ownership, namespace);
+      return;
     }
+    await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+    await this.deleteRetiredRevisionArtifacts(revision, namespace);
+  }
+
+  private async deleteRetiredAgentResources(
+    revision: AgentRevision,
+    ownership: Ownership,
+    namespace: string,
+  ): Promise<void> {
+    const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
+    await this.deleteGatewayRoute(gatewayName, ownership, namespace, revision.id);
+    await this.deleteNamedRuntimeResources(gatewayName, ownership, namespace);
+    await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+    if (this.options.runtime !== undefined) {
+      await this.deleteGatewayPrivateStateClaim(ownership, namespace);
+    }
+    if (revision.harness.mode === "dedicated") {
+      await this.deleteSharedWorkspaceClaim(ownership, namespace);
+    }
+    await this.deleteNamedRuntimeResources(
+      `agent-${sha256Hex(revision.agentId, 12)}`,
+      { ...ownership, servicePrincipalId: revision.servicePrincipalId },
+      namespace,
+    );
+    await this.deleteRetiredRevisionArtifacts(revision, namespace);
+    await this.deleteRetiredAgentPolicies(revision, namespace);
+  }
+
+  private async deleteRetiredRevisionArtifacts(
+    revision: AgentRevision,
+    namespace: string,
+  ): Promise<void> {
+    await this.deleteOwnedNamespacedResource(
+      "ConfigMap",
+      `gateway-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`,
+      { namespaceId: revision.namespaceId, agentId: revision.agentId },
+      namespace,
+    );
+    await this.deleteOwnedNamespacedResource(
+      "ConfigMap",
+      `plugin-runtime-${sha256Hex(revision.agentId, 12)}-rev-${sha256Hex(revision.id, 12)}`,
+      this.pluginRuntimeOwnership(revision),
+      namespace,
+    );
+  }
+
+  private async deleteRetiredAgentPolicies(
+    revision: AgentRevision,
+    namespace: string,
+  ): Promise<void> {
+    const suffix = sha256Hex(revision.agentId, 12);
+    const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+    for (const name of [
+      `allow-agent-runtime-${suffix}`,
+      `allow-gateway-agent-${suffix}`,
+      `allow-gateway-channels-${suffix}`,
+    ]) {
+      await this.deleteOwnedNamespacedResource("NetworkPolicy", name, ownership, namespace);
+    }
+    await this.deleteOwnedNamespacedResource(
+      "NetworkPolicy",
+      `allow-agent-auth-${suffix}`,
+      { ...ownership, servicePrincipalId: revision.servicePrincipalId },
+      namespace,
+    );
   }
 
   private async deleteGatewayRoute(
@@ -2445,7 +2557,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       : undefined;
   }
 
-  private async deleteGateway(
+  private async deleteNamedRuntimeResources(
     name: string,
     ownership: Ownership,
     namespace: string,
@@ -2456,12 +2568,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (existing === undefined) {
         continue;
       }
+      const uid = required(existing.metadata.uid, `${kind} UID`);
       const request = {
         name,
         namespace,
-        ...(existing.metadata.uid === undefined
-          ? {}
-          : { body: { preconditions: { uid: existing.metadata.uid } } }),
+        body: { preconditions: { uid } },
       };
       await this.request(
         async () => {
@@ -2476,6 +2587,36 @@ export class KubernetesComputeDriver implements ComputeDriver {
         { mutating: true },
       );
     }
+  }
+
+  private async deleteOwnedNamespacedResource(
+    kind: "ConfigMap" | "ServiceAccount" | "NetworkPolicy",
+    name: string,
+    ownership: Ownership,
+    namespace: string,
+  ): Promise<void> {
+    const existing = await this.getOwned(kind, name, namespace, ownership);
+    if (existing === undefined) {
+      return;
+    }
+    const request = {
+      name,
+      namespace,
+      body: { preconditions: { uid: required(existing.metadata.uid, `${kind} UID`) } },
+    };
+    const clients = await this.clients();
+    await this.request(
+      async () => {
+        if (kind === "ConfigMap") {
+          await clients.core.deleteNamespacedConfigMap(request);
+        } else if (kind === "ServiceAccount") {
+          await clients.core.deleteNamespacedServiceAccount(request);
+        } else {
+          await clients.networking.deleteNamespacedNetworkPolicy(request);
+        }
+      },
+      { mutating: true },
+    );
   }
 
   private async resolveNamespace(
