@@ -126,9 +126,10 @@ jobs:
     runs-on: ubuntu-24.04
     needs: preflight
     if: inputs.lane == 'all' || inputs.lane == 'k3d-model'
-    timeout-minutes: 65
+    timeout-minutes: 120
     environment: integration-model
     env:
+      CI_RUNNER_TEST_TIMEOUT_MS: "5400000"
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OCC_TEST_OPENAI_MODEL: ${{ vars.OCC_TEST_OPENAI_MODEL }}
       OCC_TEST_KUBERNETES_GATEWAY_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_GATEWAY_IMAGE }}

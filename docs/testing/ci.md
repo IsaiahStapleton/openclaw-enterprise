@@ -64,7 +64,10 @@ The dispatcher cannot approve their own run. Have a different collaborator
 perform one of those actions. Remove the branch rule after the proof completes.
 Other lanes, including `all` and `provider-account`, remain main-only. This lane
 runs the real Kubernetes topology tests, including embedded invalid-credential
-cutover and recovery; passing ordinary fixture CI does not prove those outcomes.
+cutover and recovery. It also runs the local first-Agent proof: a fresh installer
+deploys and reuses their own Agent, verifies real model responses, and cannot
+replace the credential after external changes. Ordinary fixture CI does not
+run these tests.
 
 ### Integration tests outside automatic CI
 
@@ -74,7 +77,7 @@ whether a test has ever passed in a local or hosted run.
 
 #### Manual Full Integration lanes
 
-In GitHub Actions, these nine files run only when explicitly selected in
+In GitHub Actions, these ten files run only when explicitly selected in
 [Full Integration](../../.github/workflows/full-integration.yml), using
 the listed lane or `all`. The model/service lanes require their configured
 credentials and infrastructure. All credentialed lanes except `provider-account`
@@ -87,6 +90,7 @@ testing the real helper deadline.
 | ------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `docker-model`     | [docker-compute-real.test.mjs](../../tests/integration/docker-compute-real.test.mjs)                             | Docker Compose deployment and real embedded OpenClaw/dedicated Codex model turns.                                        |
 | `k3d-model`        | [harness-topology-k3d-real.test.mjs](../../tests/integration/harness-topology-k3d-real.test.mjs)                 | Dedicated Codex continuity across Pod replacement and embedded model turns with persisted credentials or the Secret API. |
+| `k3d-model`        | [local-first-agent-real.test.mjs](../../tests/integration/local-first-agent-real.test.mjs)                       | Fresh local Agent deployment and reuse with real model replies; external changes block credential replacement.           |
 | `gateway-routing`  | [harness-topology-k3d-routing-real.test.mjs](../../tests/integration/harness-topology-k3d-routing-real.test.mjs) | Dedicated Codex consumption of workspace files through the real Envoy/OCC route.                                         |
 | `production-tui`   | [production-tui-k3d-real.test.mjs](../../tests/integration/production-tui-k3d-real.test.mjs)                     | Helm-installed production control plane, interactive TUI, and revision cutover.                                          |
 | `slack`            | [harness-topology-k3d-slack-real.test.mjs](../../tests/integration/harness-topology-k3d-slack-real.test.mjs)     | Real Slack ingress and a gateway-authored reply through the approved proxy and Codex Agent.                              |

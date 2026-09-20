@@ -70,7 +70,7 @@ runs:
     - name: Run docs check
       if: inputs.lane == 'checks-baseline'
       shell: bash
-      run: pnpm docs:install && pnpm docs:check
+      run: pnpm docs:install && pnpm docs:check && pnpm docs:build
     - name: Run typecheck
       if: inputs.lane == 'checks-baseline'
       shell: bash
@@ -85,7 +85,7 @@ runs:
     - name: Run lane
       shell: bash
       env:
-        CI_RUNNER_TEST_TIMEOUT_MS: ${{ inputs.lane == 'checks-baseline' && '300000' || '' }}
+        CI_RUNNER_TEST_TIMEOUT_MS: ${{ inputs.lane == 'checks-baseline' && '300000' || inputs.lane == 'k3d-model' && '5400000' || '' }}
       run: node scripts/ci/run-tests.mjs run "${{ inputs.lane }}" --state "$RUNNER_TEMP/state/${{ inputs.lane }}.json" --results "$RUNNER_TEMP/results/${{ inputs.lane }}.json"
     - name: Cleanup lane
       if: always()

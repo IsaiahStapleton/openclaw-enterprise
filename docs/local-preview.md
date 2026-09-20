@@ -28,7 +28,7 @@ workspace. `docs:install` uses the pinned pnpm version and frozen docs lockfile.
 
 ```sh
 npm run docs:build
-npm run docs:check-length
+npm run docs:check
 git diff --check
 ```
 
@@ -37,6 +37,8 @@ from the sidebar and the generated HTTP API reference. It checks local page
 links and heading anchors, then builds the search index. Source files, deployment
 assets, and historical specs outside `docs/` link to the Enterprise repository
 on GitHub. These links require repository access. External URLs are not fetched.
+`docs:check` checks word limits, navigation, and links without writing the site or
+running a test suite.
 Do not add or run tests for documentation changes, including docs-site
 presentation; use the build, formatting, link checks, and visual inspection.
 
