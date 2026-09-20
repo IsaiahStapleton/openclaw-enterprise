@@ -14,8 +14,9 @@ upstream credentials managed by [Service accounts](../service-accounts.md).
   with current `administer` on the singleton Installation.
 - An existing non-Agent service principal and its exact Namespace, if it has
   one. Fresh bootstrap creates an Installation service administrator. OCC has no
-  public API to create other service principals or their bindings; the selected
-  IAM authority must provision them. See [Authorization](../authorization.md).
+  public API to create other service principals; the selected IAM authority
+  must provision them. Administrators manage Namespace Roles and AccessBindings
+  through the [Namespace IAM API](../authorization.md#manage-namespace-policy).
 - A private directory for credentials. Keep shell tracing disabled, do not print
   keys, and run the examples from the repository root. CLI examples assume the
   [`occ` executable](../../guides/cli.md) is installed and on `PATH`.

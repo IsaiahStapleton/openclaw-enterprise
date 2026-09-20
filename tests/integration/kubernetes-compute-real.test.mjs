@@ -1877,7 +1877,8 @@ test(
         },
       });
       assert.equal(created.status, 201, JSON.stringify(created.error));
-      assert.equal(Object.hasOwn(created.data, "servicePrincipalId"), false);
+      assert.equal(typeof created.data.servicePrincipalId, "string");
+      assert.notEqual(created.data.servicePrincipalId.trim(), "");
       await grantAgentSecretOperate(observerPool, created.data, secret.data.id);
       return created.data;
     }

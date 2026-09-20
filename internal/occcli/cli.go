@@ -87,6 +87,7 @@ func New(out, errOut io.Writer) *cobra.Command {
 	command.AddCommand(
 		app.installationCommand(),
 		app.namespaceCommand(),
+		app.iamCommand(),
 		app.configurationCommand(),
 		app.agentCommand(),
 		developmentCommand(),
@@ -194,6 +195,206 @@ func (app *application) namespaceCommand() *cobra.Command {
 				return err
 			}
 			return app.printNamespace(namespace, false)
+		},
+	}
+
+	command.AddCommand(create, list, get, deleteCommand)
+	return command
+}
+
+func (app *application) iamCommand() *cobra.Command {
+	command := commandGroup("iam", "Manage Namespace IAM policy")
+	command.AddCommand(app.iamRoleCommand(), app.iamAccessBindingCommand())
+	return command
+}
+
+func (app *application) iamRoleCommand() *cobra.Command {
+	command := commandGroup("role", "Manage Namespace IAM Roles")
+
+	var createFile string
+	create := &cobra.Command{
+		Use:   "create",
+		Short: "Create a Namespace IAM Role from a JSON document",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			body, err := readJSON(createFile)
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			role, err := client.CreateIAMRole(namespace, body)
+			if err != nil {
+				return err
+			}
+			return app.printIAMRole(role, false)
+		},
+	}
+	create.Flags().StringVar(&createFile, "file", "", "JSON document path")
+	_ = create.MarkFlagRequired("file")
+
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List Namespace IAM Roles",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			roles, err := client.ListIAMRoles(namespace)
+			if err != nil {
+				return err
+			}
+			return app.printIAMRole(roles, true)
+		},
+	}
+
+	get := &cobra.Command{
+		Use:   "get ID",
+		Short: "Show a Namespace IAM Role",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			role, err := client.GetIAMRole(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printIAMRole(role, false)
+		},
+	}
+
+	deleteCommand := &cobra.Command{
+		Use:   "delete ID",
+		Short: "Delete an unreferenced Namespace IAM Role",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			if err := client.DeleteIAMRole(namespace, args[0]); err != nil {
+				return err
+			}
+			return app.printDeletion("iam role", args[0])
+		},
+	}
+
+	command.AddCommand(create, list, get, deleteCommand)
+	return command
+}
+
+func (app *application) iamAccessBindingCommand() *cobra.Command {
+	command := commandGroup("access-binding", "Manage Namespace IAM AccessBindings")
+
+	var createFile string
+	create := &cobra.Command{
+		Use:   "create",
+		Short: "Create a Namespace IAM AccessBinding from a JSON document",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			body, err := readJSON(createFile)
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			binding, err := client.CreateIAMAccessBinding(namespace, body)
+			if err != nil {
+				return err
+			}
+			return app.printIAMAccessBinding(binding, false)
+		},
+	}
+	create.Flags().StringVar(&createFile, "file", "", "JSON document path")
+	_ = create.MarkFlagRequired("file")
+
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List Namespace IAM AccessBindings",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			bindings, err := client.ListIAMAccessBindings(namespace)
+			if err != nil {
+				return err
+			}
+			return app.printIAMAccessBinding(bindings, true)
+		},
+	}
+
+	get := &cobra.Command{
+		Use:   "get ID",
+		Short: "Show a Namespace IAM AccessBinding",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			binding, err := client.GetIAMAccessBinding(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printIAMAccessBinding(binding, false)
+		},
+	}
+
+	deleteCommand := &cobra.Command{
+		Use:   "delete ID",
+		Short: "Delete a Namespace IAM AccessBinding",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			if err := client.DeleteIAMAccessBinding(namespace, args[0]); err != nil {
+				return err
+			}
+			return app.printDeletion("iam access-binding", args[0])
 		},
 	}
 
@@ -541,10 +742,29 @@ func (app *application) printConfiguration(value any) error {
 	})
 }
 
+func (app *application) printIAMRole(value any, collection bool) error {
+	return app.printItems(value, collection, []column{
+		{title: "ID", key: "id"},
+		{title: "NAME", key: "name"},
+		{title: "PERMISSIONS", key: "permissions"},
+	})
+}
+
+func (app *application) printIAMAccessBinding(value any, collection bool) error {
+	return app.printItems(value, collection, []column{
+		{title: "ID", key: "id"},
+		{title: "SUBJECT", key: "subjectId"},
+		{title: "ROLE", key: "roleId"},
+		{title: "RESOURCE KIND", key: "resourceKind"},
+		{title: "RESOURCE", key: "resourceId"},
+	})
+}
+
 func (app *application) printAgent(value any, collection bool) error {
 	return app.printItems(value, collection, []column{
 		{title: "ID", key: "id"},
 		{title: "NAME", key: "name"},
+		{title: "SERVICE PRINCIPAL", key: "servicePrincipalId"},
 		{title: "CONFIGURATION", key: "configurationId"},
 		{title: "MODE", key: "executionMode"},
 		{title: "DESIRED STATE", key: "desiredRuntimeState"},

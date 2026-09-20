@@ -27,9 +27,9 @@ credential. A service account is not an IAM ServicePrincipal.
 ## Grant and check access
 
 Permissions are assigned through Roles and AccessBindings. Installation
-administrators can create human accounts bound to an existing Role, but OCC does
-not provide general HTTP or console management for Roles, Groups, bindings, or
-Restrictions. The selected IAM authority owns that policy. See
+administrators can create human accounts bound to an existing Role and manage
+Namespace Roles and AccessBindings through the [HTTP API or CLI](../../reference/authorization.md#manage-namespace-policy).
+Groups and Restrictions remain managed by the selected IAM authority. See
 [Authorization](../../reference/authorization.md) for available actions, scope,
 and how denials work.
 

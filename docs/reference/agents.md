@@ -38,6 +38,11 @@ their Compute effects remain asynchronous. Stop sets the Agent's
 caller has an exact `read` grant for. The [API reference](api.md) documents route
 schemas, response envelopes, and permissions.
 
+Authorized Agent responses include immutable, read-only `servicePrincipalId`.
+Use this value for [Namespace IAM bindings](authorization.md#manage-namespace-policy);
+clients must not derive the identity from the Agent ID. Create and update
+requests reject a supplied `servicePrincipalId`.
+
 Creation body:
 
 ```json

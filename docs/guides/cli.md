@@ -122,6 +122,22 @@ Agent-owned workspace data; Namespace-owned Configurations and Secrets survive.
 Deletion runs asynchronously. See [Agent deletion](../reference/agents.md#deletion)
 for the full cleanup behavior.
 
+## Manage Namespace IAM
+
+Create a Namespace Role and bind it to the Agent's returned
+`servicePrincipalId` when an Agent needs delegated access to an exact resource.
+The IAM commands require Installation administration and Namespace read access.
+
+```bash
+occ iam role create --file role.json
+occ iam access-binding create --file binding.json
+```
+
+Use the request documents in
+[Namespace IAM](../reference/authorization.md#manage-namespace-policy). Inspect
+Role permissions before reusing a Role; its name alone does not establish
+access.
+
 ## Manage local development
 
 For a local Installation that can deploy an Agent, follow

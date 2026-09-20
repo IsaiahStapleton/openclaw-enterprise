@@ -23,6 +23,8 @@ from each trace; for commands to run locally, see [Testing](../testing/README.md
 
 ## Identity and credentials
 
+- [Namespace IAM policy](../flows/namespace-iam-policy.md): authorized Role and AccessBinding changes and audit commit
+
 - [Local password authentication](../flows/local-password-authentication.md) and [service API keys](../flows/service-api-keys.md)
 - [Secret storage and delivery](../flows/secret-storage-and-delivery.md)
 - [Harness authentication binding](../flows/native-service-account-credential-delivery.md) and [ServiceAccount Driver credential delivery](../flows/service-account-driver-credential-delivery.md)

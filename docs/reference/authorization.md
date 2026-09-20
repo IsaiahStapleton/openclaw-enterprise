@@ -53,10 +53,11 @@ binding to an existing Role, as defined in
 is disabled. Creating an account does not create a Role or implicitly grant
 administrator rights.
 
-The current API does not expose general CRUD endpoints for Groups, Roles,
-AccessBindings, or Restrictions. The native IAM implementation and persisted
-policy support these concepts internally. The policy records below illustrate
-their semantics; they are not public API request bodies.
+Administrators manage immutable Namespace Roles and exact-resource identity
+AccessBindings through the [Namespace policy APIs](#manage-namespace-policy).
+Group, membership, Restriction, and broad grant management remain unavailable
+through HTTP. The policy records below illustrate internal semantics; use the
+API request shapes for public mutations.
 
 ## Principals
 
@@ -128,8 +129,8 @@ A Role groups Permissions:
 }
 ```
 
-This example illustrates an internal policy record; there is currently no
-public API for submitting it.
+This example illustrates an internal policy record. Role creation takes only
+`name` and `permissions`; OCC supplies its ID and Namespace.
 
 ## Access bindings and Groups
 
@@ -156,6 +157,65 @@ Bindings can apply to the singleton Installation, one Namespace, or one exact
 resource. A binding without `namespaceId` is Installation-wide; a
 Namespace-scoped binding applies only to its exact Namespace. An exact-resource
 binding additionally identifies the resource kind and ID.
+
+## Manage Namespace policy
+
+Use `/namespaces/:namespaceId/iam/roles` and
+`/namespaces/:namespaceId/iam/access-bindings`. Collection `GET` lists policy in
+that Namespace and `POST` creates a server-identified resource. Item `GET`
+reads one resource; item `DELETE` removes only that resource. Reads return
+`200`, creation `201`, deletion `204`, and missing resources `404`.
+The [Namespace IAM policy flow](../flows/namespace-iam-policy.md) traces the
+controller, Driver, persistence, and audit path.
+Installation bootstrap policy is excluded from these lists. Reads include existing
+broad and Group bindings in the Namespace; deletion can revoke one by its exact
+ID. The narrower subject and target requirements below apply to creation.
+
+Every operation requires Installation `administer` and exact Namespace `read`,
+evaluated by the selected IAM Driver and applicable Restrictions. Creating a
+binding also requires `read` on its exact target. Ordinary resource access
+does not authorize delegation. Drivers without policy management return
+`503 DEPENDENCY_UNAVAILABLE`; OCC never substitutes native IAM.
+
+Create a reusable Role with a nonempty, duplicate-free permission set:
+
+```json
+{
+  "name": "Use a model Secret",
+  "permissions": [{ "action": "operate", "resourceKind": "secret" }]
+}
+```
+
+Bind it to the immutable `servicePrincipalId` returned in the Agent response:
+
+```json
+{
+  "subjectKind": "identity",
+  "subjectId": "<agent-service-principal-id>",
+  "roleId": "<role-id>",
+  "resourceKind": "secret",
+  "resourceId": "<secret-id>"
+}
+```
+
+The identity, Role, and target must exist in the path Namespace. Exact targets
+and Role permission kinds are `agent`, `agent_revision`, `configuration`,
+`secret`, or `service_account`. A ServiceAccount resource is not an IAM
+identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
+and extra fields are rejected. Native IAM commits validated policy and its
+attributable audit event together; later requests on other replicas see it
+without a restart.
+
+Roles and bindings cannot be updated. Create replacements and explicitly
+remove old bindings. A referenced Role cannot be deleted (`409`), and deleting
+one binding preserves equivalent and unrelated bindings. After an unknown
+creation outcome, list and inspect policy before retrying; equivalent bindings
+may coexist. Names are labels: inspect permissions before reusing a Role.
+
+Deleting a binding does not establish effective denial: other bindings and
+Restrictions still apply. Revocation blocks later admission but cannot retract
+already delivered bytes. Stop the Agent and revoke upstream credentials when
+immediate containment is necessary; IAM changes do neither automatically.
 
 ## Restrictions
 
@@ -210,8 +270,9 @@ ambiguous identity fails closed.
   unavailable; no fallback authorization provider is used.
 - A resource is absent from a list: Your identity may not have `read`
   permission for that specific resource.
-- You cannot create Roles or Groups through HTTP: Public IAM-management
-  endpoints have not been implemented.
+- `409` deleting a Role: remove its referencing bindings explicitly first.
+- Group or broad-grant mutation is rejected: Namespace policy APIs support
+  identity subjects and exact resource targets only.
 
 ## Evidence and related references
 
@@ -236,6 +297,8 @@ For a working authenticated request, see the
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-19 20:53: Document Namespace Role and exact identity AccessBinding management. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 06c23b9cf60915ba58baa38b23cf304562e674a1)
 
 - 2026-08-31 17:43: Document fresh human/service administrator bootstrap, private key delivery, and operator recovery. (codex/01a05a69-3fbe-7441-9e6d-20394758cf94 - 0797098646028ac00cb26cd4afcbc9b2cf8bcb24)
 

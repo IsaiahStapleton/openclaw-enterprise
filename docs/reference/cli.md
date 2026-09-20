@@ -12,7 +12,7 @@ Command-line flags override the corresponding environment variables.
 | -------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `--url`              | `OCC_URL`              | Required for resource commands. An HTTP or HTTPS origin, without embedded credentials, a base path, query, or fragment. |
 | `--service-key-file` | `OCC_SERVICE_KEY_FILE` | Required for resource commands. Path to the complete bootstrap or issued service-key JSON response.                     |
-| `--namespace`        | `OCC_NAMESPACE`        | Required for `configuration` and `agent` commands. Supply the Namespace ID, not its name.                               |
+| `--namespace`        | `OCC_NAMESPACE`        | Required for `configuration`, `iam`, and `agent` commands. Supply the Namespace ID, not its name.                       |
 | `--ca-bundle`        | `OCC_CA_BUNDLE`        | Adds a PEM certificate-authority bundle to the system trust roots for HTTPS. TLS verification cannot be disabled.       |
 | `--timeout-seconds`  | `OCC_TIMEOUT_SECONDS`  | Positive whole seconds for an HTTP request. Default: `30`.                                                              |
 | `--output`, `-o`     | —                      | Output format: `table` (default), `json`, or `yaml`.                                                                    |
@@ -32,28 +32,37 @@ and `FILE` with a JSON file path. `--file` reads a local file, not stdin; YAML
 input is not supported. The server validates document fields against the
 [HTTP API contract](api.md).
 
-| Command                                   | What it does                                                                                                                                                     |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `occ installation get`                    | Reads the singleton Installation.                                                                                                                                |
-| `occ namespace list`                      | Lists authorized Namespaces.                                                                                                                                     |
-| `occ namespace get ID`                    | Reads one Namespace and its status.                                                                                                                              |
-| `occ namespace create NAME`               | Creates a Namespace. `--existing-namespace K8S_NAME` requests adoption of an operator-prepared Kubernetes namespace and also requires Installation `administer`. |
-| `occ namespace delete ID`                 | Begins deleting an empty Namespace. Use `namespace get` to inspect the resulting state.                                                                          |
-| `occ configuration create --file FILE`    | Creates a Configuration. The body contains `kind` and `values`.                                                                                                  |
-| `occ configuration get ID`                | Reads a Configuration.                                                                                                                                           |
-| `occ configuration update ID --file FILE` | Updates a Configuration; the body must replace `values`. Omit the create-only `kind`.                                                                            |
-| `occ configuration delete ID`             | Deletes an unreferenced Configuration.                                                                                                                           |
-| `occ agent list`                          | Lists authorized Agents in the selected Namespace.                                                                                                               |
-| `occ agent get ID`                        | Reads an Agent's desired state and active revision.                                                                                                              |
-| `occ agent create --file FILE`            | Creates an Agent draft.                                                                                                                                          |
-| `occ agent update ID --file FILE`         | Updates editable Agent fields; the body must include `configurationId`.                                                                                          |
-| `occ agent deploy ID`                     | Requests deployment and creates an immutable revision.                                                                                                           |
-| `occ agent stop ID`                       | Requests a stop while retaining revisions and persistent state.                                                                                                  |
+| Command                                     | What it does                                                                                                                                                     |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `occ installation get`                      | Reads the singleton Installation.                                                                                                                                |
+| `occ namespace list`                        | Lists authorized Namespaces.                                                                                                                                     |
+| `occ namespace get ID`                      | Reads one Namespace and its status.                                                                                                                              |
+| `occ namespace create NAME`                 | Creates a Namespace. `--existing-namespace K8S_NAME` requests adoption of an operator-prepared Kubernetes namespace and also requires Installation `administer`. |
+| `occ namespace delete ID`                   | Begins deleting an empty Namespace. Use `namespace get` to inspect the resulting state.                                                                          |
+| `occ configuration create --file FILE`      | Creates a Configuration. The body contains `kind` and `values`.                                                                                                  |
+| `occ configuration get ID`                  | Reads a Configuration.                                                                                                                                           |
+| `occ configuration update ID --file FILE`   | Updates a Configuration; the body must replace `values`. Omit the create-only `kind`.                                                                            |
+| `occ configuration delete ID`               | Deletes an unreferenced Configuration.                                                                                                                           |
+| `occ iam role list`                         | Lists Namespace Roles.                                                                                                                                           |
+| `occ iam role get ID`                       | Reads a Namespace Role.                                                                                                                                          |
+| `occ iam role create --file FILE`           | Creates a Namespace Role with explicit permissions.                                                                                                              |
+| `occ iam role delete ID`                    | Deletes an unreferenced Namespace Role.                                                                                                                          |
+| `occ iam access-binding list`               | Lists Namespace AccessBindings.                                                                                                                                  |
+| `occ iam access-binding get ID`             | Reads a Namespace AccessBinding.                                                                                                                                 |
+| `occ iam access-binding create --file FILE` | Grants a Role to a principal for an exact resource.                                                                                                              |
+| `occ iam access-binding delete ID`          | Deletes a Namespace AccessBinding.                                                                                                                               |
+| `occ agent delete ID`                       | Begins asynchronous Agent deletion, including its owned runtime state.                                                                                           |
+| `occ agent list`                            | Lists authorized Agents in the selected Namespace.                                                                                                               |
+| `occ agent get ID`                          | Reads an Agent's desired state and active revision.                                                                                                              |
+| `occ agent create --file FILE`              | Creates an Agent draft.                                                                                                                                          |
+| `occ agent update ID --file FILE`           | Updates editable Agent fields; the body must include `configurationId`.                                                                                          |
+| `occ agent deploy ID`                       | Requests deployment and creates an immutable revision.                                                                                                           |
+| `occ agent stop ID`                         | Requests a stop while retaining revisions and persistent state.                                                                                                  |
 
 Use the [HTTP API](api.md) to inspect Agent deployment status and revisions, or
 to work with Secrets, ServiceAccounts, and configured Providers; the CLI has no
 commands for these. Neither the CLI nor the HTTP API offers Configuration
-listing or Agent deletion. An accepted deploy returns a revision; `agent get`
+listing. An accepted deploy returns a revision; `agent get`
 shows desired state and the selected revision, not runtime health. Use the
 [deployment status API](agents.md#deployment-status) and verify the model
 separately.

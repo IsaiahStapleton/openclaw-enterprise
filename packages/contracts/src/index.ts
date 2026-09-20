@@ -624,6 +624,87 @@ export interface IAMDriver extends Driver {
   readonly capability: "iam";
   lookupIdentity(input: IdentityLookup): Promise<Identity | undefined>;
   authorize(request: AuthorizationRequest): Promise<AuthorizationDecision>;
+  listNamespaceRoles?(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+  ): Promise<readonly Readonly<Role>[]>;
+  getNamespaceRole?(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+    roleId: string,
+  ): Promise<Readonly<Role> | undefined>;
+  createNamespaceRole?(
+    context: IAMPolicyManagementContext,
+    input: IAMManagedRoleInput,
+  ): Promise<Readonly<Role>>;
+  deleteNamespaceRole?(
+    context: IAMPolicyManagementContext,
+    namespaceId: string,
+    roleId: string,
+  ): Promise<boolean>;
+  listNamespaceAccessBindings?(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+  ): Promise<readonly Readonly<AccessBinding>[]>;
+  getNamespaceAccessBinding?(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<Readonly<AccessBinding> | undefined>;
+  createNamespaceAccessBinding?(
+    context: IAMPolicyManagementContext,
+    input: IAMManagedAccessBindingInput,
+  ): Promise<Readonly<AccessBinding>>;
+  deleteNamespaceAccessBinding?(
+    context: IAMPolicyManagementContext,
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<boolean>;
+}
+
+export interface IAMPolicyReadRepository {
+  listRoles(namespaceId: string): Promise<readonly Readonly<Role>[]>;
+  getRole(namespaceId: string, roleId: string): Promise<Readonly<Role> | undefined>;
+  listAccessBindings(namespaceId: string): Promise<readonly Readonly<AccessBinding>[]>;
+  getAccessBinding(
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<Readonly<AccessBinding> | undefined>;
+}
+
+export interface IAMPolicyRepository extends IAMPolicyReadRepository {
+  createRole(role: Role): Promise<Readonly<Role>>;
+  deleteRole(namespaceId: string, roleId: string): Promise<boolean>;
+  createAccessBinding(binding: AccessBinding): Promise<Readonly<AccessBinding>>;
+  deleteAccessBinding(namespaceId: string, bindingId: string): Promise<boolean>;
+}
+
+export interface IAMPolicyReadContext {
+  readonly policy: IAMPolicyReadRepository;
+}
+
+export interface IAMPolicyManagementContext {
+  readonly policy: IAMPolicyRepository;
+}
+
+export type ManagedIAMResourceKind =
+  "agent" | "agent_revision" | "configuration" | "secret" | "service_account";
+
+export interface IAMManagedRoleInput {
+  readonly id: string;
+  readonly namespaceId: string;
+  readonly name?: string;
+  readonly permissions: readonly Permission[];
+}
+
+export interface IAMManagedAccessBindingInput {
+  readonly id: string;
+  readonly namespaceId: string;
+  readonly subjectKind: "identity";
+  readonly subjectId: string;
+  readonly roleId: string;
+  readonly resourceKind: ManagedIAMResourceKind;
+  readonly resourceId: string;
 }
 
 export interface ServiceAccountDriver extends Driver {
