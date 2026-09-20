@@ -9,6 +9,8 @@ An API-created ordinary Agent clones or fetches an approved repository, edits an
 
 Use **`RepoDriver extends Driver`**, capability **`repo`**, and **`GitHubRepoDriver`**, retaining `resolve`, `open`, `status`, `close` and the maintenance interval. The [platform contract][contract] adds no repository CRUD or public token-issuance API. Follow the established [Driver/Provider ownership][design].
 
+Repository access is **team-first**: the current service uses GitHub App installation authority, and GitHub attributes its API actions to the App. A one-to-one conversation with a team Agent still uses that authority; it does not act as the chatting user's GitHub account or inherit that user's repository permissions. OCE authorization to invoke the Agent remains separate. Personal delegated-user access is a later phase, defined below.
+
 ## Scope and current boundary
 
 The implemented consumer supports Kubernetes Compute, embedded OpenClaw, `api_key` Harness authentication, no SandboxDriver, and one worker/credential-service owner. Integration is opt-in; Agents without bindings retain their existing lifecycle. Unsupported topologies reject repository-bearing revisions. One configured GitHub App installation supports multiple approved repositories: an Agent selects at most **16 bindings**, each session fixing one repository, resolved grant and original absolute deadline. Registry policy is the Namespace ceiling; configuration changes cannot widen an active revision.
@@ -119,6 +121,18 @@ The ephemeral external process and narrow Driver preserve custody without a new 
 
 These successor obligations do not become gates for the current credential refinement.
 
+### Later phase: personal delegated-user access
+
+Support explicit personal and team modes through the same **repository GitHub App**. In personal mode, the trusted credential service uses a [GitHub App user access token][github-user-auth]; it does not deliver the user's token or renewal secrets to the Agent. This is a selected direction, not an implemented capability or an expansion of this PR's acceptance scope.
+
+Before enabling personal mode:
+
+- Bind the consenting GitHub user to the verified OCE account and the current requester. Freeze the selected authority mode and identity into the repository admission; neither a private conversation nor the Agent's deployer selects personal authority implicitly.
+- Bound repository operations by the user's access, the App's permissions and installation access, and the admitted OCE grant. Audit the requester and selected authority separately from Git commit author metadata.
+- Implement consent, token renewal, revocation and disconnect handling in the trusted service. Missing, expired or revoked personal authorization fails closed; never fall back silently to installation/team authority.
+
+Keep OCE sign-in separate: identity-only login neither establishes repository delegation nor supplies repository credentials. Qualification must demonstrate both modes, consent and withdrawal, cross-user isolation, and refusal without fallback before claiming support.
+
 [contract]: ../packages/contracts/src/repo.ts
 [design]: ../docs/design/drivers.md#drivers-and-providers
 [reference]: ../docs/reference/repository-credentials.md
@@ -128,3 +142,4 @@ These successor obligations do not become gates for the current credential refin
 [testing]: ../docs/testing/repository-credentials.md
 [successor]: https://github.com/openclaw/openclaw-enterprise/commit/46a8fbd645a5c937d6190794576dd2dda31c0d25
 [historical]: https://github.com/openclaw/openclaw-enterprise/commit/02f8fe0b1266462a5726c6684344394324a8bdf7
+[github-user-auth]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-with-a-github-app-on-behalf-of-a-user
