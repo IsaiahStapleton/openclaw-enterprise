@@ -256,6 +256,14 @@
         },
         {
           "path": "tests/integration/repository-credentials-package.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-service-loss.test.mjs",
+          "expectedTests": [
+            "TEST-001: SIGKILL after confirmed GitHub issuance loses session inventory",
+            "TEST-002: lost GitHub issuance response stays charged while service survives",
+            "TEST-002: SIGKILL before GitHub issuance response loses local reservation"
+          ]
         }
       ]
     },

@@ -92,6 +92,25 @@ generated public CA. The gateway listens on HTTPS port 443 and `gh` retains
 own authentication, clean environment setup and the Git helper. No insecure
 TLS switch or localhost `GH_HOST` substitute is used.
 
+## Characterize service loss
+
+```sh
+node --test tests/integration/repository-credentials-service-loss.test.mjs
+```
+
+These baseline cases run the production service, GitHub factory, custody and
+transports in a child process. A controlled provider survives its termination.
+They prove stale-bearer denial after actual `SIGKILL` and show that lost issuance
+responses remain charged while the service survives, without automatic remint.
+After process replacement, the provider can still hold an unexpired token while
+the service has lost its session and reservation. That observation documents the
+current limit; it does not establish durable cleanup or accounting.
+
+The fixture joins each child death and removes only its verified stale socket
+before replacement. This setup does not prove automatic stale-socket recovery.
+These cases use synthetic keys and controlled time, with no live GitHub, database,
+Kubernetes or model execution. Safety failures and cleanup failures fail normally.
+
 ## What the controlled tests prove
 
 The Git upstream runs the actual `git-http-backend` against a disposable bare
