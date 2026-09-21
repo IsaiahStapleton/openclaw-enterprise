@@ -17,10 +17,9 @@ import {
 import { grantAgentSecretOperate } from "./postgres-harness-auth.mjs";
 import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
 import { run } from "../fixtures/repository-credentials/process.mjs";
-import { startRegistryCredentialServiceFixture } from "../fixtures/repository-credentials/registry.mjs";
 import { startControlResponseRelay } from "../fixtures/repository-credentials/control-relay.mjs";
-import { createPlatformClock } from "../fixtures/repository-credentials/platform-clock.mjs";
 import { startRepositoryPlatformWorker } from "./repository-credentials-platform-worker.mjs";
+import { startRepositoryPlatformService } from "./repository-credentials-platform-service.mjs";
 
 export const repositoryPlatformSelected =
   process.env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM === "1";
@@ -589,12 +588,11 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
   const gatewayHost = `repository-credentials.${system}.svc.cluster.local`;
   const tls = await gatewayTls(directory, gatewayHost, execute);
   const gatewayPort = await availablePort();
-  const credentialsFixture = await startRegistryCredentialServiceFixture(scope, {
+  const credentialsFixture = await startRepositoryPlatformService(scope, {
     namespaceId: namespace.id,
-    clock: createPlatformClock(),
+    signal: context.signal,
     tls,
     gateway: { publicOrigin: `https://${gatewayHost}`, listen: `0.0.0.0:${gatewayPort}` },
-    autoOpen: false,
   });
   diagnostic.stage = "control-relay-startup";
   const control = await startControlResponseRelay(scope, {
@@ -821,6 +819,86 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     return result.stdout;
   }
   const material = async (pod) => JSON.parse((await podNode(pod, materialScript)).stdout);
+  async function retainBearerProbe(pod, repositoryRef) {
+    const snapshot = `/home/node/.openclaw/workspace/.credential-crash-${randomBytes(8).toString("hex")}`;
+    const remove = `require("node:fs").rmSync(${JSON.stringify(snapshot)}, {recursive:true, force:true});`;
+    let removed = false;
+    scope.after(async () => {
+      if (removed) {
+        return;
+      }
+      const pods = await kube.resources(
+        "pods",
+        placement,
+        "-l",
+        `openclaw.dev/agent=${pod.metadata.labels["openclaw.dev/agent"]}`,
+      );
+      const running = pods.find(
+        (entry) =>
+          !entry.metadata.deletionTimestamp &&
+          entry.status.containerStatuses?.some(
+            (container) => container.name === "gateway" && container.state?.running,
+          ),
+      );
+      if (running) {
+        await podNode(running, remove);
+      }
+      // With no live Pod, the fixture's namespace/PVC cleanup owns this snapshot.
+    });
+    // The private snapshot survives Pod replacement on the owned workspace PVC.
+    // Neither capture nor the later HTTPS probe returns the bearer to the parent.
+    await podNode(
+      pod,
+      `
+      const fs = require("node:fs");
+      const manifest = JSON.parse(fs.readFileSync("/run/oce/repository-credentials/manifest.json", "utf8"));
+      const binding = manifest.bindings.find(entry => entry.repositoryRef === ${JSON.stringify(repositoryRef)});
+      fs.mkdirSync(${JSON.stringify(snapshot)}, {mode:0o700});
+      fs.writeFileSync(${JSON.stringify(`${snapshot}/request.json`)}, JSON.stringify({
+        bearer:fs.readFileSync(binding.directory + "/bearer", "utf8").trim(),
+        client:JSON.parse(fs.readFileSync(binding.directory + "/client.json", "utf8")).client,
+        ca:fs.readFileSync(binding.directory + "/ca.pem", "utf8")
+      }), {mode:0o600, flag:"wx"});
+    `,
+    );
+    return async (currentPod) => {
+      const result = await podNode(
+        currentPod,
+        `
+        const fs = require("node:fs");
+        const https = require("node:https");
+        (async () => {
+          try {
+            const saved = JSON.parse(fs.readFileSync(${JSON.stringify(`${snapshot}/request.json`)}, "utf8"));
+            const result = await new Promise((resolve, reject) => {
+              const request = https.request(saved.client.gatewayOrigin + "/repos/" + saved.client.repository,
+                {ca:saved.ca, agent:false, signal:AbortSignal.timeout(5000),
+                 headers:{authorization:"Bearer " + saved.bearer}}, response => {
+                  let body = "";
+                  response.on("data", chunk => {
+                    body += chunk;
+                    if (body.length > 4096) response.destroy(new Error("probe response limit"));
+                  });
+                  response.once("error", reject);
+                  response.once("end", () => {
+                    try {
+                      if (!response.complete) throw new Error("incomplete probe");
+                      resolve({status:response.statusCode, code:JSON.parse(body).error?.code});
+                    } catch { reject(new Error("invalid probe response")); }
+                  });
+                });
+              request.once("error", () => reject(new Error("probe transport failed")));
+              request.end();
+            });
+            process.stdout.write(JSON.stringify(result));
+          } finally { ${remove} }
+        })().catch(() => {process.exitCode=1;});
+      `,
+      );
+      removed = true;
+      return JSON.parse(result.stdout);
+    };
+  }
   async function runningPodContainers(pod) {
     const node = pod.spec.nodeName;
     assert.ok(
@@ -858,7 +936,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
   const attempts = async (revision) =>
     (
       await pool.query(
-        "SELECT repository_ref, admission_id, session_id, phase, deadline_wall_ms FROM occ.repository_session_attempts WHERE revision_id=$1 ORDER BY created_at, admission_id",
+        "SELECT namespace_id, agent_id, revision_id, repository_ref, admission_id, session_id, phase, deadline_wall_ms, live_revision_id, cleanup_context FROM occ.repository_session_attempts WHERE revision_id=$1 ORDER BY created_at, admission_id",
         [revision.id],
       )
     ).rows;
@@ -875,6 +953,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     tool,
     podNode,
     material,
+    retainBearerProbe,
     runningPodContainers,
     workspaceVolume,
     attempts,
