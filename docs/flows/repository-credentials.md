@@ -1,17 +1,17 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-21"
-last_updated_session: "authoring-run/fba2d7fa-6603-465e-a7c8-df0375ad202d"
+last_updated_session: "authoring-run/7fb656ee-ae7a-45a8-a160-6d73bc5ae25b"
 ---
 
 # Repository credential service flow
 
 ## Overview
 
-Operators or workers admit bounded sessions over private Unix control. Clients
-send Git or selected API requests over HTTPS with a gateway bearer. This flow
-traces the separate credential process through forwarding, local closure and
-cleanup. This flow describes source composition; container and live qualification need separate evidence. The
+Operators or workers admit bounded sessions over private Unix control; clients
+send Git or selected API requests over HTTPS with a gateway bearer. This source
+trace covers forwarding, local closure and cleanup in the separate credential
+process. Container and live qualification need separate evidence. The
 [Agent flow](agent-repository-credentials.md) owns admission and material delivery.
 
 ## Entry Points
@@ -21,9 +21,8 @@ cleanup. This flow describes source composition; container and live qualificatio
 - `apps/controller/src/drivers/repo/credentials/server.ts:startListeners` accepts HTTPS client traffic after protected startup succeeds.
 
 Standalone configuration selects one repository; the registry supports several
-approved repositories under one App installation. Each session binds exactly one
-repository. The operator owns the protected files and control socket; clients
-receive session files and public connection/trust configuration.
+under one App installation. Sessions bind exactly one repository. Operators own
+protected files and control; clients receive session files and public connection/trust settings.
 
 ## Flow
 
@@ -54,38 +53,31 @@ graph TD
 ### 1. Load protected startup inputs
 
 `apps/controller/src/composition/repository-credentials/check-config.ts:checkConfiguration` and
-`apps/controller/src/composition/repository-credentials/service.ts:startCredentialService` share the protected configuration
-loader, whose private file owner is
+`apps/controller/src/composition/repository-credentials/service.ts:startCredentialService` load protected configuration through
 `apps/controller/src/composition/repository-credentials/protected-file.ts:readProtectedFile`.
 The [configuration flow](repository-credential-configuration.md) traces its
 root-to-leaf protected-path validation and Kubernetes projection snapshots.
 `apps/controller/src/drivers/repo/credentials/configuration.ts:validateServiceConfig`
-validates gateway settings, session policy and service limits. The standalone
-check emits a safe summary without importing the session or listener owners.
-Normal startup constructs the system clock and explicitly selects the GitHub
-factory. `apps/controller/src/composition/repository-credentials/service.ts:runService`
-then composes the common service and listeners without starting the controller
-API or worker.
+validates gateway, session and capacity settings. The standalone check emits a
+safe summary without session/listener imports. Startup selects the system clock
+and GitHub factory; `apps/controller/src/composition/repository-credentials/service.ts:runService`
+composes service and listeners without the controller API or worker.
 `apps/controller/src/drivers/repo/github/credentials/factory.ts:createGitHubDriverFactory`
 composes session-bound backends. It delegates grant resolution to
 `apps/controller/src/drivers/repo/github/credentials/grants.ts:createGrantResolver`
 and client authentication to
 `apps/controller/src/drivers/repo/github/credentials/gateway-authentication.ts:createGatewayAuthentication`.
 A registry-selected factory retains the frozen repository identity and access profile.
-The App signing key belongs to the process, independently of each session's
-installation tokens. The public `RepoDriver`, grant identity and four-field status
-live in `packages/contracts/src/repo.ts`. Full private status, admission and
-bearer-result contracts live in
-`apps/controller/src/drivers/repo/credentials/service-contracts.ts`; the six-field
-client DTO lives in its dependency-free sibling `client-contracts.ts`. Type-only
-imports let Compute and the closed Git/gh bundle retain their distinct validators
-without importing service initialization.
-The private backend protocol and nominal custody handles live in
-`apps/controller/src/drivers/repo/credentials/backend-contracts.ts`.
+The process owns the App signing key separately from session installation tokens.
+`packages/contracts/src/repo.ts` owns public `RepoDriver`, grant identity and
+four-field status. Private contracts under
+`apps/controller/src/drivers/repo/credentials/` separate full status/admission/bearer
+results (`service-contracts.ts`), the dependency-free six-field client DTO
+(`client-contracts.ts`), and backend protocol/custody handles (`backend-contracts.ts`).
+Type-only imports keep service initialization out of Compute and the Git/gh bundle.
 The frozen runtime facade exposes `open`, `status`, `close` and `shutdown`;
-listeners retain the private exchange owner. The artifact contains runnable
-JavaScript. The [Agent flow](agent-repository-credentials.md) traces the platform
-Driver's session-control and local policy ownership.
+listeners own exchanges. The [Agent flow](agent-repository-credentials.md) owns
+platform session-control and local policy.
 
 Registry startup selects
 `apps/controller/src/drivers/repo/github/credentials/registry-factory.ts:createGitHubRegistryDriverFactory`
@@ -100,63 +92,53 @@ a live or ambiguously owned socket fails startup.
 request method, target, content type and bounded body before invoking the common
 service. `apps/controller/src/drivers/repo/credentials/service.ts:createCredentialService`
 checks duration, allowed profile and capacity, then freezes the resolved binding.
-The common service treats profile names as opaque configured values. The GitHub
-factory resolves `git-read`, `git-write` and `git-full` to the exact permission
-maps in the [reference](../reference/repository-credentials.md#configuration),
-including the profile in the grant identity. Protected startup validation rejects
-unknown names, including `read-write`; the example default remains `git-write`.
-Bearer lookup retains a digest. Only the original admission response contains
-the bearer.
+Profiles are opaque to the common service. GitHub resolves `git-read`, `git-write`
+and `git-full` to the [permission maps](../reference/repository-credentials.md#configuration)
+and includes the profile in grant identity. Startup rejects unknown names,
+including `read-write`; the example defaults to `git-write`. Bearer lookup stores
+a digest; only the original admission response contains the bearer.
 
-`apps/controller/src/drivers/repo/credentials/server.ts:startListeners` owns and disposes the
+`apps/controller/src/drivers/repo/credentials/server.ts:startListeners` owns the
 bounded correlation registry from
-`apps/controller/src/drivers/repo/credentials/control.ts:createControlAdmission`. Before
-opening a session, it binds the admission ID to the complete effective request.
-Platform requests include Namespace, repository reference, normalized profile,
-expected grant and absolute deadline. Registry mode requires that bound form and
-independently resolves its fingerprint before creating authority. A
-`recoverOnly` lookup returns status or absence without creation; a fresh missing
-ID is fenced against a delayed first request until its admission window closes.
-Known nondelivery before response transmission closes the new session. Ambiguous
-response loss permits public-status reconciliation with the same ID; it does
-not recover the bearer, change the original binding/deadline, or replay provider
-operations.
+`apps/controller/src/drivers/repo/credentials/control.ts:createControlAdmission`.
+Admission IDs bind the complete request: platform Namespace, repository reference,
+normalized profile, expected grant and absolute deadline. Registry mode requires
+this binding and independently resolves its fingerprint. `recoverOnly` returns
+status or absence without creation, fencing fresh missing IDs against delayed
+admission until their window closes. Known nondelivery before response transmission closes the
+session. Ambiguous loss permits same-ID status reconciliation without bearer
+recovery, binding/deadline changes or provider replay.
 
-If the factory throws or returns an invalid binding, the service closes
-construction admission before starting
+Factory failure or an invalid binding closes construction admission before
 `apps/controller/src/drivers/repo/credentials/custody.ts:disposeAllRenewal`.
-Every retained handle is sealed before any callback is awaited. The service
-retains this unpublished custody until callbacks settle and byte disposal
-completes; failed construction continues occupying bounded session capacity.
+All handles are sealed before awaiting callbacks. Unpublished custody occupies
+bounded session capacity until callbacks settle and bytes are disposed.
 
 `apps/controller/src/drivers/repo/github/credentials/client/config.ts:writeClientConfiguration`
-creates a private staging directory and private files, synchronizes writes, and
-renames it into the requested new session directory. Normal CLI output contains
-the session status and file location. A failed file write after admission causes
-the CLI to attempt closure and report the session ID for operator follow-up.
+stages private files, synchronizes writes and renames the directory into place.
+CLI output reports status and location. After a write failure, the CLI attempts
+closure and reports the admitted session ID for operator follow-up.
 
 ### 3. Authenticate the selected client
 
 `apps/controller/src/drivers/repo/github/credentials/client/native-git.ts:prepareNativeGitConfiguration`
-is the private preparation CLI for staged material. It calls
+prepares staged material through
 `apps/controller/src/drivers/repo/github/credentials/client/manifest.ts:readRuntimeRepositoryManifest`
-to validate the complete generation's public identities, final paths and file
-metadata. The renderer checks same-origin CA agreement and one gateway origin
-per canonical host, then emits deterministic host rewrites and origin-scoped
-credential/TLS defaults. Exclusive no-follow creation writes only the staged
-`gitconfig`; the material receiver owns deadline rechecks and atomic publication.
-This source path does not establish installed image or receiver qualification.
+which validates complete-generation public identities, final paths and metadata.
+The renderer requires same-origin CA agreement and one gateway origin per
+canonical host, then emits deterministic rewrites and origin-scoped credential/TLS
+defaults. Exclusive no-follow creation writes staged `gitconfig`; the receiver
+rechecks deadlines and publishes atomically. Source does not qualify installed images or receivers.
 
 Stock Git reads the resulting include and owns its normal command/configuration
 semantics. On authentication,
 `apps/controller/src/drivers/repo/github/credentials/client/git-helper.ts`
 parses the bounded credential protocol and verifies the embedded generation.
 `apps/controller/src/drivers/repo/github/credentials/client/targets.ts:selectGitCredential`
-matches the effective HTTPS origin and owner/repository, including optional `.git`
-and case-insensitive repository identity. Explicit reference/session pins must
-match that endpoint. Ambiguous duplicates, stale pins or expired selected sessions
-release no bearer. The helper reads only the selected bearer and clears the byte
-buffer after use; store/erase do not mutate material.
+matches effective HTTPS origin and case-insensitive owner/repository with optional
+`.git`. Explicit reference/session pins must match. Ambiguity, stale pins and
+expired selections release no bearer. The helper reads only the selected bearer,
+clears its buffer after use, and leaves material unchanged for store/erase.
 
 `apps/controller/src/drivers/repo/github/credentials/client/router.ts:routeRepositoryClient`
 handles only gh. It validates the supported API/explicit-head PR invocation,
@@ -167,59 +149,51 @@ keeps gh token/config isolation while preserving normal HOME and system Git
 configuration. `apps/controller/src/drivers/repo/github/credentials/client/commands.ts:prepareGhCommand`
 checks gh 2.100.0 and the canonical host/port profile.
 `apps/controller/src/drivers/repo/github/credentials/client/launch.ts:launchClient`
-retains the operator's single-session entrypoint, stock Git execution, signal
-forwarding and the original child exit status. Git has no command parser or
-temporary-HOME cleanup phase. The [reference](../reference/repository-credentials.md#client-routing-and-limits)
-owns native configuration overrides, ambiguity and generation limits.
+provides single-session stock Git execution, signal forwarding and original child
+exit status, without Git command parsing or temporary-HOME cleanup. The
+[reference](../reference/repository-credentials.md#client-routing-and-limits)
+owns configuration overrides and generation limits.
 
 ### 4. Reserve, acquire and dispatch
 
 `apps/controller/src/drivers/repo/credentials/server.ts:startListeners` bounds
-each listener's sockets independently, preserving private control admission when
-the public listener is full. HTTPS bounds the TLS handshake separately and arms the `headerMs` timer
-on the `TLSSocket` at `secureConnection`; the Unix control listener retains its
-raw-socket header timer. After an authenticated request reserves exchange
-capacity, `apps/controller/src/drivers/repo/credentials/transport/agent.ts:createAgentHandler`
-clears that same TLS socket timer before credential acquisition. The header
-budget therefore cannot truncate an admitted acquisition; the exchange deadline
-remains enforced.
+sockets per listener, preserving control admission under public saturation.
+HTTPS separately bounds handshakes and starts `headerMs` on the `TLSSocket` at
+`secureConnection`; Unix control retains its raw-socket timer.
+`apps/controller/src/drivers/repo/credentials/transport/agent.ts:createAgentHandler`
+clears the TLS timer after authenticated capacity reservation, before acquisition;
+the exchange deadline remains enforced.
 
-`createAgentHandler` checks generic framing and delegates authentication to the bound factory. A valid
-Git route with no credentials receives the local Basic challenge. Authenticated
-requests reserve common exchange capacity before body forwarding. The GitHub
-driver plans admitted routes through
+`createAgentHandler` checks framing and delegates authentication to the bound
+factory. Unauthenticated valid Git routes receive a Basic challenge; authenticated
+requests reserve capacity before forwarding bodies. GitHub plans routes through
 `apps/controller/src/drivers/repo/github/credentials/routes.ts:createRoutePolicy`, using
 `apps/controller/src/drivers/repo/github/credentials/routes/classification.ts:classifyRoute`
-for target, method, profile and query classification. This provider-owned decision admits upload-pack discovery and execution for all
-three profiles, but rejects receive-pack discovery and execution for `git-read`.
-Git paths match the admitted owner/repository case-insensitively, with or without
-one optional `.git` suffix, then use the canonical admitted identity upstream.
-A literal `.git` repository name retains its suffix. Raw-target, endpoint, method,
-media, query and profile checks still apply; API request matching is unchanged.
-It admits REST and GraphQL only for `git-full`: selected repository metadata,
-PRs, issues and issue comments, plus `GET /meta` and `POST /graphql`, subject to
-the existing method, query, framing and media-type checks. Both Git-only profiles
-reject API reads as well as writes before upstream dispatch. GraphQL bodies are
-forwarded under the exact installation-token grant; this route check does not
-perform per-field GraphQL or branch-only authorization. GitHub may return
-permitted public information, and every GraphQL POST is treated as a possible write.
+to classify target, method, profile and query. All profiles admit upload-pack discovery and execution;
+`git-read` rejects receive-pack, including discovery. Git paths match admitted
+owner/repository case-insensitively with one optional `.git` suffix, then use the
+canonical identity upstream. A literal `.git` repository keeps its suffix.
+Raw-target, endpoint, method, media, query and profile checks remain; API matching
+is unchanged. Only `git-full` admits selected repository metadata, PRs, issues,
+comments, `GET /meta` and `POST /graphql`. Git-only profiles reject all API
+requests before dispatch. GraphQL uses the exact installation-token grant without
+field-level or branch-only authorization. GitHub may return permitted public
+information; every GraphQL POST is a possible write.
 
 `apps/controller/src/drivers/repo/credentials/service.ts:createCredentialService`
 reserves the exchange. Its
 `apps/controller/src/drivers/repo/credentials/lifecycle/exchange.ts:executeExchange`
 reuses sufficient credential validity or acquires replacement under common custody.
-Concurrent misses share one acquisition in
-`apps/controller/src/drivers/repo/credentials/lifecycle.ts:createLifecycle`. When its last
-waiter leaves, the lifecycle cancels the original attempt. While that attempt's
-settlement remains pending, requests needing acquisition return `not-dispatched`
-without attaching new waiters or starting another acquisition. The original
-owner retains capture, settlement and cleanup obligations until they resolve.
-Custody captures the original monotonic timestamp and a cleanup deadline from
-the declared lifetime. After settlement, the lifecycle anchors the acquired
-use lifetime to that same capture timestamp, capped by the cleanup deadline.
-Acceptance, cached reuse, dispatch and authentication use this earlier deadline;
-cleanup retains its separate expiry and callback-drainage requirements. Later
-wall-clock changes cannot shorten custody or restart the use lifetime.
+Concurrent misses share acquisition in
+`apps/controller/src/drivers/repo/credentials/lifecycle.ts:createLifecycle`.
+The last departing waiter cancels it. Until settlement, acquisition-dependent
+requests return `not-dispatched` without new waiters or acquisitions. The original
+owner retains capture, settlement and cleanup obligations.
+Custody records the original monotonic timestamp and declared cleanup lifetime.
+After settlement, the use lifetime starts at that timestamp, capped by cleanup's
+deadline. Acceptance, reuse, dispatch and authentication honor the earlier deadline;
+cleanup retains separate expiry and callback drainage. Wall-clock changes cannot
+shorten custody or restart use lifetime.
 
 `apps/controller/src/drivers/repo/github/credentials/driver.ts:createGitHubDriver`
 composes acquisition and capture through
@@ -238,12 +212,11 @@ credential. Rejected material retains its cleanup owner.
 Its bounded credential transport,
 `apps/controller/src/drivers/repo/github/credentials/provider-transport.ts:createProviderTransport`,
 uses `apps/controller/src/drivers/repo/github/credentials/provider-transport/request.ts:sendProviderRequest`
-to dispatch and join the actual request close event. Its opaque scope captures
-the installation, repository and exact profile once. The adapter can issue that
-scope or revoke a token; it cannot supply arbitrary request targets, bodies or
-headers to the privileged transport. An original
-dispatch gate rechecks admission synchronously after authentication preparation,
-registers cancellation and opens the exchange without an intervening await.
+to dispatch and join the actual request close event. Opaque scope freezes
+installation, repository and profile. The adapter can issue that scope or revoke
+a token, never supply arbitrary targets, bodies or headers. After authentication
+preparation, a synchronous gate rechecks admission, registers cancellation and
+opens the exchange without an intervening await.
 The handler and sender independently capture their allowed upstream origins.
 `apps/controller/src/drivers/repo/credentials/transport/request-headers.ts:createUpstreamHeaders`
 validates adapter fields, rejects case-insensitive duplicates and reconstructs
@@ -258,41 +231,34 @@ respective phases.
 `apps/controller/src/drivers/repo/credentials/transport/response-headers.ts:responseHeaders`
 checks upstream header bounds and framing. The GitHub route plan carries the
 policy from `apps/controller/src/drivers/repo/github/credentials/response.ts:createResponsePolicy`
-for provider response headers, pagination and explicitly followed resource fields.
-It composes URL validation and pagination rewriting from
+for response headers, pagination and followed resource fields, composing
 `apps/controller/src/drivers/repo/github/credentials/response-urls.ts:createUrlRewriter`
-and `rewritePaginationLinks`, and resource-field rewriting from
+and `rewritePaginationLinks` with
 `apps/controller/src/drivers/repo/github/credentials/response-resources.ts:createResourceRewriter`.
 Before releasing bounded JSON, it removes `temp_clone_token` from repository
 objects, their `parent`/`source` relationships and PR `head.repo`/`base.repo`
-objects. Human text and unrelated metadata remain unchanged; this is not a
-generic credential-string scanner.
-The URL owner maps response links using the configured GitHub repository ID
-to the admitted `/repos/owner/repository` path before checking the route and
-resource purpose. A different repository ID remains refused. Issue-list
-pagination accepts bounded `after` and `before` cursors; rewritten links retain
-the gateway origin, so subsequent client requests pass through the same session
-and profile checks.
+objects. This is not a generic credential-string scanner.
+The URL owner maps the configured repository ID to admitted
+`/repos/owner/repository` before checking route and resource purpose; other IDs
+are refused. Issue pagination accepts bounded `after`/`before` cursors. Rewritten
+gateway links require subsequent session/profile checks.
 Informational nested labels, milestones, repository metadata and human content
 remain unchanged. Transport applies
 `apps/controller/src/drivers/repo/credentials/transport/response-headers.ts:safeResponseHeaders`
 before writing response headers to the client.
 
-After the input pipeline completes successfully, an upstream failure before response
-headers stops upstream I/O while preserving the incoming connection. Once that I/O
-settles, the Agent handler sends a fixed `502 exchange-uncertain` error. Cancellation,
-deadlines, input failures and failures after response headers still destroy the
-incoming connection. A later cancellation also destroys a connection retained for
-error delivery while the exchange remains owned.
+After successful input, upstream failure before response headers stops upstream
+I/O, then sends fixed `502 exchange-uncertain` after settlement. Cancellation,
+deadlines, input failure and post-header failure destroy the incoming connection,
+including later cancellation while error delivery remains owned.
 
 `apps/controller/src/drivers/repo/credentials/lifecycle/exchange.ts:executeExchange` joins
 tracked I/O before releasing credential use and returning exchange capacity to
 the service owner. Transport returns completed, not-dispatched or
-possibly-dispatched outcomes. The Agent handler ignores the normal response
-`close` event after `writableFinished`; a premature close cancels the exchange,
-whose I/O is joined before its lease and capacity are released. A possibly dispatched
-mutation has no automatic replay. Provider settlement and cleanup retain their
-original ownership even when an outward request ends earlier.
+possibly-dispatched outcomes. The handler ignores response `close` after
+`writableFinished`; premature close cancels the exchange. Possibly dispatched
+mutations have no automatic replay. Original provider settlement and cleanup
+ownership outlive outward requests.
 
 ### 6. Close locally and finish cleanup
 
@@ -305,12 +271,11 @@ keeps retirement/finalization unattempted and registers one capacity waiter per
 session through `apps/controller/src/drivers/repo/credentials/provider-queue.ts`. Available
 capacity wakes cleanup; queue rejection alone does not mark an action uncertain.
 
-`apps/controller/src/composition/repository-credentials/service.ts:runService` stops admission on shutdown, asks
-the service to close sessions, and bounds cleanup by an independent process
-timer. A grace expiry reports unresolved status and exits with unresolved
-obligations still counted. It does not establish disposal or remote revocation,
-and restart loses the provider cleanup inventory. The process closes the shared
-App key after shutdown disposition.
+`apps/controller/src/composition/repository-credentials/service.ts:runService`
+stops admission, closes sessions and bounds cleanup with an independent timer.
+Grace expiry reports unresolved obligations and exits without proving disposal
+or remote revocation. Restart loses provider cleanup inventory. The process
+closes the shared App key after shutdown disposition.
 
 Failed construction custody also participates in shutdown drainage. Its
 pending obligation contributes to `pendingAuxiliary` without inventing a
@@ -364,6 +329,8 @@ module closure. Separate-container isolation and live-provider behavior require 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 07:24: Condense the baseline service trace while retaining credential custody, failure and qualification boundaries. (authoring-run/7fb656ee-ae7a-45a8-a160-6d73bc5ae25b - d2b31887be1d114c9147e2ed6f07c1f38e765c6f)
 
 - 2026-09-21 05:32: Reconcile accompanying platform credential documentation with current source history and native Git boundaries. (authoring-run/fba2d7fa-6603-465e-a7c8-df0375ad202d - a051a2406eec7cafde2e0dd5e2ec63dba6ce1581)
 
