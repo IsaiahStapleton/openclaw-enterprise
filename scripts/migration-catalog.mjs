@@ -135,16 +135,18 @@ export async function migrationCatalog(client, schema = "occ") {
         SELECT 'default-acl' AS kind,
           CASE WHEN d.defaclrole=current_user::regrole THEN 'owner' ELSE d.defaclrole::regrole::text END || '.' ||
           CASE WHEN d.defaclnamespace=0 THEN '*' ELSE n.nspname END || '.' || d.defaclobjtype::text AS name,
-          jsonb_agg(jsonb_build_array(
+          COALESCE((SELECT jsonb_agg(jsonb_build_array(
             CASE WHEN x.grantor=d.defaclrole THEN 'owner' ELSE x.grantor::regrole::text END,
             CASE WHEN x.grantee=0 THEN 'public' WHEN x.grantee=d.defaclrole THEN 'owner' ELSE x.grantee::regrole::text END,
             x.privilege_type,x.is_grantable) ORDER BY x.privilege_type,
-            CASE WHEN x.grantee=0 THEN 'public' WHEN x.grantee=d.defaclrole THEN 'owner' ELSE x.grantee::regrole::text END) AS value
+            CASE WHEN x.grantee=0 THEN 'public' WHEN x.grantee=d.defaclrole THEN 'owner' ELSE x.grantee::regrole::text END,
+            CASE WHEN x.grantor=d.defaclrole THEN 'owner' ELSE x.grantor::regrole::text END,
+            x.is_grantable)
+            FROM pg_catalog.aclexplode(d.defaclacl) x), '[]'::jsonb) AS value
         FROM pg_catalog.pg_default_acl d
         LEFT JOIN pg_catalog.pg_namespace n ON n.oid=d.defaclnamespace
-        CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) x
         WHERE (d.defaclrole=current_user::regrole AND d.defaclnamespace=0) OR n.nspname=$1
-        GROUP BY d.defaclrole,d.defaclnamespace,n.nspname,d.defaclobjtype ORDER BY name`,
+        ORDER BY name`,
         [schema],
       );
       rows.push(...defaults.rows);

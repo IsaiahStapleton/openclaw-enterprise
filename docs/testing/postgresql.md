@@ -67,8 +67,9 @@ recorded fixture. Its canonical-history cases create new owned databases,
 install historical prefixes with stock Drizzle, and invoke the real development
 and production migration commands. They cover fresh and populated-main
 installation, unchanged receipts/data, repeat/concurrent runners, transaction
-rollback/retry, unsupported-history and initial-ACL refusal, and the actual
-`occ_app` temporary-domain attack against inherited privileged functions.
+rollback/retry, unsupported-history and initial-ACL refusal, added empty default
+ACLs on installed histories, and the actual `occ_app` temporary-domain attack
+against inherited privileged functions.
 
 For an already-owned loopback PostgreSQL 18 fixture with the repository's local
 test roles, explicitly select the running container, its mapped port, and a

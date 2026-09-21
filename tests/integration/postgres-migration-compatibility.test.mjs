@@ -940,6 +940,11 @@ async function historySnapshot(db) {
     receipts: await historyReceipts(db.migrator),
     occ: await migrationCatalog(db.migrator),
     drizzle: await migrationCatalog(db.migrator, "drizzle"),
+    defaultAcls: (
+      await db.migrator.query(
+        "SELECT oid,defaclrole,defaclnamespace,defaclobjtype,defaclacl::text AS acl FROM pg_catalog.pg_default_acl ORDER BY oid",
+      )
+    ).rows,
     initialOcc: await initialSchemaState(db.migrator, "occ"),
     initialDrizzle: await initialSchemaState(db.migrator, "drizzle"),
   };
@@ -1259,6 +1264,55 @@ test(
       });
       assert.deepEqual(await historySnapshot(db), before);
     });
+  },
+);
+
+test(
+  "Canonical migration refuses empty default ACLs on installed histories",
+  requiresHistoryPostgres,
+  async (context) => {
+    const fixture = await migrationHistoryFixture();
+    for (const history of ["main", "completed"]) {
+      for (const [kind, objectType] of [
+        ["SCHEMAS", "n"],
+        ["TYPES", "T"],
+        ["TABLES", "r"],
+        ["SEQUENCES", "S"],
+      ]) {
+        await context.test(`${history} ${kind}`, async (child) => {
+          const db = await historyDatabase(child, fixture, "defaults", { prefix: 24 });
+          await seedCanonicalData(db);
+          if (history === "completed") {
+            assert.deepEqual(await runHistoryMigration(db, "production"), {
+              ok: true,
+              history: "main",
+            });
+            await assertCompletedHistory(db);
+          }
+          const data = await canonicalData(db);
+          assert.deepEqual(await runHistoryMigration(db, "development", true), {
+            ok: true,
+            history,
+          });
+          // An empty global ACL still changes future objects created by the
+          // migrator. Both installed histories must reject it before any DDL.
+          await db.migrator.query(
+            `ALTER DEFAULT PRIVILEGES REVOKE ALL ON ${kind} FROM PUBLIC; ALTER DEFAULT PRIVILEGES REVOKE ALL ON ${kind} FROM occ_migrator`,
+          );
+          assert.deepEqual(
+            (
+              await db.migrator.query(
+                "SELECT defaclacl::text AS acl FROM pg_catalog.pg_default_acl WHERE defaclrole=current_user::regrole AND defaclnamespace=0 AND defaclobjtype=$1",
+                [objectType],
+              )
+            ).rows,
+            [{ acl: "{}" }],
+          );
+          await assertHistoryRefused(db);
+          assert.deepEqual(await canonicalData(db), data);
+        });
+      }
+    }
   },
 );
 
