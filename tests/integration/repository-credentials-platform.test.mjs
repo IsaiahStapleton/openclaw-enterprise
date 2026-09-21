@@ -47,6 +47,7 @@ test(
     // recovery must close the once-delivered session before replacing it.
     const gate = fixture.control.holdCreatedResponse(2);
     let withheld;
+    let withheldAdmission;
     void gate.observed.then((receipt) => {
       withheld = receipt;
     });
@@ -60,7 +61,8 @@ test(
       const partial = await fixture.attempts(revision);
       assert.equal(partial.filter(({ phase }) => phase === "open").length, 1);
       assert.equal(partial.filter(({ phase }) => phase === "opening").length, 1);
-      assert.equal(credentials.service.status(withheld.sessionId).state, "OPEN");
+      withheldAdmission = partial.find(({ phase }) => phase === "opening").admission_id;
+      assert.equal((await credentials.status(withheld.sessionId)).state, "OPEN");
       const pods = await kube.resources("pods", placement, "-l", `openclaw.dev/agent=${agent.id}`);
       assert.equal(pods.length, 0, "a partial credential set must not reach Compute");
       const claimCursor = fixture.events.length;
@@ -95,30 +97,33 @@ test(
         assert.equal(file.mode, 0o600);
       }
     }
-    // This same service instance may prune a DISPOSED session while admitting
-    // its replacement. Recovery then records the exact old session as
-    // invalidated after authoritative absence; either terminal phase is valid.
+    // Recovery needs confirmed disposal once it has persisted a session identity.
+    // Missing inventory is safe only for a never-delivered opening with no known session.
     await kube.waitFor("lost-response admission cleanup", async () =>
       (await fixture.attempts(revision)).some(
-        ({ session_id, phase }) =>
-          session_id === withheld.sessionId && ["disposed", "invalidated"].includes(phase),
+        ({ admission_id, session_id, phase }) =>
+          admission_id === withheldAdmission &&
+          ((phase === "disposed" && session_id === withheld.sessionId) ||
+            (phase === "invalidated" && session_id === null)),
       ),
     );
     const recovered = await fixture.attempts(revision);
     assert.ok(
       recovered.some(
-        ({ session_id, phase }) =>
-          session_id === withheld.sessionId && ["disposed", "invalidated"].includes(phase),
+        ({ admission_id, session_id, phase }) =>
+          admission_id === withheldAdmission &&
+          ((phase === "disposed" && session_id === withheld.sessionId) ||
+            (phase === "invalidated" && session_id === null)),
       ),
     );
-    assert.notEqual(credentials.service.status(withheld.sessionId)?.state, "OPEN");
+    assert.notEqual((await credentials.status(withheld.sessionId))?.state, "OPEN");
     const owned = recovered.filter(({ phase }) => phase === "open");
     assert.equal(owned.length, 2);
     for (const binding of original.bindings) {
       const attempt = owned.find((row) => row.repository_ref === binding.repositoryRef);
       assert.equal(attempt.phase, "open");
       assert.equal(attempt.session_id, binding.sessionId);
-      const status = credentials.service.status(binding.sessionId);
+      const status = await credentials.status(binding.sessionId);
       assert.equal(status.state, "OPEN");
       assert.equal(status.deadlineWallMs, binding.deadlineWallMs);
       // Whole-second session duration may shorten the immutable ceiling.
@@ -274,7 +279,7 @@ test(
     // service sessions and running Agent must survive without fresh authority.
     const previousWorkerPid = fixture.workerPid;
     const endpoint = fixture.endpoint;
-    const service = credentials.service;
+    const service = credentials.process;
     const admissions = (await fixture.attempts(revision))
       .map(({ admission_id }) => admission_id)
       .sort();
@@ -287,7 +292,7 @@ test(
       assert.deepEqual(death, { pid: previousWorkerPid, code: null, signal: "SIGKILL" });
       assert.equal((await fixture.request("GET", path)).activeRevisionId, revision.id);
       assert.equal(fixture.endpoint, endpoint);
-      assert.equal(credentials.service, service);
+      assert.deepEqual(credentials.process, service);
       const survivingPod = await fixture.readyPod(agent, revision);
       assert.equal(survivingPod.metadata.uid, pod.metadata.uid);
       assert.equal(gatewayContainerId(survivingPod), gatewayContainerId(pod));
@@ -321,7 +326,7 @@ test(
     assert.equal(gatewayContainerId(maintainedPod), gatewayContainerId(pod));
     assert.deepEqual(await fixture.material(maintainedPod), original);
     assert.equal(fixture.endpoint, endpoint);
-    assert.equal(credentials.service, service);
+    assert.deepEqual(credentials.process, service);
     assert.deepEqual(
       (await fixture.attempts(revision)).map(({ admission_id }) => admission_id).sort(),
       admissions,
@@ -332,8 +337,9 @@ test(
       "worker recovery must not mint provider authority",
     );
     for (const binding of original.bindings) {
-      assert.equal(service.status(binding.sessionId).state, "OPEN");
-      assert.equal(service.status(binding.sessionId).deadlineWallMs, binding.deadlineWallMs);
+      const status = await credentials.status(binding.sessionId);
+      assert.equal(status.state, "OPEN");
+      assert.equal(status.deadlineWallMs, binding.deadlineWallMs);
     }
 
     // TEST-009: retain both unpushed history and dirty work across material-driven
@@ -451,56 +457,274 @@ test(
     assert.notEqual(repaired.generation, original.generation);
     assert.notEqual(repaired.bindings[0].sessionId, original.bindings[0].sessionId);
     assert.equal(repaired.bindings[1].sessionId, original.bindings[1].sessionId);
-    assert.notEqual(credentials.service.status(original.bindings[0].sessionId)?.state, "OPEN");
+    assert.notEqual((await credentials.status(original.bindings[0].sessionId))?.state, "OPEN");
     pod = repairedPod;
 
-    // The service owns ephemeral sessions. Its restart must force the worker
-    // to replace both sessions and roll actual runtime material before success.
-    await credentials.restart();
-    const restartedPod = await fixture.readyPod(agent, revision, pod.metadata.uid);
-    await assertWorkspaceReplacement(pod, restartedPod);
-    const restarted = await fixture.material(restartedPod);
-    assert.notEqual(restarted.generation, repaired.generation);
-    for (const binding of restarted.bindings) {
-      assert.notEqual(
-        binding.sessionId,
-        repaired.bindings.find((entry) => entry.repositoryRef === binding.repositoryRef).sessionId,
+    async function revisionWork(currentRevision) {
+      return (
+        await fixture.pool.query(
+          `SELECT idempotency_key, namespace_id, agent_id, revision_id, actor_id, state, reason_code
+         FROM occ.controller_work WHERE namespace_id=$1 AND agent_id=$2 AND revision_id=$3`,
+          [namespace.id, agent.id, currentRevision.id],
+        )
+      ).rows;
+    }
+    async function assertRefused(currentRevision, previousPod, before) {
+      const failed = await kube.waitFor("lost session to refuse its exact revision", async () =>
+        (await revisionWork(currentRevision)).find(
+          (work) =>
+            work.state === "failed_permanent" &&
+            work.reason_code === "REPOSITORY_SESSION_RECOVERY_UNSAFE",
+        ),
       );
-      assert.equal(credentials.service.status(binding.sessionId).state, "OPEN");
+      const retirementKey = `agent_revision:${currentRevision.id}:repository_cleanup:retire:${createHash(
+        "sha256",
+      )
+        .update(failed.idempotency_key)
+        .digest("hex")}`;
+      const retirement = await kube.waitFor("exact unresolved retirement Work owner", async () =>
+        (await revisionWork(currentRevision)).find(
+          (work) =>
+            work.idempotency_key === retirementKey &&
+            work.state === "queued" &&
+            work.reason_code === "REPOSITORY_CLEANUP_PENDING",
+        ),
+      );
+      assert.equal(retirement.namespace_id, namespace.id);
+      assert.equal(retirement.agent_id, agent.id);
+      assert.equal(retirement.revision_id, currentRevision.id);
+      assert.equal(retirement.actor_id, failed.actor_id);
+      await kube.waitFor(
+        "refused revision's actual Pod, process and Secret retirement",
+        async () => {
+          const pods = await kube.resources(
+            "pods",
+            placement,
+            "-l",
+            `openclaw.dev/agent=${agent.id}`,
+          );
+          const secrets = await kube.resources(
+            "secrets",
+            placement,
+            "-l",
+            `openclaw.dev/agent=${agent.id},openclaw.dev/repository-material=session`,
+          );
+          return (
+            pods.length === 0 &&
+            secrets.length === 0 &&
+            (await fixture.runningPodContainers(previousPod)).length === 0
+          );
+        },
+      );
+      const after = await fixture.attempts(currentRevision);
+      assert.deepEqual(
+        after.map(({ admission_id }) => admission_id),
+        before.map(({ admission_id }) => admission_id),
+        "no automatic same-revision admission",
+      );
+      for (const attempt of before.filter(({ phase }) => phase === "open")) {
+        const retained = after.find(({ admission_id }) => admission_id === attempt.admission_id);
+        assert.deepEqual(retained, { ...attempt, phase: "invalidated" });
+        assert.equal(retained.live_revision_id, currentRevision.id);
+        assert.ok(retained.cleanup_context.driver);
+        assert.equal(retained.cleanup_context.binding.repositoryRef, attempt.repository_ref);
+      }
+      return { attempts: after, retirementKey };
+    }
+    async function deployAfterLoss(previousRevision, previousPod, previousMaterial) {
+      // This real authorized HTTP request creates a new immutable revision. It does
+      // not settle old provider effects or replay the earlier Git/PR operations.
+      const next = await fixture.request("POST", `${path}/deploy`, undefined, 202);
+      assert.notEqual(next.id, previousRevision.id);
+      const nextPod = await fixture.readyPod(agent, next, previousPod.metadata.uid);
+      await assertWorkspaceReplacement(previousPod, nextPod);
+      const material = await fixture.material(nextPod);
+      assert.notEqual(material.generation, previousMaterial.generation);
+      const attempts = await fixture.attempts(next);
+      for (const binding of material.bindings) {
+        assert.notEqual(
+          binding.sessionId,
+          previousMaterial.bindings.find((entry) => entry.repositoryRef === binding.repositoryRef)
+            .sessionId,
+        );
+        const status = await credentials.status(binding.sessionId);
+        assert.equal(status.state, "OPEN");
+        assert.equal(status.deadlineWallMs, binding.deadlineWallMs);
+        assert.ok(
+          binding.deadlineWallMs <=
+            Number(
+              attempts.find((attempt) => attempt.session_id === binding.sessionId).deadline_wall_ms,
+            ),
+        );
+      }
+      return { revision: next, pod: nextPod, material };
+    }
+
+    // Graceful shutdown settles the service's tracked tokens, but destroying its
+    // inventory leaves the worker without surviving disposition evidence.
+    const gracefulAttempts = await fixture.attempts(revision);
+    const gracefulService = credentials.process;
+    await credentials.restart();
+    assert.notEqual(credentials.process.pid, gracefulService.pid);
+    assert.equal(credentials.process.generation, gracefulService.generation + 1);
+    const gracefulRefusal = await assertRefused(revision, pod, gracefulAttempts);
+    const restarted = await deployAfterLoss(revision, pod, repaired);
+    await fixture.tool(restarted.pod, "git", ["-C", firstCheckout, "fetch", "origin"]);
+    await fixture.tool(restarted.pod, "git", ["-C", secondCheckout, "fetch", "origin"]);
+
+    // Kill only the service. The provider observations, HTTP listener, worker and
+    // actual workload remain alive so loss cannot masquerade as successful cleanup.
+    const crashService = credentials.process;
+    const crashWorkerPid = fixture.workerPid;
+    const crashAttempts = await fixture.attempts(restarted.revision);
+    const oldBearerProbe = await fixture.retainBearerProbe(restarted.pod, "repo-a");
+    const outstanding = credentials.repositories.map(({ github }) => {
+      const lastUse = github.authenticationAttempts.at(-1);
+      const token = github.tokenState().find(({ index }) => index === lastUse.tokenIndex);
+      assert.equal(token.revoked, false);
+      assert.ok(token.expires > credentials.clock.wallNow());
+      return token;
+    });
+    const beforeCrashIssuance = credentials.repositories.map(
+      ({ github }) => github.issuesOfTokens.length,
+    );
+    let crashFailure;
+    let replacementFailure;
+    try {
+      const serviceDeath = await credentials.kill();
+      assert.deepEqual(serviceDeath, { pid: crashService.pid, code: null, signal: "SIGKILL" });
+      assert.equal((await fixture.request("GET", path)).activeRevisionId, restarted.revision.id);
+      assert.equal(fixture.endpoint, endpoint);
+      assert.equal(fixture.workerPid, crashWorkerPid);
+      assert.doesNotThrow(() => process.kill(crashWorkerPid, 0));
+      const survivingPod = await fixture.readyPod(agent, restarted.revision);
+      assert.equal(survivingPod.metadata.uid, restarted.pod.metadata.uid);
+      assert.equal(gatewayContainerId(survivingPod), gatewayContainerId(restarted.pod));
       assert.ok(
-        binding.deadlineWallMs <=
-          Number(
-            owned.find(({ repository_ref }) => repository_ref === binding.repositoryRef)
-              .deadline_wall_ms,
-          ),
+        (await fixture.runningPodContainers(survivingPod)).includes(
+          gatewayContainerId(survivingPod),
+        ),
+      );
+      assert.deepEqual(await fixture.material(survivingPod), restarted.material);
+      for (const [index, { github }] of credentials.repositories.entries()) {
+        assert.deepEqual(
+          github.tokenState().find((token) => token.index === outstanding[index].index),
+          outstanding[index],
+          "service death cannot revoke parent-owned provider authority",
+        );
+      }
+    } catch (error) {
+      crashFailure = error;
+    } finally {
+      // Production startup must recover its stale Unix socket after joined death.
+      // A replacement remains available for normal worker/Agent teardown on failure.
+      try {
+        if (!credentials.process.alive) {
+          await credentials.start();
+        }
+      } catch (error) {
+        replacementFailure = error;
+      }
+    }
+    if (crashFailure !== undefined && replacementFailure !== undefined) {
+      throw new AggregateError(
+        [crashFailure, replacementFailure],
+        "service crash observation and replacement failed",
+        { cause: crashFailure },
       );
     }
-    await fixture.tool(restartedPod, "git", ["-C", firstCheckout, "fetch", "origin"]);
+    if (crashFailure !== undefined || replacementFailure !== undefined) {
+      throw crashFailure ?? replacementFailure;
+    }
+    assert.notEqual(credentials.process.pid, crashService.pid);
+    assert.equal(credentials.process.generation, crashService.generation + 1);
+    for (const binding of restarted.material.bindings) {
+      assert.equal(await credentials.status(binding.sessionId), undefined);
+    }
+    const crashRefusal = await assertRefused(restarted.revision, restarted.pod, crashAttempts);
+    assert.equal(fixture.workerPid, crashWorkerPid);
+    assert.doesNotThrow(() => process.kill(crashWorkerPid, 0));
+    assert.deepEqual(
+      credentials.repositories.map(({ github }) => github.issuesOfTokens.length),
+      beforeCrashIssuance,
+    );
+    for (const [index, { github }] of credentials.repositories.entries()) {
+      const token = github.tokenState().find((token) => token.index === outstanding[index].index);
+      assert.deepEqual(token, outstanding[index]);
+      assert.ok(token.expires > credentials.clock.wallNow());
+    }
+    const recoveredAfterCrash = await deployAfterLoss(
+      restarted.revision,
+      restarted.pod,
+      restarted.material,
+    );
+    const beforeProbe = credentials.repositories.map(
+      ({ github }) => github.authenticationAttempts.length,
+    );
+    assert.deepEqual(await oldBearerProbe(recoveredAfterCrash.pod), {
+      status: 401,
+      code: "session-unavailable",
+    });
+    assert.deepEqual(
+      credentials.repositories.map(({ github }) => github.authenticationAttempts.length),
+      beforeProbe,
+    );
+    for (const [index, { github }] of credentials.repositories.entries()) {
+      const token = github.tokenState().find((token) => token.index === outstanding[index].index);
+      assert.deepEqual(token, outstanding[index]);
+      assert.ok(token.expires > credentials.clock.wallNow());
+    }
+    await fixture.tool(recoveredAfterCrash.pod, "git", ["-C", firstCheckout, "fetch", "origin"]);
+    assert.equal([...first.github.pulls.values()].filter(({ native }) => native).length, 1);
+    assert.equal(await first.git.ref("refs/heads/native-feature"), commit);
     const beforeRenewal = first.github.issuesOfTokens.length;
     // Controlled provider/service time proves hour-thirteen renewal without a
     // wall-clock wait. Perform it after repairs so new admission timestamps use
     // the same real clock as the worker throughout the lifecycle assertions.
     await credentials.clock.advance(13 * 60 * 60 * 1000);
-    await fixture.tool(restartedPod, "git", ["-C", firstCheckout, "fetch", "origin"]);
+    await fixture.tool(recoveredAfterCrash.pod, "git", ["-C", firstCheckout, "fetch", "origin"]);
     assert.ok(first.github.issuesOfTokens.length > beforeRenewal);
-    assert.equal((await fixture.material(restartedPod)).generation, restarted.generation);
+    assert.equal(
+      (await fixture.material(recoveredAfterCrash.pod)).generation,
+      recoveredAfterCrash.material.generation,
+    );
     context.diagnostic(
-      "Worker restart, exact missing-material repair, service restart, and controlled hour-thirteen renewal passed through the real platform path.",
+      "Worker survival, material repair, graceful restart and SIGKILL refusal, explicit new revisions, and controlled hour-thirteen renewal traversed the real platform path.",
     );
 
     await fixture.request("POST", `${path}/stop`, undefined, 202);
-    await kube.waitFor("ordinary Agent stop to dispose sessions and workloads", async () => {
-      const current = await fixture.request("GET", path);
-      const attempts = await fixture.attempts(revision);
-      const pods = await kube.resources("pods", placement, "-l", `openclaw.dev/agent=${agent.id}`);
-      return (
-        current.activeRevisionId === undefined &&
-        pods.length === 0 &&
-        attempts.every(({ phase }) => phase === "disposed" || phase === "invalidated")
+    await kube.waitFor(
+      "ordinary Agent stop to retire runtime and settle current sessions",
+      async () => {
+        const current = await fixture.request("GET", path);
+        const attempts = await fixture.attempts(recoveredAfterCrash.revision);
+        const pods = await kube.resources(
+          "pods",
+          placement,
+          "-l",
+          `openclaw.dev/agent=${agent.id}`,
+        );
+        return (
+          current.activeRevisionId === undefined &&
+          pods.length === 0 &&
+          attempts.every(({ phase }) => phase === "disposed" || phase === "invalidated")
+        );
+      },
+    );
+    for (const binding of recoveredAfterCrash.material.bindings) {
+      assert.notEqual((await credentials.status(binding.sessionId))?.state, "OPEN");
+    }
+    // Neither a new revision nor later token expiry rewrites lost custody as disposal.
+    for (const [lostRevision, retained] of [
+      [revision, gracefulRefusal],
+      [restarted.revision, crashRefusal],
+    ]) {
+      assert.deepEqual(await fixture.attempts(lostRevision), retained.attempts);
+      const cleanup = (await revisionWork(lostRevision)).find(
+        ({ idempotency_key }) => idempotency_key === retained.retirementKey,
       );
-    });
-    for (const binding of restarted.bindings) {
-      assert.notEqual(credentials.service.status(binding.sessionId)?.state, "OPEN");
+      assert.ok(["queued", "claimed"].includes(cleanup.state));
+      assert.notEqual(cleanup.state, "succeeded");
     }
     const remaining = await kube.resources(
       "secrets",

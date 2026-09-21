@@ -70,9 +70,21 @@ destinations, concurrent real clients, native PR creation and read-only denial.
 They also withhold a created admission response until the real PostgreSQL claim
 expires, then check recovery without bearer replay. Additional assertions inspect
 private regular-file modes, retained material after worker replacement, exact
-missing-Secret repair, service-restart Pod replacement, Git-only API denial and
-ordinary stop cleanup without closing a sibling Agent's sessions. Controlled service/provider clocks advance past hour
-thirteen to check fresh tokens with unchanged material. This is a simulated
+missing-Secret repair, Git-only API denial and ordinary stop cleanup without
+closing a sibling Agent's sessions. The credential service runs in a separate
+child. Graceful restart and joined SIGKILL preserve the HTTP app, worker and
+controlled provider inventories. After the crash, the replacement service rejects
+the old bearer through HTTPS without provider authentication, while the exact
+previously observed provider tokens remain unrevoked and unexpired.
+
+Lost exposed sessions refuse automatic continuation of that revision. The case
+checks actual Pod/container and Secret retirement alongside the retained session
+attempts and their exact unresolved cleanup Work owner. A new authorized HTTP
+deploy creates a distinct revision; its replacement Pod retains the workspace
+PVC, unpushed commit and dirty files. This does not establish disposal of lost
+provider obligations or replay Git/PR operations. Controlled service/provider
+clocks then advance past hour thirteen to check fresh tokens with unchanged
+material. This is a simulated
 elapsed-time test, not a thirteen-hour wait or provider soak. The case skips
 without its selector and fails on missing selected prerequisites.
 
