@@ -33,6 +33,8 @@ if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD !== "1") {
 
   test("delivered Compose client mounts exclude provider inputs and the control socket", async (t) => {
     const directory = await temporaryDirectory(t);
+    const privateAddress = "192.168.50.10";
+    const gatewayHostname = "credentials.example.test";
     const paths = {
       CREDENTIAL_SERVICE_INPUTS: join(directory, "private-inputs"),
       CREDENTIAL_SERVICE_CONTROL: join(directory, "private-control"),
@@ -54,12 +56,24 @@ if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD !== "1") {
       {
         env: cleanEnvironment({
           ...paths,
+          CREDENTIAL_SERVICE_PRIVATE_ADDRESS: privateAddress,
+          CREDENTIAL_GATEWAY_HOSTNAME: gatewayHostname,
           CREDENTIAL_SERVICE_UID: String(process.getuid?.() ?? 1000),
           CREDENTIAL_SERVICE_GID: String(process.getgid?.() ?? 1000),
         }),
       },
     );
     const composed = JSON.parse(result.stdout);
+    // The client resolves the gateway to the private address publishing HTTPS.
+    const ports = composed.services.service.ports;
+    assert.equal(ports.length, 1);
+    assert.equal(ports[0].host_ip, privateAddress);
+    assert.equal(ports[0].target, 8443);
+    assert.equal(ports[0].published, "443");
+    assert.equal(ports[0].protocol, "tcp");
+    assert.deepEqual(composed.services.client.extra_hosts, [
+      `${gatewayHostname}=${privateAddress}`,
+    ]);
     const volumes = composed.services.client.volumes;
     assert.deepEqual(
       volumes.map((volume) => volume.source).sort(),
