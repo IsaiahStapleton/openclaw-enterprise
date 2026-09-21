@@ -372,7 +372,7 @@ function codexReadResponse(options = {}) {
       description: null,
       skills: [],
       apps: options.apps ?? [{ id: CODEX_LINEAR_APP_ID, name: "Linear", needsAuth: false }],
-      appTemplates: [],
+      appTemplates: options.appTemplates ?? [],
       hooks: [],
       mcpServers: [],
       scheduledTasks: [],
@@ -619,7 +619,19 @@ test("Codex runtime helper installs selected remote plugins before readiness", a
         pluginName: CODEX_LINEAR_REMOTE_ID,
       });
       readCount += 1;
-      return codexReadResponse({ installed: readCount > 1, enabled: readCount > 1 });
+      return codexReadResponse({
+        installed: readCount > 1,
+        enabled: readCount > 1,
+        // Template-only IDs must not enter the concrete app policy written below.
+        appTemplates: [
+          {
+            templateId: "workspace_template",
+            name: "Workspace app",
+            materializedAppIds: ["template_only_app"],
+            reason: null,
+          },
+        ],
+      });
     }
     if (method === "config/batchWrite") {
       assert.deepEqual(params, {

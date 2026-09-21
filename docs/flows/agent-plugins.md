@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
-updated: 2026-09-18
-last_updated_session: codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464
+updated: 2026-09-21
+last_updated_session: codex/01a0b632-4907-7362-9c51-28129db5a3b9
 ---
 
 # Agent Plugin Deployment Flow
@@ -123,6 +123,9 @@ entries remain selected but cannot execute through that bridge.
 
 At startup, native `plugin/list` discovers the `openai-curated-remote` marketplace;
 `plugin/read` resolves each selection using the summary's opaque remote identity.
+`runtime-translator.ts:codexRuntimeArtifact` derives policy only from concrete
+`detail.apps` and ignores `appTemplates`; template-only IDs do not receive an
+app grant. See the [bundled Driver limits](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
 The shared translator validates the entire selection set before Compute writes
 native app configuration with `config/batchWrite`, including optional
 `approvals_reviewer`. Compute then calls `plugin/install` for each enabled selection, collecting confirmed
@@ -233,6 +236,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 19:15: Ignore template metadata while retaining concrete app policy and startup mapping checks. (codex/01a0b632-4907-7362-9c51-28129db5a3b9 - aa6dd741)
 
 - 2026-09-18 17:17: Linked plugin warning persistence to the generalized controller work result. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 6a582ce9)
 

@@ -57,6 +57,12 @@ allowlist entries. API callers cannot choose arbitrary sources or versions.
 Startup resolves the current native identity, app mapping, and release metadata
 for each requested catalog ID.
 
+Codex app mappings come only from concrete `plugin/read` entries in `detail.apps`.
+The Driver ignores `appTemplates` metadata, including materialized app IDs; an
+ID listed only in a template receives no policy grant. An app also present in
+`detail.apps` receives the selected policy normally. Plugins with no concrete
+apps remain unsupported. Template resolution and lifecycle handling are deferred.
+
 No PluginDriver selection is the default. Existing plugin-free deployments
 remain permitted. Saving Agent plugin selections does not require catalog
 membership validation. Nonempty selections cannot start with a missing,

@@ -312,7 +312,9 @@ export function createPluginRuntimeTranslator() {
     if (requiredArray(detail.apps, "Codex plugin detail apps").length === 0) {
       throw new Error("Codex plugin detail does not expose an app mapping.");
     }
-    for (const field of ["appTemplates", "hooks", "skills", "mcpServers"]) {
+    // TODO: support app templates. For now, ignore their metadata and derive
+    // enabled app IDs only from detail.apps.
+    for (const field of ["hooks", "skills", "mcpServers"]) {
       if (requiredArray(detail[field], "Codex plugin detail " + field).length > 0) {
         throw new Error("Codex plugin detail exposes unsupported " + field + ".");
       }
