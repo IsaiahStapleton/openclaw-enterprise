@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cp,
   mkdtemp,
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -241,6 +243,61 @@ test(
       );
       assert.equal(filled.stderr.includes(bearer), false);
       assert.equal(opened.stdout.includes(bearer), false);
+      // Stage the same immutable material contract consumed by the installed
+      // preparer, then move it to its final path before asking the detached helper.
+      const stagingRoot = join(temporary, "material-staging");
+      const finalRoot = join(temporary, "material");
+      await mkdir(stagingRoot, { mode: 0o700 });
+      await mkdir(join(stagingRoot, "sessions"), { mode: 0o700 });
+      const metadata = JSON.parse(await readFile(join(sessionDirectory, "client.json"), "utf8"));
+      const identity = ["project", session.sessionId];
+      const directoryName = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+      const generation = createHash("sha256")
+        .update(JSON.stringify([identity]))
+        .digest("hex");
+      await cp(sessionDirectory, join(stagingRoot, "sessions", directoryName), {
+        recursive: true,
+      });
+      await writeFile(
+        join(stagingRoot, "manifest.json"),
+        JSON.stringify({
+          version: 1,
+          generation,
+          bindings: [
+            {
+              repositoryRef: identity[0],
+              sessionId: session.sessionId,
+              deadlineWallMs: metadata.deadlineWallMs,
+              directory: join(finalRoot, "sessions", directoryName),
+              client: metadata.client,
+            },
+          ],
+        }),
+        { mode: 0o600 },
+      );
+      const prepared = invoke("native-git.js", ["prepare", stagingRoot, finalRoot]);
+      assert.equal(prepared.status, 0, "detached native Git preparation failed");
+      const nativeConfig = await readFile(join(stagingRoot, "gitconfig"), "utf8");
+      assert.equal((await lstat(join(stagingRoot, "gitconfig"))).mode & 0o777, 0o600);
+      assert.equal(nativeConfig.includes(bearer), false);
+      const repeated = invoke("native-git.js", ["prepare", stagingRoot, finalRoot]);
+      assert.equal(repeated.status, 1, "preparation must not replace published configuration");
+      assert.equal(await readFile(join(stagingRoot, "gitconfig"), "utf8"), nativeConfig);
+      await rename(stagingRoot, finalRoot);
+      const nativeFilled = invoke(
+        "git-helper.js",
+        ["manifest", finalRoot, generation, "get"],
+        "protocol=https\nhost=credentials.example.test\npath=EXAMPLE/PROJECT.git\n\n",
+      );
+      assert.equal(nativeFilled.status, 0, "detached manifest helper failed");
+      assert.ok(nativeFilled.stdout.includes(`password=${bearer}\n`));
+      assert.equal(nativeFilled.stderr.includes(bearer), false);
+      // An unsupported command must reach the router's public error boundary;
+      // a missing router or import cannot satisfy this detached-entrypoint check.
+      const rejected = invoke("router.js", ["git", "status"]);
+      assert.equal(rejected.status, 1);
+      assert.equal(rejected.stdout, "");
+      assert.equal(rejected.stderr, "unsupported-client-command\n");
       const closed = invoke("operator.js", [
         "close",
         "--socket",
@@ -291,6 +348,8 @@ test("credential artifact builder rejects dependencies outside its emitted closu
     clientEntry,
     join(emitted, "drivers/repo/github/credentials/client/operator.js"),
     join(emitted, "drivers/repo/github/credentials/client/git-helper.js"),
+    join(emitted, "drivers/repo/github/credentials/client/native-git.js"),
+    join(emitted, "drivers/repo/github/credentials/client/router.js"),
   ]) {
     await mkdir(join(path, ".."), { recursive: true });
     await writeFile(path, "export {};\n");

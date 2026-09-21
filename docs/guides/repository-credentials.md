@@ -30,7 +30,9 @@ GitHub. The builder writes separate `.build/repository-credentials/service` and
 `.build/repository-credentials/client` directories. Each contains its own manifest
 and emitted runtime closure, using Node built-ins without runtime `node_modules`.
 Source lives under the controller tree; the credential service still runs as a
-separate process and owns the App signing key.
+separate process and owns the App signing key. The client closure also includes the
+native Git configuration preparer and GitHub CLI router used by platform
+integration; the standalone commands below use the session launcher.
 
 For `invalid-configuration`, inspect the file and every directory in its absolute
 path. Use root or service-user ownership, private configuration/key files, and

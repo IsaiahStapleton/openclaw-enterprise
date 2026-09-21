@@ -112,7 +112,7 @@ const service = await closure("service", [
 ]);
 const client = await closure(
   "client",
-  ["launch", "operator", "git-helper"].map(
+  ["launch", "operator", "git-helper", "native-git", "router"].map(
     (name) => `drivers/repo/github/credentials/client/${name}.js`,
   ),
 );

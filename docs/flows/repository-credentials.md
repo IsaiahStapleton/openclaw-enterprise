@@ -8,12 +8,11 @@ last_updated_session: "authoring-run/7c8439bf-8351-451a-8e82-a947e909fc31"
 
 ## Overview
 
-A trusted operator admits a bounded session over a private Unix socket. The
-client uses its gateway bearer to send Git or selected GitHub API requests over
-HTTPS. One process owns credential acquisition, use and cleanup. This flow ends
-at upstream response delivery or categorized failure, and then local session
-closure with separately tracked cleanup. It describes source composition;
-container and live-provider qualification have separate evidence.
+A trusted operator admits a bounded session over a private Unix socket. Clients
+send Git or selected GitHub API requests over HTTPS using a gateway bearer. One
+process owns acquisition, forwarding and cleanup; local closure tracks cleanup
+separately. This flow describes source composition. Container and live-provider
+qualification require separate evidence.
 
 ## Entry Points
 
@@ -287,13 +286,12 @@ published or disposed session; disposal wakes the shutdown waiters.
 ## Emitted packaging
 
 `scripts/build-repository-credentials.mjs` follows the credential entrypoints in
-the controller's emitted tree into separate service/client artifacts. Source
-placement does not combine their running processes or private mounts.
+the controller's emitted tree into separate service/client artifacts.
 
-| Artifact context                        | Runtime entrypoints beneath `dist/`                                               |
-| --------------------------------------- | --------------------------------------------------------------------------------- |
-| `.build/repository-credentials/service` | `repository-credentials.js`, `composition/repository-credentials/check-config.js` |
-| `.build/repository-credentials/client`  | `drivers/repo/github/credentials/client/{launch,operator,git-helper}.js`          |
+| Artifact context                        | Runtime entrypoints beneath `dist/`                                                        |
+| --------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `.build/repository-credentials/service` | `repository-credentials.js`, `composition/repository-credentials/check-config.js`          |
+| `.build/repository-credentials/client`  | `drivers/repo/github/credentials/client/{launch,operator,git-helper,native-git,router}.js` |
 
 The Dockerfiles under `deploy/runtime/repository-credentials/` consume those
 separate contexts. `deploy/examples/repository-credentials/compose.yaml` keeps
@@ -320,7 +318,6 @@ host, gateway DNS/SAN and port 443.
 The [test guide](../testing/repository-credentials.md) owns controlled upstream,
 client and alternate-adapter checks. Detached service/client artifacts prove
 module closure. Separate-container isolation and live-provider behavior require their own selected qualification.
-A structural flow check does not establish any of those runtime results.
 
 ## Related docs
 
