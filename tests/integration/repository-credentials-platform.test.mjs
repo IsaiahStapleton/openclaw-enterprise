@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import {
   createRepositoryPlatformFixture,
   repositoryPlatformSelected,
 } from "../helpers/repository-credentials-platform.mjs";
+
+function gatewayContainerId(pod) {
+  const container = pod.status.containerStatuses.find(({ name }) => name === "gateway");
+  assert.match(container.containerID, /^containerd:\/\/[a-f0-9]+$/);
+  return container.containerID.slice("containerd://".length);
+}
 
 test(
   "ordinary Agent repository bindings traverse HTTP, PostgreSQL, Unix control and Kubernetes material",
@@ -263,9 +270,35 @@ test(
       "The same Agent used both independently scoped bindings; real Git/gh preserved profile denial and repository routing.",
     );
 
-    // Worker replacement resumes durable maintenance without opening fresh
-    // authority for material already retained by the same immutable revision.
-    const replacementCursor = await fixture.restartWorker();
+    // TEST-007: only the worker process dies. The existing HTTP listener,
+    // service sessions and running Agent must survive without fresh authority.
+    const previousWorkerPid = fixture.workerPid;
+    const endpoint = fixture.endpoint;
+    const service = credentials.service;
+    const admissions = (await fixture.attempts(revision))
+      .map(({ admission_id }) => admission_id)
+      .sort();
+    const issuanceCounts = credentials.repositories.map(
+      ({ github }) => github.issuesOfTokens.length,
+    );
+    const death = await fixture.killWorker();
+    let replacementCursor;
+    try {
+      assert.deepEqual(death, { pid: previousWorkerPid, code: null, signal: "SIGKILL" });
+      assert.equal((await fixture.request("GET", path)).activeRevisionId, revision.id);
+      assert.equal(fixture.endpoint, endpoint);
+      assert.equal(credentials.service, service);
+      const survivingPod = await fixture.readyPod(agent, revision);
+      assert.equal(survivingPod.metadata.uid, pod.metadata.uid);
+      assert.equal(gatewayContainerId(survivingPod), gatewayContainerId(pod));
+      assert.deepEqual(await fixture.material(survivingPod), original);
+      await fixture.tool(survivingPod, "git", ["-C", firstCheckout, "fetch", "origin"]);
+    } finally {
+      // Teardown needs a live worker to settle Agent stop even if an assertion fails.
+      replacementCursor = fixture.events.length;
+      await fixture.startWorker();
+    }
+    assert.notEqual(fixture.workerPid, previousWorkerPid);
     await kube.waitFor("maintenance after worker replacement", async () =>
       fixture.events
         .slice(replacementCursor)
@@ -283,7 +316,121 @@ test(
         .sort(),
       owned.map(({ session_id }) => session_id).sort(),
     );
-    assert.equal((await fixture.material(pod)).generation, original.generation);
+    const maintainedPod = await fixture.readyPod(agent, revision);
+    assert.equal(maintainedPod.metadata.uid, pod.metadata.uid);
+    assert.equal(gatewayContainerId(maintainedPod), gatewayContainerId(pod));
+    assert.deepEqual(await fixture.material(maintainedPod), original);
+    assert.equal(fixture.endpoint, endpoint);
+    assert.equal(credentials.service, service);
+    assert.deepEqual(
+      (await fixture.attempts(revision)).map(({ admission_id }) => admission_id).sort(),
+      admissions,
+    );
+    assert.deepEqual(
+      credentials.repositories.map(({ github }) => github.issuesOfTokens.length),
+      issuanceCounts,
+      "worker recovery must not mint provider authority",
+    );
+    for (const binding of original.bindings) {
+      assert.equal(service.status(binding.sessionId).state, "OPEN");
+      assert.equal(service.status(binding.sessionId).deadlineWallMs, binding.deadlineWallMs);
+    }
+
+    // TEST-009: retain both unpushed history and dirty work across material-driven
+    // Pod replacement. This makes no claim about resuming a command or model turn.
+    const retainedFiles = {
+      [`${workspace}/replacement-sentinel.txt`]: "workspace survives material replacement\n",
+      [`${firstCheckout}/local-only.txt`]: "local commit survives material replacement\n",
+      [`${firstCheckout}/platform-proof.txt`]: "uncommitted edit survives material replacement\n",
+    };
+    await fixture.podNode(
+      pod,
+      `
+      const fs = require("node:fs");
+      const files = JSON.parse(fs.readFileSync(0, "utf8"));
+      for (const [path, content] of Object.entries(files)) fs.writeFileSync(path, content);
+    `,
+      JSON.stringify(retainedFiles),
+    );
+    await fixture.tool(pod, "git", ["-C", firstCheckout, "add", "local-only.txt"]);
+    await fixture.tool(pod, "git", [
+      "-C",
+      firstCheckout,
+      "-c",
+      "user.name=Platform Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "commit",
+      "-m",
+      "Retain local workspace change",
+    ]);
+    const localCommit = (
+      await fixture.tool(pod, "git", ["-C", firstCheckout, "rev-parse", "HEAD"])
+    ).trim();
+    assert.notEqual(localCommit, commit);
+    assert.equal(
+      (await fixture.tool(pod, "git", ["-C", firstCheckout, "rev-parse", "HEAD^"])).trim(),
+      commit,
+    );
+    assert.equal(await first.git.ref("refs/heads/native-feature"), commit);
+    async function workspaceSnapshot(currentPod) {
+      const result = await fixture.podNode(
+        currentPod,
+        `
+        const fs = require("node:fs");
+        const { createHash } = require("node:crypto");
+        const paths = JSON.parse(fs.readFileSync(0, "utf8"));
+        console.log(JSON.stringify(paths.map(path => ({path,
+          hash: createHash("sha256").update(fs.readFileSync(path)).digest("hex")}))));
+      `,
+        JSON.stringify(Object.keys(retainedFiles)),
+      );
+      return {
+        volume: await fixture.workspaceVolume(currentPod, workspace),
+        files: JSON.parse(result.stdout),
+        head: (
+          await fixture.tool(currentPod, "git", ["-C", firstCheckout, "rev-parse", "HEAD"])
+        ).trim(),
+        status: await fixture.tool(currentPod, "git", [
+          "-C",
+          firstCheckout,
+          "status",
+          "--porcelain=v1",
+        ]),
+      };
+    }
+    const workspaceBefore = await workspaceSnapshot(pod);
+    assert.equal(workspaceBefore.head, localCommit);
+    assert.equal(workspaceBefore.status, " M platform-proof.txt\n");
+    assert.deepEqual(
+      workspaceBefore.files,
+      Object.entries(retainedFiles).map(([path, content]) => ({
+        path,
+        hash: createHash("sha256").update(content).digest("hex"),
+      })),
+    );
+    assert.ok((await fixture.runningPodContainers(pod)).includes(gatewayContainerId(pod)));
+    async function assertWorkspaceReplacement(previous, replacement) {
+      assert.notEqual(replacement.metadata.uid, previous.metadata.uid);
+      assert.notEqual(gatewayContainerId(replacement), gatewayContainerId(previous));
+      await kube.waitFor("predecessor Pod and container processes to terminate", async () => {
+        const pods = await kube.resources(
+          "pods",
+          placement,
+          "-l",
+          `openclaw.dev/agent=${agent.id}`,
+        );
+        return (
+          !pods.some(({ metadata }) => metadata.uid === previous.metadata.uid) &&
+          (await fixture.runningPodContainers(previous)).length === 0
+        );
+      });
+      assert.ok(
+        (await fixture.runningPodContainers(replacement)).includes(gatewayContainerId(replacement)),
+      );
+      assert.deepEqual(await workspaceSnapshot(replacement), workspaceBefore);
+      assert.equal(await first.git.ref("refs/heads/native-feature"), commit);
+    }
 
     // Removing exactly one real immutable Secret exercises retained-material
     // repair through Compute's observation and the normal worker retry path.
@@ -299,6 +446,7 @@ test(
       placement,
     );
     const repairedPod = await fixture.readyPod(agent, revision, pod.metadata.uid);
+    await assertWorkspaceReplacement(pod, repairedPod);
     const repaired = await fixture.material(repairedPod);
     assert.notEqual(repaired.generation, original.generation);
     assert.notEqual(repaired.bindings[0].sessionId, original.bindings[0].sessionId);
@@ -310,6 +458,7 @@ test(
     // to replace both sessions and roll actual runtime material before success.
     await credentials.restart();
     const restartedPod = await fixture.readyPod(agent, revision, pod.metadata.uid);
+    await assertWorkspaceReplacement(pod, restartedPod);
     const restarted = await fixture.material(restartedPod);
     assert.notEqual(restarted.generation, repaired.generation);
     for (const binding of restarted.bindings) {
@@ -318,6 +467,13 @@ test(
         repaired.bindings.find((entry) => entry.repositoryRef === binding.repositoryRef).sessionId,
       );
       assert.equal(credentials.service.status(binding.sessionId).state, "OPEN");
+      assert.ok(
+        binding.deadlineWallMs <=
+          Number(
+            owned.find(({ repository_ref }) => repository_ref === binding.repositoryRef)
+              .deadline_wall_ms,
+          ),
+      );
     }
     await fixture.tool(restartedPod, "git", ["-C", firstCheckout, "fetch", "origin"]);
     const beforeRenewal = first.github.issuesOfTokens.length;
