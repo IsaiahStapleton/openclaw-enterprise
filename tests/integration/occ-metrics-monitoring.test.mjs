@@ -216,9 +216,14 @@ test(
     ).then((response) => response.json());
     assert.equal(provisioned.dashboard.uid, "occ-development");
     assert.deepEqual(provisioned.dashboard.panels, dashboard.panels);
-    const datasource = await fetch(
-      `http://127.0.0.1:${grafanaPort}/api/datasources/uid/occ-prometheus/health`,
-    ).then((response) => response.json());
-    assert.equal(datasource.status, "OK", JSON.stringify(datasource));
+    // Grafana's HTTP listener can be ready before its datasource backend. Wait
+    // for the actual Grafana-to-Prometheus query to succeed within the same bound.
+    await waitFor(async () => {
+      const response = await fetch(
+        `http://127.0.0.1:${grafanaPort}/api/datasources/uid/occ-prometheus/health`,
+      );
+      const datasource = await response.json();
+      return response.ok && datasource.status === "OK";
+    });
   },
 );
