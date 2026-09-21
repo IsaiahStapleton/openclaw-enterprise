@@ -52,12 +52,13 @@ locations, with no duplicate schema or fields. Generated identities, runtime sta
 Installation-owned Driver/host choices remain platform-owned; presets cannot turn them into
 per-Agent options.
 
-Preset writes validate the envelope, variable declarations and syntax, literal typed selections,
-JSON size/depth, and literal same-Namespace references. Variable-bearing fields receive final type
-and reference checks after substitution. Native JSON may be incomplete, as with an ordinary saved
-Configuration. Apply existing SecretRef and credential-literal restrictions to templates and
-defaults at their use sites. Creation and deployment revalidate selected credentials, Providers, and
-plugins.
+Preset writes validate the envelope, variable declarations and syntax, default types,
+JSON size/depth, credential-binding structure, and known same-Namespace references.
+Ordinary launch fields may contain mistakes until creation. Keep existing SecretRef and
+credential-literal restrictions on templates and defaults at their use sites.
+The console checks values needed to populate form controls; Configuration and Agent creation
+enforce their existing schemas and permissions. Deployment revalidates credentials,
+Providers, and plugins.
 
 ### Variables
 
@@ -112,8 +113,9 @@ Agent/Configuration settings.
 
 Use existing response envelopes and error codes. PATCH replaces an included template, including its
 variable definitions, as a whole; omitted fields are unchanged. Concurrent edits follow ordinary
-update ordering. Unknown envelope fields, malformed settings, cross-Namespace references, and
-duplicate names fail without partial writes. Missing targets return 404, denied access 403,
+update ordering. Unknown envelope fields, malformed variables or credential bindings,
+known cross-Namespace references, and duplicate names fail without partial writes.
+Ordinary launch-field errors are deferred to the creation APIs. Missing targets return 404, denied access 403,
 name/lifecycle conflicts 409, and unavailable IAM or storage 503. Preset names and ownership are DB
 constraints.
 
@@ -130,15 +132,14 @@ credential sources.
 
 ### Select, edit, and deploy
 
-The console lists readable Presets in the current Namespace with a no-Preset option. Selecting one
-reads its complete template once and shows variable inputs with descriptions and defaults. Apply
-renders that local copy and copies launch settings into the form. Present fields replace form
-values; a supplied `configuration.values` replaces the JSON editor contents without a deep merge.
-Absent fields retain normal form defaults. Users can edit every copied value and complete incomplete
-native JSON. Changing inputs requires explicit Apply again; reapplying, switching, or resetting
-requires confirmation before discarding edits. Save stays disabled until the selected Preset
-has been applied successfully and whenever variable inputs differ from the last applied values.
-Failed Apply keeps Save disabled; edits to the rendered form remain allowed.
+The console lists readable Presets in the current Namespace and offers **Start without Preset**.
+Selecting a Preset reads its complete template once and shows variable inputs with descriptions
+and defaults. **Use Preset** renders that local copy and opens the ordinary Agent form.
+A supplied `configuration.values` replaces the JSON editor contents without a deep merge;
+absent fields use normal form defaults. Users edit copied values and complete missing settings.
+The chooser is removed after rendering; the form has no ongoing variable or Preset state.
+Invalid variables or values that cannot populate form controls leave the chooser open and create
+nothing. **Start over** explicitly discards the unsaved draft and returns to a fresh chooser.
 
 Save uses the existing Configuration-create then Agent-create sequence, copying `secretBindings` and
 plugin selections as well as the current form fields. Each creation gets a new Configuration, Agent
@@ -150,8 +151,8 @@ Existing creation, credential-use, and deployment permissions still apply. Retai
 uncertain-response recovery](../docs/reference/console/create-and-deploy.md): show a saved
 Configuration ID, reuse it on a safe retry, and inspect state after an uncertain result. Do not
 introduce an atomic launch endpoint for this feature. Once Configuration creation succeeds,
-lock variable inputs, Apply, and Configuration-affecting controls; Agent retries reuse that
-Configuration. Changing variables then requires a fresh creation form. Preserve existing
+lock Configuration-affecting controls; Agent retries reuse that Configuration.
+A late Agent validation error can leave a saved Configuration. Preserve existing
 Agent-only corrections during retry. API clients follow the same read, render, edit, and create flow.
 
 After credential provisioning and grants, the user deploys the saved Agent. [Existing revision
@@ -167,7 +168,7 @@ retain their current behavior.
    and migration, and in-memory state under `packages/occ/src/`.
 2. Implement CRUD in OCC and controller routes, including IAM resource registration,
    Namespace deletion checks, policy cleanup, and audit. Reuse existing transactions.
-3. Implement deterministic variable rendering and the selector, input form, and Apply
+3. Implement deterministic variable rendering and the selector, input form, and one-time prefill
    action in [console Agent creation](../apps/controller/src/console/agents/create.mjs);
    preserve auth/channel controls and partial-save recovery. Expose editable
    plugin selections and Secret bindings when needed to submit all template fields.
@@ -184,7 +185,7 @@ retain their current behavior.
 | Variables resolve predictably                        | Browser/API integration covers declared defaults, required inputs, scalar types, interpolation, key collisions, escaping, preserved runtime placeholders/SecretRefs, and invalid references; failures save nothing.                             |
 | Copies are independent                               | Create two Agents, edit one, update/delete the Preset before and after deployment, then redeploy; saved drafts and prior revisions retain their own values.                                                                                     |
 | Presets do not bypass admission                      | Deny cross-Namespace sources, missing credential grants, and invalid model/Harness combinations through the real creation/deployment path; no workload is admitted.                                                                             |
-| Recovery retains user work                           | Browser integration covers switching edited templates, Configuration-only success, disabled Save before Apply or with unapplied inputs, locked inputs after partial save, lost responses, and explicit retry without duplicate silent creation. |
+| Recovery retains user work                           | Browser integration covers one-time prefill, ordinary draft edits, explicit restart, Configuration-only success, locked Configuration inputs after partial save, lost responses, and explicit retry without duplicate silent creation. |
 | Launch still works                                   | Extend the existing real-runtime Agent integration with a Preset-derived Agent and prove one real model response; unavailable credentials/infrastructure remain an explicit verification gap.                                                   |
 
 ## Implementation status
@@ -203,6 +204,8 @@ unverified after the local cluster failed during cgroup v2 startup.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-21 22:00: Simplify Preset selection to one-time prefill and defer ordinary launch-field validation to creation (codex/01a0b1f2-e696-7232-a439-5b668154bcd9 - f997fca7e7f739a460274c74396afbcfda63f53a).
 
 - 2026-09-21 19:58: Record narrowly scoped administrator grant upgrade (session `01a0b1f2-e696-7232-a439-5b668154bcd9`, base `aa6dd7415d65ffba5fa40098b2142eb2a7d73df4`).
 

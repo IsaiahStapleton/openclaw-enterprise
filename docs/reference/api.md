@@ -2152,7 +2152,7 @@ List readable Presets in one Namespace
 | `data[].id` | `string` | Yes | pattern: `^pre_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data[].name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data[].namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data[].template` | `object` | Yes | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates declarations, literal fields, defaults at use sites, and Namespace scope. |
+| `data[].template` | `object` | Yes | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates template syntax and credential boundaries. Ordinary creation APIs validate concrete launch settings. |
 | `data[].template.agent` | `object` | No | — |
 | `data[].template.agent.executionMode` | `SafeJsonValue` | No | — |
 | `data[].template.agent.harnessAuth` | `SafeJsonValue` | No | — |
@@ -2195,7 +2195,7 @@ Create a reusable Namespace-owned Agent Preset
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
-| `template` | `object` | Yes | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates declarations, literal fields, defaults at use sites, and Namespace scope. |
+| `template` | `object` | Yes | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates template syntax and credential boundaries. Ordinary creation APIs validate concrete launch settings. |
 | `template.agent` | `object` | No | — |
 | `template.agent.executionMode` | `SafeJsonValue` | No | — |
 | `template.agent.harnessAuth` | `SafeJsonValue` | No | — |
@@ -2231,7 +2231,7 @@ Create a reusable Namespace-owned Agent Preset
 | `data.id` | `string` | Yes | pattern: `^pre_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.template` | `object` | Yes | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates declarations, literal fields, defaults at use sites, and Namespace scope. |
+| `data.template` | `object` | Yes | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates template syntax and credential boundaries. Ordinary creation APIs validate concrete launch settings. |
 | `data.template.agent` | `object` | No | — |
 | `data.template.agent.executionMode` | `SafeJsonValue` | No | — |
 | `data.template.agent.harnessAuth` | `SafeJsonValue` | No | — |
@@ -2321,7 +2321,7 @@ Read one exact Namespace-owned Preset
 | `data.id` | `string` | Yes | pattern: `^pre_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.template` | `object` | Yes | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates declarations, literal fields, defaults at use sites, and Namespace scope. |
+| `data.template` | `object` | Yes | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates template syntax and credential boundaries. Ordinary creation APIs validate concrete launch settings. |
 | `data.template.agent` | `object` | No | — |
 | `data.template.agent.executionMode` | `SafeJsonValue` | No | — |
 | `data.template.agent.harnessAuth` | `SafeJsonValue` | No | — |
@@ -2365,7 +2365,7 @@ Update a Preset without changing existing Agents
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `name` | `string` | No | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
-| `template` | `object` | No | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates declarations, literal fields, defaults at use sites, and Namespace scope. |
+| `template` | `object` | No | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates template syntax and credential boundaries. Ordinary creation APIs validate concrete launch settings. |
 | `template.agent` | `object` | No | — |
 | `template.agent.executionMode` | `SafeJsonValue` | No | — |
 | `template.agent.harnessAuth` | `SafeJsonValue` | No | — |
@@ -2401,7 +2401,7 @@ Update a Preset without changing existing Agents
 | `data.id` | `string` | Yes | pattern: `^pre_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.template` | `object` | Yes | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates declarations, literal fields, defaults at use sites, and Namespace scope. |
+| `data.template` | `object` | Yes | Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates template syntax and credential boundaries. Ordinary creation APIs validate concrete launch settings. |
 | `data.template.agent` | `object` | No | — |
 | `data.template.agent.executionMode` | `SafeJsonValue` | No | — |
 | `data.template.agent.harnessAuth` | `SafeJsonValue` | No | — |

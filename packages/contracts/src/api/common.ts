@@ -549,7 +549,7 @@ export const PresetTemplateSchema = Type.Object(
   {
     additionalProperties: false,
     description:
-      "Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates declarations, literal fields, defaults at use sites, and Namespace scope.",
+      "Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates template syntax and credential boundaries. Ordinary creation APIs validate concrete launch settings.",
   },
 );
 

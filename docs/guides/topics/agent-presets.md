@@ -51,17 +51,22 @@ To reuse more settings, add fields from the [Preset contract](../../reference/pr
    permissions. An administrator can grant exact Preset access through
    [Namespace IAM](../../reference/authorization.md#manage-namespace-policy).
 2. Choose **embedded-agent** in **Preset template**, enter the `name` variable,
-   and select **Apply Preset**. The fields below show the rendered copy.
+   and select **Use Preset**. The chooser closes and the Agent form opens with
+   the rendered copy. To use standard defaults, select **Start without Preset**.
 3. Review the model, execution mode, native Configuration JSON, authentication,
    plugin selections, and Secret bindings. Edit any copied setting and fill
    missing values. Never paste credential values into variables or native JSON.
 4. Select **Create Agent**. Then follow [credentials and deployment](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
    for that saved Agent. Creating the draft does not start a workload.
 
-If you change a variable input, apply the Preset again before saving. Reapplying
-or switching Presets asks before discarding edits. **No Preset** returns to the
-standard form defaults. A supplied `configuration.values` replaces the entire
-native JSON editor; review it before saving.
+Variables are used once to fill the form. Edit the resulting fields directly.
+Before saving, to choose another Preset or supply different variables, select **Start over**
+and confirm that the unsaved draft can be discarded. A supplied
+`configuration.values` replaces the entire native JSON editor.
+
+Saving a Preset does not validate every launch setting. Review the draft before
+creating it; an invalid execution mode can fail when opening the form, while
+an invalid plugin policy can fail when saving the Agent.
 
 ## Change or delete the template
 

@@ -15,8 +15,8 @@ Agent; it does not verify an Agent you create in the console.
 1. Sign in, select the intended Namespace, open **Agents**, and select
    **Create Agent**.
 2. To reuse a [Preset](../presets.md), choose one, fill its variables, and select
-   **Apply Preset**. Review the copied settings; you can edit every value.
-   Leave **No Preset** selected to start from standard defaults.
+   **Use Preset**. The chooser closes and the form opens with editable settings.
+   Select **Start without Preset** to use standard defaults.
 3. Enter a name that is unique within the Namespace. Choose an execution mode
    and review the starter Configuration JSON. Dedicated uses `codex/gpt-5.1`;
    embedded uses `openai/gpt-5.1`. These are example models. Confirm your
@@ -49,7 +49,7 @@ administrator to [grant it before deploying](../../guides/deploy/production-agen
 See [harness authentication](../agents.md#harness-authentication) for the full rules.
 
 If the Configuration saves but Agent creation fails, the form shows its ID and
-keeps its JSON, Secret bindings, execution mode, and Preset controls fixed. Correct the Agent name or selections and
+keeps its JSON, Secret bindings, and execution mode fixed. Correct the Agent name or selections and
 retry to reuse that Configuration. The two saves are separate; a failed Agent
 save does not remove the Configuration. If a response is lost, the save may have
 succeeded. The form disables further creation until you leave or refresh it.

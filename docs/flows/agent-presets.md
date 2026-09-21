@@ -31,9 +31,9 @@ graph TD
   A["Operator writes Preset"] --> B["OCC authorizes and validates template"]
   B --> C["Store Namespace-owned Preset"]
   C --> D["Console reads selected Preset once"]
-  D --> E["User supplies variables and applies"]
-  E --> F["Renderer validates and copies launch settings"]
-  F --> G["User reviews and saves"]
+  D --> E["User supplies variables and selects Use Preset"]
+  E --> F["Renderer copies launch settings"]
+  F --> G["Chooser closes; user edits and saves ordinary draft"]
   G --> H["Configuration API admits and saves"]
   H --> I["Agent API admits and saves"]
   I --> J["Independent Agent draft"]
@@ -56,8 +56,10 @@ administrator Role. Its guarded update preserves customized Roles; the exact
 [`OpenClawController.createPreset` and `admitPresetTemplate`](../../packages/occ/src/index.ts)
 lock the Namespace, check the exact collection grant and ready state, then call
 [`normalizePresetTemplate`](../../packages/contracts/src/presets.ts).
-Typed values, references, syntax, and defaults are checked without requiring
-unfilled variables. When native values exist, the selected Configuration Driver's
+Template structure, variable declarations, default types, and credential
+references are checked without requiring unfilled variables. Ordinary Agent
+field validation is deferred to the creation APIs. When native values exist,
+the selected Configuration Driver's
 `validateValues` checks their native credential rules; missing capability fails
 closed. Core owns no native configuration interpretation.
 
@@ -73,14 +75,17 @@ path records mutations and denials without template or variable contents.
 
 [`createPresetFields`](../../apps/controller/src/console/agents/presets.mjs)
 lists only readable Presets, then reads the selected resource once. The user
-fills typed inputs and selects **Apply Preset**. The shared
+fills typed inputs and selects **Use Preset**. The shared
 [`renderPresetTemplate`](../../packages/contracts/src/preset-variables.mjs)
 walks JSON once, rejects missing or mistyped inputs and duplicate rendered native
 keys, and preserves runtime placeholders and unresolved SecretRefs.
 
-Changing inputs invalidates Apply. Rendering makes no requests and fetches no
-credentials. Preset updates or deletion cannot alter the retained local copy.
-Reapplying, switching, or resetting asks before discarding unsaved form edits.
+Rendering makes no requests and fetches no credentials. On success, the chooser
+is replaced by the ordinary Agent form; the form keeps only the rendered
+settings. Preset updates or deletion cannot alter them. Before saving,
+**Start over** discards the unsaved draft after confirmation and opens a fresh
+chooser. After a save succeeds or its outcome becomes uncertain, restart is
+disabled so the user follows ordinary creation recovery.
 
 ### 3. Save an independent draft
 
@@ -93,7 +98,7 @@ request owns full schema, native credential, and authorization admission before
 its persistence boundary; browser validation is not that boundary.
 
 If Configuration creation succeeds but Agent creation fails, the form retains
-the Configuration ID and locks configuration and Preset controls. A safe retry
+the Configuration ID and locks Configuration-affecting controls. A safe retry
 reuses the saved Configuration. An uncertain response requires inspection before
 another creation attempt. See [creation recovery](../reference/console/create-and-deploy.md#create-an-agent).
 
@@ -111,7 +116,7 @@ or an immutable admitted revision.
 
 - A missing selector entry can mean missing exact Preset `read` permission;
   compare the Namespace and the authenticated list response.
-- Apply errors identify variable or field problems before any save. Save errors
+- Chooser errors identify variable or form-field problems before any save. Save errors
   come from existing Configuration or Agent admission; retain request and saved
   Configuration IDs when investigating partial or uncertain outcomes.
 - [Controller integration coverage](../../tests/integration/presets-controller.test.mjs)
@@ -133,6 +138,8 @@ or an immutable admitted revision.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-21 22:00: Simplify Preset selection to one-time prefill and defer ordinary launch-field validation to creation (codex/01a0b1f2-e696-7232-a439-5b668154bcd9 - f997fca7e7f739a460274c74396afbcfda63f53a)
 
 - 2026-09-21 19:58: Link the guarded administrator grant upgrade and its eligibility contract (codex/01a0b1f2-e696-7232-a439-5b668154bcd9 - aa6dd7415d65ffba5fa40098b2142eb2a7d73df4)
 

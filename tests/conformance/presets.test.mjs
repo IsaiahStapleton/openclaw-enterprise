@@ -124,7 +124,7 @@ test("native key substitution rejects collisions and preserves special keys as i
   assert.equal({}.safe, undefined);
 });
 
-test("preset admission reuses typed launch schemas and validates literal and default credential scope", () => {
+test("preset admission preserves credential structure and literal and default scope", () => {
   const template = {
     variables: {
       mode: { type: "string" },
@@ -165,15 +165,6 @@ test("preset admission reuses typed launch schemas and validates literal and def
     assert.throws(
       () =>
         normalizePresetTemplate(
-          { agent: { plugins: { [key]: { enabled: "not_boolean", approvalMode: "prompt" } } } },
-          namespaceId,
-        ),
-      PresetValidationError,
-      `invalid plugin selection under ${key}`,
-    );
-    assert.throws(
-      () =>
-        normalizePresetTemplate(
           {
             configuration: {
               secretBindings: { [key]: { source: { kind: "secret", namespaceId, id: "junk" } } },
@@ -192,14 +183,6 @@ test("preset admission reuses typed launch schemas and validates literal and def
   );
   for (const invalid of [
     { agent: { configurationId: "forbidden" } },
-    { agent: { name: 3 } },
-    { variables: { name: { type: "number" } }, agent: { name: "{{ vars.name }}" } },
-    { agent: { executionMode: "unsupported" } },
-    { agent: { executionMode: "\\{{ vars.literal }}" } },
-    {
-      variables: { mode: { type: "string", default: "{{ vars.missing }}" } },
-      agent: { executionMode: "{{ vars.mode }}" },
-    },
     {
       agent: {
         harnessAuth: {
@@ -217,9 +200,41 @@ test("preset admission reuses typed launch schemas and validates literal and def
         },
       },
     },
+    { agent: { harnessAuth: "unfinished" } },
+    { agent: { harnessAuth: { method: "api_key", source: "raw-credential" } } },
     {
-      variables: { enabled: { type: "string" } },
-      agent: { plugins: { github: { enabled: "{{ vars.enabled }}", approvalMode: "prompt" } } },
+      variables: { secret: { type: "number" } },
+      agent: {
+        harnessAuth: {
+          method: "api_key",
+          source: { kind: "secret", namespaceId, id: "{{ vars.secret }}" },
+        },
+      },
+    },
+    {
+      variables: { secret: { type: "string", default: "not-a-secret-id" } },
+      configuration: {
+        secretBindings: {
+          TOKEN: { source: { kind: "secret", namespaceId, id: "{{ vars.secret }}" } },
+        },
+      },
+    },
+    {
+      configuration: {
+        secretBindings: {
+          TOKEN: { source: { kind: "secret", namespaceId, id: secretId }, raw: "credential" },
+        },
+      },
+    },
+    {
+      configuration: {
+        secretBindings: {
+          TOKEN: {
+            source: { kind: "secret", namespaceId, id: secretId },
+            delivery: { type: "file" },
+          },
+        },
+      },
     },
   ]) {
     assert.throws(() => normalizePresetTemplate(invalid, namespaceId), PresetValidationError);

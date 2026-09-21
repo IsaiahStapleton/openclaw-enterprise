@@ -252,7 +252,7 @@ export function renderPresetTemplate(template, inputs = {}) {
   return render(template, inputs, false);
 }
 
-// Used by server schema admission to defer only genuinely unfilled scalar fields.
+// Credential admission permits unfilled string references while validating literal/default values.
 export function unresolvedPresetVariableTypes(value, definitions) {
   if (typeof value !== "string") {
     return [];

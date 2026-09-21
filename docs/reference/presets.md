@@ -88,9 +88,13 @@ and response envelopes.
 | `DELETE` exact Preset                              | `204`                   | `preset:delete` on that Preset.              |
 
 An included `template` replaces the whole template, including variable
-definitions; omitted fields stay unchanged. Writes reject invalid typed values,
-variable definitions, defaults, known cross-Namespace credential references, and
-credential literals at their native use sites. The selected
+definitions; omitted fields stay unchanged. Writes check the template structure,
+variable syntax and default types, credential-binding structure, known
+cross-Namespace credential references, and credential literals at their native
+use sites. Ordinary launch-field errors, such as an invalid execution mode or
+plugin policy, can remain in a saved Preset. The console checks values needed
+to populate its form; the existing creation APIs validate completed settings.
+The selected
 [Configuration Driver](drivers/configuration.md#optional-validation) must support
 value validation when a template contains `configuration.values`.
 
@@ -125,8 +129,14 @@ metadata recording which Preset was used. Creation still saves a Configuration
 and an Agent separately. Follow [partial-save recovery](console/create-and-deploy.md#create-an-agent)
 if the second save fails or a response is lost.
 
-A Preset is read once when selected. Edits or deletion after selection do not
-change the displayed copy. Changing variable inputs requires **Apply Preset**
-again before saving. After a Configuration has saved, the Preset controls lock
-so a retry uses that Configuration. Later Agent deployments read the Agent's
-own draft, not the Preset. Credential rotation retains its normal behavior.
+A Preset is read once when selected. **Use Preset** renders its variables and
+opens an ordinary editable Agent form. The chooser closes; changing the draft
+does not update or reread the Preset. Before saving, **Start over** discards the
+unsaved draft and returns to the chooser. Restart is disabled once a Configuration
+has saved or a save outcome is uncertain. The saved Configuration remains available for recovery
+if Agent creation fails.
+
+A valid Preset is not necessarily a valid Agent configuration. A later Agent
+validation error can leave a saved Configuration; follow the recovery steps
+above. Later deployments read the Agent's own draft. Credential rotation retains
+its normal behavior.

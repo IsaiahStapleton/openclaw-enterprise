@@ -133,8 +133,14 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
       name: { type: "string" },
       model: { type: "string", default: "openai/gpt-5.1" },
       enabled: { type: "boolean", default: true },
+      mode: { type: "string", default: "unfinished" },
     },
-    agent: { name: "{{ vars.name }}", executionMode: "embedded", harnessAuth: null },
+    agent: {
+      name: "{{ vars.name }}",
+      executionMode: "{{ vars.mode }}",
+      plugins: { github: { enabled: "unfinished", approvalMode: "prompt" } },
+      harnessAuth: null,
+    },
     configuration: {
       values: {
         gateway: {
@@ -158,6 +164,7 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
   const preset = await createPreset(fixture, namespace.id, "Default model", template);
   const read = await fixture.request("GET", `${collection(namespace.id)}/${preset.id}`);
   assert.equal(read.status, 200);
+  assert.deepEqual(read.data.template, template);
   // The API consumer uses the same renderer as the console, then the ordinary two-create flow.
   const rendered = renderPresetTemplate(read.data.template, { name: 'My "Agent"', enabled: false });
   const configuration = await fixture.request(
@@ -178,8 +185,21 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
     configuration.data.values.models.providers.openai.apiKey,
     template.configuration.values.models.providers.openai.apiKey,
   );
-  const created = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
+  // Presets may be unfinished. The ordinary API rejects invalid launch fields
+  // after Configuration creation; correcting the draft reuses that Configuration.
+  const rejected = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
     body: { ...rendered.agent, configurationId: configuration.data.id },
+  });
+  assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+  const agentsBeforeCorrection = await fixture.request("GET", `/namespaces/${namespace.id}/agents`);
+  assert.deepEqual(agentsBeforeCorrection.data, []);
+  const created = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      ...rendered.agent,
+      executionMode: "embedded",
+      plugins: {},
+      configurationId: configuration.data.id,
+    },
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.equal(created.data.name, 'My "Agent"');
@@ -216,7 +236,6 @@ test("Preset admission rejects malformed templates and credential leaks while pr
   const sentinel = "synthetic-preset-credential-must-not-persist";
   const unsafeTemplates = [
     { configuration: { secretBindings: { OPENAI_API_KEY: { source: secret.ref } } } },
-    { agent: { executionMode: "unsupported" } },
     { agent: { namespaceId: beta.id } },
     { agent: { name: "{{ vars.undeclared }}" } },
     { configuration: { secretBindings: { SLACK_BOT_TOKEN: { source: wrongSecret.ref } } } },

@@ -259,6 +259,7 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText("Choose an installed Provider.").waitFor();
   await page.getByLabel("Authentication source").selectOption("api_key");
   await page.getByLabel("OpenAI API key Secret ID").fill(secret.id);
@@ -360,6 +361,7 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
   });
   await page.goto(`${fixture.origin}/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText("Choose an installed Provider.").waitFor();
   await page.getByLabel("Agent name").fill("Denied Agent");
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
@@ -383,6 +385,7 @@ test("Agent creation rejects non-object native Configuration JSON before any wri
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
   requests.length = 0;
 
   await page.getByLabel("Agent name").fill("Broken Agent");
@@ -414,6 +417,7 @@ test("Agent creation renders provider and service account choices and saves sele
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
   const provider = page.getByLabel("Provider (optional)");
   await page.getByLabel("Authentication source").selectOption("chatgpt_service_account");
   const account = page.getByLabel("Issued ChatGPT service account");
@@ -495,6 +499,7 @@ test("Agent creation leaves optional lists disabled when discovery is inaccessib
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText(/Providers unavailable\./).waitFor();
   await page.getByText(/Service accounts unavailable\./).waitFor();
   assert.equal(await page.getByLabel("Provider (optional)").isDisabled(), true);
@@ -514,6 +519,7 @@ test("Agent creation reuses the saved Configuration after an Agent creation conf
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText("Choose an installed Provider.").waitFor();
   requests.length = 0;
   await page.getByLabel("Agent name").fill("Retry Agent");
@@ -567,6 +573,7 @@ test("Agent creation preserves edited JSON across mode changes and resets to the
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
   const mode = page.getByLabel("Execution mode");
   const configuration = page.getByLabel("Configuration JSON");
   const dedicatedTemplate = JSON.parse(await configuration.inputValue());
@@ -588,6 +595,12 @@ test("Agent creation preserves edited JSON across mode changes and resets to the
   const resetTemplate = JSON.parse(await configuration.inputValue());
   assert.equal(resetTemplate.agents.defaults.model, "codex/gpt-5.1");
   assert.ok(resetTemplate.plugins.entries.codex);
+  await page.getByLabel("Agent name").fill("Discarded draft");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Start over" }).click();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  assert.equal(await page.getByLabel("Agent name").inputValue(), "");
+  assert.deepEqual(JSON.parse(await configuration.inputValue()), dedicatedTemplate);
 });
 
 test("Agent detail preserves admitted revision history while draft edits change current configuration", async (t) => {
@@ -1016,7 +1029,13 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
           enabled: { type: "boolean", default: false },
           count: { type: "number", default: 0 },
         },
-        agent: { name: "{{ vars.name }}", executionMode: "{{ vars.execution }}", plugins },
+        agent: {
+          name: "{{ vars.name }}",
+          executionMode: "{{ vars.execution }}",
+          providerId: providerFixtures[0].id,
+          harnessAuth: { method: "api_key", source: secret.ref },
+          plugins,
+        },
         configuration: { values, secretBindings },
       },
     },
@@ -1028,35 +1047,31 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await page.getByLabel("Preset template").selectOption(preset.data.id);
   await page.getByLabel("Variable: name", { exact: true }).waitFor();
   const save = page.getByRole("button", { name: "Create Agent", exact: true });
-  const apply = page.getByRole("button", { name: "Apply Preset" });
-  assert.equal(await save.isDisabled(), true);
+  assert.equal(await save.count(), 0, "choose a starting point before editing the Agent draft");
+  const apply = page.getByRole("button", { name: "Use Preset" });
   await apply.click();
   await page.getByRole("alert").filter({ hasText: /name/ }).waitFor();
   assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
   await page.getByLabel("Variable: name", { exact: true }).fill("Existing Agent");
-  await apply.click();
-  assert.equal(await save.isEnabled(), true);
-  const beforeInvalidApply = await page
-    .getByLabel("Configuration JSON", { exact: true })
-    .inputValue();
   await page.getByLabel("Variable: execution", { exact: true }).fill("invalid");
   await apply.click();
   await page
     .getByText("Rendered Preset contains invalid Agent fields or Secret bindings.")
     .waitFor();
-  assert.equal(await save.isDisabled(), true);
-  assert.equal(
-    await page.getByLabel("Configuration JSON", { exact: true }).inputValue(),
-    beforeInvalidApply,
-  );
+  assert.equal(await save.count(), 0);
   assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
   await page.getByLabel("Variable: execution", { exact: true }).fill("dedicated");
+  await page.getByLabel("Variable: marker", { exact: true }).fill("changed");
   await apply.click();
+  await page.getByLabel("Agent name", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Preset template").count(), 0);
+  assert.equal(await page.getByLabel("Variable: marker", { exact: true }).count(), 0);
+  assert.equal(await save.isEnabled(), true);
   const rendered = JSON.parse(
     await page.getByLabel("Configuration JSON", { exact: true }).inputValue(),
   );
   assert.deepEqual(rendered.plugins.entries.knowledge.config, {
-    marker: "initial",
+    marker: "changed",
     thresholds: [1, 2, 3],
     enabled: false,
     count: 0,
@@ -1069,9 +1084,6 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
     JSON.parse(await page.getByLabel("Secret bindings JSON").inputValue()),
     secretBindings,
   );
-  await page.getByLabel("Variable: marker", { exact: true }).fill("changed");
-  assert.equal(await save.isDisabled(), true);
-  await apply.click();
   // Deletion after selection must not invalidate this independent local copy.
   assert.equal(
     (
@@ -1087,18 +1099,14 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   );
   edited.plugins.entries.knowledge.config.thresholds = [5, 6];
   await page.getByLabel("Configuration JSON", { exact: true }).fill(JSON.stringify(edited));
-  // Canceling a re-Apply preserves the edited draft and its ability to save.
+  // Canceling Start over keeps the ordinary draft and its ability to save.
   page.once("dialog", (dialog) => dialog.dismiss());
-  await apply.click();
+  await page.getByRole("button", { name: "Start over" }).click();
   assert.equal(await save.isEnabled(), true);
   assert.deepEqual(
     JSON.parse(await page.getByLabel("Configuration JSON", { exact: true }).inputValue()),
     edited,
   );
-  page.once("dialog", (dialog) => dialog.dismiss());
-  await page.getByLabel("Preset template").selectOption("");
-  assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Edited name");
-  assert.equal(await page.getByLabel("Preset template").inputValue(), preset.data.id);
   await page.getByLabel("Agent name", { exact: true }).fill("Existing Agent");
   const conflict = page.waitForResponse(
     (response) =>
@@ -1108,8 +1116,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await save.click();
   assert.equal((await conflict).status(), 409);
   await page.getByText(/conflicts with the saved state/).waitFor();
-  assert.equal(await apply.isDisabled(), true);
-  assert.equal(await page.getByLabel("Variable: marker", { exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Start over" }).isDisabled(), true);
   assert.equal(
     await page.getByLabel("Secret bindings JSON").evaluate((node) => node.readOnly),
     true,
@@ -1125,6 +1132,8 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   const created = await (await createdResponse).json();
   assert.equal(created.data.name, "Preset Agent");
   assert.deepEqual(created.data.plugins, plugins);
+  assert.equal(created.data.providerId, providerFixtures[0].id);
+  assert.deepEqual(created.data.harnessAuth, { method: "api_key", source: secret.ref });
   const saved = await fixture.request(
     "GET",
     `/namespaces/${namespace.id}/configurations/${created.data.configurationId}`,
