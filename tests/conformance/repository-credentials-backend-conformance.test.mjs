@@ -144,11 +144,20 @@ test("second backend uses the production HTTPS sender and distinct native authen
   });
   const opened = service.open({ durationSeconds: 86400, profile: "git-write" });
   const fixture = { config, opened, tls: upstream.tls };
-  assert.equal((await gatewayRequest(fixture, "/team/nested/project")).status, 200);
+  const headers = {
+    authorization: `Bearer ${opened.bearer}`,
+    cookie: "repository-credentials-probe=nonsecret",
+  };
+  assert.equal((await gatewayRequest(fixture, "/team/nested/project", { headers })).status, 200);
   await clock.advance(13 * 3600000 + 1);
-  assert.equal((await gatewayRequest(fixture, "/team/nested/project")).status, 200);
+  assert.equal((await gatewayRequest(fixture, "/team/nested/project", { headers })).status, 200);
   assert.equal(upstream.trace.length, 2);
   assert.equal(upstream.trace[1].path, "/v2/projects/team%2Fnested%2Fproject");
+  // Native-key acceptance must not carry either caller credential header upstream.
+  for (const entry of upstream.trace) {
+    assert.equal(entry.authorizationPresent, false, "caller Authorization reached upstream");
+    assert.equal(entry.cookiePresent, false, "caller Cookie reached upstream");
+  }
 });
 
 test("drain-before rotation waits for a streamed upstream write and preserves the replacement", async (t) => {
@@ -265,6 +274,8 @@ test("drain-before rotation waits for a streamed upstream write and preserves th
       {
         method: "POST",
         path: "/v2/projects/team%2Fnested%2Fproject",
+        authorizationPresent: false,
+        cookiePresent: false,
         bodyBytes: body.length,
         committed: true,
         bodyDigest: createHash("sha256").update(body).digest("hex"),

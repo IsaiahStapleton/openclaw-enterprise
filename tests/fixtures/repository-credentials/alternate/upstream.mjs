@@ -7,7 +7,12 @@ export function createAlternateUpstreamHandler({ authorize, observe, beforeWrite
       response.writeHead(401).end();
       return;
     }
-    const entry = { method: request.method, path: request.url };
+    const entry = {
+      method: request.method,
+      path: request.url,
+      authorizationPresent: Object.hasOwn(request.headers, "authorization"),
+      cookiePresent: Object.hasOwn(request.headers, "cookie"),
+    };
     observe(entry);
     void (async () => {
       if (request.method === "POST") {
