@@ -17,7 +17,7 @@ const engine = process.env.OCC_METRICS_TEST_ENGINE ?? "docker";
 const prometheusImage =
   "docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0";
 const grafanaImage =
-  "docker.io/grafana/grafana@sha256:9924c7fe0effe4a5fea08b3451905de54f09fde9d1589463a5f2d02d9ec158bc";
+  "docker.io/grafana/grafana@sha256:ac461fb352abc50da10a51c7d02462e9c05488f11f53f14b3ad79a8145f638a0";
 
 async function port() {
   const server = createServer();

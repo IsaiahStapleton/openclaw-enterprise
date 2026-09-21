@@ -1,7 +1,8 @@
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "@prometheus-io/client";
 import type { PlatformMetricsSnapshot } from "@openclaw-enterprise/occ";
 
-export type WorkKind = "namespace_ensure" | "namespace_delete" | "agent_revision" | "agent_stop";
+export type WorkKind =
+  "namespace_ensure" | "namespace_delete" | "agent_revision" | "agent_stop" | "agent_delete";
 export type WorkOutcome = "success" | "pending" | "retry" | "permanent" | "claim_lost" | "error";
 
 const processFamilies = new Set([

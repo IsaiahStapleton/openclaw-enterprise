@@ -39,6 +39,11 @@ auth:
   secretName: occ-auth
   secretKey: secret
 
+agentNativeAdmin:
+  enabled: false
+  domain: ""
+  sharedCookieDomain: ""
+
 bootstrap:
   adminEmail: ""
   password:
@@ -53,6 +58,8 @@ provider:
     enabled: false
     secretName: occ-chatgpt-admin
     key: admin-key
+    # IPv4 /32 destination seen by the pod network for api.chatgpt.com:443.
+    # This permits network egress; it does not configure a forward proxy.
     providerCidr: ""
 
 gatewayRouting:
@@ -84,7 +91,10 @@ database:
   secretName: occ-database
   appUrlKey: application-url
   migrationUrlKey: migration-url
-  cidr: ""
+  caSecretName: ""
+  caKey: ca.pem
+  caMountPath: /etc/openclaw/database-ca
+  cidrs: []
   port: 5432
 
 api:
@@ -92,8 +102,11 @@ api:
   clients: []
 
 cluster:
-  cidr: ""
+  cidrs: []
   port: 443
+
+controlPlane:
+  nodeSelector: {}
 
 dns:
   namespace: kube-system

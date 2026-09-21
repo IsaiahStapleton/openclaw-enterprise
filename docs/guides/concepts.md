@@ -1,4 +1,6 @@
-# Concepts
+# OpenClaw Enterprise concepts
+
+<span id="concepts"></span>
 
 Use these concepts to understand what you configure and deploy in **OpenClaw Enterprise (OCE)**.
 
@@ -50,16 +52,16 @@ A [Configuration](../reference/configuration.md) stores reusable native
 OpenClaw settings in a Namespace. An Agent references it. Installation startup
 YAML is separate: it selects Drivers and configures the control plane.
 
-A [Secret](../reference/drivers/kubernetes-secret.md) stores a sensitive value
+A [Secret](topics/secrets.md) stores a sensitive value
 separately from Configuration. OCC returns Secret metadata, not the value.
 Configuration bindings deliver selected Secrets to the Agent gateway;
 OpenClaw resolves its native `SecretRef` references there.
 
 ## Identity and access
 
-[Authentication](../reference/authentication.md) identifies the caller.
-[Authorization](../reference/authorization.md) checks its permissions for the
-exact action and resource. A **Principal** represents a person; a
+[IAM](topics/iam.md) controls access. [Authentication](../reference/authentication.md)
+identifies the caller; [authorization](../reference/authorization.md) checks
+its permissions for the exact action and resource. A **Principal** represents a person; a
 **ServicePrincipal** represents automation. Each Agent has its own stable
 ServicePrincipal and does not inherit its creator's permissions.
 
@@ -72,7 +74,7 @@ from the Kubernetes ServiceAccount used by a workload.
 
 ## Drivers and Providers
 
-[Drivers](../reference/drivers/selection.md) implement platform operations
+[Drivers](integrations/drivers.md) implement platform operations
 against infrastructure. For example, the Kubernetes Compute Driver provisions
 workloads, while the Kubernetes Configuration Driver stores ConfigMaps.
 
@@ -83,5 +85,5 @@ model or Harness.
 
 ## Next steps
 
-Start with the [quickstart](quickstart.md), or use the
-[deployment guide](deploy.md) to configure a full installation.
+[Set up the platform locally](quickstart.md), then [deploy your first Agent](first-agent.md).
+For production, start with the [deployment guide](deploy.md).

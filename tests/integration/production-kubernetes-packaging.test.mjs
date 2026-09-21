@@ -25,8 +25,10 @@ const values = {
   "bootstrap.password.claimName": "occ-bootstrap-admin-password",
   "api.clients[0].namespace": "operator-tools",
   "api.clients[0].podLabels.app": "operator",
-  "database.cidr": "10.45.0.12/32",
-  "cluster.cidr": "10.43.0.1/32",
+  "database.cidrs[0]": "10.45.0.12/32",
+  "database.cidrs[1]": "10.45.0.13/32",
+  "cluster.cidrs[0]": "10.43.0.1/32",
+  "cluster.cidrs[1]": "10.43.0.2/32",
 };
 const chatgptValues = {
   "provider.chatgpt.enabled": "true",
@@ -41,6 +43,20 @@ const externalGatewayRoutingValues = {
   ...gatewayRoutingValues,
   "gatewayRouting.hostname": "agents.example.internal",
   "gatewayRouting.issuerRef.name": "occ-private-issuer",
+};
+const agentNativeAdminValues = {
+  ...gatewayRoutingValues,
+  "agentNativeAdmin.enabled": "true",
+  "agentNativeAdmin.domain": "agents.example.invalid",
+  "agentNativeAdmin.sharedCookieDomain": "example.invalid",
+};
+const databaseCaValues = {
+  "database.caSecretName": "occ-rds-ca",
+  "database.caKey": "ca.pem",
+  "database.caMountPath": "/etc/openclaw/database-ca",
+};
+const controlPlaneSelectorValues = {
+  "controlPlane.nodeSelector.oce-role": "control",
 };
 
 async function render(overrides = {}, options = {}) {
@@ -186,21 +202,101 @@ test("production Helm values example renders the providerless default chart", to
     { cwd: repository, maxBuffer: 2_000_000 },
   );
   const objects = await resources(stdout);
+  const selected = (kind, component) =>
+    objects.find(
+      (object) =>
+        object.kind === kind &&
+        object.metadata.labels?.["app.kubernetes.io/component"] === component,
+    );
   assert.ok(
     objects.some(
       ({ kind, metadata }) =>
         kind === "Job" && metadata.labels?.["app.kubernetes.io/component"] === "initialization",
     ),
   );
+  const initialization = selected("Job", "initialization");
+  assert.deepEqual(initialization.spec.template.spec.nodeSelector, { "oce-role": "control" });
+  for (const component of ["api", "worker"]) {
+    assert.deepEqual(selected("Deployment", component).spec.template.spec.nodeSelector, {
+      "oce-role": "control",
+    });
+  }
+  assert.ok(
+    initialization.spec.template.spec.volumes.some(
+      ({ name, secret }) => name === "database-ca" && secret?.secretName === "occ-rds-ca",
+    ),
+  );
   assert.equal(objects.filter(({ kind }) => kind === "Secret").length, 0);
   assert.ok(!objects.some(({ metadata }) => metadata.name.endsWith("-api-chatgpt-egress")));
 });
+
+test("control-plane node selectors are optional unless configured", tooling, async () => {
+  const { stdout } = await render();
+  const objects = await resources(stdout);
+  const selected = (kind, component) =>
+    objects.find(
+      (object) =>
+        object.kind === kind &&
+        object.metadata.labels?.["app.kubernetes.io/component"] === component,
+    );
+
+  assert.equal(selected("Job", "initialization").spec.template.spec.nodeSelector, undefined);
+  for (const component of ["api", "worker"]) {
+    assert.equal(selected("Deployment", component).spec.template.spec.nodeSelector, undefined);
+  }
+});
+
+test(
+  "Agent native admin pilot renders public host settings with private gateway routing",
+  tooling,
+  async () => {
+    const { stdout } = await render(agentNativeAdminValues);
+    const objects = await resources(stdout);
+    const deployment = (component) =>
+      objects.find(
+        ({ kind, metadata }) =>
+          kind === "Deployment" && metadata.labels["app.kubernetes.io/component"] === component,
+      );
+
+    const apiEnvironment = deployment("api").spec.template.spec.containers[0].env;
+    const workerEnvironment = deployment("worker").spec.template.spec.containers[0].env;
+    assert.deepEqual(
+      apiEnvironment.filter(({ name }) => name.startsWith("OCC_AGENT_NATIVE_ADMIN_")),
+      [
+        { name: "OCC_AGENT_NATIVE_ADMIN_ENABLED", value: "true" },
+        { name: "OCC_AGENT_NATIVE_ADMIN_DOMAIN", value: "agents.example.invalid" },
+      ],
+    );
+    assert.deepEqual(
+      apiEnvironment.filter(({ name }) => name === "OCC_AUTH_COOKIE_DOMAIN"),
+      [{ name: "OCC_AUTH_COOKIE_DOMAIN", value: "example.invalid" }],
+    );
+    assert.ok(!workerEnvironment.some(({ name }) => name.startsWith("OCC_AGENT_NATIVE_ADMIN_")));
+    assert.ok(!workerEnvironment.some(({ name }) => name === "OCC_AUTH_COOKIE_DOMAIN"));
+    assert.ok(apiEnvironment.some(({ name }) => name === "OCC_GATEWAY_API_KEY_PATH"));
+    assert.ok(objects.some(({ kind }) => kind === "Gateway"));
+    assert.ok(objects.some(({ kind }) => kind === "EnvoyProxy"));
+
+    const disabledObjects = await resources((await render()).stdout);
+    const disabledDeployment = (component) =>
+      disabledObjects.find(
+        ({ kind, metadata }) =>
+          kind === "Deployment" && metadata.labels["app.kubernetes.io/component"] === component,
+      );
+    const disabledApiEnvironment = disabledDeployment("api").spec.template.spec.containers[0].env;
+    assert.deepEqual(
+      disabledApiEnvironment.filter(({ name }) => name.startsWith("OCC_AGENT_NATIVE_ADMIN_")),
+      [{ name: "OCC_AGENT_NATIVE_ADMIN_ENABLED", value: "false" }],
+    );
+    assert.ok(!disabledApiEnvironment.some(({ name }) => name === "OCC_AUTH_COOKIE_DOMAIN"));
+  },
+);
 
 test(
   "the production Helm chart renders private least-privilege runtime and ordered bootstrap",
   tooling,
   async () => {
-    const { stdout } = await render();
+    const { stdout } = await render(controlPlaneSelectorValues);
     const objects = await resources(stdout);
     const selected = (kind, component) =>
       objects.find(
@@ -223,6 +319,7 @@ test(
     assert.equal(initialization.spec.backoffLimit, 0);
     const pod = initialization.spec.template.spec;
     assert.equal(pod.automountServiceAccountToken, false);
+    assert.deepEqual(pod.nodeSelector, { "oce-role": "control" });
     assert.equal(pod.securityContext.fsGroupChangePolicy, "OnRootMismatch");
     assert.equal(pod.initContainers[0].name, "migration");
     assert.deepEqual(pod.initContainers[0].args, ["scripts/migrate-production.mjs"]);
@@ -335,6 +432,11 @@ test(
         resources: ["secrets"],
         verbs: ["get", "create", "update", "patch", "delete"],
       },
+      {
+        apiGroups: ["apps"],
+        resources: ["deployments"],
+        verbs: ["list"],
+      },
     ]);
     // Only the unbound tenant-worker role can reconcile and remove an Agent-owned claim.
     assert.deepEqual(
@@ -366,6 +468,7 @@ test(
     for (const component of ["api", "worker"]) {
       const pod = selected("Deployment", component).spec.template.spec;
       const container = pod.containers[0];
+      assert.deepEqual(pod.nodeSelector, { "oce-role": "control" });
       assert.equal(pod.securityContext.runAsNonRoot, true);
       assert.equal(pod.securityContext.seccompProfile.type, "RuntimeDefault");
       assert.equal(container.securityContext.allowPrivilegeEscalation, false);
@@ -406,7 +509,64 @@ test(
         ({ kind, metadata }) => kind === "NetworkPolicy" && metadata.name.endsWith("default-deny"),
       ),
     );
+    const dependencyEgress = objects.find(
+      ({ kind, metadata }) =>
+        kind === "NetworkPolicy" && metadata.name === "openclaw-enterprise-dependency-egress",
+    );
+    assert.deepEqual(
+      dependencyEgress.spec.egress.find(({ ports }) => ports.some(({ port }) => port === 5432)).to,
+      [{ ipBlock: { cidr: "10.45.0.12/32" } }, { ipBlock: { cidr: "10.45.0.13/32" } }],
+    );
+    assert.deepEqual(
+      dependencyEgress.spec.egress.find(({ ports }) => ports.some(({ port }) => port === 443)).to,
+      [{ ipBlock: { cidr: "10.43.0.1/32" } }, { ipBlock: { cidr: "10.43.0.2/32" } }],
+    );
     assert.ok(!objects.some(({ metadata }) => metadata.name.endsWith("-api-chatgpt-egress")));
+  },
+);
+
+test(
+  "optional database CA Secret mounts into every production database client",
+  tooling,
+  async () => {
+    const { stdout } = await render(databaseCaValues);
+    const objects = await resources(stdout);
+    const selected = (kind, component) =>
+      objects.find(
+        (object) =>
+          object.kind === kind &&
+          object.metadata.labels?.["app.kubernetes.io/component"] === component,
+      );
+
+    const initializationPod = selected("Job", "initialization").spec.template.spec;
+    assert.deepEqual(initializationPod.volumes.find(({ name }) => name === "database-ca")?.secret, {
+      secretName: "occ-rds-ca",
+      items: [{ key: "ca.pem", path: "ca.pem" }],
+    });
+    assert.deepEqual(
+      initializationPod.initContainers[0].volumeMounts.find(({ name }) => name === "database-ca"),
+      { name: "database-ca", mountPath: "/etc/openclaw/database-ca", readOnly: true },
+    );
+    assert.deepEqual(
+      initializationPod.containers[0].volumeMounts.find(({ name }) => name === "database-ca"),
+      { name: "database-ca", mountPath: "/etc/openclaw/database-ca", readOnly: true },
+    );
+
+    for (const component of ["api", "worker"]) {
+      const pod = selected("Deployment", component).spec.template.spec;
+      assert.deepEqual(pod.volumes.find(({ name }) => name === "database-ca")?.secret, {
+        secretName: "occ-rds-ca",
+        items: [{ key: "ca.pem", path: "ca.pem" }],
+      });
+      assert.deepEqual(
+        pod.containers[0].volumeMounts.find(({ name }) => name === "database-ca"),
+        {
+          name: "database-ca",
+          mountPath: "/etc/openclaw/database-ca",
+          readOnly: true,
+        },
+      );
+    }
   },
 );
 
@@ -449,6 +609,11 @@ test(
         apiGroups: [""],
         resources: ["secrets"],
         verbs: ["get", "create", "update", "patch", "delete"],
+      },
+      {
+        apiGroups: ["apps"],
+        resources: ["deployments"],
+        verbs: ["list"],
       },
     ]);
     assert.ok(
@@ -499,8 +664,18 @@ test(
         { "bootstrap.serviceKey.fileName": "initial-admin-password" },
       ],
       ["unrestricted client namespace", { "api.clients[0].namespace": "" }],
-      ["broad database egress", { "database.cidr": "0.0.0.0/0" }],
-      ["broad Kubernetes API egress", { "cluster.cidr": "10.43.0.0/16" }],
+      ["retired database egress key", { "database.cidr": "10.45.0.12/32" }],
+      ["retired Kubernetes API egress key", { "cluster.cidr": "10.43.0.1/32" }],
+      ["missing database egress list", { "database.cidrs": "" }],
+      ["missing Kubernetes API egress list", { "cluster.cidrs": "" }],
+      ["broad database egress", { "database.cidrs[0]": "0.0.0.0/0" }],
+      ["broad Kubernetes API egress", { "cluster.cidrs[0]": "10.43.0.0/16" }],
+      ["invalid control-plane node selector", { "controlPlane.nodeSelector": "control" }],
+      ["false control-plane node selector", { "controlPlane.nodeSelector": false }],
+      [
+        "invalid database CA key",
+        { "database.caSecretName": "occ-rds-ca", "database.caKey": "../ca.pem" },
+      ],
       ["shared migration database credentials", { "database.migrationUrlKey": "application-url" }],
       [
         "retired ChatGPT integration key",
@@ -524,6 +699,25 @@ test(
       [
         "ChatGPT Provider without an admin Secret key",
         { ...chatgptValues, "provider.chatgpt.key": "" },
+      ],
+      [
+        "Agent native admin enabled without a public DNS suffix",
+        { "agentNativeAdmin.enabled": "true" },
+      ],
+      [
+        "Agent native admin configured with a wildcard DNS suffix",
+        { ...agentNativeAdminValues, "agentNativeAdmin.domain": "*.example.invalid" },
+      ],
+      [
+        "Agent native admin configured with a URL",
+        { ...agentNativeAdminValues, "agentNativeAdmin.domain": "https://agents.example.invalid" },
+      ],
+      [
+        "Agent native admin enabled without private Gateway routing",
+        {
+          "agentNativeAdmin.enabled": "true",
+          "agentNativeAdmin.domain": "agents.example.invalid",
+        },
       ],
       [
         "retired workspace-files endpoint ConfigMap",

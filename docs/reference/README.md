@@ -1,72 +1,47 @@
-# Feature reference
+# Reference
 
-These living specifications describe supported OpenClaw Enterprise behavior at
-this repository version: ownership, lifecycle, permissions, interface guarantees,
-failure behavior, and current limitations. They contain the complete current
-contract for each feature, including changes delivered by multiple implementation
-specifications. They are not proposals or promises of future capabilities.
+<a id="feature-reference"></a>
 
-The [platform design](../design.md) remains the architectural authority. Its
-target scope can exceed the current implementation; the
-[architecture overview](../ARCHITECTURE.md) identifies implemented components.
-Use the [quickstart](../guides/quickstart.md) or [deployment guide](../guides/deploy.md)
-for deployment procedures, the [observability guide](../guides/observability.md)
-for logging and Collector setup, and [flow docs](../README.md#understand-the-code)
-for source execution. Contributor test setup, fixtures, hooks, and coverage
-belong in the [testing guides](../testing/README.md).
-Use [`deploy/runtime`](../../deploy/runtime/README.md) to build an OpenClaw/Codex
-runtime image for local deployment.
+Use Reference to look up commands, flags, HTTP operations, request and response
+fields, and permissions for OpenClaw Control Plane (OCC).
 
-## Features
+## CLI
 
-See [OCC metrics](metrics.md) for application and process metric contracts.
+Use `occ` from a terminal to manage an Installation, Namespaces, Configurations,
+and Agents. Start with [CLI setup](../guides/cli.md) to install it, connect, and
+make your first request. The [command reference](cli.md) lists the available
+commands, flags, and output formats.
 
-| Reference                                         | Owns                                                                                 |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| [Platform console](console.md)                    | Login, Agent creation, draft channels, revision inspection, and Namespace selection. |
-| [Namespaces](namespaces.md)                       | Tenant identity, placement, readiness, and deletion.                                 |
-| [Agents](agents.md)                               | Agent identity, mutable selection, immutable revisions, and workspace file routes.   |
-| [Gateway routing with Envoy](gateway-routing.md)  | Private Agent endpoints, service keys, TLS, and network enforcement.                 |
-| [Configuration](configuration.md)                 | Native documents, generations, references, and snapshots.                            |
-| [Secrets](drivers/kubernetes-secret.md)           | Namespace-owned Secret storage, metadata-only responses, env bindings, and redeploy. |
-| [Authentication](authentication.md)               | Supported caller credentials, sessions, bootstrap, and account provisioning.         |
-| [Authorization](authorization.md)                 | Principals, Groups, Roles, Bindings, Restrictions, and exact-resource decisions.     |
-| [Providers](providers.md)                         | Provider configuration, related Drivers, client ownership, and Agent references.     |
-| [Service accounts](service-accounts.md)           | Account associations, credential references, issuance, and revocation boundaries.    |
-| [Agent plugins](agent-plugins.md)                 | Agent-owned curated selections, startup validation, and native runtime policy.       |
-| [Harness execution](harness-execution.md)         | Runtime selection, topology, and admitted execution constraints.                     |
-| [Controller reconciliation](controller.md)        | Durable lifecycle work, authorization refresh, claims, retries, and recovery.        |
-| [Platform repositories](platform-repositories.md) | Callback transaction lifetimes, read-only views, and storage ownership.              |
-| [Security](security.md)                           | Kubernetes workload and credential boundaries and enforcement limitations.           |
-| [Settings](settings.md)                           | Supported environment variables and programmatic configuration.                      |
-| [HTTP API](api.md)                                | Generated routes, wire schemas, and declared permissions.                            |
+## HTTP API
 
-Generated schemas describe wire shape. The feature pages additionally own
-behavioral rules such as cross-resource ownership, lifecycle ordering, and failure
-effects. Contributors updating routes or schemas should follow the
-[API generation checks](../testing/local.md#repository-and-tooling-configuration).
+Use the HTTP API from automation or when you need an operation the CLI does not
+expose. The [HTTP API quickstart](../guides/http-api.md) makes authenticated
+requests and explains the responses. The [API reference](api.md) lists exact
+paths, schemas, permissions, and error codes. It is generated from the checked-in
+[OpenAPI contract](../../packages/contracts/openapi/occ-api.openapi.json).
 
-## Drivers
+## Metrics
 
-The term **contract** names obligations that callers and Driver implementations
-must satisfy. It is part of the reference, not another document lifecycle.
+The [OCC metrics reference](metrics.md) defines application and process metrics
+and the private listener configuration.
 
-- [ComputeDriver feature matrix](drivers/compute-matrix.md): compare bundled
-  implementations with pinned source evidence.
-- [Driver selection](drivers/selection.md): trusted configuration, package loading,
-  capability selection, and compatibility boundaries.
-- [ComputeDriver](drivers/compute.md), [SandboxDriver](drivers/sandbox.md),
-  [ConfigurationDriver](drivers/configuration.md), [IAMDriver](drivers/iam.md),
-  [SecretDriver](drivers/kubernetes-secret.md), and
-  [ServiceAccountDriver](drivers/service-account.md), and
-  [PluginDriver](drivers/plugin.md): capability contracts.
-- [Docker Compute](drivers/docker-compute.md),
-  [Kubernetes Compute](drivers/kubernetes-compute.md),
-  [SSH Compute](drivers/ssh-compute.md), and
-  [OpenShell Sandbox](drivers/openshell-sandbox.md): implementation settings,
-  supported behavior, and limitations.
+## Related
 
-Change a reference in the same PR that changes its supported behavior. Keep
-proposal rationale, implementation tasks, and historical alternatives in
-[top-level implementation specs](../../specs/README.md); keep runtime traces in
-`docs/flows/`. Reference pages use stable feature names rather than milestone numbers.
+<span id="features"></span>
+
+- [Topics](../guides/topics/README.md) explains what product features do; [Configuration](configuration.md)
+  and [Installation settings](settings.md) cover supported configuration.
+- [Authentication](authentication.md) and [authorization](authorization.md)
+  explain which credentials and permissions requests need.
+- [Agent native admin UI](agent-native-admin.md) covers trusted operator access,
+  exact Agent authorization, and routing limits.
+
+<span id="drivers"></span>
+
+- [Integrations](../guides/integrations/README.md) covers named Drivers and Providers.
+
+<span id="platform-internals"></span>
+
+- [Contribute](../contributing/README.md) covers development; see
+  [API generation checks](../testing/local.md#repository-and-tooling-configuration)
+  when changing routes or schemas.

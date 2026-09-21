@@ -23,10 +23,10 @@ export class PostgresMetricsSnapshot {
       // One statement gives all gauges the same MVCC snapshot. The dedicated
       // pool supplies connection and server-side statement deadlines.
       const result = await client.query(`
-        WITH latest_stop AS (
+        WITH latest_teardown AS (
           SELECT DISTINCT ON (agent_id) agent_id, state
           FROM occ.controller_work
-          WHERE agent_target = 'stopped'
+          WHERE agent_target IN ('stopped', 'deleted')
           ORDER BY agent_id, created_at DESC, idempotency_key DESC
         ), unfinished_deployments AS (
           SELECT DISTINCT agent_id
@@ -35,12 +35,16 @@ export class PostgresMetricsSnapshot {
             AND idempotency_key = 'agent_revision:' || revision_id || ':reconcile'
         ), agent_states AS (
           SELECT CASE
+            WHEN a.status = 'deleting' THEN CASE
+              WHEN teardown.state = 'failed_permanent' THEN 'failed'
+              ELSE 'stopping'
+            END
             WHEN a.desired_runtime_state = 'stopped' THEN CASE
-              WHEN stop.state = 'failed_permanent' THEN 'failed'
+              WHEN teardown.state = 'failed_permanent' THEN 'failed'
               WHEN a.active_revision_id IS NOT NULL
-                OR stop.state IN ('queued', 'claimed')
+                OR teardown.state IN ('queued', 'claimed')
                 OR unfinished.agent_id IS NOT NULL THEN 'stopping'
-              WHEN revision.id IS NULL AND stop.agent_id IS NULL THEN 'draft'
+              WHEN revision.id IS NULL AND teardown.agent_id IS NULL THEN 'draft'
               ELSE 'stopped'
             END
             WHEN deployment.state = 'failed_permanent' THEN 'failed'
@@ -57,7 +61,7 @@ export class PostgresMetricsSnapshot {
           ) revision ON true
           LEFT JOIN occ.controller_work deployment
             ON deployment.idempotency_key = 'agent_revision:' || revision.id || ':reconcile'
-          LEFT JOIN latest_stop stop ON stop.agent_id = a.id
+          LEFT JOIN latest_teardown teardown ON teardown.agent_id = a.id
           LEFT JOIN unfinished_deployments unfinished ON unfinished.agent_id = a.id
         )
         SELECT

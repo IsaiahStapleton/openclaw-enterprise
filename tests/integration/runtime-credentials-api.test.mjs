@@ -8,7 +8,6 @@ import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
-import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
@@ -37,7 +36,6 @@ function createRuntimeCredentialComputeDriver(options = {}) {
   const calls = [];
   const emptyStatus = Object.freeze({
     transportConfigured: false,
-    slackConfigured: false,
   });
   const keyOf = (binding) => `${binding.namespace.id}:${binding.agent.id}`;
   const explicitKeyOf = (namespaceId, agentId) => `${namespaceId}:${agentId}`;
@@ -51,7 +49,7 @@ function createRuntimeCredentialComputeDriver(options = {}) {
     setStatus(namespaceId, agentId, status) {
       statusByAgent.set(explicitKeyOf(namespaceId, agentId), { ...status });
     },
-    validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
+    validateHarnessAuth() {},
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -80,10 +78,8 @@ function createRuntimeCredentialComputeDriver(options = {}) {
         agentId: binding.agent.id,
         input: structuredClone(input),
       });
-      const previous = statusOf(binding);
       const status = {
         transportConfigured: true,
-        slackConfigured: input.slack !== undefined || previous.slackConfigured,
       };
       statusByAgent.set(keyOf(binding), status);
       if (options.provisionError !== undefined) {
@@ -221,6 +217,7 @@ async function createFixture(t, options = {}) {
       body: {
         name: "Runtime credential Agent",
         configurationId: configuration.data.id,
+        executionMode: "embedded",
         harnessAuth: { method: "api_key", source: secret.data.ref },
       },
     });
@@ -284,32 +281,22 @@ async function createFixture(t, options = {}) {
   };
 }
 
-test("runtime credential API provisions metadata only through the selected Compute Driver", async (t) => {
+test("runtime credential API provisions transport metadata only through the selected Compute Driver", async (t) => {
   const fixture = await createFixture(t);
   const { namespace, agent } = await fixture.bootstrapAgent();
   const path = `/namespaces/${namespace.id}/agents/${agent.id}/runtime-credentials`;
-  const slack = {
-    appToken: `xapp-${randomUUID()}`,
-    botToken: `xoxb-${randomUUID()}`,
-  };
 
   const initial = await fixture.request("GET", path);
   assert.equal(initial.status, 200);
   assert.deepEqual(initial.data, {
     transportConfigured: false,
-    slackConfigured: false,
   });
 
-  const provisioned = await fixture.request("POST", path, {
-    body: { slack },
-  });
+  const provisioned = await fixture.request("POST", path, { body: {} });
   assert.equal(provisioned.status, 200);
   assert.deepEqual(provisioned.data, {
     transportConfigured: true,
-    slackConfigured: true,
   });
-  assert.equal(JSON.stringify(provisioned.body).includes(slack.appToken), false);
-  assert.equal(JSON.stringify(provisioned.body).includes(slack.botToken), false);
 
   const observed = await fixture.request("GET", path);
   assert.equal(observed.status, 200);
@@ -318,11 +305,8 @@ test("runtime credential API provisions metadata only through the selected Compu
     fixture.computeDriver.calls.map((call) => call.operation),
     ["status", "provision", "status"],
   );
-  assert.deepEqual(fixture.computeDriver.calls[1].input, { slack });
+  assert.deepEqual(fixture.computeDriver.calls[1].input, {});
 
-  const audit = JSON.stringify(fixture.auditSink.events);
-  assert.equal(audit.includes(slack.appToken), false);
-  assert.equal(audit.includes(slack.botToken), false);
   assert.ok(
     fixture.auditSink.events.some(
       (event) =>
@@ -340,16 +324,28 @@ test("runtime credential POST accepts empty input when only transport provisioni
   const path = `/namespaces/${namespace.id}/agents/${agent.id}/runtime-credentials`;
   fixture.computeDriver.setStatus(namespace.id, agent.id, {
     transportConfigured: false,
-    slackConfigured: false,
   });
 
   const provisioned = await fixture.request("POST", path, { body: {} });
   assert.equal(provisioned.status, 200);
   assert.deepEqual(provisioned.data, {
     transportConfigured: true,
-    slackConfigured: false,
   });
   assert.deepEqual(fixture.computeDriver.calls.at(-1).input, {});
+});
+
+test("runtime credential POST rejects channel token bodies before driver provisioning", async (t) => {
+  const fixture = await createFixture(t);
+  const { namespace, agent } = await fixture.bootstrapAgent();
+  const path = `/namespaces/${namespace.id}/agents/${agent.id}/runtime-credentials`;
+  const appToken = `xapp-${randomUUID()}`;
+
+  const rejected = await fixture.request("POST", path, {
+    body: { slack: { appToken, botToken: "xoxb-test" } },
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(JSON.stringify(rejected.body).includes(appToken), false);
+  assert.equal(fixture.computeDriver.calls.length, 0);
 });
 
 test("runtime credential POST keeps session CSRF and exact Agent read plus operate authorization", async (t) => {
@@ -417,6 +413,9 @@ test("runtime credential API rejects unsupported initial provisioning states and
   }
   assert.equal(fixture.computeDriver.calls.length, 0);
 
+  const generated = await fixture.request("POST", path, { body: {} });
+  assert.equal(generated.status, 200);
+
   const revision = await fixture.request(
     "POST",
     `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
@@ -439,7 +438,7 @@ test("runtime credential driver and audit failures stay sanitized and recoverabl
   const failedAgent = await driverFailureFixture.bootstrapAgent();
   const failedPath = `/namespaces/${failedAgent.namespace.id}/agents/${failedAgent.agent.id}/runtime-credentials`;
   const failed = await driverFailureFixture.request("POST", failedPath, {
-    body: { slack: { appToken: leakedDriverValue, botToken: "xoxb-test" } },
+    body: {},
   });
   assert.equal(failed.status, 503);
   assert.equal(failed.body.error.code, "DEPENDENCY_UNAVAILABLE");
@@ -452,7 +451,6 @@ test("runtime credential driver and audit failures stay sanitized and recoverabl
   assert.equal(recovered.status, 200);
   assert.deepEqual(recovered.data, {
     transportConfigured: true,
-    slackConfigured: true,
   });
 
   const leakedAuditValue = `audit-leak-${randomUUID()}`;
@@ -468,7 +466,7 @@ test("runtime credential driver and audit failures stay sanitized and recoverabl
   const auditAgent = await auditFailureFixture.bootstrapAgent();
   const auditPath = `/namespaces/${auditAgent.namespace.id}/agents/${auditAgent.agent.id}/runtime-credentials`;
   const auditFailed = await auditFailureFixture.request("POST", auditPath, {
-    body: { slack: { appToken: leakedAuditValue, botToken: "xoxb-test" } },
+    body: {},
   });
   assert.equal(auditFailed.status, 503);
   assert.equal(auditFailed.body.error.code, "DEPENDENCY_UNAVAILABLE");
@@ -481,6 +479,5 @@ test("runtime credential driver and audit failures stay sanitized and recoverabl
   assert.equal(auditRecovered.status, 200);
   assert.deepEqual(auditRecovered.data, {
     transportConfigured: true,
-    slackConfigured: true,
   });
 });

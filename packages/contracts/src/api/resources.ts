@@ -13,8 +13,10 @@ import {
   Meta,
   Name,
   NamespaceId,
+  PermissionActionSchema,
   ProviderId,
   RevisionId,
+  ResourceKindSchema,
   SecretBindings,
   SecretId,
   SecretReference,
@@ -52,6 +54,7 @@ export const AgentSchema = Type.Object(
     id: AgentId,
     namespaceId: NamespaceId,
     name: Name,
+    servicePrincipalId: Type.String({ minLength: 1, maxLength: 200 }),
     configurationId: ConfigurationId,
     providerId: Type.Union([ProviderId, Type.Null()]),
     harnessAuth: Type.Union([HarnessAuthBindingSchema, Type.Null()]),
@@ -59,6 +62,7 @@ export const AgentSchema = Type.Object(
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     desiredRuntimeState: Type.Union([Type.Literal("running"), Type.Literal("stopped")]),
     activeRevisionId: Type.Optional(RevisionId),
+    status: Type.Union([Type.Literal("active"), Type.Literal("deleting")]),
     createdAt: Timestamp,
   },
   { additionalProperties: false },
@@ -139,10 +143,44 @@ export const SecretSchema = Type.Object(
 export const AgentRuntimeCredentialStatusSchema = Type.Object(
   {
     transportConfigured: Type.Boolean(),
-    slackConfigured: Type.Boolean(),
   },
   { additionalProperties: false },
 );
+
+export const IAMPermissionSchema = Type.Object(
+  { action: PermissionActionSchema, resourceKind: ResourceKindSchema },
+  { additionalProperties: false },
+);
+
+export const IAMRoleSchema = Type.Object(
+  {
+    id: Type.String({ minLength: 1, maxLength: 200 }),
+    namespaceId: NamespaceId,
+    name: Type.Optional(Name),
+    permissions: Type.Array(IAMPermissionSchema, { minItems: 1, maxItems: 64 }),
+  },
+  { additionalProperties: false },
+);
+
+const IAMAccessBindingBaseSchema = {
+  id: Type.String({ minLength: 1, maxLength: 200 }),
+  namespaceId: NamespaceId,
+  subjectKind: Type.Union([Type.Literal("identity"), Type.Literal("group")]),
+  subjectId: Type.String({ minLength: 1, maxLength: 200 }),
+  roleId: Type.String({ minLength: 1, maxLength: 200 }),
+};
+
+export const IAMAccessBindingSchema = Type.Union([
+  Type.Object(IAMAccessBindingBaseSchema, { additionalProperties: false }),
+  Type.Object(
+    {
+      ...IAMAccessBindingBaseSchema,
+      resourceKind: ResourceKindSchema,
+      resourceId: Type.String({ minLength: 1, maxLength: 200 }),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 export const ServiceAccountSchema = Type.Object(
   {
@@ -212,6 +250,26 @@ export const AgentRuntimeCredentialResponse = Type.Object(
   { $id: "AgentRuntimeCredentialResponse", additionalProperties: false },
 );
 
+export const IAMRoleResponse = Type.Object(
+  { data: IAMRoleSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
+export const IAMRoleListResponse = Type.Object(
+  { data: Type.Array(IAMRoleSchema), meta: Meta },
+  { additionalProperties: false },
+);
+
+export const IAMAccessBindingResponse = Type.Object(
+  { data: IAMAccessBindingSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
+export const IAMAccessBindingListResponse = Type.Object(
+  { data: Type.Array(IAMAccessBindingSchema), meta: Meta },
+  { additionalProperties: false },
+);
+
 export const AgentListResponse = Type.Object(
   { data: Type.Array(AgentSchema), meta: Meta },
   { additionalProperties: false },
@@ -272,6 +330,64 @@ export const AgentRevisionListResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentDeploymentStatusSchema = Type.Object(
+  {
+    deploymentId: RevisionId,
+    namespaceId: NamespaceId,
+    agentId: AgentId,
+    status: Type.Union([
+      Type.Literal("queued"),
+      Type.Literal("running"),
+      Type.Literal("succeeded"),
+      Type.Literal("failed"),
+    ]),
+    error: Type.Union(
+      [
+        Type.Null(),
+        Type.Object(
+          {
+            code: Type.String({ minLength: 1, maxLength: 64 }),
+            message: Type.String({ minLength: 1 }),
+            data: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Unknown())),
+          },
+          { additionalProperties: false },
+        ),
+      ],
+      {
+        description:
+          "Null unless deployment failed. A failure contains code, a fixed safe message, and optional allowlisted data. CONVERGENCE_DEADLINE_EXCEEDED may include data.timeoutMs. Native error text is never returned.",
+      },
+    ),
+    warnings: Type.Array(
+      Type.Object(
+        {
+          code: Type.Union([
+            Type.Literal("PLUGIN_INSTALL_FAILED"),
+            Type.Literal("PLUGIN_AUTH_REQUIRED"),
+          ]),
+          pluginId: Type.String({
+            minLength: 1,
+            maxLength: 253,
+            pattern: PluginIdPattern,
+            description: "The admitted Agent plugin selection key.",
+          }),
+        },
+        { additionalProperties: false },
+      ),
+      {
+        description:
+          "Warnings recorded from this deployment startup. Plugin install and connector-auth warnings mean the deployment succeeded after the runtime disabled the affected admitted plugin for that startup.",
+      },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentDeploymentStatusResponse = Type.Object(
+  { data: AgentDeploymentStatusSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
 export const WorkspaceFileResponse = Type.Object(
   {
     data: Type.Object(
@@ -310,7 +426,11 @@ export type AgentWire = Type.Static<typeof AgentSchema>;
 export type AgentRuntimeCredentialStatusWire = Type.Static<
   typeof AgentRuntimeCredentialStatusSchema
 >;
+export type IAMPermissionWire = Type.Static<typeof IAMPermissionSchema>;
+export type IAMRoleWire = Type.Static<typeof IAMRoleSchema>;
+export type IAMAccessBindingWire = Type.Static<typeof IAMAccessBindingSchema>;
 export type AgentRevisionWire = Type.Static<typeof AgentRevisionSchema>;
+export type AgentDeploymentStatusWire = Type.Static<typeof AgentDeploymentStatusSchema>;
 export type InstallationResponse = Type.Static<typeof InstallationResponse>;
 export type NamespaceResponse = Type.Static<typeof NamespaceResponse>;
 export type NamespaceListResponse = Type.Static<typeof NamespaceListResponse>;
@@ -320,9 +440,14 @@ export type ServiceAccountResponse = Type.Static<typeof ServiceAccountResponse>;
 export type ServiceAccountListResponse = Type.Static<typeof ServiceAccountListResponse>;
 export type AgentResponse = Type.Static<typeof AgentResponse>;
 export type AgentRuntimeCredentialResponse = Type.Static<typeof AgentRuntimeCredentialResponse>;
+export type IAMRoleResponse = Type.Static<typeof IAMRoleResponse>;
+export type IAMRoleListResponse = Type.Static<typeof IAMRoleListResponse>;
+export type IAMAccessBindingResponse = Type.Static<typeof IAMAccessBindingResponse>;
+export type IAMAccessBindingListResponse = Type.Static<typeof IAMAccessBindingListResponse>;
 export type AgentListResponse = Type.Static<typeof AgentListResponse>;
 export type ProviderListResponse = Type.Static<typeof ProviderListResponse>;
 export type AgentRevisionResponse = Type.Static<typeof AgentRevisionResponse>;
 export type AgentRevisionListResponse = Type.Static<typeof AgentRevisionListResponse>;
+export type AgentDeploymentStatusResponse = Type.Static<typeof AgentDeploymentStatusResponse>;
 export type WorkspaceFileResponse = Type.Static<typeof WorkspaceFileResponse>;
 export type WorkspaceFileUpdateResponse = Type.Static<typeof WorkspaceFileUpdateResponse>;

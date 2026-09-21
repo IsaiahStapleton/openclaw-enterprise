@@ -45,7 +45,7 @@ routes stay templates. Methods are `GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|OTHER
 status classes are `1xx|2xx|3xx|4xx|5xx|other`. Status classes cannot distinguish
 401/403 from other 4xx failures. These are not model-turn or WebSocket durations.
 
-Work kinds are `namespace_ensure|namespace_delete|agent_revision|agent_stop`. Outcomes are
+Work kinds are `namespace_ensure|namespace_delete|agent_revision|agent_stop|agent_delete`. Outcomes are
 `success|pending|retry|permanent|claim_lost|error`. Pending convergence, retries,
 maintenance, and superseded work may generate multiple passes per deployment.
 Durations exclude queue wait and time between passes. Idle polling and stale
@@ -61,16 +61,18 @@ HTTP histogram boundaries in seconds: `0.005, 0.01, 0.025, 0.05, 0.1, 0.25,
 Each worker scrape collects all gauges in one read-only PostgreSQL statement
 against the singleton Installation. Every lifecycle category exists even at zero;
 each Agent counts once. The projection uses desired runtime state, the latest
-admitted revision, and deployment/stop work:
+admitted revision, and deployment/stop/delete work:
 
 | State       | Meaning                                                                                                                                |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `draft`     | No revision or stop request has been admitted.                                                                                         |
+| `draft`     | No revision, stop, or deletion request has been admitted.                                                                              |
 | `deploying` | Running is desired and the latest deployment is pending or not selected. Includes redeployment while an older revision remains active. |
 | `running`   | The selected latest deployment has completed. This does not prove continuous runtime health.                                           |
-| `stopping`  | Stopped is desired, but an active pointer or unfinished deployment/stop work remains.                                                  |
+| `stopping`  | Deletion is pending, or stopped is desired with an active pointer or unfinished deployment/stop work.                                  |
 | `stopped`   | Stop has converged; revision history and Agent records remain.                                                                         |
-| `failed`    | The latest operation for the desired state failed permanently. A failed redeployment or stop can leave an older workload running.      |
+| `failed`    | The latest operation for the desired state failed permanently. Includes retained Agents whose deletion cleanup failed.                 |
+
+Successful deletion removes the Agent from inventory.
 
 Maintenance work does not change these lifecycle categories. Collection never
 polls Compute or updates resource state. Queue depth and oldest age include
@@ -118,8 +120,8 @@ upgrades must explicitly review this list; new defaults are filtered out.
 
 For `R` observed registered route/method pairs, HTTP has at most `20R` series
 (six statuses plus fourteen histogram series). Unmatched methods add at most
-eight pairs. Worker application metrics have at most 116 series (24 outcomes,
-56 pass-duration series, 28 operation-duration series, and eight gauges). Process collectors add at most 53 series
+eight pairs. Worker application metrics have at most 136 series (30 outcomes,
+70 pass-duration series, 28 operation-duration series, and eight gauges). Process collectors add at most 53 series
 per process. Do not preallocate the route/status Cartesian product.
 
 ## Replica aggregation

@@ -1,5 +1,6 @@
 import type {
   AgentDesiredRuntimeState,
+  AgentStatus,
   HarnessExecutionMode,
   HarnessAuthBinding,
   PluginDesiredState,
@@ -241,6 +242,7 @@ export const agents = occSchema.table(
       .$type<AgentDesiredRuntimeState>()
       .notNull()
       .default("stopped"),
+    status: text("status").$type<AgentStatus>().notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (table): PgTableExtraConfigValue[] => [
@@ -257,6 +259,11 @@ export const agents = occSchema.table(
     check(
       "agents_desired_runtime_state_valid",
       sql`${table.desiredRuntimeState} IN ('running', 'stopped')`,
+    ),
+    check("agents_status_valid", sql`${table.status} IN ('active', 'deleting')`),
+    check(
+      "agents_deleting_is_stopped",
+      sql`${table.status} <> 'deleting' OR ${table.desiredRuntimeState} = 'stopped'`,
     ),
     check(
       "agents_provider_id_valid",
@@ -310,7 +317,7 @@ export const agents = occSchema.table(
       foreignColumns: [iamIdentities.namespaceId, iamIdentities.agentId, iamIdentities.id],
     })
       .onUpdate("restrict")
-      .onDelete("restrict"),
+      .onDelete("no action"),
   ],
 );
 
@@ -486,7 +493,7 @@ export const iamIdentities = occSchema.table(
       foreignColumns: [agents.namespaceId, agents.id],
     })
       .onUpdate("restrict")
-      .onDelete("restrict"),
+      .onDelete("no action"),
     check("iam_identities_kind_valid", sql`${table.kind} IN ('principal', 'service_principal')`),
     check(
       "iam_identities_kind_ownership",
@@ -673,24 +680,28 @@ export const controllerWork = occSchema.table(
     claimToken: uuid("claim_token"),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    reasonCode: text("reason_code"),
+    resultData: jsonb("result_data").$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
   },
   (table) => [
+    // Migration 0017 makes both work-owner constraints deferrable; Drizzle
+    // models their NO ACTION semantics but not FK deferral.
     foreignKey({
       name: "controller_work_agent_owner",
       columns: [table.namespaceId, table.agentId],
       foreignColumns: [agents.namespaceId, agents.id],
     })
       .onUpdate("restrict")
-      .onDelete("restrict"),
+      .onDelete("no action"),
     foreignKey({
       name: "controller_work_revision_owner",
       columns: [table.namespaceId, table.agentId, table.revisionId],
       foreignColumns: [agentRevisions.namespaceId, agentRevisions.agentId, agentRevisions.id],
     })
       .onUpdate("restrict")
-      .onDelete("restrict"),
+      .onDelete("no action"),
     check(
       "controller_work_idempotency_key_length",
       sql`char_length(${table.idempotencyKey}) BETWEEN 1 AND 512`,
@@ -714,7 +725,7 @@ export const controllerWork = occSchema.table(
         OR (${table.agentId} IS NOT NULL AND ${table.revisionId} IS NULL
           AND ${table.namespaceTarget} IS NULL
           AND ${table.agentTarget} IS NOT NULL
-          AND ${table.agentTarget} = 'stopped')
+          AND ${table.agentTarget} IN ('stopped', 'deleted'))
         OR (${table.agentId} IS NOT NULL AND ${table.revisionId} IS NOT NULL
           AND ${table.namespaceTarget} IS NULL AND ${table.agentTarget} IS NULL)
       )`,
@@ -732,9 +743,48 @@ export const controllerWork = occSchema.table(
       "controller_work_completion_state",
       sql`(
         (${table.state} IN ('succeeded', 'failed_permanent')
-          AND ${table.completedAt} IS NOT NULL)
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.reasonCode} IS NOT NULL)
         OR (${table.state} NOT IN ('succeeded', 'failed_permanent')
-          AND ${table.completedAt} IS NULL)
+          AND ${table.completedAt} IS NULL
+          AND ${table.reasonCode} IS NULL
+          AND ${table.resultData} IS NULL)
+      )`,
+    ),
+    check(
+      "controller_work_reason_code_length",
+      sql`${table.reasonCode} IS NULL OR char_length(${table.reasonCode}) BETWEEN 1 AND 64`,
+    ),
+    check(
+      "controller_work_result_data_state",
+      sql`${table.resultData} IS NULL OR (
+        jsonb_typeof(${table.resultData}) = 'object'
+        AND (
+          (
+            ${table.state} = 'failed_permanent'
+            AND ${table.reasonCode} = 'CONVERGENCE_DEADLINE_EXCEEDED'
+            AND ${table.resultData} ? 'timeoutMs'
+            AND (${table.resultData} - 'timeoutMs') = '{}'::jsonb
+            AND jsonb_typeof(${table.resultData}->'timeoutMs') = 'number'
+            AND (${table.resultData}->>'timeoutMs') ~ '^[1-9][0-9]{0,15}$'
+            AND (${table.resultData}->>'timeoutMs')::numeric <= 9007199254740991
+          )
+          OR (
+            ${table.state} = 'succeeded'
+            AND ${table.reasonCode} IN ('REVISION_ACTIVATED', 'REVISION_ALREADY_ACTIVE')
+            AND ${table.resultData} ? 'warnings'
+            AND (${table.resultData} - 'warnings') = '{}'::jsonb
+            AND jsonb_typeof(${table.resultData}->'warnings') = 'array'
+            AND NOT jsonb_path_exists(
+              ${table.resultData},
+              '$.warnings[*] ? (@.type() != "object" || !(exists(@.code)) || !(exists(@.pluginId)) || @.code.type() != "string" || @.pluginId.type() != "string" || !(@.code == "PLUGIN_INSTALL_FAILED" || @.code == "PLUGIN_AUTH_REQUIRED") || !(@.pluginId like_regex "^[A-Za-z0-9._~:@-]{1,253}$"))'
+            )
+            AND NOT jsonb_path_exists(
+              ${table.resultData},
+              '$.warnings[*].keyvalue() ? (@.key != "code" && @.key != "pluginId")'
+            )
+          )
+        )
       )`,
     ),
     index("controller_work_ready")

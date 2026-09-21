@@ -40,8 +40,15 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics } =
   const workerPool = createWorkerPool();
   const state = new PostgresPlatformState(observerPool);
   const installation = await ensureInstallation(state, "revision-worker");
-  const actor = authorizedPrincipal(await state.loadNativeIAMState());
-  assert.ok(actor, "persisted IAM must contain an unrestricted Agent-deploy Principal");
+  const actor = authorizedPrincipal(await state.loadNativeIAMState(), [
+    ["deploy", "agent"],
+    ["delete", "agent"],
+    ["delete", "secret"],
+  ]);
+  assert.ok(
+    actor,
+    "persisted IAM must contain a Principal authorized for Agent lifecycle and Secret cleanup",
+  );
 
   let worker;
   context.after(async () => {
@@ -61,8 +68,10 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics } =
   };
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = createDevelopmentComputeDriver();
-  const controller = createProviderController({ installation, state }, { providers: [] });
   const secretDriver = createProviderWorkerDrivers(compute, []).secretDriver;
+  const controller = createProviderController({ installation, state }, { providers: [] });
+  controller.registerDriver(secretDriver);
+  controller.selectDriver("secret", secretDriver.id);
   const secretRoleId = `role-${randomUUID()}`;
   await observerPool.query(
     `INSERT INTO occ.iam_roles (id, namespace_id, name, permissions)
@@ -147,7 +156,7 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics } =
     return owner;
   }
 
-  async function revision(owner, number, harness) {
+  async function revision(owner, number, harness, plugins) {
     let harnessAuth;
     if (owner.harnessAuth.method === "runtime") {
       harnessAuth = owner.harnessAuth;
@@ -179,6 +188,7 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics } =
       configurationGeneration: 1,
       harness: approvedHarness,
       compute: { id: compute.id, implementation: compute.implementation },
+      ...(plugins === undefined ? {} : { plugins }),
       harnessAuth,
       servicePrincipalId: owner.servicePrincipalId,
       createdAt: new Date().toISOString(),
@@ -226,6 +236,37 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics } =
     return { id: owner.id, idempotencyKey: work.rows[0].idempotency_key };
   }
 
+  async function requestDeletion(owner) {
+    const idempotencyKey = `agent:${owner.id}:reconcile:deleted`;
+    await state.transactWithQueue(async (unit, queue) => {
+      const current = await unit.agents.lockAgent(namespace.id, owner.id);
+      assert.ok(current);
+      const stopped = await unit.agents.transitionAgentDesiredRuntimeState(
+        namespace.id,
+        owner.id,
+        current.desiredRuntimeState,
+        "stopped",
+      );
+      assert.ok(stopped);
+      const deleting = await unit.agents.transitionAgentStatus(
+        namespace.id,
+        owner.id,
+        "active",
+        "deleting",
+      );
+      assert.ok(deleting);
+      await queue.enqueue({
+        idempotencyKey,
+        namespaceId: namespace.id,
+        agentId: owner.id,
+        agentTarget: "deleted",
+        actorId: actor.id,
+        availableAt: new Date(0),
+      });
+    });
+    return { id: owner.id, idempotencyKey };
+  }
+
   function start(
     computeDriver,
     emit = () => {},
@@ -258,6 +299,7 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics } =
 
   return {
     installation,
+    controller,
     actor,
     namespace,
     observerPool,
@@ -268,6 +310,7 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics } =
     PostgresWorkQueue,
     agent,
     revision,
+    requestDeletion,
     requestStop,
     work,
     start,
@@ -275,6 +318,46 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics } =
     createWorkerPool,
     workerPool,
   };
+}
+
+function codexPluginRevisionState(pluginId) {
+  return {
+    driver: { id: "codex-plugin", implementation: "occ/codex-plugin" },
+    plugins: {
+      [pluginId]: {
+        enabled: true,
+        approvalMode: "auto",
+      },
+    },
+  };
+}
+
+async function coldSshComputeDriver(fixture, operations) {
+  const { SshComputeDriver } =
+    await import("../../apps/controller/src/drivers/compute/ssh/index.ts");
+  return new SshComputeDriver(
+    {
+      ssh: { identityFile: "/fixture/identity", knownHostsFile: "/fixture/hosts" },
+      hosts: { [fixture.namespace.name]: { address: "127.0.0.1", user: "root" } },
+      runtime: {
+        nodePath: "/usr/bin/node",
+        openclawPath: "/opt/openclaw/index.js",
+        user: "runtime",
+        root: "/var/lib/openclaw-enterprise",
+      },
+      network: { gatewayPortRange: { start: 18800, end: 18899 } },
+    },
+    {
+      id: fixture.compute.id,
+      implementation: fixture.compute.implementation,
+      executor: {
+        async execute(request) {
+          operations.push(JSON.parse(Buffer.from(request.operation, "base64").toString()));
+          return { code: 0, stdout: '{"ok":true}', stderr: "" };
+        },
+      },
+    },
+  );
 }
 
 test(
@@ -571,34 +654,10 @@ for (const recovery of [false, true]) {
         );
       }
       const stop = await fixture.requestStop(owner);
-      const { SshComputeDriver } =
-        await import("../../apps/controller/src/drivers/compute/ssh/index.ts");
       const operations = [];
       // Exercise the bundled SSH Driver's actual cold binding validation. Only
       // remote SSH execution is controlled; the queue and worker use PostgreSQL.
-      const cold = new SshComputeDriver(
-        {
-          ssh: { identityFile: "/fixture/identity", knownHostsFile: "/fixture/hosts" },
-          hosts: { [fixture.namespace.name]: { address: "127.0.0.1", user: "root" } },
-          runtime: {
-            nodePath: "/usr/bin/node",
-            openclawPath: "/opt/openclaw/index.js",
-            user: "runtime",
-            root: "/var/lib/openclaw-enterprise",
-          },
-          network: { gatewayPortRange: { start: 18800, end: 18899 } },
-        },
-        {
-          id: fixture.compute.id,
-          implementation: fixture.compute.implementation,
-          executor: {
-            async execute(request) {
-              operations.push(JSON.parse(Buffer.from(request.operation, "base64").toString()));
-              return { code: 0, stdout: '{"ok":true}', stderr: "" };
-            },
-          },
-        },
-      );
+      const cold = await coldSshComputeDriver(fixture, operations);
       await fixture.start(
         {
           ...fixture.compute,
@@ -632,6 +691,503 @@ for (const recovery of [false, true]) {
     },
   );
 }
+
+test(
+  "fresh worker binds SSH ownership before Agent deletion",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("cold-delete", "embedded", undefined, null, true, true);
+    const candidate = await fixture.revision(owner, 1);
+    await fixture.start(fixture.compute);
+    await fixture.work(candidate, "succeeded");
+    await fixture.stop();
+
+    // Deletion is admitted while the Agent is running, then a fresh worker must
+    // reconstruct the SSH binding before it can retire the persisted revision.
+    await fixture.requestDeletion(owner);
+    const operations = [];
+    const cold = await coldSshComputeDriver(fixture, operations);
+    await fixture.start(
+      {
+        ...fixture.compute,
+        bindAgent: cold.bindAgent.bind(cold),
+        retireRevision: cold.retireRevision.bind(cold),
+      },
+      () => {},
+      undefined,
+      undefined,
+      fixture.createWorkerPool(),
+    );
+
+    await waitFor(`Agent ${owner.id} deletion to complete`, async () => {
+      const deleted = await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+      );
+      return deleted === undefined ? true : undefined;
+    });
+    const audit = await fixture.observerPool.query(
+      `SELECT (details->>'attemptCount')::integer AS attempt_count
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND resource_id = $2
+         AND action = 'openclaw.agents.lifecycle.delete' AND outcome = 'success'`,
+      [fixture.namespace.id, owner.id],
+    );
+    assert.deepEqual(audit.rows, [{ attempt_count: 1 }]);
+    assert.deepEqual(
+      operations.map(({ operation }) => operation),
+      ["retire-revision"],
+    );
+    assert.ok(
+      operations.every(
+        (operation) =>
+          operation.namespace.id === fixture.namespace.id &&
+          operation.revision.agentId === owner.id,
+      ),
+    );
+  },
+);
+
+test(
+  "Agent deploy, stop, and deletion complete as one persisted lifecycle",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("complete-lifecycle");
+    const effects = [];
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        effects.push(`prepare:${revision.id}`);
+        return fixture.compute.prepareRevision(revision);
+      },
+      async stopRevision(revision) {
+        effects.push(`stop:${revision.id}`);
+      },
+      async retireRevision(revision) {
+        effects.push(`retire:${revision.id}`);
+      },
+      async deleteAgentRuntimeCredentials({ agent }) {
+        effects.push(`credentials:${agent.id}`);
+      },
+    });
+
+    const revision = await fixture.revision(owner, 1);
+    await fixture.work(revision, "succeeded");
+    const running = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(running?.desiredRuntimeState, "running");
+    assert.equal(running?.activeRevisionId, revision.id);
+
+    const stop = await fixture.requestStop(owner);
+    await fixture.work(stop, "succeeded");
+    const [stopped, retainedRevision] = await fixture.state.read(async (view) =>
+      Promise.all([
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+        view.revisions.findRevision(fixture.namespace.id, owner.id, revision.id),
+      ]),
+    );
+    assert.equal(stopped?.desiredRuntimeState, "stopped");
+    assert.equal(stopped?.activeRevisionId, undefined);
+    assert.equal(retainedRevision?.id, revision.id);
+
+    await fixture.requestDeletion(owner);
+    await waitFor(`Agent ${owner.id} lifecycle deletion to complete`, async () => {
+      const deleted = await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+      );
+      return deleted === undefined ? true : undefined;
+    });
+    const [deletedRevision, deletedIdentity, remainingWork] = await Promise.all([
+      fixture.state.read((view) =>
+        view.revisions.findRevision(fixture.namespace.id, owner.id, revision.id),
+      ),
+      fixture.observerPool.query(
+        "SELECT count(*)::integer AS count FROM occ.iam_identities WHERE id = $1",
+        [owner.servicePrincipalId],
+      ),
+      fixture.observerPool.query(
+        "SELECT count(*)::integer AS count FROM occ.controller_work WHERE agent_id = $1",
+        [owner.id],
+      ),
+    ]);
+    assert.equal(deletedRevision, undefined);
+    assert.deepEqual(deletedIdentity.rows, [{ count: 0 }]);
+    assert.deepEqual(remainingWork.rows, [{ count: 0 }]);
+    assert.deepEqual(effects, [
+      `prepare:${revision.id}`,
+      `stop:${revision.id}`,
+      `retire:${revision.id}`,
+      `credentials:${owner.id}`,
+    ]);
+
+    const lifecycleAudit = await fixture.observerPool.query(
+      `SELECT action, outcome, details->>'reasonCode' AS reason_code
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND resource_id = $2
+         AND action IN (
+           'openclaw.agents.lifecycle.stop',
+           'openclaw.agents.lifecycle.delete'
+         )
+       ORDER BY occurred_at`,
+      [fixture.namespace.id, owner.id],
+    );
+    assert.deepEqual(lifecycleAudit.rows, [
+      {
+        action: "openclaw.agents.lifecycle.stop",
+        outcome: "success",
+        reason_code: "AGENT_STOPPED",
+      },
+      {
+        action: "openclaw.agents.lifecycle.delete",
+        outcome: "success",
+        reason_code: "AGENT_DELETED",
+      },
+    ]);
+  },
+);
+
+test(
+  "Agent deletion retries teardown, removes owned state, and preserves sibling resources",
+  requiresPostgres,
+  async (context) => {
+    let snapshot;
+    const metrics = createOccMetrics("worker", () => snapshot.collect());
+    const fixture = await setup(context, { metrics });
+    snapshot = new PostgresMetricsSnapshot(fixture.observerPool);
+    const owner = await fixture.agent("delete-target");
+    const sibling = await fixture.agent("delete-sibling");
+    const targetRevision = await fixture.revision(owner, 1);
+    const siblingRevision = await fixture.revision(sibling, 1);
+    const retiredRevisions = [];
+    const deletedCredentialOwners = [];
+    let failRetirementOnce = true;
+    await fixture.start({
+      ...fixture.compute,
+      async retireRevision(revision) {
+        retiredRevisions.push(revision.id);
+        if (revision.id === targetRevision.id && failRetirementOnce) {
+          failRetirementOnce = false;
+          throw new Error("transient Compute retirement failure");
+        }
+      },
+      async deleteAgentRuntimeCredentials({ agent }) {
+        deletedCredentialOwners.push(agent.id);
+      },
+    });
+    await Promise.all([
+      fixture.work(targetRevision, "succeeded"),
+      fixture.work(siblingRevision, "succeeded"),
+    ]);
+
+    // Use an exact Namespace-local role so the binding is realistic and the
+    // finalizer must remove it without relying on a foreign-key cascade.
+    const revisionRoleId = `role-${randomUUID()}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_roles (id, namespace_id, name, permissions)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        revisionRoleId,
+        fixture.namespace.id,
+        `Agent revision reader ${randomUUID()}`,
+        JSON.stringify([{ action: "read", resourceKind: "agent_revision" }]),
+      ],
+    );
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_access_bindings
+         (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+       VALUES ($1, $2, $3, $4, 'agent_revision', $5)`,
+      [
+        `binding-${randomUUID()}`,
+        fixture.namespace.id,
+        owner.servicePrincipalId,
+        revisionRoleId,
+        targetRevision.id,
+      ],
+    );
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_restrictions
+         (id, namespace_id, action, resource_kind, resource_id, effect)
+       VALUES ($1, $2, 'read', 'agent', $3, 'deny')`,
+      [`restriction-${randomUUID()}`, fixture.namespace.id, owner.id],
+    );
+    await fixture.observerPool.query(
+      `INSERT INTO occ.apikey
+         (id, config_id, reference_id, key, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, now(), now())`,
+      [randomUUID(), randomUUID(), owner.servicePrincipalId, randomUUID()],
+    );
+
+    await fixture.requestDeletion(owner);
+    await waitFor(`Agent ${owner.id} to be removed`, async () => {
+      const deleted = await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+      );
+      return deleted === undefined ? true : undefined;
+    });
+
+    await fixture.stop();
+    // Deletion passes have their own work kind and record the committed retry
+    // and completion, rather than appearing as Namespace errors.
+    const exposition = await metrics.exposition();
+    assert.match(
+      exposition,
+      /occ_reconciliation_attempts_total\{[^}]*work_kind="agent_delete"[^}]*outcome="retry"[^}]*\} 1/,
+    );
+    assert.match(
+      exposition,
+      /occ_reconciliation_attempts_total\{[^}]*work_kind="agent_delete"[^}]*outcome="success"[^}]*\} 1/,
+    );
+    assert.doesNotMatch(exposition, /work_kind="namespace_ensure"[^}]*outcome="error"/);
+
+    const [survivingAgent, survivingRevision, survivingConfiguration] = await fixture.state.read(
+      async (view) =>
+        Promise.all([
+          view.agents.findAgent(fixture.namespace.id, sibling.id),
+          view.revisions.findRevision(fixture.namespace.id, sibling.id, siblingRevision.id),
+          view.configurations.findConfiguration(fixture.namespace.id, owner.configurationId),
+        ]),
+    );
+    assert.equal(survivingAgent?.activeRevisionId, siblingRevision.id);
+    assert.equal(survivingRevision?.id, siblingRevision.id);
+    assert.equal(survivingConfiguration?.id, owner.configurationId);
+    assert.deepEqual(
+      retiredRevisions.filter((id) => id === targetRevision.id),
+      [targetRevision.id, targetRevision.id],
+    );
+    assert.equal(retiredRevisions.includes(siblingRevision.id), false);
+    assert.deepEqual(
+      deletedCredentialOwners.filter((id) => id === owner.id),
+      [owner.id],
+    );
+    assert.equal(deletedCredentialOwners.includes(sibling.id), false);
+
+    const leftovers = await fixture.observerPool.query(
+      `SELECT
+         (SELECT count(*)::integer FROM occ.agent_revisions
+           WHERE namespace_id = $1 AND agent_id = $2) AS revisions,
+         (SELECT count(*)::integer FROM occ.iam_identities WHERE id = $3) AS identities,
+         (SELECT count(*)::integer FROM occ.iam_access_bindings
+           WHERE identity_subject_id = $3 OR resource_id IN ($2, $4)) AS bindings,
+         (SELECT count(*)::integer FROM occ.iam_restrictions
+           WHERE resource_id IN ($2, $4)) AS restrictions,
+         (SELECT count(*)::integer FROM occ.apikey WHERE reference_id = $3) AS api_keys,
+         (SELECT count(*)::integer FROM occ.controller_work
+           WHERE namespace_id = $1 AND agent_id = $2) AS work`,
+      [fixture.namespace.id, owner.id, owner.servicePrincipalId, targetRevision.id],
+    );
+    assert.deepEqual(leftovers.rows, [
+      { revisions: 0, identities: 0, bindings: 0, restrictions: 0, api_keys: 0, work: 0 },
+    ]);
+    const audit = await fixture.observerPool.query(
+      `SELECT outcome, details->>'reasonCode' AS reason_code,
+              (details->>'attemptCount')::integer AS attempt_count
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.delete'
+         AND resource_id = $2`,
+      [fixture.namespace.id, owner.id],
+    );
+    assert.deepEqual(audit.rows, [
+      { outcome: "success", reason_code: "AGENT_DELETED", attempt_count: 2 },
+    ]);
+  },
+);
+
+test(
+  "Agent deletion fails closed when a credential-provisioning Driver cannot delete credentials",
+  requiresPostgres,
+  async (context) => {
+    let snapshot;
+    const metrics = createOccMetrics("worker", () => snapshot.collect());
+    const fixture = await setup(context, { metrics });
+    snapshot = new PostgresMetricsSnapshot(fixture.observerPool);
+    const owner = await fixture.agent("delete-credentials-unsupported");
+    const before = await snapshot.collect();
+    const deletion = await fixture.requestDeletion(owner);
+    // Even a draft enters teardown while deletion is queued. Failed cleanup
+    // retains the Agent and must remain visible as a failed lifecycle.
+    const pending = await snapshot.collect();
+    assert.equal(pending.agents.draft, before.agents.draft - 1);
+    assert.equal(pending.agents.stopping, before.agents.stopping + 1);
+    await fixture.start({
+      ...fixture.compute,
+      async provisionAgentRuntimeCredentials() {},
+    });
+
+    const failed = await fixture.work(deletion, "failed_permanent");
+    assert.equal(failed.attempt_count, 1);
+    await fixture.stop();
+    const after = await snapshot.collect();
+    assert.equal(after.agents.failed, before.agents.failed + 1);
+    assert.equal(after.agents.draft, before.agents.draft - 1);
+    assert.match(
+      await metrics.exposition(),
+      /occ_reconciliation_attempts_total\{[^}]*work_kind="agent_delete"[^}]*outcome="permanent"[^}]*\} 1/,
+    );
+    const retained = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(retained?.status, "deleting");
+    assert.equal(retained?.desiredRuntimeState, "stopped");
+    const audit = await fixture.observerPool.query(
+      `SELECT outcome, details->>'reasonCode' AS reason_code
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.delete'
+         AND resource_id = $2`,
+      [fixture.namespace.id, owner.id],
+    );
+    assert.deepEqual(audit.rows, [
+      { outcome: "failure", reason_code: "CREDENTIAL_DELETION_UNSUPPORTED" },
+    ]);
+  },
+);
+
+test(
+  "Agent deletion finalization rejects an expired lease without removing state",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("delete-expired-lease");
+    const deletion = await fixture.requestDeletion(owner);
+    const claimToken = randomUUID();
+    await fixture.observerPool.query(
+      `UPDATE occ.controller_work
+       SET state = 'claimed', claim_token = $1, lease_expires_at = now() - interval '1 second',
+           attempt_count = 1, updated_at = now()
+       WHERE idempotency_key = $2`,
+      [claimToken, deletion.idempotencyKey],
+    );
+    const queue = new fixture.PostgresWorkQueue(fixture.workerPool);
+
+    await assert.rejects(
+      queue.completeAgentDeletion(
+        { idempotencyKey: deletion.idempotencyKey, claimToken },
+        fixture.namespace.id,
+        owner.id,
+      ),
+      { name: "WorkClaimLostError" },
+    );
+    const [retained, revisions, identity, work] = await Promise.all([
+      fixture.state.read((view) => view.agents.findAgent(fixture.namespace.id, owner.id)),
+      fixture.observerPool.query(
+        "SELECT count(*)::integer AS count FROM occ.agent_revisions WHERE agent_id = $1",
+        [owner.id],
+      ),
+      fixture.observerPool.query(
+        "SELECT count(*)::integer AS count FROM occ.iam_identities WHERE id = $1",
+        [owner.servicePrincipalId],
+      ),
+      fixture.observerPool.query(
+        "SELECT count(*)::integer AS count FROM occ.controller_work WHERE idempotency_key = $1",
+        [deletion.idempotencyKey],
+      ),
+    ]);
+    assert.equal(retained?.status, "deleting");
+    assert.deepEqual(revisions.rows, [{ count: 0 }]);
+    assert.deepEqual(identity.rows, [{ count: 1 }]);
+    assert.deepEqual(work.rows, [{ count: 1 }]);
+    // Keep this deliberately expired fixture from being recovered by a later
+    // worker test; the assertions above already proved the live product path.
+    await fixture.observerPool.query(
+      `UPDATE occ.controller_work
+       SET state = 'failed_permanent', claim_token = NULL, lease_expires_at = NULL,
+           completed_at = now(), reason_code = 'EXPIRED_LEASE_TEST_CLEANUP',
+           result_data = NULL, updated_at = now()
+       WHERE idempotency_key = $1`,
+      [deletion.idempotencyKey],
+    );
+  },
+);
+
+test(
+  "deleting the last Agent releases its Namespace for ordinary offboarding",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("last-agent");
+    await fixture.start(fixture.compute);
+
+    await fixture.requestDeletion(owner);
+    await waitFor(`last Agent ${owner.id} to be removed`, async () => {
+      const deleted = await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+      );
+      return deleted === undefined ? true : undefined;
+    });
+
+    // Agent deletion preserves Namespace-owned inputs. Remove the surviving
+    // harness Secret through the production controller before offboarding.
+    assert.equal(owner.harnessAuth.method, "api_key");
+    await fixture.controller.deleteSecret(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.harnessAuth.source.id,
+    );
+    await fixture.state.transactWithQueue(async (unit, queue) => {
+      assert.equal(await unit.namespaces.hasAgents(fixture.namespace.id), false);
+      assert.equal(
+        await unit.configurations.deleteConfiguration(fixture.namespace.id, owner.configurationId),
+        true,
+      );
+      const deleting = await unit.namespaces.transitionNamespaceStatus(
+        fixture.namespace.id,
+        "ready",
+        "deleting",
+      );
+      assert.ok(deleting);
+      await queue.enqueue({
+        idempotencyKey: `namespace:${fixture.namespace.id}:reconcile:deleted`,
+        namespaceId: fixture.namespace.id,
+        namespaceTarget: "deleted",
+        actorId: fixture.actor.id,
+        availableAt: new Date(0),
+      });
+    });
+    await waitFor(`Namespace ${fixture.namespace.id} to be tombstoned`, async () => {
+      const namespace = await fixture.state.read((view) =>
+        view.namespaces.findNamespace(fixture.namespace.id),
+      );
+      return namespace === undefined ? true : undefined;
+    });
+  },
+);
+
+test(
+  "the application role can finalize Agent deletion without direct table deletion grants",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const privileges = await fixture.observerPool.query(
+      `SELECT
+         has_table_privilege(current_user, 'occ.agents', 'DELETE') AS delete_agent,
+         has_table_privilege(current_user, 'occ.agent_revisions', 'DELETE') AS delete_revision,
+         has_table_privilege(current_user, 'occ.iam_identities', 'DELETE') AS delete_identity,
+         has_function_privilege(
+           current_user,
+           'occ.finalize_agent_deletion(text,text,text,uuid)',
+           'EXECUTE'
+         ) AS execute_finalizer,
+         EXISTS (
+           SELECT 1
+           FROM information_schema.routine_privileges
+           WHERE routine_schema = 'occ'
+             AND routine_name = 'finalize_agent_deletion'
+             AND grantee = 'PUBLIC'
+             AND privilege_type = 'EXECUTE'
+         ) AS public_execute`,
+    );
+    assert.deepEqual(privileges.rows, [
+      {
+        delete_agent: false,
+        delete_revision: false,
+        delete_identity: false,
+        execute_finalizer: true,
+        public_execute: false,
+      },
+    ]);
+  },
+);
 
 test(
   "a deployment admitted after stop supersedes stale stop work before Compute mutation",
@@ -1753,6 +2309,203 @@ test(
       [candidate.id],
     );
     assert.deepEqual(evidence.rows, [{ reason: "CONVERGENCE_DEADLINE_EXCEEDED" }]);
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "CONVERGENCE_DEADLINE_EXCEEDED",
+      message: "Deployment convergence deadline exceeded.",
+      data: { timeoutMs: 1 },
+    });
+    assert.deepEqual(status.warnings, []);
+  },
+);
+
+test(
+  "plugin startup warnings complete deployment and remain visible in status",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const pluginId = "codex-plugin:linear@openai-curated-remote";
+    const otherPluginId = "codex-plugin:calendar@openai-curated-remote";
+    const warnings = [
+      { code: "PLUGIN_AUTH_REQUIRED", pluginId },
+      { code: "PLUGIN_INSTALL_FAILED", pluginId: otherPluginId },
+    ];
+    const pluginState = codexPluginRevisionState(pluginId);
+    pluginState.plugins[otherPluginId] = { enabled: true, approvalMode: "auto" };
+    const owner = await fixture.agent("plugin-warning", "dedicated");
+    const candidate = await fixture.revision(owner, 1, undefined, pluginState);
+    const prepared = [];
+
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        prepared.push(revision.id);
+        if (revision.id !== candidate.id) {
+          return fixture.compute.prepareRevision(revision);
+        }
+        return {
+          namespaceId: revision.namespaceId,
+          agentId: revision.agentId,
+          revisionId: revision.id,
+          ready: true,
+          warnings,
+        };
+      },
+    });
+
+    await fixture.work(candidate, "succeeded");
+    const terminal = await fixture.observerPool.query(
+      `SELECT state, reason_code, result_data
+       FROM occ.controller_work WHERE idempotency_key = $1`,
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(terminal.rows, [
+      {
+        state: "succeeded",
+        reason_code: "REVISION_ACTIVATED",
+        result_data: { warnings },
+      },
+    ]);
+    const active = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(active.activeRevisionId, candidate.id);
+    assert.deepEqual(prepared, [candidate.id]);
+    // The public status projection reads the persisted result through OCC;
+    // individual plugin failures must not turn a successful deployment into an error.
+    assert.deepEqual(
+      await fixture.controller.getDeploymentStatus(
+        fixture.actor.id,
+        fixture.namespace.id,
+        owner.id,
+        candidate.id,
+      ),
+      {
+        deploymentId: candidate.id,
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        status: "succeeded",
+        error: null,
+        warnings,
+      },
+    );
+  },
+);
+
+test(
+  "plugin warnings after active-pointer publication still activate the ready revision",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const pluginId = "codex-plugin:github@openai-curated-remote";
+    const owner = await fixture.agent("plugin-post-pointer-warning", "dedicated");
+    const candidate = await fixture.revision(
+      owner,
+      1,
+      undefined,
+      codexPluginRevisionState(pluginId),
+    );
+    const published = await fixture.state.transact((unit) =>
+      unit.agents.compareAndSetActiveRevision(
+        fixture.namespace.id,
+        owner.id,
+        undefined,
+        candidate.id,
+      ),
+    );
+    assert.equal(published.activeRevisionId, candidate.id);
+
+    let prepareCount = 0;
+    const activations = [];
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        prepareCount += 1;
+        return {
+          namespaceId: revision.namespaceId,
+          agentId: revision.agentId,
+          revisionId: revision.id,
+          ready: true,
+          warnings: [{ code: "PLUGIN_INSTALL_FAILED", pluginId }],
+        };
+      },
+      async activateRevision(revision) {
+        activations.push(revision.id);
+      },
+    });
+
+    await fixture.work(candidate, "succeeded");
+    assert.equal(prepareCount, 1);
+    assert.deepEqual(activations, [candidate.id]);
+    const terminal = await fixture.observerPool.query(
+      `SELECT state, reason_code, result_data
+       FROM occ.controller_work WHERE idempotency_key = $1`,
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(terminal.rows, [
+      {
+        state: "succeeded",
+        reason_code: "REVISION_ALREADY_ACTIVE",
+        result_data: { warnings: [{ code: "PLUGIN_INSTALL_FAILED", pluginId }] },
+      },
+    ]);
+  },
+);
+
+test(
+  "foreign plugin warnings remain generic invalid Compute observations",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const pluginId = "codex-plugin:slack@openai-curated-remote";
+    const owner = await fixture.agent("foreign-plugin-diagnostic", "dedicated");
+    const candidate = await fixture.revision(
+      owner,
+      1,
+      undefined,
+      codexPluginRevisionState(pluginId),
+    );
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        return {
+          namespaceId: revision.namespaceId,
+          agentId: revision.agentId,
+          revisionId: revision.id,
+          ready: true,
+          warnings: [
+            {
+              code: "PLUGIN_INSTALL_FAILED",
+              pluginId: "codex-plugin:foreign@openai-curated-remote",
+            },
+          ],
+        };
+      },
+    });
+
+    await fixture.work(candidate, "failed_permanent");
+    const generic = await fixture.observerPool.query(
+      `SELECT state, reason_code, result_data
+       FROM occ.controller_work WHERE idempotency_key = $1`,
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(generic.rows, [
+      {
+        state: "failed_permanent",
+        reason_code: "INVALID_DRIVER_OBSERVATION",
+        result_data: null,
+      },
+    ]);
+    const inactive = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(inactive.activeRevisionId, undefined);
   },
 );
 
@@ -1915,7 +2668,7 @@ test(
     assert.equal(
       effects.filter(({ action, revisionId }) => action === "prepare" && revisionId === second.id)
         .length,
-      1,
+      2,
     );
     const activation = await fixture.observerPool.query(
       `SELECT action FROM occ.audit_events

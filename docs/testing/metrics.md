@@ -38,9 +38,9 @@ uses pinned image digests and introduces no model credentials into monitoring.
 For Podman, include `compose.podman.yaml` with the socket reported by
 `podman info`; the [quickstart helper](../guides/quickstart.md) prepares that
 configuration. Namespace sharing and remote write were also verified on Podman.
-The pinned Grafana image is amd64. On an ARM Mac, prefer a local Compose
-override selecting a verified ARM64 image digest of the same version; emulation
-can exceed the container memory limit. Back up `/var/lib/grafana` before
+The Grafana 13.2.2 pin selects a multi-platform image index with native amd64
+and arm64 variants, so Docker and Podman select the host architecture without
+a local image override. Back up `/var/lib/grafana` before
 recreating an instance whose local dashboard or account changes you need to keep.
 
 ## Generate traffic and check results

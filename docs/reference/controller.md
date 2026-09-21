@@ -1,16 +1,15 @@
 # Controller reconciliation
 
 The controller worker advances Namespaces from `provisioning` to `ready`,
-finishes deleting empty Namespaces, and prepares and activates admitted Agent
-revisions. It runs separately from the OpenClaw Control Plane
+finishes deleting empty Namespaces, stops or deletes Agents, and prepares and
+activates admitted Agent revisions. It runs separately from the OpenClaw Control Plane
 (OCC) HTTP API, polls durable PostgreSQL work, and calls its selected Compute
-Driver. The supported development default is the bundled Docker Compute
-Driver, which creates one Docker network per Namespace and starts real
-OpenClaw/Codex containers for admitted revisions. Both development and
-production workers can use reviewed bundled or installed Drivers and reconcile
-Namespace operations plus supported Agent revisions. The bundled Kubernetes
-Driver supports embedded OpenClaw and dedicated Codex; see
-[deployment guide](../guides/deploy.md).
+Driver. The default development Docker Compute Driver creates one Docker
+network per Namespace. It rejects the Harness authentication required by the
+public deployment API and cannot deploy Agents. Select Kubernetes to deploy
+Agents locally; it supports embedded OpenClaw and dedicated Codex. Reviewed
+bundled or installed Drivers can reconcile their supported operations in both
+development and production. See the [deployment guide](../guides/deploy.md).
 
 This reference owns durable reconciliation, queue states, and recovery guarantees.
 The [worker flow](../flows/controller-worker.md) explains their execution through
@@ -20,7 +19,8 @@ process startup procedures.
 ## Requirements
 
 - Node.js 24 or newer and the repository's existing workspace dependencies.
-- For the supported development path, Docker Engine and `docker compose`.
+- For default Compose development, Docker Engine and `docker compose`. To deploy
+  Agents locally, follow [Local Setup](../guides/quickstart.md).
 - A migrated local PostgreSQL database and an API using the same application
   connection; the full Compose stack starts both. See the
   [configuration reference](settings/operations.md#local-compose-and-postgresql-configuration).
@@ -33,7 +33,8 @@ process startup procedures.
 - `NODE_ENV=development` or `NODE_ENV=production` and the application-role
   `OCC_DATABASE_URL`.
 - In production, the shared absolute `OCC_CONFIG_PATH` to trusted Installation
-  startup YAML selecting the approved IAM, Compute, and Configuration Drivers.
+  startup YAML selecting approved IAM, Compute, and Configuration Drivers and the
+  bundled Kubernetes Secret Driver.
 
 The worker does not support process-local state. Never start it with migration or
 PostgreSQL administrator credentials.
@@ -58,9 +59,10 @@ processes must use the same migrated PostgreSQL database.
 ## Startup and readiness contract
 
 Both processes resolve the persisted singleton Installation internally. Their
-YAML selects the approved IAM, Compute, and Configuration Drivers. Reviewed
-bundled and installed implementations are available in development and
-production. Driver-owned closed schemas are validated before construction;
+YAML selects approved IAM, Compute, and Configuration Drivers and the bundled
+Kubernetes Secret Driver. Reviewed bundled and installed implementations are
+available according to the [Driver selection reference](drivers/selection.md#supported-selections).
+Driver-owned closed schemas are validated before construction;
 missing files, unknown fields, unavailable implementations, or plaintext
 credentials fail closed. See the [Configuration guide](configuration.md).
 
@@ -89,7 +91,14 @@ Harness/mode combinations and external ingress remain unavailable.
 
 ## Reconciliation lifecycle
 
-Namespace creation and deletion queue infrastructure work. Agent deployment queues an immutable revision; the worker prepares it, activates its route, and retires its predecessor. Read [Namespace and Agent reconciliation](controller/reconciliation.md) for lifecycle, queue-state, authorization, and recovery guarantees.
+Namespace creation and deletion queue infrastructure work. Agent stop and
+deletion queue exact-Agent lifecycle work. Agent deployment queues an immutable
+revision; the worker prepares it, activates its route, and retires its
+predecessor. Kubernetes uses a single-replica gateway with `Recreate`, so
+replacement can interrupt serving. For embedded OpenClaw, the predecessor can
+stop before the replacement passes authentication and readiness. Read
+[Namespace and Agent reconciliation](controller/reconciliation.md) for lifecycle,
+queue states, authorization, and recovery.
 
 ## Observability
 
@@ -129,11 +138,10 @@ worker does not expose an HTTP health endpoint.
 - **Namespace stays `provisioning`:** Start the separate worker, verify both
   processes use the same database, and inspect `worker.health` and
   `worker.completed` output.
-- **Docker Namespace or Agent container does not become ready:** Confirm Docker
-  Engine access from the worker, image availability, the configured runtime
-  image variables, the trusted Compose bridge CIDR, and the per-Namespace
-  Docker network labels. Use
-  [Docker Compute Driver troubleshooting](drivers/docker-compute.md#troubleshooting).
+- **Docker Namespace does not become ready:** Confirm Docker Engine access from
+  the worker and inspect the per-Namespace Docker network labels. Docker Agent
+  container tooling is for contributor verification; it cannot deploy through
+  the public API. Use [Docker Compute Driver troubleshooting](drivers/docker-compute.md#troubleshooting).
 - **Configuration creation returns `503`:** Confirm the API, not the worker,
   has `OCC_DEVELOPMENT_CONFIGURATION_ROOT` set and can write the
   `/app/.development/configurations` mount backed by `occ_configuration_data`.
@@ -165,7 +173,8 @@ worker does not expose an HTTP health endpoint.
   `OCC_DATABASE_URL` to the migrated application's `postgresql:` connection.
 - **Worker mode is rejected:** Set `NODE_ENV=development` or
   `NODE_ENV=production` explicitly. Production additionally requires valid
-  trusted startup YAML selecting the supported Kubernetes Drivers.
+  trusted startup YAML selecting approved Drivers, including the bundled
+  Kubernetes Secret Driver.
 - **`AUTHORIZATION_DENIED` or `ACTOR_REVOKED`:** Inspect the initiating actor's
   current role, binding, exact-Namespace Restrictions, and `read` permission on
   any service account captured in the immutable revision; see [IAM](authorization.md).

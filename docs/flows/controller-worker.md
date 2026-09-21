@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-17
-last_updated_session: codex/01a03526-12b3-7f50-b599-e8414052909d
+updated: 2026-09-21
+last_updated_session: codex/01a0af6f-d097-7ef0-a2b7-c8ce31703bd9
 ---
 
 # Controller Worker Flow
@@ -10,7 +10,7 @@ last_updated_session: codex/01a03526-12b3-7f50-b599-e8414052909d
 
 The worker claims PostgreSQL work committed by the HTTP API, rechecks the
 original actor's authorization, invokes Compute, and persists results under its
-live claim. This trace follows Namespace, Agent-stop, and AgentRevision work through
+live claim. This trace follows Namespace, Agent stop/deletion, and AgentRevision work through
 completion, deferral, retry, or permanent failure. The
 [controller reference](../reference/controller.md) owns the contract and the
 [deployment guide](../guides/deploy.md) owns process setup.
@@ -18,7 +18,7 @@ completion, deferral, retry, or permanent failure. The
 ## Entry Points
 
 - Trigger: Compose or Helm starts `apps/controller/src/worker.mjs`; an
-  authenticated API mutation commits Namespace, Agent-stop, or AgentRevision work.
+  authenticated API mutation commits Namespace, Agent lifecycle, or AgentRevision work.
 - Source: `apps/controller/src/worker.mjs:configuration`,
   `apps/controller/src/worker.ts:ControllerWorker.start`, and
   `packages/occ/src/state/postgres-state.ts:operations.append`.
@@ -75,17 +75,13 @@ support `setLifecycleDrivers`; invalid or unavailable selected capabilities stop
 startup. Production then runs Compute preflight before emitting `worker.started`
 and starting `run()`.
 
-The worker has no resource HTTP API, session service, or provider-admin client.
-When metrics are enabled, startup binds a separate private scrape listener and
-opens a one-connection read-only metrics pool. Each scrape obtains the persisted
-Agent/queue snapshot; concurrent scrapes share that work.
+The worker has no resource API.
+Metrics use a private listener and one read-only database connection.
+Concurrent scrapes share a
 `packages/occ/src/state/postgres-metrics.ts:PostgresMetricsSnapshot.collect`
-derives lifecycle counts from desired state, latest revision and work records,
-plus backlog depth and oldest admission age. Stopped and never-deployed Agents
-are distinct; the projection does not probe runtime health. Processing records
-pass outcomes after finalization and durations independently of log emission.
-See the [metrics contract](../reference/metrics.md). Compose and Helm run the
-worker separately from the API.
+read of persisted lifecycle, backlog depth, and oldest age. This distinguishes
+stopped from draft Agents without probing runtime health. Pass metrics follow
+finalization independently of logging; see the [metrics contract](../reference/metrics.md).
 
 ### 2. Commit API admission and the durable work record
 
@@ -94,16 +90,17 @@ worker separately from the API.
 `packages/occ/src/state/postgres-state.ts:operations.append`
 
 The API authenticates and authorizes the caller before invoking controller
-operations such as `createNamespace`, `deleteNamespace`, `deployAgent`, or `stopAgent`.
+operations such as `createNamespace`, `deleteNamespace`, `deployAgent`, `stopAgent`,
+or `deleteAgent`.
 `operations.append` verifies exact ownership and calls `PostgresWorkQueue.enqueue`
 within the transaction. State, admission audit, and work commit or roll back together.
 
 The queue freezes actor, Namespace owner, lifecycle target, and exact Agent and
-immutable AgentRevision for revision work. Stop work has an exact Agent owner and
-`stopped` target without inventing a revision. Its idempotency
-key identifies the operation. Reusing that key with a different actor, owner, or
-target is rejected. The API returns accepted lifecycle state without waiting for
-Compute; the next owner is the independent worker.
+immutable AgentRevision for revision work. Agent lifecycle work has an exact
+Agent owner and a `stopped` or `deleted` target without inventing a revision.
+Its idempotency key identifies the operation. Reusing that key with a different
+actor, owner, or target is rejected. The API returns accepted lifecycle state
+without waiting for Compute; the next owner is the independent worker.
 
 ### 3. Recover expired claims and claim one eligible operation
 
@@ -157,6 +154,10 @@ Agent-stop work rechecks current exact-Agent `operate`. Superseded desired state
 completes without shutdown. An absent active pointer does not prove candidates
 have no runtime resources, so stop still checks the captured revision history.
 
+Agent-deletion work requires the Agent to remain `deleting` and stopped, then
+rechecks the original actor's exact-Agent `delete`. It loads every owned revision
+and rejects ownership or Compute-Driver mismatches before teardown.
+
 ### 5. Invoke Compute while renewing the live claim
 
 `apps/controller/src/worker.ts:ControllerWorker.observe`,
@@ -168,6 +169,12 @@ dispatch optionally binds the exact Agent, then calls `prepareRevision` with its
 immutable snapshot. The worker validates the returned observation's owner and
 shape before treating it as ready. A pending observation defers convergence;
 an invalid observation fails permanently.
+
+Compute can also return safe plugin warnings for the current startup attempt.
+The worker validates each closed code and admitted selection key against the
+immutable revision. Warnings do not fail deployment; readiness means Compute
+has already verified that failed selections are disabled. Missing or malformed
+startup evidence cannot be interpreted as a safe successful installation.
 
 Agent-stop dispatch captures the Agent's revisions owned by the current Compute
 and validates their exact owner. It calls `stopRevision` for the active revision
@@ -184,6 +191,14 @@ revision recovery also binds before shutdown and retirement. IAM and exact
 resource checks precede binding.
 Revision preparation and maintenance recheck `desiredRuntimeState`; a candidate
 that overlaps stop is shut down instead of activated.
+
+Agent-deletion dispatch binds the server-owned Namespace and Agent before calling
+`retireRevision` for every owned revision, then invokes the optional Agent
+credential-deletion capability. This rebuilds Driver-local ownership after a
+worker restart. A Driver that can provision runtime credentials but cannot delete
+them fails permanently before binding or retirement. Compute retirement owns
+workload termination and Sandbox cleanup; the worker does not invoke either
+independently.
 
 `withClaimHeartbeat()` renews the claim before starting each effect and then
 roughly every third of its lease duration while the effect runs. The initial
@@ -228,7 +243,9 @@ the predecessor. `completeActivatedRevision()` then rechecks the exact active
 revision and claim, appends activation evidence, and completes work in a second
 transaction. This deliberately does not claim that infrastructure effects and
 database state are one atomic transaction. Interrupted finalization is retried;
-the already-active branch finishes activation and retirement safely.
+the already-active branch re-observes the candidate before finishing activation
+and retirement safely. That re-observation prevents a plugin failure retained by
+Compute from being mistaken for success after a claim loss.
 
 Stop finalization rechecks the live claim, Agent owner, and stopped desired state.
 After all captured cleanup succeeds, it clears `activeRevisionId` only when
@@ -237,12 +254,20 @@ stop even if it retains that active pointer while preparing. It appends lifecycl
 evidence and completes the same work item. Revision rows and persistent runtime
 state are not deleted.
 
-After successful finalization, `completeActivatedRevision()` and
-`finalizeAgentStop()` observe admission-to-completion time through
-`apps/controller/src/metrics/index.ts:createOccMetrics`. Original work creation
-time survives retries and queue waits. Only the original revision reconcile item
-counts as a deployment; maintenance and superseded operations do not. An
-observation occurs after commit, so process death in that gap may lose a sample.
+After commit, `completeActivatedRevision()` and `finalizeAgentStop()` record
+admission-to-completion duration through `apps/controller/src/metrics/index.ts:createOccMetrics`.
+Queue waits and retries count; maintenance and superseded work do not.
+Process death before observation can lose a sample.
+
+Deletion finalization uses a restricted database function rather than the
+generic queue completion path. In one transaction it validates the live claim,
+removes the Agent's revisions, service principal, API keys, and exact IAM
+references, records lifecycle-delete success, deletes the Agent, and removes its
+work rows. An expired or replaced claim removes nothing; `occ_app` has no direct
+table-level delete privilege for these records.
+`finalizeAgentDeletion()` records committed `agent_delete` outcomes. Snapshots
+count deleting Agents as `stopping`, permanent cleanup failures as `failed`,
+and remove completed deletions from inventory.
 
 ### 7. Defer, retry, or stop and hand off the next iteration
 
@@ -258,11 +283,33 @@ the convergence deadline produce terminal failure instead. See the
 and the [settings reference](../reference/settings/operations.md#controller-worker-environment)
 for their timing controls.
 
+Terminal work rows store the overall `reason_code` and one optional `result_data`
+object for success or failure details. Successful revision work stores
+`{ warnings: [...] }`; a convergence deadline failure stores `{ timeoutMs }`.
+`PostgresWorkQueue.complete` and `PostgresWorkQueue.fail` publish that data under
+the live claim. The deployment status projection derives its separate `error`
+and `warnings` fields from the saved result. Stale claims cannot publish outcomes or warnings. Completion needs no
+runtime receipt acknowledgment or post-commit cleanup protocol. The original
+deployment's warnings remain a historical startup result; later maintenance
+observations do not rewrite that completed deployment.
+
+Legacy terminal work rows derive `reason_code` from durable audit evidence.
+A successful revision is marked `REVISION_ACTIVATED` only
+when a matching activation audit event exists between work creation and
+completion. Otherwise, the backfill copies the matching terminal `reconcile`
+audit reason for the same resource, actor, attempt, outcome, and completion
+window. If that evidence is absent, the row receives `LEGACY_OUTCOME_UNKNOWN`.
+Historical `result_data` remains `NULL`, because previous rows did not store
+structured timeout or warning data. Pending rows stay incomplete with no
+terminal outcome.
+
 If Compute declares a maintenance interval, successful activation schedules
 another exact-revision observation. An incomplete active-runtime observation or
 Compute binding closes the bounded item and schedules another so that a provider
 outage does not abandon reconciliation of an authorized active runtime.
-Each new claim reauthorizes its original actor.
+Each new claim reauthorizes its original actor. The next maintenance key uses a
+strictly later time bucket than the current claim, preventing clock skew from
+colliding with completed work and silently dropping its successor.
 
 `worker.completed` reports the target, outcome, and code; polling then continues.
 Lease loss is reported as `worker.error` with `CLAIM_LOST` rather than publishing
@@ -309,6 +356,17 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 00:56: Integrate Agent-deletion metrics. (01a0af6f-d097-7ef0-a2b7-c8ce31703bd9 - 1de0877d28f7c77e6ef4aab97531ad7d56b583d0)
+
+- 2026-09-20 10:50: Documented legacy terminal work outcome backfill during migration 0019, including unknown result data and fallback behavior. (authoring-run/a2f901df-d27a-4a05-9468-e1ee895ae89d - 08b1b8fe)
+
+- 2026-09-18 17:17: Generalized terminal details to result_data for success warnings and failure metadata, retaining live-claim fencing and the deployment API projection. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 6a582ce9)
+
+- 2026-09-17 21:20: Keep maintenance successor buckets monotonic when database and worker clocks differ. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 7f968f39)
+
+- 2026-09-17 20:28: Replaced terminal plugin receipts with verified optional-plugin exclusion, current startup status, and successful deployment warnings; runtime verification in progress. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 7771526d)
+- 2026-09-17 20:28: Removed the first-failure receipt and acknowledgment lifecycle under the approved best-effort plugin decision. (NOT_IN_SPEC)
 
 - 2026-09-17 12:09: Separate health reporting from claim renewal, preserve lease-loss fencing, and restore admitted Agent bindings before stop effects. (01a03526-12b3-7f50-b599-e8414052909d - 683d0e253ad827af7c6098650097fa6a8ad61f57)
 

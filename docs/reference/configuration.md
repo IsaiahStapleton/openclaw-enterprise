@@ -1,18 +1,26 @@
 # Configuration
 
-OpenClaw Control Plane (OCC) stores reusable Agent configuration as
-Namespace-scoped Configuration resources. Each resource explicitly identifies
-its consumer with the required, immutable `kind: "agent"`. Its `values` is the
-actual nested OpenClaw configuration document, including native OpenClaw
-SecretRefs for `env`, `file`, and `exec`. Its optional `secretBindings` map is
-separate OCC metadata that binds exact Namespace-owned Secrets to selected Agent
-gateway environment variables. The selected Configuration Driver persists `values` in
-its implementation-owned storage; the bundled Kubernetes Driver uses one
-`openclaw.json` ConfigMap entry. Reviewed bundled and installed Configuration
-Drivers are available in both development and production. The selected
-SecretDriver stores Secret values separately. Installation settings and
-selected Driver options remain separate: OCC reads them directly from trusted
-startup YAML and never stores them in tenant ConfigMaps.
+OpenClaw Control Plane (OCC) keeps Agent settings and platform settings in
+separate places. Agent settings live in a reusable Configuration in the Agent's
+Namespace. Saving a change does not affect a running Agent; deploy each Agent
+that should use it. Platform operators set Installation and Driver options in
+trusted startup YAML, not in Agent Configurations.
+
+- To change a model or other Agent settings and put them into use, follow
+  [Agent revisions](../guides/topics/agent-revisions.md).
+- To choose Agent credentials or enable a channel, see
+  [Configuration secrets and channels](configuration/secrets.md).
+- To set platform options, see [Installation startup configuration](#installation-startup-configuration)
+  and [controller and PostgreSQL settings](settings.md).
+
+Every Agent Configuration has the required, immutable `kind: "agent"`. Its
+`values` holds the native OpenClaw document, including `env`, `file`, and `exec`
+SecretRefs. The optional `secretBindings` field binds exact Namespace-owned
+Secrets to selected gateway environment variables; the Secret Driver stores the
+values separately. The Configuration Driver stores the native document. The
+bundled Kubernetes Driver uses one `openclaw.json` ConfigMap entry. Reviewed
+bundled and installed Configuration Drivers are available in development and
+production.
 
 ## Installation startup configuration
 
@@ -60,7 +68,7 @@ after the referenced Namespace-owned Secrets exist.
 OCC generates the `cfg_` identifier and derives ownership from the exact route
 Namespace; callers cannot select either field. GET, PATCH, and DELETE operate
 on `/namespaces/:namespaceId/configurations/:configurationId`. A PATCH body
-contains only the replacement `values`, for example:
+requires the replacement `values` and may also set `secretBindings`, for example:
 
 ```json
 {
@@ -169,6 +177,7 @@ The Kubernetes Configuration Driver stores live native documents in tenant Confi
 - [Development and production deployment](../guides/deploy.md)
 - [Controller and PostgreSQL configuration](settings.md)
 - [Controller worker lifecycle](controller.md)
+- [Update and deploy Agent revisions](../guides/topics/agent-revisions.md)
 - [Agent Configuration, revisions, and deployment](agents.md)
 - [Kubernetes Compute Driver](drivers/kubernetes-compute.md)
 - [Identity and access management](authorization.md)

@@ -341,11 +341,18 @@ export interface ServiceAccount extends Scope {
 }
 
 export type AgentDesiredRuntimeState = "running" | "stopped";
+
+/**
+ * `deleting` is a terminal transition: the Agent row is removed once teardown
+ * succeeds, so there is no `deleted` status and no tombstone to observe.
+ */
+export type AgentStatus = "active" | "deleting";
 export interface Agent extends Scope {
   readonly id: string;
   readonly namespaceId: string;
   readonly name: string;
   readonly desiredRuntimeState: AgentDesiredRuntimeState;
+  readonly status: AgentStatus;
   readonly configurationId: string;
   readonly providerId: ProviderRef;
   readonly harnessAuth: HarnessAuthBinding | null;
@@ -617,6 +624,87 @@ export interface IAMDriver extends Driver {
   readonly capability: "iam";
   lookupIdentity(input: IdentityLookup): Promise<Identity | undefined>;
   authorize(request: AuthorizationRequest): Promise<AuthorizationDecision>;
+  listNamespaceRoles?(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+  ): Promise<readonly Readonly<Role>[]>;
+  getNamespaceRole?(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+    roleId: string,
+  ): Promise<Readonly<Role> | undefined>;
+  createNamespaceRole?(
+    context: IAMPolicyManagementContext,
+    input: IAMManagedRoleInput,
+  ): Promise<Readonly<Role>>;
+  deleteNamespaceRole?(
+    context: IAMPolicyManagementContext,
+    namespaceId: string,
+    roleId: string,
+  ): Promise<boolean>;
+  listNamespaceAccessBindings?(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+  ): Promise<readonly Readonly<AccessBinding>[]>;
+  getNamespaceAccessBinding?(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<Readonly<AccessBinding> | undefined>;
+  createNamespaceAccessBinding?(
+    context: IAMPolicyManagementContext,
+    input: IAMManagedAccessBindingInput,
+  ): Promise<Readonly<AccessBinding>>;
+  deleteNamespaceAccessBinding?(
+    context: IAMPolicyManagementContext,
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<boolean>;
+}
+
+export interface IAMPolicyReadRepository {
+  listRoles(namespaceId: string): Promise<readonly Readonly<Role>[]>;
+  getRole(namespaceId: string, roleId: string): Promise<Readonly<Role> | undefined>;
+  listAccessBindings(namespaceId: string): Promise<readonly Readonly<AccessBinding>[]>;
+  getAccessBinding(
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<Readonly<AccessBinding> | undefined>;
+}
+
+export interface IAMPolicyRepository extends IAMPolicyReadRepository {
+  createRole(role: Role): Promise<Readonly<Role>>;
+  deleteRole(namespaceId: string, roleId: string): Promise<boolean>;
+  createAccessBinding(binding: AccessBinding): Promise<Readonly<AccessBinding>>;
+  deleteAccessBinding(namespaceId: string, bindingId: string): Promise<boolean>;
+}
+
+export interface IAMPolicyReadContext {
+  readonly policy: IAMPolicyReadRepository;
+}
+
+export interface IAMPolicyManagementContext {
+  readonly policy: IAMPolicyRepository;
+}
+
+export type ManagedIAMResourceKind =
+  "agent" | "agent_revision" | "configuration" | "secret" | "service_account";
+
+export interface IAMManagedRoleInput {
+  readonly id: string;
+  readonly namespaceId: string;
+  readonly name?: string;
+  readonly permissions: readonly Permission[];
+}
+
+export interface IAMManagedAccessBindingInput {
+  readonly id: string;
+  readonly namespaceId: string;
+  readonly subjectKind: "identity";
+  readonly subjectId: string;
+  readonly roleId: string;
+  readonly resourceKind: ManagedIAMResourceKind;
+  readonly resourceId: string;
 }
 
 export interface ServiceAccountDriver extends Driver {
@@ -677,11 +765,17 @@ export interface NamespaceDeleteResult extends Scope {
   readonly failure?: NamespaceLifecycleFailure;
 }
 
+export interface PluginDeploymentWarning {
+  readonly code: "PLUGIN_INSTALL_FAILED" | "PLUGIN_AUTH_REQUIRED";
+  readonly pluginId: string;
+}
+
 export interface ComputeReadiness extends Scope {
   readonly namespaceId: string;
   readonly agentId: string;
   readonly revisionId: string;
   readonly ready: boolean;
+  readonly warnings?: readonly PluginDeploymentWarning[];
 }
 
 /** Authorized, server-admitted resource identities for an Agent-owned runtime. */
@@ -690,16 +784,10 @@ export interface ComputeAgentBinding {
   readonly agent: Readonly<Agent>;
 }
 
-export interface AgentRuntimeCredentialsInput {
-  readonly slack?: {
-    readonly appToken: string;
-    readonly botToken: string;
-  };
-}
+export type AgentRuntimeCredentialsInput = Readonly<Record<never, never>>;
 
 export interface AgentRuntimeCredentialStatus {
   readonly transportConfigured: boolean;
-  readonly slackConfigured: boolean;
 }
 
 export interface ComputePreflightWarning {
@@ -721,6 +809,7 @@ export interface ComputeDriver extends Driver {
     harness: RevisionHarnessDescriptor,
     auth: HarnessAuthSnapshot,
     configuration: OpenClawConfigurationDocument,
+    secretBindings?: SecretBindings,
   ): void;
   preflight?(): Promise<void | ComputePreflightResult>;
   setLifecycleDrivers?(drivers: readonly Driver[]): void;
@@ -732,6 +821,7 @@ export interface ComputeDriver extends Driver {
     binding: ComputeAgentBinding,
     input: AgentRuntimeCredentialsInput,
   ): Promise<AgentRuntimeCredentialStatus>;
+  deleteAgentRuntimeCredentials?(binding: ComputeAgentBinding): Promise<void>;
   getGatewayEndpoint?(revision: AgentRevision): string | undefined;
   ensureNamespace(namespace: Namespace): Promise<NamespaceEnsureResult>;
   deleteNamespace(namespace: Namespace): Promise<NamespaceDeleteResult>;

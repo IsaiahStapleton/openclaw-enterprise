@@ -1,3 +1,7 @@
+---
+published: false
+---
+
 # Platform startup documentation history
 
 This record preserves the dated changes to the platform startup flow. See the [parent flow](../platform-startup.md) for its context and overall sequence.

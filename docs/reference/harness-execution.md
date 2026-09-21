@@ -1,10 +1,14 @@
 # Harness execution
 
-An Agent selects an execution mode; its native Configuration selects a supported
-Harness. OCC admits the pair into an immutable AgentRevision. The selected
-Compute Driver owns realization, activation, and retirement. This reference
-defines supported selection and execution behavior; the
-[Harness flow](../flows/harness-execution-topology.md) traces its implementation.
+A Harness calls the model and runs tools for an Agent. OpenClaw Enterprise supports
+two: OpenClaw runs inside the Agent's gateway; Codex runs in a separate
+workload connected to that gateway. You choose an execution mode on the Agent
+and a compatible model and Harness in its Configuration.
+
+This page explains supported combinations, model authentication, and what a
+replacement can interrupt. For the infrastructure choices, see
+[Agent compute](../guides/topics/agent-compute.md). To get a first model
+response, follow [Deploy your first Agent](../guides/first-agent.md).
 
 ## Supported topology
 
@@ -15,9 +19,8 @@ defines supported selection and execution behavior; the
 
 Agent creation defaults to `embedded`; an update preserves the existing mode
 when omitted. Unsupported Harness/mode pairs are rejected before work is admitted.
-A Harness is a server-approved descriptor rather than a user-created resource or
-independently selected Driver. Runtime availability and containment additionally
-depend on the selected Compute and optional Sandbox implementation.
+You cannot create a Harness or select it as a separate Driver. Availability
+and isolation also depend on the installation's Compute and optional Sandbox.
 
 ## Native runtime selection
 
@@ -110,15 +113,15 @@ provider failure leave the replacement unready and the Agent unavailable until
 repair and restart or a new deployment. There is no automatic rollback.
 Readiness polling does not repeat model calls.
 
-Both probes check the configured primary model. OpenClaw disables tools and
-model fallback. Codex ignores user configuration and rules, disables execution
+Both startup checks call the configured primary model. OpenClaw disables tools
+and model fallback. Codex ignores user configuration and rules, disables execution
 and external tools, and uses read-only filesystem policy without approval grants;
 a tool event cannot satisfy its success check. Each probe has a process timeout
 and captures native output, emitting only a fixed failure message if unsuccessful.
 A failed Codex probe also holds the process unready until restart.
 
-Probes incur provider requests and may incur model usage charges. They do not
-verify access to every other configured model or guarantee continued validity
+These startup checks make provider requests and may incur model usage charges.
+They do not verify access to every other configured model or guarantee continued validity
 after upstream revocation. Embedded probe transport configuration must use
 literal metadata rather than additional environment or Secret references. The
 canonical `OPENAI_API_KEY` authentication alias remains supported, and unrelated
@@ -207,7 +210,8 @@ for the complete capability and upstream compatibility boundaries.
 
 ## Related
 
-- [Deployment](../guides/deploy.md)
+- [Deploy your first Agent](../guides/first-agent.md)
+- [Agent compute](../guides/topics/agent-compute.md)
 - [ComputeDriver contract](drivers/compute.md)
 - [ServiceAccount credentials](service-accounts.md)
 - [Harness execution and shared storage flow](../flows/harness-execution-topology.md)

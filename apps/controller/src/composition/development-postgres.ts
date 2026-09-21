@@ -27,7 +27,12 @@ import { providerSummariesFromDefinitions } from "./installation-config.ts";
 import type { LoggingConfiguration, OccLogger } from "../logging.ts";
 import { resolveApprovedHarness } from "./production-harness.ts";
 import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
-import { createWorkspaceFilesAccess, validateWorkspaceFilesApiKeyPath } from "./workspace-files.ts";
+import type { NativeAdminAccessConfig } from "../gateway/native-admin.ts";
+import {
+  createWorkspaceFilesAccess,
+  readWorkspaceFilesApiKey,
+  validateWorkspaceFilesApiKeyPath,
+} from "./workspace-files.ts";
 
 export interface PostgresDevelopmentConfig {
   readonly metrics?: import("../metrics/index.ts").OccMetrics;
@@ -43,6 +48,7 @@ export interface PostgresDevelopmentConfig {
   readonly trustedDevelopmentForwarderCidr?: string;
   readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
   readonly gatewayApiKeyPath?: string;
+  readonly nativeAdmin?: NativeAdminAccessConfig;
 }
 
 export type PostgresDevelopmentRuntimeOptions =
@@ -92,7 +98,10 @@ export async function composePostgresDevelopment(
       secret: config.authSecret,
       baseURL: config.authBaseURL,
       pool,
-      secureCookies: false,
+      secureCookies: config.nativeAdmin?.enabled === true,
+      ...(config.nativeAdmin?.enabled === true
+        ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
+        : {}),
     });
     const computeDriver = options.computeDriver ?? createDevelopmentDockerComputeDriver();
     const sandboxDriver = drivers?.sandboxDriver;
@@ -177,6 +186,9 @@ export async function composePostgresDevelopment(
       await validateWorkspaceFilesApiKeyPath(gatewayApiKeyPath);
       workspaceFilesAccess = createWorkspaceFilesAccess(computeDriver, gatewayApiKeyPath);
     }
+    if (config.nativeAdmin?.enabled === true && config.gatewayApiKeyPath === undefined) {
+      throw new Error("Native admin UI access requires OCC_GATEWAY_API_KEY_PATH.");
+    }
 
     const app = createFastifyApp({
       ...(config.metrics === undefined ? {} : { metrics: config.metrics }),
@@ -184,6 +196,10 @@ export async function composePostgresDevelopment(
       iamDriver,
       computeDriver,
       publicOrigin: config.authBaseURL,
+      ...(config.nativeAdmin === undefined ? {} : { nativeAdmin: config.nativeAdmin }),
+      ...(config.nativeAdmin?.enabled === true && config.gatewayApiKeyPath !== undefined
+        ? { nativeAdminGatewayApiKey: () => readWorkspaceFilesApiKey(config.gatewayApiKeyPath!) }
+        : {}),
       ...(configurationDriver === undefined ? {} : { configurationDriver }),
       ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
       resolveHarness: resolveApprovedHarness,

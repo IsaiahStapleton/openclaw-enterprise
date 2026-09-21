@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash, X509Certificate } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { createServer as createHttpsServer } from "node:https";
+import { request as httpRequest } from "node:http";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { once } from "node:events";
 
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
 import { providerSummariesFromDefinitions } from "../../apps/controller/src/composition/installation-config.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
-import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
@@ -14,6 +19,7 @@ import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/sr
 import { authenticatedHeaders, signInWithEmailPassword } from "./auth-session.mjs";
 import { createTestConfigurationDriver } from "./configuration-driver.mjs";
 import { createTestSecretDriver } from "./secret-driver.mjs";
+import { createTestKubernetesComputeDriver } from "./kubernetes-compute.mjs";
 
 export const providerFixtures = Object.freeze([
   Object.freeze({
@@ -29,11 +35,10 @@ export const providerFixtures = Object.freeze([
 ]);
 
 function computeDriver() {
-  return {
-    id: "console-compute",
-    capability: "compute",
+  const driver = createTestKubernetesComputeDriver("console-compute");
+
+  return Object.assign(driver, {
     implementation: "test-memory-lifecycle",
-    validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -49,7 +54,7 @@ function computeDriver() {
       };
     },
     async retireRevision() {},
-  };
+  });
 }
 
 async function availableLoopbackPort() {
@@ -68,7 +73,11 @@ async function availableLoopbackPort() {
 export async function createConsoleAppFixture(t, options = {}) {
   const installationId = `ins_${randomUUID()}`;
   const port = await availableLoopbackPort();
-  const origin = `http://127.0.0.1:${port}`;
+  const originHost = options.originHost ?? "127.0.0.1";
+  const browserPort = options.https === true ? await availableLoopbackPort() : port;
+  const origin = `${options.https === true ? "https" : "http"}://${originHost}:${browserPort}`;
+  const browserArgs = [];
+  const transportOrigin = `http://127.0.0.1:${port}`;
   // CUA fault-injection keeps Better Auth on the trusted browser origin.
   const authBaseURL = options.authBaseURL ?? origin;
   const authMode = options.authMode ?? "development";
@@ -79,6 +88,12 @@ export async function createConsoleAppFixture(t, options = {}) {
     baseURL: authBaseURL,
     secret: `console-test-secret-${randomUUID()}-${randomUUID()}`,
     memoryDatabase,
+    ...(options.authCookieDomain === undefined
+      ? {}
+      : { sharedCookieDomain: options.authCookieDomain }),
+    ...(options.authSecureCookies === undefined
+      ? {}
+      : { secureCookies: options.authSecureCookies }),
   });
   const credentials = {
     email: `console-admin-${randomUUID()}@example.com`,
@@ -104,6 +119,7 @@ export async function createConsoleAppFixture(t, options = {}) {
     { id: "console-native-iam" },
   );
   const providers = options.providers ?? providerFixtures;
+  const publicOrigin = options.publicOrigin === true ? origin : options.publicOrigin;
   const providerSummaries = Object.hasOwn(options, "providerSummaries")
     ? options.providerSummaries
     : providerSummariesFromDefinitions(providers);
@@ -117,10 +133,15 @@ export async function createConsoleAppFixture(t, options = {}) {
     auth,
     iamDriver,
     auditSink,
-    development: options.development ?? { enabled: true, installationId },
+    development: { enabled: true, installationId, ...options.development },
     computeDriver: options.computeDriver ?? computeDriver(),
     configurationDriver: createTestConfigurationDriver({ id: "console-configuration" }),
     ...(secretDriver === undefined || secretDriver === null ? {} : { secretDriver }),
+    ...(publicOrigin === undefined ? {} : { publicOrigin }),
+    ...(options.nativeAdmin === undefined ? {} : { nativeAdmin: options.nativeAdmin }),
+    ...(options.nativeAdminGatewayApiKey === undefined
+      ? {}
+      : { nativeAdminGatewayApiKey: options.nativeAdminGatewayApiKey }),
     resolveHarness: resolveApprovedHarness,
     createController(installation) {
       controller = new OpenClawController(installation, {
@@ -187,10 +208,74 @@ export async function createConsoleAppFixture(t, options = {}) {
 
   t.after(close);
 
+  if (options.https === true) {
+    // Exercise browser Secure/Domain cookies through a real TLS ingress to the HTTP API.
+    const directory = await mkdtemp(join(tmpdir(), "openclaw-console-tls-"));
+    cleanupBeforeAppClose.push(() => rm(directory, { recursive: true, force: true }));
+    const keyPath = join(directory, "tls.key");
+    const certPath = join(directory, "tls.crt");
+    const generated = spawnSync(
+      "openssl",
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-days",
+        "1",
+        "-keyout",
+        keyPath,
+        "-out",
+        certPath,
+        "-subj",
+        `/CN=${originHost}`,
+        "-addext",
+        `subjectAltName=DNS:${originHost}`,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(generated.status, 0, generated.stderr || generated.error?.message);
+    const cert = await readFile(certPath);
+    const ingress = createHttpsServer(
+      { key: await readFile(keyPath), cert },
+      (incoming, outgoing) => {
+        const upstream = httpRequest(
+          {
+            hostname: "127.0.0.1",
+            port,
+            method: incoming.method,
+            path: incoming.url,
+            headers: incoming.headers,
+          },
+          (response) => {
+            outgoing.writeHead(response.statusCode, response.headers);
+            response.pipe(outgoing);
+          },
+        );
+        upstream.on("error", () => outgoing.writeHead(502).end());
+        incoming.pipe(upstream);
+      },
+    );
+    cleanupBeforeAppClose.push(async () => {
+      ingress.closeAllConnections();
+      await new Promise((resolve, reject) =>
+        ingress.close((error) => (error ? reject(error) : resolve())),
+      );
+    });
+    ingress.listen(browserPort, "127.0.0.1");
+    await once(ingress, "listening");
+    const spki = createHash("sha256")
+      .update(new X509Certificate(cert).publicKey.export({ type: "spki", format: "der" }))
+      .digest("base64");
+    browserArgs.push(`--ignore-certificate-errors-spki-list=${spki}`);
+  }
+
   async function rawRequest(method, path, { headers = {}, body, timeout = 5000 } = {}) {
-    const response = await fetch(`${origin}${path}`, {
+    const response = await fetch(`${transportOrigin}${path}`, {
       method,
       headers: {
+        host: new URL(origin).host,
         ...headers,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
@@ -211,8 +296,26 @@ export async function createConsoleAppFixture(t, options = {}) {
     return payload;
   }
 
+  async function fetchThroughLoopback(request) {
+    const url = new URL(request.url);
+    return fetch(`${transportOrigin}${url.pathname}${url.search}`, {
+      method: request.method,
+      headers: {
+        ...Object.fromEntries(request.headers),
+        host: url.host,
+      },
+      ...(request.body === null ? {} : { body: Buffer.from(await request.arrayBuffer()) }),
+      signal: request.signal,
+    });
+  }
+
   async function signIn(overrides = {}) {
-    return signInWithEmailPassword({ origin, ...credentials, ...overrides });
+    return signInWithEmailPassword({
+      origin,
+      fetch: fetchThroughLoopback,
+      ...credentials,
+      ...overrides,
+    });
   }
 
   const adminSession = await signIn();
@@ -391,6 +494,7 @@ export async function createConsoleAppFixture(t, options = {}) {
 
   return {
     origin,
+    browserArgs,
     credentials,
     memoryDatabase,
     policy,
@@ -409,5 +513,9 @@ export async function createConsoleAppFixture(t, options = {}) {
     createSecret,
     createAccountWithPolicy,
     registerCleanupBeforeAppClose,
+    app,
+    get controller() {
+      return controller;
+    },
   };
 }

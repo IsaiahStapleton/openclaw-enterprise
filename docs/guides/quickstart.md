@@ -1,81 +1,67 @@
-# Quickstart
+# Set up OpenClaw Enterprise locally
 
-Start [OpenClaw Control Plane (OCC)](concepts.md#control-plane)
-locally, sign in to the console, and read the Installation through an
-authenticated API request. This proves controller access; it does not deploy an
-[Agent](concepts.md#agents-and-revisions) or make a model call.
+<span id="quickstart"></span>
 
-You need either Docker Engine with Docker Compose, or Podman with
-`podman-compose` and `yq` v4. Bash, Python 3, and the Go version selected by the
-repository's `go.mod` are also required, along with Node.js 24 or newer and the
-repository-pinned pnpm. Podman needs no `docker` alias. Run commands from the
-repository root and build the checkout-local [OCC CLI](cli.md) first:
+Start an OpenClaw Enterprise installation that can deploy Agents on your
+machine. The OpenClaw Control Plane (OCC) runs in Compose; Agent workloads run
+in a local Kubernetes cluster created with k3d. This setup is for development
+and uses loopback addresses. To install OCC itself in a cluster you already
+operate, use [Kubernetes Setup](kubernetes-setup.md).
 
-```bash
-pnpm cli:build
-```
+## Before you start
+
+Run the commands below from the repository root on Linux or macOS. You need:
+
+- Docker Engine with Docker Compose, k3d, and kubectl. Podman users should first
+  check the [local Kubernetes requirements](deploy/local-kubernetes-development.md#start-the-profile).
+- The Go version in `go.mod`, Node.js 24 or later, and the pnpm version pinned
+  in `package.json`.
+- Free local ports `3000` for OCC and `6443` for Kubernetes. If either is in
+  use, override `OPENCLAW_DEV_PORT` or `OCC_DEVELOPMENT_KUBERNETES_API_PORT`;
+  see [development settings](../reference/settings/development.md#required-development-controller-environment).
+
+You do not need a model credential to install the platform. Have an OpenAI API
+key available when you continue to [deploy your first Agent](first-agent.md).
 
 ## Start the local stack
 
 ```bash
-./bin/occ dev up
+pnpm cli:build
+OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev up
 ```
 
-The helper selects a usable Docker Engine or falls back to Podman, validates the
-resolved Compose configuration without logging expanded credentials, starts
-PostgreSQL, migration, bootstrap, API, and worker services, then copies the
-bootstrap service-key response into a private local file. Fresh bootstrap also
-creates the initial platform
-[Namespace](concepts.md#tenancy) named `default`.
-
-The helper reuses the local quickstart runtime image tag. After changing the
-runtime recipe or package versions, [rebuild and verify the image](../../deploy/runtime/README.md#rebuild-an-existing-image)
-before rerunning it.
-
-Expected output includes:
-
-- `OpenClaw Enterprise development stack is ready.`
-- the selected container engine
-- the API URL, usually `http://127.0.0.1:3000`
-- the Installation ID
-- the owner-readable service-key file path
-- a copy-paste API check
+The first start builds and imports the runtime image and can take several
+minutes. Wait for `OpenClaw Enterprise development stack is ready.` The
+command prints the API URL, Installation ID, local service-key file, kubeconfig,
+Kubernetes context, and cleanup command. Keep this output; the service-key file
+is an administrator credential and must remain on your machine.
 
 ## Open the platform console
 
-Open `/console/` on the API URL printed by `dev-up`, normally
-`http://127.0.0.1:3000/console/`. For a fresh database with default settings, use
-`admin@openclaw.local` as **Username** and `openclaw-development-password` as the
-password. If you set `OPENCLAW_DEV_EMAIL` or `OPENCLAW_DEV_PASSWORD` in `.env` or
-the environment, use those values; see [development settings](../reference/settings/development.md#required-development-controller-environment).
-An existing database keeps its original password. Browser login uses the human
-session path, not service keys.
+Open `/console/` on the printed API URL, normally
+`http://127.0.0.1:3000/console/`. On a fresh installation, sign in with username
+`admin@openclaw.local` and password `openclaw-development-password`. If you set
+`OPENCLAW_DEV_EMAIL` or `OPENCLAW_DEV_PASSWORD`, use those values. These defaults
+are for the local development profile only; see [development authentication settings](../reference/settings/development.md#required-development-controller-environment).
 
-A fresh Installation has a `default` Namespace and no Agents. Use the
-[console reference](../reference/console.md) for supported pages, Agent creation,
-credential provisioning, deployment, workspace files, and limits.
+Open **Namespaces**. Fresh bootstrap creates a platform Namespace named
+`default` and no Agents. Wait for the Namespace to show `ready`. The platform
+Namespace is separate from Kubernetes' built-in `default` namespace.
 
 ## Read the Installation with the bootstrap service key
 
-`dev-up` already checks API access. To repeat the check and run the remaining
-commands, export the URL and service-key path printed by the helper:
+Use the API URL and service-key file printed at startup. On Linux, the defaults
+are usually:
 
 ```bash
 export OCC_URL='http://127.0.0.1:3000'
-export OCC_SERVICE_KEY_FILE='/private/path/initial-admin-service-key.json'
+export OCC_SERVICE_KEY_FILE='/tmp/openclaw-development/initial-admin-service-key.json'
 ./bin/occ installation get
 ```
 
-Expect an Installation row containing its ID and name. The Installation ID must
-match `meta.installationId` in the service-key response. The client sends the
-[service key](concepts.md#identity-and-access) as
-`x-api-key` without exposing it in process arguments or terminal output.
-
-Keep these variables for the
-[development TUI procedure](deploy/local-operations.md#development-end-to-end-tui). The OCC key
-stays with the operator. It is separate from the Agent
-[gateway](concepts.md#gateways-and-harnesses) token and model credential and
-must never enter a workload or TUI.
+On macOS or with a custom state directory, use the printed key path instead.
+Expect an Installation row with the ID printed at startup. The CLI reads the
+key from the file; do not pass the credential value as an argument or share it.
 
 ## Find the initial Namespace
 
@@ -83,34 +69,21 @@ must never enter a workload or TUI.
 ./bin/occ namespace list
 ```
 
-On a fresh Installation, expect one Namespace named `default` with a server-assigned ID. Export it as
-`OCC_NAMESPACE` and wait for `STATUS` to become `ready` before creating Namespace
-resources. Docker and Podman Compute do not currently support Agent harness
-bindings; use [local Kubernetes](deploy/local-operations.md#build-images-for-local-kubernetes)
-for Agent deployment and model execution.
+Expect one Namespace named `default`. Wait for `STATUS` to become `ready` and
+note its server-assigned ID. The control-plane readiness message alone does not
+prove an Agent or model works. Continue to [Deploy your first Agent](first-agent.md)
+to create your own Agent and send it a prompt.
 
 ## Clean up and stop
 
-If you are stopping after this API check, remove only the temporary local key
-copy printed by `dev-up`, then run the exact command under `Cleanup` in its
-output. The command records the selected Compute Driver and container engine; `dev-down` resolves
-the corresponding Compose cleanup details:
+When you are finished, run the cleanup command printed by startup. With the
+defaults:
 
 ```bash
-rm -- "$OCC_SERVICE_KEY_FILE"
-test -z "${OCC_SERVICE_KEY_DIRECTORY:-}" || rmdir -- "$OCC_SERVICE_KEY_DIRECTORY"
-unset OCC_SERVICE_KEY_FILE OCC_SERVICE_KEY_DIRECTORY
-# Run the Cleanup command printed by dev-up.
+OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev down
 ```
 
-For the default Docker Compute profile, local cleanup does not revoke the
-service key. Compose `down` preserves the
-database, [Configuration](concepts.md#configuration-and-secrets), and
-bootstrap-key volumes. Add `--volumes` after the printed `dev down` and before any
-`--` separator only when intentionally deleting the local Installation. Kubernetes-profile cleanup is
-destructive and is documented separately in the
-[local Kubernetes guide](deploy/local-kubernetes-development.md#stop-and-clean-up).
-
-Next, use [Deploy OpenClaw Enterprise](deploy.md) for production installation,
-customization, Agent/TUI proof, and startup-error diagnosis. For supported
-resource operations, see the [feature reference](../reference/README.md).
+This deletes the local cluster, database, Agents, stored credentials, and audit
+history. If cleanup fails, restore access to the container engine and run the
+same command again. See [local Kubernetes cleanup](deploy/local-kubernetes-development.md#stop-and-clean-up)
+if you used a custom state directory or service-key location.

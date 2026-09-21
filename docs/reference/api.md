@@ -29,7 +29,7 @@ Each operation lists its supported status codes.
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `error` | `object` | Yes | — |
-| `error.code` | `"INVALID_REQUEST" or "UNAUTHENTICATED" or "FORBIDDEN" or "NOT_FOUND" or "METHOD_NOT_ALLOWED" or "INSTALLATION_EXISTS" or "RESOURCE_CONFLICT" or "NAMESPACE_NOT_READY" or "NAMESPACE_NOT_EMPTY" or "PAYLOAD_TOO_LARGE" or "UNSUPPORTED_MEDIA_TYPE" or "UNKNOWN_OUTCOME" or "NOT_IMPLEMENTED" or "INTERNAL_ERROR" or "DEPENDENCY_UNAVAILABLE"` | Yes | — |
+| `error.code` | `"INVALID_REQUEST" or "UNAUTHENTICATED" or "FORBIDDEN" or "NOT_FOUND" or "METHOD_NOT_ALLOWED" or "INSTALLATION_EXISTS" or "RESOURCE_CONFLICT" or "AGENT_DELETING" or "NAMESPACE_NOT_READY" or "NAMESPACE_NOT_EMPTY" or "PAYLOAD_TOO_LARGE" or "UNSUPPORTED_MEDIA_TYPE" or "UNKNOWN_OUTCOME" or "NOT_IMPLEMENTED" or "INTERNAL_ERROR" or "DEPENDENCY_UNAVAILABLE"` | Yes | — |
 | `error.details` | `array<object>` | No | max items: 32 |
 | `error.details[].code` | `"REQUIRED" or "UNKNOWN_FIELD" or "INVALID_TYPE" or "INVALID_FORMAT" or "INVALID_VALUE" or "TOO_LONG" or "TOO_DEEP"` | Yes | — |
 | `error.details[].path` | `string` | Yes | max length: 512; pattern: `^(?:/(?:[^~/]\|~0\|~1)*)*$` |
@@ -44,9 +44,11 @@ Each operation lists its supported status codes.
 | [Authentication](#authentication) | 6 operations |
 | [Installation](#installation) | 2 operations |
 | [Namespaces](#namespaces) | 4 operations |
-| [Agents](#agents) | 10 operations |
+| [Agents](#agents) | 12 operations |
+| [Agent deployments](#agent-deployments) | 1 operation |
 | [Agent revisions](#agent-revisions) | 2 operations |
 | [Configurations](#configurations) | 4 operations |
+| [IAM](#iam) | 8 operations |
 | [Secrets](#secrets) | 4 operations |
 | [Service accounts](#service-accounts) | 6 operations |
 | [Providers](#providers) | 1 operation |
@@ -598,9 +600,11 @@ Get an exact Installation-owned Namespace
 | --- | --- |
 | [`GET /namespaces/{namespaceId}/agents`](#get-namespacesnamespaceidagents) | List authorized Agents in one exact Namespace |
 | [`POST /namespaces/{namespaceId}/agents`](#post-namespacesnamespaceidagents) | Create a Namespace-owned Agent |
+| [`DELETE /namespaces/{namespaceId}/agents/{agentId}`](#delete-namespacesnamespaceidagentsagentid) | Begin deletion of an exact Namespace-owned Agent and its AgentRevisions |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}`](#get-namespacesnamespaceidagentsagentid) | Get an exact Namespace-owned Agent |
 | [`PATCH /namespaces/{namespaceId}/agents/{agentId}`](#patch-namespacesnamespaceidagentsagentid) | Replace an exact Namespace-owned Agent's editable draft |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/deploy`](#post-namespacesnamespaceidagentsagentiddeploy) | Admit an immutable revision from the Agent's saved draft |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}/native-admin`](#get-namespacesnamespaceidagentsagentidnativeadmin) | Resolve native admin UI launch availability for one Agent |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`](#get-namespacesnamespaceidagentsagentidruntimecredentials) | Get metadata for one Agent's provisioned runtime credentials |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`](#post-namespacesnamespaceidagentsagentidruntimecredentials) | Provision initial runtime credentials for one undeployed Agent |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/stop`](#post-namespacesnamespaceidagentsagentidstop) | Stop one Agent while retaining its revision and persistent state |
@@ -656,6 +660,8 @@ List authorized Agents in one exact Namespace
 | `data[].namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data[].plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data[].providerId` | `string or null` | Yes | — |
+| `data[].servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
+| `data[].status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -728,6 +734,63 @@ Create a Namespace-owned Agent
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
+| `data.status` | `"active" or "deleting"` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `DELETE /namespaces/{namespaceId}/agents/{agentId}`
+
+<span id="delete-namespacesnamespaceidagentsagentid"></span>
+
+Begin deletion of an exact Namespace-owned Agent and its AgentRevisions
+
+**Operation ID:** `deleteAgent`
+
+**Permissions:** Requires delete permission on the requested Agent.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `delete` | `agent` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `202` | Accepted |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`202` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.activeRevisionId` | `string` | No | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.configurationId` | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.createdAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
+| `data.desiredRuntimeState` | `"running" or "stopped"` | Yes | — |
+| `data.executionMode` | `"embedded" or "dedicated"` | Yes | — |
+| `data.harnessAuth` | `object or object or object or null` | Yes | — |
+| `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
+| `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
+| `data.providerId` | `string or null` | Yes | — |
+| `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
+| `data.status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -780,6 +843,8 @@ Get an exact Namespace-owned Agent
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
+| `data.status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -852,6 +917,8 @@ Replace an exact Namespace-owned Agent's editable draft
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
+| `data.status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -925,6 +992,50 @@ Admit an immutable revision from the Agent's saved draft
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
+#### `GET /namespaces/{namespaceId}/agents/{agentId}/native-admin`
+
+<span id="get-namespacesnamespaceidagentsagentidnativeadmin"></span>
+
+Resolve native admin UI launch availability for one Agent
+
+**Operation ID:** `getAgentNativeAdmin`
+
+**Permissions:** Requires a human session with administer permission on the exact Agent. Service API keys cannot launch or inspect native admin UI access.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `agent` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | min length: 1; max length: 200 |
+| `agentId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.activeRevisionId` | `string` | No | — |
+| `data.host` | `string` | No | — |
+| `data.origin` | `string (uri)` | No | — |
+| `data.status` | `"available" or "disabled" or "stopped" or "unavailable" or "unsupported"` | Yes | — |
+| `data.url` | `string (uri)` | No | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
 #### `GET /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`
 
 <span id="get-namespacesnamespaceidagentsagentidruntimecredentials"></span>
@@ -963,7 +1074,6 @@ Get metadata for one Agent's provisioned runtime credentials
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `data` | `object` | Yes | — |
-| `data.slackConfigured` | `boolean` | Yes | — |
 | `data.transportConfigured` | `boolean` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
@@ -996,11 +1106,7 @@ Provision initial runtime credentials for one undeployed Agent
 
 **Content type:** `application/json`
 
-| Field | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `slack` | `object` | No | — |
-| `slack.appToken` | `string` | Yes | min length: 1; max length: 65536; pattern: `^[^\u0000]*$`; Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value. |
-| `slack.botToken` | `string` | Yes | min length: 1; max length: 65536; pattern: `^[^\u0000]*$`; Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value. |
+Schema: `object`.
 
 ##### Responses
 
@@ -1022,7 +1128,6 @@ Provision initial runtime credentials for one undeployed Agent
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `data` | `object` | Yes | — |
-| `data.slackConfigured` | `boolean` | Yes | — |
 | `data.transportConfigured` | `boolean` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
@@ -1077,6 +1182,8 @@ Stop one Agent while retaining its revision and persistent state
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
+| `data.status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -1169,7 +1276,7 @@ Create or replace an allowed workspace file for one active Agent
 | `413` | Payload Too Large |
 | `415` | Unsupported Media Type |
 | `500` | Internal Server Error |
-| `503` | Service Unavailable |
+| `503` | Service Unavailable. Check `error.code`: `DEPENDENCY_UNAVAILABLE` means workspace access is unavailable. `UNKNOWN_OUTCOME` means OCC could not confirm the write or its audit record; the file may already contain the requested content. Read the same file with `GET` and compare its content before deciding whether to retry. If the content matches, do not retry. If you cannot read it, wait or ask someone with `read` permission on the Agent to check. |
 
 **`200` response body:** `application/json`
 
@@ -1178,6 +1285,64 @@ Create or replace an allowed workspace file for one active Agent
 | `data` | `object` | Yes | — |
 | `data.name` | `"AGENTS.md" or "SOUL.md" or "IDENTITY.md" or "USER.md"` | Yes | — |
 | `data.size` | `integer` | No | minimum: 0; maximum: 16384 |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+<span id="agent-deployments"></span>
+
+### Agent deployments
+
+| Operation | Summary |
+| --- | --- |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}`](#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentid) | Get the durable deployment status for one admitted Agent revision |
+
+#### `GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}`
+
+<span id="get-namespacesnamespaceidagentsagentiddeploymentsdeploymentid"></span>
+
+Get the durable deployment status for one admitted Agent revision
+
+**Operation ID:** `getAgentDeployment`
+
+**Permissions:** Requires read permission on the requested AgentRevision.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `read` | `agent_revision` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `deploymentId` | path | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.agentId` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.deploymentId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.error` | `null or object` | Yes | Null unless deployment failed. A failure contains code, a fixed safe message, and optional allowlisted data. CONVERGENCE_DEADLINE_EXCEEDED may include data.timeoutMs. Native error text is never returned. |
+| `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.status` | `"queued" or "running" or "succeeded" or "failed"` | Yes | — |
+| `data.warnings` | `array<object>` | Yes | Warnings recorded from this deployment startup. Plugin install and connector-auth warnings mean the deployment succeeded after the runtime disabled the affected admitted plugin for that startup. |
+| `data.warnings[].code` | `"PLUGIN_INSTALL_FAILED" or "PLUGIN_AUTH_REQUIRED"` | Yes | — |
+| `data.warnings[].pluginId` | `string` | Yes | min length: 1; max length: 253; pattern: `^[A-Za-z0-9._~:@-]{1,253}$`; The admitted Agent plugin selection key. |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -1540,6 +1705,395 @@ Replace values and increment an exact Namespace-owned Configuration generation
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth. |
 | `data.values` | `object<string, SafeJsonValue>` | Yes | A native OpenClaw configuration document. |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+<span id="iam"></span>
+
+### IAM
+
+| Operation | Summary |
+| --- | --- |
+| [`GET /namespaces/{namespaceId}/iam/access-bindings`](#get-namespacesnamespaceidiamaccessbindings) | List exact Namespace IAM AccessBindings |
+| [`POST /namespaces/{namespaceId}/iam/access-bindings`](#post-namespacesnamespaceidiamaccessbindings) | Create an immutable exact-resource Namespace IAM AccessBinding |
+| [`DELETE /namespaces/{namespaceId}/iam/access-bindings/{bindingId}`](#delete-namespacesnamespaceidiamaccessbindingsbindingid) | Delete one exact Namespace IAM AccessBinding |
+| [`GET /namespaces/{namespaceId}/iam/access-bindings/{bindingId}`](#get-namespacesnamespaceidiamaccessbindingsbindingid) | Get an exact Namespace IAM AccessBinding |
+| [`GET /namespaces/{namespaceId}/iam/roles`](#get-namespacesnamespaceidiamroles) | List exact Namespace IAM Roles |
+| [`POST /namespaces/{namespaceId}/iam/roles`](#post-namespacesnamespaceidiamroles) | Create an immutable Namespace IAM Role |
+| [`DELETE /namespaces/{namespaceId}/iam/roles/{roleId}`](#delete-namespacesnamespaceidiamrolesroleid) | Delete an unreferenced exact Namespace IAM Role |
+| [`GET /namespaces/{namespaceId}/iam/roles/{roleId}`](#get-namespacesnamespaceidiamrolesroleid) | Get an exact Namespace IAM Role |
+
+#### `GET /namespaces/{namespaceId}/iam/access-bindings`
+
+<span id="get-namespacesnamespaceidiamaccessbindings"></span>
+
+List exact Namespace IAM AccessBindings
+
+**Operation ID:** `listIAMAccessBindings`
+
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+| `read` | `namespace` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `array<object or object>` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `POST /namespaces/{namespaceId}/iam/access-bindings`
+
+<span id="post-namespacesnamespaceidiamaccessbindings"></span>
+
+Create an immutable exact-resource Namespace IAM AccessBinding
+
+**Operation ID:** `createIAMAccessBinding`
+
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+| `read` | `namespace` | `requested` |
+| `read` | `agent` | `request_body` |
+| `read` | `agent_revision` | `request_body` |
+| `read` | `configuration` | `request_body` |
+| `read` | `secret` | `request_body` |
+| `read` | `service_account` | `request_body` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `resourceId` | `string` | Yes | min length: 1; max length: 200 |
+| `resourceKind` | `"agent" or "agent_revision" or "configuration" or "secret" or "service_account"` | Yes | — |
+| `roleId` | `string` | Yes | min length: 1; max length: 200 |
+| `subjectId` | `string` | Yes | min length: 1; max length: 200 |
+| `subjectKind` | `"identity"` | Yes | — |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `201` | Created |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `413` | Payload Too Large |
+| `415` | Unsupported Media Type |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`201` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object or object` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `DELETE /namespaces/{namespaceId}/iam/access-bindings/{bindingId}`
+
+<span id="delete-namespacesnamespaceidiamaccessbindingsbindingid"></span>
+
+Delete one exact Namespace IAM AccessBinding
+
+**Operation ID:** `deleteIAMAccessBinding`
+
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+| `read` | `namespace` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `bindingId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `204` | No Content |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+#### `GET /namespaces/{namespaceId}/iam/access-bindings/{bindingId}`
+
+<span id="get-namespacesnamespaceidiamaccessbindingsbindingid"></span>
+
+Get an exact Namespace IAM AccessBinding
+
+**Operation ID:** `getIAMAccessBinding`
+
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+| `read` | `namespace` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `bindingId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object or object` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `GET /namespaces/{namespaceId}/iam/roles`
+
+<span id="get-namespacesnamespaceidiamroles"></span>
+
+List exact Namespace IAM Roles
+
+**Operation ID:** `listIAMRoles`
+
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+| `read` | `namespace` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `array<object>` | Yes | — |
+| `data[].id` | `string` | Yes | min length: 1; max length: 200 |
+| `data[].name` | `string` | No | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
+| `data[].namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data[].permissions` | `array<object>` | Yes | min items: 1; max items: 64 |
+| `data[].permissions[].action` | `"create" or "read" or "update" or "delete" or "deploy" or "operate" or "administer"` | Yes | — |
+| `data[].permissions[].resourceKind` | `"installation" or "namespace" or "configuration" or "service_account" or "secret" or "agent" or "agent_revision"` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `POST /namespaces/{namespaceId}/iam/roles`
+
+<span id="post-namespacesnamespaceidiamroles"></span>
+
+Create an immutable Namespace IAM Role
+
+**Operation ID:** `createIAMRole`
+
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+| `read` | `namespace` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `name` | `string` | No | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
+| `permissions` | `array<object>` | Yes | min items: 1; max items: 64 |
+| `permissions[].action` | `"create" or "read" or "update" or "delete" or "deploy" or "operate" or "administer"` | Yes | — |
+| `permissions[].resourceKind` | `"agent" or "agent_revision" or "configuration" or "secret" or "service_account"` | Yes | — |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `201` | Created |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `413` | Payload Too Large |
+| `415` | Unsupported Media Type |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`201` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.id` | `string` | Yes | min length: 1; max length: 200 |
+| `data.name` | `string` | No | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
+| `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.permissions` | `array<object>` | Yes | min items: 1; max items: 64 |
+| `data.permissions[].action` | `"create" or "read" or "update" or "delete" or "deploy" or "operate" or "administer"` | Yes | — |
+| `data.permissions[].resourceKind` | `"installation" or "namespace" or "configuration" or "service_account" or "secret" or "agent" or "agent_revision"` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `DELETE /namespaces/{namespaceId}/iam/roles/{roleId}`
+
+<span id="delete-namespacesnamespaceidiamrolesroleid"></span>
+
+Delete an unreferenced exact Namespace IAM Role
+
+**Operation ID:** `deleteIAMRole`
+
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+| `read` | `namespace` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `roleId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `204` | No Content |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+#### `GET /namespaces/{namespaceId}/iam/roles/{roleId}`
+
+<span id="get-namespacesnamespaceidiamrolesroleid"></span>
+
+Get an exact Namespace IAM Role
+
+**Operation ID:** `getIAMRole`
+
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+| `read` | `namespace` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `roleId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.id` | `string` | Yes | min length: 1; max length: 200 |
+| `data.name` | `string` | No | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
+| `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.permissions` | `array<object>` | Yes | min items: 1; max items: 64 |
+| `data.permissions[].action` | `"create" or "read" or "update" or "delete" or "deploy" or "operate" or "administer"` | Yes | — |
+| `data.permissions[].resourceKind` | `"installation" or "namespace" or "configuration" or "service_account" or "secret" or "agent" or "agent_revision"` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 

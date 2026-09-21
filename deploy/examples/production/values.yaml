@@ -1,5 +1,5 @@
 # Production Helm values for an OpenClaw Enterprise control plane.
-# Replace example domains, selectors, CIDRs, Secret names, and image digests
+# Replace example domains, selectors, CIDRs, Secret names, node selectors, and image digests
 # with reviewed site-specific values before installing.
 # The [local image build](../../../docs/guides/deploy/local-operations.md#build-images-for-local-kubernetes) fills a real local digest.
 images:
@@ -14,7 +14,12 @@ bootstrap:
     claimName: occ-bootstrap-admin-password
 
 database:
-  cidr: 10.45.0.12/32
+  caSecretName: occ-rds-ca
+  caKey: ca.pem
+  caMountPath: /etc/openclaw/database-ca
+  cidrs:
+    - 10.45.0.12/32
+    - 10.45.0.13/32
 
 api:
   clients:
@@ -23,4 +28,10 @@ api:
         app: occ-operator
 
 cluster:
-  cidr: 10.43.0.1/32
+  cidrs:
+    - 10.43.0.1/32
+    - 10.43.0.2/32
+
+controlPlane:
+  nodeSelector:
+    oce-role: control

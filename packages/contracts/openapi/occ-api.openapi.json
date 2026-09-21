@@ -110,6 +110,7 @@
                   { "const": "METHOD_NOT_ALLOWED", "type": "string" },
                   { "const": "INSTALLATION_EXISTS", "type": "string" },
                   { "const": "RESOURCE_CONFLICT", "type": "string" },
+                  { "const": "AGENT_DELETING", "type": "string" },
                   { "const": "NAMESPACE_NOT_READY", "type": "string" },
                   { "const": "NAMESPACE_NOT_EMPTY", "type": "string" },
                   { "const": "PAYLOAD_TOO_LARGE", "type": "string" },
@@ -173,11 +174,8 @@
         "properties": {
           "data": {
             "additionalProperties": false,
-            "properties": {
-              "slackConfigured": { "type": "boolean" },
-              "transportConfigured": { "type": "boolean" }
-            },
-            "required": ["transportConfigured", "slackConfigured"],
+            "properties": { "transportConfigured": { "type": "boolean" } },
+            "required": ["transportConfigured"],
             "type": "object"
           },
           "meta": {
@@ -2129,17 +2127,30 @@
                               },
                               { "type": "null" }
                             ]
+                          },
+                          "servicePrincipalId": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "status": {
+                            "anyOf": [
+                              { "const": "active", "type": "string" },
+                              { "const": "deleting", "type": "string" }
+                            ]
                           }
                         },
                         "required": [
                           "id",
                           "namespaceId",
                           "name",
+                          "servicePrincipalId",
                           "configurationId",
                           "providerId",
                           "harnessAuth",
                           "executionMode",
                           "desiredRuntimeState",
+                          "status",
                           "createdAt"
                         ],
                         "type": "object"
@@ -2434,17 +2445,30 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "servicePrincipalId": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "status": {
+                          "anyOf": [
+                            { "const": "active", "type": "string" },
+                            { "const": "deleting", "type": "string" }
+                          ]
                         }
                       },
                       "required": [
                         "id",
                         "namespaceId",
                         "name",
+                        "servicePrincipalId",
                         "configurationId",
                         "providerId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
+                        "status",
                         "createdAt"
                       ],
                       "type": "object"
@@ -2544,6 +2568,242 @@
       }
     },
     "/namespaces/{namespaceId}/agents/{agentId}": {
+      "delete": {
+        "description": "Requires delete permission on the requested Agent.",
+        "operationId": "deleteAgent",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "activeRevisionId": {
+                          "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "configurationId": {
+                          "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                          "type": "string"
+                        },
+                        "desiredRuntimeState": {
+                          "anyOf": [
+                            { "const": "running", "type": "string" },
+                            { "const": "stopped", "type": "string" }
+                          ]
+                        },
+                        "executionMode": {
+                          "anyOf": [
+                            { "const": "embedded", "type": "string" },
+                            { "const": "dedicated", "type": "string" }
+                          ]
+                        },
+                        "harnessAuth": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "runtime", "type": "string" }
+                                  },
+                                  "required": ["method"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "api_key", "type": "string" },
+                                    "source": {
+                                      "additionalProperties": false,
+                                      "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                                      "properties": {
+                                        "id": {
+                                          "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                          "type": "string"
+                                        },
+                                        "kind": { "const": "secret", "type": "string" },
+                                        "namespaceId": {
+                                          "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind", "namespaceId", "id"],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": ["method", "source"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": {
+                                      "const": "chatgpt_service_account",
+                                      "type": "string"
+                                    },
+                                    "serviceAccountId": {
+                                      "pattern": "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["method", "serviceAccountId"],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "id": {
+                          "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                          "type": "string"
+                        },
+                        "namespaceId": {
+                          "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "plugins": { "$ref": "#/components/schemas/def-4" },
+                        "providerId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "servicePrincipalId": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "status": {
+                          "anyOf": [
+                            { "const": "active", "type": "string" },
+                            { "const": "deleting", "type": "string" }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "namespaceId",
+                        "name",
+                        "servicePrincipalId",
+                        "configurationId",
+                        "providerId",
+                        "harnessAuth",
+                        "executionMode",
+                        "desiredRuntimeState",
+                        "status",
+                        "createdAt"
+                      ],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Begin deletion of an exact Namespace-owned Agent and its AgentRevisions",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "delete", "resourceKind": "agent", "scope": "requested" }
+        ]
+      },
       "get": {
         "description": "Requires read permission on the requested Agent.",
         "operationId": "getAgent",
@@ -2684,17 +2944,30 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "servicePrincipalId": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "status": {
+                          "anyOf": [
+                            { "const": "active", "type": "string" },
+                            { "const": "deleting", "type": "string" }
+                          ]
                         }
                       },
                       "required": [
                         "id",
                         "namespaceId",
                         "name",
+                        "servicePrincipalId",
                         "configurationId",
                         "providerId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
+                        "status",
                         "createdAt"
                       ],
                       "type": "object"
@@ -2989,17 +3262,30 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "servicePrincipalId": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "status": {
+                          "anyOf": [
+                            { "const": "active", "type": "string" },
+                            { "const": "deleting", "type": "string" }
+                          ]
                         }
                       },
                       "required": [
                         "id",
                         "namespaceId",
                         "name",
+                        "servicePrincipalId",
                         "configurationId",
                         "providerId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
+                        "status",
                         "createdAt"
                       ],
                       "type": "object"
@@ -3392,6 +3678,277 @@
             "resourceKind": "secret",
             "scope": "requested"
           }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}": {
+      "get": {
+        "description": "Requires read permission on the requested AgentRevision.",
+        "operationId": "getAgentDeployment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "agentId": {
+                          "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "deploymentId": {
+                          "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "error": {
+                          "anyOf": [
+                            { "type": "null" },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "code": { "maxLength": 64, "minLength": 1, "type": "string" },
+                                "data": { "additionalProperties": {}, "type": "object" },
+                                "message": { "minLength": 1, "type": "string" }
+                              },
+                              "required": ["code", "message"],
+                              "type": "object"
+                            }
+                          ],
+                          "description": "Null unless deployment failed. A failure contains code, a fixed safe message, and optional allowlisted data. CONVERGENCE_DEADLINE_EXCEEDED may include data.timeoutMs. Native error text is never returned."
+                        },
+                        "namespaceId": {
+                          "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "status": {
+                          "anyOf": [
+                            { "const": "queued", "type": "string" },
+                            { "const": "running", "type": "string" },
+                            { "const": "succeeded", "type": "string" },
+                            { "const": "failed", "type": "string" }
+                          ]
+                        },
+                        "warnings": {
+                          "description": "Warnings recorded from this deployment startup. Plugin install and connector-auth warnings mean the deployment succeeded after the runtime disabled the affected admitted plugin for that startup.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "anyOf": [
+                                  { "const": "PLUGIN_INSTALL_FAILED", "type": "string" },
+                                  { "const": "PLUGIN_AUTH_REQUIRED", "type": "string" }
+                                ]
+                              },
+                              "pluginId": {
+                                "description": "The admitted Agent plugin selection key.",
+                                "maxLength": 253,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9._~:@-]{1,253}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["code", "pluginId"],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "deploymentId",
+                        "namespaceId",
+                        "agentId",
+                        "status",
+                        "error",
+                        "warnings"
+                      ],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Get the durable deployment status for one admitted Agent revision",
+        "tags": ["Agent deployments"],
+        "x-openclaw-permissions": [
+          { "action": "read", "resourceKind": "agent_revision", "scope": "requested" }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/agents/{agentId}/native-admin": {
+      "get": {
+        "description": "Requires a human session with administer permission on the exact Agent. Service API keys cannot launch or inspect native admin UI access.",
+        "operationId": "getAgentNativeAdmin",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": { "maxLength": 200, "minLength": 1, "type": "string" }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": { "maxLength": 200, "minLength": 1, "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "OK",
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "activeRevisionId": { "type": "string" },
+                        "host": { "type": "string" },
+                        "origin": { "format": "uri", "type": "string" },
+                        "status": {
+                          "enum": [
+                            "available",
+                            "disabled",
+                            "stopped",
+                            "unavailable",
+                            "unsupported"
+                          ],
+                          "type": "string"
+                        },
+                        "url": { "format": "uri", "type": "string" }
+                      },
+                      "required": ["status"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [{ "sessionCookie": [] }],
+        "summary": "Resolve native admin UI launch availability for one Agent",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "agent", "scope": "requested" }
         ]
       }
     },
@@ -4002,11 +4559,8 @@
                   "properties": {
                     "data": {
                       "additionalProperties": false,
-                      "properties": {
-                        "slackConfigured": { "type": "boolean" },
-                        "transportConfigured": { "type": "boolean" }
-                      },
-                      "required": ["transportConfigured", "slackConfigured"],
+                      "properties": { "transportConfigured": { "type": "boolean" } },
+                      "required": ["transportConfigured"],
                       "type": "object"
                     },
                     "meta": {
@@ -4097,33 +4651,7 @@
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "slack": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "appToken": {
-                        "description": "Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value.",
-                        "maxLength": 65536,
-                        "minLength": 1,
-                        "pattern": "^[^\\u0000]*$",
-                        "type": "string"
-                      },
-                      "botToken": {
-                        "description": "Protected Agent runtime credential value. OCC accepts at most 65,536 UTF-8 bytes and never returns the value.",
-                        "maxLength": 65536,
-                        "minLength": 1,
-                        "pattern": "^[^\\u0000]*$",
-                        "type": "string"
-                      }
-                    },
-                    "required": ["appToken", "botToken"],
-                    "type": "object"
-                  }
-                },
-                "type": "object"
-              }
+              "schema": { "additionalProperties": false, "properties": {}, "type": "object" }
             }
           },
           "required": true
@@ -4137,11 +4665,8 @@
                   "properties": {
                     "data": {
                       "additionalProperties": false,
-                      "properties": {
-                        "slackConfigured": { "type": "boolean" },
-                        "transportConfigured": { "type": "boolean" }
-                      },
-                      "required": ["transportConfigured", "slackConfigured"],
+                      "properties": { "transportConfigured": { "type": "boolean" } },
+                      "required": ["transportConfigured"],
                       "type": "object"
                     },
                     "meta": {
@@ -4367,17 +4892,30 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "servicePrincipalId": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "status": {
+                          "anyOf": [
+                            { "const": "active", "type": "string" },
+                            { "const": "deleting", "type": "string" }
+                          ]
                         }
                       },
                       "required": [
                         "id",
                         "namespaceId",
                         "name",
+                        "servicePrincipalId",
                         "configurationId",
                         "providerId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
+                        "status",
                         "createdAt"
                       ],
                       "type": "object"
@@ -4699,7 +5237,7 @@
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
             },
-            "description": "Default Response"
+            "description": "Service Unavailable. Check `error.code`: `DEPENDENCY_UNAVAILABLE` means workspace access is unavailable. `UNKNOWN_OUTCOME` means OCC could not confirm the write or its audit record; the file may already contain the requested content. Read the same file with `GET` and compare its content before deciding whether to retry. If the content matches, do not retry. If you cannot read it, wait or ask someone with `read` permission on the Agent to check."
           }
         },
         "summary": "Create or replace an allowed workspace file for one active Agent",
@@ -5442,6 +5980,1173 @@
             "resourceKind": "secret",
             "scope": "requested"
           }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/iam/access-bindings": {
+      "get": {
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.",
+        "operationId": "listIAMAccessBindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": { "maxLength": 200, "minLength": 1, "type": "string" },
+                              "namespaceId": {
+                                "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              },
+                              "roleId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                              "subjectId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                              "subjectKind": {
+                                "anyOf": [
+                                  { "const": "identity", "type": "string" },
+                                  { "const": "group", "type": "string" }
+                                ]
+                              }
+                            },
+                            "required": ["id", "namespaceId", "subjectKind", "subjectId", "roleId"],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": { "maxLength": 200, "minLength": 1, "type": "string" },
+                              "namespaceId": {
+                                "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              },
+                              "resourceId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                              "resourceKind": {
+                                "anyOf": [
+                                  { "const": "installation", "type": "string" },
+                                  { "const": "namespace", "type": "string" },
+                                  { "const": "configuration", "type": "string" },
+                                  { "const": "service_account", "type": "string" },
+                                  { "const": "secret", "type": "string" },
+                                  { "const": "agent", "type": "string" },
+                                  { "const": "agent_revision", "type": "string" }
+                                ]
+                              },
+                              "roleId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                              "subjectId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                              "subjectKind": {
+                                "anyOf": [
+                                  { "const": "identity", "type": "string" },
+                                  { "const": "group", "type": "string" }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "namespaceId",
+                              "subjectKind",
+                              "subjectId",
+                              "roleId",
+                              "resourceKind",
+                              "resourceId"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "List exact Namespace IAM AccessBindings",
+        "tags": ["IAM"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" },
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" }
+        ]
+      },
+      "post": {
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.",
+        "operationId": "createIAMAccessBinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "resourceId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                  "resourceKind": {
+                    "anyOf": [
+                      { "const": "agent", "type": "string" },
+                      { "const": "agent_revision", "type": "string" },
+                      { "const": "configuration", "type": "string" },
+                      { "const": "secret", "type": "string" },
+                      { "const": "service_account", "type": "string" }
+                    ]
+                  },
+                  "roleId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                  "subjectId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                  "subjectKind": { "const": "identity", "type": "string" }
+                },
+                "required": ["subjectKind", "subjectId", "roleId", "resourceKind", "resourceId"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "namespaceId": {
+                              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                              "type": "string"
+                            },
+                            "roleId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "subjectId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "subjectKind": {
+                              "anyOf": [
+                                { "const": "identity", "type": "string" },
+                                { "const": "group", "type": "string" }
+                              ]
+                            }
+                          },
+                          "required": ["id", "namespaceId", "subjectKind", "subjectId", "roleId"],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "namespaceId": {
+                              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                              "type": "string"
+                            },
+                            "resourceId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "resourceKind": {
+                              "anyOf": [
+                                { "const": "installation", "type": "string" },
+                                { "const": "namespace", "type": "string" },
+                                { "const": "configuration", "type": "string" },
+                                { "const": "service_account", "type": "string" },
+                                { "const": "secret", "type": "string" },
+                                { "const": "agent", "type": "string" },
+                                { "const": "agent_revision", "type": "string" }
+                              ]
+                            },
+                            "roleId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "subjectId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "subjectKind": {
+                              "anyOf": [
+                                { "const": "identity", "type": "string" },
+                                { "const": "group", "type": "string" }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "namespaceId",
+                            "subjectKind",
+                            "subjectId",
+                            "roleId",
+                            "resourceKind",
+                            "resourceId"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "413": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "415": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Create an immutable exact-resource Namespace IAM AccessBinding",
+        "tags": ["IAM"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" },
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "agent",
+            "scope": "request_body"
+          },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "agent_revision",
+            "scope": "request_body"
+          },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "configuration",
+            "scope": "request_body"
+          },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "secret",
+            "scope": "request_body"
+          },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "service_account",
+            "scope": "request_body"
+          }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/iam/access-bindings/{bindingId}": {
+      "delete": {
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.",
+        "operationId": "deleteIAMAccessBinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "bindingId",
+            "required": true,
+            "schema": { "maxLength": 200, "minLength": 1, "type": "string" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Default Response" },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Delete one exact Namespace IAM AccessBinding",
+        "tags": ["IAM"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" },
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" }
+        ]
+      },
+      "get": {
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.",
+        "operationId": "getIAMAccessBinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "bindingId",
+            "required": true,
+            "schema": { "maxLength": 200, "minLength": 1, "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "namespaceId": {
+                              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                              "type": "string"
+                            },
+                            "roleId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "subjectId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "subjectKind": {
+                              "anyOf": [
+                                { "const": "identity", "type": "string" },
+                                { "const": "group", "type": "string" }
+                              ]
+                            }
+                          },
+                          "required": ["id", "namespaceId", "subjectKind", "subjectId", "roleId"],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "namespaceId": {
+                              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                              "type": "string"
+                            },
+                            "resourceId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "resourceKind": {
+                              "anyOf": [
+                                { "const": "installation", "type": "string" },
+                                { "const": "namespace", "type": "string" },
+                                { "const": "configuration", "type": "string" },
+                                { "const": "service_account", "type": "string" },
+                                { "const": "secret", "type": "string" },
+                                { "const": "agent", "type": "string" },
+                                { "const": "agent_revision", "type": "string" }
+                              ]
+                            },
+                            "roleId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "subjectId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                            "subjectKind": {
+                              "anyOf": [
+                                { "const": "identity", "type": "string" },
+                                { "const": "group", "type": "string" }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "namespaceId",
+                            "subjectKind",
+                            "subjectId",
+                            "roleId",
+                            "resourceKind",
+                            "resourceId"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Get an exact Namespace IAM AccessBinding",
+        "tags": ["IAM"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" },
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/iam/roles": {
+      "get": {
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.",
+        "operationId": "listIAMRoles",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": { "maxLength": 200, "minLength": 1, "type": "string" },
+                          "name": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                            "type": "string"
+                          },
+                          "namespaceId": {
+                            "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          },
+                          "permissions": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "action": {
+                                  "anyOf": [
+                                    { "const": "create", "type": "string" },
+                                    { "const": "read", "type": "string" },
+                                    { "const": "update", "type": "string" },
+                                    { "const": "delete", "type": "string" },
+                                    { "const": "deploy", "type": "string" },
+                                    { "const": "operate", "type": "string" },
+                                    { "const": "administer", "type": "string" }
+                                  ]
+                                },
+                                "resourceKind": {
+                                  "anyOf": [
+                                    { "const": "installation", "type": "string" },
+                                    { "const": "namespace", "type": "string" },
+                                    { "const": "configuration", "type": "string" },
+                                    { "const": "service_account", "type": "string" },
+                                    { "const": "secret", "type": "string" },
+                                    { "const": "agent", "type": "string" },
+                                    { "const": "agent_revision", "type": "string" }
+                                  ]
+                                }
+                              },
+                              "required": ["action", "resourceKind"],
+                              "type": "object"
+                            },
+                            "maxItems": 64,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": ["id", "namespaceId", "permissions"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "List exact Namespace IAM Roles",
+        "tags": ["IAM"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" },
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" }
+        ]
+      },
+      "post": {
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.",
+        "operationId": "createIAMRole",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                    "type": "string"
+                  },
+                  "permissions": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "action": {
+                          "anyOf": [
+                            { "const": "create", "type": "string" },
+                            { "const": "read", "type": "string" },
+                            { "const": "update", "type": "string" },
+                            { "const": "delete", "type": "string" },
+                            { "const": "deploy", "type": "string" },
+                            { "const": "operate", "type": "string" },
+                            { "const": "administer", "type": "string" }
+                          ]
+                        },
+                        "resourceKind": {
+                          "anyOf": [
+                            { "const": "agent", "type": "string" },
+                            { "const": "agent_revision", "type": "string" },
+                            { "const": "configuration", "type": "string" },
+                            { "const": "secret", "type": "string" },
+                            { "const": "service_account", "type": "string" }
+                          ]
+                        }
+                      },
+                      "required": ["action", "resourceKind"],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": ["permissions"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": { "maxLength": 200, "minLength": 1, "type": "string" },
+                        "name": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                          "type": "string"
+                        },
+                        "namespaceId": {
+                          "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "permissions": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "action": {
+                                "anyOf": [
+                                  { "const": "create", "type": "string" },
+                                  { "const": "read", "type": "string" },
+                                  { "const": "update", "type": "string" },
+                                  { "const": "delete", "type": "string" },
+                                  { "const": "deploy", "type": "string" },
+                                  { "const": "operate", "type": "string" },
+                                  { "const": "administer", "type": "string" }
+                                ]
+                              },
+                              "resourceKind": {
+                                "anyOf": [
+                                  { "const": "installation", "type": "string" },
+                                  { "const": "namespace", "type": "string" },
+                                  { "const": "configuration", "type": "string" },
+                                  { "const": "service_account", "type": "string" },
+                                  { "const": "secret", "type": "string" },
+                                  { "const": "agent", "type": "string" },
+                                  { "const": "agent_revision", "type": "string" }
+                                ]
+                              }
+                            },
+                            "required": ["action", "resourceKind"],
+                            "type": "object"
+                          },
+                          "maxItems": 64,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": ["id", "namespaceId", "permissions"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "413": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "415": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Create an immutable Namespace IAM Role",
+        "tags": ["IAM"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" },
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/iam/roles/{roleId}": {
+      "delete": {
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.",
+        "operationId": "deleteIAMRole",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "roleId",
+            "required": true,
+            "schema": { "maxLength": 200, "minLength": 1, "type": "string" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Default Response" },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Delete an unreferenced exact Namespace IAM Role",
+        "tags": ["IAM"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" },
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" }
+        ]
+      },
+      "get": {
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.",
+        "operationId": "getIAMRole",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "roleId",
+            "required": true,
+            "schema": { "maxLength": 200, "minLength": 1, "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": { "maxLength": 200, "minLength": 1, "type": "string" },
+                        "name": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                          "type": "string"
+                        },
+                        "namespaceId": {
+                          "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "permissions": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "action": {
+                                "anyOf": [
+                                  { "const": "create", "type": "string" },
+                                  { "const": "read", "type": "string" },
+                                  { "const": "update", "type": "string" },
+                                  { "const": "delete", "type": "string" },
+                                  { "const": "deploy", "type": "string" },
+                                  { "const": "operate", "type": "string" },
+                                  { "const": "administer", "type": "string" }
+                                ]
+                              },
+                              "resourceKind": {
+                                "anyOf": [
+                                  { "const": "installation", "type": "string" },
+                                  { "const": "namespace", "type": "string" },
+                                  { "const": "configuration", "type": "string" },
+                                  { "const": "service_account", "type": "string" },
+                                  { "const": "secret", "type": "string" },
+                                  { "const": "agent", "type": "string" },
+                                  { "const": "agent_revision", "type": "string" }
+                                ]
+                              }
+                            },
+                            "required": ["action", "resourceKind"],
+                            "type": "object"
+                          },
+                          "maxItems": 64,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": ["id", "namespaceId", "permissions"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Get an exact Namespace IAM Role",
+        "tags": ["IAM"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" },
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" }
         ]
       }
     },

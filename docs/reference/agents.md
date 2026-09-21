@@ -1,8 +1,14 @@
 # Agents
 
-An Agent is a named, persistent resource representing one AI workload inside a
-[Namespace](namespaces.md). Each Agent has its own identity and revision history and cannot cross
-Namespace boundaries.
+An Agent is an AI workload that you name, configure, and deploy inside a
+[Namespace](namespaces.md). Each Agent has its own identity, revision history,
+and, once deployed, gateway. It cannot use another Namespace's resources
+through its own permissions.
+
+To get one running, [deploy your first Agent](../guides/first-agent.md). For an
+existing Agent, see [Compute](../guides/topics/agent-compute.md) for execution
+choices, [Agent Revisions](../guides/topics/agent-revisions.md) for changes, or
+[Troubleshoot](../guides/topics/agent-troubleshoot.md) if a deployment stalls.
 
 ```text
 Namespace: support
@@ -14,20 +20,28 @@ Namespace: support
     └── Gateway: unique to deployed customer-help
 ```
 
-Creating an Agent records its platform resource, exact Namespace-owned
-Configuration reference, identity, and a `stopped` desired runtime state. It does not start a workload, deploy a
-model, or create a revision until an authorized caller explicitly requests
-deployment.
+Creating an Agent saves its identity and exact Namespace-owned Configuration
+reference with an `active` lifecycle status and a `stopped` desired runtime
+state. No workload or model starts, and no revision is created, until an
+authorized caller requests deployment. Deployment records an immutable revision
+and queues the work to start it. Stopping an Agent ends execution and routing
+but keeps its revision history and persistent state. A later deployment creates
+a new revision.
 
 ## Supported operations
 
 Agent operations are scoped beneath `/namespaces/:namespaceId/agents`. Creation
 returns `201`, reads and updates return `200`, and deployment returns `202`
-with the newly admitted AgentRevision. Stop also returns `202`, with the Agent's
-`desiredRuntimeState` set to `stopped`; Compute shutdown remains asynchronous.
-Collection reads include only Agents
-for which the caller has an exact `read` grant. The [API reference](api.md)
-owns route schemas, response envelopes, and permission annotations.
+with the newly admitted AgentRevision. Stop and deletion also return `202`;
+their Compute effects remain asynchronous. Stop sets the Agent's
+`desiredRuntimeState` to `stopped`. Collection reads include only Agents the
+caller has an exact `read` grant for. The [API reference](api.md) documents route
+schemas, response envelopes, and permissions.
+
+Authorized Agent responses include immutable, read-only `servicePrincipalId`.
+Use this value for [Namespace IAM bindings](authorization.md#manage-namespace-policy);
+clients must not derive the identity from the Agent ID. Create and update
+requests reject a supplied `servicePrincipalId`.
 
 Creation body:
 
@@ -43,9 +57,38 @@ Creation body:
 Creation requires an existing Namespace in `provisioning` or `ready` status
 and a same-Namespace Configuration with `kind: "agent"`. The caller needs
 Agent `create` permission in that Namespace and `read` permission on the
-exact Configuration. A selected harness credential source requires its own exact permissions; see
-[harness authentication](#harness-authentication). [Authentication](authentication.md) establishes the
-caller; [authorization](authorization.md) defines its grants.
+exact Configuration. A selected model credential requires separate permissions;
+see [Harness authentication](#harness-authentication). [Authentication](authentication.md)
+establishes the caller; [authorization](authorization.md) defines its grants.
+
+## Deployment status
+
+The `deploymentId` for status polling is the admitted AgentRevision ID returned
+by `POST /namespaces/:namespaceId/agents/:agentId/deploy`. The deploy response
+being `202` means OCC admitted immutable revision state and queued work; it does
+not mean the workload is ready.
+
+Poll the original deployment work with:
+
+```text
+GET /namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId
+```
+
+The caller needs read access to that exact AgentRevision. Responses include the
+original `deploymentId`, `namespaceId`, `agentId`, a `status`, nullable
+`error`, and plugin `warnings`. `queued` means no live worker claim currently owns the original work,
+including after a claim lease expires. `running` means a worker claim is still
+live. `succeeded` means the original deployment work completed activation or
+was already active; it is historical completion evidence, not a live health
+probe. `failed` means the original work reached a terminal failed outcome or
+completed without activating the requested revision.
+
+Errors use fixed platform codes, messages, and allowlisted `error.data`.
+A successful deployment can include plugin warnings containing a closed code
+and admitted `pluginId`; see [Agent plugins](agent-plugins.md#lifecycle). These
+warnings record the observed startup result, not live plugin health.
+A later deployment admits a new revision with its own deployment status and does
+not rewrite the original result.
 
 ## Provider association
 
@@ -56,9 +99,9 @@ resolve to a configured Provider. No default is inferred. The nullable reference
 is returned on both Agent and AgentRevision responses.
 
 The Provider reference is independent of native model names and Harness
-selection. Providerless Agents remain supported with an OpenAI API-key harness binding. A managed access token requires the
-matching Provider and private account binding at admission and reconciliation;
-see [Provider deployment checks](providers.md#agent-association-and-immutable-deployment).
+selection. An Agent using an OpenAI API key does not need a Provider. An
+issued account token requires the matching Provider and account when deployment
+is requested and again before startup; see [Provider deployment checks](providers.md#agent-association-and-immutable-deployment).
 Creating an Agent does not create a provider account or issue credentials.
 
 ## Harness authentication
@@ -156,6 +199,8 @@ count. Successful writes record the Agent, file name, and outcome in the audit l
 | ---------------------------- | ---------------------------------------------------- |
 | `400 INVALID_REQUEST`        | Invalid file name or content.                        |
 | `404 NOT_FOUND`              | The requested Agent or file was not found.           |
+| `409 AGENT_DELETING`         | The Agent is being deleted.                          |
+| `409 RESOURCE_CONFLICT`      | The Agent is stopping.                               |
 | `413 PAYLOAD_TOO_LARGE`      | The request body exceeds 48 KiB.                     |
 | `503 DEPENDENCY_UNAVAILABLE` | Workspace access is unavailable.                     |
 | `503 UNKNOWN_OUTCOME`        | OCC could not confirm the write or its audit record. |
@@ -168,6 +213,21 @@ See [gateway routing](gateway-routing.md) for transport configuration and
 access, the [HTTP API](api.md#get-namespacesnamespaceidagentsagentidworkspacefilesname)
 for request and response schemas, and the [execution flow](../flows/workspace-files.md)
 for implementation details.
+
+## Native admin UI
+
+Trusted operators can open the selected Agent gateway's stock native admin UI
+when the Installation enables [Agent native admin UI access](agent-native-admin.md).
+The availability route requires exact Agent `administer`; `read` and `operate`
+are insufficient. The Agent must be desired running, have an active revision,
+and expose a private gateway endpoint through the selected Compute Driver.
+
+The native UI uses the Agent's derived browser host and the existing private
+gateway route. The derived host authenticates with the ordinary OCE browser
+session cookie under the configured shared cookie parent domain; OCC still
+resolves and authorizes the exact Agent before proxying. OCE does not turn
+native edits into Configuration changes or AgentRevision snapshots. Redeploy
+applies the managed revision again but does not erase all gateway-local state.
 
 ## Namespace ownership
 
@@ -184,14 +244,40 @@ or deleting Namespace rejects new Agents.
 
 ## Identity and deployment
 
-Each Agent has one stable service principal and explicitly selects embedded OpenClaw or dedicated Codex execution. A bodyless deployment request admits an immutable revision; the separate worker activates it asynchronously. See [Agent identity and deployment](agents/deployment.md) for credential boundaries, admission permissions, snapshot fields, and activation guarantees.
+Each Agent has one stable service principal and runs embedded OpenClaw or
+dedicated Codex. A deployment request takes no body: it snapshots the saved
+draft, and a worker starts it asynchronously. See
+[Agent identity and deployment](agents/deployment.md) for the permissions,
+snapshot fields, and activation guarantees.
 
 An authorized bodyless `POST /namespaces/:namespaceId/agents/:agentId/stop`
 sets desired state to `stopped`. The worker removes execution and routing before
 clearing `activeRevisionId`; revision history, credentials, and persistent state
 remain. Cleanup includes failed candidate resources and interrupted predecessor
-retirement owned by the current Compute. Repeating stop is safe. A later deployment admits a new revision and sets
-desired state back to `running`; stop does not restart an old revision directly.
+retirement owned by the current Compute. Repeating stop is safe. A later
+deployment creates a new revision and sets desired state back to `running`;
+you cannot restart an old revision directly.
+
+## Deletion
+
+An authorized bodyless `DELETE /namespaces/:namespaceId/agents/:agentId`
+sets `status` to `deleting`, sets desired runtime state to `stopped`, queues
+teardown, and returns `202`. A deleting Agent remains readable while work is in
+flight, but update, deployment, runtime-credential provisioning, and workspace
+writes return `409`. Repeating deletion while the Agent exists converges on the
+same queued operation.
+
+The worker reauthorizes the original caller, binds the persisted Agent identity
+into Compute, retires every revision, and removes the Agent's runtime credentials
+before atomically deleting the Agent, its
+revision history, service principal, service-principal API keys, and exact IAM
+bindings and restrictions. Kubernetes revision retirement waits for exact
+workload Pods and removes Agent-owned compute artifacts, including workspace
+data. Namespace-owned Configurations and Secrets survive. After success,
+the Agent disappears from reads and its name can be reused. Retryable cleanup
+failures leave the Agent in `deleting` while bounded queue retries continue.
+Permanent failures fail closed in `failed_permanent`; the Agent remains
+`deleting`, and the current API has no requeue or operator recovery path.
 
 ## Editable configuration
 
@@ -220,15 +306,15 @@ each deployed Agent still owns its own gateway and stable service principal.
 
 ## Current limitations
 
-The public API has no Agent deletion operation, revision mutation/deletion,
-or explicit rollback endpoint. An Agent therefore prevents deletion of its
-Namespace. Editing a Configuration or Agent does not update a running workload;
-a new deployment is required. Stop retains Agent-owned persistent data and does
-not destroy credentials. Brokered model credentials and controller API
+The public API has no revision mutation/deletion or explicit rollback endpoint.
+Editing a Configuration or Agent does not update a running workload; a new
+deployment is required. Stop retains Agent-owned persistent data and does not
+destroy credentials. Brokered model credentials and controller API
 authentication for Agent service principals remain unavailable. The optional
-[OpenShell SandboxDriver](drivers/openshell-sandbox.md) is supported with the
-bundled Kubernetes Compute Driver and dedicated Codex; other sandbox execution
-combinations are rejected.
+[OpenShell SandboxDriver](drivers/openshell-sandbox.md) requires bundled
+Kubernetes Compute and dedicated Codex. Stock OpenShell cannot provide all the
+required workload credentials; review the documented compatibility limits before
+planning a deployment. Other sandbox execution combinations are rejected.
 
 ## Failure semantics
 
@@ -245,7 +331,10 @@ combinations are rejected.
 - `400 INVALID_REQUEST`: A removed top-level `serviceAccountId` or runtime
   `modelApiKey` selector is supplied. Use `harnessAuth` explicitly.
 - `409 RESOURCE_CONFLICT`: Another Agent already uses that name in the same
-  Namespace, or the Namespace cannot accept new Agents.
+  Namespace, the Namespace cannot accept new Agents, or a stopping Agent cannot
+  accept the requested mutation.
+- `409 AGENT_DELETING`: The Agent is deleting and cannot accept update,
+  deployment, credential-provisioning, or workspace-write mutations.
 - `409 NAMESPACE_NOT_READY`: The backing Namespace infrastructure is not ready
   for deployment.
 - `503 DEPENDENCY_UNAVAILABLE`: A selected Harness descriptor, Compute
@@ -253,7 +342,10 @@ combinations are rejected.
 
 ## Related
 
-- [Quickstart](../guides/quickstart.md)
+- [Deploy your first Agent](../guides/first-agent.md)
+- [Agent Revisions](../guides/topics/agent-revisions.md)
+- [Workspace files](../guides/topics/workspace-files.md)
+- [Troubleshoot Agents](../guides/topics/agent-troubleshoot.md)
 - [Development and production deployment](../guides/deploy.md)
 - [Harness execution](harness-execution.md)
 - [Namespaces](namespaces.md)

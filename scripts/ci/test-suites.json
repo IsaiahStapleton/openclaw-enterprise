@@ -157,6 +157,9 @@
           "path": "tests/integration/ci-prepare.test.mjs"
         },
         {
+          "path": "tests/integration/k3d-launcher.test.mjs"
+        },
+        {
           "path": "tests/integration/ci-openshell.test.mjs"
         },
         {
@@ -200,6 +203,15 @@
         },
         {
           "path": "tests/conformance/postgres-transaction-commit.test.mjs"
+        },
+        {
+          "path": "tests/integration/native-admin-access.test.mjs",
+          "expectedTests": [
+            "native admin status requires exact Agent administer and reports lifecycle availability",
+            "native admin disabled status still requires exact Agent administer",
+            "native admin shared session configuration validates cookie scope and rejects keys",
+            "native admin proxy strips browser credentials and preserves the Agent gateway base path"
+          ]
         }
       ]
     },
@@ -278,6 +290,18 @@
           "expectedTests": [
             "development API starts with stale Provider references and permits repair through Agent update",
             "PostgreSQL Provider ownership persists exact Agent associations and admits only matching managed bindings"
+          ]
+        },
+        {
+          "path": "tests/integration/postgres-namespace-iam-policy.test.mjs",
+          "expectedTests": [
+            "PostgreSQL native IAM creates exact Namespace bindings atomically with audit",
+            "PostgreSQL native IAM serializes AccessBinding creation before target deletion",
+            "PostgreSQL native IAM serializes target deletion before AccessBinding creation",
+            "PostgreSQL native IAM rolls back policy mutations when transaction audit fails",
+            "PostgreSQL native IAM authorizes Namespace-local service identities without Agent ownership",
+            "PostgreSQL native IAM creates exact AgentRevision bindings with limited app privileges",
+            "PostgreSQL native IAM rejects foreign subjects, broad grants, and absent targets"
           ]
         },
         {
@@ -362,6 +386,18 @@
           "expectedTests": [
             "a lost real COMMIT response preserves the unknown outcome and committed resource"
           ]
+        },
+        {
+          "path": "tests/integration/native-admin-session-postgres.test.mjs",
+          "expectedTests": [
+            "PostgreSQL native admin shared session and HTTP proxy work across two OCC API replicas",
+            "PostgreSQL native admin WebSocket lease closes within thirty seconds after parent logout",
+            "PostgreSQL native admin WebSocket lease closes within thirty seconds after parent session expiry",
+            "PostgreSQL native admin WebSocket lease closes within thirty seconds after IAM administer restriction",
+            "PostgreSQL native admin WebSocket lease closes within thirty seconds after Agent stop",
+            "PostgreSQL native admin WebSocket lease closes within thirty seconds after active revision replacement",
+            "PostgreSQL native admin WebSocket closes on API shutdown and disabled redeploy denies reuse"
+          ]
         }
       ]
     },
@@ -444,7 +480,8 @@
       "requiredEnv": [
         "OCC_TEST_KUBERNETES_KUBECONFIG",
         "OCC_TEST_KUBERNETES_CONTEXT",
-        "OCC_TEST_KUBERNETES_IMAGE"
+        "OCC_TEST_KUBERNETES_IMAGE",
+        "OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS"
       ],
       "env": {
         "OCC_TEST_KUBERNETES_CONFIGURATION": "1"
@@ -460,7 +497,7 @@
           "expectedTests": [
             "real Kubernetes Compute Driver owns isolated Agent gateways, identities, revisions, and deletion",
             "real Kubernetes Drivers safely use and preserve an externally managed tenant namespace",
-            "authenticated PostgreSQL OCC API and worker deploy real Agent-owned gateways and revisions"
+            "authenticated PostgreSQL OCC API and worker deploy real Agent-owned gateways, Secret bindings, and revisions"
           ]
         },
         {
@@ -470,6 +507,13 @@
             "real OCC creates concurrent Namespace Agents and durably associates revisions with their owner",
             "independent PostgreSQL API and worker provision isolated Namespaces, activate admitted revisions, and tombstone deletion",
             "PostgreSQL API and worker preserve immutable deployments, stable identities, and tenant isolation"
+          ]
+        },
+        {
+          "path": "tests/integration/kubernetes-plugin-status-real.test.mjs",
+          "expectedTests": [
+            "real Kubernetes Compute reads plugin runtime status from the exact gateway Pod",
+            "real Kubernetes Compute reports plugin install warnings and disables failed plugin config"
           ]
         }
       ]
@@ -512,6 +556,7 @@
       ],
       "env": {
         "OCC_TEST_HARNESS_K3D_REAL": "1",
+        "OCC_TEST_LOCAL_FIRST_AGENT_REAL": "1",
         "OCC_TEST_SLACK_LIVE": "0",
         "OCC_TEST_GATEWAY_ROUTING_REAL": "0"
       },
@@ -536,6 +581,12 @@
             "production service account powers embedded OpenClaw through its exact persisted provider credential",
             "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings"
           ]
+        },
+        {
+          "path": "tests/integration/local-first-agent-real.test.mjs",
+          "expectedTests": [
+            "a local Kubernetes installer can deploy and reuse an Agent but cannot replace its key after external changes"
+          ]
         }
       ]
     },
@@ -543,6 +594,7 @@
       "requiredEnv": [
         "OCC_TEST_KUBERNETES_KUBECONFIG",
         "OCC_TEST_KUBERNETES_CONTEXT",
+        "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
         "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
         "OCC_TEST_KUBERNETES_AGENT_IMAGE",
         "OPENAI_API_KEY",
@@ -552,14 +604,15 @@
       ],
       "env": {
         "OCC_TEST_GATEWAY_ROUTING_REAL": "1",
-        "OCC_TEST_SLACK_LIVE": "0"
+        "OCC_TEST_SLACK_LIVE": "0",
+        "OCC_TEST_NATIVE_ADMIN_REAL": "1"
       },
       "prepare": {
         "postgres": true,
         "k3d": true,
         "codexSeccomp": true,
         "requiresPreparedStateForFile": true,
-        "requireEnv": ["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL"],
+        "requireEnv": ["OPENAI_API_KEY", "OCC_TEST_OPENAI_MODEL", "NODE_BASE_IMAGE"],
         "immutableOptionalEnvImages": [
           "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
           "OCC_TEST_KUBERNETES_AGENT_IMAGE"
@@ -570,6 +623,12 @@
           "path": "tests/integration/harness-topology-k3d-routing-real.test.mjs",
           "expectedTests": [
             "production dedicated Codex consumes Envoy-routed workspace files through OCC"
+          ]
+        },
+        {
+          "path": "tests/integration/native-admin-k3d-real.test.mjs",
+          "expectedTests": [
+            "production native admin UI opens through OCC and preserves Agent boundaries"
           ]
         }
       ]
@@ -853,6 +912,7 @@
         "OCC_TEST_KUBERNETES_CONTEXT",
         "OCC_TEST_PLUGIN_DRIVER_OPENCLAW_DATABASE_URL",
         "OCC_TEST_PLUGIN_DRIVER_CODEX_CALENDAR_DATABASE_URL",
+        "OCC_TEST_PLUGIN_DRIVER_CODEX_FAILURE_DATABASE_URL",
         "CODEX_ACCESS_TOKEN",
         "OCC_TEST_CODEX_PLUGIN_CATALOG_CODEX_EXECUTABLE",
         "OCC_TEST_CODEX_PLUGIN_CATALOG_CODEX_HOME"

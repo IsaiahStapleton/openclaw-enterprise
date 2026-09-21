@@ -1,5 +1,6 @@
 import { element, button } from "../dom.mjs";
 import { createHarnessAuthFields, harnessAuthDescription } from "./harness-auth.mjs";
+import { renderNativeAdminAccess } from "./native-admin.mjs";
 import { renderChannels } from "../channels.mjs";
 import { renderWorkspaceFiles } from "./workspace.mjs";
 import { displayDate, shortId, namespacePath, link, message } from "./list.mjs";
@@ -112,12 +113,21 @@ export async function renderAgentDetail(context) {
       header,
       identity,
       serving,
+      renderNativeAdminAccess(context, path),
       tabs,
       renderWorkspaceFiles(context, agent, path),
     );
     return;
   }
-  view.replaceChildren(header, identity, serving, selector, tabs, content);
+  view.replaceChildren(
+    header,
+    identity,
+    serving,
+    renderNativeAdminAccess(context, path),
+    selector,
+    tabs,
+    content,
+  );
   const results = await Promise.allSettled([
     request(`${path}/revisions`),
     request(
@@ -233,6 +243,8 @@ export async function renderAgentDetail(context) {
       ? createRuntimeCredentialsPanel({
           context,
           path,
+          agent,
+          configuration: snapshot,
           values,
           revisionsLoaded: revisionResult.status === "fulfilled",
           revisionCount: revisions.length,
@@ -293,7 +305,10 @@ export async function renderAgentDetail(context) {
           deployStatus.textContent = credentialBlockReason;
           return;
         }
-        if (!runtimeAuth && !hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values)) {
+        if (
+          !runtimeAuth &&
+          !hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values, freshConfig)
+        ) {
           deployStatus.textContent =
             "Runtime credential metadata changed. Refresh status before deploying.";
           return;

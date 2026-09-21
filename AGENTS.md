@@ -149,8 +149,22 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
   configuration and operator verification remain in the feature references and guides.
 - `docs/flows/` explains runtime execution through the current source. Link to
   reference for normative behavior and to guides for operator procedures.
-- `docs/guides/` owns operator procedures. Keep overview pages concise and
+- `docs/guides/` owns procedures for product users and operators, including
+  people using the console, CLI, or HTTP API. Keep overview pages concise and
   split coherent tasks into named child pages linked from their overview.
+- `docs/contributing/` owns onboarding and workflows for people changing the
+  platform. Link the root `CONTRIBUTING.md` for contribution policy and the
+  relevant reference, flow, or testing page for detailed behavior.
+- The site has six menu sections: **Getting Started**, **Topics**, **Integrations**,
+  **Operate**, and **Reference** serve people using or administering the product;
+  **Contribute** serves people changing the platform. Each menu switches sidebars.
+  Register each Markdown page once in `docs/docs.json`; put deep implementation
+  and testing pages in the owning tab's `hidden` list when an index links them.
+  Hidden pages keep their routes and search entries. Cross-link shared subjects;
+  keep existing file paths and heading anchors when changing navigation.
+- Use short Title Case sidebar labels and descriptive sentence-case article
+  titles. Use nested groups when they clarify the reader's task; give menus a
+  useful overview and list prerequisite steps before actions that need them.
 - Top-level `specs/` records implementation proposals, milestones, and delivery
   history. Completed specifications do not override current feature reference.
 
@@ -192,6 +206,11 @@ The user approved keeping the complete generated HTTP API reference in one page
 for browsing and search. Keep it generated from the OpenAPI contract; the checker
 reports its word count without requiring a split. This exception covers no other
 page.
+
+Files named exactly `AGENTS.md`, including nested instruction documents, are
+also exempt from the length thresholds. The checker still reports their word
+counts. Exemptions follow the resolved file: an `AGENTS.md` symlink pointing to
+an ordinary document does not exempt that document.
 
 ## Documentation editing
 
