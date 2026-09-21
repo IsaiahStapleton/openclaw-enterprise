@@ -23,6 +23,7 @@ import type {
   SecretBindings,
   SecretDriver,
   ResolvedHarnessAuth,
+  RuntimeFailureEvidence,
   SecretEnvironmentProjection,
   SecretReference,
 } from "@openclaw-enterprise/contracts";
@@ -40,6 +41,7 @@ import {
   type PostgresPool,
   type PostgresQueryClient,
   type PostgresWorkQueueOptions,
+  validateRuntimeFailureEvidence,
 } from "@openclaw-enterprise/occ";
 import {
   providerDefinitionMap,
@@ -290,6 +292,33 @@ function pluginWarningsResultData(
     return undefined;
   }
   return Object.freeze({ warnings });
+}
+
+function safeRuntimeFailureEvidence(value: unknown): RuntimeFailureEvidence | undefined {
+  try {
+    return validateRuntimeFailureEvidence(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function runtimeFailureFromObservation(observation: unknown): RuntimeFailureEvidence | undefined {
+  if (typeof observation !== "object" || observation === null || Array.isArray(observation)) {
+    return undefined;
+  }
+  return safeRuntimeFailureEvidence(
+    (observation as { readonly runtimeFailure?: unknown }).runtimeFailure,
+  );
+}
+
+function convergenceDeadlineResultData(
+  timeoutMs: number,
+  runtimeFailure: RuntimeFailureEvidence | undefined,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    timeoutMs,
+    ...(runtimeFailure === undefined ? {} : { runtimeFailure }),
+  });
 }
 
 function revisionSecretBindings(
@@ -1437,7 +1466,12 @@ export class ControllerWorker {
             computePluginWarnings(observation.warnings, revision) ?? Object.freeze([]),
           );
           if (!observation.ready) {
-            await this.finalizeActiveRevision(claim, revision, "REVISION_INCOMPLETE");
+            await this.finalizeActiveRevision(
+              claim,
+              revision,
+              "REVISION_INCOMPLETE",
+              runtimeFailureFromObservation(observation),
+            );
             return;
           }
           if (this.shouldActivatePublishedRevision(compute)) {
@@ -1681,7 +1715,12 @@ export class ControllerWorker {
         computePluginWarnings(observation.warnings, revision) ?? Object.freeze([]),
       );
       if (!observation.ready) {
-        return { outcome: "pending", code: "REVISION_INCOMPLETE" };
+        const runtimeFailure = runtimeFailureFromObservation(observation);
+        return {
+          outcome: "pending",
+          code: "REVISION_INCOMPLETE",
+          ...(runtimeFailure === undefined ? {} : { data: { runtimeFailure } }),
+        };
       }
       const agent = await this.state.read((view) =>
         view.agents.findAgent(revision.namespaceId, revision.agentId),
@@ -1878,7 +1917,10 @@ export class ControllerWorker {
           ...result,
           outcome: "permanent",
           code: "CONVERGENCE_DEADLINE_EXCEEDED",
-          data: { timeoutMs: this.convergenceTimeoutMs },
+          data: convergenceDeadlineResultData(
+            this.convergenceTimeoutMs,
+            safeRuntimeFailureEvidence(result.data?.runtimeFailure),
+          ),
         }
       : result;
     let activated: Readonly<AgentRevision> | undefined;
@@ -2092,6 +2134,7 @@ export class ControllerWorker {
     claim: ClaimedWork,
     revision: Readonly<AgentRevision>,
     code: string,
+    runtimeFailure?: RuntimeFailureEvidence,
   ): Promise<void> {
     if (
       this.maintenanceIntervalMs === undefined ||
@@ -2100,6 +2143,7 @@ export class ControllerWorker {
       await this.finalizeRevision(claim, {
         outcome: "pending",
         code,
+        ...(runtimeFailure === undefined ? {} : { data: { runtimeFailure } }),
       });
       return;
     }

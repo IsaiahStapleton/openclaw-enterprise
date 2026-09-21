@@ -2283,13 +2283,23 @@ test(
     const fixture = await setup(context);
     const owner = await fixture.agent("expired-runtime");
     const candidate = await fixture.revision(owner, 1);
+    const runtimeFailure = {
+      component: "gateway",
+      check: "readyz",
+      checkedAt: "2026-09-19T20:30:00.000Z",
+      code: "STARTUP_FAILED",
+    };
 
     // A real short deadline expires against the durable queued creation timestamp.
     await fixture.start(
       {
         ...fixture.compute,
         async prepareRevision(revision) {
-          return { ...(await fixture.compute.prepareRevision(revision)), ready: false };
+          return {
+            ...(await fixture.compute.prepareRevision(revision)),
+            ready: false,
+            runtimeFailure,
+          };
         },
       },
       () => {},
@@ -2319,7 +2329,7 @@ test(
     assert.deepEqual(status.error, {
       code: "CONVERGENCE_DEADLINE_EXCEEDED",
       message: "Deployment convergence deadline exceeded.",
-      data: { timeoutMs: 1 },
+      data: { timeoutMs: 1, runtimeFailure },
     });
     assert.deepEqual(status.warnings, []);
   },

@@ -1611,6 +1611,60 @@ test("native channel providers require Secret bindings and project them only to 
   ]);
 });
 
+test("Kubernetes cached runtime failure evidence is native-only and readiness-passive", async () => {
+  const revision = routedRevision(createKubernetesComputeDriver(options()), {
+    id: "revision-runtime-failure-evidence",
+    agentId: "agent-runtime-failure-evidence",
+    configurationId: "cfg_runtime_failure_evidence",
+    servicePrincipalId: "service-principal-runtime-failure-evidence",
+  });
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const nonNative = createKubernetesComputeDriver(options());
+  let attemptedProxy = false;
+  nonNative.apiClients = Promise.resolve({
+    core: {
+      async listNamespacedPod() {
+        attemptedProxy = true;
+        throw Object.assign(new Error("pods/proxy denied"), { statusCode: 403 });
+      },
+    },
+  });
+
+  assert.equal(await nonNative.safeRuntimeFailureObservation(revision, namespace), undefined);
+  assert.equal(attemptedProxy, false);
+
+  const native = createKubernetesComputeDriver(
+    options({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+      },
+    }),
+  );
+  const nativeRevision = {
+    ...revision,
+    compute: { id: native.id, implementation: native.implementation },
+  };
+  native.apiClients = Promise.resolve({
+    core: {
+      async listNamespacedPod() {
+        throw Object.assign(new Error("pods/proxy denied"), { statusCode: 403 });
+      },
+    },
+  });
+  assert.equal(await native.safeRuntimeFailureObservation(nativeRevision, namespace), undefined);
+
+  const cancellation = new Error("runtime evidence cancelled");
+  const owner = new AbortController();
+  owner.abort(cancellation);
+  await assert.rejects(
+    withComputeAbortSignal(owner.signal, () =>
+      native.safeRuntimeFailureObservation(nativeRevision, namespace),
+    ),
+    (error) => error === cancellation,
+  );
+});
+
 test("embedded replacement cuts over an unready shared gateway and waits for actual startup readiness", async () => {
   const driver = createKubernetesComputeDriver(
     routedOptions({

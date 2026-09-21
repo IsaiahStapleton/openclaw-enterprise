@@ -87,6 +87,7 @@ const modelPrefix = "openclaw-agent-model";
 const secretRotationProbe = "SECRET_ROTATION_PROBE";
 const peerSecretRotationProbe = "SECRET_ROTATION_PEER_PROBE";
 const sharedSecretRotationProbe = "SECRET_ROTATION_SHARED_PROBE";
+const startupFailurePluginId = "codex-plugin:linear@openai-curated-remote";
 const deniedPort = 18791;
 const sharedWorkspaceVolumeName = "openclaw-workspace";
 const sharedWorkspaceClaimSize = "40Gi";
@@ -699,6 +700,15 @@ function installationConfiguration(authentication, platformNamespace, slack, opt
   configuration.drivers.secret.configuration.authentication = authentication;
   configuration.drivers.configuration.id = "configuration-kubernetes-production";
   configuration.drivers.compute.id = "compute-kubernetes-production";
+  configuration.drivers.plugin = { id: "codex-plugin", configuration: {} };
+  const pluginStatusProxyCidrs = process.env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS;
+  if (pluginStatusProxyCidrs !== undefined && pluginStatusProxyCidrs.trim().length > 0) {
+    configuration.drivers.compute.configuration.network.pluginStatusProxySourceCidrs =
+      pluginStatusProxyCidrs
+        .split(",")
+        .map((cidr) => cidr.trim())
+        .filter(Boolean);
+  }
   configuration.drivers.compute.configuration.resources.namespace.quota = {
     pods: "8",
     "requests.cpu": "2",
@@ -1413,7 +1423,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       return response;
     };
   }
-  const adminRequest = await requestFactory(credentials);
+  let adminRequest = await requestFactory(credentials);
   let request = adminRequest;
   let secretAssignmentPrincipalId;
   const events = [];
@@ -1939,6 +1949,32 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   if (slack === undefined) {
     forwarding = await startGatewayForward();
   }
+  const restartControllerApi = async () => {
+    assert.equal(
+      workspaceGateway,
+      undefined,
+      "controller restart proof is scoped to the local Fastify production harness",
+    );
+    const previousUrl = controllerUrl;
+    await productionApp.close();
+    productionApp = await composeProduction({
+      mode: "production",
+      host: "127.0.0.1",
+      databaseUrl,
+      authSecret,
+      authBaseURL: controllerAuthBaseURL,
+      drivers,
+    });
+    if (previousUrl !== undefined) {
+      await productionApp.listen({
+        host: "127.0.0.1",
+        port: Number(new URL(previousUrl).port),
+      });
+      controllerUrl = previousUrl;
+    }
+    adminRequest = await requestFactory(credentials);
+    request = adminRequest;
+  };
   return {
     mode,
     placement,
@@ -1955,8 +1991,9 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     apiSecretRole: controller.apiSecretRole,
     apiAccount: controller.apiAccount,
     kubernetesNamespaceName,
-    adminRequest,
-    request,
+    adminRequest: (...args) => adminRequest(...args),
+    request: (...args) => request(...args),
+    restartControllerApi,
     events,
     agent: agent.data,
     persistedAgent,
@@ -2101,7 +2138,7 @@ async function assertActualModelTurn(topology) {
 
 // Exercise the regular Secret -> Agent draft -> deployment -> worker -> native startup path.
 // The failure log distinguishes rejected native authentication from ordinary startup latency.
-async function assertInvalidHarnessAuthStaysUnready(context, topology) {
+async function assertInvalidHarnessAuthStaysUnready(context, topology, options = {}) {
   const namespaceId = topology.agent.namespaceId;
   const agentPath = `/namespaces/${namespaceId}/agents/${topology.agent.id}`;
   const validBinding = structuredClone(topology.agent.harnessAuth);
@@ -2122,6 +2159,7 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology) {
   const rebound = await topology.request("PATCH", agentPath, {
     configurationId: topology.agent.configurationId,
     harnessAuth: { method: "api_key", source: invalidSecret.ref },
+    ...(options.plugins === undefined ? {} : { plugins: options.plugins }),
   });
   assertNoSecretMaterial(rebound, [invalidKey], "invalid-key binding response");
   assert.equal(rebound.status, 200, JSON.stringify(rebound.error));
@@ -2274,6 +2312,9 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology) {
   const historical = await topology.request("GET", `${agentPath}/revisions/${predecessor.id}`);
   assert.equal(historical.status, 200);
   assert.deepEqual(historical.data.harnessAuth, predecessor.harnessAuth);
+  if (options.recover === false) {
+    return { revision: candidate.data, rejectedPod };
+  }
   if (topology.mode === "dedicated") {
     await assertActualModelTurn(topology);
     const afterTurn = await topology.request("GET", agentPath);
@@ -2317,6 +2358,115 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology) {
     topology.mode === "dedicated"
       ? "dedicated: invalid-key candidate stayed unready; predecessor served and valid binding recovered"
       : "embedded: invalid-key replacement left the shared gateway unavailable; valid redeploy recovered",
+  );
+}
+
+function assertRuntimeFailureEvidence(value) {
+  assert.deepEqual(
+    Object.keys(value).sort(),
+    ["check", "checkedAt", "code", "component"],
+    "startup failure evidence must contain only the allowlisted runtime fields",
+  );
+  for (const key of ["component", "check", "code"]) {
+    assert.equal(typeof value[key], "string", `runtime failure ${key} must be a string`);
+    assert.match(value[key], /^[A-Za-z0-9._~:@-]{1,64}$/);
+  }
+  assert.equal(Number.isNaN(Date.parse(value.checkedAt)), false);
+}
+
+async function deploymentStatus(topology, revisionId) {
+  const response = await topology.request(
+    "GET",
+    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/deployments/${revisionId}`,
+  );
+  assert.equal(response.status, 200, JSON.stringify(response.error));
+  assertNoSecretMaterial(
+    response,
+    secretApiProtectedValues(topology, [process.env.OPENAI_API_KEY]),
+    "deployment status response",
+  );
+  return response.data;
+}
+
+async function deleteRevisionPods(topology, revisionId) {
+  const pods = (await resources("pods", topology.placement)).filter((pod) => {
+    const { metadata } = pod;
+    if (
+      metadata.deletionTimestamp !== undefined ||
+      metadata.labels?.["openclaw.dev/agent"] !== topology.agent.id
+    ) {
+      return false;
+    }
+    if (metadata.labels?.["openclaw.dev/workload-role"] === "agent") {
+      return metadata.labels?.["openclaw.dev/revision"] === revisionId;
+    }
+    return (
+      metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
+      gatewayConsumesRevision(pod, topology.agent.id, revisionId)
+    );
+  });
+  await Promise.all(
+    pods.map((pod) =>
+      kubectl(
+        "delete",
+        "pod",
+        pod.metadata.name,
+        "--namespace",
+        topology.placement,
+        "--wait=true",
+        "--timeout=90s",
+      ),
+    ),
+  );
+  return pods;
+}
+
+async function assertStartupFailureDeploymentStatusDurable(context, topology, options = {}) {
+  const plugins = options.pluginsEnabled
+    ? { [startupFailurePluginId]: { enabled: true, approvalMode: "auto" } }
+    : {};
+  const failure = await assertInvalidHarnessAuthStaysUnready(context, topology, {
+    plugins,
+    recover: false,
+  });
+  const failed = await deploymentStatus(topology, failure.revision.id);
+  assert.deepEqual(
+    Object.keys(failed).sort(),
+    ["agentId", "deploymentId", "error", "namespaceId", "status", "warnings"],
+    "deployment status must use the approved durable status shape",
+  );
+  assert.equal(failed.deploymentId, failure.revision.id);
+  assert.equal(failed.namespaceId, topology.agent.namespaceId);
+  assert.equal(failed.agentId, topology.agent.id);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.error.code, "CONVERGENCE_DEADLINE_EXCEEDED");
+  assert.equal(typeof failed.error.message, "string");
+  assert.equal(typeof failed.error.data.timeoutMs, "number");
+  assert.ok(failed.error.data.timeoutMs > 0);
+  assertRuntimeFailureEvidence(failed.error.data.runtimeFailure);
+  assert.ok(Array.isArray(failed.warnings));
+  const deletedPods = await deleteRevisionPods(topology, failure.revision.id);
+  assert.ok(
+    deletedPods.length > 0,
+    "durability proof must delete the failed native Pod before re-reading deployment status",
+  );
+  const afterPodDeletion = await deploymentStatus(topology, failure.revision.id);
+  assert.deepEqual(
+    afterPodDeletion,
+    failed,
+    "failed deployment status must survive native Pod deletion and restart opportunities",
+  );
+  await topology.restartControllerApi();
+  const afterControllerRestart = await deploymentStatus(topology, failure.revision.id);
+  assert.deepEqual(
+    afterControllerRestart,
+    failed,
+    "failed deployment status must survive controller API restart",
+  );
+  context.diagnostic(
+    `startup failure durability: ${failure.revision.id} plugins ${
+      options.pluginsEnabled ? "enabled" : "disabled"
+    } retained ${failed.error.code}`,
   );
 }
 
@@ -4343,6 +4493,7 @@ export {
   assertSameNamespaceSecretSharing,
   assertSecretApiNegativeRows,
   assertSecretApiRotationAndRedeploy,
+  assertStartupFailureDeploymentStatusDurable,
   assertUnauthorizedCodexSocket,
   assertUnboundSecretDeletion,
   hash,

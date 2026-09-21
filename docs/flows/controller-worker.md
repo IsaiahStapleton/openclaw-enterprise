@@ -8,10 +8,9 @@ last_updated_session: codex/01a0af6f-d097-7ef0-a2b7-c8ce31703bd9
 
 ## Overview
 
-The worker claims PostgreSQL work committed by the HTTP API, rechecks the
-original actor's authorization, invokes Compute, and persists results under its
-live claim. This trace follows Namespace, Agent stop/deletion, and AgentRevision work through
-completion, deferral, retry, or permanent failure. The
+The worker claims API-admitted PostgreSQL work, rechecks authorization, invokes
+Compute, and persists results under its live claim. This trace follows Namespace,
+Agent stop/deletion, and AgentRevision work. The
 [controller reference](../reference/controller.md) owns the contract and the
 [deployment guide](../guides/deploy.md) owns process setup.
 
@@ -96,11 +95,10 @@ or `deleteAgent`.
 within the transaction. State, admission audit, and work commit or roll back together.
 
 The queue freezes actor, Namespace owner, lifecycle target, and exact Agent and
-immutable AgentRevision for revision work. Agent lifecycle work has an exact
-Agent owner and a `stopped` or `deleted` target without inventing a revision.
-Its idempotency key identifies the operation. Reusing that key with a different
-actor, owner, or target is rejected. The API returns accepted lifecycle state
-without waiting for Compute; the next owner is the independent worker.
+immutable AgentRevision for revision work. Agent lifecycle work identifies its
+Agent and `stopped` or `deleted` target without a revision. Reusing an idempotency
+key with a different actor, owner, or target is rejected. The API returns accepted
+state without waiting for Compute; the worker takes over.
 
 ### 3. Recover expired claims and claim one eligible operation
 
@@ -200,14 +198,10 @@ them fails permanently before binding or retirement. Compute retirement owns
 workload termination and Sandbox cleanup; the worker does not invoke either
 independently.
 
-`withClaimHeartbeat()` renews the claim before starting each effect and then
-roughly every third of its lease duration while the effect runs. The initial
-renewal also keeps a sequence of short effects alive when no individual effect
-lasts long enough for its timer to fire. It propagates an abort signal into
-Compute. A lost lease, failed
-heartbeat, or worker shutdown aborts the operation context and raises
-`WorkClaimLostError`. The stale worker cannot publish its result under an expired
-or replaced token.
+`withClaimHeartbeat()` renews before each effect and every third of the lease
+duration, protecting sequences of short effects too. Lease loss, heartbeat failure,
+or shutdown aborts Compute and raises `WorkClaimLostError`. Expired or replaced
+claim tokens cannot publish results.
 
 While Compute runs, successful renewals also request a throttled health update.
 Neither starting an effect nor renewing its lease waits for that update: slow
@@ -241,11 +235,9 @@ revision is staged inactive until that commit. A changed active pointer causes
 After the pointer commit, the worker finishes required activation and retires
 the predecessor. `completeActivatedRevision()` then rechecks the exact active
 revision and claim, appends activation evidence, and completes work in a second
-transaction. This deliberately does not claim that infrastructure effects and
-database state are one atomic transaction. Interrupted finalization is retried;
-the already-active branch re-observes the candidate before finishing activation
-and retirement safely. That re-observation prevents a plugin failure retained by
-Compute from being mistaken for success after a claim loss.
+transaction. Infrastructure effects and database state are not atomic. Retried
+finalization rechecks the already-active candidate before activation and
+retirement, so a retained plugin failure cannot become success after claim loss.
 
 Stop finalization rechecks the live claim, Agent owner, and stopped desired state.
 After all captured cleanup succeeds, it clears `activeRevisionId` only when
@@ -275,23 +267,35 @@ and remove completed deletions from inventory.
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.defer`,
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.retry`
 
-Pending convergence returns work to the queue with backoff and restores the
-attempt consumed by the claim. Real dependency failures retain that attempt and
-retry within the configured budget. Permanent failures, exhausted attempts, and
-the convergence deadline produce terminal failure instead. See the
+Pending convergence requeues work with backoff and restores the consumed attempt.
+Dependency failures consume attempts within the retry budget. Permanent failures,
+exhausted attempts, and the convergence deadline terminate work. See the
 [controller reference](../reference/controller.md) for the supported outcomes
 and the [settings reference](../reference/settings/operations.md#controller-worker-environment)
 for their timing controls.
 
 Terminal work rows store the overall `reason_code` and one optional `result_data`
 object for success or failure details. Successful revision work stores
-`{ warnings: [...] }`; a convergence deadline failure stores `{ timeoutMs }`.
+`{ warnings: [...] }`; a convergence deadline failure stores required
+`timeoutMs` and optional `runtimeFailure` from the exact candidate runtime.
+Compute observes cached startup results through its private status path,
+including unready Harnesses without plugins, and verifies the Pod/container
+incarnation after collection. It does not repeat the model probe. Missing or
+invalidated evidence leaves the cause unspecified.
+
+`packages/occ/src/state/controller-work.ts:validateFailureData` validates reads
+and writes; the PostgreSQL constraint enforces the matching persisted shape.
+Other failure reasons still reject data.
 `PostgresWorkQueue.complete` and `PostgresWorkQueue.fail` publish that data under
 the live claim. The deployment status projection derives its separate `error`
 and `warnings` fields from the saved result. Stale claims cannot publish outcomes or warnings. Completion needs no
 runtime receipt acknowledgment or post-commit cleanup protocol. The original
 deployment's warnings remain a historical startup result; later maintenance
 observations do not rewrite that completed deployment.
+
+Deployment GET requires exact revision `read` access and reads only durable
+state, surviving Pod deletion and controller restart. Queued, running, and
+successful deployments have no failure error. See [deployment status](../reference/agents.md#deployment-status).
 
 Legacy terminal work rows derive `reason_code` from durable audit evidence.
 A successful revision is marked `REVISION_ACTIVATED` only
@@ -358,6 +362,8 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 ## Changelog
 
 - 2026-09-21 00:56: Integrate Agent-deletion metrics. (01a0af6f-d097-7ef0-a2b7-c8ce31703bd9 - 1de0877d28f7c77e6ef4aab97531ad7d56b583d0)
+
+- 2026-09-20 17:23: Document cached startup failure persistence. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 1ff76eb2)
 
 - 2026-09-20 10:50: Documented legacy terminal work outcome backfill during migration 0019, including unknown result data and fallback behavior. (authoring-run/a2f901df-d27a-4a05-9468-e1ee895ae89d - 08b1b8fe)
 

@@ -46,6 +46,109 @@ function nativeDocument(values, label) {
   );
 }
 
+function deploymentFailure(error) {
+  if (!error) {
+    return element("p", { className: "muted" }, "No persisted startup failure.");
+  }
+  const runtimeFailure = error.data?.runtimeFailure;
+  return element(
+    "div",
+    {},
+    element("p", { className: "error", role: "alert" }, `${error.code}: ${error.message}`),
+    runtimeFailure && typeof runtimeFailure === "object"
+      ? element(
+          "dl",
+          { className: "credential-status-list" },
+          element("dt", {}, "Runtime component"),
+          element("dd", {}, runtimeFailure.component ?? "Unknown"),
+          element("dt", {}, "Check"),
+          element("dd", {}, runtimeFailure.check ?? "Unknown"),
+          element("dt", {}, "Code"),
+          element("dd", {}, runtimeFailure.code ?? "Unknown"),
+          element("dt", {}, "Checked"),
+          element("dd", {}, displayDate(runtimeFailure.checkedAt)),
+        )
+      : null,
+  );
+}
+
+function createDeploymentStatusPanel(context, path, revisionId) {
+  const section = element("section", { className: "agent-card deployment-status" });
+  const state = { loading: false, status: null, error: null };
+
+  async function loadStatus() {
+    if (state.loading || !context.isCurrent()) {
+      return;
+    }
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.status = await context.request(`${path}/deployments/${encodeURIComponent(revisionId)}`);
+    } catch (error) {
+      if (!context.isCurrent()) {
+        return;
+      }
+      if (error.status === 401) {
+        context.onExpired();
+        return;
+      }
+      state.error = error;
+      state.status = null;
+    } finally {
+      if (context.isCurrent()) {
+        state.loading = false;
+        render();
+      }
+    }
+  }
+
+  function renderStatus() {
+    if (state.error) {
+      return element("p", { className: "error", role: "alert" }, message(state.error));
+    }
+    if (!state.status) {
+      return element("p", { className: "muted" }, "Deployment status has not loaded.");
+    }
+    return element(
+      "div",
+      {},
+      element(
+        "dl",
+        { className: "credential-status-list" },
+        element("dt", {}, "Status"),
+        element("dd", {}, state.status.status),
+        element("dt", {}, "Deployment"),
+        element("dd", {}, state.status.deploymentId),
+      ),
+      deploymentFailure(state.status.error),
+    );
+  }
+
+  function render() {
+    section.replaceChildren(
+      element("h2", {}, "Deployment status"),
+      element(
+        "p",
+        { className: "muted" },
+        "Startup evidence is read from the durable deployment record.",
+      ),
+      renderStatus(),
+      element(
+        "div",
+        { className: "form-actions credential-actions" },
+        button(state.loading ? "Refreshing..." : "Refresh deployment", () => void loadStatus(), {
+          disabled: state.loading,
+        }),
+      ),
+    );
+  }
+
+  render();
+  void loadStatus();
+  return section;
+}
+
 export async function renderAgentDetail(context) {
   const { view, namespaceId, agentId, request, url } = context;
   const path = `${namespacePath(namespaceId)}/agents/${encodeURIComponent(agentId)}`;
@@ -108,11 +211,14 @@ export async function renderAgentDetail(context) {
       "The API supplies no serving observation. Selecting or admitting a revision does not confirm runtime health, completed cutover, or shutdown. An operator must verify the installed runtime separately.",
     ),
   );
+  const deploymentStatus =
+    selected === "draft" ? [] : [createDeploymentStatusPanel(context, path, selected)];
   if (selectedTab === "workspace") {
     view.replaceChildren(
       header,
       identity,
       serving,
+      ...deploymentStatus,
       renderNativeAdminAccess(context, path),
       tabs,
       renderWorkspaceFiles(context, agent, path),
@@ -123,6 +229,7 @@ export async function renderAgentDetail(context) {
     header,
     identity,
     serving,
+    ...deploymentStatus,
     renderNativeAdminAccess(context, path),
     selector,
     tabs,

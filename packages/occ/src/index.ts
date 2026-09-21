@@ -156,10 +156,12 @@ export {
   type WorkResult,
 } from "./state/postgres-work-queue.ts";
 export {
+  validateRuntimeFailureEvidence,
   type DeploymentStatus,
   type DeploymentStatusError,
   type DeploymentStatusResult,
   type PluginDeploymentWarning,
+  type RuntimeFailureEvidence,
 } from "./state/controller-work.ts";
 
 export const BOOTSTRAP_DEFAULT_NAMESPACE_NAME = "default";

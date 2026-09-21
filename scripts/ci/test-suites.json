@@ -578,8 +578,10 @@
           "path": "tests/integration/harness-topology-k3d-real.test.mjs",
           "expectedTests": [
             "production dedicated Codex preserves gateway conversations and retained images across Pod replacement",
-            "production service account powers embedded OpenClaw through its exact persisted provider credential",
-            "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings"
+            "production Secret binding powers embedded OpenClaw and preserves conversations across Pod replacement",
+            "production Secret API powers embedded OpenClaw through exact Namespace-owned native bindings",
+            "production dedicated Codex startup failure status survives Pod deletion and controller restart with plugins disabled",
+            "production dedicated Codex startup failure status survives Pod deletion and controller restart with plugins enabled"
           ]
         },
         {
