@@ -129,17 +129,33 @@ export class RepositoryCredentialLifecycle {
       if (selectedRefs !== undefined && !selectedRefs.has(binding.repositoryRef)) {
         continue;
       }
-      const attempts = await this.dependencies.state.read((view) =>
+      let attempts = await this.dependencies.state.read((view) =>
         view.repositorySessions.listRevisionAttempts(owner(revision)),
       );
-      for (const attempt of attempts.filter(
+      const closingAttempts = attempts.filter(
         (candidate) =>
           candidate.repositoryRef === binding.repositoryRef && candidate.phase === "closing",
-      )) {
+      );
+      for (const attempt of closingAttempts) {
         const closed = await this.closeAttempt(claim, revision, attempt);
         if (!closed.authorityClosed) {
           throw new Error("REPOSITORY_CLEANUP_PENDING");
         }
+      }
+      if (closingAttempts.length > 0) {
+        attempts = await this.dependencies.state.read((view) =>
+          view.repositorySessions.listRevisionAttempts(owner(revision)),
+        );
+      }
+      if (
+        attempts.some(
+          (attempt) =>
+            attempt.repositoryRef === binding.repositoryRef &&
+            attempt.sessionId !== undefined &&
+            (attempt.phase === "invalidated" || attempt.phase === "closing"),
+        )
+      ) {
+        throw new RepositoryCredentialAuthorityError("REPOSITORY_SESSION_RECOVERY_UNSAFE");
       }
       const existing = attempts.find(
         (attempt) =>
@@ -165,7 +181,7 @@ export class RepositoryCredentialLifecycle {
             continue;
           }
           const closing = await this.markAttemptClosing(claim, revision, existing);
-          const closed = await this.closeAttempt(claim, revision, closing);
+          const closed = await this.closeAttempt(claim, revision, closing, status);
           if (!closed.authorityClosed) {
             throw new Error("REPOSITORY_CLEANUP_PENDING");
           }
@@ -363,6 +379,19 @@ export class RepositoryCredentialLifecycle {
     binding: AdmittedRepositoryBinding,
   ): Promise<RepositoryCredentialRuntimeBinding> {
     const attempt = await this.authorizedTransaction(claim, revision, async (unit) => {
+      const attempts = await unit.repositorySessions.listRevisionAttempts(owner(revision));
+      // A known session may have exposed material. Authority closure alone does
+      // not settle its provider obligations or make replacement safe.
+      if (
+        attempts.some(
+          (prior) =>
+            prior.repositoryRef === binding.repositoryRef &&
+            prior.sessionId !== undefined &&
+            (prior.phase === "invalidated" || prior.phase === "closing"),
+        )
+      ) {
+        throw new RepositoryCredentialAuthorityError("REPOSITORY_SESSION_RECOVERY_UNSAFE");
+      }
       const deadlineWallMs = revision.repositoryCredentials!.deadlineWallMs;
       const durationSeconds = Math.min(
         this.validate(revision)!,
@@ -396,7 +425,7 @@ export class RepositoryCredentialLifecycle {
         attempt,
         opened.status.sessionId,
       );
-      await this.closeAttempt(claim, revision, closing);
+      await this.closeAttempt(claim, revision, closing, opened.status);
       throw new Error("REPOSITORY_ADMISSION_RECOVERED");
     }
     this.validateStatus(opened.session, attempt, binding);
@@ -407,7 +436,7 @@ export class RepositoryCredentialLifecycle {
         attempt,
         opened.session.sessionId,
       );
-      await this.closeAttempt(claim, revision, closing);
+      await this.closeAttempt(claim, revision, closing, opened.session);
       throw new Error("REPOSITORY_SESSION_NOT_OPEN");
     }
     try {
@@ -465,7 +494,12 @@ export class RepositoryCredentialLifecycle {
     }
   }
 
-  private async closeAttempt(claim: ClaimedWork, revision: Revision, attempt: Attempt) {
+  private async closeAttempt(
+    claim: ClaimedWork,
+    revision: Revision,
+    attempt: Attempt,
+    observedStatus?: RepositoryCredentialSessionStatus,
+  ) {
     const binding = revision.repositoryCredentials?.bindings.find(
       (candidate) => candidate.repositoryRef === attempt.repositoryRef,
     );
@@ -474,6 +508,7 @@ export class RepositoryCredentialLifecycle {
     }
     const driver = this.driver(revision);
     let closing = attempt;
+    let status = observedStatus;
     if (closing.sessionId === undefined) {
       const recovered = await this.dependencies.effect(claim, (signal) =>
         driver.open({ ...this.input(closing, binding), recoverOnly: true }, signal),
@@ -487,10 +522,15 @@ export class RepositoryCredentialLifecycle {
       }
       this.validateStatus(recovered.status, closing, binding);
       closing = await this.advance(claim, closing, "closing", recovered.status.sessionId);
+      status = recovered.status;
     }
-    const status = await this.dependencies.effect(claim, (signal) =>
-      driver.close(closing.sessionId!, signal),
-    );
+    // Preserve confirmed disposal even if a later service admission prunes its
+    // terminal inventory. Missing inventory alone never establishes disposal.
+    if (status?.state !== "DISPOSED") {
+      status = await this.dependencies.effect(claim, (signal) =>
+        driver.close(closing.sessionId!, signal),
+      );
+    }
     if (status === undefined) {
       await this.advance(claim, closing, "invalidated");
       return { settled: false, authorityClosed: true };

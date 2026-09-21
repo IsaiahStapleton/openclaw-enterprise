@@ -209,6 +209,14 @@
       "tag": "0025_privileged_function_search_paths",
       "breakpoints": true,
       "sha256": "c7f846629fadc9bfd12b36f336698ccdf4f9c4ffa7fe385bab31de78ccec628a"
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1787000000026,
+      "tag": "0027_repository_attempt_retention",
+      "breakpoints": true,
+      "sha256": "060f5791f1ab0eec5b38ec1c195fbb231ae31d29b5788c9436913d381f3ff670"
     }
   ],
   "initialSchemaStates": {
@@ -233,7 +241,8 @@
   "catalogs": {
     "empty": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
     "main": "c2400ee2ec0c8168bd62de1ce0203bf364d38b3b7bbb51a0da35ed23c56e875f",
-    "completed": "2537440b214d5457ae636a8e7631b2535718bfc1fded883f79e30fcd923b3c29"
+    "repositoryCredentials": "2537440b214d5457ae636a8e7631b2535718bfc1fded883f79e30fcd923b3c29",
+    "completed": "ae3c96c43497cec7de4b22508ae6c4348272438ac2a55710f25e572a99b1be86"
   },
   "ledgerCatalogs": {
     "initialized": "62946da6b1fc2b06df09e97dda4cf1831f170a2f3d5ff35a9f107af206c425dc",

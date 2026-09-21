@@ -1,7 +1,7 @@
 ---
 created: "2026-09-18"
 updated: "2026-09-21"
-last_updated_session: "authoring-run/5657fc4b-0f7a-423e-9c54-1cf174f5d6c2"
+last_updated_session: "authoring-run/f4034e1f-9090-4f83-87c7-189e172017e2"
 ---
 
 # Agent repository credential flow
@@ -47,11 +47,14 @@ graph TD
   Service -->|Created once| New["<b>New material</b><br/>Record ID before delivery"]
   Service -->|Existing open session| Retained["<b>Retained material</b><br/>No bearer recovery"]
   Service -->|Lost response| Recover["<b>Recover only</b><br/>Find or fence, then close"]
-  Recover -->|Authorized replacement| Attempt
+  Recover -->|Never delivered or disposed| Attempt
+  Recover -->|Known session unsettled| Refuse["<b>Fail revision</b><br/>Retain cleanup obligation"]
   New --> Compute["<b>Compute delivery</b><br/>Validate complete set"]
   Retained --> Compute
-  Compute -->|Missing retained files| Repair["<b>Repair exact subset</b><br/>Close and replace once"]
-  Repair --> Compute
+  Compute -->|Missing retained files| Repair["<b>Repair exact subset</b><br/>Close and verify disposal"]
+  Repair -->|Disposed| Compute
+  Repair -->|Unsettled| Refuse
+  Refuse --> Close
   Compute --> Pod["<b>Private generation</b><br/>Init files, replace Pod"]
   Pod --> Command["<b>Git or gh command</b><br/>Pin target and session"]
   Command --> Gateway["<b>HTTPS gateway</b><br/>Exact repository/profile"]
@@ -69,7 +72,7 @@ graph TD
   classDef condition fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
   class API,Revision,Attempt,Queue state
   class Worker,Service,New,Retained,Compute,Pod,Command,Gateway,Close,Done,Delete,Finalize operation
-  class Recover,Repair condition
+  class Recover,Repair,Refuse condition
 ```
 
 ## Execution Trace
@@ -143,7 +146,13 @@ session ID before passing files solely through
 
 A confirmed open session produces a `retained` binding without new files. An
 unfinished opening attempt uses `recoverOnly` to find or fence the original
-admission, closes any recovered session, then permits a fresh authorized attempt.
+admission and closes any recovered session. Fresh material requires confirmed
+disposal of a known session, or a missing opening with no recorded session ID:
+that opening never delivered material through the worker. An invalidated known
+session blocks automatic replacement in the same revision. The worker checks
+retained attempts again under its admission transaction's Namespace/Agent locks.
+Validated `DISPOSED` observations are persisted without another close request;
+later service pruning cannot erase that confirmed settlement.
 `apps/controller/src/drivers/repo/credentials/control.ts:createControlAdmission`
 never reissues a bearer and records a cancellation fence for a missing fresh ID.
 Transport failure or overload cannot establish absence.
@@ -156,9 +165,9 @@ a generation from sorted reference/session pairs.
 `apps/controller/src/drivers/compute/kubernetes/repository-material-store.ts:RepositoryMaterialStore.prepare`
 validates exact ownership and file contents before creating immutable
 Agent/revision/session-owned Secrets. It reports the precise missing retained
-subset. The worker's `RepositoryCredentialLifecycle.repair` closes and replaces
-only that subset, then retries Compute once; it does not pretend status recovery
-recovered credential bytes.
+subset. The worker's `RepositoryCredentialLifecycle.repair` closes that subset
+and requires disposal before replacement, then retries Compute once. Missing
+inventory or unresolved closure fails the revision instead of reminting.
 
 `apps/controller/src/drivers/compute/kubernetes/repository-material.ts:repositoryMaterialDeployment`
 mounts Secret projections only in the init container. The init entrypoint in
@@ -213,8 +222,13 @@ commits completion and the next maintenance work together, preserving the
 original actor. Repository-bearing revisions use the selected Driver's
 30-second maintenance interval, or a shorter Compute interval. Worker restart
 resumes durable queued work; it does not invent actors through a startup scan.
-An unavailable session after service restart is invalidated and retains cleanup
-Work. A replacement uses the same authorized material path within the frozen deadline.
+A missing known session after service restart is invalidated and retains cleanup
+Work. `REPOSITORY_SESSION_RECOVERY_UNSAFE` permanently fails the observation and
+queues exact runtime retirement. A later worker rereads that retained evidence
+and cannot automatically remint for the same revision. Worker-only restart can
+retain an existing open session and its Compute material. A user can explicitly
+deploy a new revision through the existing authorized deployment operation;
+that does not settle old cleanup or replay a Git/API command.
 
 `apps/controller/src/worker.ts:ControllerWorker.finalizeActiveRevision`
 can atomically fail one bounded observation and enqueue its successor while the
@@ -264,7 +278,8 @@ partial failure. Service restart cannot prove remote token revocation.
 Run `occ agent get AGENT_ID --output json` in the selected Namespace and compare
 `activeRevisionId` with the admitted revision. Inspect worker events for
 `REPOSITORY_BINDING_CHANGED`, `REPOSITORY_CREDENTIAL_DEADLINE_EXCEEDED`,
-`REPOSITORY_CLEANUP_PENDING` or `REPOSITORY_CLEANUP_COMPLETE`. Check registry
+`REPOSITORY_SESSION_RECOVERY_UNSAFE`, `REPOSITORY_CLEANUP_PENDING` or
+`REPOSITORY_CLEANUP_COMPLETE`. Check registry
 identity and deadline before treating these as transient failures.
 
 For client errors, `repository-not-admitted` identifies an unselected target;
@@ -287,6 +302,8 @@ State/worker, real-client, installed/runtime and live-provider checks.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 15:48: Trace refusal of unsafe same-revision replacement and canonical retention registration in the accompanying changes. (authoring-run/f4034e1f-9090-4f83-87c7-189e172017e2 - 08a9b693de5fe959d26e698435017e0114e3e46e)
 
 - 2026-09-21 07:32: Trace retained cleanup evidence and pending Agent deletion in the accompanying State and worker changes. (authoring-run/5657fc4b-0f7a-423e-9c54-1cf174f5d6c2 - d2b31887be1d114c9147e2ed6f07c1f38e765c6f)
 
