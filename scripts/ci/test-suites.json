@@ -223,6 +223,17 @@
           "path": "tests/conformance/repository-credentials-ownership-boundaries.test.mjs"
         },
         {
+          "path": "tests/conformance/repository-credentials-fixture-ownership.test.mjs",
+          "expectedTests": [
+            "runner timeout cancels and joins commands before teardown admits cleanup",
+            "accepted network creation with a lost response stays owned until verified absent",
+            "creation completes after 0ms",
+            "creation completes after 500ms",
+            "uncertain network creation remains unresolved when its cleanup budget expires empty",
+            "network cleanup reports failed readback and refuses foreign ownership"
+          ]
+        },
+        {
           "path": "tests/integration/repository-credentials-config.test.mjs"
         },
         {

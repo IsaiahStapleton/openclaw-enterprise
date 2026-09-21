@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { run } from "../repository-credentials/process.mjs";
-import { ownedNetwork } from "./ownership.mjs";
+import { run } from "../fixtures/repository-credentials/process.mjs";
+import { ownedNetwork } from "../fixtures/repository-credentials-isolation/ownership.mjs";
 
 // These checks qualify fixture ownership only; they do not run the service,
 // Docker daemon, delivered images, or provider integration.
@@ -14,8 +14,12 @@ test("runner timeout cancels and joins commands before teardown admits cleanup",
   t.after(() => rm(directory, { recursive: true, force: true }));
   const late = join(directory, "late");
   const cleaned = join(directory, "cleaned");
-  const ownership = new URL("./ownership.mjs", import.meta.url).href;
-  const processModule = new URL("../repository-credentials/process.mjs", import.meta.url).href;
+  const ownership = new URL(
+    "../fixtures/repository-credentials-isolation/ownership.mjs",
+    import.meta.url,
+  ).href;
+  const processModule = new URL("../fixtures/repository-credentials/process.mjs", import.meta.url)
+    .href;
   const source = `
     import test from 'node:test';
     import { forwardWork } from ${JSON.stringify(ownership)};
