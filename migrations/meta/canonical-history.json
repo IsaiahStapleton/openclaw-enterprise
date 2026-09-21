@@ -1,0 +1,247 @@
+{
+  "version": 1,
+  "source": "5f9a9903239a84224a755610339f3bf0443c171f",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1787000000000,
+      "tag": "0000_occ_initial",
+      "breakpoints": true,
+      "sha256": "539a8f15156d349ec8ccf06975f71fc4cea0ade980726f138ee92ed9601e26c2"
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787000000001,
+      "tag": "0001_occ_immutability_and_grants",
+      "breakpoints": true,
+      "sha256": "af42170fe6d63c004a55d9d663a92242ce64cc2772fd08fc4a89b2c33b2f1265"
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787000000002,
+      "tag": "0002_namespace_lifecycle_and_iam",
+      "breakpoints": true,
+      "sha256": "d277af82303b4dbbead3a9c5ab769662be8135a7fc096bab30e5e0cc31f545dc"
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787000000003,
+      "tag": "0003_agent_drafts",
+      "breakpoints": true,
+      "sha256": "744cf8da678341d22fe54003ae64b72f58ffc2d43045e34fdc3af7ec33be92b3"
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787000000004,
+      "tag": "0004_configuration_driver",
+      "breakpoints": true,
+      "sha256": "da371f809dddaf24dc0b17ec9fdd44090775cd700d87930284a37c16913a38ad"
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787000000005,
+      "tag": "0005_openclaw_native_configuration",
+      "breakpoints": true,
+      "sha256": "184a5405109bfa0f54991477cc32e9f50e65ceb0a74ae613039aa4d62110264e"
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787000000006,
+      "tag": "0006_configuration_kind",
+      "breakpoints": true,
+      "sha256": "f9c72a48cba3d310d60ec23f8cbbf15b3a93105e253e95f341d0f73e81f0a3fd"
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787000000007,
+      "tag": "0007_native_service_accounts",
+      "breakpoints": true,
+      "sha256": "817d8cc63bac73466920a43f32a134774c2cd8bfca1255e377148fa5c2345061"
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787000000008,
+      "tag": "0008_better_auth_sessions",
+      "breakpoints": true,
+      "sha256": "33e942da16000ac073bf052b0a0273b9f8facc6fcfdfb64547add705a51d3b82"
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787000000009,
+      "tag": "0009_service_account_driver",
+      "breakpoints": true,
+      "sha256": "cc58daba28a90391deb099c6ceace52ff677cb8bfc3163c0ce535aaa59931379"
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787000000010,
+      "tag": "0010_namespace_existing_kubernetes_namespace",
+      "breakpoints": true,
+      "sha256": "a94add9703b98901ffe6acf2b84e1b12f7ab75c6d8850b97684887e22052b1ae"
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1787000000011,
+      "tag": "0011_sandbox_driver",
+      "breakpoints": true,
+      "sha256": "16a962b1dd47ff9b3573ba7da3b080726a29f60dbcdbdfcf0f5f379b4567b3b1"
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787000000012,
+      "tag": "0012_service_api_keys",
+      "breakpoints": true,
+      "sha256": "9554e626ee7fd0ba1da4ad1598ed76c80ba4f2c27b797b08c842b8d705f6b227"
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1787000000013,
+      "tag": "0013_secret_state",
+      "breakpoints": true,
+      "sha256": "2e1950480771bc666e383a2d009592e329ba7308138f20e767a7f2295a6cc149"
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1787000000014,
+      "tag": "0014_provider_driver_abstraction",
+      "breakpoints": true,
+      "sha256": "1f5901acf85da9f716e364b24030ff974d5eb64e2114b6fd9f61b9603857a48d"
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1787000000015,
+      "tag": "0015_agent_plugins",
+      "breakpoints": true,
+      "sha256": "9b7c53baeef50de4ab87bf983d4e1495930e7fbfb227d1f8513ea141e77c9bb6"
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1787000000016,
+      "tag": "0016_agent_stop",
+      "breakpoints": true,
+      "sha256": "ae63c8df359e2412862e7523ff1ed307b028e6dcf78a028fef96cf0da354d64f"
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1787000000017,
+      "tag": "0017_harness_auth_binding",
+      "breakpoints": true,
+      "sha256": "61bf5a458375cb7eeae33b4208af29a69c639362196feeb2f60c673b26e389a1"
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787000000018,
+      "tag": "0018_runtime_harness_auth",
+      "breakpoints": true,
+      "sha256": "c5e48345949f797a19a5c5214c55aad00e1ee321ef9a738a020bba82143c7827"
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787000000019,
+      "tag": "0019_controller_work_terminal_outcome",
+      "breakpoints": true,
+      "sha256": "591a807f921eb34c1bfa5e7fc66136af4526b17112a725999a028d3cf3773ff3"
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1787000000020,
+      "tag": "0020_agent_deletion",
+      "breakpoints": true,
+      "sha256": "0c66ec4ee54fe71d7f369422f4ba7811cdea293bc97dad78cff9ef223c1f3c25"
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787000000021,
+      "tag": "0021_iam_policy_delete_grants",
+      "breakpoints": true,
+      "sha256": "c3b729d479f64992dcca9fc3662e829ed7d62f061cc7ac2bccc038c577291841"
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1787000000022,
+      "tag": "0022_controller_work_runtime_failure_data",
+      "breakpoints": true,
+      "sha256": "a3f1a2ea79015464bf4be87ea1245a4b5794ea5464ef9570435564a1754f1de3"
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1787000000023,
+      "tag": "0023_runtime_failure_timestamp_validation",
+      "breakpoints": true,
+      "sha256": "b08d9108d3b3d3590be540953b87854c3c3a8d943ecec6877cf390eabdbeebde"
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1787000000024,
+      "tag": "0024_repository_credentials",
+      "breakpoints": true,
+      "sha256": "9d9920b20f3900090880426a84f4d5ca50f34a7b94455f09dc143d5f32165ac1"
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1787000000025,
+      "tag": "0025_privileged_function_search_paths",
+      "breakpoints": true,
+      "sha256": "c7f846629fadc9bfd12b36f336698ccdf4f9c4ffa7fe385bab31de78ccec628a"
+    }
+  ],
+  "initialSchemaStates": {
+    "absent": {
+      "owner": null,
+      "privileges": [],
+      "objects": 0,
+      "defaultPrivileges": 0,
+      "databaseCreate": true
+    },
+    "ownerOnly": {
+      "owner": "occ_migrator",
+      "privileges": [
+        ["occ_migrator", "occ_migrator", "CREATE", false],
+        ["occ_migrator", "occ_migrator", "USAGE", false]
+      ],
+      "objects": 0,
+      "defaultPrivileges": 0,
+      "databaseCreate": true
+    }
+  },
+  "catalogs": {
+    "empty": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "main": "c2400ee2ec0c8168bd62de1ce0203bf364d38b3b7bbb51a0da35ed23c56e875f",
+    "completed": "2537440b214d5457ae636a8e7631b2535718bfc1fded883f79e30fcd923b3c29"
+  },
+  "ledgerCatalogs": {
+    "initialized": "62946da6b1fc2b06df09e97dda4cf1831f170a2f3d5ff35a9f107af206c425dc",
+    "completed": "5693317372204660303ec53ce8d96322d9b2404fc484401b95b846e3fb4c88e9"
+  },
+  "catalogEvidence": {
+    "postgres": "18.6",
+    "drizzleOrm": "0.45.2",
+    "method": "Stock Drizzle execution with occ_migrator and effective occ_app privileges"
+  }
+}

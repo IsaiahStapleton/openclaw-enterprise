@@ -125,11 +125,6 @@
       "count": 1
     }
   },
-  "scripts/migrate-production.mjs": {
-    "no-unused-vars": {
-      "count": 1
-    }
-  },
   "tests/browser/console-agents.test.mjs": {
     "no-empty": {
       "count": 1
