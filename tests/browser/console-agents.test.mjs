@@ -10,6 +10,7 @@ import { chromium } from "playwright";
 import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { createConsoleAppFixture, providerFixtures } from "../helpers/console-app.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 
 async function artifactDirectory(t) {
   const configured = process.env.OCC_TEST_CONSOLE_ARTIFACT_DIR;
@@ -21,7 +22,7 @@ async function artifactDirectory(t) {
   return directory;
 }
 
-async function launchBrowser() {
+async function launchBrowser(options = {}) {
   const browserExecutable =
     process.env.OCC_TEST_BROWSER_EXECUTABLE === undefined ||
     process.env.OCC_TEST_BROWSER_EXECUTABLE.length === 0
@@ -30,13 +31,14 @@ async function launchBrowser() {
   const browser = await chromium.launch({
     ...(browserExecutable === undefined ? {} : { executablePath: browserExecutable }),
     headless: true,
+    ...(options.args === undefined ? {} : { args: options.args }),
   });
   return browser;
 }
 
-async function newPage(t, fixture) {
+async function newPage(t, fixture, options = {}) {
   const artifacts = await artifactDirectory(t);
-  const browser = await launchBrowser();
+  const browser = await launchBrowser(options);
   let context;
   fixture.registerCleanupBeforeAppClose(async () => {
     let cleanupError;
@@ -95,6 +97,11 @@ async function expectNoText(page, pattern) {
   );
 }
 
+async function expectNativeAdminHidden(page) {
+  assert.equal(await page.getByRole("heading", { name: "Native admin UI" }).isVisible(), false);
+  assert.equal(await page.getByText("Open native admin UI", { exact: true }).isVisible(), false);
+}
+
 async function revealNativeConfiguration(page, label) {
   await page.getByText(label).click();
 }
@@ -148,6 +155,32 @@ async function seedServiceAccount(state, namespaceId, name, issued = true) {
   );
 }
 
+function nativeAdminComputeDriver(endpoint) {
+  const driver = createTestKubernetesComputeDriver("console-native-admin-compute");
+
+  return Object.assign(driver, {
+    implementation: "test-native-admin-endpoint",
+    async ensureNamespace(namespace) {
+      return { namespaceId: namespace.id, namespaceReady: true };
+    },
+    async deleteNamespace(namespace) {
+      return { namespaceId: namespace.id, namespaceDeleted: true };
+    },
+    async prepareRevision(revision) {
+      return {
+        namespaceId: revision.namespaceId,
+        agentId: revision.agentId,
+        revisionId: revision.id,
+        ready: true,
+      };
+    },
+    async retireRevision() {},
+    getGatewayEndpoint() {
+      return endpoint;
+    },
+  });
+}
+
 function nativeValues(marker, options = {}) {
   const harnessId = options.harnessId ?? "openclaw";
   const providerModel = options.providerModel ?? (harnessId === "codex" ? "gpt-5.1" : "gpt-4.1");
@@ -164,6 +197,32 @@ function nativeValues(marker, options = {}) {
         knowledge: {
           enabled: true,
           config: { marker, thresholds: [1, 2, 3] },
+        },
+      },
+    },
+  };
+}
+
+function nativeAdminValues(marker, origin) {
+  const values = nativeValues(marker);
+  return {
+    ...values,
+    gateway: {
+      ...(values.gateway ?? {}),
+      controlUi: {
+        ...(values.gateway?.controlUi ?? {}),
+        enabled: true,
+        allowedOrigins: [origin],
+      },
+      auth: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-occ-identity",
+          allowUsers: ["occ-workspace-files"],
+          deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
+        },
+        identityScopes: {
+          "occ-workspace-files": ["operator.admin"],
         },
       },
     },
@@ -608,6 +667,200 @@ test("Agent detail preserves admitted revision history while draft edits change 
   await page
     .getByText(`OpenAI API key · ${agent.harnessAuth.source.id}`, { exact: true })
     .waitFor();
+});
+
+test("Agent detail opens native admin UI only after real API access checks pass", async (t) => {
+  const disabledFixture = await createConsoleAppFixture(t);
+  await disabledFixture.bootstrap();
+  const disabledNamespace = await disabledFixture.createNamespace("Native admin disabled", {
+    ready: true,
+  });
+  const disabledAgent = await disabledFixture.createAgent(
+    disabledNamespace.id,
+    "Disabled native admin Agent",
+    nativeValues("disabled-ui"),
+  );
+  const disabledRevision = await disabledFixture.seedActiveAgentRevision(
+    disabledNamespace.id,
+    disabledAgent.id,
+  );
+  const disabledPage = (await newPage(t, disabledFixture)).page;
+  const disabledDetail = detailUrl(
+    disabledFixture,
+    disabledNamespace.id,
+    disabledAgent.id,
+    disabledRevision.revision.id,
+    "configuration",
+  );
+
+  await login(disabledPage, disabledFixture, `${disabledDetail.pathname}${disabledDetail.search}`);
+  await disabledPage.getByRole("heading", { name: "Disabled native admin Agent" }).waitFor();
+  await expectNativeAdminHidden(disabledPage);
+
+  const cookieDomain = "oce.example.test";
+  const consoleHost = `console.${cookieDomain}`;
+  const nativeDomain = `agents.${cookieDomain}`;
+  const gatewayEndpoint =
+    "wss://private-gateway.example.invalid/namespaces/native-admin/agents/agent";
+  const fixture = await createConsoleAppFixture(t, {
+    originHost: consoleHost,
+    publicOrigin: true,
+    authCookieDomain: cookieDomain,
+    development: { enabled: false },
+    https: true,
+    authSecureCookies: true,
+    nativeAdmin: { enabled: true, domain: nativeDomain, sharedCookieDomain: cookieDomain },
+    nativeAdminGatewayApiKey: async () => "native-admin-gateway-api-key",
+    computeDriver: nativeAdminComputeDriver(gatewayEndpoint),
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Native admin access", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Native admin Agent",
+    nativeValues("unsupported-ui"),
+  );
+  let active = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  const initialNativeAccess = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+  );
+  assert.equal(initialNativeAccess.status, 200);
+  assert.equal(initialNativeAccess.data.status, "unsupported");
+  assert.equal(new URL(initialNativeAccess.data.origin).protocol, "https:");
+  const { page } = await newPage(t, fixture, {
+    args: [
+      ...fixture.browserArgs,
+      `--host-resolver-rules=MAP ${consoleHost} 127.0.0.1,MAP *.${nativeDomain} 127.0.0.1`,
+    ],
+  });
+  const requests = apiRequests(page, fixture.origin);
+  const detail = () =>
+    detailUrl(fixture, namespace.id, agent.id, active.revision.id, "configuration");
+
+  // A fresh shared-cookie login clears legacy host-only cookies from the Console.
+  await page.context().addCookies([
+    {
+      name: "__Secure-openclaw_occ.session_token",
+      value: "old-host-only",
+      domain: consoleHost,
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    },
+  ]);
+  await login(page, fixture, `${detail().pathname}${detail().search}`);
+  assert.equal(
+    (await page.context().cookies(fixture.origin)).some(
+      (cookie) => cookie.value === "old-host-only",
+    ),
+    false,
+  );
+
+  await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
+  await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
+  await page
+    .getByText("This Agent does not expose a supported native admin UI endpoint.")
+    .waitFor();
+  assert.equal(await page.getByText("Open native admin UI", { exact: true }).isVisible(), false);
+
+  fixture.policy.restrictions.push({
+    id: "deny-native-administer",
+    namespaceId: namespace.id,
+    resourceKind: "agent",
+    resourceId: agent.id,
+    action: "administer",
+    effect: "deny",
+  });
+  await page.reload();
+  await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
+  await expectNativeAdminHidden(page);
+  fixture.policy.restrictions.length = 0;
+
+  const stopped = await fixture.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.id}/stop`,
+  );
+  assert.equal(stopped.status, 202);
+  await page.reload();
+  await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
+  await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
+  await page.getByText("Start this Agent before opening its native admin UI.").waitFor();
+  assert.equal(await page.getByText("Open native admin UI", { exact: true }).isVisible(), false);
+
+  await fixture.updateConfiguration(
+    namespace.id,
+    agent.configurationId,
+    nativeAdminValues("supported-ui", initialNativeAccess.data.origin),
+  );
+  active = await fixture.seedActiveAgentRevision(namespace.id, agent.id, active.revision.id);
+  await page.goto(`${fixture.origin}${detail().pathname}${detail().search}`);
+  await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
+  await page.getByText("Native admin UI is available for the selected AgentRevision.").waitFor();
+  const expectedAccess = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+  );
+  assert.equal(expectedAccess.status, 200);
+  assert.equal(expectedAccess.data.status, "available");
+  assert.equal(expectedAccess.data.bootstrapUrl, undefined);
+  assert.equal(new URL(expectedAccess.data.url).origin, expectedAccess.data.origin);
+  assert.match(new URL(expectedAccess.data.url).hostname, new RegExp(`\\.${nativeDomain}$`));
+  const sharedCookies = await page.context().cookies(expectedAccess.data.origin);
+  const sessionCookies = sharedCookies.filter((cookie) =>
+    cookie.name.endsWith("openclaw_occ_shared.session_token"),
+  );
+  assert.equal(sessionCookies.length, 1);
+  assert.equal(sessionCookies[0].domain, `.${cookieDomain}`);
+  assert.equal(sessionCookies[0].httpOnly, true);
+  assert.equal(sessionCookies[0].sameSite, "Lax");
+
+  let nativeRequestCookie = "";
+  await page.context().route(`${expectedAccess.data.origin}/**`, async (route) => {
+    nativeRequestCookie = (await route.request().allHeaders()).cookie ?? "";
+    return route.fulfill({
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+      body: "<!doctype html><title>Native admin UI</title>",
+    });
+  });
+
+  await page.context().addCookies([
+    {
+      name: "openclaw_occ.session_token",
+      value: "legacy-host-only",
+      domain: consoleHost,
+      path: "/",
+      httpOnly: true,
+      sameSite: "Lax",
+    },
+  ]);
+  const consoleCookies = await page.context().cookies(fixture.origin);
+  assert.ok(
+    consoleCookies.some(
+      (cookie) =>
+        cookie.name === "openclaw_occ.session_token" && cookie.value === "legacy-host-only",
+    ),
+    "the migration fixture must contain the legacy host-only console cookie",
+  );
+  const agentCookies = await page.context().cookies(expectedAccess.data.origin);
+  assert.equal(
+    agentCookies.some((cookie) => cookie.value === "legacy-host-only"),
+    false,
+    "a legacy host-only console cookie must not authenticate the Agent host",
+  );
+
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("link", { name: "Open native admin UI" }).click();
+  const popup = await popupPromise;
+  await popup.waitForLoadState("domcontentloaded");
+  assert.equal(popup.url(), expectedAccess.data.url);
+  assert.equal(await popup.evaluate(() => globalThis.opener === null), true);
+  assert.match(nativeRequestCookie, /(?:__Secure-)?openclaw_occ_shared\.session_token=/);
+  assert.doesNotMatch(nativeRequestCookie, /legacy-host-only/);
+
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
 });
 
 test("Channel drawer saves channel edits without exposing Secret values or dropping unrelated draft state", async (t) => {

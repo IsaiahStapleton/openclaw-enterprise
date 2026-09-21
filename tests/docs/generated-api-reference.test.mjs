@@ -27,7 +27,7 @@ test("generated API reference stays on the approved single page", async () => {
   );
 
   const page = outputs[0].content;
-  assert.match(page, /\| \[Agents\]\(#agents\) \| 10 operations \|/);
+  assert.match(page, /\| \[Agents\]\(#agents\) \| 12 operations \|/);
   assert.match(page, /\| \[Providers\]\(#providers\) \| 1 operation \|/);
   assert.match(
     page,
@@ -52,6 +52,48 @@ test("generated API reference stays on the approved single page", async () => {
       [];
     assert.equal(matches.length, 1, `${operationId} appears ${matches.length} times`);
   }
+});
+
+test("AccessBinding creation documents request body target read permissions", async () => {
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const operation =
+    document.paths["/namespaces/{namespaceId}/iam/access-bindings"]?.post ?? undefined;
+  assert.ok(operation, "createIAMAccessBinding OpenAPI operation is missing");
+
+  assert.deepEqual(operation["x-openclaw-permissions"], [
+    { action: "administer", resourceKind: "installation", scope: "requested" },
+    { action: "read", resourceKind: "namespace", scope: "requested" },
+    {
+      action: "read",
+      resourceKind: "agent",
+      scope: "request_body",
+      condition: "iam_binding_target",
+    },
+    {
+      action: "read",
+      resourceKind: "agent_revision",
+      scope: "request_body",
+      condition: "iam_binding_target",
+    },
+    {
+      action: "read",
+      resourceKind: "configuration",
+      scope: "request_body",
+      condition: "iam_binding_target",
+    },
+    {
+      action: "read",
+      resourceKind: "secret",
+      scope: "request_body",
+      condition: "iam_binding_target",
+    },
+    {
+      action: "read",
+      resourceKind: "service_account",
+      scope: "request_body",
+      condition: "iam_binding_target",
+    },
+  ]);
 });
 
 test("OpenAPI check rejects unexpected generated API child pages in an isolated CLI fixture", async (t) => {

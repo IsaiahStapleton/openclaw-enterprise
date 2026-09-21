@@ -58,13 +58,24 @@ export function bindPlatformUnitOfWork(
       "compareAndSetActiveRevision",
       "compareAndClearActiveRevision",
       "transitionAgentDesiredRuntimeState",
+      "transitionAgentStatus",
     ]),
     revisions: bindRepository(repositories.revisions, lifetime, [
       "findRevision",
       "listRevisions",
       "createRevision",
     ]),
+    iamPolicy: bindRepository(repositories.iamPolicy, lifetime, [
+      "listRoles",
+      "getRole",
+      "createRole",
+      "deleteRole",
+      "listAccessBindings",
+      "getAccessBinding",
+      "createAccessBinding",
+      "deleteAccessBinding",
+    ]),
     audit: bindRepository(repositories.audit, lifetime, ["append", "list"]),
-    operations: bindRepository(repositories.operations, lifetime, ["append", "list"]),
+    operations: bindRepository(repositories.operations, lifetime, ["append", "list", "findWork"]),
   });
 }

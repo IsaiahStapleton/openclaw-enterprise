@@ -88,6 +88,13 @@ import PAT permissions. GraphQL may return public information GitHub permits;
 GraphQL POST is treated as a possible write. The former `read-write` name is
 unsupported, with no compatibility alias.
 
+Git discovery, upload-pack and receive-pack accept case differences in the
+admitted owner/repository and an optional `.git` suffix. The backend constructs
+a canonical upstream path; a literal `.git` repository name remains part of the
+admitted identity. Endpoint names, methods, media types, service queries and
+profile restrictions still apply. API request paths and repository authority
+remain unchanged.
+
 Native repository rules still apply. Administration, workflow changes requiring
 additional permissions, Actions, packages, projects, SSH, LFS, and other
 repositories are outside the supported scope. Missing App permissions cause
@@ -148,6 +155,15 @@ Failed admission can also retain cleanup work. If session construction fails,
 renewal access closes immediately; retained material remains counted against
 session capacity and shutdown's `pendingAuxiliary` until admitted callbacks
 finish and their material is disposed.
+
+## GitHub response data
+
+Bounded REST JSON responses omit the provider's `temp_clone_token` from the
+repository object, its `parent` and `source` repository relationships, and
+pull-request `head.repo` and `base.repo` objects. Human text and unrelated
+metadata remain unchanged. Qualified machine links still pass through the
+existing origin, repository, route, and profile checks before gateway rewriting;
+other informational links remain data.
 
 ## Client routing and limits
 

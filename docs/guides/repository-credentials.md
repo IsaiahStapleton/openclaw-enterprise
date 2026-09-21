@@ -94,9 +94,10 @@ node "$credential_client" \
   /absolute/path/sessions/task git push origin HEAD:refs/heads/agent-feature
 ```
 
-Use credential-free HTTPS URLs. If the launcher refuses inherited URL credentials,
-remove userinfo from remote fetch/push URLs and `url.*.insteadOf` or
-`url.*.pushInsteadOf` destinations; the selected session helper supplies authentication.
+Use credential-free HTTPS URLs; the selected session helper supplies authentication.
+Git keeps its normal configuration, hooks and worktrees. These native settings
+are overridable defaults, so operators remain responsible for inherited URL
+credentials and configuration overrides.
 
 API commands require a `git-full` session. The launcher checks that the
 executable is exactly `gh` 2.100.0. Create a

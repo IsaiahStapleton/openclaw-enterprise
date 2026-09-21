@@ -64,6 +64,9 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     executionMode: "embedded",
     servicePrincipalId: identifier("service-agent"),
     desiredRuntimeState: "stopped",
+    // Both adapters force a created Agent to `active` rather than honoring a
+    // caller-supplied status, so a seeded Agent must carry the same value.
+    status: "active",
     createdAt: new Date().toISOString(),
   };
   const revision = {
@@ -119,6 +122,9 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     await transaction.operations.append(operation);
   });
 
+  // Agent-scoped work exists only to tear an Agent down. Reconciliation still
+  // belongs to revisions, so Agent work without the deleted target is refused
+  // rather than queued as generic Agent reconciliation.
   await assert.rejects(
     store.transact((transaction) =>
       transaction.operations.append({
@@ -129,7 +135,37 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
         actorId: audit.actorId,
       }),
     ),
-    "Agent metadata must not enqueue reconciliation work.",
+    "Agent work without a lifecycle target must not enqueue reconciliation",
+  );
+
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.operations.append({
+        kind: "agent",
+        action: "reconcile",
+        namespaceId: namespace.id,
+        resourceId: agent.id,
+        actorId: audit.actorId,
+        target: "ready",
+      }),
+    ),
+    "an Agent cannot be driven to a Namespace lifecycle target",
+  );
+
+  // Teardown work must name the Agent, not its owning Namespace; otherwise it
+  // would be indistinguishable from Namespace work on the queue.
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.operations.append({
+        kind: "agent",
+        action: "reconcile",
+        namespaceId: namespace.id,
+        resourceId: namespace.id,
+        actorId: audit.actorId,
+        target: "deleted",
+      }),
+    ),
+    "teardown work naming its Namespace instead of its Agent must be refused",
   );
 
   const providerConfiguration = {
@@ -691,6 +727,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     servicePrincipalId: identifier("service-agent"),
     harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
     desiredRuntimeState: "stopped",
+    status: "active",
     createdAt: new Date().toISOString(),
   };
   const sharedAccountAgent = {
@@ -1037,6 +1074,140 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     );
   });
 
+  // Agent deletion is asynchronous, so the status transition is the boundary
+  // that stops concurrent mutations from admitting work an in-flight teardown
+  // has already enumerated. A dedicated Agent keeps the seeded one usable.
+  const lifecycleAgent = {
+    ...agent,
+    id: identifier("agt"),
+    name: `Lifecycle ${randomUUID()}`,
+    servicePrincipalId: identifier("service-agent"),
+  };
+  await store.transact(async (transaction) => {
+    const created = await transaction.agents.createAgent(lifecycleAgent);
+    assert.equal(created.status, "active", "a created Agent is active");
+
+    // An absent Agent is reported as undefined rather than raising, so callers
+    // cannot distinguish a missing Agent from a refused transition.
+    assert.equal(
+      await transaction.agents.transitionAgentStatus(
+        lifecycleAgent.namespaceId,
+        identifier("agt"),
+        "active",
+        "deleting",
+      ),
+      undefined,
+    );
+
+    // A status the Agent does not currently hold does not match.
+    assert.equal(
+      await transaction.agents.transitionAgentStatus(
+        lifecycleAgent.namespaceId,
+        lifecycleAgent.id,
+        "deleting",
+        "deleting",
+      ),
+      undefined,
+    );
+
+    const deleting = await transaction.agents.transitionAgentStatus(
+      lifecycleAgent.namespaceId,
+      lifecycleAgent.id,
+      "active",
+      "deleting",
+    );
+    assert.equal(deleting.status, "deleting");
+
+    // The same call no longer matches, because the Agent has left active. A
+    // caller that treats a repeated deletion request as success checks the
+    // status first rather than relying on the transition, as deleteNamespace does.
+    assert.equal(
+      await transaction.agents.transitionAgentStatus(
+        lifecycleAgent.namespaceId,
+        lifecycleAgent.id,
+        "active",
+        "deleting",
+      ),
+      undefined,
+    );
+
+    // Re-entering the state the Agent already holds is permitted, so a retry
+    // that has already observed `deleting` converges instead of conflicting.
+    const unchanged = await transaction.agents.transitionAgentStatus(
+      lifecycleAgent.namespaceId,
+      lifecycleAgent.id,
+      "deleting",
+      "deleting",
+    );
+    assert.equal(unchanged.status, "deleting");
+  });
+
+  // Deleting is terminal: teardown removes the row, so nothing returns to active.
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.agents.transitionAgentStatus(
+        lifecycleAgent.namespaceId,
+        lifecycleAgent.id,
+        "deleting",
+        "active",
+      ),
+    ),
+    "A deleting Agent cannot return to active.",
+  );
+
+  // A created Agent always lands active; a caller cannot seed one mid-deletion.
+  await store.transact(async (transaction) => {
+    const seeded = await transaction.agents.createAgent({
+      ...agent,
+      id: identifier("agt"),
+      name: `Seeded deleting ${randomUUID()}`,
+      servicePrincipalId: identifier("service-agent"),
+      status: "deleting",
+    });
+    assert.equal(seeded.status, "active");
+  });
+
+  // Agent teardown work carries no revision, unlike revision reconciliation.
+  // It must survive persistence and be read back as Agent work rather than
+  // being mistaken for Namespace work, which is the other revision-less shape.
+  const teardownOperation = {
+    kind: "agent",
+    action: "reconcile",
+    namespaceId: lifecycleAgent.namespaceId,
+    resourceId: lifecycleAgent.id,
+    actorId: audit.actorId,
+    target: "deleted",
+  };
+  await store.transact((transaction) => transaction.operations.append(teardownOperation));
+  await store.transact(async (transaction) => {
+    const queued = (await transaction.operations.list()).filter(
+      (candidate) => candidate.resourceId === lifecycleAgent.id,
+    );
+    assert.equal(queued.length, 1, "exactly one teardown item is queued for the Agent");
+    assert.deepEqual(queued[0], teardownOperation);
+  });
+
+  // Re-requesting teardown converges on the queued item instead of duplicating
+  // it, so a retried deletion request cannot enqueue a second teardown.
+  await store.transact((transaction) => transaction.operations.append(teardownOperation));
+  await store.transact(async (transaction) => {
+    assert.equal(
+      (await transaction.operations.list()).filter(
+        (candidate) => candidate.resourceId === lifecycleAgent.id,
+      ).length,
+      1,
+    );
+  });
+
+  // Teardown cannot be queued against an Agent that does not exist in the
+  // exact owning Namespace.
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.operations.append({ ...teardownOperation, resourceId: identifier("agt") }),
+    ),
+    "teardown work for an absent Agent must be refused",
+  );
+
   return {
     installation,
     namespace,
@@ -1045,6 +1216,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     revision,
     audit,
     operation,
+    lifecycleAgent,
     serviceAccount: { ...account, credential: alternateCredential },
     serviceAccountNamespace: accountNamespace,
     serviceAccountRevision: accountRevision,

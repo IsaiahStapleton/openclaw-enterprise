@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
 updated: "2026-09-21"
-last_updated_session: "authoring-run/2c944a97-e78b-44f1-86cf-ddfec705e0a6"
+last_updated_session: "authoring-run/7c8439bf-8351-451a-8e82-a947e909fc31"
 ---
 
 # Repository credential service flow
@@ -169,6 +169,10 @@ backend plans admitted routes through
 `apps/controller/src/drivers/repo/github/credentials/routes/classification.ts:classifyRoute`
 for target, method, profile and query classification. This provider-owned decision admits upload-pack discovery and execution for all
 three profiles, but rejects receive-pack discovery and execution for `git-read`.
+Git paths match the admitted owner/repository case-insensitively, with or without
+one optional `.git` suffix, then use the canonical admitted identity upstream.
+A literal `.git` repository name retains its suffix. Raw-target, endpoint, method,
+media, query and profile checks still apply; API request matching is unchanged.
 It admits REST and GraphQL only for `git-full`: selected repository metadata,
 PRs, issues and issue comments, plus `GET /meta` and `POST /graphql`, subject to
 the existing method, query, framing and media-type checks. Both Git-only profiles
@@ -234,6 +238,10 @@ It composes URL validation and pagination rewriting from
 `apps/controller/src/drivers/repo/github/credentials/response-urls.ts:createUrlRewriter`
 and `rewritePaginationLinks`, and resource-field rewriting from
 `apps/controller/src/drivers/repo/github/credentials/response-resources.ts:createResourceRewriter`.
+Before releasing bounded JSON, it removes `temp_clone_token` from repository
+objects, their `parent`/`source` relationships and PR `head.repo`/`base.repo`
+objects. Human text and unrelated metadata remain unchanged; this is not a
+generic credential-string scanner.
 The URL owner maps response links using the configured GitHub repository ID
 to the admitted `/repos/owner/repository` path before checking the route and
 resource purpose. A different repository ID remains refused. Issue-list
@@ -304,6 +312,18 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 03:34: Reconcile core normalization and response filtering with native client transport. (public authoring-run/7c8439bf-8351-451a-8e82-a947e909fc31 - aa6c43383764e0632f7f9a9aa4245473075e9ff6)
+
+- 2026-09-21 03:28: Document admitted Git path normalization and unchanged authorization checks. (public authoring-run/3a7b57ee-abdc-48f9-87c7-4527c7f42e8a - daf5e85cd6a4c967b91302fa68ad2e156b20e5a7)
+
+- 2026-09-20 21:55: Document accompanying GitHub response credential filtering at supported repository locations. (public authoring-run/85bfba42-19b5-4084-86ec-49dac9e45fba - 46627a2c38cb942fffcbc61ed5229c85fe01bef3)
+
+- 2026-09-19 21:29: Update common/backend ownership and source paths; distinguish finite shutdown from completed disposal. Verify composed source. (public authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b - 5d8329753f4e17402f619d392acc8fc3d112f620)
+
+- 2026-09-18 02:02: Document accompanying capture deadlines and failed-construction cleanup. (source `cce878092910f39770aa27baa64c6d710f9651f8`)
+
+- 2026-09-17 21:49: Document callable common lifecycle ownership. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
 
 - 2026-09-21 03:16: Document accompanying native Git preparation, manifest helper selection and gh-only routing. (authoring-run/2c944a97-e78b-44f1-86cf-ddfec705e0a6 - a0e96101ba7a7e111816103b0f6336f3b9dbeee8)
 

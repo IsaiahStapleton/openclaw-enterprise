@@ -138,9 +138,10 @@ jobs:
     runs-on: ubuntu-24.04
     needs: preflight
     if: inputs.lane == 'all' || inputs.lane == 'k3d-model'
-    timeout-minutes: 65
+    timeout-minutes: 120
     environment: integration-model
     env:
+      CI_RUNNER_TEST_TIMEOUT_MS: "5400000"
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OCC_TEST_OPENAI_MODEL: ${{ vars.OCC_TEST_OPENAI_MODEL }}
       OCC_TEST_KUBERNETES_GATEWAY_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_GATEWAY_IMAGE }}
@@ -170,6 +171,7 @@ jobs:
       OCC_TEST_OPENAI_MODEL: ${{ vars.OCC_TEST_OPENAI_MODEL }}
       OCC_TEST_KUBERNETES_GATEWAY_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_GATEWAY_IMAGE }}
       OCC_TEST_KUBERNETES_AGENT_IMAGE: ${{ vars.OCC_TEST_KUBERNETES_AGENT_IMAGE }}
+      NODE_BASE_IMAGE: ${{ vars.NODE_BASE_IMAGE }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

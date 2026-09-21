@@ -35,6 +35,23 @@ queue transition does not itself establish enforcement of cluster admission,
 NetworkPolicy, or a SandboxDriver facet; those guarantees require the selected
 implementation and its documented infrastructure.
 
+## Agent lifecycle
+
+Stopping an Agent sets its desired runtime state to `stopped` and queues an
+exact-Agent `stopped` target. The worker reauthorizes the original actor, stops
+the current revision, and clears the active pointer only if it still identifies
+that revision. Revision history, credentials, and persistent state remain; a
+later deployment starts a new revision.
+
+Deleting an Agent sets its lifecycle status to `deleting`, sets desired runtime
+state to `stopped`, and queues an exact-Agent `deleted` target. Synchronous Agent
+mutations reject this state. The worker reauthorizes `delete`, retires every
+revision, and removes runtime credentials before a claim-protected database
+finalizer removes the Agent, revisions, service principal, API keys, exact IAM
+references, and Agent work rows. The function records durable success evidence;
+an expired claim or failed external cleanup leaves the rows intact for safe
+retry. Namespace-owned Configurations and Secrets are not Agent teardown state.
+
 ## AgentRevision lifecycle
 
 An authorized bodyless Agent deployment reads its exact Namespace-owned native
@@ -64,17 +81,19 @@ These checks use the immutable revision, not a later Agent draft. Revoked source
 access fails permanently with `AUTHORIZATION_DENIED`, records attributable
 deployment-denial audit evidence, and prevents Compute calls and activation.
 The [harness credential flow](../../flows/native-service-account-credential-delivery.md)
-owns the complete source-resolution sequence. Production accepts both dedicated
-Codex and embedded OpenClaw. It prepares the candidate
-and its Agent-owned gateway, records the exact active revision, activates the
-existing concrete Kubernetes route when applicable, and retires the prior
-revision. The live claim remains unfinished until the worker atomically records
+owns the complete source-resolution sequence. Production accepts dedicated
+Codex and embedded OpenClaw. Dedicated Codex prepares its revision-specific
+workload before the Agent Service selects it. Embedded OpenClaw replaces and
+checks the shared Agent gateway during activation. The worker records the exact
+active revision, activates the Kubernetes route when applicable, and retires the
+prior revision. Its live claim remains unfinished until it atomically records
 one attributable activation audit and completes the durable operation.
-Already-active recovery repeats safe route activation and predecessor retirement
-before that same audit/finalization; idle dedicated app-servers can overlap,
+Already-active recovery repeats route activation and predecessor retirement
+before that audit and finalization. Idle dedicated app-servers can overlap,
 but normal reconciliation routes requests only to the active revision. This does
-not provide independent process fencing during Kubernetes node partitions or
-manual replacement; see the [gateway rollout limitation](../drivers/kubernetes-compute.md#execution-modes).
+not fence independent processes during Kubernetes node partitions or manual
+replacement. The single-replica gateway can also interrupt serving during
+replacement; see the [gateway rollout limitation](../drivers/kubernetes-compute.md#execution-modes).
 See the
 [Harness execution topology flow](../../flows/harness-execution-topology.md) for the
 full placement, runtime, and recovery sequence.
@@ -88,10 +107,10 @@ host-process debugging also needs PostgreSQL for a durable worker path. The expl
 Kubernetes driver creates a hardened Deployment and dedicated Kubernetes
 ServiceAccount for the revision's existing Agent ServicePrincipal. Its
 audience-scoped projected token is required in production but does not
-implement ServicePrincipal token verification or exchange. The Agent Service
-remains nonserving until its exact
-revision is active. Production then selects that Agent's ready workload;
-selected SandboxDriver facets are pinned at admission and enforced by the
+implement ServicePrincipal token verification or exchange. The dedicated Codex
+Agent Service does not select a replacement workload until it is ready and the
+revision is active; embedded OpenClaw reuses and replaces its existing gateway.
+Selected SandboxDriver facets are pinned at admission and enforced by the
 selected Driver. See the [SandboxDriver contract](../drivers/sandbox.md) for
 provider-specific preparation and failure boundaries.
 
@@ -102,7 +121,7 @@ following states:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: Namespace or AgentRevision operation committed
+    [*] --> queued: Namespace or Agent operation committed
     queued --> claimed: Worker acquires claim and lease
     claimed --> claimed: Heartbeat renews lease
     claimed --> succeeded: Effect and lifecycle update commit
@@ -124,14 +143,29 @@ stateDiagram-v2
   method, renews its lease before each effect, and keeps renewing while it runs.
   Consecutive short effects must not starve renewal. Only the current claim
   token can publish lifecycle state, audit evidence, or completion.
-- **`succeeded`:** The exact Namespace or AgentRevision operation completed
+- **`succeeded`:** The exact Namespace or Agent operation completed
   successfully. Namespace transitions finalize with their audit; an Agent
   revision first becomes active and publishes its route, then commits its
-  activation audit and queue completion together. This terminal record remains
-  available for idempotency.
+  activation audit and queue completion together. These terminal records remain
+  available for idempotency. Successful Agent deletion instead removes its work
+  rows after recording lifecycle evidence because the owner no longer exists.
 - **`failed_permanent`:** Processing stopped because authorization failed, an
   unrecoverable error occurred, or the retry limit was exhausted. The failure
   is audited, and the terminal operation is never retried automatically.
+
+### Terminal results
+
+Terminal work stores its overall outcome in `reasonCode` and optional structured
+success or failure details in `resultData` (the PostgreSQL `result_data` column).
+Successful activation keeps `REVISION_ACTIVATED` or `REVISION_ALREADY_ACTIVE`
+even when `resultData.warnings` contains different plugin failure codes.
+Convergence deadline failures store their allowed `timeoutMs` in the same field.
+Queued and claimed work have no result data.
+
+Warnings contain only an allowed code and an admitted plugin ID. The
+[deployment status API](../agents.md#deployment-status) derives `error` and
+`warnings` from this saved outcome; a successful deployment with plugin warnings
+still returns `error: null`. Only the current live claim can publish the result.
 
 ### Deferred Namespace and Agent convergence
 
@@ -156,11 +190,14 @@ operation creation time. Exceeding it fails the operation with
 [worker configuration reference](../settings/operations.md#controller-worker-environment) for
 defaults and supported overrides.
 
-For Agent replacement, the existing route remains live while its nonserving
-replacement starts. The worker preserves the predecessor's Service selector
-until fenced activation succeeds, then publishes only the verified replacement
-and retires the previous workload. Failed activation leaves the predecessor
-and its route intact.
+Replacement behavior depends on the Harness. Dedicated Codex prepares its
+revision-specific workload before the worker switches the Agent Service, but the
+shared single-replica gateway can still interrupt serving during its rollout.
+Embedded OpenClaw replaces that shared gateway using Kubernetes `Recreate`: the
+predecessor can stop before the replacement passes startup authentication and
+readiness. A failed embedded rollout can interrupt serving; the worker retries
+according to its queue policy but does not guarantee that the predecessor stays
+available or restore it automatically.
 
 If a worker exits or stops renewing its lease, stale-claim recovery either
 requeues the operation or marks it `failed_permanent` after its final attempt.
@@ -170,10 +207,9 @@ exhausted.
 ## Authorization, retries, and scope
 
 - Namespace provisioning and deletion remain the only Namespace infrastructure
-  operations; AgentRevision preparation and retirement use the same Compute
-  Driver while preserving each Agent's stable gateway identity.
-- PostgreSQL accepts only Namespace lifecycle work or fully owned
-  AgentRevision work and rejects malformed queue shapes.
+  operations; Agent lifecycle and AgentRevision work use the same Compute Driver.
+- PostgreSQL accepts only Namespace lifecycle, exact-Agent lifecycle, or fully
+  owned AgentRevision work and rejects malformed queue shapes.
 - Creating or updating Agent metadata does not enqueue infrastructure work.
 - Every admitted AgentRevision is created through the canonical deployment
   path with pinned Harness and Compute metadata, then processed asynchronously.

@@ -56,21 +56,25 @@ spec:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
     - to:
+        {{- range .Values.database.cidrs }}
         - ipBlock:
-            cidr: {{ .Values.database.cidr }}
+            cidr: {{ . }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.database.port }}
     - to:
+        {{- range .Values.cluster.cidrs }}
         - ipBlock:
-            cidr: {{ .Values.cluster.cidr }}
+            cidr: {{ . }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.cluster.port }}
 {{- if .Values.provider.chatgpt.enabled }}
 {{- $providerCidr := .Values.provider.chatgpt.providerCidr }}
 {{- if not (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/32$" $providerCidr) }}
-{{- fail "provider.chatgpt.providerCidr must identify exactly one approved IPv4 provider or proxy host with /32" }}
+{{- fail "provider.chatgpt.providerCidr must identify one IPv4 /32 destination for api.chatgpt.com:443; it does not configure a forward proxy" }}
 {{- end }}
 ---
 apiVersion: networking.k8s.io/v1

@@ -1,18 +1,18 @@
 # Docker Compute Driver
 
-`DockerComputeDriver` is the default local development Compute Driver. Compose
-development runs PostgreSQL, migrations, and the shared initializer on Docker
-Engine or Podman before starting the OCC API and worker. The API uses filesystem
-Configuration. Both engines implement Namespace networks and embedded OpenClaw
-and dedicated Codex runtime topologies.
+`DockerComputeDriver` is the default Compute Driver for local control-plane
+development. Compose runs PostgreSQL, migrations, the initializer, the OCC API,
+and the worker on Docker Engine or Podman. The API uses filesystem
+Configuration, and the Driver creates isolated Namespace networks.
 
-This driver is a development runtime. Production can select bundled
-[Kubernetes](kubernetes-compute.md), [SSH](ssh-compute.md), or an installed
-Compute Driver through trusted Installation configuration.
+**This Driver cannot deploy a new Agent under the current authentication
+contract.** It rejects every `harnessAuth` binding at deployment. Its code
+contains embedded OpenClaw and dedicated Codex container topologies, but those
+components do not provide a currently usable Agent or model-response workflow.
 
-The current Agent `harnessAuth` contract requires Kubernetes Compute. This Driver
-rejects unsupported bindings at deployment; its existing topology implementation
-and prior runtime proof do not establish support for this authentication path.
+Use [Kubernetes](kubernetes-compute.md) to deploy Agents locally with OCC-managed
+credentials, or [SSH](ssh-compute.md) for embedded OpenClaw with operator-managed
+host credentials. Docker Compute cannot be selected for production.
 
 ## Requirements
 
@@ -21,8 +21,6 @@ and prior runtime proof do not establish support for this authentication path.
 - Existing production-equivalent runtime images:
   `OCC_DOCKER_GATEWAY_IMAGE` and `OCC_DOCKER_AGENT_IMAGE`, or one shared
   `OCC_DOCKER_RUNTIME_IMAGE` containing both runtime entrypoints.
-- An existing shell `OPENAI_API_KEY` for real embedded and dedicated model
-  turns. The stack must not print, persist, or pass it to the wrong container.
 - Explicit `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` when the Compose bridge range
   must be admitted as local development traffic.
 - The controller-only `OCC_DEVELOPMENT_CONFIGURATION_ROOT`, which Compose sets
@@ -89,7 +87,8 @@ network or another Namespace network.
 
 `prepareRevision(revision)` validates the immutable Namespace, Agent, revision,
 Harness identity, execution mode, and selected Compute implementation before it
-starts containers.
+starts containers. The code implements the topologies below, but it rejects
+the model-authentication bindings required for a newly deployed Agent:
 
 - `openclaw` with `embedded` starts one Agent-owned OpenClaw gateway container.
   That container also runs the embedded Harness and receives only that Agent's
@@ -134,9 +133,10 @@ not receive the Docker socket. Only the controller receives the
 `occ_configuration_data` volume at `/app/.development/configurations`; the
 worker and workload containers do not mount it.
 
-`OPENAI_API_KEY` enters only the container that performs the model call: the
-combined embedded OpenClaw container or the dedicated Codex container. A
-dedicated gateway never receives it. The key must not appear in command
+The underlying container code passes `OPENAI_API_KEY` only to the component
+that performs the model call: the combined embedded OpenClaw container or the
+dedicated Codex container. Current Agent admission cannot reach this path. A
+dedicated gateway never receives the key. It must not appear in command
 arguments, API responses, audit events, logs, Compose output, Docker labels, or
 persisted controller configuration.
 
@@ -180,9 +180,10 @@ while other Namespaces remain.
   `OCC_DOCKER_RUNTIME_IMAGE` when one image contains both entrypoints.
 - **API rejects Compose traffic:** set `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR`
   to the exact Compose bridge range. Do not enable forwarded-header trust.
-- **Model turn fails:** confirm `OPENAI_API_KEY` exists in the shell that starts
-  Compose, the selected model is authorized, and the key reaches only the
-  embedded OpenClaw or dedicated Codex container.
+- **Agent deployment rejects model authentication:** Docker Compute does not
+  accept any current Agent authentication binding. Use
+  [local Kubernetes setup](../../guides/quickstart.md) to deploy an Agent and
+  verify a model response.
 - **Namespace cleanup leaves resources:** inspect ownership labels before
   deleting anything manually. The driver removes only exact owned resources.
 

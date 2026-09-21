@@ -169,13 +169,15 @@ and their enforcement limits.
 
 ## Deployment modes
 
-- **Local development:** Compose runs the API, worker, and PostgreSQL on Docker
-  Engine or Podman; the API binds to loopback and Docker Compute provisions
-  Agent containers through the selected engine's Docker-compatible API. Podman
-  verification covers control-plane startup, worker API access, authenticated
-  Installation access, Namespace isolation, and an embedded provider-backed
-  model turn. Dedicated Codex and interactive TUI execution remain
-  Docker-verified.
+- **Local Kubernetes development:** Compose runs the API, worker, and PostgreSQL
+  on Docker Engine or Podman. Kubernetes Compute runs Agent workloads in a
+  disposable k3d cluster. Follow [Local Setup](guides/quickstart.md) to deploy
+  an Agent locally.
+- **Docker or Podman control-plane preview:** The default Compose profile runs
+  the API, worker, and PostgreSQL; the API binds to loopback. Its Docker Compute
+  Driver cannot provide the Harness authentication required to deploy Agents
+  through OCC. See [Docker Compute](reference/drivers/docker-compute.md) for
+  development and verification limits.
 - **Production Kubernetes:** the API and worker run separately; Kubernetes Compute
   provisions tenant infrastructure and Agent workloads. The API remains internal.
 - **SSH execution:** SSH Compute runs embedded OpenClaw on preprovisioned Linux

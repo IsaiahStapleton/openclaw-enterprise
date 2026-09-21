@@ -49,6 +49,9 @@ case and skip counts. Existing suite discovery and CI selection remain available
 
 ## Integration tests
 
+For local metrics collection and the provisioned Prometheus/Grafana dashboard,
+use [metrics testing](metrics.md).
+
 Each suite page owns its setup, environment variables, model defaults, cleanup,
 and coverage limits. See [GitHub Actions](ci.md) for CI coverage.
 

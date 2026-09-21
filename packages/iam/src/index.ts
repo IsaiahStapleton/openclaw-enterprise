@@ -9,9 +9,17 @@ import {
   type Group,
   type GroupMembership,
   type IAMDriver,
+  type IAMManagedAccessBindingInput,
+  type IAMManagedRoleInput,
+  type IAMPolicyManagementContext,
+  type IAMPolicyReadContext,
+  type IAMPolicyReadRepository,
+  type IAMPolicyRepository,
   type Identity,
   type IdentityLookup,
   type JSONSchema,
+  type ManagedIAMResourceKind,
+  type Permission,
   type PermissionAction,
   type Principal,
   type ResourceRef,
@@ -123,7 +131,7 @@ export function createAuthPrincipalSeed(
         })),
       ),
       { action: "operate", resourceKind: "secret" },
-      ...(["create", "read", "update", "deploy", "operate", "administer"] as const).map(
+      ...(["create", "read", "update", "delete", "deploy", "operate", "administer"] as const).map(
         (action) => ({
           action,
           resourceKind: "agent" as const,
@@ -192,6 +200,14 @@ const ACTIONS: readonly PermissionAction[] = [
   "administer",
 ];
 
+const MANAGED_RESOURCE_KINDS: readonly ManagedIAMResourceKind[] = [
+  "agent",
+  "agent_revision",
+  "configuration",
+  "secret",
+  "service_account",
+];
+
 function optionalNonempty(value: unknown): value is string | undefined {
   return value === undefined || isNonEmptyString(value);
 }
@@ -215,6 +231,22 @@ function assertUniqueIds(values: readonly { readonly id: string }[], collection:
   }
 }
 
+function exactKeys(value: object, keys: readonly string[]): boolean {
+  const allowed = new Set(keys);
+  return Object.keys(value).every((key) => allowed.has(key)) && keys.every((key) => key in value);
+}
+
+function exactOptionalKeys(
+  value: object,
+  required: readonly string[],
+  optional: readonly string[],
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return (
+    Object.keys(value).every((key) => allowed.has(key)) && required.every((key) => key in value)
+  );
+}
+
 function assertScope(value: { readonly namespaceId?: string }, collection: string): void {
   assertCondition(
     !Object.hasOwn(value, "installationId"),
@@ -224,6 +256,113 @@ function assertScope(value: { readonly namespaceId?: string }, collection: strin
     optionalNonempty(value.namespaceId),
     `${collection} contains an invalid namespace`,
   );
+}
+
+function validatedManagedPermissions(permissions: readonly Permission[]): readonly Permission[] {
+  assertCondition(Array.isArray(permissions), "managed Role permissions must be an array");
+  assertCondition(permissions.length > 0, "managed Role permissions must be nonempty");
+  const keys = new Set<string>();
+  const saved: Permission[] = [];
+  for (const permission of permissions) {
+    assertCondition(
+      typeof permission === "object" &&
+        permission !== null &&
+        exactKeys(permission, ["action", "resourceKind"]),
+      "managed Role permissions must contain only action and resourceKind",
+    );
+    assertCondition(
+      ACTIONS.includes(permission.action),
+      "managed Role permission action is invalid",
+    );
+    assertCondition(
+      MANAGED_RESOURCE_KINDS.includes(permission.resourceKind as ManagedIAMResourceKind),
+      "managed Role permission resource kind is invalid",
+    );
+    const key = `${permission.action}\u0000${permission.resourceKind}`;
+    assertCondition(!keys.has(key), "managed Role permissions must be duplicate-free");
+    keys.add(key);
+    saved.push({
+      action: permission.action,
+      resourceKind: permission.resourceKind,
+    });
+  }
+  return Object.freeze(saved.map((permission) => Object.freeze({ ...permission })));
+}
+
+function managedRole(input: IAMManagedRoleInput): Role {
+  assertCondition(
+    typeof input === "object" &&
+      input !== null &&
+      exactOptionalKeys(input, ["id", "namespaceId", "permissions"], ["name"]),
+    "managed Role input contains unsupported fields",
+  );
+  assertCondition(isNonEmptyString(input.id), "managed Role identity is invalid");
+  assertCondition(isNonEmptyString(input.namespaceId), "managed Role requires a Namespace");
+  assertCondition(
+    input.name === undefined || isNonEmptyString(input.name),
+    "managed Role name is invalid",
+  );
+  return Object.freeze({
+    id: input.id,
+    namespaceId: input.namespaceId,
+    ...(input.name === undefined ? {} : { name: input.name }),
+    permissions: validatedManagedPermissions(input.permissions),
+  });
+}
+
+function managedAccessBinding(input: IAMManagedAccessBindingInput): AccessBinding {
+  assertCondition(
+    typeof input === "object" &&
+      input !== null &&
+      exactKeys(input, [
+        "id",
+        "namespaceId",
+        "subjectKind",
+        "subjectId",
+        "roleId",
+        "resourceKind",
+        "resourceId",
+      ]),
+    "managed AccessBinding input contains unsupported fields",
+  );
+  assertCondition(isNonEmptyString(input.id), "managed AccessBinding identity is invalid");
+  assertCondition(
+    isNonEmptyString(input.namespaceId),
+    "managed AccessBinding requires a Namespace",
+  );
+  assertCondition(
+    input.subjectKind === "identity",
+    "managed AccessBinding supports only identity subjects",
+  );
+  assertCondition(isNonEmptyString(input.subjectId), "managed AccessBinding subject is invalid");
+  assertCondition(isNonEmptyString(input.roleId), "managed AccessBinding Role is invalid");
+  assertCondition(
+    MANAGED_RESOURCE_KINDS.includes(input.resourceKind),
+    "managed AccessBinding resource kind is invalid",
+  );
+  assertCondition(isNonEmptyString(input.resourceId), "managed AccessBinding resource is invalid");
+  return Object.freeze({
+    id: input.id,
+    namespaceId: input.namespaceId,
+    subjectKind: "identity",
+    subjectId: input.subjectId,
+    roleId: input.roleId,
+    resourceKind: input.resourceKind,
+    resourceId: input.resourceId,
+  });
+}
+
+function immutableRole(role: Readonly<Role>): Readonly<Role> {
+  return Object.freeze({
+    ...role,
+    permissions: Object.freeze(
+      role.permissions.map((permission) => Object.freeze({ ...permission })),
+    ),
+  });
+}
+
+function immutableBinding(binding: Readonly<AccessBinding>): Readonly<AccessBinding> {
+  return Object.freeze({ ...binding });
 }
 
 export function validateNativeIAMState(state: NativeIAMState): void {
@@ -761,6 +900,126 @@ export class NativeIAMDriver implements IAMDriver {
       return decision(this.id, false, "The native IAM policy is invalid.");
     }
     return evaluateValidatedAuthorization(request, state, this.id);
+  }
+
+  async listNamespaceRoles(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+  ): Promise<readonly Readonly<Role>[]> {
+    const repository = this.policyRepository(context, ["listRoles"]);
+    this.assertNamespace(namespaceId);
+    return Object.freeze((await repository.listRoles(namespaceId)).map(immutableRole));
+  }
+
+  async getNamespaceRole(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+    roleId: string,
+  ): Promise<Readonly<Role> | undefined> {
+    const repository = this.policyRepository(context, ["getRole"]);
+    this.assertNamespace(namespaceId);
+    this.assertIdentifier(roleId, "Role");
+    const role = await repository.getRole(namespaceId, roleId);
+    return role === undefined ? undefined : immutableRole(role);
+  }
+
+  async createNamespaceRole(
+    context: IAMPolicyManagementContext,
+    input: IAMManagedRoleInput,
+  ): Promise<Readonly<Role>> {
+    const repository = this.managementPolicyRepository(context, ["createRole"]);
+    return immutableRole(await repository.createRole(managedRole(input)));
+  }
+
+  async deleteNamespaceRole(
+    context: IAMPolicyManagementContext,
+    namespaceId: string,
+    roleId: string,
+  ): Promise<boolean> {
+    const repository = this.managementPolicyRepository(context, ["deleteRole"]);
+    this.assertNamespace(namespaceId);
+    this.assertIdentifier(roleId, "Role");
+    return repository.deleteRole(namespaceId, roleId);
+  }
+
+  async listNamespaceAccessBindings(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+  ): Promise<readonly Readonly<AccessBinding>[]> {
+    const repository = this.policyRepository(context, ["listAccessBindings"]);
+    this.assertNamespace(namespaceId);
+    return Object.freeze((await repository.listAccessBindings(namespaceId)).map(immutableBinding));
+  }
+
+  async getNamespaceAccessBinding(
+    context: IAMPolicyReadContext,
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<Readonly<AccessBinding> | undefined> {
+    const repository = this.policyRepository(context, ["getAccessBinding"]);
+    this.assertNamespace(namespaceId);
+    this.assertIdentifier(bindingId, "AccessBinding");
+    const binding = await repository.getAccessBinding(namespaceId, bindingId);
+    return binding === undefined ? undefined : immutableBinding(binding);
+  }
+
+  async createNamespaceAccessBinding(
+    context: IAMPolicyManagementContext,
+    input: IAMManagedAccessBindingInput,
+  ): Promise<Readonly<AccessBinding>> {
+    const repository = this.managementPolicyRepository(context, ["createAccessBinding"]);
+    return immutableBinding(await repository.createAccessBinding(managedAccessBinding(input)));
+  }
+
+  async deleteNamespaceAccessBinding(
+    context: IAMPolicyManagementContext,
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<boolean> {
+    const repository = this.managementPolicyRepository(context, ["deleteAccessBinding"]);
+    this.assertNamespace(namespaceId);
+    this.assertIdentifier(bindingId, "AccessBinding");
+    return repository.deleteAccessBinding(namespaceId, bindingId);
+  }
+
+  private policyRepository(
+    context: IAMPolicyReadContext,
+    methods: readonly (keyof IAMPolicyReadRepository)[],
+  ): IAMPolicyReadRepository {
+    const repository = context?.policy;
+    if (
+      typeof repository !== "object" ||
+      repository === null ||
+      !methods.every((method) => typeof repository[method] === "function")
+    ) {
+      throw new TypeError("Native IAM management requires a policy repository.");
+    }
+    return repository;
+  }
+
+  private managementPolicyRepository(
+    context: IAMPolicyManagementContext,
+    methods: readonly (keyof IAMPolicyRepository)[],
+  ): IAMPolicyRepository {
+    const repository = context?.policy;
+    if (
+      typeof repository !== "object" ||
+      repository === null ||
+      !methods.every((method) => typeof repository[method] === "function")
+    ) {
+      throw new TypeError("Native IAM management requires a policy repository.");
+    }
+    return repository;
+  }
+
+  private assertNamespace(namespaceId: string): void {
+    this.assertIdentifier(namespaceId, "Namespace");
+  }
+
+  private assertIdentifier(value: string, label: string): void {
+    if (!isNonEmptyString(value)) {
+      throw new TypeError(`Native IAM management requires an exact ${label} identity.`);
+    }
   }
 }
 

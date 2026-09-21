@@ -366,6 +366,11 @@ test(
         database: { cidr: `${postgresIP}/32` },
         cluster: { cidr: `${endpoint.addresses[0].ip}/32`, port: endpoint.ports[0].port },
         api: { clients: [{ namespace: system, podLabels: { app: "production-tui-proxy" } }] },
+        metrics: {
+          enabled: true,
+          scraperNamespaceLabels: { "kubernetes.io/metadata.name": system },
+          scraperPodLabels: { app: "production-tui-proxy" },
+        },
         resources,
       };
       await writeFile(join(directory, "values.json"), JSON.stringify(values), { mode: 0o600 });
@@ -778,6 +783,45 @@ test(
       );
       assert.equal(await probe(system, "operator", apiService, 8080), "connected");
       assert.equal(await probe(system, "operator", foreignIP, 8123), "connected");
+      // Both live OCC processes expose private metrics. Prove the allowed peer
+      // can scrape, and the foreign peer cannot connect, against the same Pod IP.
+      for (const component of ["api", "worker"]) {
+        const pods = JSON.parse(
+          await kubectl(
+            "-n",
+            system,
+            "get",
+            "pods",
+            "-l",
+            `app.kubernetes.io/component=${component},app.kubernetes.io/instance=${release}`,
+            "-o",
+            "json",
+          ),
+        );
+        const running = pods.items.filter((pod) => pod.status.phase === "Running");
+        assert.ok(running.length > 0, `${component} must have a running metrics target`);
+        for (const pod of running) {
+          const host = pod.status.podIP;
+          assert.equal(await probe(system, "operator", host, 9464), "connected");
+          assert.ok(
+            ["timeout", "ECONNREFUSED", "EHOSTUNREACH"].includes(
+              await probe(foreign, "unapproved", host, 9464),
+            ),
+          );
+          const output = await kubectl(
+            "-n",
+            system,
+            "exec",
+            "operator",
+            "--",
+            "node",
+            "-e",
+            "fetch(process.argv[1]).then(async r=>{if(!r.ok)process.exit(1);process.stdout.write(await r.text())})",
+            `http://${host}:9464/metrics`,
+          );
+          assert.match(output, /occ_process_resident_memory_bytes/);
+        }
+      }
       await record("Production API NetworkPolicy allows operator and denies foreign namespace");
       return { foreignIP, probe };
     }

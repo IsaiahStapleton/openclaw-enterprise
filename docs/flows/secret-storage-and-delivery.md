@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-17
-last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
+updated: 2026-09-20
+last_updated_session: codex/01a0bce5-9f29-7110-85fd-6b140674d362
 ---
 
 # Secret Storage and Gateway Delivery Flow
@@ -9,12 +9,13 @@ last_updated_session: codex/01a0acbf-4d5a-7413-9411-dce911f3ad23
 ## Overview
 
 An authorized owner stores a Namespace-owned Secret before any Agent exists,
-binds its stable reference in Configuration for gateway delivery, then assigns
-and deploys a consuming Agent. Harness model authentication uses the
-[shared Agent binding flow](native-service-account-credential-delivery.md). OCC admits references; Kubernetes supplies values only to each
-selected gateway environment. This trace ends when native OpenClaw secret
-resolution hands the configured credential to its consumer. Credential issuance,
-provider internals, and future broker substitution are outside this flow.
+binds its stable reference in Configuration for gateway delivery, then grants, assigns
+and deploys a consuming Agent. For these Configuration bindings, OCC admits
+references and Kubernetes supplies values only to each selected gateway.
+Harness model authentication uses the
+[shared Agent binding flow](native-service-account-credential-delivery.md).
+The local installer also grants a new Agent access and verifies a model response.
+Credential issuance and provider internals are outside this flow.
 
 ## Entry Points
 
@@ -26,9 +27,13 @@ provider internals, and future broker substitution are outside this flow.
   Agent deployment action: authorized exact Secret references, same-Namespace
   bindings, exact Agent assignment authority, and an approved Harness/Compute
   selection.
+- Local installer: `scripts/first-agent.mjs:main` uses the bootstrap service key.
 - Source: [HTTP handlers](../../apps/controller/src/index.ts),
   [OpenClawController](../../packages/occ/src/index.ts), and
   [KubernetesSecretDriver](../../apps/controller/src/drivers/secret/kubernetes/index.ts).
+- The console and [OCC CLI](../guides/cli.md#provision-integration-secrets)
+  call these HTTP operations. They initiate OCC-authorized mutations; neither
+  writes directly to SQL, Kubernetes, or credential backends.
 
 ## Flow
 
@@ -41,15 +46,21 @@ graph TD
   end
   subgraph Admission["Configuration and deployment"]
     D --> E["Bind source ref to gateway env destination"]
-    E --> F["Authorize caller and Agent SP; verify backend"]
+    E --> P["Bind Agent identity to exact Secret"]
+    P --> F["Authorize caller and Agent SP; verify backend"]
     F -->|allowed| G["Freeze references in AgentRevision"]
     F -->|denied or unavailable| X["No admitted deployment"]
+    D --> L["Local installer: grant Agent use of this exact Secret"]
+    L --> F
+    L -->|ownership or IAM denied| X
   end
   subgraph Runtime["Worker and Kubernetes"]
     G --> H["Worker resolves OCC metadata for Compute"]
     H --> I["Kubelet injects secretKeyRef into selected gateway"]
     I --> J["OpenClaw resolves native env SecretRef"]
     I -->|missing material| Y["Gateway cannot become ready"]
+    G -->|Agent harnessAuth| W["Harness auth flow delivers to model workload"]
+    W -->|local installer| V["Check model response"]
   end
 ```
 
@@ -87,6 +98,11 @@ recovery.
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
+The Agent response exposes its immutable `servicePrincipalId`. An administrator
+grants that identity `operate` on the exact Secret before deployment. OCC checks
+Installation administration, Namespace scope, and target access through the
+selected IAM Driver; policy and audit commit together.
+
 [createConfiguration and updateConfiguration](../../packages/occ/src/index.ts)
 keep `secretBindings` in OCC metadata, separate from native `values`. Each binding
 has a Secret source and an env delivery destination; omitted delivery normalizes
@@ -105,13 +121,39 @@ caller and consuming Agent service principal to `operate` every Secret, then
 checks live backend identity through the API-side driver. Namespace locking
 serializes binding/admission changes against deletion. Admission freezes
 normalized refs and the selected SecretDriver identity, not backend locators or
-values, in the revision.
+values, in the revision. Enabled native channel environment SecretRefs must have
+matching bindings at admission; disabled channel provider blocks do not require
+them.
 
 Model-auth environment destinations are reserved for Agent `harnessAuth`;
 Configuration bindings cannot select or override model credentials in either
 execution topology.
 
-### 4. Render only the exact gateway's projection
+### 4. Grant the first local Agent access to its model Secret
+
+`scripts/first-agent.mjs:main`;
+`scripts/first-agent-database.mjs:grantFirstAgentSecret`
+
+The [tool](../../scripts/first-agent.mjs) targets the persistent installation
+started with `OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev up`.
+With the [bootstrap service key](../../packages/iam/src/index.ts), it creates a
+Secret, Configuration, and named Agent through the OCC HTTP API. Bootstrap already
+has Secret `operate`; the Agent does not.
+
+OCC has no public IAM management endpoint. The tool opens the recorded local
+PostgreSQL service. One transaction verifies the Namespace, Agent, and Secret, then
+grants the Agent's existing principal `operate` on that exact Secret. It verifies
+the bootstrap identity, honors IAM restrictions, and audits a new grant.
+
+The tool provisions initial runtime credentials and requests deployment through
+OCC. Once the revision is active, it sends a prompt through the gateway and
+[checks the model response](../../scripts/first-agent-model.mjs). It leaves the
+installation and resources in place on exit.
+
+<span id="4-render-only-the-exact-gateways-projection"></span>
+<span id="4.-render-only-the-exact-gateway's-projection"></span>
+
+### 5. Render only the exact gateway's projection
 
 `apps/controller/src/worker.ts:ControllerWorker.resolveRevisionSecretContext`
 
@@ -138,11 +180,20 @@ preparation alone is not proof that the replacement runtime is ready.
 Kubelet obtains the bytes and creates the process environment. OpenClaw resolves
 its existing `{ source: "env", provider, id }` reference. This is the handoff to
 the native consumer, not a new OpenClaw provider or OCC text-substitution engine.
+Native channel credentials follow these same admitted bindings. No legacy
+per-Agent channel Secret injects additional values. Dedicated gateways receive
+channel bytes; the dedicated Harness receives only its separately admitted model
+authentication. Embedded channel credentials remain unsupported.
+
 The worker/workload have no Secret API verbs, but a trusted workload writer can
 indirectly project namespace Secrets; Kubernetes RBAC alone does not remove that
 trust boundary.
 
-### 5. Update, restart, or remove
+<span id="5-update-restart-or-remove"></span>
+<span id="5.-update,-restart,-or-remove"></span>
+<span id="5.-update%2C-restart%2C-or-remove"></span>
+
+### 6. Update, restart, or remove
 
 `packages/occ/src/index.ts:OpenClawController.updateSecret`
 
@@ -151,6 +202,10 @@ Kubernetes concurrency/ownership checks. It changes only the stored value; the
 response retains the same ref. No revision, binding, or running environment is
 updated, and no controller automatically restarts the gateway. A successful update
 means stored, not delivered.
+
+For coordinated channel replacement, stop the Agent and wait for shutdown before
+updating each Secret. A partial update leaves it stopped until repaired; there is
+no multi-Secret transaction or rollback of stored bytes.
 
 An explicit deployment for each consuming Agent creates a new revision and
 restarts that gateway with the current value. An infrastructure restart of an
@@ -174,6 +229,8 @@ credential at its issuer.
 - A stored Secret with no ready gateway is valid. Update success does not imply
   delivery. Compare revision/Pod identities and use noncredential sentinel values
   for restart assertions.
+- On local failure, rerun the tool with the same Agent name. It prints the Agent
+  and revision IDs only after the model responds.
 - Source selection, exact Namespace ownership, consumption authorization, missing
   material, and concurrent backend mutations fail closed. Do not retry a denial
   against another driver or model-key source.
@@ -191,6 +248,7 @@ credential at its issuer.
 - [SecretDriver implementation specification](../../specs/.archive/14-secret-driver.md)
 - [Secret access architecture](../design/safeguards.md#secret-access)
 - [Kubernetes deployment](../guides/deploy.md)
+- [Deploy your first Agent](../guides/first-agent.md)
 - [Configuration](../reference/configuration.md)
 - [Kubernetes Secret Driver](../reference/drivers/kubernetes-secret.md)
 
@@ -199,6 +257,9 @@ credential at its issuer.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-20 18:25: Document the local first-Agent Secret grant and model-response check added with the installer tool. (01a0c00c-8a45-7233-82c4-e12fb2c3b0d7 - 3bbdc447dbe2dee8c5f757b822e9ebe034047193)
+- 2026-09-20 00:00: Recorded channel credentials as Configuration Secret bindings with Agent service-principal grants and gateway-only delivery. (01a0bce5-9f29-7110-85fd-6b140674d362 - 93fe0a83)
 
 - 2026-09-17 00:48: Correct current harness admission and metadata-only dispatch boundaries after implementation review. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 107900e9551b90c3e9ac24d30f8ea866f17e5dbb)
 

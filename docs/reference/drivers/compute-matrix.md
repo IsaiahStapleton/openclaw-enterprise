@@ -1,15 +1,30 @@
 # ComputeDriver feature matrix
 
-Compare the bundled ComputeDriver implementations before choosing an execution
-environment. This is a reviewed source snapshot, not a live inventory. The
-baseline commit and review date accompany the table below.
-The [ComputeDriver contract](compute.md) owns requirements; the
-[platform design](../../design.md) remains authoritative for target architecture.
+Compare the bundled Compute Drivers before choosing where to run Agents. The
+first table summarizes current Agent deployment paths. The detailed capability
+matrix is a reviewed source snapshot: it describes implementation components,
+not proof that a complete deployment or model request works. Its baseline and
+review date are shown above the generated table.
 
 The [local docs preview](../../local-preview.md) adds search, filters, and
 expandable source/test evidence to this page. On GitHub, status links in the
 table open pinned implementation sources. Full cell explanations and evidence
 are in the [canonical matrix data](../../assets/compute-driver-matrix.json).
+
+## Which Drivers can deploy an Agent?
+
+| Driver                              | Current Agent deployment                                                                                                                                                            |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Kubernetes](kubernetes-compute.md) | Embedded OpenClaw supports an OCC Secret-backed API key. Dedicated Codex supports an OCC Secret-backed API key or a managed ChatGPT service-account credential.                     |
+| [SSH](ssh-compute.md)               | Supports embedded OpenClaw with `harnessAuth.method: runtime`; an operator must supply the model credential on the Linux host. No OCC-managed model credentials or dedicated Codex. |
+| [Docker/Podman](docker-compute.md)  | Runs the local control plane, but rejects all current model-authentication bindings. A newly admitted Agent cannot be deployed through this Driver.                                 |
+
+An optional [OpenShell Sandbox Driver](openshell-sandbox.md) can be selected
+with Kubernetes, but stock OpenShell lacks required credential and
+workload-identity projection. It is not a supported Agent deployment path.
+For setup, see [Drivers quickstart](selection.md#choose-a-bundled-driver).
+The [Compute Driver contract](compute.md) owns requirements; the
+[platform design](../../design.md) owns the target architecture.
 
 ## Read the matrix
 
@@ -18,21 +33,23 @@ are in the [canonical matrix data](../../assets/compute-driver-matrix.json).
 - **Unsupported**: the implementation rejects or does not provide the behavior.
 - **Unknown**: the available evidence does not establish the behavior.
 
-A checkmark describes source support; it does not certify production readiness.
-A required-contract row records an obligation, while optional-capability rows
-record choices. Activation stages are optional in the shared interface but required
-in production. Implementation boundaries describe deployment or isolation limits.
-Tests linked in the interactive view are coverage evidence **not executed in this
-review**. Live runtime and model-turn proof are **unknown for every cell**.
-Use the [testing guide](../../testing/README.md) for proof prerequisites.
+A checkmark describes an individual implementation component. For example,
+Docker's embedded and dedicated topology code earns checkmarks in the pinned
+table, even though current Agent authentication prevents a new deployment.
+A required-contract row records an obligation; optional-capability rows record
+choices. Production also requires activation stages. Tests linked in the
+interactive view were **not executed in this source review**. No cell certifies
+a live model response or production readiness. Contributors can use the
+[testing guide](../../testing/README.md) for runtime verification.
 
 ## Bundled implementations
 
-- [Docker](docker-compute.md) supports Docker/Podman container execution for development.
-- [Kubernetes](kubernetes-compute.md) supports Kubernetes workload orchestration,
-  production configuration, and selected SandboxDriver composition.
-- [SSH](ssh-compute.md) is now bundled on main. It realizes embedded OpenClaw on
-  operator-provisioned Linux/systemd hosts; its setup requirements remain distinct.
+- [Docker](docker-compute.md) runs the Compose control plane on Docker or Podman
+  for development.
+- [Kubernetes](kubernetes-compute.md) supports Kubernetes workload orchestration
+  and production configuration.
+- [SSH](ssh-compute.md) runs embedded OpenClaw on operator-provisioned
+  Linux/systemd hosts.
 
 LocalTest is not a bundled selectable implementation in this snapshot. External
 ComputeDriver packages remain an extension point, not an additional implementation

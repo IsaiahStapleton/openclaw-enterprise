@@ -1,19 +1,28 @@
 # OpenShell SandboxDriver
 
-The bundled OpenShell SandboxDriver implements the
-[SandboxDriver contract](sandbox.md) using a Namespace-local
-OpenShell gateway and a provider-owned dedicated Codex Harness. It works with
-the bundled [Kubernetes ComputeDriver](kubernetes-compute.md); it is not a
-standalone ComputeDriver and does not replace OCC ownership of Agents,
-revisions, Namespaces, routing, credentials, or authorization.
+The bundled OpenShell SandboxDriver integrates a Namespace-local OpenShell
+gateway with a dedicated Codex Harness and the bundled
+[Kubernetes Compute Driver](kubernetes-compute.md). OCC retains ownership of
+Agents, revisions, Namespaces, routing, credentials, and authorization.
 
-OpenShell support is limited to dedicated Codex Harness revisions. Embedded
-OpenClaw Agents fail closed when OpenShell is selected because embedded mode
-would require OpenShell to own the Agent gateway workload too.
+**OpenShell is not supported for production Agent deployment.** The stock
+OpenShell version this integration targets, `v0.0.113`, cannot accept the
+Kubernetes Secret-backed environment entries or projected workload identity a
+dedicated Codex Agent requires. The Enterprise Driver rejects deployment rather
+than starting an incorrectly credentialed Harness. The existing OpenShell
+integration verifies that rejection; it does not establish a successful Agent
+deployment or model response. Use Kubernetes Compute without OpenShell when
+you need to run Agents.
+
+Embedded OpenClaw also fails when OpenShell is selected; the integration is
+designed only for dedicated Codex. See the [upstream requirements](#current-upstream-preconditions)
+before evaluating OpenShell.
 
 ## Ownership model
 
-The Kubernetes Compute Driver remains the orchestration owner:
+The following describes how the integration is wired. Stock OpenShell cannot
+complete dedicated Harness provisioning until it meets the upstream
+requirements. The Kubernetes Compute Driver remains the orchestration owner:
 
 - It creates or adopts the OpenClaw Namespace and applies baseline isolation.
 - It creates the per-Agent gateway, ServiceAccount, shared workspace PVC,
@@ -51,8 +60,9 @@ and cleanup without persisting duplicate provider descriptors or facets.
 
 ## OpenShell containment facets
 
-OpenShell implements all three available
-[SandboxDriver containment facets](sandbox.md#containment-facets):
+The Driver configures all three available
+[SandboxDriver containment facets](sandbox.md#containment-facets). Applying them
+to a running Agent requires upstream support:
 
 | Facet        | Current OpenShell behavior                                                                  |
 | ------------ | ------------------------------------------------------------------------------------------- |
@@ -157,9 +167,9 @@ trusted OpenShell images by digest, expected ServiceAccounts, approved
 Namespaces, expected labels, and the exact elevated capabilities needed by
 OpenShell init or sidecar containers.
 
-Do not grant wildcard tenant permissions to the SandboxDriver. In production,
-the driver uses the same authenticated Kubernetes client as the Kubernetes
-Compute Driver; there is no provider-specific Kubernetes access adapter. The
+Do not grant wildcard tenant permissions to the SandboxDriver. It is wired to
+use the same authenticated Kubernetes client as the Kubernetes Compute Driver;
+there is no provider-specific Kubernetes access adapter. The
 controller and worker should receive only the Kubernetes access already
 required by Compute plus the OpenShell-specific ability to apply configured
 namespace-scoped NetworkPolicy resources and read gateway
@@ -175,24 +185,23 @@ allows can bypass the intended boundary.
 
 ## Current upstream preconditions
 
-The current code models the target integration, but production OpenShell support
-depends on upstream/provider behavior matching this contract:
+The current integration cannot run production Agents. Production support would
+require upstream OpenShell to satisfy all of these conditions:
 
 - OpenShell must create Sandboxes with the per-Agent ServiceAccount that Compute
   creates for the Harness.
 - OpenShell must preserve the Harness's exact audience-bound, short-lived
   projected ServiceAccount token and read-only mount. Its gateway bootstrap
   token is not a substitute. Stock OpenShell `v0.0.113` does not support
-  projected volumes in gateway driver configuration. Until upstream
-  projected-volume support exists, local verification may require an
-  operator-owned template bridge; that bridge is not production support.
+  projected volumes in gateway driver configuration. An operator-created
+  template bridge is not a supported workaround.
 - OpenShell must preserve all approved Agent workspace PVC subpath mounts
   without falling back to its default workspace claim or mounting the PVC root.
 - OpenShell must support exact environment entries backed by Kubernetes
   `secretKeyRef`, including the startup app-server token Secret. Stock
   OpenShell `v0.0.113` cannot receive those entries through the current gateway
-  API. Until upstream secret support exists, local verification may require a
-  credential bridge; that bridge is not production support.
+  API, and the Enterprise Driver rejects them. A credential bridge is not a
+  supported workaround.
 - OpenShell gateway authentication must be bound to the trusted caller and the
   requested Sandbox or Pod identity.
 
