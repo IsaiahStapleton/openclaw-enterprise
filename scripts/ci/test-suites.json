@@ -1014,6 +1014,9 @@
           ]
         },
         {
+          "path": "tests/integration/repository-credentials-native-paths.test.mjs"
+        },
+        {
           "path": "tests/integration/repository-credentials-gh.test.mjs",
           "expectedTests": [
             "pinned gh uses canonical GitHub identity for REST, pagination and native PR creation"

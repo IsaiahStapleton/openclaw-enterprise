@@ -171,6 +171,25 @@ case records native child Git through private HOME configuration. The installed
 image's system include, multi-repository registry and Compute publication require
 separate platform qualification; helper selection alone does not prove them.
 
+Run the gateway normalization cases with the same prepared image and pinned gh:
+
+```sh
+node --test tests/integration/repository-credentials-native-paths.test.mjs
+```
+
+Five container cases exercise stock Git through canonical GitHub URLs with mixed
+owner/repository case, with and without `.git`. They verify fetched objects,
+accepted refs/content and canonical upstream paths through the real classifier,
+HTTPS sender and `git-http-backend`. Cold discovery challenges issue no token;
+read-only receive-pack and raw-path/API denials contact no upstream. These cases
+do not establish literal-`.git` repository or multi-repository registry runtime
+support. Count the child cases separately from the host wrapper.
+
+The `repository-credentials-container` CI lane selects this file through the
+[suite map](../../scripts/ci/test-suites.json), alongside the other controlled
+client tests. Selected prerequisites, failures, skips and cleanup outcomes remain
+part of [CI result accounting](ci.md).
+
 ## Qualify emitted artifacts
 
 Build the final artifacts and run the detached package check first:
