@@ -91,6 +91,13 @@ async function routeRuntimeCredentials(page, fixture, namespaceId, agentId, hand
   });
 }
 
+async function routeDeploymentDiagnostics(page, fixture, namespaceId, agentId, handler) {
+  const path = `/namespaces/${namespaceId}/agents/${agentId}/deployments/*/diagnostics`;
+  await page.route(`${fixture.origin}${path}`, async (route, request) => {
+    await handler(route, request);
+  });
+}
+
 async function expectNoText(page, pattern) {
   await assert.rejects(
     page.getByText(pattern).waitFor({ state: "visible", timeout: 300 }),
@@ -324,6 +331,7 @@ test("draft Agent deploy waits for generated runtime credentials", async (t) => 
     { executionMode: "dedicated" },
   );
   const requests = [];
+  const diagnosticsRequests = [];
   let status = { transportConfigured: false };
   const { page, artifacts } = await newPage(t, fixture);
   await routeRuntimeCredentials(page, fixture, namespace.id, agent.id, async (route, request) => {
@@ -337,6 +345,37 @@ test("draft Agent deploy waits for generated runtime credentials", async (t) => 
       body: JSON.stringify(credentialEnvelope(status)),
     });
   });
+  await routeDeploymentDiagnostics(
+    page,
+    fixture,
+    namespace.id,
+    agent.id,
+    async (route, request) => {
+      const url = new URL(request.url());
+      const segments = url.pathname.split("/");
+      const deploymentId = segments.at(-2);
+      diagnosticsRequests.push({ method: request.method(), postData: request.postData() });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          credentialEnvelope({
+            revisionId: deploymentId,
+            observedAt: "2026-01-02T03:04:05.000Z",
+            checks: [
+              {
+                component: "runtime",
+                check: "gateway",
+                state: "failed",
+                checkedAt: "2026-01-02T03:04:04.000Z",
+                code: "probe_timeout",
+              },
+            ],
+          }),
+        ),
+      });
+    },
+  );
 
   await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
   await page.getByRole("heading", { name: "Runtime credentials" }).waitFor();
@@ -368,6 +407,10 @@ test("draft Agent deploy waits for generated runtime credentials", async (t) => 
   );
   await page.getByRole("button", { name: "Deploy new revision" }).click();
   assert.equal((await deployResponse).status(), 202);
+  await page.getByRole("button", { name: "Run current diagnostics" }).click();
+  await page.getByText("runtime / gateway").waitFor();
+  await page.getByText(/failed \(probe_timeout\)/).waitFor();
+  assert.deepEqual(diagnosticsRequests, [{ method: "POST", postData: null }]);
   await page.screenshot({ path: join(artifacts, "runtime-credentials.png"), fullPage: true });
 });
 

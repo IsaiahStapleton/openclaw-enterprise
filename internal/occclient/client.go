@@ -245,6 +245,20 @@ func (client *Client) StopAgent(namespaceID, agentID string) (any, error) {
 	)
 }
 
+// GetAgentDeployment fetches deployment status for one admitted revision.
+func (client *Client) GetAgentDeployment(namespaceID, agentID, deploymentID string) (any, error) {
+	return client.get("namespaces", namespaceID, "agents", agentID, "deployments", deploymentID)
+}
+
+// DiagnoseAgentDeployment runs bodyless current-runtime diagnostics for one revision.
+func (client *Client) DiagnoseAgentDeployment(namespaceID, agentID, deploymentID string) (any, error) {
+	return client.send(
+		http.MethodPost,
+		[]string{"namespaces", namespaceID, "agents", agentID, "deployments", deploymentID, "diagnostics"},
+		nil,
+	)
+}
+
 // DeleteAgent begins asynchronous Agent deletion.
 func (client *Client) DeleteAgent(namespaceID, agentID string) (any, error) {
 	return client.send(

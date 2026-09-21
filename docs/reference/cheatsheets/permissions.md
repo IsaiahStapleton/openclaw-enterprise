@@ -33,7 +33,7 @@ principal. Rerunning bootstrap does not add missing permissions to existing Role
 | [`service_account`](../api.md#service-accounts) | `create`, `read`, `update`, `delete`                                    | Namespace for create; exact ServiceAccount otherwise. Credential creation also uses `update`.                                                                               |
 | [`secret`](../api.md#secrets)                   | `create`, `read`, `update`, `delete`, `operate`                         | Namespace collection for create/list; list also filters by exact Secret `read`. Other actions target the exact Secret. `operate` is checked when a Secret is bound or used. |
 | [`agent`](../api.md#agents)                     | `create`, `read`, `update`, `delete`, `deploy`, `operate`, `administer` | Namespace for create; exact Agent otherwise. Native admin requires a human session.                                                                                         |
-| [`agent_revision`](../api.md#agent-revisions)   | `read`                                                                  | Exact AgentRevision; deployment-status reads use this permission too.                                                                                                       |
+| [`agent_revision`](../api.md#agent-revisions)   | `read`                                                                  | Exact AgentRevision; deployment-status reads and current diagnostics use this permission too.                                                                                                       |
 
 Namespace, Preset, Agent, ServiceAccount, AgentRevision, and Secret lists check
 each returned resource. Listing Agents or ServiceAccounts also requires `namespace:read`;
@@ -65,6 +65,8 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
   requires `installation:administer`.
 - [Provisioning Agent runtime credentials](../api.md#post-namespacesnamespaceidagentsagentidruntimecredentials)
   requires both `agent:operate` and `agent:read`.
+- [Running Agent deployment diagnostics](../api.md#post-namespacesnamespaceidagentsagentiddeploymentsdeploymentiddiagnostics)
+  requires `agent:operate`, `agent:read`, and `agent_revision:read`.
 - [Namespace IAM operations](../api.md#iam) require `installation:administer`
   and `namespace:read`. [Creating an AccessBinding](../api.md#post-namespacesnamespaceidiamaccessbindings)
   also requires `read` on its exact target. [Listing Providers](../api.md#get-providers)

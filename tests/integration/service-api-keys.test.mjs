@@ -24,7 +24,11 @@ const occCli = join(process.cwd(), "bin", "occ");
 // does not claim PostgreSQL or Agent runtime coverage.
 test("service API keys authenticate scoped automation without replacing sessions or IAM", async (t) => {
   // Build the real CLI once, then exercise it through a live Fastify socket below.
-  await run("go", ["build", "-trimpath", "-o", occCli, "./cmd/occ"]);
+  const goCache = await mkdtemp(join(tmpdir(), "openclaw-go-build-cache-"));
+  t.after(() => rm(goCache, { recursive: true, force: true }));
+  await run("go", ["build", "-trimpath", "-o", occCli, "./cmd/occ"], {
+    env: { ...process.env, GOCACHE: goCache },
+  });
   const installationId = `ins_${randomUUID()}`;
   const memoryDatabase = { user: [], account: [], session: [], verification: [], apikey: [] };
   const authOptions = {
@@ -49,20 +53,43 @@ test("service API keys authenticate scoped automation without replacing sessions
   };
   const iamDriver = new NativeIAMDriver({ loadNativeIAMState: async () => policy });
   const auditSink = new InMemoryAuditSink();
+  const diagnosticsCalls = [];
+  const computeDriver = {
+    ...createDevelopmentComputeDriver(),
+    async diagnoseAgentDeployment(binding) {
+      diagnosticsCalls.push({
+        namespaceId: binding.namespace.id,
+        agentId: binding.agent.id,
+        revisionId: binding.revision.id,
+      });
+      return {
+        revisionId: binding.revision.id,
+        observedAt: "2026-01-02T03:04:05.000Z",
+        checks: [
+          {
+            component: "runtime",
+            check: "gateway",
+            state: "succeeded",
+            checkedAt: "2026-01-02T03:04:04.000Z",
+            code: "gateway_ready",
+          },
+        ],
+      };
+    },
+  };
   let controller;
   const app = createFastifyApp({
     auth,
     iamDriver,
     auditSink,
     development: { enabled: true, installationId },
-    computeDriver: createDevelopmentComputeDriver(),
+    computeDriver,
     secretDriver: createTestSecretDriver(),
     configurationDriver: createTestConfigurationDriver(),
     resolveHarness: resolveApprovedDevelopmentHarness,
     createController(installation) {
       controller = new OpenClawController(installation, {
         state: new InMemoryPlatformState({ auditSink }),
-        recordOperations: false,
       });
       return controller;
     },
@@ -104,6 +131,7 @@ test("service API keys authenticate scoped automation without replacing sessions
       { action: "create", resourceKind: "configuration" },
       { action: "delete", resourceKind: "configuration" },
       { action: "read", resourceKind: "agent" },
+      { action: "read", resourceKind: "agent_revision" },
       { action: "operate", resourceKind: "agent" },
       { action: "delete", resourceKind: "agent" },
     ],
@@ -248,6 +276,41 @@ test("service API keys authenticate scoped automation without replacing sessions
         .desiredRuntimeState,
       "running",
     );
+
+    const deployment = await run(
+      occCli,
+      ["agent", "deployment", "get", agent.data.id, deployed.data.id, "--output", "json"],
+      { env },
+    );
+    const deploymentStatus = JSON.parse(deployment.stdout);
+    assert.deepEqual(
+      {
+        deploymentId: deploymentStatus.deploymentId,
+        agentId: deploymentStatus.agentId,
+      },
+      { deploymentId: deployed.data.id, agentId: agent.data.id },
+    );
+    const diagnostics = await run(
+      occCli,
+      ["agent", "deployment", "diagnostics", agent.data.id, deployed.data.id, "--output", "json"],
+      { env },
+    );
+    assert.deepEqual(JSON.parse(diagnostics.stdout), {
+      revisionId: deployed.data.id,
+      observedAt: "2026-01-02T03:04:05.000Z",
+      checks: [
+        {
+          component: "runtime",
+          check: "gateway",
+          state: "succeeded",
+          checkedAt: "2026-01-02T03:04:04.000Z",
+          code: "gateway_ready",
+        },
+      ],
+    });
+    assert.deepEqual(diagnosticsCalls, [
+      { namespaceId, agentId: agent.data.id, revisionId: deployed.data.id },
+    ]);
 
     const stopped = await run(occCli, ["agent", "stop", agent.data.id], { env });
     assert.match(stopped.stdout, /DESIRED STATE/);

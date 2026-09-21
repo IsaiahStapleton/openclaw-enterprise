@@ -86,6 +86,26 @@ warnings record the observed startup result, not live plugin health.
 A later deployment admits a new revision with its own deployment status and does
 not rewrite the original result.
 
+For a current runtime observation, send a bodyless diagnostics request:
+
+```text
+POST /namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/diagnostics
+```
+
+The caller needs exact Agent `read` and `operate`, plus read access to the exact
+AgentRevision. The revision must belong to the Agent in the requested Namespace.
+The response contains the `revisionId`, an `observedAt` timestamp, and up to 32
+generic `checks`. Each check includes `component`, `check`, `state`, nullable
+`checkedAt`, and optional safe `code`. States are `not_started`, `checking`,
+`succeeded`, `failed`, or `unknown`; the selected Compute implementation owns
+their meaning and collection method. Unsupported Drivers or invalid Driver
+evidence return `503 DEPENDENCY_UNAVAILABLE`.
+
+Diagnostics are on-demand runtime checks. They do not rewrite the deployment
+status row, repeat the startup model probe, or prove message delivery. Use
+deployment GET for persisted startup failures and diagnostics for a fresh
+Compute-owned observation.
+
 ## Provider association
 
 An Agent can reference one Installation-configured [Provider](providers.md)

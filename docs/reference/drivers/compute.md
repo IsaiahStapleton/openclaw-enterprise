@@ -116,6 +116,26 @@ terminal result. The existing [deployment status API](../agents.md#deployment-st
 returns the saved evidence under the caller's exact-revision read permission.
 It does not invoke Compute while serving the GET request.
 
+### Optional runtime diagnostics
+
+`diagnoseAgentDeployment(binding)` returns bounded current-runtime checks for
+one exact AgentRevision. The binding contains the approved Namespace, Agent, and
+revision. The controller has already authorized the caller for exact Agent read
+and operate and exact revision read before invoking the Driver.
+
+The Driver owns native collection and maps its evidence to generic
+`component`, `check`, `state`, nullable `checkedAt`, and optional safe `code`
+fields. It must validate the observed runtime identity against the requested
+revision, bound response size and collection time, and avoid returning
+credentials, raw provider output, logs, or backend-specific secrets. OCC rejects
+diagnostics with a mismatched revision, invalid timestamps, more than 32 checks,
+or unsupported state values.
+
+Diagnostics are not deployment status. The operation does not update queued work,
+rerun the startup model probe, send channel messages, or prove that the runtime
+can answer a model turn. A missing method returns dependency unavailable; a
+Driver that cannot safely observe the runtime should omit the method.
+
 ### Runtime logging ownership
 
 Omitting `runtimeLogging` or setting it to `"platform"` uses the bundled
@@ -257,6 +277,7 @@ prove readiness. See [Kubernetes startup status](kubernetes-compute.md#plugin-st
 
 - [Harness execution](../harness-execution.md) and [Agent lifecycle](../agents.md)
 - [Driver selection](selection.md) and [deployment guide](../../guides/deploy.md)
+- [Agent deployment diagnostics flow](../../flows/agent-deployment-diagnostics.md)
 - [Controller reconciliation](../controller/reconciliation.md) and [Harness execution topology](../../flows/harness-execution-topology.md)
 - [Worker source](../../../apps/controller/src/worker.ts) and [OCC admission and resource operations](../../../packages/occ/src/index.ts)
 - [Docker Compose development flow](../../flows/docker-compose-development.md) and [verification guide](../../testing/README.md)

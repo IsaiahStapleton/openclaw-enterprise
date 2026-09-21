@@ -106,8 +106,11 @@ occ agent get '<agent-id>'
 
 Deployment returns an immutable revision. `agent get` shows the desired state
 and selected revision; neither command reports live health or proves a model
-responded. There is no CLI deployment-status command. Check the
-[deployment status API](../reference/agents.md#deployment-status) and follow
+responded. Use `occ agent deployment get '<agent-id>' '<deployment-id>'` to read
+persisted [deployment status](../reference/agents.md#deployment-status). If you
+need a fresh runtime observation, run
+`occ agent deployment diagnostics '<agent-id>' '<deployment-id>'`; diagnostics
+do not send a message or model turn. Then follow
 [Verify production workloads](deploy/production-agents.md#verify-production-workloads)
 to verify a response from this Agent on Kubernetes. If you lost the
 deploy result, check [revision history](../reference/agents/deployment.md#revisions-and-deployment)

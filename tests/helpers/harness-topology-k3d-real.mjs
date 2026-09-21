@@ -285,6 +285,7 @@ async function createScopedController(context, identifier, platformNamespace, ku
   const apiNamespaceRole = `oce-production-secret-namespaces-${suffix}`;
   const apiSecretRole = `oce-production-secrets-${suffix}`;
   const apiConfigurationRole = `oce-production-configurations-${suffix}`;
+  const apiComputeRole = `oce-production-compute-read-${suffix}`;
   const directory = await mkdtemp(join(tmpdir(), "openclaw-production-controller-"));
   context.after(async () => {
     await kubectl("delete", "clusterrolebinding", binding, apiBinding, "--ignore-not-found=true");
@@ -296,6 +297,7 @@ async function createScopedController(context, identifier, platformNamespace, ku
       apiNamespaceRole,
       apiSecretRole,
       apiConfigurationRole,
+      apiComputeRole,
       "--ignore-not-found=true",
     );
     await rm(directory, { recursive: true, force: true });
@@ -402,6 +404,34 @@ async function createScopedController(context, identifier, platformNamespace, ku
     "--verb=get,list,create,update,patch,delete",
     "--resource=configmaps",
   );
+  await kubectl("create", "clusterrole", apiComputeRole, "--verb=get,list", "--resource=pods");
+  await kubectl(
+    "patch",
+    "clusterrole",
+    apiComputeRole,
+    "--type=json",
+    "--patch",
+    JSON.stringify([
+      {
+        op: "add",
+        path: "/rules/-",
+        value: {
+          apiGroups: ["apps"],
+          resources: ["deployments"],
+          verbs: ["list"],
+        },
+      },
+      {
+        op: "add",
+        path: "/rules/-",
+        value: {
+          apiGroups: [""],
+          resources: ["pods/proxy"],
+          verbs: ["get"],
+        },
+      },
+    ]),
+  );
   const apiIdentity = await createControllerIdentity({
     directory,
     platformNamespace,
@@ -416,6 +446,7 @@ async function createScopedController(context, identifier, platformNamespace, ku
     tenantRole,
     apiSecretRole,
     apiConfigurationRole,
+    apiComputeRole,
     apiAccount: apiIdentity.account,
     apiAuthentication: apiIdentity.authentication,
   };
@@ -966,6 +997,7 @@ function nativeConfiguration(harnessId, slack, options = {}) {
 
   configuration.plugins.allow.push("slack");
   configuration.plugins.entries.slack = { enabled: true };
+  const eventResponsesDisabled = slack.disableEventResponses === true;
   configuration.channels = {
     slack: {
       enabled: true,
@@ -973,15 +1005,17 @@ function nativeConfiguration(harnessId, slack, options = {}) {
       appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
       dmPolicy: "allowlist",
-      allowFrom: [slack.allowedUserId],
-      channels: {
-        [slack.channelId]: {
-          requireMention: true,
-          allowBots: "mentions",
-          users: [slack.allowedUserId],
-          replyToMode: "off",
-        },
-      },
+      allowFrom: eventResponsesDisabled ? [] : [slack.allowedUserId],
+      channels: eventResponsesDisabled
+        ? {}
+        : {
+            [slack.channelId]: {
+              requireMention: true,
+              allowBots: "mentions",
+              users: [slack.allowedUserId],
+              replyToMode: "off",
+            },
+          },
     },
   };
   return configuration;
@@ -1518,6 +1552,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     apiConfiguration.drivers.compute.configuration.authentication = { mode: "inCluster" };
   } else {
     apiConfiguration.drivers.secret.configuration.authentication = controller.apiAuthentication;
+    apiConfiguration.drivers.compute.configuration.authentication = controller.apiAuthentication;
   }
   await writeFile(startupPath, JSON.stringify(apiConfiguration), { mode: 0o600 });
   await writeFile(workerStartupPath, JSON.stringify(workerConfiguration), { mode: 0o600 });
@@ -1759,6 +1794,51 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       gatewayRuntimeNamespace,
       `--clusterrole=${role}`,
       `--serviceaccount=${platformNamespace}:${controller.apiAccount}`,
+    );
+  }
+  await kubectl(
+    "create",
+    "rolebinding",
+    "openclaw-production-compute-api",
+    "--namespace",
+    placement,
+    `--clusterrole=${controller.apiComputeRole}`,
+    `--serviceaccount=${platformNamespace}:${controller.apiAccount}`,
+  );
+  for (const [verb, resourceName] of [
+    ["list", "deployments.apps"],
+    ["get", "pods"],
+    ["list", "pods"],
+    ["get", "pods/proxy"],
+  ]) {
+    const workerAccess = await kubectl(
+      "auth",
+      "can-i",
+      verb,
+      resourceName,
+      "--namespace",
+      placement,
+      `--as=system:serviceaccount:${platformNamespace}:${controller.account}`,
+    );
+    assert.equal(
+      workerAccess.trim(),
+      "yes",
+      `the production worker must be able to ${verb} ${resourceName}`,
+    );
+
+    const apiAccess = await kubectl(
+      "auth",
+      "can-i",
+      verb,
+      resourceName,
+      "--namespace",
+      placement,
+      `--as=system:serviceaccount:${platformNamespace}:${controller.apiAccount}`,
+    );
+    assert.equal(
+      apiAccess.trim(),
+      "yes",
+      `the production API must be able to ${verb} ${resourceName} for diagnostics`,
     );
   }
   for (const verb of ["get", "create"]) {
@@ -2337,6 +2417,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     controllerAccount: controller.account,
     controllerTenantRole: controller.tenantRole,
     apiSecretRole: controller.apiSecretRole,
+    apiComputeRole: controller.apiComputeRole,
     apiAccount: controller.apiAccount,
     kubernetesNamespaceName,
     adminRequest: (...args) => adminRequest(...args),
@@ -2698,6 +2779,13 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
   );
 }
 
+function assertIsoTimestampAtOrAfter(value, startedAt, description) {
+  assert.equal(typeof value, "string", `${description} must be an ISO timestamp`);
+  const parsed = Date.parse(value);
+  assert.equal(Number.isNaN(parsed), false, `${description} must parse as an ISO timestamp`);
+  assert.ok(parsed >= startedAt, `${description} must be fresh for the explicit diagnostic run`);
+}
+
 function assertRuntimeFailureEvidence(value) {
   assert.deepEqual(
     Object.keys(value).sort(),
@@ -2721,6 +2809,61 @@ async function deploymentStatus(topology, revisionId) {
     response,
     secretApiProtectedValues(topology, [process.env.OPENAI_API_KEY]),
     "deployment status response",
+  );
+  return response.data;
+}
+
+async function assertCurrentRuntimeDiagnosticsNoSend(context, topology, revision) {
+  const startedAt = Date.now() - 1_000;
+  const response = await topology.request(
+    "POST",
+    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/deployments/${revision.id}/diagnostics`,
+  );
+  assert.equal(response.status, 200, JSON.stringify(response.error));
+  assertNoSecretMaterial(
+    response,
+    secretApiProtectedValues(topology, [process.env.OPENAI_API_KEY]),
+    "current runtime diagnostics response",
+  );
+  assert.deepEqual(
+    Object.keys(response.data).sort(),
+    ["checks", "observedAt", "revisionId"],
+    "diagnostics response must use the approved opaque shape",
+  );
+  assert.equal(response.data.revisionId, revision.id);
+  assertIsoTimestampAtOrAfter(response.data.observedAt, startedAt, "diagnostics observedAt");
+  assert.ok(
+    response.data.checks.length > 0,
+    "current diagnostics must report at least one native runtime health check",
+  );
+  for (const check of response.data.checks) {
+    assert.deepEqual(
+      Object.keys(check).sort(),
+      check.code === undefined
+        ? ["check", "checkedAt", "component", "state"]
+        : ["check", "checkedAt", "code", "component", "state"],
+    );
+    assert.equal(typeof check.component, "string");
+    assert.equal(typeof check.check, "string");
+    assert.match(check.component, /^[A-Za-z0-9._~:@-]{1,64}$/);
+    assert.match(check.check, /^[A-Za-z0-9._~:@-]{1,64}$/);
+    assert.ok(
+      ["not_started", "checking", "succeeded", "failed", "unknown"].includes(check.state),
+      `unsupported diagnostic state ${check.state}`,
+    );
+    if (check.checkedAt !== null) {
+      assertIsoTimestampAtOrAfter(
+        check.checkedAt,
+        startedAt,
+        `${check.component}/${check.check} checkedAt`,
+      );
+    }
+    if (check.code !== undefined) {
+      assert.match(check.code, /^[A-Za-z0-9._~:@-]{1,64}$/);
+    }
+  }
+  context.diagnostic(
+    `runtime diagnostics: ${revision.id} reported ${response.data.checks.length} no-send checks`,
   );
   return response.data;
 }
@@ -3912,6 +4055,15 @@ async function assertCrossNamespaceSecretBindingDenied(context, topology) {
     `--clusterrole=${topology.apiSecretRole}`,
     `--serviceaccount=${topology.platformNamespace}:${topology.apiAccount}`,
   );
+  await kubectl(
+    "create",
+    "rolebinding",
+    "openclaw-production-compute-api",
+    "--namespace",
+    placement,
+    `--clusterrole=${topology.apiComputeRole}`,
+    `--serviceaccount=${topology.platformNamespace}:${topology.apiAccount}`,
+  );
   await waitFor(
     `the production worker to provision cross-Namespace tenant ${placement}`,
     async () => {
@@ -5046,6 +5198,7 @@ async function assertRoutedWorkspaceModelTurn(topology, connection, marker) {
 export {
   arrangeProductionTopology,
   assertActualModelTurn,
+  assertCurrentRuntimeDiagnosticsNoSend,
   assertDedicatedAgentsInstructionsInFreshSession,
   assertLegacyModelSecretBindingDenied,
   assertDedicatedWorkspaceResources,

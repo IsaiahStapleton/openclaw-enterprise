@@ -34,6 +34,8 @@ async function availableLoopbackPort() {
 function createRuntimeCredentialComputeDriver(options = {}) {
   const statusByAgent = new Map();
   const calls = [];
+  const diagnosticObservedAt = "2026-01-02T03:04:05.000Z";
+  const diagnosticCheckedAt = "2026-01-02T03:04:04.000Z";
   const emptyStatus = Object.freeze({
     transportConfigured: false,
   });
@@ -86,6 +88,26 @@ function createRuntimeCredentialComputeDriver(options = {}) {
         throw options.provisionError;
       }
       return { ...status };
+    },
+    async diagnoseAgentDeployment(binding) {
+      calls.push({
+        operation: "diagnostics",
+        agentId: binding.agent.id,
+        revisionId: binding.revision.id,
+      });
+      return {
+        revisionId: binding.revision.id,
+        observedAt: diagnosticObservedAt,
+        checks: [
+          {
+            component: "runtime",
+            check: "gateway",
+            state: "succeeded",
+            checkedAt: diagnosticCheckedAt,
+            code: "gateway_ready",
+          },
+        ],
+      };
     },
   };
 }
@@ -426,6 +448,115 @@ test("runtime credential API rejects unsupported initial provisioning states and
   });
   assert.equal(deployedRejected.status, 409);
   assert.equal(deployedRejected.body.error.code, "RESOURCE_CONFLICT");
+});
+
+test("deployment diagnostics require exact revision read and Agent operate authorization", async (t) => {
+  const fixture = await createFixture(t);
+  const { namespace, agent } = await fixture.bootstrapAgent();
+  const revision = await fixture.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+  );
+  assert.equal(revision.status, 202);
+  const path = `/namespaces/${namespace.id}/agents/${agent.id}/deployments/${revision.data.id}/diagnostics`;
+
+  const { principal, session } = await fixture.createPrincipal(
+    "deployment-diagnostics-reader",
+    (limited) => {
+      fixture.policy.roles.push({
+        id: "diagnostics-revision-reader",
+        namespaceId: namespace.id,
+        permissions: [{ action: "read", resourceKind: "agent_revision" }],
+      });
+      fixture.policy.bindings.push({
+        id: "diagnostics-revision-reader-binding",
+        namespaceId: namespace.id,
+        subjectKind: "identity",
+        subjectId: limited.id,
+        roleId: "diagnostics-revision-reader",
+        resourceKind: "agent_revision",
+        resourceId: revision.data.id,
+      });
+    },
+  );
+  const denied = await fixture.request("POST", path, { session });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body.error.code, "FORBIDDEN");
+  assert.equal(fixture.computeDriver.calls.length, 0);
+  const denial = fixture.auditSink.events.at(-1);
+  assert.equal(denial.kind, "authorization_denial");
+  assert.deepEqual(denial.authorization, {
+    principalId: principal.id,
+    action: "operate",
+    resource: { kind: "agent", id: agent.id, namespaceId: namespace.id },
+  });
+
+  fixture.policy.roles.push({
+    id: "diagnostics-agent-operator",
+    namespaceId: namespace.id,
+    permissions: [{ action: "operate", resourceKind: "agent" }],
+  });
+  fixture.policy.bindings.push({
+    id: "diagnostics-agent-operator-binding",
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: principal.id,
+    roleId: "diagnostics-agent-operator",
+    resourceKind: "agent",
+    resourceId: agent.id,
+  });
+  const missingAgentRead = await fixture.request("POST", path, { session });
+  assert.equal(missingAgentRead.status, 403);
+  assert.equal(missingAgentRead.body.error.code, "FORBIDDEN");
+  assert.equal(fixture.computeDriver.calls.length, 0);
+  const readDenial = fixture.auditSink.events.at(-1);
+  assert.equal(readDenial.kind, "authorization_denial");
+  assert.deepEqual(readDenial.authorization, {
+    principalId: principal.id,
+    action: "read",
+    resource: { kind: "agent", id: agent.id, namespaceId: namespace.id },
+  });
+
+  fixture.policy.roles.push({
+    id: "diagnostics-agent-reader",
+    namespaceId: namespace.id,
+    permissions: [{ action: "read", resourceKind: "agent" }],
+  });
+  fixture.policy.bindings.push({
+    id: "diagnostics-agent-reader-binding",
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: principal.id,
+    roleId: "diagnostics-agent-reader",
+    resourceKind: "agent",
+    resourceId: agent.id,
+  });
+  const scopedDiagnostics = await fixture.request("POST", path, { session });
+  assert.equal(scopedDiagnostics.status, 200);
+  assert.equal(scopedDiagnostics.data.revisionId, revision.data.id);
+  assert.deepEqual(fixture.computeDriver.calls, [
+    { operation: "diagnostics", agentId: agent.id, revisionId: revision.data.id },
+  ]);
+  fixture.computeDriver.calls.length = 0;
+
+  const diagnostics = await fixture.request("POST", path);
+  assert.equal(diagnostics.status, 200);
+  assert.deepEqual(diagnostics.data, {
+    revisionId: revision.data.id,
+    observedAt: "2026-01-02T03:04:05.000Z",
+    checks: [
+      {
+        component: "runtime",
+        check: "gateway",
+        state: "succeeded",
+        checkedAt: "2026-01-02T03:04:04.000Z",
+        code: "gateway_ready",
+      },
+    ],
+  });
+  assert.deepEqual(fixture.computeDriver.calls, [
+    { operation: "diagnostics", agentId: agent.id, revisionId: revision.data.id },
+  ]);
 });
 
 test("runtime credential driver and audit failures stay sanitized and recoverable through GET", async (t) => {

@@ -54,6 +54,10 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function diagnosticTime(value) {
+  return typeof value === "string" ? displayDate(value) : "No observation time";
+}
+
 function deploymentFailure(error) {
   if (!error) {
     return element("p", { className: "muted" }, "No persisted startup failure.");
@@ -74,15 +78,44 @@ function deploymentFailure(error) {
           element("dt", {}, "Code"),
           element("dd", {}, runtimeFailure.code ?? "Unknown"),
           element("dt", {}, "Checked"),
-          element("dd", {}, displayDate(runtimeFailure.checkedAt)),
+          element("dd", {}, diagnosticTime(runtimeFailure.checkedAt)),
         )
       : null,
   );
 }
 
+function diagnosticChecks(data) {
+  const checks = Array.isArray(data?.checks) ? data.checks : [];
+  if (!checks.length) {
+    return element("p", { className: "muted" }, "No diagnostic checks returned.");
+  }
+  const list = element("dl", { className: "credential-status-list" });
+  for (const check of checks) {
+    const label = [check.component, check.check].filter(Boolean).join(" / ") || "Check";
+    list.append(
+      element("dt", {}, label),
+      element(
+        "dd",
+        {},
+        `${check.state ?? "unknown"}${check.code ? ` (${check.code})` : ""} · ${diagnosticTime(
+          check.checkedAt,
+        )}`,
+      ),
+    );
+  }
+  return list;
+}
+
 function createDeploymentStatusPanel(context, path, revisionId) {
   const section = element("section", { className: "agent-card deployment-status" });
-  const state = { loading: false, status: null, error: null };
+  const state = {
+    loading: false,
+    status: null,
+    error: null,
+    diagnostics: null,
+    diagnosticsError: null,
+    diagnosticsLoading: false,
+  };
 
   async function loadStatus() {
     if (state.loading || !context.isCurrent()) {
@@ -111,6 +144,36 @@ function createDeploymentStatusPanel(context, path, revisionId) {
     }
   }
 
+  async function runDiagnostics() {
+    if (state.diagnosticsLoading || !context.isCurrent()) {
+      return;
+    }
+    state.diagnosticsLoading = true;
+    state.diagnostics = null;
+    state.diagnosticsError = null;
+    render();
+    try {
+      state.diagnostics = await context.request(
+        `${path}/deployments/${encodeURIComponent(revisionId)}/diagnostics`,
+        { method: "POST" },
+      );
+    } catch (error) {
+      if (!context.isCurrent()) {
+        return;
+      }
+      if (error.status === 401) {
+        context.onExpired();
+        return;
+      }
+      state.diagnosticsError = error;
+    } finally {
+      if (context.isCurrent()) {
+        state.diagnosticsLoading = false;
+        render();
+      }
+    }
+  }
+
   function renderStatus() {
     if (state.error) {
       return element("p", { className: "error", role: "alert" }, message(state.error));
@@ -133,22 +196,51 @@ function createDeploymentStatusPanel(context, path, revisionId) {
     );
   }
 
+  function renderDiagnostics() {
+    if (state.diagnosticsError) {
+      return element("p", { className: "error", role: "alert" }, message(state.diagnosticsError));
+    }
+    if (!state.diagnostics) {
+      return element(
+        "p",
+        { className: "muted" },
+        "Run diagnostics for fresh current-runtime checks. Startup failures remain the deployment status above.",
+      );
+    }
+    return element(
+      "div",
+      {},
+      element(
+        "p",
+        { className: "muted" },
+        `Observed ${diagnosticTime(state.diagnostics.observedAt)}`,
+      ),
+      diagnosticChecks(state.diagnostics),
+    );
+  }
+
   function render() {
     section.replaceChildren(
       element("h2", {}, "Deployment status"),
       element(
         "p",
         { className: "muted" },
-        "Startup evidence is read from the durable deployment record.",
+        "Startup evidence is read from the durable deployment record. Current diagnostics run only when requested.",
       ),
       renderStatus(),
       element(
         "div",
         { className: "form-actions credential-actions" },
         button(state.loading ? "Refreshing..." : "Refresh deployment", () => void loadStatus(), {
-          disabled: state.loading,
+          disabled: state.loading || state.diagnosticsLoading,
         }),
+        button(
+          state.diagnosticsLoading ? "Running diagnostics..." : "Run current diagnostics",
+          () => void runDiagnostics(),
+          { disabled: state.loading || state.diagnosticsLoading },
+        ),
       ),
+      renderDiagnostics(),
     );
   }
 

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   arrangeProductionTopology,
   assertActualModelTurn,
+  assertCurrentRuntimeDiagnosticsNoSend,
   assertInvalidHarnessAuthStaysUnready,
   assertDedicatedAgentsInstructionsInFreshSession,
   assertLegacyModelSecretBindingDenied,
@@ -121,6 +122,7 @@ test(
     );
     process.stderr.write("k3d dedicated: topology ready; running a real model turn.\n");
     await assertActualModelTurn(topology);
+    await assertCurrentRuntimeDiagnosticsNoSend(context, topology, topology.revision);
     process.stderr.write("k3d dedicated: model turn passed; testing normal workspace flows.\n");
     await assertDedicatedAgentsInstructionsInFreshSession(topology);
     await assertDedicatedWorkspaceRuntime(context, topology, harnessWorkspaceClaim, privateClaim);
@@ -240,6 +242,7 @@ test(
       target.status.podIP,
     );
     await assertActualModelTurn(topology);
+    await assertCurrentRuntimeDiagnosticsNoSend(context, topology, topology.revision);
     await assertSameNamespaceSecretSharing(context, topology);
     await assertSecretApiNegativeRows(context, topology);
     await assertUnboundSecretDeletion(context, topology);

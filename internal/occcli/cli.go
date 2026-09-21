@@ -778,7 +778,7 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, update, deploy, stop, deleteAgent)
+	command.AddCommand(create, list, get, update, deploy, stop, deleteAgent, app.agentDeploymentCommand())
 	return command
 }
 
@@ -838,6 +838,55 @@ func (app *application) printNamespace(value any, collection bool) error {
 	})
 }
 
+func (app *application) agentDeploymentCommand() *cobra.Command {
+	command := commandGroup("deployment", "Inspect Agent deployment status and diagnostics")
+
+	get := &cobra.Command{
+		Use:   "get AGENT_ID DEPLOYMENT_ID",
+		Short: "Show deployment status",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			status, err := client.GetAgentDeployment(namespace, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return app.printDeploymentStatus(status)
+		},
+	}
+
+	diagnostics := &cobra.Command{
+		Use:   "diagnostics AGENT_ID DEPLOYMENT_ID",
+		Short: "Run bodyless current-runtime deployment diagnostics",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			result, err := client.DiagnoseAgentDeployment(namespace, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return app.printDeploymentDiagnostics(result)
+		},
+	}
+
+	command.AddCommand(get, diagnostics)
+	return command
+}
+
 func (app *application) printConfiguration(value any) error {
 	return app.printItems(value, false, []column{
 		{title: "ID", key: "id"},
@@ -882,6 +931,24 @@ func (app *application) printAgent(value any, collection bool) error {
 		{title: "DESIRED STATE", key: "desiredRuntimeState"},
 		{title: "STATUS", key: "status"},
 		{title: "ACTIVE REVISION", key: "activeRevisionId"},
+	})
+}
+
+func (app *application) printDeploymentStatus(value any) error {
+	return app.printItems(value, false, []column{
+		{title: "DEPLOYMENT", key: "deploymentId"},
+		{title: "AGENT", key: "agentId"},
+		{title: "STATUS", key: "status"},
+		{title: "ERROR", key: "error"},
+		{title: "WARNINGS", key: "warnings"},
+	})
+}
+
+func (app *application) printDeploymentDiagnostics(value any) error {
+	return app.printItems(value, false, []column{
+		{title: "REVISION", key: "revisionId"},
+		{title: "OBSERVED", key: "observedAt"},
+		{title: "CHECKS", key: "checks"},
 	})
 }
 

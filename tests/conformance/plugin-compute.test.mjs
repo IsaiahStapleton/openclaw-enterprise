@@ -96,6 +96,26 @@ function readRuntimeStatusFromHandler(handler) {
   return readStatusFromHandler(handler, "/openclaw/runtime/status");
 }
 
+async function readStatusFromHandlerAsync(handler, path) {
+  let body = "";
+  await handler(
+    { method: "GET", url: path, on() {}, off() {} },
+    {
+      writeHead() {},
+      on() {},
+      off() {},
+      end(chunk) {
+        body += chunk;
+      },
+    },
+  );
+  return JSON.parse(body);
+}
+
+async function readRuntimeDiagnosticsFromHandler(handler) {
+  return readStatusFromHandlerAsync(handler, "/openclaw/runtime/diagnostics");
+}
+
 const tenant = {
   id: "ns_00000000-0000-4000-8000-000000000016",
   name: "Plugin compute tenant",
@@ -1689,6 +1709,261 @@ test("Kubernetes startup failure evidence requires the exact runtime Pod report"
       path: "openclaw/runtime/status",
     },
   ]);
+});
+
+test("Kubernetes diagnostics read exact runtime Pod checks through the apiserver proxy", async () => {
+  const driver = createKubernetesComputeDriver(kubernetesOptions());
+  const candidate = revision({
+    compute: { id: driver.id, implementation: driver.implementation },
+    plugins: codexNoPluginState(),
+  });
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const namespaceObject = {
+    ...driver.manifest("v1", "Namespace", namespace, { namespaceId: tenant.id }),
+    status: { phase: "Active" },
+  };
+  const podForRole = (role) => ({
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: {
+      name: `${role}-runtime-diagnostics`,
+      namespace,
+      uid: `pod-${role}-runtime-diagnostics`,
+      labels: {
+        "openclaw.dev/agent": candidate.agentId,
+        "openclaw.dev/revision": candidate.id,
+        "openclaw.dev/workload-role": role,
+      },
+    },
+    status: {
+      containerStatuses: [{ name: role, containerID: `containerd://runtime-diagnostics-${role}` }],
+    },
+  });
+  const pods = { agent: podForRole("agent"), gateway: podForRole("gateway") };
+  const requests = [];
+  driver.clients = async () => ({
+    core: {
+      listNamespace: async () => ({ apiVersion: "v1", kind: "NamespaceList", items: [] }),
+      readNamespace: async () => namespaceObject,
+      listNamespacedPod: async (request) => {
+        requests.push({ kind: "list", request });
+        const role = request.labelSelector.includes("openclaw.dev/workload-role=agent")
+          ? "agent"
+          : "gateway";
+        return { apiVersion: "v1", kind: "PodList", items: [pods[role]] };
+      },
+      connectGetNamespacedPodProxyWithPath: async (request) => {
+        requests.push({ kind: "proxy", request });
+        const role = request.name.startsWith("agent-") ? "agent" : "gateway";
+        return JSON.stringify({
+          revisionId: candidate.id,
+          container: role,
+          podUid: pods[role].metadata.uid,
+          observedAt: "2026-09-21T00:00:00.000Z",
+          ready: role === "gateway",
+          checks: [
+            {
+              component: role,
+              check: role === "gateway" ? "connectivity" : "runtime-status",
+              state: role === "gateway" ? "failed" : "succeeded",
+              checkedAt: "2026-09-21T00:00:00.000Z",
+              ...(role === "gateway" ? { code: "DISCONNECTED" } : {}),
+            },
+          ],
+        });
+      },
+    },
+  });
+
+  const diagnostics = await driver.diagnoseAgentDeployment({
+    namespace: tenant,
+    agent,
+    revision: candidate,
+  });
+
+  assert.equal(diagnostics.revisionId, candidate.id);
+  assert.match(diagnostics.observedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual(diagnostics.checks, [
+    {
+      component: "agent",
+      check: "runtime-status",
+      state: "succeeded",
+      checkedAt: "2026-09-21T00:00:00.000Z",
+    },
+    {
+      component: "gateway",
+      check: "connectivity",
+      state: "failed",
+      checkedAt: "2026-09-21T00:00:00.000Z",
+      code: "DISCONNECTED",
+    },
+  ]);
+  assert.deepEqual(
+    requests.filter(({ kind }) => kind === "proxy").map(({ request }) => request),
+    [
+      {
+        name: "agent-runtime-diagnostics:18791",
+        namespace,
+        path: "openclaw/runtime/diagnostics",
+      },
+      {
+        name: "gateway-runtime-diagnostics:18791",
+        namespace,
+        path: "openclaw/runtime/diagnostics",
+      },
+    ],
+  );
+});
+
+test("gateway runtime diagnostics translate Slack status into safe checks", async () => {
+  const files = new Map();
+  const spawned = [];
+  let statusHandler;
+  const childWithJson = (payload) => {
+    const child = {
+      stdout: {
+        on(event, callback) {
+          if (event === "data") {
+            queueMicrotask(() => callback(Buffer.from(JSON.stringify(payload))));
+          }
+        },
+      },
+      on(event, callback) {
+        if (event === "close") {
+          queueMicrotask(() => callback(0));
+        }
+      },
+      kill(signal) {
+        spawned.push({ kill: signal });
+      },
+    };
+    return child;
+  };
+  const sandbox = {
+    AbortController,
+    AbortSignal,
+    Buffer,
+    JSON,
+    URL,
+    console: { error() {} },
+    process: {
+      env: {
+        HOME: "/home/node",
+        OPENCLAW_AGENT_REVISION_ID: "revision-slack-diagnostics",
+        OPENCLAW_GATEWAY_PORT: "8080",
+        OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
+        OPENCLAW_RUNTIME_STATUS_PORT: "18791",
+        OPENCLAW_POD_UID: "pod-gateway-slack-diagnostics",
+      },
+      on() {},
+      exit(code) {
+        throw new Error(`unexpected process exit ${code}`);
+      },
+    },
+    setTimeout,
+    clearTimeout,
+    require(specifier) {
+      if (specifier === "node:http") {
+        return {
+          createServer(handler) {
+            statusHandler = handler;
+            return { listen() {} };
+          },
+        };
+      }
+      if (specifier === "node:fs") {
+        return {
+          cpSync() {},
+          existsSync() {
+            return false;
+          },
+          lstatSync() {
+            return { isDirectory: () => true };
+          },
+          mkdirSync() {},
+          readdirSync() {
+            return [];
+          },
+          readFileSync(path) {
+            if (!files.has(path)) {
+              throw new Error(`Missing mocked file: ${path}`);
+            }
+            return files.get(path);
+          },
+          rmSync() {},
+          writeFileSync(path, data) {
+            files.set(path, String(data));
+          },
+        };
+      }
+      if (specifier === "node:child_process") {
+        return {
+          spawn(command, args) {
+            spawned.push({ command, args });
+            if (args.includes("channels")) {
+              return childWithJson({
+                channels: { slack: { configured: true, connected: false } },
+                channelDefaultAccountId: { slack: "slack-account" },
+                channelAccounts: {
+                  slack: [
+                    { accountId: "slack-account", probe: { ok: false, error: "invalid_auth" } },
+                  ],
+                },
+              });
+            }
+            return { on() {}, kill() {} };
+          },
+          spawnSync() {
+            return { status: 0 };
+          },
+        };
+      }
+      if (specifier === "node:path") {
+        return { join };
+      }
+      return nodeRequire(specifier);
+    },
+  };
+
+  vm.runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, sandbox);
+  assert.ok(statusHandler);
+
+  const diagnostics = await readRuntimeDiagnosticsFromHandler(statusHandler);
+
+  assert.equal(diagnostics.revisionId, "revision-slack-diagnostics");
+  assert.equal(diagnostics.container, "gateway");
+  assert.equal(diagnostics.podUid, "pod-gateway-slack-diagnostics");
+  assert.equal(diagnostics.ready, true);
+  assert.deepEqual(diagnostics.checks, [
+    {
+      component: "gateway",
+      check: "configuration",
+      state: "succeeded",
+      checkedAt: diagnostics.observedAt,
+    },
+    {
+      component: "gateway",
+      check: "authentication",
+      state: "failed",
+      checkedAt: diagnostics.observedAt,
+      code: "AUTHENTICATION_FAILED",
+    },
+    {
+      component: "gateway",
+      check: "connectivity",
+      state: "failed",
+      checkedAt: diagnostics.observedAt,
+      code: "DISCONNECTED",
+    },
+  ]);
+  assert.ok(
+    spawned.some(
+      ({ command, args }) =>
+        command === "node" &&
+        plain(args).join(" ") ===
+          "/app/openclaw.mjs channels status --channel slack --json --probe --timeout 10000",
+    ),
+  );
 });
 
 test("Codex runtime gates startup and readiness on a successful native authentication turn", async (t) => {

@@ -140,13 +140,20 @@ Configuration values; it does not stop a running Agent. The
 [console reference](../../reference/console.md#inspect-detail-revisions-and-channel-drafts)
 describes the supported edits and their deployment boundaries.
 
+For a selected revision, the detail view reads the durable deployment-status row.
+It renders optional safe startup-failure details from that persisted result.
+Only an explicit **Run current diagnostics** action sends the bodyless diagnostics
+POST. The result stays local to the current page state; it does not mutate the
+stored deployment status, repeat a startup probe, send channel messages, or
+prove model response.
+
 ### 5. Provision initial runtime credentials
 
 `apps/controller/src/console/agents/credentials.mjs:createRuntimeCredentialsPanel`
 
 The **Operator-managed credentials** selection saves `{ "method": "runtime" }`
-without a source field. The console explains “Configured on the runtime host;
-not validated by OCC.” This mode does not request managed credential metadata
+without a source field. The console explains "Configured on the runtime host;
+not validated by OCC." This mode does not request managed credential metadata
 or provisioning; it still requires readable revision history and unchanged draft
 state before submitting deployment. API authorization and selected-driver
 compatibility checks remain authoritative.
