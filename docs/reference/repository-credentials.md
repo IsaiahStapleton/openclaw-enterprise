@@ -73,6 +73,13 @@ API routes and methods; it does not grant every permission held by the App or
 import PAT permissions. The former `read-write` name is unsupported, with no
 compatibility alias.
 
+Git discovery, upload-pack and receive-pack accept case differences in the
+admitted owner/repository and an optional `.git` suffix. The backend constructs
+a canonical upstream path; a literal `.git` repository name remains part of the
+admitted identity. Endpoint names, methods, media types, service queries and
+profile restrictions still apply. API request paths and repository authority
+remain unchanged.
+
 `git-full` does not provide branch-only or per-field GraphQL authorization.
 GitHub may also return public information permitted by its API. The backend
 treats every GraphQL POST as a possible write, including queries, and never

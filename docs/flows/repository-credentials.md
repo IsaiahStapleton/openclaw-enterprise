@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
-updated: "2026-09-20"
-last_updated_session: "authoring-run/85bfba42-19b5-4084-86ec-49dac9e45fba"
+updated: "2026-09-21"
+last_updated_session: "authoring-run/3a7b57ee-abdc-48f9-87c7-4527c7f42e8a"
 ---
 
 # Repository credential lifecycle flow
@@ -56,6 +56,16 @@ sufficient validity at acceptance, reuse, and dispatch. `provider-queue.ts` boun
 provider work; `lifecycle/exchange.ts:executeExchange` joins tracked exchange work
 before releasing the original use.
 
+Before acquisition,
+`apps/controller/src/drivers/repo/github/credentials/routes/classification.ts:classifyGitRoute`
+matches the admitted owner and repository case-insensitively, with or without one
+optional `.git` suffix. It preserves raw-target, endpoint, method, media, query
+and profile checks, then constructs the upstream path from the admitted identity.
+A literal repository name ending in `.git` retains that suffix. The sibling
+`factory.ts:createGitHubDriverFactory` uses this policy for Basic authentication
+selection; `routes.ts:planRequest` returns the canonical target. API request
+matching is unchanged.
+
 The GitHub backend selects `response.ts:createResponsePolicy` when planning an
 admitted request. Before bounded JSON is released, its
 `response-resources.ts:createResourceRewriter` rewrites qualified machine links
@@ -97,6 +107,8 @@ listeners, clients, containers, or live-provider behavior.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 03:28: Document admitted Git path normalization and unchanged authorization checks. (public authoring-run/3a7b57ee-abdc-48f9-87c7-4527c7f42e8a - daf5e85cd6a4c967b91302fa68ad2e156b20e5a7)
 
 - 2026-09-20 21:55: Document accompanying GitHub response credential filtering at supported repository locations. (public authoring-run/85bfba42-19b5-4084-86ec-49dac9e45fba - 46627a2c38cb942fffcbc61ed5229c85fe01bef3)
 
