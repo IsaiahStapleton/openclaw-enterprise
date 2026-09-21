@@ -20,6 +20,7 @@ import { run } from "../fixtures/repository-credentials/process.mjs";
 import { startRegistryCredentialServiceFixture } from "../fixtures/repository-credentials/registry.mjs";
 import { startControlResponseRelay } from "../fixtures/repository-credentials/control-relay.mjs";
 import { createPlatformClock } from "../fixtures/repository-credentials/platform-clock.mjs";
+import { startRepositoryPlatformWorker } from "./repository-credentials-platform-worker.mjs";
 
 export const repositoryPlatformSelected =
   process.env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM === "1";
@@ -466,13 +467,11 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     { default: pg },
     { loadInstallationConfiguration },
     { composeProduction },
-    { createControllerWorker },
     { kubernetesNamespaceName },
   ] = await Promise.all([
     import("pg"),
     import("../../apps/controller/src/composition/installation-config.ts"),
     import("../../apps/controller/src/composition/production.ts"),
-    import("../../apps/controller/src/worker.ts"),
     import("../../apps/controller/src/drivers/compute/kubernetes/index.ts"),
   ]);
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
@@ -514,6 +513,10 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     }
   }
   scope.after(stopProcesses);
+  async function startWorker() {
+    assert.equal(worker, undefined, "join the previous worker before replacement");
+    worker = await startRepositoryPlatformWorker({ databaseUrl, configFile, events });
+  }
   async function startProcesses() {
     const drivers = await loadInstallationConfiguration({
       mode: "production",
@@ -529,16 +532,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     });
     endpoint = await app.listen({ host: "127.0.0.1", port: 0 });
     session = await signInWithEmailPassword({ origin: endpoint, ...credentials });
-    worker = createControllerWorker({
-      mode: "production",
-      pool: new pg.Pool({ connectionString: databaseUrl, max: 4 }),
-      drivers,
-      pollIntervalMs: 25,
-      leaseDurationMs: 6_000,
-      maxAttempts: 30,
-      emit: (event) => events.push(event),
-    });
-    await worker.start();
+    await startWorker();
   }
   async function request(method, path, payload, expected = 200) {
     const response = await fetch(`${endpoint}${path}`, {
@@ -827,6 +821,40 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     return result.stdout;
   }
   const material = async (pod) => JSON.parse((await podNode(pod, materialScript)).stdout);
+  async function runningPodContainers(pod) {
+    const node = pod.spec.nodeName;
+    assert.ok(
+      node.startsWith(`${selection.kubernetesContext}-`),
+      "inspect only the selected k3d node",
+    );
+    const { stdout } = await execute("docker", ["exec", node, "crictl", "ps", "-o", "json"], {
+      timeout: 15_000,
+    });
+    return JSON.parse(stdout)
+      .containers.filter(
+        (container) => container.labels["io.kubernetes.pod.uid"] === pod.metadata.uid,
+      )
+      .map(({ id }) => id)
+      .sort();
+  }
+  async function workspaceVolume(pod, path) {
+    const container = pod.spec.containers.find(({ name }) => name === "gateway");
+    const mount = container.volumeMounts.find(({ mountPath }) => mountPath === path);
+    assert.ok(mount, "the workspace must have its own persistent mount");
+    const volume = pod.spec.volumes.find(({ name }) => name === mount.name);
+    const claimName = volume.persistentVolumeClaim.claimName;
+    const claims = await kube.resources("persistentvolumeclaims", placement);
+    const claim = claims.find(({ metadata }) => metadata.name === claimName);
+    assert.equal(claim.status.phase, "Bound");
+    assert.ok(claim.metadata.uid);
+    assert.ok(claim.spec.volumeName);
+    return {
+      name: claimName,
+      uid: claim.metadata.uid,
+      volume: claim.spec.volumeName,
+      subPath: mount.subPath,
+    };
+  }
   const attempts = async (revision) =>
     (
       await pool.query(
@@ -847,15 +875,23 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     tool,
     podNode,
     material,
+    runningPodContainers,
+    workspaceVolume,
     attempts,
     credentials: credentialsFixture,
     control,
     events,
-    restartWorker: async () => {
-      await stopProcesses();
-      const cursor = events.length;
-      await startProcesses();
-      return cursor;
+    get workerPid() {
+      return worker?.pid;
+    },
+    get endpoint() {
+      return endpoint;
+    },
+    startWorker,
+    killWorker: async () => {
+      const receipt = await worker.kill();
+      worker = undefined;
+      return receipt;
     },
   };
 }
