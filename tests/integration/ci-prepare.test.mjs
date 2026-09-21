@@ -10,7 +10,6 @@ import {
   deriveCodexBwrapProfile,
   prepareCodexSeccompProfile,
 } from "../../scripts/ci/codex-seccomp.mjs";
-import { resolveGatewayPublisherImage } from "../helpers/envoy-workspace-gateway.mjs";
 import { createKubernetesInstallationConfiguration } from "../helpers/kubernetes-real.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -52,7 +51,8 @@ const scenario = process.env.CI_FIXTURE_SCENARIO;
 const command = basename(process.argv[1], ".mjs");
 const args = process.argv.slice(2);
 const statePath = join(root, "commands-state.json");
-const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : {};
+const initialState = existsSync(statePath) ? readFileSync(statePath, "utf8") : "{}";
+const state = JSON.parse(initialState);
 const equals = (actual, expected) => JSON.stringify(actual) === JSON.stringify(expected);
 const configId = "sha256:" + "b".repeat(64);
 const manifestDigest = "sha256:" + "c".repeat(64);
@@ -60,12 +60,16 @@ appendFileSync(join(root, "commands.jsonl"), JSON.stringify({
   command, args, envPublished: existsSync(join(root, "github.env")),
 }) + "\n");
 function finish(stdout = "") {
-  writeFileSync(statePath, JSON.stringify(state));
+  // Parallel diagnostic reads must not truncate the shared fixture state.
+  const serializedState = JSON.stringify(state);
+  if (serializedState !== initialState) {
+    writeFileSync(statePath, serializedState);
+  }
   process.stdout.write(stdout);
   process.exit(0);
 }
 
-if (command === "docker") {
+if (command === "docker" || command === "podman") {
   if (equals(args, ["version", "--format", "{{.Server.Version}}"])) finish("29.4.0\n");
   if (args[0] === "compose" && args[1] === "-f" && args[3] === "-p") {
     assert.match(args[4], /^openclaw_ci_pg_/);
@@ -78,46 +82,68 @@ if (command === "docker") {
     finish();
   }
   if (equals(args, ["image", "inspect", state.tag])) finish("[]\n");
-  if (equals(args, ["image", "inspect", "--format", "{{.Id}}", state.tag])) finish(configId + "\n");
+  if (equals(args, ["image", "inspect", "--format", "{{.Id}}", state.tag])) {
+    finish((command === "podman" ? configId.slice("sha256:".length) : configId) + "\n");
+  }
   if (equals(args, ["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", state.tag])) finish("linux/amd64\n");
-  if (equals(args.slice(0, 5), ["image", "save", "--platform", "linux/amd64", "--output"]) &&
-      args.length === 7 && args[6] === state.tag) {
-    state.archive = args[5];
+  const expectedSave = command === "podman"
+    ? ["image", "save", "--output"]
+    : ["image", "save", "--platform", "linux/amd64", "--output"];
+  if (equals(args.slice(0, expectedSave.length), expectedSave) &&
+      args.length === expectedSave.length + 2 && args.at(-1) === state.tag) {
+    state.archive = args.at(-2);
     writeFileSync(state.archive, "synthetic image archive\n");
     finish();
   }
   if (equals(args, ["image", "rm", "-f", state.tag])) finish();
-  if (args[0] === "exec" && args[1] === "k3d-" + state.cluster + "-server-0") {
+  if (args[0] === "exec" && ["server-0", "agent-0"].some((suffix) =>
+      args[1] === "k3d-" + state.cluster + "-" + suffix)) {
+    const node = args[1];
+    const alias = state.aliases?.[node];
+    if (equals(args.slice(2), ["ip", "route", "get", "10.42.7.0"])) {
+      assert.ok(node.endsWith("-server-0"));
+      finish(scenario === "missing-proxy-source"
+        ? "10.42.7.0 dev flannel.1\n"
+        : "10.42.7.0 via 10.42.7.0 dev flannel.1 src 10.42.3.0\n");
+    }
     const ctr = ["ctr", "-n", "k8s.io", "images"];
     if (equals(args.slice(2), [...ctr, "list"])) {
-      const references = [state.imported && state.tag, state.alias].filter(Boolean);
+      const references = [state.imported && state.tag, alias].filter(Boolean);
       finish("REF TYPE DIGEST SIZE PLATFORMS LABELS\n" + references.map((ref) =>
         ref + " application/vnd.oci.image.manifest.v1+json " + manifestDigest + " 1 linux/amd64 -\n",
       ).join(""));
     }
     if (equals(args.slice(2, 8), [...ctr, "tag", state.tag]) && args.length === 9) {
-      if (scenario !== "missing-alias") state.alias = args[8];
+      if (scenario !== "missing-alias") {
+        state.aliases ??= {};
+        state.aliases[node] = args[8];
+      }
       finish();
     }
     if (equals(args.slice(2, 7), [...ctr, "rm"]) && args.length === 8 &&
-        [state.tag, state.alias].includes(args[7])) finish();
-    if (equals(args.slice(2), ["crictl", "inspecti", state.alias]) && state.alias) {
-      if (scenario === "missing-cri") {
+        [state.tag, alias].includes(args[7])) finish();
+    if (equals(args.slice(2), ["crictl", "inspecti", alias]) && alias) {
+      if (scenario === "missing-cri" ||
+          (scenario === "missing-worker-cri" && node.endsWith("-agent-0"))) {
         process.stderr.write("synthetic CRI image not found\n");
         process.exit(19);
       }
-      finish(JSON.stringify({ status: { id: configId, repoDigests: [state.alias] } }));
+      finish(JSON.stringify({ status: { id: configId, repoDigests: [alias] } }));
     }
   }
 }
 if (command === "k3d") {
   if (equals(args, ["version"])) finish("k3d version v5.8.3\n");
-  if (equals(args.slice(0, 2), ["cluster", "create"]) && args.length === 13) {
+  if (equals(args.slice(0, 2), ["cluster", "create"]) && args.length === 15) {
     assert.match(args[2], /^openclaw-k8s-/);
     assert.deepEqual(args.slice(3, 5), ["--image", "+v1.35"]);
-    assert.deepEqual(args.slice(5, 10), ["--servers", "1", "--agents", "0", "--api-port"]);
-    assert.match(args[10], /^127\.0\.0\.1:\d+$/);
-    assert.deepEqual(args.slice(11), ["--kubeconfig-update-default=false", "--kubeconfig-switch-context=false"]);
+    assert.deepEqual(args.slice(5, 10), ["--servers", "1", "--agents", "1", "--volume"]);
+    const storage = args[10].split(":");
+    assert.equal(storage[1], "/var/lib/rancher/k3s/storage@all");
+    assert.ok(existsSync(storage[0]), "both nodes must mount an existing shared host directory");
+    assert.equal(args[11], "--api-port");
+    assert.match(args[12], /^127\.0\.0\.1:\d+$/);
+    assert.deepEqual(args.slice(13), ["--kubeconfig-update-default=false", "--kubeconfig-switch-context=false"]);
     state.cluster = args[2];
     finish();
   }
@@ -150,12 +176,63 @@ if (command === "kubectl") {
     if (equals(args.slice(4), ["version", "-o", "json"])) {
       finish(JSON.stringify({ serverVersion: { gitVersion: "v1.35.8+k3s1" } }));
     }
+    if (equals(args.slice(4), ["get", "node", "k3d-" + state.cluster + "-agent-0", "-o", "json"])) {
+      finish(JSON.stringify({ spec: { podCIDR: "10.42.7.0/24" } }));
+    }
+    if (equals(args.slice(4), ["get", "nodes", "-o", "json"])) {
+      finish(JSON.stringify({ items: [{ metadata: { name: "worker" },
+        spec: { taints: [{ key: "node.kubernetes.io/disk-pressure", effect: "NoSchedule" }] },
+        status: { conditions: [{ type: "DiskPressure", status: "True", reason: "KubeletHasDiskPressure" }] } }] }));
+    }
+    if (equals(args.slice(4, 6), ["--namespace", "kube-system"])) {
+      if (equals(args.slice(6, 8), ["apply", "-f"]) && args.length === 9) {
+        const manifest = JSON.parse(readFileSync(args[8], "utf8"));
+        assert.equal(manifest.kind, "DaemonSet");
+        assert.equal(manifest.metadata.name, "openclaw-ci-fixture-image-pin");
+        assert.equal(manifest.metadata.namespace, "kube-system");
+        const pod = manifest.spec.template.spec;
+        assert.equal(pod.automountServiceAccountToken, false);
+        assert.deepEqual(pod.tolerations, [{ operator: "Exists" }]);
+        assert.equal(pod.containers.length, 1);
+        assert.equal(pod.containers[0].image, Object.values(state.aliases)[0]);
+        assert.equal(pod.containers[0].imagePullPolicy, "Never");
+        assert.deepEqual(pod.containers[0].securityContext.capabilities.drop, ["ALL"]);
+        assert.equal(pod.containers[0].securityContext.readOnlyRootFilesystem, true);
+        state.fixtureImagePinned = true;
+        finish();
+      }
+      if (equals(args.slice(6), ["rollout", "status", "daemonset/openclaw-ci-fixture-image-pin", "--timeout=120s"])) {
+        assert.equal(state.fixtureImagePinned, true);
+        finish();
+      }
+      if (equals(args.slice(6), ["rollout", "status", "deployment/local-path-provisioner", "--timeout=120s"])) {
+        if (scenario === "storage-unready" || (scenario === "storage-after-image-unready" && state.storageRestarted)) {
+          process.stderr.write("deployment exceeded its progress deadline\n");
+          process.exit(1);
+        }
+        finish();
+      }
+      if (equals(args.slice(6), ["rollout", "restart", "deployment/local-path-provisioner"])) {
+        state.storageRestarted = true;
+        finish();
+      }
+      if (equals(args.slice(6), ["get", "pods", "--selector=app=local-path-provisioner", "-o", "json"])) {
+        finish(JSON.stringify({ items: [{ metadata: { name: "local-path-provisioner-fixture" },
+          spec: { nodeSelector: { "kubernetes.io/os": "linux" }, containers: [{ env: [{ name: "PRIVATE", value: "do-not-publish-pod-spec" }] }] },
+          status: { phase: "Pending", conditions: [{ type: "PodScheduled", status: "False", reason: "Unschedulable", message: "0/2 nodes are available: untolerated disk-pressure taint" }], containerStatuses: [{ name: "local-path-provisioner", ready: false,
+            restartCount: 3, state: { waiting: { reason: "CrashLoopBackOff" } } }] } }] }));
+      }
+      if (equals(args.slice(6), ["logs", "deployment/local-path-provisioner", "--tail=30"]) ||
+          equals(args.slice(6), ["logs", "deployment/local-path-provisioner", "--tail=30", "--previous"])) {
+        finish("Error starting daemon: fixture configuration rejected\n");
+      }
+    }
   }
 }
 throw new Error("Unexpected external command: " + command + " " + JSON.stringify(args));
 `}`;
-  for (const command of ["docker", "k3d", "kubectl"]) {
-    await writeFile(join(bin, `${command}.mjs`), commandSource, { mode: 0o700 });
+  for (const command of ["docker.mjs", "k3d.mjs", "kubectl.mjs", "podman"]) {
+    await writeFile(join(bin, command), commandSource, { mode: 0o700 });
   }
   const statePath = join(root, "state.json");
   const githubEnv = join(root, "github.env");
@@ -169,7 +246,7 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
     RUNNER_TEMP: root,
     CI_FIXTURE_ROOT: root,
     CI_FIXTURE_SCENARIO: scenario,
-    OCC_DOCKER_BIN: join(bin, "docker.mjs"),
+    OCC_DOCKER_BIN: join(bin, scenario === "podman-success" ? "podman" : "docker.mjs"),
     OPENCLAW_CI_K3D_BIN: join(bin, "k3d.mjs"),
     OCC_KUBECTL_BIN: join(bin, "kubectl.mjs"),
   };
@@ -200,12 +277,14 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
 
 for (const { scenario, error } of [
   { scenario: "success" },
+  { scenario: "podman-success" },
   { scenario: "missing-tag", error: /Unable to find imported OCI manifest digest/ },
   {
     scenario: "missing-alias",
     error: /Unable to find imported OCC_TEST_KUBERNETES_IMAGE reference/,
   },
   { scenario: "missing-cri", error: /synthetic CRI image not found/ },
+  { scenario: "missing-worker-cri", error: /synthetic CRI image not found/ },
   { scenario: "nonzero-import", error: /synthetic import command failure/ },
 ]) {
   test(`fixture image CLI verifies runtime registration and cleanup: ${scenario}`, async (t) => {
@@ -240,10 +319,13 @@ for (const { scenario, error } of [
 
     const preparation = await commands.commands();
     const save = preparation.find(
-      ({ command, args }) => command === "docker" && args[0] === "image" && args[1] === "save",
+      ({ command, args }) =>
+        ["docker", "podman"].includes(command) && args[0] === "image" && args[1] === "save",
     );
     assert.ok(save, "registration must export a task-owned archive");
-    await assert.rejects(() => stat(save.args[5]), { code: "ENOENT" });
+    const archive = save.args[save.args.indexOf("--output") + 1];
+    await assert.rejects(() => stat(archive), { code: "ENOENT" });
+    assert.equal(save.args.includes("--platform"), scenario !== "podman-success");
     assert.equal(
       preparation.every(({ envPublished }) => !envPublished),
       true,
@@ -252,16 +334,32 @@ for (const { scenario, error } of [
       const expected = `localhost/${cluster.name}/fixture@sha256:${"c".repeat(64)}`;
       assert.equal(importedImage.reference, expected);
       assert.equal(state.env.OCC_TEST_KUBERNETES_IMAGE, expected);
+      assert.equal(state.env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS, "10.42.3.0/32");
       assert.ok(
         (await readFile(commands.githubEnv, "utf8"))
           .split("\n")
           .includes(`OCC_TEST_KUBERNETES_IMAGE=${expected}`),
       );
+      for (const suffix of ["server-0", "agent-0"]) {
+        assert.ok(
+          preparation.some(
+            ({ command, args }) =>
+              command === (scenario === "podman-success" ? "podman" : "docker") &&
+              args[1] === `k3d-${cluster.name}-${suffix}` &&
+              args[2] === "crictl" &&
+              args[4] === expected,
+          ),
+          "each schedulable node must resolve the published immutable image",
+        );
+      }
       assert.ok(
         preparation.some(
           ({ command, args }) =>
-            command === "docker" && args[2] === "crictl" && args[4] === expected,
+            command === "kubectl" &&
+            args.includes("rollout") &&
+            args.includes("daemonset/openclaw-ci-fixture-image-pin"),
         ),
+        "preparation must keep the local-only fixture image active on every node",
       );
     }
 
@@ -272,7 +370,8 @@ for (const { scenario, error } of [
     await assert.rejects(() => stat(cluster.directory), { code: "ENOENT" });
     const cleanupCalls = (await commands.commands()).slice(preparation.length);
     const localRemoval = cleanupCalls.findIndex(
-      ({ command, args }) => command === "docker" && args[0] === "image" && args[1] === "rm",
+      ({ command, args }) =>
+        ["docker", "podman"].includes(command) && args[0] === "image" && args[1] === "rm",
     );
     const clusterRemoval = cleanupCalls.findIndex(
       ({ command, args }) => command === "k3d" && args[0] === "cluster" && args[1] === "delete",
@@ -282,8 +381,42 @@ for (const { scenario, error } of [
   });
 }
 
+test("fixture preparation rejects an unknown proxy source before publishing its environment", async (t) => {
+  const commands = await fixtureImageCommands(t, "missing-proxy-source");
+  const result = commands.prepare();
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Unable to determine the cross-node plugin status proxy source/);
+  const state = JSON.parse(await readFile(commands.statePath, "utf8"));
+  assert.equal(state.env, undefined);
+  await assert.rejects(() => stat(commands.githubEnv), { code: "ENOENT" });
+  // Failed preparation retains ownership so cleanup can remove the partial cluster.
+  const cleanup = commands.cleanup();
+  assert.equal(cleanup.status, 0, cleanup.stderr);
+  await assert.rejects(() => stat(commands.statePath), { code: "ENOENT" });
+});
+
+for (const scenario of ["storage-unready", "storage-after-image-unready"]) {
+  test(`fixture preparation reports unavailable storage without publishing workload inputs: ${scenario}`, async (t) => {
+    const commands = await fixtureImageCommands(t, scenario);
+    const result = commands.prepare();
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /CI fixture storage controller is not ready/);
+    assert.match(result.stderr, /CrashLoopBackOff/);
+    assert.match(result.stderr, /fixture configuration rejected/);
+    assert.match(result.stderr, /Unschedulable/);
+    assert.match(result.stderr, /KubeletHasDiskPressure/);
+    assert.doesNotMatch(result.stderr, /do-not-publish-pod-spec/);
+    await assert.rejects(() => stat(commands.githubEnv), { code: "ENOENT" });
+    const state = JSON.parse(await readFile(commands.statePath, "utf8"));
+    assert.equal(state.env, undefined);
+    const cleanup = commands.cleanup();
+    assert.equal(cleanup.status, 0, cleanup.stderr);
+  });
+}
+
 const digest = "a".repeat(64);
 const immutableImage = `registry.example/openclaw/runtime@sha256:${digest}`;
+const nodeBaseImage = `docker.io/library/node:24-bookworm@sha256:${digest}`;
 const mutableImage = "registry.example/openclaw/runtime:latest";
 const runtimeDefaultBaseline = Object.freeze({
   architectures: ["SCMP_ARCH_X86_64"],
@@ -367,35 +500,6 @@ test("Kubernetes test helper passes an explicit Codex localhost seccomp profile 
   });
 
   assert.equal(configuration.drivers.compute.configuration.runtime.codexSeccompProfile, profile);
-});
-
-test("Envoy host publisher requires the prepared Docker-local gateway image identity", () => {
-  const k3dRuntimeReference =
-    "localhost/openclaw-k8s-test/occ-test-kubernetes-gateway-image@sha256:" + digest;
-  const dockerImageId = `sha256:${"b".repeat(64)}`;
-
-  assert.equal(
-    resolveGatewayPublisherImage({
-      gatewayImage: k3dRuntimeReference,
-      gatewayPublisherImage: dockerImageId,
-    }),
-    dockerImageId,
-  );
-  assert.throws(
-    () =>
-      resolveGatewayPublisherImage({
-        gatewayImage: k3dRuntimeReference,
-      }),
-    /OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE/,
-  );
-  assert.throws(
-    () =>
-      resolveGatewayPublisherImage({
-        gatewayImage: k3dRuntimeReference,
-        gatewayPublisherImage: k3dRuntimeReference,
-      }),
-    /immutable Docker image ID/,
-  );
 });
 
 test("codex seccomp preparation fails closed for unverified Codex versions and foreign clusters", async () => {
@@ -722,6 +826,8 @@ test("prepareLane rejects mutable Kubernetes image inputs before creating state"
       env: {
         ...baseModelEnv,
         ...k3dImages,
+        NODE_BASE_IMAGE: nodeBaseImage,
+        OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: immutableImage,
         OCC_TEST_KUBERNETES_AGENT_IMAGE: mutableImage,
       },
     },

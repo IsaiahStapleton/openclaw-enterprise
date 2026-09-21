@@ -109,6 +109,49 @@ func (client *Client) DeleteNamespace(namespaceID string) (any, error) {
 	return client.send(http.MethodDelete, []string{"namespaces", namespaceID}, nil)
 }
 
+// ListIAMRoles lists Namespace IAM Roles.
+func (client *Client) ListIAMRoles(namespaceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "iam", "roles")
+}
+
+// CreateIAMRole creates an immutable Namespace IAM Role.
+func (client *Client) CreateIAMRole(namespaceID string, body jsontext.Value) (any, error) {
+	return client.send(http.MethodPost, []string{"namespaces", namespaceID, "iam", "roles"}, body)
+}
+
+// GetIAMRole fetches a Namespace IAM Role.
+func (client *Client) GetIAMRole(namespaceID, roleID string) (any, error) {
+	return client.get("namespaces", namespaceID, "iam", "roles", roleID)
+}
+
+// DeleteIAMRole deletes an unreferenced Namespace IAM Role.
+func (client *Client) DeleteIAMRole(namespaceID, roleID string) error {
+	return client.sendEmpty(http.MethodDelete, []string{"namespaces", namespaceID, "iam", "roles", roleID})
+}
+
+// ListIAMAccessBindings lists Namespace IAM AccessBindings.
+func (client *Client) ListIAMAccessBindings(namespaceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "iam", "access-bindings")
+}
+
+// CreateIAMAccessBinding creates an immutable Namespace IAM AccessBinding.
+func (client *Client) CreateIAMAccessBinding(namespaceID string, body jsontext.Value) (any, error) {
+	return client.send(http.MethodPost, []string{"namespaces", namespaceID, "iam", "access-bindings"}, body)
+}
+
+// GetIAMAccessBinding fetches a Namespace IAM AccessBinding.
+func (client *Client) GetIAMAccessBinding(namespaceID, bindingID string) (any, error) {
+	return client.get("namespaces", namespaceID, "iam", "access-bindings", bindingID)
+}
+
+// DeleteIAMAccessBinding deletes one exact Namespace IAM AccessBinding.
+func (client *Client) DeleteIAMAccessBinding(namespaceID, bindingID string) error {
+	return client.sendEmpty(
+		http.MethodDelete,
+		[]string{"namespaces", namespaceID, "iam", "access-bindings", bindingID},
+	)
+}
+
 // CreateConfiguration creates a Configuration in a Namespace.
 func (client *Client) CreateConfiguration(namespaceID string, body jsontext.Value) (any, error) {
 	return client.send(
@@ -142,6 +185,26 @@ func (client *Client) DeleteConfiguration(namespaceID, configurationID string) e
 		http.MethodDelete,
 		[]string{"namespaces", namespaceID, "configurations", configurationID},
 	)
+}
+
+// CreateSecret creates a Secret in a Namespace and returns metadata only.
+func (client *Client) CreateSecret(namespaceID string, body jsontext.Value) (any, error) {
+	return client.send(http.MethodPost, []string{"namespaces", namespaceID, "secrets"}, body)
+}
+
+// GetSecret fetches Secret metadata without material.
+func (client *Client) GetSecret(namespaceID, secretID string) (any, error) {
+	return client.get("namespaces", namespaceID, "secrets", secretID)
+}
+
+// UpdateSecret replaces Secret material and returns stable metadata.
+func (client *Client) UpdateSecret(namespaceID, secretID string, body jsontext.Value) (any, error) {
+	return client.send(http.MethodPatch, []string{"namespaces", namespaceID, "secrets", secretID}, body)
+}
+
+// DeleteSecret deletes an unbound Secret.
+func (client *Client) DeleteSecret(namespaceID, secretID string) error {
+	return client.sendEmpty(http.MethodDelete, []string{"namespaces", namespaceID, "secrets", secretID})
 }
 
 // CreateAgent creates an Agent in a Namespace.
@@ -178,6 +241,15 @@ func (client *Client) StopAgent(namespaceID, agentID string) (any, error) {
 	return client.send(
 		http.MethodPost,
 		[]string{"namespaces", namespaceID, "agents", agentID, "stop"},
+		nil,
+	)
+}
+
+// DeleteAgent begins asynchronous Agent deletion.
+func (client *Client) DeleteAgent(namespaceID, agentID string) (any, error) {
+	return client.send(
+		http.MethodDelete,
+		[]string{"namespaces", namespaceID, "agents", agentID},
 		nil,
 	)
 }

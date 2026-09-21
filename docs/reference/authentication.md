@@ -10,8 +10,8 @@ to an explicitly provisioned Principal or ServicePrincipal and owns
 
 This page defines the currently supported authentication behavior. For a
 working sign-in procedure, see
-[human administrator sign-in](../guides/deploy/service-keys.md#sign-in-as-a-human-administrator).
-For non-Agent automation, see the [service-key procedure](../guides/deploy/service-keys.md#service-api-keys-for-automation).
+[human administrator sign-in](authentication/service-api-keys.md#sign-in-as-a-human-administrator).
+For non-Agent automation, see the [service-key procedure](authentication/service-api-keys.md).
 The [platform console](console.md) provides email/password login at `/console/`
 and uses these same session endpoints. Public signup, OIDC, and bearer
 credentials are not supported controller API authentication paths.
@@ -53,8 +53,8 @@ response. OCC creates no Kubernetes Secret or PVC for delivery.
 In Helm, `bootstrap.password.claimName` selects the existing protected PVC.
 Only the initialization Job mounts it; `bootstrap.password.fileName` and
 `bootstrap.serviceKey.fileName` are written under `bootstrap.password.mountPath`.
-See [initial-key retrieval](../guides/deploy/service-keys.md#retrieve-the-bootstrap-service-key)
-and [bootstrap recovery](../guides/deploy/service-keys.md#recover-an-incomplete-bootstrap).
+See [initial-key retrieval](authentication/service-api-keys.md#retrieve-the-bootstrap-service-key)
+and [bootstrap recovery](authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
 
 The shared `scripts/bootstrap-installation.mjs` initializer runs after migration
 and before either API or worker startup in Compose and Helm. Development
@@ -82,7 +82,7 @@ The Helm initialization Job uses `backoffLimit: 0` and does not retry a failed
 attempt. Better Auth persistence and the Installation/IAM commit are separate;
 an error does not establish whether the transaction committed. Operators must
 resolve that outcome before manual repair, or explicitly reset an identified
-disposable Installation. See [incomplete bootstrap recovery](../guides/deploy/service-keys.md#recover-an-incomplete-bootstrap).
+disposable Installation. See [incomplete bootstrap recovery](authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
 File existence alone is not proof of successful initialization.
 
 ## Browser request origin
@@ -124,6 +124,36 @@ only `authenticated` and the account's `id`, `email`, and `name`.
 Protected requests resolve the current stored session with cookie caching
 disabled. A missing, expired, revoked, or forged session is rejected. Supplying
 an `Authorization` header is rejected even if a session cookie is also present.
+
+## Native admin shared sessions
+
+Agent native admin UI access starts from an ordinary controller browser session.
+When the trusted-operator pilot is enabled, the server parses
+`nativeAdmin.sharedCookieDomain` and configures the Better Auth session cookie
+for that explicit shared OCE parent domain so the console host and derived Agent
+hosts can use the same human session. Service API keys do not create browser
+sessions and cannot open native admin UI access. When native admin is disabled,
+leftover shared-cookie-domain configuration is ignored and Better Auth keeps the
+legacy host-only `openclaw_occ` cookie prefix and scope.
+
+The shared cookie parent domain is configured explicitly and validated against
+the console origin and Agent host suffix on DNS-label boundaries. Public
+suffixes, malformed domains, and hosts outside the configured parent are
+rejected; OCC does not infer a broader parent domain from either host. A
+domain-scoped cookie cannot use a host-only `__Host-` prefix. The shared-domain
+session uses the Better Auth cookie prefix `openclaw_occ_shared`; on HTTPS its
+cookie name is `__Secure-openclaw_occ_shared.session_token`. During migration,
+successful sign-in/sign-out responses clear prior host-only `openclaw_occ` and
+`openclaw_occ_shared` session-cookie names without a `Domain` attribute so
+browsers do not choose between duplicate host-only and domain cookies.
+
+Native-host requests authenticate the shared OCE session, resolve the exact
+Agent represented by the requested host, authorize exact Agent `administer`, and
+validate the current active revision and supported native configuration before
+proxying. OCC strips browser cookies, `Authorization`, API keys, forwarded
+identity, and native scope headers before forwarding upstream, so the native
+gateway never receives the OCE session cookie. Native chat or other Agent-host
+activity does not renew the console session.
 
 ## Account provisioning
 
@@ -181,7 +211,8 @@ and account-provisioning authorization.
 - [Local authentication tests](../testing/local.md#authentication-and-authorization-coverage)
 - [Service-key persistence tests](../testing/postgresql.md#service-key-persistence)
 - [Service API key flow](../flows/service-api-keys.md)
-- [Deployment procedure](../guides/deploy/service-keys.md#service-api-keys-for-automation)
+- [Issue or rotate a service API key](authentication/service-api-keys.md#issue-a-service-key)
+- [IAM overview](../guides/topics/iam.md)
 - [Authorization](authorization.md)
 - [Generated API reference](api.md)
 - [Controller settings](settings.md)
@@ -191,6 +222,8 @@ and account-provisioning authorization.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-20 08:53: Replaced native-admin launch-code sessions with the shared OCE session cookie boundary and cookie-domain validation. (cody/01a0b7fd-13fa-7dc2-8653-5c5814b59305 - 5e5f12f37842ae7239d73432e00609547627ded8)
 
 - 2026-08-31 22:29: Define single-attempt bootstrap failure handling with retained artifacts, no automatic recovery, and manual operator repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)
 

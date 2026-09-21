@@ -14,6 +14,17 @@ DNS, approved gateway clients, and required communication between an Agent's
 gateway and dedicated Harness. Cross-tenant traffic, traffic between different
 Agents, Kubernetes API access, and cloud metadata access remain denied.
 
+For Compute-owned startup failure evidence and plugin reporting, set
+`network.pluginStatusProxySourceCidrs` to the precise source addresses used by the
+Kubernetes API server when proxying requests to workload Pods. The policy allows
+those sources only to the private status port, TCP/18791; worker RBAC separately
+requires `get` on `pods/proxy`. Prefer individual `/32` or `/128` addresses. On an
+overlay network, the observed source may be the control-plane node's overlay
+address rather than its node IP. Verify it across nodes with enforced policies.
+An omitted list adds no API-proxy ingress rule and leaves status unavailable
+where the cluster blocks that traffic. This setting does not expose the native
+gateway or grant workloads Kubernetes API access.
+
 When private Agent routing is enabled, Compute derives the only allowed peer
 from `gatewayRouting`: the Envoy namespace and the Gateway's exact owning name
 and namespace labels. Omit `network.gatewayClients`; startup rejects explicit
@@ -68,8 +79,16 @@ native Configuration or an AgentRevision.
 `wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>` without Kubernetes
 API access. During preparation and activation, Compute reconciles an owned
 `HTTPRoute` in the tenant namespace, attached to the configured Gateway's
-`https` listener. It matches the exact Agent path and hostname, rewrites the
-path to `/`, and targets the existing same-namespace gateway Service.
+`https` listener. Both rules match the configured private hostname and target
+the existing same-namespace gateway Service:
+
+- The exact Agent path rewrites to `/`, preserving workspace-file WSS access.
+- A prefix rule below that Agent path rewrites the prefix to `/` and retains
+  the suffix for native UI assets, deep links, and WebSocket paths.
+
+OCC bounds proxy requests to the selected Agent base. Public native UI browser
+traffic enters through OCC; Envoy and gateway Services remain private. See
+[Agent native admin UI](../../agent-native-admin.md#agent-host-identity).
 Namespaces receive the Gateway membership label used by `allowedRoutes`.
 
 The Service and route remain stable across revision cutover. Retiring an old

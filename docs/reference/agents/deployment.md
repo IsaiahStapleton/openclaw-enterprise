@@ -14,8 +14,10 @@ provider credentials, or another Agent's identity. It has the same
 role-granted capabilities as a human Principal: an appropriately scoped Role
 and AccessBinding can grant any platform action, including administrative
 actions and access to another Agent in the same Namespace. Its Namespace scope,
-exact resource grants, and matching Restrictions still apply. The public Agent
-response intentionally does not expose its internal `servicePrincipalId`.
+exact resource grants, and matching Restrictions still apply. Authorized Agent
+responses expose this internal `servicePrincipalId` as a read-only identifier
+so administrators can bind exact IAM policy to the Agent-owned principal.
+Create and update requests cannot set or replace it.
 
 Workload identity is execution credential evidence, not a third platform
 principal. For a `dedicated` Agent, the

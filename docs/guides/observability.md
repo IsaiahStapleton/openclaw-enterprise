@@ -1,24 +1,28 @@
 # Configure platform observability
 
-Configure and verify operational log export for OpenClaw Control Plane (OCC),
-managed gateways, and Codex workloads. Run commands from the repository root.
+Send operational logs from OpenClaw Control Plane (OCC), managed gateways, and
+Codex workloads to your log backend, then verify that records arrive. The
+OpenTelemetry Collector also exposes metrics about its own delivery pipeline;
+it does not collect application metrics, traces, or audit records. Run commands
+from the repository root.
 
-| Signal                                     | Available path                                                                                      |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| Operational logs                           | Local container output; optional OpenTelemetry Collector export over OTLP/HTTP to your log backend. |
-| Collector metrics                          | Prometheus endpoint on port `8888` for the collection pipeline itself.                              |
-| Audit records                              | Separate PostgreSQL-backed audit persistence; this Collector does not export audit records.         |
-| Application metrics and distributed traces | This configuration does not install an application metrics or trace pipeline.                       |
+| Signal              | Available path                                                                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Operational logs    | Local container output; optional OpenTelemetry Collector export over OTLP/HTTP to your log backend.                                                    |
+| Collector metrics   | Prometheus endpoint on port `8888` for the collection pipeline itself.                                                                                 |
+| Audit records       | Stored separately in PostgreSQL; the Collector does not export them. See [Audit Log](topics/audit-log.md).                                             |
+| Application metrics | Optional private OCC Prometheus endpoints; see [production scraping](observability/metrics.md) and the [development dashboard](../testing/metrics.md). |
+| Distributed traces  | No application tracing pipeline is installed.                                                                                                          |
 
-Export includes only fixed operational events and reviewed scalar fields; it
-excludes arbitrary messages, prompts, responses, and Codex protocol stdout, even
+The Collector exports predefined operational events and approved fields. It
+excludes arbitrary messages, prompts, responses, and Codex protocol output, even
 at `debug`. See the
 [security boundary](../reference/security.md#operational-log-collection-boundary).
 
-For a ComputeDriver that declares
+If your Compute Driver declares
 [deployment-managed runtime logging](../reference/drivers/compute.md#runtime-logging-ownership),
-use that runtime platform's collection and verification procedures instead of
-rewiring it to this Collector. OCC logging and audit remain unchanged.
+follow its runtime platform's collection and verification procedures. Continue
+using this guide for OCC logs; the Driver does not change how OCC records audits.
 
 ## Requirements
 
@@ -43,7 +47,7 @@ logging:
   level: info
 ```
 
-Use `debug`, `info`, `warn`, or `error`; omission defaults to `info`. For the
+Use `debug`, `info`, `warn`, or `error`. The default is `info`. For the
 Docker logging override, edit [`deploy/logging/occ.yaml`](../../deploy/logging/occ.yaml).
 For production, edit the protected Installation YAML and update its mounted
 startup Secret through your deployment process. This is separate from Helm's
@@ -54,17 +58,16 @@ override, migration and bootstrap read the YAML on their next execution. The
 current Helm initialization Job does not mount that YAML or set `OCC_CONFIG_PATH`,
 so its migration and bootstrap processes use `info`.
 
-Existing AgentRevisions retain their admitted level. Deploy an Agent again to
-apply the new level to its gateway or Codex runtime.
-The [settings reference](../reference/configuration.md#installation-startup-configuration)
-owns the accepted startup configuration.
+Existing AgentRevisions keep their original level. Deploy an Agent again to
+apply the new level to its gateway or Codex runtime. See the [startup settings](../reference/configuration.md#installation-startup-configuration)
+for the accepted configuration.
 
 ### 2. Configure the exporter
 
 Use [`deploy/logging/exporter.yaml`](../../deploy/logging/exporter.yaml) as the
 native Collector exporter configuration. It reads `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`
-and configures a finite queue and retry window. Use HTTPS with verified server
-identity for real backends; plain HTTP is only for a local test receiver.
+and limits the queue size and retry window. Use HTTPS with verified server
+identity for real backends; use plain HTTP only for a local test receiver.
 
 For authentication or a custom CA, prepare a protected `exporter.yaml` with native
 Collector header/TLS settings. Keep credentials in Collector-only Secrets or
@@ -96,13 +99,14 @@ a custom exporter file, add a private Compose override mounting it at
 The override routes OCC and newly created managed runtime containers through
 Docker's nonblocking `fluentd` driver. It publishes Fluent Forward on loopback
 port `24224` and Collector metrics on loopback port `8888`. Redeploy existing
-Agents to recreate their containers with the logging route. Verify Engine
-reachability when Docker runs in a VM; container DNS alone does not prove it.
+Agents to recreate their containers with logging enabled. When Docker runs in a
+VM, verify that the Engine can reach the receiver; resolving the container's
+DNS name alone does not prove this.
 
 If you change the Fluent Forward port, set both `OTEL_COLLECTOR_PORT` and
 `OCC_DOCKER_LOGGING_ADDRESS` to matching values. `OTEL_COLLECTOR_METRICS_PORT`
-changes only the host metrics port. The [Docker settings table](../reference/settings/operations.md#local-compose-and-postgresql-configuration)
-owns defaults and environment precedence.
+changes only the host metrics port. See [Docker settings](../reference/settings/operations.md#local-compose-and-postgresql-configuration)
+for defaults and environment precedence.
 
 #### Kubernetes and Helm
 
@@ -146,8 +150,8 @@ yq -i '.logging.collector.enabled = true |
 
 Keep a digest-pinned approved Collector image. For custom Secret names, set
 `logging.collector.configSecretName` and `logging.collector.envSecretName`.
-Do not reuse application Secrets. The [Helm settings reference](../reference/settings/production.md#production-operational-logging-collection)
-owns resource limits and state sizing.
+Do not reuse application Secrets. See [Helm settings](../reference/settings/production.md#production-operational-logging-collection)
+for resource and storage limits.
 
 Before first install, finish [bootstrap PVC preparation](deploy/production-installation.md#prepare-the-fresh-bootstrap-output-pvc).
 For existing installations, apply reviewed values through the same Helm upgrade. The Collector reads
@@ -176,8 +180,9 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
    app-server. Check the corresponding `openclaw-gateway` or `codex-app-server`
    records and `openclaw.agent.id` / `openclaw.revision.id` resource attributes.
 
-Collector health and local stdout do not prove remote receipt. Only admitted
-runtime events appear; API collection does not prove model turns or other integrations.
+A healthy Collector and local container output do not prove that the backend
+received the records. Only approved runtime events appear. Receiving API logs
+does not verify model turns or other integrations.
 
 ### Check Collector metrics
 
@@ -204,8 +209,8 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
 ```
 
 In another terminal, run `curl --fail http://127.0.0.1:8888/metrics`. Inspect
-receiver acceptance/refusal, exporter success/failure, queue utilization, and
-process memory. `otelcol_exporter_queue_size` should not grow indefinitely;
+whether the receiver accepts or refuses records, whether exports succeed,
+queue usage, and process memory. `otelcol_exporter_queue_size` should not grow indefinitely;
 compare it with `otelcol_exporter_queue_capacity`. An increasing
 `otelcol_processor_filter_logs_filtered` can reflect expected privacy filtering.
 
@@ -233,9 +238,9 @@ to assign alert recipients and response procedures alongside these collection ch
   `occ_otelcol_data` volume and bounded runtime log caches; its push-based
   Fluent Forward receiver has no file offsets. Kubernetes keeps file offsets
   and exporter queues in `/var/lib/otelcol` on bounded `emptyDir` storage,
-  which survives container restart but is lost
-  on Pod or node replacement. An outage can lose operational logs without
-  blocking OCC work or replacing durable audit persistence.
+  which survives container restart but is lost on Pod or node replacement. An
+  outage can lose operational logs without blocking OCC work. Audit records are
+  stored separately in PostgreSQL.
 
 ## Troubleshooting
 
@@ -255,4 +260,3 @@ to assign alert recipients and response procedures alongside these collection ch
 - [Settings and supported inputs](../reference/settings.md).
 - [Common operational logging flow](../flows/common-logging.md).
 - [Operational logging security boundary](../reference/security.md#operational-log-collection-boundary).
-- [Integration test setup](../testing/README.md).

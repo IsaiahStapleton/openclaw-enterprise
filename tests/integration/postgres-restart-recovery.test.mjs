@@ -238,6 +238,177 @@ test(
 );
 
 test(
+  "terminal revision work stores safe outcome data and plugin warnings",
+  requiresPostgres,
+  async (context) => {
+    const { pool, queue } = await dependencies(context);
+    const { namespaceId, agents } = await createResources(pool);
+    const revisionId = await createQueueRevision(pool, namespaceId, agents[0]);
+    const idempotencyKey = `agent_revision:${revisionId}:reconcile`;
+    await queue.enqueue(revisionWork(namespaceId, idempotencyKey, agents[0], revisionId));
+
+    const claim = await claimExpected(queue, idempotencyKey);
+    // Result payloads remain allowlisted even though success and failure now
+    // share one column. Reject malformed warnings before completing the claim.
+    for (const resultData of [
+      { warnings: [{ code: "UNKNOWN_WARNING", pluginId: "occ-plugin:diffs" }] },
+      { warnings: [{ code: "PLUGIN_INSTALL_FAILED", pluginId: "invalid plugin id" }] },
+      {
+        warnings: [{ code: "PLUGIN_INSTALL_FAILED", pluginId: "occ-plugin:diffs", raw: "unsafe" }],
+      },
+      {
+        warnings: [
+          { code: "PLUGIN_INSTALL_FAILED", pluginId: "occ-plugin:diffs" },
+          { code: "PLUGIN_AUTH_REQUIRED", pluginId: "occ-plugin:diffs" },
+        ],
+      },
+      { warnings: [], raw: "unsafe" },
+      { timeoutMs: 1 },
+    ]) {
+      await assert.rejects(queue.complete(claim, { code: "REVISION_ACTIVATED", resultData }), {
+        name: "ScopeViolationError",
+      });
+    }
+    const warnings = [
+      {
+        code: "PLUGIN_AUTH_REQUIRED",
+        pluginId: "codex-plugin:calendar@openai-curated-remote",
+      },
+      { code: "PLUGIN_INSTALL_FAILED", pluginId: "occ-plugin:diffs" },
+    ];
+    await queue.complete(claim, {
+      code: "REVISION_ACTIVATED",
+      resultData: { warnings },
+    });
+
+    // Reload through a fresh queue: mixed plugin outcomes must survive completion
+    // without replacing the overall successful deployment reason.
+    const { PostgresWorkQueue } =
+      await import("../../packages/occ/src/state/postgres-work-queue.ts");
+    const terminal = await new PostgresWorkQueue(pool).findWork(idempotencyKey);
+    assert.equal(terminal.state, "succeeded");
+    assert.equal(terminal.reasonCode, "REVISION_ACTIVATED");
+    assert.deepEqual(terminal.resultData, { warnings });
+    // PostgreSQL independently rejects unsafe persisted shapes, even when a
+    // writer bypasses the queue's result validation.
+    for (const resultData of [
+      { warnings: {} },
+      { warnings: [null] },
+      { warnings: [{ code: "UNKNOWN_WARNING", pluginId: "occ-plugin:diffs" }] },
+      { warnings: [{ code: "PLUGIN_INSTALL_FAILED", pluginId: "invalid plugin id" }] },
+      {
+        warnings: [{ code: "PLUGIN_INSTALL_FAILED", pluginId: "occ-plugin:diffs", raw: "unsafe" }],
+      },
+      { warnings: [], raw: "unsafe" },
+    ]) {
+      await assert.rejects(
+        pool.query(
+          `UPDATE occ.controller_work SET result_data = $2::jsonb WHERE idempotency_key = $1`,
+          [idempotencyKey, JSON.stringify(resultData)],
+        ),
+        { code: "23514" },
+      );
+    }
+  },
+);
+
+test(
+  "terminal metadata is allowlisted and retry exhaustion preserves a safe reason",
+  requiresPostgres,
+  async (context) => {
+    const { pool, queue } = await dependencies(context, { maxAttempts: 1 });
+    const { namespaceId, agents } = await createResources(pool, 2);
+    const invalidRevisionId = await createQueueRevision(pool, namespaceId, agents[0]);
+    const exhaustedRevisionId = await createQueueRevision(pool, namespaceId, agents[1]);
+    const invalidKey = `agent_revision:${invalidRevisionId}:reconcile`;
+    const exhaustedKey = `agent_revision:${exhaustedRevisionId}:reconcile`;
+    await queue.enqueue(revisionWork(namespaceId, invalidKey, agents[0], invalidRevisionId));
+    await queue.enqueue(revisionWork(namespaceId, exhaustedKey, agents[1], exhaustedRevisionId));
+
+    const invalidClaim = await claimExpected(queue, invalidKey);
+    await assert.rejects(
+      queue.fail(invalidClaim, { code: "DEPENDENCY_UNAVAILABLE", data: { raw: "unsafe" } }),
+      { name: "ScopeViolationError" },
+    );
+    await assert.rejects(
+      queue.fail(invalidClaim, {
+        code: "PLUGIN_INSTALL_FAILED",
+        data: { pluginId: "codex-plugin:calendar@openai-curated-remote", raw: "unsafe" },
+      }),
+      { name: "ScopeViolationError" },
+    );
+    for (const data of [
+      { timeoutMs: 900_000, runtimeFailure: null },
+      { timeoutMs: 900_000, runtimeFailure: { component: "gateway" } },
+      {
+        timeoutMs: 900_000,
+        runtimeFailure: {
+          component: "gateway",
+          check: "readyz",
+          checkedAt: "2026-02-30T20:30:00.000Z",
+          code: "STARTUP_FAILED",
+        },
+      },
+      {
+        timeoutMs: 900_000,
+        runtimeFailure: {
+          component: "gateway",
+          check: "readyz",
+          checkedAt: "2026-09-19T20:30:00.000Z",
+          code: "STARTUP_FAILED",
+          raw: "unsafe",
+        },
+      },
+    ]) {
+      await assert.rejects(
+        queue.fail(invalidClaim, { code: "CONVERGENCE_DEADLINE_EXCEEDED", data }),
+        { name: "ScopeViolationError" },
+      );
+    }
+    const stillClaimed = await queue.findWork(invalidKey);
+    assert.equal(stillClaimed.state, "claimed");
+    const runtimeFailure = {
+      component: "gateway",
+      check: "readyz",
+      checkedAt: "2026-09-19T20:30:00.000Z",
+      code: "STARTUP_FAILED",
+    };
+    await queue.fail(invalidClaim, {
+      code: "CONVERGENCE_DEADLINE_EXCEEDED",
+      data: { timeoutMs: 900_000, runtimeFailure },
+    });
+    const deadline = await queue.findWork(invalidKey);
+    assert.equal(deadline.state, "failed_permanent");
+    assert.deepEqual(deadline.resultData, { timeoutMs: 900_000, runtimeFailure });
+    for (const resultData of [
+      { timeoutMs: 900_000, raw: "unsafe" },
+      { timeoutMs: 0, runtimeFailure },
+      {
+        timeoutMs: 900_000,
+        runtimeFailure: { ...runtimeFailure, checkedAt: "2026-02-30T20:30:00.000Z" },
+      },
+      { timeoutMs: 900_000, runtimeFailure: { ...runtimeFailure, raw: "unsafe" } },
+    ]) {
+      await assert.rejects(
+        pool.query(
+          `UPDATE occ.controller_work SET result_data = $2::jsonb WHERE idempotency_key = $1`,
+          [invalidKey, JSON.stringify(resultData)],
+        ),
+        { code: "23514" },
+      );
+    }
+
+    const exhaustedClaim = await claimExpected(queue, exhaustedKey);
+    await queue.retry(exhaustedClaim, {
+      code: "DEPENDENCY_UNAVAILABLE",
+    });
+    const exhausted = await queue.findWork(exhaustedKey);
+    assert.equal(exhausted.state, "failed_permanent");
+    assert.equal(exhausted.reasonCode, "DEPENDENCY_UNAVAILABLE");
+  },
+);
+
+test(
   "Namespace convergence and admitted revision work share one durable queue with exact resource ownership",
   requiresPostgres,
   async (context) => {

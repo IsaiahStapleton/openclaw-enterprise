@@ -21,8 +21,8 @@ const commonValues = {
   "bootstrap.password.claimName": "occ-bootstrap-admin-password",
   "api.clients[0].namespace": "operator-tools",
   "api.clients[0].podLabels.app": "operator",
-  "database.cidr": "10.45.0.12/32",
-  "cluster.cidr": "10.43.0.1/32",
+  "database.cidrs[0]": "10.45.0.12/32",
+  "cluster.cidrs[0]": "10.43.0.1/32",
 };
 const loggingValues = {
   "logging.collector.enabled": "true",
@@ -253,6 +253,13 @@ test(
     const egress = rendered.find(
       ({ kind, metadata }) =>
         kind === "NetworkPolicy" && metadata.name === "openclaw-enterprise-collector-egress",
+    );
+    assert.deepEqual(
+      egress.spec.egress.find((rule) => rule.to?.[0]?.ipBlock?.cidr === "10.43.0.1/32"),
+      {
+        to: [{ ipBlock: { cidr: "10.43.0.1/32" } }],
+        ports: [{ protocol: "TCP", port: 443 }],
+      },
     );
     assert.deepEqual(
       egress.spec.egress.find((rule) => rule.to?.[0]?.ipBlock?.cidr === "203.0.113.10/32"),

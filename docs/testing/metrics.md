@@ -1,0 +1,154 @@
+# Test OCC metrics with Prometheus and Grafana
+
+Start from the [Compose quickstart](../guides/quickstart.md) with a working
+development API and worker. No model credential is needed to collect metrics;
+an active Agent requires the normal supported deployment prerequisites.
+
+## Start the development dashboard
+
+Run from the repository root with Docker Compose. Keep the same Compose project
+name and `.env` as your existing development stack. This overlay recreates the
+API and worker to enable their metrics listeners; allow existing work to finish
+before restarting. Choose a local Grafana password without putting it in shell
+history:
+
+```bash
+read -rs -p 'Development Grafana password: ' OCC_METRICS_GRAFANA_PASSWORD
+export OCC_METRICS_GRAFANA_PASSWORD
+docker compose -f compose.yaml -f compose.metrics.yaml up -d --build
+```
+
+Open Grafana at `http://127.0.0.1:3001`, sign in as `admin` with that password,
+and open **OCC → OCC development**. The datasource and dashboard are provisioned
+from `deploy/metrics/development/`. Prometheus is at `http://127.0.0.1:9090`.
+Override host ports with `OCC_GRAFANA_PORT` and `OCC_PROMETHEUS_PORT` if occupied.
+
+Each OCC metrics listener stays on container loopback. Two Prometheus agent-mode
+collectors share the respective API/worker network namespaces, scrape every
+five seconds, and remote-write to the local Prometheus server. Grafana queries
+that server. This development-only arrangement requires no change to production
+scraping. The example is a single development deployment, not a multi-replica
+Compose topology. Recreate its collectors when replacing their owner containers.
+
+The central server accepts unauthenticated remote writes on the development
+network; its UI and Grafana are published only on host loopback. Use this on a
+trusted development machine, never as production packaging. Collector/WAL and
+dashboard state is disposable; server retention is 24 hours / 256 MB. The overlay
+uses pinned image digests and introduces no model credentials into monitoring.
+For Podman, include `compose.podman.yaml` with the socket reported by
+`podman info`; the [quickstart helper](../guides/quickstart.md) prepares that
+configuration. Namespace sharing and remote write were also verified on Podman.
+The Grafana 13.2.2 pin selects a multi-platform image index with native amd64
+and arm64 variants, so Docker and Podman select the host architecture without
+a local image override. Back up `/var/lib/grafana` before
+recreating an instance whose local dashboard or account changes you need to keep.
+
+## Generate traffic and check results
+
+Wait about 15 seconds, then evaluate `up{job=~"occ-api|occ-worker"}` in
+Prometheus: expect two series equal to 1. The receiving server's Targets page
+does not list remote-write targets; query `up` instead.
+
+Use the console to create an Agent draft and refresh its list. The lifecycle
+panel should gain one draft. Deploy it through the regular Agent workflow:
+expect `deploying`, then `running` after finalization. Redeploying counts that
+Agent once, with `deploying` replacing `running` until completion. Stop it:
+expect `stopping`, then `stopped`, with no return to `draft`. These are persisted
+lifecycle states, not continuous runtime-health measurements.
+
+The Agent operation p95 panel includes queue wait and retry delays for completed
+deploy/stop requests. It needs completed operations in its five-minute window;
+failed or unfinished operations do not produce duration samples. Compare it with
+reconciliation-pass p95 and oldest pending work age to distinguish slow passes
+from accumulated waiting. Oldest age is zero when the queue is empty and includes
+delayed retries and scheduled maintenance. Retry/failure rates and API 5xx
+percentage use the existing counters.
+
+For an easy error-rate check, request an unknown API path several times:
+
+```bash
+for attempt in 1 2 3 4 5; do
+  curl --silent --output /dev/null http://127.0.0.1:3000/metrics-demo-missing
+done
+```
+
+Expect 4xx activity. Allow at least two scrapes for rate panels; new counters
+can initially show no data. Request latency, reconciliation passes, queue depth,
+memory, CPU, and event-loop panels become useful as traffic/work occurs. A quiet
+worker may have no attempt series yet.
+
+Scrape directly without publishing a new host port:
+
+```bash
+docker compose -f compose.yaml -f compose.metrics.yaml exec -T worker node -e \
+  "fetch('http://127.0.0.1:9464/metrics').then(async r=>{console.log(r.status);console.log(await r.text())})"
+```
+
+Temporarily stopping the **metrics-worker collector** tests transport loss
+without interrupting reconciliation. Start it again and wait for fresh samples.
+Because remote write stops too, the previous `up` sample can remain visible
+until Prometheus's lookback expires; inspect sample age as well as `up`. A
+running collector observing a worker scrape failure instead reports `up=0`.
+Do not interpret an absent inventory panel as zero Agents.
+
+## Troubleshoot and stop
+
+Inspect `docker compose -f compose.yaml -f compose.metrics.yaml logs --tail=100
+metrics-api metrics-worker prometheus grafana`. Check failed remote writes,
+Grafana datasource URL, wrong project/network, and inaccessible mounted files.
+Do not relabel or change ownership of the repository to fix a container mount;
+use an appropriate development checkout/container setup.
+
+Remove only monitoring containers (their disposable data may be lost):
+
+```bash
+docker compose -f compose.yaml -f compose.metrics.yaml stop metrics-api metrics-worker grafana prometheus
+docker compose -f compose.yaml -f compose.metrics.yaml rm -f metrics-api metrics-worker grafana prometheus
+unset OCC_METRICS_GRAFANA_PASSWORD
+```
+
+To disable OCC listeners too, recreate API/worker using the original quickstart
+Compose files. Keep PostgreSQL volumes, `.env`, and Agent workloads. Do not use
+`down -v` to clean up monitoring.
+
+## Automated proof
+
+`tests/integration/occ-metrics.test.mjs` covers real Fastify/auth HTTP requests,
+separate registries/listeners, and PostgreSQL inventory/redeployment with the
+existing deterministic Compute fixture. Its database case also exercises queue age before claim, retry-inclusive
+completion timing, real lock contention, concurrent scrape failure, recovery,
+and closed-pool failure.
+It proves persistence and instrumentation, not live workload readiness.
+
+Run with an exclusively used disposable database from the
+[PostgreSQL setup](postgresql.md), migrated by the migrator role:
+
+```bash
+OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_test_local \
+  OCC_METRICS_TEST_MIGRATION_DATABASE_URL=postgresql://occ_migrator:occ-migrator-local@127.0.0.1:55432/openclaw_test_local \
+  node --test tests/integration/occ-metrics.test.mjs
+```
+
+The optional `OCC_METRICS_TEST_MIGRATION_DATABASE_URL` must target the same
+disposable database and supplies table-owner permission solely for the lock
+scenario. Omitting it skips that subtest; application reads still use the
+limited application role.
+
+The existing `docker-compute-real.test.mjs` journey now scrapes both processes
+after actual Agent deployment; the Podman path also stops the Agent and
+checks its lifecycle and completion metric. Follow its [runtime prerequisites](docker.md).
+Helm rendering proves selectors/ports but does not prove live NetworkPolicy
+enforcement. Record any unrun runtime or cluster proof explicitly.
+
+Run the real Prometheus remote-write and Grafana provisioning test on Linux:
+
+```bash
+OCC_TEST_METRICS_MONITORING=1 OCC_METRICS_TEST_ENGINE=podman \
+  node --test tests/integration/occ-metrics-monitoring.test.mjs
+```
+
+Choose `docker` instead for Docker Engine. This test creates and removes only
+randomly named monitoring containers. It uses host networking with loopback-only
+listeners to reach a real test API and validates every dashboard query against
+Prometheus. It verifies collection and provisioning, not Compose's namespace
+sharing or live Agent runtime behavior.

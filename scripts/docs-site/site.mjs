@@ -1,10 +1,47 @@
 import "./compute-matrix-browser.mjs";
 
 const menu = document.querySelector("#menu");
+const sidebar = document.querySelector("#sidebar");
+const mobileNavigation = window.matchMedia("(max-width: 760px)");
+document.documentElement.dataset.docsNavigation = "interactive";
 menu.addEventListener("click", () => {
-  const open = document.querySelector("#sidebar").classList.toggle("open");
+  const open = sidebar.classList.toggle("open");
   menu.setAttribute("aria-expanded", String(open));
 });
+sidebar.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && mobileNavigation.matches && sidebar.classList.contains("open")) {
+    sidebar.classList.remove("open");
+    menu.setAttribute("aria-expanded", "false");
+    menu.focus();
+  }
+});
+const activeTab = document.querySelector(".tabs [aria-current]");
+function revealCurrentTab() {
+  const tabs = activeTab.parentElement;
+  const bounds = tabs.getBoundingClientRect();
+  const current = (tabs.querySelector(":focus") ?? activeTab).getBoundingClientRect();
+  const styles = getComputedStyle(tabs);
+  const start = parseFloat(styles.paddingInlineStart);
+  const end = parseFloat(styles.paddingInlineEnd);
+  if (current.left < bounds.left + start) {
+    tabs.scrollLeft += current.left - bounds.left - start;
+  } else if (current.right > bounds.right - end) {
+    tabs.scrollLeft += current.right - bounds.right + end;
+  }
+}
+let currentTabFrame;
+function scheduleCurrentTab() {
+  if (currentTabFrame !== undefined) {
+    return;
+  }
+  currentTabFrame = requestAnimationFrame(() => {
+    currentTabFrame = undefined;
+    revealCurrentTab();
+  });
+}
+revealCurrentTab();
+document.fonts.ready.then(scheduleCurrentTab);
+window.addEventListener("resize", scheduleCurrentTab);
 const themeButton = document.querySelector("#theme");
 let theme = localStorage.getItem("enterprise-docs-theme") ?? "dark";
 document.documentElement.dataset.theme = theme;

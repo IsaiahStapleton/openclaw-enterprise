@@ -192,8 +192,8 @@ schedule rotation.
   cross-instance revocation, and deletion during concurrent verification.
   Use the existing [test environment instructions](../testing/postgresql.md#postgresql-test-environment).
 - [IAM conformance](../../tests/conformance/iam.test.mjs) verifies identity lookup.
-  Run `pnpm openapi:check` to check that the generated API contract and Markdown
-  reference remain current with the controller routes.
+  Run `pnpm openapi:check` to check that the OpenAPI contract, HTTP API reference,
+  and API cheat sheet remain current with the controller routes.
 - Investigate `401` as credential rejection and `403` as identity, scope, or
   policy denial. Check `openclaw.auth.service-keys.create` and
   `openclaw.auth.service-keys.revoke` audit actions using the request and

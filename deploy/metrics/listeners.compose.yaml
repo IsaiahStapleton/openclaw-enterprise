@@ -1,0 +1,11 @@
+services:
+  controller:
+    environment:
+      OCC_METRICS_ENABLED: "true"
+      OCC_METRICS_HOST: "127.0.0.1"
+      OCC_METRICS_PORT: "9464"
+  worker:
+    environment:
+      OCC_METRICS_ENABLED: "true"
+      OCC_METRICS_HOST: "127.0.0.1"
+      OCC_METRICS_PORT: "9464"

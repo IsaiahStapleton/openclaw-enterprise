@@ -22,6 +22,10 @@ spec:
       automountServiceAccountToken: true
       securityContext:
         {{- include "openclaw.podSecurity" $ | nindent 8 }}
+      {{- with $.Values.controlPlane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
         - name: installation-startup
           secret:
@@ -29,6 +33,14 @@ spec:
             items:
               - key: {{ $.Values.installation.key }}
                 path: installation.yaml
+        {{- if $.Values.database.caSecretName }}
+        - name: database-ca
+          secret:
+            secretName: {{ $.Values.database.caSecretName | quote }}
+            items:
+              - key: {{ $.Values.database.caKey | quote }}
+                path: {{ $.Values.database.caKey | quote }}
+        {{- end }}
         {{- if eq $component "api" }}
         {{- if $.Values.gatewayRouting.enabled }}
         - name: gateway-api-key
@@ -78,6 +90,16 @@ spec:
           env:
             - name: NODE_ENV
               value: production
+            {{- if $.Values.metrics.enabled }}
+            - name: OCC_METRICS_ENABLED
+              value: "true"
+            - name: OCC_METRICS_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: OCC_METRICS_PORT
+              value: {{ $.Values.metrics.port | quote }}
+            {{- end }}
             - name: OCC_CONFIG_PATH
               value: /etc/openclaw/installation/installation.yaml
             {{- include "openclaw.secretEnv" (dict "name" "OCC_DATABASE_URL" "secretName" $.Values.database.secretName "key" $.Values.database.appUrlKey) | nindent 12 }}
@@ -99,6 +121,14 @@ spec:
             {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_SECRET" "secretName" $.Values.auth.secretName "key" $.Values.auth.secretKey) | nindent 12 }}
             - name: OCC_AUTH_BASE_URL
               value: {{ $.Values.auth.baseUrl | quote }}
+            - name: OCC_AGENT_NATIVE_ADMIN_ENABLED
+              value: {{ ternary "true" "false" $.Values.agentNativeAdmin.enabled | quote }}
+            {{- if $.Values.agentNativeAdmin.enabled }}
+            - name: OCC_AGENT_NATIVE_ADMIN_DOMAIN
+              value: {{ $.Values.agentNativeAdmin.domain | quote }}
+            - name: OCC_AUTH_COOKIE_DOMAIN
+              value: {{ $.Values.agentNativeAdmin.sharedCookieDomain | quote }}
+            {{- end }}
             {{- else }}
             - name: OCC_WORKER_READINESS_PATH
               value: /var/run/openclaw/ready
@@ -115,6 +145,11 @@ spec:
             - name: installation-startup
               mountPath: /etc/openclaw/installation
               readOnly: true
+            {{- if $.Values.database.caSecretName }}
+            - name: database-ca
+              mountPath: {{ $.Values.database.caMountPath | quote }}
+              readOnly: true
+            {{- end }}
             {{- if eq $component "api" }}
             {{- if $.Values.gatewayRouting.enabled }}
             - name: gateway-api-key
@@ -135,10 +170,18 @@ spec:
             - name: worker-readiness
               mountPath: /var/run/openclaw
             {{- end }}
-          {{- if eq $component "api" }}
+          {{- if or (eq $component "api") $.Values.metrics.enabled }}
           ports:
+            {{- if $.Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ $.Values.metrics.port }}
+            {{- end }}
+            {{- if eq $component "api" }}
             - name: http
               containerPort: {{ $.Values.api.port }}
+            {{- end }}
+          {{- end }}
+          {{- if eq $component "api" }}
           readinessProbe:
             httpGet:
               path: /readyz
