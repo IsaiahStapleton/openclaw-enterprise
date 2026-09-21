@@ -1,7 +1,15 @@
 # Use the repository credential service
 
-Build the service and admit a session to give an ordinary container Git and
-selected GitHub CLI access to one repository. The container receives a gateway
+Use the [private Kubernetes production installation](deploy.md#production)
+for OCE Agents. Keep the repository credential gateway reachable only by its
+approved clients, with enforced NetworkPolicies and HTTPS on port 443. A
+Kubernetes `.svc` hostname or ClusterIP Service alone does not establish
+isolation: inspect operator-added forwarding, Ingress, load balancers and other
+exposure, and verify effective network-policy enforcement.
+
+The standalone procedure below builds the service and admits a session to give
+an ordinary container Git and selected GitHub CLI access to one repository.
+Its operator must supply private networking and access controls. The container receives a gateway
 bearer; GitHub App keys and installation tokens stay in the service. Review the
 [profiles and lifecycle](../reference/repository-credentials.md) before selecting
 `git-full`.
@@ -34,9 +42,11 @@ in the [reference](../reference/repository-credentials.md#configuration).
 Create the protected configuration shown in the
 [reference](../reference/repository-credentials.md#configuration). Use a GitHub
 App installed on the selected repository with the permissions for your chosen
-profile. Configure public DNS and a TLS certificate covering the gateway
-hostname. GitHub CLI requires HTTPS port 443 on that hostname. Provision a
-private control directory owned by the service/operator:
+profile. Choose a gateway hostname resolvable by the intended clients and a
+matching TLS certificate trusted by those clients; public DNS is not required.
+Set `gateway.publicOrigin` to that HTTPS origin. GitHub CLI requires port 443
+on that hostname. Restrict gateway access to the approved clients before starting
+the listener. Provision a private control directory owned by the service/operator:
 
 ```sh
 install -d -m 700 /absolute/path/control /absolute/path/sessions
@@ -201,16 +211,31 @@ signing, session and listener owners. The client image installs Git and checksum
 files or a control socket. The client entrypoint takes `SESSION_DIRECTORY
  git|gh ARGS...`.
 
-The optional `deploy/examples/repository-credentials/compose.yaml` publishes service port
-8443 at host port 443 and keeps service/control mounts separate from client
-mounts. Supply its required `CREDENTIAL_SERVICE_UID`, `CREDENTIAL_SERVICE_GID`,
+The optional `deploy/examples/repository-credentials/compose.yaml` maps port 443
+on an explicitly selected private host IPv4 address to the service's port 8443.
+Set `CREDENTIAL_SERVICE_PRIVATE_ADDRESS` to an address assigned to the host and
+reachable from the separate client container. Do not use a wildcard address or
+loopback: the client's loopback address refers to its own container. Before
+starting the service, enforce host/container-network access controls that allow
+only approved clients to reach this published port and the container listener.
+The example does not install those controls; a private address alone is not an
+access policy. Keep this endpoint off public forwarding, Ingress and load balancers.
+
+Set `CREDENTIAL_GATEWAY_HOSTNAME` to the hostname in `gateway.publicOrigin`, such
+as `credentials.example.internal`, with a matching trusted TLS certificate. The
+client's `extra_hosts` entry resolves it to the selected private host address so
+the client uses HTTPS port 443. Retain `gateway.listen` as `0.0.0.0:8443` inside
+the service container. Any approved host client also needs hostname resolution
+to the private address and the same CA trust; Compose supplies neither for the host.
+
+Supply `CREDENTIAL_SERVICE_UID`, `CREDENTIAL_SERVICE_GID`,
 `CREDENTIAL_SERVICE_INPUTS`, `CREDENTIAL_SERVICE_CONTROL`,
-`CREDENTIAL_CLIENT_SESSION`, and `CREDENTIAL_CLIENT_WORKSPACE` variables. Set
-`CREDENTIAL_CLIENT_SESSION` to the selected directory, such as
-`/absolute/path/sessions/task`; it appears as `/session` in the client. Match the
-UID/GID to the protected files. The example configuration's paths match these
-container mounts. Arrange gateway DNS and certificate trust before running the
-client; Compose does not provision public DNS or a CA. For example:
+`CREDENTIAL_CLIENT_SESSION`, and `CREDENTIAL_CLIENT_WORKSPACE`. Match the UID/GID
+to the protected files. Set `CREDENTIAL_CLIENT_SESSION` to only the selected
+directory, such as `/absolute/path/sessions/task`; it appears as `/session` in
+the client. Service/control mounts remain separate from client mounts, and the
+reference configuration's file paths match these mounts. After configuring
+private access and certificate trust, render the configuration and run the client:
 
 ```sh
 docker compose -f deploy/examples/repository-credentials/compose.yaml config
@@ -222,7 +247,10 @@ docker compose -f deploy/examples/repository-credentials/compose.yaml run --rm -
 Rendering Compose checks declared configuration. To verify delivered separation,
 inspect the running service/client mounts and client surfaces using the
 [container qualification procedure](../testing/repository-credentials.md#verify-separate-running-containers).
-Neither image inspection nor a Compose rendering establishes live GitHub compatibility.
+Also verify approved client connectivity and denied access from an unapproved
+workload and the relevant external network, without copying a session bearer
+into reachability probes. Neither a Compose rendering nor image inspection
+establishes deployment isolation or live GitHub compatibility.
 
 ## Inspect and close
 

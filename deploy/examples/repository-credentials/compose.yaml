@@ -8,7 +8,11 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    ports: ["443:8443"]
+    ports:
+      - target: 8443
+        published: "443"
+        host_ip: ${CREDENTIAL_SERVICE_PRIVATE_ADDRESS:?Set a private host IPv4 address reachable by the client container}
+        protocol: tcp
     volumes:
       - type: bind
         source: ${CREDENTIAL_SERVICE_INPUTS:?Set a protected service input directory}
@@ -28,6 +32,8 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: ["/tmp:mode=1777,size=16m"]
+    extra_hosts:
+      - "${CREDENTIAL_GATEWAY_HOSTNAME:?Set the hostname from gateway.publicOrigin}=${CREDENTIAL_SERVICE_PRIVATE_ADDRESS:?Set a private host IPv4 address reachable by the client container}"
     volumes:
       - type: bind
         source: ${CREDENTIAL_CLIENT_SESSION:?Set the selected private session directory}
