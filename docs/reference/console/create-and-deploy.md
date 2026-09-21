@@ -18,9 +18,10 @@ Agent; it does not verify an Agent you create in the console.
    **Use Preset**. The chooser closes and the form opens with editable settings.
    Select **Start without Preset** to use standard defaults.
 3. Enter a name that is unique within the Namespace. Choose an execution mode
-   and review the starter Configuration JSON. Dedicated uses `codex/gpt-5.1`;
-   embedded uses `openai/gpt-5.1`. These are example models. Confirm your
-   Installation has access to the model you choose. The form requires a JSON
+   and review the starter Configuration JSON. Dedicated uses `codex/gpt-6-astra`;
+   embedded uses `openai/gpt-6-astra`. This is the default for new Agents;
+   edit the JSON to use another authorized model. Confirm your Installation has
+   access to the model you choose. The form requires a JSON
    object. Changing modes updates untouched JSON; use **Reset template** if you
    want to replace your edits.
 4. If you need Slack or Microsoft Teams, use the channel cards and select
