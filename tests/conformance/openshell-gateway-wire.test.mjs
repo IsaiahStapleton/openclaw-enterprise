@@ -10,10 +10,7 @@ const loader = require("@grpc/proto-loader");
 
 test("OpenShell client serializes v0.1 workspace scopes and network enums", async () => {
   const proto = await loader.load(
-    join(
-      import.meta.dirname,
-      "../../apps/controller/src/drivers/sandbox/proto/openshell-gateway.proto",
-    ),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.0-pre.5-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -21,7 +18,8 @@ test("OpenShell client serializes v0.1 workspace scopes and network enums", asyn
   const deleteRequests = [];
   const server = new grpc.Server();
 
-  // Decode through the production proto loader so this protects the actual wire field numbers.
+  // Decode with the independently pinned upstream fixture so a production proto
+  // field or enum renumbering cannot make both ends agree on an incompatible wire shape.
   server.addService(OpenShell.service, {
     CreateSandbox(call, callback) {
       createRequests.push(call.request);

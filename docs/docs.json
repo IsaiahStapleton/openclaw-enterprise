@@ -710,6 +710,7 @@
               "testing/service-accounts",
               "testing/plugins",
               "testing/openshell",
+              "testing/openshell-pre5-local-experiment",
               "driver-docs-inventory",
               "documentation-inventory/gaps",
               "documentation-inventory/getting-started",

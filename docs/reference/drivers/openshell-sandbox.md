@@ -122,8 +122,12 @@ drivers:
 ```
 
 The optional endpoint fields use OpenShell's configuration spellings: `tls`
-accepts `skip`, `terminate`, or `passthrough`; `enforcement` accepts `enforce`
-or `audit`; and `access` accepts `read_only`, `read_write`, or `full`.
+accepts `skip` or `terminate`; `enforcement` accepts `enforce` or `audit`; and
+`access` accepts `read_only`, `read_write`, or `full`. OpenShell pre.5 treats
+`terminate` as a deprecated alias for automatic TLS detection and termination.
+It also changed the old `passthrough` spelling to that behavior, so the Driver
+rejects `passthrough` at startup. Replace `tls: passthrough` with `tls: skip` to
+retain uninspected TLS relay.
 `gatewayConfigured` is the only ServiceAccount mode for `v0.1.0-pre.5`; the
 gateway's configured sandbox ServiceAccount applies to every Sandbox it creates
 and does not satisfy the per-Agent production requirement below.

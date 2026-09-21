@@ -1091,11 +1091,19 @@ async function assertEmbeddedOpenShellFailsClosed(topology) {
   );
 }
 
-if (process.env.OCC_TEST_OPENSHELL_SECRET_PROJECTION === "1") {
-  test(
-    "OpenShell with genuine Secret projection executes and enforces a provider-owned Codex Harness",
-    { ...requiresOpenShellK3d, timeout: 900_000 },
-    async (context) => {
+const secretProjectionMode = process.env.OCC_TEST_OPENSHELL_SECRET_PROJECTION ?? "0";
+assert.match(
+  secretProjectionMode,
+  /^(?:0|1)$/,
+  "OCC_TEST_OPENSHELL_SECRET_PROJECTION must be 0 or 1.",
+);
+
+test(
+  "OpenShell enforces the selected Secret projection contract",
+  { ...requiresOpenShellK3d, timeout: 900_000 },
+  async (context) => {
+    if (secretProjectionMode === "1") {
+      process.stderr.write("OpenShell integration: selected positive projection proof.\n");
       const topology = await prepareProductionInstallation(context);
       assert.equal(
         topology.harnessPod.spec.serviceAccountName,
@@ -1120,17 +1128,13 @@ if (process.env.OCC_TEST_OPENSHELL_SECRET_PROJECTION === "1") {
       );
       await assertDuplicateReconciliationDoesNotDuplicateOpenShell(topology);
       await assertEmbeddedOpenShellFailsClosed(topology);
-    },
-  );
-} else {
-  test(
-    "stock OpenShell rejects unsupported Secret projection without activating the Agent",
-    { ...requiresOpenShellK3d, timeout: 900_000 },
-    async (context) => {
-      const topology = await prepareProductionInstallation(context, {
-        expectUnsupportedProjection: true,
-      });
-      await assertEmbeddedOpenShellFailsClosed(topology);
-    },
-  );
-}
+      return;
+    }
+
+    process.stderr.write("OpenShell integration: selected stock fail-closed projection proof.\n");
+    const topology = await prepareProductionInstallation(context, {
+      expectUnsupportedProjection: true,
+    });
+    await assertEmbeddedOpenShellFailsClosed(topology);
+  },
+);

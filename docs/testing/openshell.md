@@ -20,6 +20,7 @@ OpenShell prerequisites, and export the lane environment before
 `run-tests.mjs` invokes the case:
 
 ```sh
+export OCC_TEST_OPENSHELL_SECRET_PROJECTION=0
 node scripts/ci/prepare.mjs \
   --lane openshell \
   --state "$RUNNER_TEMP/state/openshell.json" \
@@ -43,12 +44,14 @@ With stock OpenShell, the selected test expects the driver to reject unsupported
 Secret projection before the candidate can activate. This is a failure-path
 check, not successful provider authentication or model execution.
 
-Set `OCC_TEST_OPENSHELL_SECRET_PROJECTION=1` only for an upstream runtime that
-supports the required genuine projections. That positive scenario requires a real
+Set `OCC_TEST_OPENSHELL_SECRET_PROJECTION=0` for the stock fail-closed proof. Set
+it to `1` only for an upstream runtime that supports the required genuine
+projections. The strict CI runner forwards this selector and accounts for one
+stable test identity in either mode. The positive scenario requires a real
 gateway model turn, provider-owned dedicated Codex execution, exact projected
-workload identity, approved mounts and privileges, denied secret exposure, allowed
-and denied tool egress, and lifecycle cleanup. Missing prerequisites after
-selection fail rather than skip.
+workload identity, approved mounts and privileges, denied secret exposure,
+allowed and denied tool egress, and lifecycle cleanup. Missing prerequisites
+after selection fail rather than skip.
 
 ### Upstream projection prerequisite
 
@@ -58,6 +61,9 @@ that gateway. Stock OpenShell `v0.1.0-pre.5` cannot receive the required exact
 `secretKeyRef` environment entries and projected workload identity through its
 gateway configuration. The test does not substitute a credential bridge or
 Pod-template patch. See the [production contract](../reference/drivers/openshell-sandbox.md#current-upstream-preconditions).
+The [pre.5 local experiment handoff](openshell-pre5-local-experiment.md) records
+how test-only bridges progressed to the next missing runtime projection without
+establishing a successful Agent or model turn.
 
 Local `sandbox-driver-startup`, `controller-lifecycle`, and
 `postgres-platform-state` integration tests cover driver selection, revision
@@ -71,24 +77,24 @@ image, database, or OpenShell-specific prerequisite. If any of those variables
 is present while the flag is not `1`, prerequisite validation still fails; use a
 scoped environment file for this suite.
 
-| Variable                               | Requirement or default                                                                                                                              |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_OPENSHELL_K3D_REAL`          | Set to `1` to explicitly opt into the real OpenShell integration.                                                                                   |
-| `OCC_TEST_OPENSHELL_SECRET_PROJECTION` | Set to `1` only when upstream supports genuine Secret and workload-identity projections; selects positive model/lifecycle proof.                    |
-| `OPENAI_API_KEY`                       | Existing authorized provider credential for the required real model turn.                                                                           |
-| `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-5.6-sol`.                                                                                               |
-| `OCC_TEST_KUBERNETES_KUBECONFIG`       | Absolute kubeconfig path for the dedicated disposable k3d cluster.                                                                                  |
-| `OCC_TEST_KUBERNETES_CONTEXT`          | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                                                        |
-| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`    | Imported immutable real OpenClaw gateway image; `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` is accepted as a fallback.                                      |
-| `OCC_TEST_KUBERNETES_AGENT_IMAGE`      | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_CODEX_IMAGE` and runtime image fallbacks are accepted.                                    |
-| `OCC_TEST_DATABASE_URL`                | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                                                                            |
-| `OCC_TEST_OPENSHELL_HELM`              | Helm binary used to install the namespace-scoped OpenShell gateway.                                                                                 |
-| `OCC_TEST_OPENSHELL_HELM_CHART`        | OpenShell Helm chart path or chart archive.                                                                                                         |
-| `OCC_TEST_OPENSHELL_GATEWAY_IMAGE`     | Imported immutable OpenShell gateway image pinned by SHA-256 digest.                                                                                |
-| `OCC_TEST_OPENSHELL_SANDBOX_IMAGE`     | Imported immutable OpenShell sandbox runtime image pinned by SHA-256 digest.                                                                        |
-| `OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE`  | Imported immutable OpenShell supervisor image pinned by SHA-256 digest.                                                                             |
-| `OCC_TEST_OPENSHELL_CHART_VERSION`     | Optional OpenShell chart version; defaults to `0.1.0-pre.5`.                                                                                        |
-| `OCC_TEST_OPENSHELL_RUNTIME_CLASS`     | Existing RuntimeClass used by Agent Sandbox Pods; CI creates the selected RuntimeClass, defaulting to `openshell-sandbox`, with the `runc` handler. |
+| Variable                               | Requirement or default                                                                                                                               |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OCC_TEST_OPENSHELL_K3D_REAL`          | Set to `1` to explicitly opt into the real OpenShell integration.                                                                                    |
+| `OCC_TEST_OPENSHELL_SECRET_PROJECTION` | `0` selects stock fail-closed proof; `1` selects positive model/lifecycle proof only when upstream supports genuine Secret and identity projections. |
+| `OPENAI_API_KEY`                       | Existing authorized provider credential for the required real model turn.                                                                            |
+| `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-5.6-sol`.                                                                                                |
+| `OCC_TEST_KUBERNETES_KUBECONFIG`       | Absolute kubeconfig path for the dedicated disposable k3d cluster.                                                                                   |
+| `OCC_TEST_KUBERNETES_CONTEXT`          | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                                                         |
+| `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`    | Imported immutable real OpenClaw gateway image; `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` is accepted as a fallback.                                       |
+| `OCC_TEST_KUBERNETES_AGENT_IMAGE`      | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_CODEX_IMAGE` and runtime image fallbacks are accepted.                                     |
+| `OCC_TEST_DATABASE_URL`                | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                                                                             |
+| `OCC_TEST_OPENSHELL_HELM`              | Helm binary used to install the namespace-scoped OpenShell gateway.                                                                                  |
+| `OCC_TEST_OPENSHELL_HELM_CHART`        | OpenShell Helm chart path or chart archive.                                                                                                          |
+| `OCC_TEST_OPENSHELL_GATEWAY_IMAGE`     | Imported immutable OpenShell gateway image pinned by SHA-256 digest.                                                                                 |
+| `OCC_TEST_OPENSHELL_SANDBOX_IMAGE`     | Imported immutable OpenShell sandbox runtime image pinned by SHA-256 digest.                                                                         |
+| `OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE`  | Imported immutable OpenShell supervisor image pinned by SHA-256 digest.                                                                              |
+| `OCC_TEST_OPENSHELL_CHART_VERSION`     | Optional OpenShell chart version; defaults to `0.1.0-pre.5`.                                                                                         |
+| `OCC_TEST_OPENSHELL_RUNTIME_CLASS`     | Existing RuntimeClass used by Agent Sandbox Pods; CI creates the selected RuntimeClass, defaulting to `openshell-sandbox`, with the `runc` handler.  |
 
 The selected cluster must already expose the Agent Sandbox CRD and a ready Agent
 Sandbox controller. See the

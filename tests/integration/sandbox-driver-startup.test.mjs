@@ -96,7 +96,42 @@ test("startup rejects OpenShell network values outside the v0.1 protocol enums",
       mode: "production",
       environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
     }),
-    /OpenShell network policy model-egress TLS mode must be one of: skip, terminate, passthrough/,
+    /OpenShell network policy model-egress TLS mode must be one of: skip, terminate/,
+  );
+});
+
+test("startup rejects inherited OpenShell network enum property names", async (t) => {
+  const cases = [
+    ["tls", "toString", /TLS mode must be one of: skip, terminate/],
+    ["enforcement", "constructor", /enforcement mode must be one of: enforce, audit/],
+    ["access", "__proto__", /access preset must be one of: read_only, read_write, full/],
+  ];
+
+  for (const [field, value, expected] of cases) {
+    const configuration = sandboxInstallation();
+    configuration.drivers.sandbox.configuration.policy.networkPolicies[0].endpoints[0][field] =
+      value;
+    await assert.rejects(
+      loadInstallationConfiguration({
+        mode: "production",
+        environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
+      }),
+      expected,
+    );
+  }
+});
+
+test("startup rejects the deprecated OpenShell passthrough spelling", async (t) => {
+  const configuration = sandboxInstallation();
+  configuration.drivers.sandbox.configuration.policy.networkPolicies[0].endpoints[0].tls =
+    "passthrough";
+
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
+    }),
+    /OpenShell network policy model-egress TLS mode must be one of: skip, terminate/,
   );
 });
 

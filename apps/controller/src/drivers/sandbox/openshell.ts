@@ -31,7 +31,7 @@ export interface OpenShellNetworkEndpoint {
   readonly host: string;
   readonly ports: readonly number[];
   readonly protocol?: string;
-  readonly tls?: "skip" | "terminate" | "passthrough";
+  readonly tls?: "skip" | "terminate";
   readonly enforcement?: "enforce" | "audit";
   readonly access?: "read_only" | "read_write" | "full";
 }
@@ -95,7 +95,6 @@ class OpenShellSandboxConfigurationFailure extends Error {}
 const NETWORK_TLS_MODES = Object.freeze({
   skip: "NETWORK_TLS_MODE_SKIP",
   terminate: "NETWORK_TLS_MODE_TERMINATE",
-  passthrough: "NETWORK_TLS_MODE_PASSTHROUGH",
 });
 const NETWORK_ENFORCEMENT_MODES = Object.freeze({
   enforce: "NETWORK_ENFORCEMENT_MODE_ENFORCE",
@@ -116,13 +115,12 @@ function optionalEnumValue(
     return undefined;
   }
   const key = nonempty(value, description);
-  const mapped = values[key];
-  if (mapped === undefined) {
+  if (!Object.hasOwn(values, key)) {
     throw new OpenShellSandboxConfigurationFailure(
       `${description} must be one of: ${Object.keys(values).join(", ")}.`,
     );
   }
-  return mapped;
+  return values[key];
 }
 
 const DEFAULT_WORKSPACE = "default";

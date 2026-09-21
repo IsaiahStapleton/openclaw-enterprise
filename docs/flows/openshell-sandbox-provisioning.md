@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: "2026-09-21"
-last_updated_session: "authoring-run/a16c607b-1ddd-4146-a4c7-05b900b65be7"
+last_updated_session: "authoring-run/180c9046-1da2-444d-ab1d-7d5cf04532e2"
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -70,8 +70,12 @@ creating the Deployment itself.
 
 OpenShell accepts only dedicated Codex revisions pinned to the selected Driver.
 It builds filesystem, process, and network policy plus Kubernetes driver config.
-Network TLS, enforcement, and access spellings are converted to the exact
-`v0.1.0-pre.5` protobuf enums.
+Network TLS, enforcement, and access spellings must be own keys in the Driver's
+allowlists before they are converted to the exact `v0.1.0-pre.5` protobuf enums.
+The Driver rejects inherited object names instead of allowing them to omit an
+explicit enforcement value on the wire. It also rejects the old `passthrough`
+TLS spelling because pre.5 redefined that enum as an automatic inspection alias;
+operators use `skip` for uninspected relay.
 
 The regular Codex requirements contain Secret-backed environment entries.
 `environment` rejects the first such entry before any gateway mutation, so the
@@ -107,9 +111,11 @@ NetworkPolicies after revision resources are gone.
 - `node --test tests/integration/sandbox-driver-startup.test.mjs` checks Driver
   selection and fail-closed configuration behavior.
 - `OCC_TEST_OPENSHELL_K3D_REAL=1 node --env-file="$TEST_ENV_FILE" --test tests/integration/sandbox-driver-openshell-k3d-real.test.mjs`
-  exercises the selected real gateway and cluster prerequisites. With stock
-  `v0.1.0-pre.5`, the expected result is Secret-projection rejection before
-  activation; this does not prove a model turn.
+  exercises the selected real gateway and cluster prerequisites. Set
+  `OCC_TEST_OPENSHELL_SECRET_PROJECTION=0` for stock `v0.1.0-pre.5`; the expected
+  result is Secret-projection rejection before activation, which does not prove
+  a model turn. Mode `1` selects the positive model and lifecycle proof and must
+  fail if its upstream prerequisites are absent.
 - `OpenShell v0.1.0-pre.5 cannot receive secretKeyRef environment ...` identifies
   the current fail-closed boundary.
 
@@ -126,4 +132,5 @@ NetworkPolicies after revision resources are gone.
 
 ## Changelog
 
+- 2026-09-21 12:41: Documented own-key network enum validation, the rejected pre.5 `passthrough` alias, and explicit CI projection-mode selection. (authoring-run/180c9046-1da2-444d-ab1d-7d5cf04532e2 - b3a4c00462163edb81cb0588b59a6be8722ffe40)
 - 2026-09-21 08:56: Documented the `v0.1.0-pre.5` workspace-scoped provisioning, fail-closed projection boundary, and cleanup flow. (authoring-run/a16c607b-1ddd-4146-a4c7-05b900b65be7 - aa6dd7415d65ffba5fa40098b2142eb2a7d73df4)
