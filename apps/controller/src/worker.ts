@@ -931,7 +931,9 @@ export class ControllerWorker {
           agentId: claim.agentId!,
           revisionId: claim.revisionId!,
         });
-        complete = !attempts.some((attempt) => attempt.phase === "closing");
+        complete = !attempts.some(
+          (attempt) => attempt.phase === "closing" || attempt.phase === "invalidated",
+        );
       }
       if (complete) {
         await queue.complete(claim);
@@ -1265,6 +1267,7 @@ export class ControllerWorker {
         });
       }
       for (const revision of revisions) {
+        await this.closeRevisionCredentials(claim, revision);
         await this.withClaimHeartbeat(claim, () => this.compute.retireRevision(revision));
       }
       if (this.compute.deleteAgentRuntimeCredentials !== undefined) {
@@ -1321,11 +1324,29 @@ export class ControllerWorker {
       if (claim.agentId === undefined) {
         throw new Error("The worker Agent deletion context is unavailable.");
       }
-      await this.state.transactWithQueue(
-        async (_unit, queue) =>
-          queue.completeAgentDeletion(claim, claim.namespaceId, claim.agentId!),
-        this.queueOptions,
-      );
+      const completed = await this.state.transactWithQueue(async (_unit, queue) => {
+        const completed = await queue.completeAgentDeletion(
+          claim,
+          claim.namespaceId,
+          claim.agentId!,
+        );
+        if (completed === "cleanup-pending") {
+          await queue.defer(claim, { code: "REPOSITORY_CLEANUP_PENDING" });
+        }
+        return completed;
+      }, this.queueOptions);
+      if (completed === "cleanup-pending") {
+        this.passOutcome = "pending";
+        this.emit({
+          event: "worker.completed",
+          ...workLogFields(claim),
+          namespaceId: claim.namespaceId,
+          agentId: claim.agentId,
+          outcome: "pending",
+          code: "REPOSITORY_CLEANUP_PENDING",
+        });
+        return;
+      }
     } else {
       await this.state.transactWithQueue(async (unit, queue) => {
         if ((await queue.heartbeat(claim)) === undefined) {

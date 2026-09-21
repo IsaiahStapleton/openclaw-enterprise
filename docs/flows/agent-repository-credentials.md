@@ -1,7 +1,7 @@
 ---
 created: "2026-09-18"
 updated: "2026-09-21"
-last_updated_session: "authoring-run/fba2d7fa-6603-465e-a7c8-df0375ad202d"
+last_updated_session: "authoring-run/f4034e1f-9090-4f83-87c7-189e172017e2"
 ---
 
 # Agent repository credential flow
@@ -47,11 +47,14 @@ graph TD
   Service -->|Created once| New["<b>New material</b><br/>Record ID before delivery"]
   Service -->|Existing open session| Retained["<b>Retained material</b><br/>No bearer recovery"]
   Service -->|Lost response| Recover["<b>Recover only</b><br/>Find or fence, then close"]
-  Recover -->|Authorized replacement| Attempt
+  Recover -->|Never delivered or disposed| Attempt
+  Recover -->|Known session unsettled| Refuse["<b>Fail revision</b><br/>Retain cleanup obligation"]
   New --> Compute["<b>Compute delivery</b><br/>Validate complete set"]
   Retained --> Compute
-  Compute -->|Missing retained files| Repair["<b>Repair exact subset</b><br/>Close and replace once"]
-  Repair --> Compute
+  Compute -->|Missing retained files| Repair["<b>Repair exact subset</b><br/>Close and verify disposal"]
+  Repair -->|Disposed| Compute
+  Repair -->|Unsettled| Refuse
+  Refuse --> Close
   Compute --> Pod["<b>Private generation</b><br/>Init files, replace Pod"]
   Pod --> Command["<b>Git or gh command</b><br/>Pin target and session"]
   Command --> Gateway["<b>HTTPS gateway</b><br/>Exact repository/profile"]
@@ -59,14 +62,17 @@ graph TD
   Pod -->|Stop or retire| Close
   Close -->|Unavailable or pending| Queue["<b>Durable cleanup</b><br/>Retry without new admission"]
   Queue --> Close
-  Close -->|Disposed or absent| Done["<b>Cleanup settled</b><br/>Owned material removed"]
+  Close -->|Disposed| Done["<b>Cleanup settled</b><br/>Retain immutable evidence"]
+  Pod -->|Delete Agent| Delete["<b>Agent deletion</b><br/>Close and retire Compute"]
+  Delete --> Close
+  Done -->|Deleting Agent| Finalize["<b>State finalizer</b><br/>Detach and remove live rows"]
 
   classDef state fill:#EDF2F7,stroke:#879AB0,color:#25364A,stroke-width:1px
   classDef operation fill:#EBF3F0,stroke:#7F9D93,color:#2B4038,stroke-width:1px
   classDef condition fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
   class API,Revision,Attempt,Queue state
-  class Worker,Service,New,Retained,Compute,Pod,Command,Gateway,Close,Done operation
-  class Recover,Repair condition
+  class Worker,Service,New,Retained,Compute,Pod,Command,Gateway,Close,Done,Delete,Finalize operation
+  class Recover,Repair,Refuse condition
 ```
 
 ## Execution Trace
@@ -114,9 +120,10 @@ sidecar launch; the service validates its own protected inputs before listening.
 rechecks the original actor, ready Namespace, running Agent, exact revision,
 selected Driver, unchanged grant and deadline. Each fresh attempt commits its
 request identity in State under the live work claim and Namespace/Agent locks
-before dispatch. `RepositoryCredentialLifecycle.open` then calls the Driver
-outside the transaction. State stores recovery identifiers and phases, never
-bearers or client files.
+before dispatch. State derives the immutable cleanup context from the admitted
+Driver and binding, and rejects new attempts for stopped or deleting owners.
+`RepositoryCredentialLifecycle.open` calls the Driver outside the transaction.
+State stores recovery identifiers and phases, never bearers or client files.
 
 `apps/controller/src/providers/repository-credentials/control-client.ts:UnixRepositoryCredentialControlClient`
 sends the bound request over the private socket. The service independently
@@ -139,7 +146,13 @@ session ID before passing files solely through
 
 A confirmed open session produces a `retained` binding without new files. An
 unfinished opening attempt uses `recoverOnly` to find or fence the original
-admission, closes any recovered session, then permits a fresh authorized attempt.
+admission and closes any recovered session. Fresh material requires confirmed
+disposal of a known session, or a missing opening with no recorded session ID:
+that opening never delivered material through the worker. An invalidated known
+session blocks automatic replacement in the same revision. The worker checks
+retained attempts again under its admission transaction's Namespace/Agent locks.
+Validated `DISPOSED` observations are persisted without another close request;
+later service pruning cannot erase that confirmed settlement.
 `apps/controller/src/drivers/repo/credentials/control.ts:createControlAdmission`
 never reissues a bearer and records a cancellation fence for a missing fresh ID.
 Transport failure or overload cannot establish absence.
@@ -152,9 +165,9 @@ a generation from sorted reference/session pairs.
 `apps/controller/src/drivers/compute/kubernetes/repository-material-store.ts:RepositoryMaterialStore.prepare`
 validates exact ownership and file contents before creating immutable
 Agent/revision/session-owned Secrets. It reports the precise missing retained
-subset. The worker's `RepositoryCredentialLifecycle.repair` closes and replaces
-only that subset, then retries Compute once; it does not pretend status recovery
-recovered credential bytes.
+subset. The worker's `RepositoryCredentialLifecycle.repair` closes that subset
+and requires disposal before replacement, then retries Compute once. Missing
+inventory or unresolved closure fails the revision instead of reminting.
 
 `apps/controller/src/drivers/compute/kubernetes/repository-material.ts:repositoryMaterialDeployment`
 mounts Secret projections only in the init container. The init entrypoint in
@@ -209,8 +222,13 @@ commits completion and the next maintenance work together, preserving the
 original actor. Repository-bearing revisions use the selected Driver's
 30-second maintenance interval, or a shorter Compute interval. Worker restart
 resumes durable queued work; it does not invent actors through a startup scan.
-An unavailable session after service restart is invalidated and replaced through
-the same authorized material path, within the frozen deadline.
+A missing known session after service restart is invalidated and retains cleanup
+Work. `REPOSITORY_SESSION_RECOVERY_UNSAFE` permanently fails the observation and
+queues exact runtime retirement. A later worker rereads that retained evidence
+and cannot automatically remint for the same revision. Worker-only restart can
+retain an existing open session and its Compute material. A user can explicitly
+deploy a new revision through the existing authorized deployment operation;
+that does not settle old cleanup or replay a Git/API command.
 
 `apps/controller/src/worker.ts:ControllerWorker.finalizeActiveRevision`
 can atomically fail one bounded observation and enqueue its successor while the
@@ -232,8 +250,19 @@ attempts, closes their sessions and calls the selected Compute Driver's
 A Compute mismatch or stop failure keeps retirement retryable beyond the
 foreground attempt limit. Completion requires settled sessions and successful
 runtime retirement. Session-only repair or rotation cleanup never stops the
-healthy workload. `CLOSED` denies local use but remains pending until disposal
-or authoritative absence.
+healthy workload. `CLOSED` denies local use but remains pending until disposal.
+Missing service inventory and invalidation do not establish provider settlement.
+
+`ControllerWorker.processAgentDeletion` closes and registers each revision's
+attempts, then retires Compute even while service cleanup is pending. Deleted-Agent
+Work covers only its exact owner and revisions admitted before that Work was created;
+the same boundary governs failed and stale Work transfer.
+`PostgresWorkQueue.completeAgentDeletion` calls `occ.finalize_agent_deletion` under
+the current claim. The function locks Namespace, Agent and attempts and returns a
+distinct pending outcome unless every attempt is disposed. The worker defers that
+outcome without consuming its retry budget. Once settled, the finalizer detaches
+live revision pointers, removes live rows and records deletion atomically. Original
+IDs and non-secret cleanup context remain immutable, with no pruning policy.
 
 Compute retirement waits for owned Pods to stop before removing their material.
 It preserves Secrets referenced by actual Pods and current Deployments, and
@@ -242,15 +271,15 @@ the stopped revision's route and preserves a newer gateway Deployment and its
 shared resources. Route deletion and the stopped revision's Deployment deletion
 also require the observed resourceVersion. Under the single-worker topology,
 Deployment deletion precedes shared cleanup, which remains retryable after a
-partial failure. Service restart can settle missing local-session records but
-cannot prove remote token revocation.
+partial failure. Service restart cannot prove remote token revocation.
 
 ## Debugging and Verification
 
 Run `occ agent get AGENT_ID --output json` in the selected Namespace and compare
 `activeRevisionId` with the admitted revision. Inspect worker events for
 `REPOSITORY_BINDING_CHANGED`, `REPOSITORY_CREDENTIAL_DEADLINE_EXCEEDED`,
-`REPOSITORY_CLEANUP_PENDING` or `REPOSITORY_CLEANUP_COMPLETE`. Check registry
+`REPOSITORY_SESSION_RECOVERY_UNSAFE`, `REPOSITORY_CLEANUP_PENDING` or
+`REPOSITORY_CLEANUP_COMPLETE`. Check registry
 identity and deadline before treating these as transient failures.
 
 For client errors, `repository-not-admitted` identifies an unselected target;
@@ -273,6 +302,10 @@ State/worker, real-client, installed/runtime and live-provider checks.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 15:48: Trace refusal of unsafe same-revision replacement and canonical retention registration in the accompanying changes. (authoring-run/f4034e1f-9090-4f83-87c7-189e172017e2 - 08a9b693de5fe959d26e698435017e0114e3e46e)
+
+- 2026-09-21 07:32: Trace retained cleanup evidence and pending Agent deletion in the accompanying State and worker changes. (authoring-run/5657fc4b-0f7a-423e-9c54-1cf174f5d6c2 - d2b31887be1d114c9147e2ed6f07c1f38e765c6f)
 
 - 2026-09-21 05:32: Reconcile accompanying platform credential documentation with current source history and native Git boundaries. (authoring-run/fba2d7fa-6603-465e-a7c8-df0375ad202d - a051a2406eec7cafde2e0dd5e2ec63dba6ce1581)
 

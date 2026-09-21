@@ -84,6 +84,12 @@ export async function seedSessionRevision(store, credentials = repositoryCredent
     await unit.secrets.createSecret(secret);
     await unit.agents.createAgent(agent);
     await unit.revisions.createRevision(revision);
+    await unit.agents.transitionAgentDesiredRuntimeState(
+      namespace.id,
+      agent.id,
+      "stopped",
+      "running",
+    );
   });
   return { namespace, configuration, agent, revision };
 }
@@ -339,8 +345,18 @@ export async function verifyRepositorySessions(t, store) {
       }
       const input = sessionAttempt(revision);
       const opened = await store.transact((unit) => unit.repositorySessions.createAttempt(input));
-      assert.deepEqual(opened, { ...input, phase: "opening", updatedAt: input.createdAt });
+      assert.deepEqual(opened, {
+        ...input,
+        liveRevisionId: revision.id,
+        cleanupContext: {
+          driver: revision.repositoryCredentials.driver,
+          binding: revision.repositoryCredentials.bindings[0],
+        },
+        phase: "opening",
+        updatedAt: input.createdAt,
+      });
       assert.ok(Object.isFrozen(opened));
+      assert.ok(Object.isFrozen(opened.cleanupContext.binding.grant));
       assert.deepEqual(
         await store.read((view) => view.repositorySessions.findAttempt(input.admissionId)),
         opened,
@@ -560,6 +576,34 @@ export async function verifyRepositorySessions(t, store) {
       assert.equal(attempts[0].admissionId, input.admissionId);
       assert.equal(attempts[0].phase, "closing");
     });
+  });
+
+  await t.test("stopped and deleting owners cannot admit new attempts", async () => {
+    const { namespace, agent, revision } = await seedSessionRevision(store);
+    await store.transact((unit) =>
+      unit.agents.transitionAgentDesiredRuntimeState(namespace.id, agent.id, "running", "stopped"),
+    );
+    await assert.rejects(
+      store.transact((unit) => unit.repositorySessions.createAttempt(sessionAttempt(revision))),
+      scopeError,
+    );
+    await store.transact((unit) =>
+      unit.agents.transitionAgentStatus(namespace.id, agent.id, "active", "deleting"),
+    );
+    await assert.rejects(
+      store.transact((unit) => unit.repositorySessions.createAttempt(sessionAttempt(revision))),
+      scopeError,
+    );
+    const other = await seedSessionRevision(store);
+    await store.transact((unit) =>
+      unit.namespaces.transitionNamespaceStatus(other.namespace.id, "ready", "deleting"),
+    );
+    await assert.rejects(
+      store.transact((unit) =>
+        unit.repositorySessions.createAttempt(sessionAttempt(other.revision)),
+      ),
+      scopeError,
+    );
   });
 
   await t.test("concurrent expected-phase advances publish one winner", async () => {

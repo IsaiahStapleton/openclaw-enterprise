@@ -487,6 +487,8 @@ export const repositorySessionAttempts = occSchema.table(
     namespaceId: text("namespace_id").notNull(),
     agentId: text("agent_id").notNull(),
     revisionId: text("revision_id").notNull(),
+    liveRevisionId: text("live_revision_id"),
+    cleanupContext: jsonb("cleanup_context").notNull(),
     repositoryRef: text("repository_ref").notNull(),
     admissionId: text("admission_id").primaryKey(),
     durationSeconds: bigint("duration_seconds", { mode: "number" }).notNull(),
@@ -499,11 +501,26 @@ export const repositorySessionAttempts = occSchema.table(
   (table): PgTableExtraConfigValue[] => [
     foreignKey({
       name: "repository_session_attempts_revision_owner",
-      columns: [table.namespaceId, table.agentId, table.revisionId],
+      columns: [table.namespaceId, table.agentId, table.liveRevisionId],
       foreignColumns: [agentRevisions.namespaceId, agentRevisions.agentId, agentRevisions.id],
     })
       .onUpdate("restrict")
       .onDelete("restrict"),
+    check(
+      "repository_session_attempts_live_revision_valid",
+      sql`(${table.liveRevisionId} IS NOT NULL AND ${table.liveRevisionId} = ${table.revisionId})
+        OR (${table.liveRevisionId} IS NULL AND ${table.phase} = 'disposed')`,
+    ),
+    check(
+      "repository_session_attempts_cleanup_context_valid",
+      sql`jsonb_typeof(${table.cleanupContext}) = 'object'
+        AND ${table.cleanupContext} ?& ARRAY['driver', 'binding']
+        AND ${table.cleanupContext} - 'driver' - 'binding' = '{}'::jsonb
+        AND occ.repository_credentials_are_valid(jsonb_build_object(
+          'driver', ${table.cleanupContext}->'driver', 'deadlineWallMs', ${table.deadlineWallMs},
+          'bindings', jsonb_build_array(${table.cleanupContext}->'binding')))
+        AND ${table.cleanupContext} #>> '{binding,repositoryRef}' = ${table.repositoryRef}`,
+    ),
     uniqueIndex("repository_session_attempts_active_binding_unique")
       .on(table.revisionId, table.repositoryRef)
       .where(sql`${table.phase} IN ('opening', 'open')`),

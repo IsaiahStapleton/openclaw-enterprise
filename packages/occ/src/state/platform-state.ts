@@ -1605,10 +1605,21 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       snapshot.bindings.delete(iamPolicyKey(namespaceId, bindingId)),
   };
 
-  const repositorySessions = memoryRepositorySessions(snapshot.repositorySessions, (owner) =>
-    snapshot.revisions
-      .get(agentKey(owner.namespaceId, owner.agentId))
-      ?.find((revision) => revision.id === owner.revisionId),
+  const repositorySessions = memoryRepositorySessions(
+    snapshot.repositorySessions,
+    (owner) =>
+      snapshot.revisions
+        .get(agentKey(owner.namespaceId, owner.agentId))
+        ?.find((revision) => revision.id === owner.revisionId),
+    (owner) => {
+      const namespace = snapshot.namespaces.get(owner.namespaceId);
+      const agent = snapshot.agents.get(agentKey(owner.namespaceId, owner.agentId));
+      return (
+        namespace?.status === "ready" &&
+        agent?.status === "active" &&
+        agent.desiredRuntimeState === "running"
+      );
+    },
   );
 
   return {

@@ -1,11 +1,10 @@
 # Repository credentials
 
-Give an Agent bounded Git HTTPS and selected GitHub API access through optional
-repository bindings. OCC authorizes the Agent operation, freezes approved
-repository grants into its revision, and lets the worker prepare private runtime
-material. The separately running credential service retains GitHub App signing
-keys, App JWTs and installation tokens. The Agent receives gateway session
-bearers, client configuration and public CA trust. Start with the
+Repository bindings give an Agent bounded Git HTTPS and selected GitHub API
+access. OCC freezes authorized grants into its revision; the worker prepares
+runtime material. The separate credential service retains App signing keys,
+JWTs and installation tokens. The Agent receives gateway bearers, client
+configuration and public CA trust. Start with the
 [operator guide](../guides/repository-credentials.md).
 
 The bundled platform path supports Kubernetes Compute-owned embedded OpenClaw
@@ -14,13 +13,11 @@ worker/credential-service owner; Helm uses `Recreate` to avoid overlapping
 owners. Dedicated Harnesses and other Compute topologies reject repository-bearing
 revisions. Agents without bindings retain their existing lifecycle.
 
-Source lives under the controller, while the credential service runs in its own
-process. Trusted startup composition loads protected configuration and keeps
-backend construction and request-sender callbacks private. Its session controls
-are limited to `open`, `status`, `close`, and `shutdown`. The build produces
-separate service and Git/gh client artifacts; the client runtime contains no
-signing or service modules. `SIGTERM` or `SIGINT` starts bounded cleanup and
-material disposal.
+Trusted startup loads protected configuration into the separate service process;
+backend construction and sender callbacks remain private. Session controls are
+`open`, `status`, `close`, and `shutdown`. Separate service and Git/gh artifacts
+keep signing and service modules out of the client. `SIGTERM` or `SIGINT` starts
+bounded cleanup and disposal.
 
 ## Repo Driver contract
 
@@ -36,16 +33,33 @@ The optional `repo` capability uses `RepoDriver extends Driver`, with the bundle
 - `close` stops local authority and reports closure or absence; it does not
   promise remote revocation or runtime termination.
 
-Every public status contains only `sessionId`, `state`, `deadlineWallMs` and
-`binding`; the binding contains `providerInstanceId`, `repositoryId` and `grantId`.
-Created-open, recovered-open, status and close return fresh immutable snapshots
-after complete private control validation. Cleanup counters remain private.
-Client-configuration decoding is also private; public runtime files retain their
-closed Git/gh schema. Status cannot regenerate those files.
+Public status contains only `sessionId`, `state`, `deadlineWallMs` and `binding`
+(`providerInstanceId`, `repositoryId`, `grantId`). Each response is an immutable
+snapshot after complete private validation. Cleanup counters and configuration
+decoding remain private. Status cannot regenerate the closed-schema Git/gh files.
 
 `maintenanceIntervalMs` schedules worker reconciliation; it is not a measured
 withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
 persisted `admitted_spec.repository_credentials` retain their meaning.
+
+State derives immutable Driver, Provider, profile and grant context from the
+admitted revision. It retains original Namespace, Agent, revision, admission and
+session identities and deadlines after Agent deletion, without bearers or tokens.
+
+Agent deletion closes sessions and retires Compute. Physical deletion and live
+revision detachment require every attempt to be `disposed`. `CLOSED`, missing
+inventory and `invalidated` attempts retain cleanup Work and the deleting Agent.
+Deadlines do not settle provider cleanup. Evidence pruning and durable token
+recovery are unimplemented.
+
+Worker restart can retain surviving service sessions and Compute material.
+Missing exposed sessions or unsettled closure block same-revision replacement,
+including Compute repair. `REPOSITORY_SESSION_RECOVERY_UNSAFE` fails the revision
+and queues runtime retirement while retaining cleanup. Never-delivered openings
+without a recorded session ID remain recoverable; known sessions require disposal
+before replacement. Users may explicitly deploy a new authorized revision. This
+neither settles old cleanup nor replays Git/API mutations; credential disposal
+does not establish their outcomes.
 
 ## Configuration
 
@@ -195,13 +209,12 @@ The socket's parent is private to the service/operator. It is never mounted into
 the client. Control bodies are limited to 16 KiB. The HTTPS client listener has
 no admission or close endpoint.
 
-Admission requires `X-Admission-Id`: a 13-digit Unix-millisecond timestamp,
-a hyphen, and a lowercase UUIDv4. The operator CLI generates and prints this
-nonsecret ID before dispatch. The first response is HTTP 201 with the bearer.
-Repeating the same ID and effective duration/profile returns HTTP 200 with
-status only; conflicting inputs fail. Follow the
-[lost-response recovery procedure](../guides/repository-credentials.md#recover-an-admission)
-to close that session and explicitly request replacement client material.
+`X-Admission-Id` combines a 13-digit Unix-millisecond timestamp, hyphen and
+lowercase UUIDv4. The CLI prints this nonsecret ID before dispatch. HTTP 201
+returns the bearer once; matching ID/duration/profile returns HTTP 200 with
+status only. Conflicts fail. Follow
+[lost-response recovery](../guides/repository-credentials.md#recover-an-admission)
+before explicitly requesting replacement material.
 
 Platform admission additionally requires `namespaceId`, `repositoryRef`,
 normalized `profile`, `expectedBinding` and `deadlineWallMs`. Replays must match
@@ -210,21 +223,18 @@ all original fields. `recoverOnly: true` may return status or
 first-open using that still-fresh ID. Capacity or transport failure remains an
 error, not evidence of absence.
 
-Unseen IDs must be less than 60 seconds old and cannot be future-dated.
-Correlations are process-local and bounded to twice the session limit, including
-short-lived tombstones; rapid churn can temporarily return `overloaded`.
-Existing correlations recover status after the initial window and remain while
-a closed session has unresolved cleanup, including after its deadline. They may
-be reclaimed after disposal or authoritative absence. Unknown stale IDs cannot
-create sessions: admission lookup returns `admission-missing`, while status for
-an absent session returns `not-found`. Correlations never retain a recoverable
-bearer and do not survive restart.
+Unseen IDs must be less than 60 seconds old, never future-dated. Process-local
+correlations, including tombstones, are bounded to twice the session limit;
+churn can return `overloaded`. Existing correlations retain status beyond that
+window and session deadline while cleanup is unresolved. Disposal or authoritative
+absence permits reclamation. Unknown stale IDs cannot create sessions:
+lookup returns `admission-missing`; absent-session status returns `not-found`.
+Correlations retain no recoverable bearer and do not survive restart.
 
-Session duration is independent of token lifetime. Credentials are replaced on
-demand using the original immutable repository grant. A credential must cover
-the full remaining exchange budget plus a safety margin before dispatch. An idle
-session needs no periodic mint. A 24-hour session can use its original bearer
-after hour 13, provided the process and upstream authorization remain available.
+Session duration is independent of token lifetime. On-demand replacement uses
+the original grant and requires validity through the remaining exchange budget
+plus safety margin. Idle sessions need no periodic mint. The original bearer
+works throughout the session while its process and upstream authorization survive.
 
 Authentication eligibility and terminal cleanup expiry are separate deadlines.
 Both use elapsed monotonic time from the original capture; delayed acquisition
@@ -336,10 +346,8 @@ Unsettled actions retain capacity until exit; grace expiry does not establish
 `DISPOSED` or confirmed revocation. Restart cannot recover the lost provider
 cleanup inventory. Overrides remain positive and finite.
 
-Controlled source tests, detached-artifact checks, separate running containers
-and authorized live-provider tests establish different evidence. See the
-[testing guide](../testing/repository-credentials.md)
-for current selection and prerequisites, and the [runtime flow](../flows/repository-credentials.md)
-for service internals and the [Agent flow](../flows/agent-repository-credentials.md)
-for platform ownership. A local fixture success does not establish live GitHub
-App compatibility or release readiness.
+The [testing guide](../testing/repository-credentials.md) separates source,
+artifact, container and live-provider proof. Local fixtures establish neither
+live GitHub compatibility nor release readiness. See the
+[service flow](../flows/repository-credentials.md) and
+[Agent flow](../flows/agent-repository-credentials.md) for implementation ownership.

@@ -115,11 +115,13 @@ Links managed accounts to a Provider, Driver, upstream account, workspace, and a
 
 ### `repository_session_attempts`
 
-Stores repository-credential session attempts tied to an admitted AgentRevision.
+Retains repository-session identity and cleanup context after AgentRevision deletion.
 
 - `namespace_id`
 - `agent_id`
 - `revision_id`
+- `live_revision_id`
+- `cleanup_context`
 - `repository_ref`
 - `admission_id`
 - `duration_seconds`

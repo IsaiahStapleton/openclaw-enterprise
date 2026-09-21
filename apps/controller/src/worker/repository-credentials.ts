@@ -8,6 +8,7 @@ import type {
   RepositoryCredentialSessionStatus,
 } from "@openclaw-enterprise/contracts";
 import {
+  isRepositoryCleanupWork,
   WorkClaimLostError,
   type ClaimedWork,
   type PlatformUnitOfWork,
@@ -128,17 +129,33 @@ export class RepositoryCredentialLifecycle {
       if (selectedRefs !== undefined && !selectedRefs.has(binding.repositoryRef)) {
         continue;
       }
-      const attempts = await this.dependencies.state.read((view) =>
+      let attempts = await this.dependencies.state.read((view) =>
         view.repositorySessions.listRevisionAttempts(owner(revision)),
       );
-      for (const attempt of attempts.filter(
+      const closingAttempts = attempts.filter(
         (candidate) =>
           candidate.repositoryRef === binding.repositoryRef && candidate.phase === "closing",
-      )) {
+      );
+      for (const attempt of closingAttempts) {
         const closed = await this.closeAttempt(claim, revision, attempt);
         if (!closed.authorityClosed) {
           throw new Error("REPOSITORY_CLEANUP_PENDING");
         }
+      }
+      if (closingAttempts.length > 0) {
+        attempts = await this.dependencies.state.read((view) =>
+          view.repositorySessions.listRevisionAttempts(owner(revision)),
+        );
+      }
+      if (
+        attempts.some(
+          (attempt) =>
+            attempt.repositoryRef === binding.repositoryRef &&
+            attempt.sessionId !== undefined &&
+            (attempt.phase === "invalidated" || attempt.phase === "closing"),
+        )
+      ) {
+        throw new RepositoryCredentialAuthorityError("REPOSITORY_SESSION_RECOVERY_UNSAFE");
       }
       const existing = attempts.find(
         (attempt) =>
@@ -164,7 +181,7 @@ export class RepositoryCredentialLifecycle {
             continue;
           }
           const closing = await this.markAttemptClosing(claim, revision, existing);
-          const closed = await this.closeAttempt(claim, revision, closing);
+          const closed = await this.closeAttempt(claim, revision, closing, status);
           if (!closed.authorityClosed) {
             throw new Error("REPOSITORY_CLEANUP_PENDING");
           }
@@ -247,6 +264,9 @@ export class RepositoryCredentialLifecycle {
       let closeLive = claim.revisionId !== undefined;
       if (claim.agentTarget === "stopped") {
         closeLive = agent?.desiredRuntimeState === "stopped" && beforeSource;
+      } else if (claim.agentTarget === "deleted") {
+        closeLive =
+          agent?.status === "deleting" && agent.desiredRuntimeState === "stopped" && beforeSource;
       } else if (claim.namespaceTarget === "deleted") {
         closeLive = namespace?.status === "deleting" && beforeSource;
       }
@@ -270,6 +290,9 @@ export class RepositoryCredentialLifecycle {
     if (options.retireRuntime) {
       await this.dependencies.state.transactWithQueue(async (unit, queue) => {
         await this.heartbeat(queue, claim);
+        await unit.namespaces.lockNamespace(revision.namespaceId, { includeDeleted: true });
+        await unit.agents.lockAgent(revision.namespaceId, revision.agentId);
+        await this.heartbeat(queue, claim);
         const attempts = await unit.repositorySessions.listRevisionAttempts(owner(revision));
         for (const attempt of attempts) {
           if (attempt.phase === "opening" || attempt.phase === "open") {
@@ -281,7 +304,7 @@ export class RepositoryCredentialLifecycle {
     const attempts = await this.dependencies.state.read((view) =>
       view.repositorySessions.listRevisionAttempts(owner(revision)),
     );
-    let complete = true;
+    let complete = !attempts.some((attempt) => attempt.phase === "invalidated");
     for (const attempt of attempts.filter((candidate) => candidate.phase === "closing")) {
       try {
         const closed = await this.closeAttempt(claim, revision, attempt);
@@ -356,6 +379,19 @@ export class RepositoryCredentialLifecycle {
     binding: AdmittedRepositoryBinding,
   ): Promise<RepositoryCredentialRuntimeBinding> {
     const attempt = await this.authorizedTransaction(claim, revision, async (unit) => {
+      const attempts = await unit.repositorySessions.listRevisionAttempts(owner(revision));
+      // A known session may have exposed material. Authority closure alone does
+      // not settle its provider obligations or make replacement safe.
+      if (
+        attempts.some(
+          (prior) =>
+            prior.repositoryRef === binding.repositoryRef &&
+            prior.sessionId !== undefined &&
+            (prior.phase === "invalidated" || prior.phase === "closing"),
+        )
+      ) {
+        throw new RepositoryCredentialAuthorityError("REPOSITORY_SESSION_RECOVERY_UNSAFE");
+      }
       const deadlineWallMs = revision.repositoryCredentials!.deadlineWallMs;
       const durationSeconds = Math.min(
         this.validate(revision)!,
@@ -389,7 +425,7 @@ export class RepositoryCredentialLifecycle {
         attempt,
         opened.status.sessionId,
       );
-      await this.closeAttempt(claim, revision, closing);
+      await this.closeAttempt(claim, revision, closing, opened.status);
       throw new Error("REPOSITORY_ADMISSION_RECOVERED");
     }
     this.validateStatus(opened.session, attempt, binding);
@@ -400,7 +436,7 @@ export class RepositoryCredentialLifecycle {
         attempt,
         opened.session.sessionId,
       );
-      await this.closeAttempt(claim, revision, closing);
+      await this.closeAttempt(claim, revision, closing, opened.session);
       throw new Error("REPOSITORY_SESSION_NOT_OPEN");
     }
     try {
@@ -458,7 +494,12 @@ export class RepositoryCredentialLifecycle {
     }
   }
 
-  private async closeAttempt(claim: ClaimedWork, revision: Revision, attempt: Attempt) {
+  private async closeAttempt(
+    claim: ClaimedWork,
+    revision: Revision,
+    attempt: Attempt,
+    observedStatus?: RepositoryCredentialSessionStatus,
+  ) {
     const binding = revision.repositoryCredentials?.bindings.find(
       (candidate) => candidate.repositoryRef === attempt.repositoryRef,
     );
@@ -467,6 +508,7 @@ export class RepositoryCredentialLifecycle {
     }
     const driver = this.driver(revision);
     let closing = attempt;
+    let status = observedStatus;
     if (closing.sessionId === undefined) {
       const recovered = await this.dependencies.effect(claim, (signal) =>
         driver.open({ ...this.input(closing, binding), recoverOnly: true }, signal),
@@ -476,17 +518,22 @@ export class RepositoryCredentialLifecycle {
       }
       if (recovered.kind === "missing") {
         await this.advance(claim, closing, "invalidated");
-        return { settled: true, authorityClosed: true };
+        return { settled: false, authorityClosed: true };
       }
       this.validateStatus(recovered.status, closing, binding);
       closing = await this.advance(claim, closing, "closing", recovered.status.sessionId);
+      status = recovered.status;
     }
-    const status = await this.dependencies.effect(claim, (signal) =>
-      driver.close(closing.sessionId!, signal),
-    );
+    // Preserve confirmed disposal even if a later service admission prunes its
+    // terminal inventory. Missing inventory alone never establishes disposal.
+    if (status?.state !== "DISPOSED") {
+      status = await this.dependencies.effect(claim, (signal) =>
+        driver.close(closing.sessionId!, signal),
+      );
+    }
     if (status === undefined) {
       await this.advance(claim, closing, "invalidated");
-      return { settled: true, authorityClosed: true };
+      return { settled: false, authorityClosed: true };
     }
     this.validateStatus(status, closing, binding);
     if (status.state === "DISPOSED") {
@@ -504,6 +551,9 @@ export class RepositoryCredentialLifecycle {
   ): Promise<Attempt> {
     return this.dependencies.state.transactWithQueue(async (unit, queue) => {
       await this.heartbeat(queue, claim);
+      await unit.namespaces.lockNamespace(revision.namespaceId, { includeDeleted: true });
+      await unit.agents.lockAgent(revision.namespaceId, revision.agentId);
+      await this.heartbeat(queue, claim);
       const closing = await this.advanceIn(unit, attempt, "closing", sessionId);
       await queue.enqueueRepositoryCleanup(claim, owner(revision));
       return closing;
@@ -518,7 +568,14 @@ export class RepositoryCredentialLifecycle {
   ): Promise<Attempt> {
     return this.dependencies.state.transactWithQueue(async (unit, queue) => {
       await this.heartbeat(queue, claim);
-      return this.advanceIn(unit, attempt, phase, sessionId);
+      await unit.namespaces.lockNamespace(attempt.namespaceId, { includeDeleted: true });
+      await unit.agents.lockAgent(attempt.namespaceId, attempt.agentId);
+      await this.heartbeat(queue, claim);
+      const advanced = await this.advanceIn(unit, attempt, phase, sessionId);
+      if (phase === "invalidated" && !isRepositoryCleanupWork(claim)) {
+        await queue.enqueueRepositoryCleanup(claim, attempt);
+      }
+      return advanced;
     }, this.dependencies.queueOptions);
   }
 

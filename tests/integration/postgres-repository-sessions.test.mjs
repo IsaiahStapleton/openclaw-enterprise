@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/state/postgres-state.ts";
 import {
@@ -229,6 +230,8 @@ test(
           "namespace_id",
           "agent_id",
           "revision_id",
+          "live_revision_id",
+          "cleanup_context",
           "repository_ref",
           "admission_id",
           "duration_seconds",
@@ -260,6 +263,53 @@ test(
         );
       },
     );
+
+    await t.test("session admission serializes behind deleting ownership", async () => {
+      const { namespace, agent, revision } = await seedSessionRevision(store);
+      const deleting = await pool.connect();
+      const admission = await pool.connect();
+      try {
+        const admissionPid = (await admission.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+        await deleting.query("BEGIN");
+        await deleting.query("SELECT id FROM occ.namespaces WHERE id = $1 FOR UPDATE", [
+          namespace.id,
+        ]);
+        await deleting.query(
+          "UPDATE occ.agents SET desired_runtime_state = 'stopped', status = 'deleting' WHERE id = $1",
+          [agent.id],
+        );
+        const pending = insertAttempt(admission, sessionAttempt(revision));
+        const refused = assert.rejects(pending, { code: "23514" });
+        const timeout = Date.now() + 5_000;
+        while (
+          !(
+            await pool.query("SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked", [
+              admissionPid,
+            ])
+          ).rows[0].blocked
+        ) {
+          assert.ok(Date.now() < timeout, "admission must wait on its Namespace owner");
+          await delay(10);
+        }
+        // The owner commits deletion before the waiting INSERT may validate admission.
+        await deleting.query("COMMIT");
+        await refused;
+        assert.deepEqual(
+          await store.read((view) =>
+            view.repositorySessions.listRevisionAttempts({
+              namespaceId: namespace.id,
+              agentId: agent.id,
+              revisionId: revision.id,
+            }),
+          ),
+          [],
+        );
+      } finally {
+        await deleting.query("ROLLBACK");
+        deleting.release();
+        admission.release();
+      }
+    });
 
     await t.test(
       "SQL validates canonical draft and immutable revision repository snapshots",
