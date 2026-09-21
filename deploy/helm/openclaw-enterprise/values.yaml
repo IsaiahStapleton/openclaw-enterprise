@@ -52,6 +52,8 @@ provider:
     enabled: false
     secretName: occ-chatgpt-admin
     key: admin-key
+    # IPv4 /32 destination seen by the pod network for api.chatgpt.com:443.
+    # This permits network egress; it does not configure a forward proxy.
     providerCidr: ""
 
 gatewayRouting:

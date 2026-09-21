@@ -10,6 +10,7 @@ You need:
 - Helm, a version-compatible `kubectl`, Python 3, `yq` v4, and the [OCC CLI](cli.md).
 - External PostgreSQL with separate application and migration roles, verified TLS, and a registry your cluster can pull controller and runtime images from.
 - Storage for the bootstrap and gateway volumes, and an approved internal HTTPS origin for OCC. Dedicated Agent workspaces also need a default StorageClass that supports `ReadWriteMany`. The chart does not create public Ingress or TLS.
+- To run an Agent with an OpenAI API key: a model credential and OCC permissions to grant the Agent `operate` on its exact Secret. Fresh native-IAM bootstrap gives its administrator service key the required Installation `administer`, Namespace `read`, and Secret `read` permissions. If you use a limited credential, arrange for an Installation administrator to [create the grant](deploy/production-agents.md#grant-the-agent-access-to-its-model-secret). Kubernetes RBAC does not replace it.
 
 The [standard Kubernetes guide](deploy/kubernetes.md#prepare-the-cluster) covers node pools, storage, and network access in detail. For AWS, start with [Amazon EKS](deploy/eks.md); it uses the same Helm installation procedure.
 
@@ -46,14 +47,15 @@ The release runs migration and bootstrap before the API and worker. A ready rele
 
 ## 3. Authenticate and continue to an Agent
 
-Retrieve `initial-admin-service-key.json` from the protected bootstrap volume through your approved storage process. Keep it private. With the installed OCC CLI, run:
+Retrieve `initial-admin-service-key.json` from the protected bootstrap volume through your approved storage process. Keep that original in protected storage: bootstrap will not reissue it. Set the endpoint and protected original path:
 
 ```bash
 export OCC_URL='https://<internal-occ-host>'
-export OCC_SERVICE_KEY_FILE='/secure/occ/initial-admin-service-key.json'
-occ installation get
+export OCC_BOOTSTRAP_KEY_FILE="$OCC_INPUT_DIRECTORY/initial-admin-service-key.json"
 ```
+
+In the same shell, follow [Authenticate to the production API](deploy/production-installation.md#authenticate-to-the-production-api) to create a separate private copy and run `occ installation get`.
 
 Expect the displayed `ID` to match `meta.installationId` in the key file. If it does not authenticate, see [Troubleshoot API authentication](operate/troubleshooting.md#authentication-fails-after-installation). If initialization did not finish, follow [bootstrap recovery](../reference/authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
 
-To run an Agent on this cluster, continue with [Prepare Namespaces and deploy Agents](deploy/production-agents.md) and [verify a real model response](deploy/production-agents.md#verify-production-workloads). The [local first-Agent walkthrough](first-agent.md) uses a different installation and should not be run against this one.
+Keep the same shell and temporary key copy to [prepare Namespaces and deploy Agents](deploy/production-agents.md), then [verify a real model response from that Agent](deploy/production-agents.md#verify-production-workloads). At the end, [remove only the temporary credential copies](deploy/production-agents.md#end-the-operator-session). The [local first-Agent walkthrough](first-agent.md) uses a different installation and should not be run against this one.

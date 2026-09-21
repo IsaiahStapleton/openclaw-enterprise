@@ -8,11 +8,12 @@ token-authenticated gateways, use the [OpenClaw TUI](../deploy/production-agents
 
 ## Prepare the Agent
 
-You need an active Agent revision, a working model credential, `kubectl`
-permission to port-forward a tenant Service's Pod, and the Agent's local gateway
-password. If you retrieve the generated password from Kubernetes, you also need
-read access to that exact Secret. Keep `AGENT_ID`, `TENANT_NAMESPACE`,
+You need a working model credential, the Agent's local gateway password, Bash,
+Python 3, and `kubectl` permission to get and list Pods and create
+`pods/portforward` requests in the tenant namespace. If you retrieve the generated
+password from Kubernetes, you also need read access to that exact Secret. Keep `AGENT_ID`, `NAMESPACE_ID`, `TENANT_NAMESPACE`,
 `KUBECONFIG_FILE`, and `CONTEXT` from the [production Agent guide](../deploy/production-agents.md).
+Set `REVISION_ID` to the immutable revision you want to verify.
 
 Configure the Agent to serve model requests and use the Kubernetes-managed local
 password. Add these fields to the existing native gateway Configuration without
@@ -36,34 +37,128 @@ gateway:
 The [transport Secret](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#runtime-credentials)
 must have a `gateway-password` key. The initial credential API generates one;
 external operators can provision one during [Agent deployment](../deploy/production-agents.md#configure-the-agent-runtime).
-Deploy a new revision if these Configuration fields changed and wait for it to
-become active. The password is separate from the model provider's credential.
+If these Configuration fields changed, [deploy a new revision](../deploy/production-agents.md#configure-the-agent-runtime)
+and capture its new `REVISION_ID`. Wait for OCC to report that exact ID as active.
+The password is separate from the model provider's credential.
 
 ## Open a local connection
 
-In the first operator shell:
+An active revision can still be replacing the previous gateway. In the first
+operator shell, run the entire block below. It waits for exactly one Running,
+Ready, nonterminating Pod for the requested revision and confirms that it mounts
+that revision's immutable ConfigMap. It polls every five seconds for up to 60
+attempts. No match, multiple Ready matches, or a Kubernetes error stops the
+check without opening a connection to another revision.
 
 ```bash
-AGENT_SUFFIX="$(printf %s "$AGENT_ID" | shasum -a 256 | cut -c1-12)"
-kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$TENANT_NAMESPACE" \
-  port-forward --address 127.0.0.1 "service/gateway-$AGENT_SUFFIX" 18789:http
+forward_requested_gateway() {
+  local expected_configmap pods_json pod selection_code attempt
+  if [ -z "${AGENT_ID:-}" ] || [ -z "${REVISION_ID:-}" ] || [ -z "${NAMESPACE_ID:-}" ] ||
+     [ -z "${TENANT_NAMESPACE:-}" ] || [ -z "${KUBECONFIG_FILE:-}" ] || [ -z "${CONTEXT:-}" ]; then
+    printf '%s\n' 'Set the Agent, revision, OCC and Kubernetes namespaces, kubeconfig, and context first.' >&2
+    return 1
+  fi
+  if ! expected_configmap="$(python3 -c '
+import hashlib, sys
+def digest(value):
+    return hashlib.sha256(value.encode()).hexdigest()[:12]
+print(f"gateway-{digest(sys.argv[1])}-rev-{digest(sys.argv[2])}")
+' "$AGENT_ID" "$REVISION_ID")"; then
+    return 1
+  fi
+  for ((attempt = 1; attempt <= 60; attempt++)); do
+    if ! pods_json="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
+      -n "$TENANT_NAMESPACE" get pods \
+      -l "app.kubernetes.io/managed-by=openclaw-enterprise,openclaw.dev/workload-role=gateway,openclaw.dev/namespace=$NAMESPACE_ID,openclaw.dev/agent=$AGENT_ID,openclaw.dev/revision=$REVISION_ID" \
+      -o json)"; then
+      return 1
+    fi
+    if pod="$(printf '%s' "$pods_json" | python3 -c '
+import json, sys
+expected = sys.argv[1]
+ready = [
+    pod for pod in json.load(sys.stdin)["items"]
+    if not pod["metadata"].get("deletionTimestamp")
+    and pod.get("status", {}).get("phase") == "Running"
+    and any(c.get("type") == "Ready" and c.get("status") == "True"
+            for c in pod.get("status", {}).get("conditions", []))
+    and any(v.get("configMap", {}).get("name") == expected
+            for v in pod["spec"].get("volumes", []))
+]
+if len(ready) > 1:
+    print(f"Found {len(ready)} Ready Pods for the requested revision; refusing to choose.", file=sys.stderr)
+    sys.exit(1)
+if not ready:
+    sys.exit(3)
+print(ready[0]["metadata"]["name"])
+' "$expected_configmap")"; then
+      printf 'Forwarding to revision %s on Pod %s.\n' "$REVISION_ID" "$pod" >&2
+      kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$TENANT_NAMESPACE" \
+        port-forward --address 127.0.0.1 "pod/$pod" 18789:http
+      return $?
+    else
+      selection_code=$?
+      if [ "$selection_code" -ne 3 ]; then
+        return "$selection_code"
+      fi
+    fi
+    if [ "$attempt" -lt 60 ]; then sleep 5; fi
+  done
+  printf 'No Ready gateway Pod for revision %s; stop and inspect the rollout.\n' "$REVISION_ID" >&2
+  return 1
+}
+forward_requested_gateway
 ```
 
 Leave the command running after `Forwarding from 127.0.0.1:18789` appears.
-If that local port is occupied, change `18789` in both the forward and the
-verification example. In another operator shell with the same environment, set `GATEWAY_PASSWORD_FILE`
-to a protected file containing the password. If the credential API created it,
-you can retrieve it without printing the value:
+If it reports no matching Pod, inspect the requested revision and tenant Pods
+before rerunning the block; do not forward to the Agent-wide Service. If the
+local port is occupied, change `18789` in both the forward and the verification
+example. In another operator shell with the same environment, set
+`GATEWAY_PASSWORD_FILE` to a protected file containing the password. If the
+credential API created it, you can retrieve it without printing the value:
 
 ```bash
 umask 077
-GATEWAY_PASSWORD_DIRECTORY="$(mktemp -d)"
-export GATEWAY_PASSWORD_FILE="$GATEWAY_PASSWORD_DIRECTORY/gateway-password"
-AGENT_SUFFIX="$(printf %s "$AGENT_ID" | shasum -a 256 | cut -c1-12)"
-TRANSPORT_SECRET="openclaw-agent-transport-$AGENT_SUFFIX"
-kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$TENANT_NAMESPACE" \
-  get secret "$TRANSPORT_SECRET" -o json | \
-  python3 -c 'import base64,json,os,sys; from pathlib import Path; Path(os.environ["GATEWAY_PASSWORD_FILE"]).write_bytes(base64.b64decode(json.load(sys.stdin)["data"]["gateway-password"], validate=True))'
+fetch_gateway_password() {
+  local working_directory agent_suffix transport_secret secret_json
+  unset GATEWAY_PASSWORD_FILE GATEWAY_PASSWORD_DIRECTORY
+  if [ -z "${AGENT_ID:-}" ] || [ -z "${KUBECONFIG_FILE:-}" ] ||
+     [ -z "${CONTEXT:-}" ] || [ -z "${TENANT_NAMESPACE:-}" ]; then
+    printf '%s\n' 'Set the Agent, kubeconfig, context, and Kubernetes namespace first.' >&2
+    return 1
+  fi
+  if ! working_directory="$(mktemp -d /tmp/occ-gateway-password.XXXXXXXX)"; then
+    printf '%s\n' 'Could not create the temporary password directory; stop here.' >&2
+    return 1
+  fi
+  if ! agent_suffix="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "$AGENT_ID")"; then
+    rmdir -- "$working_directory"
+    return 1
+  fi
+  transport_secret="openclaw-agent-transport-$agent_suffix"
+  if ! secret_json="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$TENANT_NAMESPACE" \
+    get secret "$transport_secret" -o json)"; then
+    rmdir -- "$working_directory"
+    return 1
+  fi
+  if ! python3 -c '
+import base64, json, sys
+from pathlib import Path
+password = base64.b64decode(json.load(sys.stdin)["data"]["gateway-password"], validate=True)
+if not password:
+    raise SystemExit("The gateway password is empty.")
+Path(sys.argv[1]).write_bytes(password)
+' "$working_directory/gateway-password" <<< "$secret_json"; then
+    rm -f -- "$working_directory/gateway-password"
+    rmdir -- "$working_directory"
+    printf '%s\n' 'Could not write the gateway password; stop here.' >&2
+    return 1
+  fi
+  export GATEWAY_PASSWORD_DIRECTORY="$working_directory"
+  export GATEWAY_PASSWORD_FILE="$working_directory/gateway-password"
+}
+fetch_gateway_password
 ```
 
 Replace `openclaw-agent-transport-` if your Installation sets a different
@@ -116,10 +211,16 @@ call fails, check that the selected revision is active, its model credential is
 valid, and the gateway and Harness are available. Use [platform troubleshooting](troubleshooting.md)
 when the control plane or several Agents are affected.
 
-Stop the port-forward with Ctrl+C. If you created a temporary password file
-above, delete only that copy:
+Stop the port-forward with Ctrl+C. This removes the temporary password copy
+created above and leaves a password file you supplied yourself untouched:
 
 ```bash
-rm -- "$GATEWAY_PASSWORD_FILE"
-rmdir -- "$GATEWAY_PASSWORD_DIRECTORY"
+case "${GATEWAY_PASSWORD_DIRECTORY:-}" in
+  /tmp/occ-gateway-password.[[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]])
+    if [ ! -L "$GATEWAY_PASSWORD_DIRECTORY" ] &&
+       [ "${GATEWAY_PASSWORD_FILE:-}" = "$GATEWAY_PASSWORD_DIRECTORY/gateway-password" ]; then
+      rm -- "$GATEWAY_PASSWORD_DIRECTORY/gateway-password" &&
+        rmdir -- "$GATEWAY_PASSWORD_DIRECTORY"
+    fi ;;
+esac
 ```

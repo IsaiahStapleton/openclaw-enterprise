@@ -23,8 +23,10 @@ before changing shared dependencies or hook configuration.
 - [Local Setup](../guides/quickstart.md) starts the local Kubernetes platform and
   leads to deploying an Agent.
 - [Local Kubernetes development](../guides/deploy/local-kubernetes-development.md)
-  covers the contributor profile, health checks, teardown, and what its startup
-  does and does not verify.
+  covers the contributor profile and health checks. Once it is running, use the
+  [edit and rebuild loop](../guides/deploy/local-kubernetes-development.md#rebuild-after-a-source-edit)
+  to reload the API, worker, or console without resetting PostgreSQL or the
+  Kubernetes cluster. The console is served by the controller.
 - [Testing](../testing/README.md) covers isolated PostgreSQL, Docker, Kubernetes,
   and browser checks. Use the environment required by the behavior you changed.
 

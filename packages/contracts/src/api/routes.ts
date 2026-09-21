@@ -732,7 +732,14 @@ export const occApiRoutes = [
       querystring: EmptyQuery,
       params: WorkspaceFileParams,
       body: UpdateWorkspaceFileBody,
-      response: { 200: WorkspaceFileUpdateResponse, ...createErrors },
+      response: {
+        200: WorkspaceFileUpdateResponse,
+        ...createErrors,
+        503: Type.Ref("ErrorResponse", {
+          description:
+            "Service Unavailable. Check `error.code`: `DEPENDENCY_UNAVAILABLE` means workspace access is unavailable. `UNKNOWN_OUTCOME` means OCC could not confirm the write or its audit record; the file may already contain the requested content. Read the same file with `GET` and compare its content before deciding whether to retry. If the content matches, do not retry. If you cannot read it, wait or ask someone with `read` permission on the Agent to check.",
+        }),
+      },
     },
   },
   {
