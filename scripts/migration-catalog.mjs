@@ -9,7 +9,7 @@ WITH objects AS (
       c.relowner = current_user::regrole, c.reloptions, c.relreplident, c.relispartition,
       CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid, false) END) AS value
   FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = 'occ'
+  WHERE n.nspname = $1
   UNION ALL
   SELECT 'column', c.relname || '.' || a.attname,
     jsonb_build_array(format_type(a.atttypid, a.atttypmod), a.attnotnull,
@@ -20,61 +20,61 @@ WITH objects AS (
   FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-  WHERE n.nspname = 'occ' AND c.relkind IN ('r','p','v','m','f') AND a.attnum > 0 AND NOT a.attisdropped
+  WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f') AND a.attnum > 0 AND NOT a.attisdropped
   UNION ALL
   SELECT 'constraint', COALESCE(c.relname || '.', '') || co.conname,
     jsonb_build_array(pg_get_constraintdef(co.oid, false), co.convalidated,
       co.condeferrable, co.condeferred)
   FROM pg_catalog.pg_constraint co JOIN pg_catalog.pg_namespace n ON n.oid = co.connamespace
-  LEFT JOIN pg_catalog.pg_class c ON c.oid = co.conrelid WHERE n.nspname = 'occ' AND co.contype <> 'n'
+  LEFT JOIN pg_catalog.pg_class c ON c.oid = co.conrelid WHERE n.nspname = $1 AND co.contype <> 'n'
   UNION ALL
   SELECT 'index', c.relname, jsonb_build_array(pg_get_indexdef(i.indexrelid),
       i.indisvalid, i.indisready, i.indislive)
   FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
-  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'occ'
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1
   UNION ALL
   SELECT 'function', p.oid::regprocedure::text,
     jsonb_build_array(pg_get_functiondef(p.oid), p.proowner = current_user::regrole,
       has_function_privilege('occ_app', p.oid, 'EXECUTE'))
   FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-  WHERE n.nspname = 'occ'
+  WHERE n.nspname = $1
   UNION ALL
   SELECT 'trigger', c.relname || '.' || t.tgname,
     jsonb_build_array(pg_get_triggerdef(t.oid, false), t.tgenabled)
   FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = 'occ' AND NOT t.tgisinternal
+  WHERE n.nspname = $1 AND NOT t.tgisinternal
   UNION ALL
   SELECT 'sequence', c.relname, jsonb_build_array(format_type(s.seqtypid, NULL),
       s.seqstart, s.seqincrement, s.seqmax, s.seqmin, s.seqcache, s.seqcycle)
   FROM pg_catalog.pg_sequence s JOIN pg_catalog.pg_class c ON c.oid = s.seqrelid
-  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'occ'
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1
   UNION ALL
   SELECT 'type', t.typname, jsonb_build_array(t.typtype, format_type(t.typbasetype, NULL),
       t.typnotnull, t.typdefault, t.typowner = current_user::regrole,
       ARRAY(SELECT e.enumlabel FROM pg_catalog.pg_enum e WHERE e.enumtypid=t.oid ORDER BY e.enumsortorder))
   FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-  WHERE n.nspname = 'occ' AND t.typrelid = 0 AND t.typelem = 0
+  WHERE n.nspname = $1 AND t.typrelid = 0 AND t.typelem = 0
   UNION ALL
   SELECT 'policy', c.relname || '.' || p.polname,
     jsonb_build_array(p.polcmd, p.polpermissive, pg_get_expr(p.polqual,p.polrelid),
       pg_get_expr(p.polwithcheck,p.polrelid),
       ARRAY(SELECT CASE WHEN r=0 THEN 'public' ELSE r::regrole::text END FROM unnest(p.polroles) r ORDER BY 1))
   FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid=p.polrelid
-  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='occ'
+  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1
 ), acl AS (
   SELECT 'relation' AS kind, c.relname AS name, c.relowner AS owner,
     COALESCE(c.relacl, acldefault(CASE WHEN c.relkind='S' THEN 'S'::"char" ELSE 'r'::"char" END,c.relowner)) AS privileges
   FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-  WHERE n.nspname='occ' AND c.relkind IN ('r','p','v','m','S','f')
+  WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','S','f')
   UNION ALL
   SELECT 'column', c.relname || '.' || a.attname, c.relowner, a.attacl
   FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
   JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-  WHERE n.nspname='occ' AND a.attnum>0 AND NOT a.attisdropped
+  WHERE n.nspname=$1 AND a.attnum>0 AND NOT a.attisdropped
   UNION ALL
   SELECT 'function', p.oid::regprocedure::text, p.proowner, COALESCE(p.proacl,acldefault('f',p.proowner))
-  FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='occ'
+  FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1
 )
 SELECT kind, name, value FROM objects
 UNION ALL
@@ -90,14 +90,14 @@ SELECT 'effective-table-acl',c.relname,to_jsonb(ARRAY(SELECT p FROM unnest(
   ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p
   WHERE has_table_privilege('occ_app',c.oid,p) ORDER BY p))
 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-WHERE n.nspname='occ' AND c.relkind IN ('r','p','v','m','f')
+WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f')
 ORDER BY kind,name`;
 
 export async function migrationCatalog(client, schema = "occ") {
   const previous = await client.query("SHOW search_path");
   await client.query("SET search_path = pg_catalog, pg_temp");
   try {
-    const { rows } = await client.query(catalogSql.replaceAll("'occ'", "$1"), [schema]);
+    const { rows } = await client.query(catalogSql, [schema]);
     const otherObjects = await client.query(
       `
       SELECT 'other-object' AS kind, i.identity AS name, to_jsonb(i.type) AS value

@@ -53,7 +53,7 @@ async function requireInitialSchema(client, schema, manifest) {
   }
 }
 
-async function preflight(client, manifest) {
+async function requireMigrationRoles(client) {
   const { rows: roles } = await client.query(`
     SELECT current_user = 'occ_migrator' AND session_user = current_user
       AND pg_catalog.has_database_privilege(current_user, pg_catalog.current_database(), 'CREATE')
@@ -75,19 +75,9 @@ async function preflight(client, manifest) {
   if (schemas.some((schema) => !schema.owned || schema.app_create || schema.other_create)) {
     refuse("a database schema has unexpected ownership or CREATE grants");
   }
+}
 
-  const ledger = catalogDigest(await migrationCatalog(client, "drizzle"));
-  let receipts = [];
-  if (
-    ledger === manifest.ledgerCatalogs.initialized ||
-    ledger === manifest.ledgerCatalogs.completed
-  ) {
-    ({ rows: receipts } = await client.query(
-      "SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY id",
-    ));
-  } else {
-    await requireInitialSchema(client, "drizzle", manifest);
-  }
+function classifyReceipts(receipts, manifest) {
   let previousId = 0;
   for (const [index, receipt] of receipts.entries()) {
     const entry = manifest.entries[index];
@@ -102,17 +92,33 @@ async function preflight(client, manifest) {
     }
     previousId = receipt.id;
   }
-  const shape =
-    receipts.length === 0
-      ? "empty"
-      : receipts.length === 24
-        ? "main"
-        : receipts.length === manifest.entries.length
-          ? "completed"
-          : undefined;
-  if (shape === undefined) {
-    refuse("an incomplete or unsupported development history is installed");
+  if (receipts.length === 0) {
+    return "empty";
   }
+  if (receipts.length === 24) {
+    return "main";
+  }
+  if (receipts.length === manifest.entries.length) {
+    return "completed";
+  }
+  refuse("an incomplete or unsupported development history is installed");
+}
+
+async function preflight(client, manifest) {
+  await requireMigrationRoles(client);
+  const ledger = catalogDigest(await migrationCatalog(client, "drizzle"));
+  let receipts = [];
+  if (
+    ledger === manifest.ledgerCatalogs.initialized ||
+    ledger === manifest.ledgerCatalogs.completed
+  ) {
+    ({ rows: receipts } = await client.query(
+      "SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY id",
+    ));
+  } else {
+    await requireInitialSchema(client, "drizzle", manifest);
+  }
+  const shape = classifyReceipts(receipts, manifest);
   if (shape === "empty") {
     await requireInitialSchema(client, "occ", manifest);
   } else if (ledger !== manifest.ledgerCatalogs.completed) {

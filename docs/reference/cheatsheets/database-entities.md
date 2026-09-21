@@ -5,8 +5,12 @@ The tables below are in the `occ` PostgreSQL schema; use `occ."user"` when
 querying the `user` table.
 
 The [database schema](../../../packages/occ/src/state/postgres-schema.ts) defines
-columns and constraints. The [Drizzle migration-history table](../../../drizzle.config.ts),
-`drizzle.__drizzle_migrations`, is excluded. See [platform repositories](../platform-repositories.md)
+columns and constraints. The
+[repository-credentials migration](../../../migrations/0024_repository_credentials.sql)
+adds the repository binding and session-attempt storage below. The
+[Drizzle migration-history table](../../../drizzle.config.ts),
+`drizzle.__drizzle_migrations`, is excluded. See [migration history](../settings/operations.md#migration-history)
+for supported database states and [platform repositories](../platform-repositories.md)
 for how OCC reads and writes its data.
 
 ## Platform resources
@@ -41,6 +45,7 @@ Stores Agent drafts, their desired runtime state, and the active revision refere
 - `provider_id`
 - `execution_mode`
 - `plugins`
+- `repository_bindings`
 - `service_principal_id`
 - `harness_auth`
 - `harness_auth_secret_id`
@@ -107,6 +112,22 @@ Links managed accounts to a Provider, Driver, upstream account, workspace, and a
 - `external_account_id`
 - `external_credential_id`
 - `workspace_id`
+
+### `repository_session_attempts`
+
+Stores repository-credential session attempts tied to an admitted AgentRevision.
+
+- `namespace_id`
+- `agent_id`
+- `revision_id`
+- `repository_ref`
+- `admission_id`
+- `duration_seconds`
+- `deadline_wall_ms`
+- `phase`
+- `session_id`
+- `created_at`
+- `updated_at`
 
 ## Identity and access
 
