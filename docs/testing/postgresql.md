@@ -59,6 +59,39 @@ already has an Installation. See [PostgreSQL settings](#postgresql-test-environm
 For a repeat of production bootstrap, prepare a fresh migrated database and
 change its URL. Keep the general and bootstrap databases separate.
 
+## Canonical migration compatibility
+
+The mandatory native `postgres` lane runs
+`tests/integration/postgres-migration-compatibility.test.mjs` against its
+recorded fixture. Its canonical-history cases create new owned databases,
+install historical prefixes with stock Drizzle, and invoke the real development
+and production migration commands. They cover fresh and populated-main
+installation, unchanged receipts/data, repeat/concurrent runners, transaction
+rollback/retry, unsupported-history and initial-ACL refusal, and the actual
+`occ_app` temporary-domain attack against inherited privileged functions.
+
+For an already-owned loopback PostgreSQL 18 fixture with the repository's local
+test roles, explicitly select the running container, its mapped port, and a
+unique database prefix. The suite validates the mapping, creates only new names
+under that prefix, and drops only databases it created:
+
+```sh
+OCC_MIGRATION_HISTORY_DATABASE_URL="postgresql://occ_migrator:occ-migrator-local@127.0.0.1:$TEST_POSTGRES_PORT/postgres" \
+OCC_MIGRATION_HISTORY_CONTAINER="$TEST_POSTGRES_CONTAINER" \
+OCC_MIGRATION_HISTORY_DATABASE_PREFIX=openclaw_migration_test_local \
+  node --test --test-name-pattern=Canonical tests/integration/postgres-migration-compatibility.test.mjs
+```
+
+The database prefix must start with `openclaw_`, contain only lowercase letters,
+digits, and underscores, and have at most 50 characters. All three selectors
+are required together. This mode reuses the selected server and roles; it does
+not provision or repair them. The database-local administrator fixture uses
+`docker exec` for database creation, failure injection, and cleanup. Preserve
+the command output when a case fails. These tests prove SQL and entrypoint
+behavior, not installed State/API, Agent deletion, credential custody, or live
+provider operation. Developer recovery is documented under
+[migration history](../reference/settings/operations.md#migration-history).
+
 ## PostgreSQL test environment
 
 | Variable                                       | Required by                                | Behavior                                                                                                                                                                                   |
