@@ -2639,25 +2639,12 @@ test("Kubernetes runtime diagnostics read exact private Pod status without nativ
     servicePrincipalId: "service-principal-runtime-diagnostics",
     createdAt: tenant.createdAt,
   };
-  const revision = {
+  const revision = routedRevision(driver, {
     id: "revision-runtime-diagnostics",
-    namespaceId: tenant.id,
     agentId: agent.id,
-    revision: 1,
     configurationId: agent.configurationId,
-    configurationKind: "agent",
-    configurationGeneration: 1,
-    configuration: {
-      logging: { level: "info", consoleLevel: "info", consoleStyle: "json" },
-      diagnostics: { otel: { logs: false } },
-      agents: { defaults: { model: "codex/gpt-5" } },
-    },
-    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
-    harnessAuth: apiKeyAuth,
-    compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: agent.servicePrincipalId,
-    createdAt: tenant.createdAt,
-  };
+  });
   const pod = (role) => ({
     apiVersion: "v1",
     kind: "Pod",
@@ -2778,25 +2765,12 @@ test("Kubernetes runtime diagnostics reject missing timestamps and raced Pod rea
   );
 
   const namespaceName = kubernetesNamespaceName(tenant.id);
-  const revision = {
+  const revision = routedRevision(driver, {
     id: "revision-runtime-readback-race",
-    namespaceId: tenant.id,
     agentId: "agent-runtime-readback-race",
-    revision: 1,
     configurationId: "cfg_runtime_readback_race",
-    configurationKind: "agent",
-    configurationGeneration: 1,
-    configuration: {
-      logging: { level: "info", consoleLevel: "info", consoleStyle: "json" },
-      diagnostics: { otel: { logs: false } },
-      agents: { defaults: { model: "codex/gpt-5" } },
-    },
-    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
-    harnessAuth: apiKeyAuth,
-    compute: { id: driver.id, implementation: driver.implementation },
     servicePrincipalId: "service-principal-runtime-readback-race",
-    createdAt: tenant.createdAt,
-  };
+  });
   const pod = {
     apiVersion: "v1",
     kind: "Pod",
