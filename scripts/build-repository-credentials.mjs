@@ -109,6 +109,8 @@ async function closure(name, entrypoints) {
 const service = await closure("service", [
   "repository-credentials.js",
   "composition/repository-credentials/check-config.js",
+  "composition/repository-credentials/projected-inputs.js",
+  "composition/repository-credentials/probe.js",
 ]);
 const client = await closure(
   "client",

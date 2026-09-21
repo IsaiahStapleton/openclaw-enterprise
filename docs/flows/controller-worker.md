@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-21
-last_updated_session: codex/01a0af6f-d097-7ef0-a2b7-c8ce31703bd9
+updated: "2026-09-21"
+last_updated_session: "authoring-run/fba2d7fa-6603-465e-a7c8-df0375ad202d"
 ---
 
 # Controller Worker Flow
@@ -343,6 +343,7 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 
 ## Related docs
 
+- [Agent repository session preparation and durable cleanup](agent-repository-credentials.md)
 - [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
 
 - [Controller reference](../reference/controller.md)
@@ -361,6 +362,8 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 
 ## Changelog
 
+- 2026-09-21 05:32: Reconcile accompanying platform credential documentation with current source history and native Git boundaries. (authoring-run/fba2d7fa-6603-465e-a7c8-df0375ad202d - a051a2406eec7cafde2e0dd5e2ec63dba6ce1581)
+
 - 2026-09-21 00:56: Integrate Agent-deletion metrics. (01a0af6f-d097-7ef0-a2b7-c8ce31703bd9 - 1de0877d28f7c77e6ef4aab97531ad7d56b583d0)
 
 - 2026-09-20 17:23: Document cached startup failure persistence. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 1ff76eb2)
@@ -373,6 +376,8 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 
 - 2026-09-17 20:28: Replaced terminal plugin receipts with verified optional-plugin exclusion, current startup status, and successful deployment warnings; runtime verification in progress. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 7771526d)
 - 2026-09-17 20:28: Removed the first-failure receipt and acknowledgment lifecycle under the approved best-effort plugin decision. (NOT_IN_SPEC)
+
+- 2026-09-18 03:04: Link the accompanying repository-session preparation, maintenance and cleanup flow. (authoring-run/7e9ee7cd-e36a-4de7-8f67-29f3b03bd94d - 8500b2da103063b4503b62e5529f3910513e84a9)
 
 - 2026-09-17 12:09: Separate health reporting from claim renewal, preserve lease-loss fencing, and restore admitted Agent bindings before stop effects. (01a03526-12b3-7f50-b599-e8414052909d - 683d0e253ad827af7c6098650097fa6a8ad61f57)
 

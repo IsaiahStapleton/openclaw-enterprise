@@ -8,3 +8,20 @@ export const appExtension = appRoot.endsWith("/dist") ? "js" : "ts";
 export function appModule(path) {
   return import(pathToFileURL(resolve(appRoot, `${path}.${appExtension}`)).href);
 }
+
+export function credentialDriverModule(path) {
+  return appModule(
+    path.startsWith("client/")
+      ? `drivers/repo/github/credentials/${path}`
+      : `drivers/repo/credentials/${path}`,
+  );
+}
+export function githubProviderModule(path) {
+  return appModule(`drivers/repo/github/credentials/${path}`);
+}
+export function credentialCompositionModule(path) {
+  return appModule(`composition/repository-credentials/${path}`);
+}
+export function credentialClientPath(name) {
+  return resolve(appRoot, `drivers/repo/github/credentials/client/${name}.${appExtension}`);
+}

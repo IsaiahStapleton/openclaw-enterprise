@@ -32,5 +32,10 @@ export function createPlatformReadView(
       "listAccessBindings",
       "getAccessBinding",
     ]),
+    repositorySessions: bindRepository(repositories.repositorySessions, lifetime, [
+      "findAttempt",
+      "listRevisionAttempts",
+      "listNamespaceAttempts",
+    ]),
   });
 }

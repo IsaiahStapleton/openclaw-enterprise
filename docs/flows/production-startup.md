@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: 2026-09-21
-last_updated_session: authoring-run/10020664-226c-401f-a499-199fb7f18c9c
+updated: "2026-09-21"
+last_updated_session: "authoring-run/fba2d7fa-6603-465e-a7c8-df0375ad202d"
 ---
 
 # Production Startup Flow
@@ -51,6 +51,9 @@ graph TD
         O -->|Yes| G["Apply migrations, bootstrap administrators and write protected key output"]
         G --> H["Start private API Deployment"]
         G --> I["Start independent worker Deployment"]
+        I --> O{"Repository credentials enabled?"}
+        O -->|Yes| P["Sidecar copies protected inputs and starts private control"]
+        P --> Q["Sidecar probe gates worker Pod readiness"]
         H --> L["Run Kubernetes Compute preflight"]
         I --> L
         L --> M{"Kubernetes older than 1.35?"}
@@ -183,6 +186,31 @@ server, emits `worker.started`, and polls durable Namespace and AgentRevision
 work. Worker readiness depends on fresh queue-health observations. Neither
 process mounts the bootstrap PVC.
 
+`apps/controller/src/composition/repository-credentials/platform.ts:composeRepoDriver`
+
+When selected, both processes load the same canonical registry and public CA,
+construct the GitHub Provider with a lazy Unix client, and register
+`GitHubRepoDriver` under the optional `repo` capability. The configured Provider
+member and `drivers.repo` must select the same Driver ID. API startup performs no control operation and loads no App key or
+session engine. The worker owns subsequent session lifecycle calls through the
+selected Driver; API readiness remains database-backed.
+
+`apps/controller/src/composition/repository-credentials/projected-inputs.ts:prepareProjectedInputs`
+
+The optional service runs beside the single worker. Its own process pins a
+projection generation, copies the known config/key/TLS/registry files into owned
+private regular files, validates the selected Provider and exact Service origin,
+then uses the protected loader and starts both listeners. App/TLS private
+material stays in that container. Only the worker receives an explicitly
+projected Kubernetes API token. The service's private health probe checks the
+Unix listener; it performs no provider operation. The service and worker share
+only the private control volume, and the Pod uses `Recreate` with a 75-second
+termination grace period. Both containers must pass readiness for the Pod to be
+ready; the worker keeps its queue-health probe and retries unavailable session
+operations through its ordinary Driver contract. This is one service owner,
+without independent worker/service high availability. Repository runtime reconciliation continues in the
+[Agent repository credential flow](agent-repository-credentials.md).
+
 ### 5. Retrieve the key and prove authenticated access
 
 `internal/occclient/client.go:Client.GetInstallation`
@@ -233,6 +261,7 @@ tenant deployment and TUI procedures run.
 - [Settings reference](../reference/settings.md)
 - [Kubernetes Compute Driver](../reference/drivers/kubernetes-compute.md)
 - [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
+- [Repository credential setup](../guides/repository-credentials.md)
 - [Controller worker execution flow](controller-worker.md)
 - [Production TUI flow](production-tui.md)
 - [Local password authentication flow](local-password-authentication.md)
@@ -243,6 +272,12 @@ tenant deployment and TUI procedures run.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 05:32: Reconcile accompanying platform credential documentation with current source history and native Git boundaries. (authoring-run/fba2d7fa-6603-465e-a7c8-df0375ad202d - a051a2406eec7cafde2e0dd5e2ec63dba6ce1581)
+
+- 2026-09-19 23:54: Reconcile RepoDriver ownership, private status projection, and separate emitted service/client paths. (public authoring-run/73c80a5e-4d0c-4e72-b989-0cf9963c6593 - e5b5a5489f078d08272523476bdbcd0b9162c946)
+
+- 2026-09-18 03:03: Trace optional repository Driver composition and service-only projected input startup. (8500b2da103063b4503b62e5529f3910513e84a9)
 
 - 2026-09-21 03:38: Trace canonical migration preflight and fail-closed initialization. (authoring-run/10020664-226c-401f-a499-199fb7f18c9c - 5f9a9903239a84224a755610339f3bf0443c171f)
 - 2026-09-18 21:48: Clarify that control-plane node placement is optional unless configured. (authoring-run/23a79228-a1f4-4d9d-adb6-4c2a77d6b43f - db8547ffe19cd3317309b526d80e1d19af4c8a9a)

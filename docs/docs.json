@@ -306,6 +306,10 @@
                         "label": "Setup"
                       },
                       {
+                        "page": "guides/repository-credentials/installation",
+                        "label": "Installation"
+                      },
+                      {
                         "page": "reference/repository-credentials",
                         "label": "Credential Lifecycle"
                       }
@@ -738,9 +742,11 @@
               "documentation-inventory/repository-specs-1",
               "documentation-inventory/repository-specs-2",
               "documentation-inventory/repository-specs-3",
+              "flows/agent-repository-credentials",
               "flows/repository-credentials",
               "flows/repository-credential-configuration",
-              "testing/repository-credentials"
+              "testing/repository-credentials",
+              "testing/repository-credentials-platform"
             ]
           }
         ]

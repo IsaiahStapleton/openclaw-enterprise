@@ -4,7 +4,7 @@ import type {
   DriverCustody,
   RepositoryBackend,
 } from "../../credentials/backend-contracts.ts";
-import type { RepositoryGrantIdentity } from "../../credentials/service-contracts.ts";
+import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
 import type { ProviderTransport } from "./provider-transport.ts";
 import type { RoutePolicy } from "./routes.ts";
 import type { GitHubConfiguration, GitHubKeyOwner } from "./types.ts";
@@ -17,7 +17,7 @@ export { sameAuthority } from "./driver/state.ts";
 
 interface GitHubDriverOptions {
   readonly authority: AuthorityIdentity;
-  readonly binding: RepositoryGrantIdentity;
+  readonly binding: RepositoryCredentialGrantIdentity;
   readonly custody: DriverCustody;
   readonly clock: Clock;
   readonly key: GitHubKeyOwner;

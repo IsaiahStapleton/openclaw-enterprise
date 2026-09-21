@@ -3,22 +3,26 @@ import { fixtureRepository, fixtureRepositoryId } from "./metadata.mjs";
 
 const json = (status, body, headers = {}) => ({ status, body, headers });
 
-export function createRepositoryResources() {
+export function createRepositoryResources({
+  repository = fixtureRepository,
+  repositoryId = fixtureRepositoryId,
+} = {}) {
+  const [owner, name] = repository.split("/");
   const issues = new Map();
   const pulls = new Map();
   const comments = new Map();
   let nextNumber = 1;
   let nextComment = 101;
   const repo = {
-    id: 73,
-    node_id: "R_fixture",
-    name: "repository",
-    full_name: fixtureRepository,
-    owner: { login: "fixture", id: 1, type: "Organization" },
+    id: Number(repositoryId),
+    node_id: repositoryId === fixtureRepositoryId ? "R_fixture" : `R_fixture_${repositoryId}`,
+    name,
+    full_name: repository,
+    owner: { login: owner, id: 1, type: "Organization" },
     private: true,
     default_branch: "main",
-    html_url: `https://github.com/${fixtureRepository}`,
-    clone_url: `https://github.com/${fixtureRepository}.git`,
+    html_url: `https://github.com/${repository}`,
+    clone_url: `https://github.com/${repository}.git`,
   };
   function pageOf(values, url, defaultSize = 100) {
     const size = Number(url.searchParams.get("per_page") ?? defaultSize);
@@ -34,8 +38,8 @@ export function createRepositoryResources() {
       state: "open",
       title: input.title,
       body: input.body ?? "",
-      html_url: `https://github.com/${fixtureRepository}/pull/${number}`,
-      url: `https://api.github.com/repos/${fixtureRepository}/pulls/${number}`,
+      html_url: `https://github.com/${repository}/pull/${number}`,
+      url: `https://api.github.com/repos/${repository}/pulls/${number}`,
       head: { ref: input.head ?? input.headRefName ?? "native-feature" },
       base: { ref: input.base ?? input.baseRefName ?? "main" },
       native,
@@ -57,11 +61,11 @@ export function createRepositoryResources() {
           },
         });
       }
-      const repository = {
-        id: "R_fixture",
-        name: "repository",
-        nameWithOwner: fixtureRepository,
-        owner: { login: "fixture", __typename: "Organization" },
+      const graphRepository = {
+        id: repo.node_id,
+        name: repo.name,
+        nameWithOwner: repository,
+        owner: { login: owner, __typename: "Organization" },
         isPrivate: true,
         isFork: false,
         hasIssuesEnabled: true,
@@ -76,13 +80,17 @@ export function createRepositoryResources() {
         ref: { name: "native-feature", target: { oid: "a".repeat(40) } },
       };
       return json(200, {
-        data: { repository, repo_000: repository, viewer: { login: "fixture-bot" } },
+        data: {
+          repository: graphRepository,
+          repo_000: graphRepository,
+          viewer: { login: "fixture-bot" },
+        },
       });
     }
     if (url.pathname === "/meta") {
       return json(200, { installed_version: "github.com" });
     }
-    const prefix = `/repos/${fixtureRepository}`;
+    const prefix = `/repos/${repository}`;
     const suffix = url.pathname.slice(prefix.length);
     if (!url.pathname.startsWith(prefix)) {
       return json(404, {});
@@ -121,8 +129,8 @@ export function createRepositoryResources() {
         number,
         id: number,
         state: "open",
-        html_url: `https://github.com/${fixtureRepository}/issues/${number}`,
-        url: `https://api.github.com/repos/${fixtureRepository}/issues/${number}`,
+        html_url: `https://github.com/${repository}/issues/${number}`,
+        url: `https://api.github.com/repos/${repository}/issues/${number}`,
       };
       issues.set(number, issue);
       return json(201, issue);
@@ -140,7 +148,7 @@ export function createRepositoryResources() {
       const headers = {};
       if (offset + size < values.length) {
         const next = new URL(url);
-        next.pathname = `/repositories/${fixtureRepositoryId}/issues`;
+        next.pathname = `/repositories/${repositoryId}/issues`;
         next.searchParams.set("after", cursor(selected.at(-1)));
         next.searchParams.set("page", String(page + 1));
         headers.link = `<${next}>; rel="next"`;
@@ -167,8 +175,8 @@ export function createRepositoryResources() {
           id,
           body: body.body,
           issue,
-          url: `https://api.github.com/repos/${fixtureRepository}/issues/comments/${id}`,
-          html_url: `https://github.com/${fixtureRepository}/issues/${issue}#issuecomment-${id}`,
+          url: `https://api.github.com/repos/${repository}/issues/comments/${id}`,
+          html_url: `https://github.com/${repository}/issues/${issue}#issuecomment-${id}`,
         };
         comments.set(id, comment);
         return json(201, comment);
@@ -179,7 +187,7 @@ export function createRepositoryResources() {
       const headers =
         values.length > page * size
           ? {
-              link: `<https://api.github.com/repositories/${fixtureRepositoryId}${suffix}?page=${page + 1}&per_page=${size}>; rel="next"`,
+              link: `<https://api.github.com/repositories/${repositoryId}${suffix}?page=${page + 1}&per_page=${size}>; rel="next"`,
             }
           : {};
       return json(200, pageOf(values, url, 1), headers);

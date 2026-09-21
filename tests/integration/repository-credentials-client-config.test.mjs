@@ -15,8 +15,12 @@ import {
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { createServer } from "node:https";
+import { createServer as createHttpServer } from "node:http";
 import { once } from "node:events";
-import { writeClientConfiguration } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
+import {
+  writeClientConfiguration,
+  encodeRepositoryCredentialSessionFiles,
+} from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 import {
   prepareNativeGitConfiguration,
   renderNativeGitConfiguration,
@@ -341,3 +345,111 @@ test(
     assert.equal(requests[0].authorization, undefined);
   },
 );
+
+test("encoded session files support the actual client without the operator writer", async (t) => {
+  const parent = await temporaryDirectory(t);
+  await mkdir(join(parent, "gh"), { mode: 0o700 });
+  const files = encodeRepositoryCredentialSessionFiles(opened);
+  for (const [name, value] of Object.entries(files)) {
+    await writeFile(join(parent, name), value, { mode: 0o600 });
+  }
+  const result = await run(process.execPath, [launcher, parent, "git", "credential", "fill"], {
+    env: cleanEnvironment({ HOME: parent }),
+    input: protocol(),
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(result.stdout.includes(`password=${opened.bearer}\n`));
+  assert.equal(result.stderr.includes(opened.bearer), false);
+  assert.equal(JSON.parse(files["client.json"]).hasPublicCa, false);
+});
+
+test("operator rejects unsafe or conflicting bound request files before admission", async (t) => {
+  const parent = await temporaryDirectory(t);
+  const requestPath = join(parent, "request.json");
+  const socket = join(parent, "control.sock");
+  const requests = [];
+  // Observe the actual operator's HTTP boundary; this does not emulate admission.
+  const server = createHttpServer(async (incoming, response) => {
+    let body = "";
+    for await (const chunk of incoming) {
+      body += chunk;
+    }
+    requests.push({ method: incoming.method, path: incoming.url, body: JSON.parse(body) });
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not-found" }));
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  server.listen(socket);
+  await once(server, "listening");
+  const request = {
+    namespaceId: "namespace-test",
+    repositoryRef: "project",
+    durationSeconds: 60,
+    profile: "git-read",
+    deadlineWallMs: Date.now() + 60_000,
+    expectedBinding: {
+      providerInstanceId: "provider-test",
+      repositoryId: "repository-test",
+      grantId: "grant-test",
+    },
+  };
+  const invoke = (path, extra = []) =>
+    run(
+      process.execPath,
+      [
+        resolve("apps/controller/src/drivers/repo/github/credentials/client/operator.ts"),
+        "open",
+        "--socket",
+        socket,
+        "--output",
+        join(parent, "session"),
+        "--request-json",
+        path,
+        ...extra,
+      ],
+      { allowFailure: true },
+    );
+  const failed = (result) => {
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "credential-operator-failed\n");
+  };
+  // A valid request must reach the peer, so a dead socket cannot satisfy the
+  // subsequent assertions that invalid files are rejected before admission.
+  await writeFile(requestPath, JSON.stringify(request), { mode: 0o600 });
+  const admitted = await invoke(requestPath);
+  assert.equal(admitted.code, 1);
+  assert.equal(admitted.stdout, "");
+  assert.match(
+    admitted.stderr,
+    /^credential-admission [0-9]{13}-[0-9a-f-]{36}; recover with open --admission-id and the same inputs\ncredential-operator-not-found\n$/,
+  );
+  assert.deepEqual(requests, [{ method: "POST", path: "/v1/sessions", body: request }]);
+  requests.length = 0;
+  const refused = (result) => {
+    failed(result);
+    assert.equal(requests.length, 0, "invalid request reached admission");
+  };
+  for (const value of [
+    { ...request, bearer: "unexpected-secret-field" },
+    { ...request, recoverOnly: false },
+    { ...request, expectedBinding: { ...request.expectedBinding, token: "unexpected" } },
+    { ...request, deadlineWallMs: "60000" },
+  ]) {
+    await writeFile(requestPath, JSON.stringify(value), { mode: 0o600 });
+    refused(await invoke(requestPath));
+  }
+  await writeFile(requestPath, JSON.stringify(request), { mode: 0o600 });
+  for (const extra of [
+    ["--duration-seconds", "60"],
+    ["--profile", "git-read"],
+  ]) {
+    refused(await invoke(requestPath, extra));
+  }
+  await chmod(requestPath, 0o644);
+  refused(await invoke(requestPath));
+  await chmod(requestPath, 0o600);
+  const alias = join(parent, "alias.json");
+  await symlink(requestPath, alias);
+  refused(await invoke(alias));
+});

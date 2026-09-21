@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { randomBytes, verify, createHash } from "node:crypto";
 import { fixtureAppId, fixtureRepositoryId } from "./metadata.mjs";
 
-export function createTokenAuthority({ clock, publicKey, lifetimeMs }) {
+export function createTokenAuthority({
+  clock,
+  publicKey,
+  lifetimeMs,
+  repositoryId = fixtureRepositoryId,
+}) {
   const tokens = new Map();
   const issuesOfTokens = [];
   const authenticationAttempts = [];
@@ -42,7 +47,7 @@ export function createTokenAuthority({ clock, publicKey, lifetimeMs }) {
     assert.ok(claims.iat <= clock.wallNow() / 1000);
     assert.ok(claims.exp > clock.wallNow() / 1000);
     assert.ok(claims.exp - claims.iat <= 600);
-    assert.deepEqual(body.repository_ids.map(String), [fixtureRepositoryId]);
+    assert.deepEqual(body.repository_ids.map(String), [String(repositoryId)]);
     const permissions = body.permissions;
     const acceptedPermissions = [
       { metadata: "read", contents: "read" },

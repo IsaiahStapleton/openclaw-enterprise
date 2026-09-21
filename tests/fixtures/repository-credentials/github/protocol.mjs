@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import { fixtureInstallationId } from "./metadata.mjs";
+import { fixtureInstallationId, fixtureRepository, fixtureRepositoryId } from "./metadata.mjs";
 import { createTokenAuthority } from "./token-authority.mjs";
 import { createRepositoryResources } from "./repository-resources.mjs";
 
@@ -13,6 +13,9 @@ export {
 
 export function createGitHubProtocol({
   clock,
+  repository = fixtureRepository,
+  repositoryId = fixtureRepositoryId,
+  keyPair = generateKeyPairSync("rsa", { modulusLength: 2048 }),
   tokenLifetimeMs = 3600000,
   tokenResponse = (packet) => packet,
   beforeIssueResponse,
@@ -20,9 +23,14 @@ export function createGitHubProtocol({
   issueResponseGate,
   revokeStatus = 204,
 }) {
-  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
-  const authority = createTokenAuthority({ clock, publicKey, lifetimeMs: tokenLifetimeMs });
-  const resources = createRepositoryResources();
+  const { privateKey, publicKey } = keyPair;
+  const authority = createTokenAuthority({
+    clock,
+    publicKey,
+    lifetimeMs: tokenLifetimeMs,
+    repositoryId,
+  });
+  const resources = createRepositoryResources({ repository, repositoryId });
   const trace = [];
   const errors = [];
   let disconnectMutation;

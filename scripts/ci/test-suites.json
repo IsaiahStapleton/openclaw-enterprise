@@ -279,6 +279,30 @@
             "TEST-002: lost GitHub issuance response stays charged while service survives",
             "TEST-002: SIGKILL before GitHub issuance response loses local reservation"
           ]
+        },
+        {
+          "path": "tests/conformance/repository-credentials-registry.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-runtime-material.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-sessions-memory.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-admission.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-driver.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-projected-inputs.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-restart.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-runtime-materialization.test.mjs"
         }
       ]
     },
@@ -465,6 +489,9 @@
             "PostgreSQL native admin WebSocket lease closes within thirty seconds after active revision replacement",
             "PostgreSQL native admin WebSocket closes on API shutdown and disabled redeploy denies reuse"
           ]
+        },
+        {
+          "path": "tests/integration/postgres-repository-sessions.test.mjs"
         }
       ]
     },
@@ -1059,6 +1086,83 @@
           "path": "tests/integration/repository-credentials-live.test.mjs"
         }
       ]
+    },
+    "repository-credentials-platform": {
+      "env": {
+        "OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM": "1"
+      },
+      "requiredEnv": [
+        "OCC_TEST_DATABASE_URL",
+        "OCC_TEST_KUBERNETES_KUBECONFIG",
+        "OCC_TEST_KUBERNETES_CONTEXT",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_HOST_ADDRESS"
+      ],
+      "prepare": {
+        "postgres": true,
+        "k3d": true,
+        "requiresPreparedStateForFile": true
+      },
+      "files": [
+        {
+          "path": "tests/integration/repository-credentials-platform.test.mjs",
+          "expectedTests": [
+            "ordinary Agent repository bindings traverse HTTP, PostgreSQL, Unix control and Kubernetes material"
+          ]
+        }
+      ]
+    },
+    "repository-credentials-installed": {
+      "env": {
+        "OCC_TEST_REPOSITORY_CREDENTIALS_REAL": "1"
+      },
+      "requiredEnv": [
+        "OPENAI_API_KEY",
+        "OCC_TEST_OPENAI_MODEL",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_REPOSITORY",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_APP_CONFIG_FILE",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS",
+        "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
+        "OCC_TEST_PRODUCTION_NODE_IMAGE",
+        "OCC_TEST_KUBERNETES_KUBECONFIG",
+        "OCC_TEST_KUBERNETES_CONTEXT",
+        "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
+        "OCC_TEST_KUBERNETES_RUNTIME_IMAGE"
+      ],
+      "prepare": {
+        "k3d": true,
+        "requiresPreparedStateForFile": true,
+        "requireEnv": [
+          "OPENAI_API_KEY",
+          "OCC_TEST_OPENAI_MODEL",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_REPOSITORY",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_APP_CONFIG_FILE",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS",
+          "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
+          "OCC_TEST_PRODUCTION_NODE_IMAGE",
+          "NODE_BASE_IMAGE"
+        ],
+        "nodeBaseImage": true,
+        "immutableEnvImages": [
+          "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
+          "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
+          "OCC_TEST_PRODUCTION_NODE_IMAGE"
+        ]
+      },
+      "files": [
+        {
+          "path": "tests/integration/repository-credentials-k3d-real.test.mjs",
+          "expectedTests": [
+            "installed embedded Agent clones, edits, commits, pushes and creates a native repository PR"
+          ]
+        }
+      ]
     }
   },
   "groups": {
@@ -1068,7 +1172,8 @@
       "images-packaging",
       "k3d-fixture-configuration",
       "logging-collector",
-      "repository-credentials-container"
+      "repository-credentials-container",
+      "repository-credentials-platform"
     ],
     "full": [
       "checks-baseline",
@@ -1085,7 +1190,8 @@
       "helper-timeout",
       "logging-collector",
       "k3d-otel",
-      "repository-credentials-container"
+      "repository-credentials-container",
+      "repository-credentials-platform"
     ]
   }
 }

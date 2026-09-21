@@ -3762,6 +3762,7 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
   };
   const gateway = driver.manifest("apps/v1", "Deployment", gatewayName, ownership, namespace);
   gateway.metadata.uid = "gateway-uid";
+  gateway.metadata.resourceVersion = "1";
   gateway.metadata.annotations["openclaw.dev/agent-revision-id"] = revisionId;
   const service = driver.service(gatewayName, ownership, namespace, {
     "app.kubernetes.io/name": gatewayName,
@@ -3776,8 +3777,11 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
     service,
   );
   route.metadata.uid = "route-uid";
+  route.metadata.resourceVersion = "1";
   const deletions = [];
   let gatewayDeleted = false;
+  let routeDeleted = false;
+  let failServiceDelete = true;
   let gatewayPodObservations = 0;
   const gatewayPod = {
     apiVersion: "v1",
@@ -3796,7 +3800,7 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
   driver.apiClients = Promise.resolve({
     apps: {
       async readNamespacedDeployment({ name }) {
-        if (name !== gatewayName) {
+        if (name !== gatewayName || gatewayDeleted) {
           throw Object.assign(new Error("Not found"), { code: 404 });
         }
         return structuredClone(gateway);
@@ -3827,6 +3831,10 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
       },
       async deleteNamespacedService(request) {
         deletions.push(["Service", request]);
+        if (failServiceDelete) {
+          failServiceDelete = false;
+          throw new Error("service delete failed");
+        }
       },
       async readNamespacedServiceAccount() {
         return structuredClone(account);
@@ -3843,21 +3851,153 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
     },
     objects: {
       async read() {
+        if (routeDeleted) {
+          throw Object.assign(new Error("Not found"), { code: 404 });
+        }
         return structuredClone(route);
       },
       async delete(spec, _pretty, _dryRun, _grace, _orphan, _propagation, body) {
         deletions.push(["HTTPRoute", { spec, body }]);
+        routeDeleted = true;
       },
     },
   });
 
+  // A failed shared cleanup must retry after the exact route and Deployment are absent.
+  await assert.rejects(driver.stopRevision(revision), /service delete failed/);
   await driver.stopRevision(revision);
   assert.deepEqual(
     deletions.map(([kind]) => kind),
-    ["HTTPRoute", "Service", "ServiceAccount", "Deployment"],
+    ["HTTPRoute", "Deployment", "Service", "Service", "ServiceAccount"],
   );
   assert.equal(gatewayPodObservations, 2);
 });
+
+for (const cutover of ["already deployed", "during Deployment deletion", "during route deletion"]) {
+  test(`stopping a predecessor preserves its replacement ${cutover}`, async () => {
+    const driver = createKubernetesComputeDriver(routedOptions());
+    const revision = routedRevision(driver, {
+      harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+    });
+    const namespace = kubernetesNamespaceName(tenant.id);
+    const name = `gateway-${digest(revision.agentId)}`;
+    const ownership = { namespaceId: tenant.id, agentId: revision.agentId };
+    const namespaceResource = driver.manifest("v1", "Namespace", namespace, {
+      namespaceId: tenant.id,
+    });
+    const gateway = driver.manifest("apps/v1", "Deployment", name, ownership, namespace);
+    gateway.metadata.annotations["openclaw.dev/agent-revision-id"] = revision.id;
+    const service = driver.service(name, ownership, namespace, {
+      "app.kubernetes.io/name": name,
+    });
+    const account = driver.manifest("v1", "ServiceAccount", name, ownership, namespace);
+    const route = driver.gatewayRoute(revision, ownership, namespace, service);
+    const resources = new Map();
+    for (const resource of [gateway, service, account, route]) {
+      resource.metadata.uid = `${resource.kind}-uid`;
+      resource.metadata.resourceVersion = "1";
+      resources.set(resource.kind, resource);
+    }
+    const advance = (resource) => {
+      resource.metadata.annotations["openclaw.dev/agent-revision-id"] = "replacement-revision";
+      resource.metadata.resourceVersion = "2";
+    };
+    if (cutover === "already deployed") {
+      // Activation applies the replacement Deployment before replacing the old route.
+      advance(gateway);
+    }
+    let raced = false;
+    const deletions = [];
+    const missing = () => Object.assign(new Error("Not found"), { code: 404 });
+    const read = (kind) => {
+      const resource = resources.get(kind);
+      if (resource === undefined) {
+        throw missing();
+      }
+      return structuredClone(resource);
+    };
+    const remove = (kind, body) => {
+      if (!raced && cutover === `during ${kind === "HTTPRoute" ? "route" : kind} deletion`) {
+        // Server-side apply updates the revision without changing the object's UID.
+        advance(gateway);
+        if (kind === "HTTPRoute") {
+          advance(route);
+        }
+        raced = true;
+      }
+      const resource = resources.get(kind);
+      if (resource === undefined) {
+        throw missing();
+      }
+      for (const field of ["uid", "resourceVersion"]) {
+        if (
+          body?.preconditions?.[field] !== undefined &&
+          body.preconditions[field] !== resource.metadata[field]
+        ) {
+          throw Object.assign(new Error("Deletion precondition conflict"), { code: 409 });
+        }
+      }
+      resources.delete(kind);
+      deletions.push(kind);
+    };
+    driver.apiClients = Promise.resolve({
+      core: {
+        async listNamespace() {
+          return { items: [namespaceResource] };
+        },
+        async readNamespace() {
+          return structuredClone(namespaceResource);
+        },
+        async listNamespacedPod() {
+          return { items: [] };
+        },
+        async readNamespacedService() {
+          return read("Service");
+        },
+        async readNamespacedServiceAccount() {
+          return read("ServiceAccount");
+        },
+        async deleteNamespacedService({ body }) {
+          remove("Service", body);
+        },
+        async deleteNamespacedServiceAccount({ body }) {
+          remove("ServiceAccount", body);
+        },
+      },
+      apps: {
+        async readNamespacedDeployment() {
+          return read("Deployment");
+        },
+        async deleteNamespacedDeployment({ body }) {
+          remove("Deployment", body);
+        },
+      },
+      objects: {
+        async read() {
+          return read("HTTPRoute");
+        },
+        async delete(_spec, _pretty, _dryRun, _grace, _orphan, _propagation, body) {
+          remove("HTTPRoute", body);
+        },
+      },
+    });
+
+    if (cutover !== "already deployed") {
+      await assert.rejects(driver.stopRevision(revision), { code: 409 });
+      assert.equal(raced, true);
+    }
+    await driver.stopRevision(revision);
+    assert.equal(resources.get("Deployment"), gateway);
+    assert.equal(resources.get("Service"), service);
+    assert.equal(resources.get("ServiceAccount"), account);
+    assert.equal(
+      gateway.metadata.annotations["openclaw.dev/agent-revision-id"],
+      "replacement-revision",
+    );
+    assert.deepEqual(deletions, cutover === "during route deletion" ? [] : ["HTTPRoute"]);
+    assert.equal(resources.has("HTTPRoute"), cutover === "during route deletion");
+  });
+}
 
 test("stopping a containment-only Kubernetes revision removes its workload before Sandbox cleanup", async () => {
   const cleanupCalls = [];
@@ -3929,6 +4069,12 @@ test("stopping a containment-only Kubernetes revision removes its workload befor
   const notFound = () => Object.assign(new Error("Not found"), { code: 404 });
   driver.apiClients = Promise.resolve({
     core: {
+      async readNamespacedService() {
+        throw notFound();
+      },
+      async readNamespacedServiceAccount() {
+        throw notFound();
+      },
       async listNamespace() {
         return { apiVersion: "v1", kind: "NamespaceList", items: [namespaceResource] };
       },
@@ -4044,6 +4190,12 @@ test("stopping a provider-owned Kubernetes revision waits for Sandbox workload t
   const notFound = () => Object.assign(new Error("Not found"), { code: 404 });
   driver.apiClients = Promise.resolve({
     core: {
+      async readNamespacedService() {
+        throw notFound();
+      },
+      async readNamespacedServiceAccount() {
+        throw notFound();
+      },
       async listNamespace() {
         return { apiVersion: "v1", kind: "NamespaceList", items: [namespaceResource] };
       },

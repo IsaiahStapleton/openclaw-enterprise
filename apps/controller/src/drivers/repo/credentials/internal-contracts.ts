@@ -1,6 +1,5 @@
-import type { CredentialService, ServiceConfig } from "./service-contracts.ts";
+import type { CredentialService } from "./service-contracts.ts";
 import type {
-  RepositoryBackendFactory,
   Bounds,
   Denied,
   PrivateUpstreamRequest,
@@ -22,13 +21,6 @@ export type ExchangeSender = (
   request: PrivateUpstreamRequest,
   context: Bounds & Readonly<{ gate: DispatchGate }>,
 ) => Promise<ExchangeOutcome>;
-export interface LoadedConfiguration {
-  readonly config: ServiceConfig;
-  readonly tls: TlsMaterial;
-  readonly factory: RepositoryBackendFactory;
-  readonly trustedUpstreamOrigins: ReadonlySet<string>;
-  close(): void;
-}
 export interface TlsMaterial {
   readonly cert: Uint8Array;
   readonly key: Uint8Array;

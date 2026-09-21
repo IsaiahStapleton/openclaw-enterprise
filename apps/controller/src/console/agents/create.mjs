@@ -276,11 +276,14 @@ export function renderCreateAgent(context) {
       if (!context.isCurrent()) {
         return;
       }
+      const modelProviders = items.filter((item) => item.type === "chatgpt");
       provider.append(
-        ...items.map((item) => element("option", { value: item.id }, `${item.id} · ${item.type}`)),
+        ...modelProviders.map((item) =>
+          element("option", { value: item.id }, `${item.id} · ${item.type}`),
+        ),
       );
       providersLoaded = true;
-      providerStatus.textContent = items.length
+      providerStatus.textContent = modelProviders.length
         ? "Choose an installed Provider."
         : "No Providers configured.";
       updateControls();

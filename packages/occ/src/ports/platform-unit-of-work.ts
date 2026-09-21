@@ -75,6 +75,13 @@ export function bindPlatformUnitOfWork(
       "createAccessBinding",
       "deleteAccessBinding",
     ]),
+    repositorySessions: bindRepository(repositories.repositorySessions, lifetime, [
+      "findAttempt",
+      "listRevisionAttempts",
+      "listNamespaceAttempts",
+      "createAttempt",
+      "advanceAttempt",
+    ]),
     audit: bindRepository(repositories.audit, lifetime, ["append", "list"]),
     operations: bindRepository(repositories.operations, lifetime, ["append", "list", "findWork"]),
   });

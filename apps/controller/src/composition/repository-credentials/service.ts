@@ -1,6 +1,6 @@
 import type { Clock } from "../../drivers/repo/credentials/backend-contracts.ts";
 import type { CredentialService } from "../../drivers/repo/credentials/service-contracts.ts";
-import type { LoadedConfiguration } from "../../drivers/repo/credentials/internal-contracts.ts";
+import type { LoadedConfiguration } from "./contracts.ts";
 import type { BoundListeners } from "../../drivers/repo/credentials/server.ts";
 
 export interface RunningService {

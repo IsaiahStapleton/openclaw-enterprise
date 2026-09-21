@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -33,17 +33,7 @@ test("credential source boundary rejects new raw capabilities in the real source
   const temporary = await mkdtemp(join(tmpdir(), "repository-credentials-boundary-"));
   const root = join(temporary, "src");
   t.after(() => rm(temporary, { recursive: true, force: true }));
-  const directories = [
-    "drivers/repo/credentials",
-    "drivers/repo/github/credentials",
-    "composition/repository-credentials",
-  ];
-  for (const directory of directories) {
-    await cp(join(sourceRoot, directory), join(root, directory), { recursive: true });
-  }
-  for (const entrypoint of ["repository-credentials.ts", "repository-credentials.mjs"]) {
-    await cp(join(sourceRoot, entrypoint), join(root, entrypoint));
-  }
+  await cp(sourceRoot, root, { recursive: true });
   assert.ok((await verifyRepositoryCredentialBoundary(root)) > 0);
 
   await t.test("type-only imports and ordinary object methods remain valid", () =>
@@ -60,101 +50,95 @@ test("credential source boundary rejects new raw capabilities in the real source
       () => verifyRepositoryCredentialBoundary(root),
     ),
   );
-  for (const directory of directories) {
-    await t.test(`missing source root ${directory} fails closed`, async () => {
-      const path = join(root, directory);
-      const parked = join(temporary, "parked");
-      await rename(path, parked);
-      try {
-        await assert.rejects(
-          verifyRepositoryCredentialBoundary(root),
-          /Missing or invalid credential source root/,
-        );
-        await symlink(parked, path);
-        await assert.rejects(
-          verifyRepositoryCredentialBoundary(root),
-          /Missing or invalid credential source root/,
-        );
-      } finally {
-        await rm(path, { force: true });
-        await rename(parked, path);
-      }
-    });
-  }
-  for (const entrypoint of [
-    "repository-credentials.ts",
-    "repository-credentials.mjs",
-    "composition/repository-credentials/check-config.ts",
-    "drivers/repo/github/credentials/client/launch.ts",
-    "drivers/repo/github/credentials/client/operator.ts",
-    "drivers/repo/github/credentials/client/git-helper.ts",
-  ]) {
-    await t.test(`missing entrypoint ${entrypoint} fails closed`, async () => {
-      const path = join(root, entrypoint);
-      const parked = join(temporary, "parked-entrypoint");
-      await rename(path, parked);
-      try {
-        await assert.rejects(
-          verifyRepositoryCredentialBoundary(root),
-          /Missing credential entrypoint/,
-        );
-      } finally {
-        await rename(parked, path);
-      }
-    });
-  }
-  await t.test("service cannot import a client command owner", () =>
+  await t.test("the outgoing header owner can validate names and values", () =>
     appendSource(
       root,
-      "drivers/repo/github/credentials/client/boundary-command.ts",
-      "export const command = 1;",
-      () =>
-        appendSource(
-          root,
-          "drivers/repo/credentials/boundary-client.ts",
-          'import { command } from "../github/credentials/client/boundary-command.ts";',
-          () =>
-            assert.rejects(
-              verifyRepositoryCredentialBoundary(root),
-              /service code cannot load client command owner/,
-            ),
-        ),
+      "drivers/repo/credentials/transport/request-headers.ts",
+      `import { validateHeaderName as checkName, validateHeaderValue as checkValue } from "node:http";
+       checkName("accept"); checkValue("accept", "application/json");`,
+      () => verifyRepositoryCredentialBoundary(root),
     ),
   );
+
+  await t.test("the platform Driver can render portable session files", () =>
+    appendSource(
+      root,
+      "drivers/repo/github/driver.ts",
+      'import { encodeRepositoryCredentialSessionFiles as encodeFiles } from "./credentials/client/config.js"; void encodeFiles;',
+      () => verifyRepositoryCredentialBoundary(root),
+    ),
+  );
+  await t.test("the bootstrap can load only the emitted process main", () =>
+    appendSource(
+      root,
+      "repository-credentials.mjs",
+      'import { main as emittedMain } from "../dist/repository-credentials.js"; void emittedMain;',
+      () => verifyRepositoryCredentialBoundary(root),
+    ),
+  );
+
+  for (const file of [
+    "composition/repository-credentials",
+    "drivers/repo/credentials",
+    "drivers/repo/github",
+    "providers/repository-credentials",
+    "repository-credentials.ts",
+    "repository-credentials.mjs",
+  ]) {
+    await t.test(`missing ${file} fails closed`, async () => {
+      const path = join(root, file);
+      const saved = join(temporary, "missing-source");
+      await rename(path, saved);
+      try {
+        await assert.rejects(verifyRepositoryCredentialBoundary(root), { code: "ENOENT" });
+      } finally {
+        await rename(saved, path);
+      }
+    });
+  }
+
   const cases = [
     [
-      "client runtime remains inside its subtree",
-      'import { createCredentialService } from "../../../credentials/service.ts";',
-      /client runtime cannot load service owner/,
-      "drivers/repo/github/credentials/client/boundary-service.ts",
-    ],
-    [
-      "streaming sender is private to its transport owner",
-      'import { createUpstreamSender } from "./transport/upstream.js";',
-      /raw sender drivers\/repo\/credentials\/transport\/upstream.ts/,
-    ],
-    [
-      "process composition cannot read command arguments",
-      "void process.argv;",
-      /raw process capability argv/,
-      "composition/repository-credentials/service.ts",
-    ],
-    [
-      "launcher cannot load an unrelated emitted controller entrypoint",
-      'import { main } from "../dist/index.js";',
-      /runtime import escapes credential source/,
-      "repository-credentials.mjs",
-    ],
-    [
-      "unscanned controller source",
-      'import { initialize } from "../../../index.ts";',
-      /runtime import has no scanned credential source/,
-    ],
-    [
-      "composition output permission stays with check-config",
-      'process.stdout.write("credential");',
-      /raw process capability stdout/,
+      "configuration composition cannot open files outside the protected reader",
+      'import { open } from "node:fs/promises";',
+      /unreviewed runtime import from node:fs\/promises/,
       "composition/repository-credentials/config.ts",
+    ],
+    [
+      "configuration composition cannot inspect the process user directly",
+      "process.getuid?.();",
+      /raw process capability/,
+      "composition/repository-credentials/config.ts",
+    ],
+    [
+      "the protected reader cannot write files",
+      'import { writeFile } from "node:fs/promises";',
+      /unreviewed runtime import from node:fs\/promises/,
+      "composition/repository-credentials/protected-file.ts",
+    ],
+    [
+      "new composition source is scanned",
+      'import { request } from "node:http";',
+      /unreviewed runtime import from node:http/,
+      "composition/repository-credentials/boundary-regression.ts",
+    ],
+    [
+      "new Provider source is scanned",
+      'import { request } from "node:https";',
+      /unreviewed runtime import from node:https/,
+      "providers/repository-credentials/boundary-regression.ts",
+    ],
+    [
+      "the process entrypoint cannot use a raw network global",
+      'fetch("https://example.test");',
+      /raw global fetch/,
+      "repository-credentials.ts",
+    ],
+    [
+      "the emitted bootstrap cannot use a raw network global",
+      'fetch("https://example.test");',
+      /raw global fetch/,
+      "repository-credentials.mjs",
     ],
     [
       "direct HTTPS request",
@@ -222,18 +206,6 @@ test("credential source boundary rejects new raw capabilities in the real source
       'import { writeFile } from "node:fs/promises";',
       /unreviewed runtime import from node:fs\/promises/,
     ],
-    [
-      "configuration assembly cannot read outside the protected owner",
-      'import { open } from "node:fs/promises";',
-      /unreviewed runtime import from node:fs\/promises \(open\)/,
-      "composition/repository-credentials/config.ts",
-    ],
-    [
-      "protected input owner cannot become a filesystem sink",
-      'import { writeFile } from "node:fs/promises";',
-      /unreviewed runtime import from node:fs\/promises \(writeFile\)/,
-      "composition/repository-credentials/protected-file.ts",
-    ],
     ["console sink", 'console.log("credential");', /raw global console/],
     ["process output sink", 'process.stdout.write("credential");', /raw process capability stdout/],
     [
@@ -252,14 +224,160 @@ test("credential source boundary rejects new raw capabilities in the real source
       /raw process capability execve/,
     ],
     [
+      "raw upstream helper",
+      'import { createUpstreamSender } from "./transport/upstream.ts";',
+      /raw sender drivers\/repo\/credentials\/transport\/upstream.ts/,
+    ],
+    [
       "raw provider helper through emitted extension",
       'import { sendProviderRequest } from "../github/credentials/provider-transport/request.js";',
       /raw sender drivers\/repo\/github\/credentials\/provider-transport\/request.ts/,
     ],
     [
+      "client command owner",
+      'import { launchClient } from "../github/credentials/client/launch.ts";',
+      /service code cannot load client command owner/,
+    ],
+    [
       "unscanned source",
       'import { send } from "../../../../dist/unchecked.js";',
       /runtime import escapes credential source/,
+    ],
+    [
+      "listener cannot become sender",
+      'import { request as rawRequest } from "node:https";',
+      /unreviewed runtime import from node:https \(request\)/,
+      "drivers/repo/credentials/server.ts",
+    ],
+    [
+      "header validator cannot become sender",
+      'import { request as rawRequest } from "node:http";',
+      /unreviewed runtime import from node:http \(request\)/,
+      "drivers/repo/credentials/transport/request-headers.ts",
+    ],
+    [
+      "unrelated controller source is not part of the credential boundary",
+      'import { loadConfiguration } from "../../composition/installation-config.ts";',
+      /runtime import has no scanned credential source/,
+    ],
+    [
+      "the platform Driver cannot load private client files",
+      'import { readClientConfiguration as readClient } from "./credentials/client/config.ts";',
+      /service code cannot load client command owner/,
+      "drivers/repo/github/driver.ts",
+    ],
+    [
+      "the encoder exception cannot re-export client code",
+      'export { encodeRepositoryCredentialSessionFiles } from "./credentials/client/config.ts";',
+      /service code cannot load client command owner/,
+      "drivers/repo/github/driver.ts",
+    ],
+    [
+      "the platform Driver cannot spawn client commands",
+      'import { launchClient } from "./credentials/client/launch.ts";',
+      /service code cannot load client command owner/,
+      "drivers/repo/github/driver.ts",
+    ],
+    [
+      "the platform Driver cannot import another platform capability",
+      'import { PostgresPlatformState } from "@openclaw-enterprise/occ";',
+      /unreviewed runtime import from @openclaw-enterprise\/occ/,
+      "drivers/repo/github/driver.ts",
+    ],
+    [
+      "the bootstrap cannot load a different emitted module",
+      'import { main as unrelatedMain } from "../dist/main.js";',
+      /runtime import escapes credential source/,
+      "repository-credentials.mjs",
+    ],
+    [
+      "the bootstrap cannot load another emitted binding",
+      'import { runService } from "../dist/repository-credentials.js";',
+      /runtime import escapes credential source/,
+      "repository-credentials.mjs",
+    ],
+    [
+      "the bootstrap cannot re-export its emitted main",
+      'export { main } from "../dist/repository-credentials.js";',
+      /runtime import escapes credential source/,
+      "repository-credentials.mjs",
+    ],
+    [
+      "other source cannot use the emitted bootstrap exception",
+      'import { main } from "../dist/repository-credentials.js";',
+      /runtime import escapes credential source/,
+      "repository-credentials.ts",
+    ],
+    [
+      "the control client cannot send HTTPS traffic",
+      'import { request as sendHttps } from "node:https";',
+      /unreviewed runtime import from node:https/,
+      "providers/repository-credentials/control-client.ts",
+    ],
+    [
+      "the control client is available only to its reviewed consumers",
+      'import { UnixRepositoryCredentialControlClient } from "../../../providers/repository-credentials/control-client.ts";',
+      /raw sender providers\/repository-credentials\/control-client.ts/,
+    ],
+    [
+      "registry loading cannot write files",
+      'import { writeFile } from "node:fs/promises";',
+      /unreviewed runtime import from node:fs\/promises/,
+      "composition/repository-credentials/registry.ts",
+    ],
+    [
+      "public CA composition cannot import an additional file reader",
+      'import { readFile } from "node:fs/promises";',
+      /unreviewed runtime import from node:fs\/promises/,
+      "composition/repository-credentials/platform.ts",
+    ],
+    [
+      "projected inputs cannot remove directories recursively",
+      'import { rm } from "node:fs/promises";',
+      /unreviewed runtime import from node:fs\/promises/,
+      "composition/repository-credentials/projected-inputs.ts",
+    ],
+    [
+      "socket recovery cannot create raw listeners",
+      'import { createServer as rawServer } from "node:net";',
+      /unreviewed runtime import from node:net/,
+      "drivers/repo/credentials/server.ts",
+    ],
+    [
+      "the platform composition cannot re-export its local control client",
+      "export { UnixRepositoryCredentialControlClient };",
+      /raw I\/O binding cannot be re-exported/,
+      "composition/repository-credentials/platform.ts",
+    ],
+    [
+      "the platform Driver cannot re-export its local encoder",
+      "export { encodeRepositoryCredentialSessionFiles };",
+      /raw I\/O binding cannot be re-exported/,
+      "drivers/repo/github/driver.ts",
+    ],
+    [
+      "the bootstrap cannot re-export its local emitted main",
+      "export { main };",
+      /raw I\/O binding cannot be re-exported/,
+      "repository-credentials.mjs",
+    ],
+    [
+      "the Provider transport cannot re-export its local raw sender",
+      "export { sendProviderRequest };",
+      /raw I\/O binding cannot be re-exported/,
+      "drivers/repo/github/credentials/provider-transport.ts",
+    ],
+    [
+      "the Agent transport cannot expose its local sender through a type assertion",
+      "export const rawSender = createUpstreamSender as typeof createUpstreamSender;",
+      /raw I\/O binding cannot be re-exported/,
+      "drivers/repo/credentials/transport/agent.ts",
+    ],
+    [
+      "an emitted-extension alias cannot hide a restricted default export",
+      'import { UnixRepositoryCredentialControlClient as Control } from "../../providers/repository-credentials/control-client.js"; export default Control satisfies typeof Control;',
+      /raw I\/O binding cannot be re-exported/,
+      "composition/repository-credentials/platform.ts",
     ],
     [
       "approved sender cannot re-export raw HTTPS",

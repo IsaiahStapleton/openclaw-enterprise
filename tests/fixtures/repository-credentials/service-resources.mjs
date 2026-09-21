@@ -13,21 +13,32 @@ import {
 
 export async function createGitHubServiceFactory(
   resources,
-  { config, clock, privateKey, trustedEndpoints, providerInstanceId = "github-fixture" },
+  {
+    config,
+    clock,
+    privateKey,
+    key: borrowedKey,
+    repository = fixtureRepository,
+    repositoryId = fixtureRepositoryId,
+    trustedEndpoints,
+    providerInstanceId = "github-fixture",
+  },
 ) {
   const [{ createGitHubDriverFactory }, { createGitHubKeyOwner }] = await Promise.all([
     appModule("drivers/repo/github/credentials/index"),
     appModule("drivers/repo/github/credentials/material"),
   ]);
-  const key = createGitHubKeyOwner({ privateKey, appId: fixtureAppId, clock });
-  resources.after(() => key.close());
+  const key = borrowedKey ?? createGitHubKeyOwner({ privateKey, appId: fixtureAppId, clock });
+  if (!borrowedKey) {
+    resources.after(() => key.close());
+  }
   return createGitHubDriverFactory({
     configuration: githubConfigurationData({
       providerInstanceId,
       appId: fixtureAppId,
       installationId: fixtureInstallationId,
-      repositoryId: fixtureRepositoryId,
-      repository: fixtureRepository,
+      repositoryId,
+      repository,
       privateKeyFile: "/unused-fixture-key.pem",
     }),
     key,

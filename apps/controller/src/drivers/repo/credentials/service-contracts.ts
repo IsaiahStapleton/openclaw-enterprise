@@ -1,23 +1,12 @@
-/** Session consumers, client configuration, and operator settings. */
-export type RepositoryGrantIdentity = Readonly<{
-  providerInstanceId: string;
-  repositoryId: string;
-  grantId: string;
-}>;
-export interface PublicClientConfiguration {
-  readonly gatewayOrigin: string;
-  readonly gitRemote: string;
-  readonly gitUsername: string;
-  readonly canonicalApiHost: string;
-  readonly apiHost: string;
-  readonly repository: string;
-}
-export type OpenSessionInput = Readonly<{ durationSeconds: number; profile: string | undefined }>;
+import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialClientConfiguration } from "./client-contracts.ts";
+
+/** Full private service observation, validated before projection at the Driver boundary. */
 export interface SessionStatus {
   readonly sessionId: string;
   readonly state: "OPEN" | "CLOSED" | "DISPOSED";
   readonly deadlineWallMs: number;
-  readonly binding: RepositoryGrantIdentity;
+  readonly binding: RepositoryCredentialGrantIdentity;
   readonly activeUses: number;
   readonly cleanup: Readonly<{
     active: number;
@@ -28,11 +17,30 @@ export interface SessionStatus {
     auxiliaryPending: boolean;
   }>;
 }
-export interface OpenSessionResult {
+
+/** Protected single-repository operator input; registry admission uses the bound form. */
+export type RepositoryCredentialSessionInput = Readonly<{
+  durationSeconds: number;
+  profile: string | undefined;
+}>;
+
+/** Registry-backed admission always supplies the complete resolved authority. */
+export interface RepositoryCredentialBoundSessionInput extends RepositoryCredentialSessionInput {
+  readonly namespaceId: string;
+  readonly repositoryRef: string;
+  readonly profile: string;
+  readonly expectedBinding: RepositoryCredentialGrantIdentity;
+  readonly deadlineWallMs: number;
+  /** Look up an admission without creating a session; not part of replay identity. */
+  readonly recoverOnly?: true;
+}
+
+export interface RepositoryCredentialSessionResult {
   readonly session: SessionStatus;
   readonly bearer: string;
-  readonly client: PublicClientConfiguration;
+  readonly client: RepositoryCredentialClientConfiguration;
 }
+
 export interface ShutdownSummary {
   readonly closedSessions: number;
   readonly disposedSessions: number;
@@ -86,15 +94,10 @@ export interface SafeConfigurationSummary {
   readonly profiles: readonly string[];
   readonly maximumDurationSeconds: number;
 }
-export type ControlRequest =
-  | Readonly<{ method: "POST"; path: "/v1/sessions"; body: OpenSessionInput }>
-  | Readonly<{ method: "GET"; path: `/v1/sessions/${string}` }>
-  | Readonly<{ method: "POST"; path: `/v1/sessions/${string}/close` }>;
-export type ControlErrorCode = "invalid-request" | "not-found" | "unavailable" | "overloaded";
-export type ControlResponse =
-  OpenSessionResult | SessionStatus | Readonly<{ error: ControlErrorCode }>;
 export interface SessionControl {
-  open(input: OpenSessionInput): OpenSessionResult;
+  open(
+    input: RepositoryCredentialSessionInput | RepositoryCredentialBoundSessionInput,
+  ): RepositoryCredentialSessionResult;
   status(sessionId: string): SessionStatus | undefined;
   close(sessionId: string): SessionStatus;
 }

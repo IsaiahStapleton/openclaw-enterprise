@@ -2,12 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { appRoot } from "../fixtures/repository-credentials/runtime.mjs";
 import { createTlsMaterial } from "../fixtures/repository-credentials/process.mjs";
-import {
-  appRoot,
-  appExtension,
-  createServiceConfiguration,
-} from "../fixtures/repository-credentials/service.mjs";
+import { createServiceConfiguration } from "../fixtures/repository-credentials/service.mjs";
 
 // The child uses the real process composition and common settlement owner. An
 // unresolved alternate-provider callback must never defeat finite process exit.
@@ -22,11 +19,9 @@ test(
     import assert from 'node:assert/strict';
     import { readFile } from 'node:fs/promises';
     import { request } from 'node:https';
-    import { pathToFileURL } from 'node:url';
-    import { join } from 'node:path';
     const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString());
-    const load = (name) => import(pathToFileURL(join(input.appRoot, name + '.' + input.extension)).href);
+    const { appModule: load } = await import(input.runtime);
     const [{runService}, {createSystemClock}, {createAlternateDriverFactory}] = await Promise.all([load('composition/repository-credentials/service'), load('drivers/repo/credentials/clock'), import(input.adapter)]);
     const clock = createSystemClock();
     const factory = createAlternateDriverFactory({origin:'https://upstream.example.test',gatewayOrigin:input.config.gateway.publicOrigin,clock,controls:{lateCapture:new Promise(() => {})}});
@@ -64,8 +59,7 @@ test(
     child.stdin.end(
       JSON.stringify({
         config,
-        appRoot,
-        extension: appExtension,
+        runtime: new URL("../fixtures/repository-credentials/runtime.mjs", import.meta.url).href,
         key: tls.keyFile,
         cert: tls.certFile,
         adapter: pathToFileURL(

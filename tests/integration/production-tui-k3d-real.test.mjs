@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+import { installProductionHelmControlPlane } from "../helpers/production-helm-real.mjs";
 import {
   createKubernetesClient,
   createKubernetesInstallationConfiguration,
@@ -153,17 +154,6 @@ test(
     });
     const createSecret = (name, stringData, namespace = system) =>
       apply({ apiVersion: "v1", kind: "Secret", metadata: metadata(name, namespace), stringData });
-    const createClaim = (name, namespace = system) =>
-      apply({
-        apiVersion: "v1",
-        kind: "PersistentVolumeClaim",
-        metadata: metadata(name, namespace),
-        spec: {
-          accessModes: ["ReadWriteOnce"],
-          storageClassName: "local-path",
-          resources: { requests: { storage: "1Gi" } },
-        },
-      });
     const protectedBootstrapFiles = ["initial-admin-password", "initial-admin-service-key.json"];
     const shellQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
     const podSecurity = {
@@ -226,113 +216,6 @@ test(
           metadata: { name, labels: { "oce-test": suffix } },
         });
       }
-      const postgresPassword = secret();
-      const migrationPassword = secret();
-      const appPassword = secret();
-      await createSecret("postgres-bootstrap", {
-        password: postgresPassword,
-        "init.sql": `CREATE ROLE occ_migrator LOGIN PASSWORD '${migrationPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nCREATE ROLE occ_app LOGIN PASSWORD '${appPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nGRANT CREATE ON DATABASE openclaw_enterprise TO occ_migrator;\nCREATE SCHEMA occ AUTHORIZATION occ_migrator;\nCREATE SCHEMA drizzle AUTHORIZATION occ_migrator;\nREVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
-      });
-      await createClaim("postgres-data");
-      await createClaim("bootstrap-password");
-      await apply({
-        apiVersion: "v1",
-        kind: "Pod",
-        metadata: metadata("bootstrap-password-prepare"),
-        spec: {
-          restartPolicy: "Never",
-          automountServiceAccountToken: false,
-          securityContext: {
-            runAsUser: 0,
-            runAsGroup: 0,
-            seccompProfile: { type: "RuntimeDefault" },
-          },
-          containers: [
-            {
-              name: "prepare",
-              image: images.controller,
-              imagePullPolicy: "IfNotPresent",
-              command: [
-                "node",
-                "-e",
-                "const fs=require('node:fs');const root='/var/lib/openclaw/bootstrap';for(const name of ['initial-admin-password','initial-admin-service-key.json']){if(fs.existsSync(`${root}/${name}`))throw new Error(`${name} already exists on fresh bootstrap PVC`)}fs.chownSync(root,1000,1000);fs.chmodSync(root,0o700);const s=fs.statSync(root);console.log(JSON.stringify({uid:s.uid,gid:s.gid,mode:s.mode&0o777}));",
-              ],
-              securityContext: {
-                allowPrivilegeEscalation: false,
-                capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER"] },
-              },
-              resources,
-              volumeMounts: [{ name: "bootstrap", mountPath: "/var/lib/openclaw/bootstrap" }],
-            },
-          ],
-          volumes: [
-            { name: "bootstrap", persistentVolumeClaim: { claimName: "bootstrap-password" } },
-          ],
-        },
-      });
-      await waitFor("fresh bootstrap PVC preparation", async () => {
-        const pod = await get("pod", "bootstrap-password-prepare");
-        assert.notEqual(pod.status.phase, "Failed", "bootstrap PVC preparation Pod failed");
-        return pod.status.phase === "Succeeded";
-      });
-      assert.deepEqual(
-        JSON.parse((await kubectl("-n", system, "logs", "bootstrap-password-prepare")).trim()),
-        { uid: 1000, gid: 1000, mode: 0o700 },
-      );
-      await record("Fresh bootstrap PVC root prepared for UID 1000 output", {
-        claimName: "bootstrap-password",
-      });
-      await apply({
-        apiVersion: "v1",
-        kind: "Pod",
-        metadata: metadata("postgres", system, { app: "postgres" }),
-        spec: {
-          securityContext: { ...podSecurity, runAsUser: 999, runAsGroup: 999, fsGroup: 999 },
-          containers: [
-            {
-              name: "postgres",
-              image: images.postgres,
-              imagePullPolicy: "IfNotPresent",
-              securityContext,
-              resources,
-              env: [
-                { name: "POSTGRES_DB", value: "openclaw_enterprise" },
-                {
-                  name: "POSTGRES_PASSWORD",
-                  valueFrom: { secretKeyRef: { name: "postgres-bootstrap", key: "password" } },
-                },
-              ],
-              volumeMounts: [
-                { name: "data", mountPath: "/var/lib/postgresql" },
-                { name: "init", mountPath: "/docker-entrypoint-initdb.d", readOnly: true },
-              ],
-              readinessProbe: {
-                exec: { command: ["pg_isready", "-U", "postgres", "-d", "openclaw_enterprise"] },
-                initialDelaySeconds: 2,
-                periodSeconds: 2,
-              },
-            },
-          ],
-          volumes: [
-            { name: "data", persistentVolumeClaim: { claimName: "postgres-data" } },
-            {
-              name: "init",
-              secret: {
-                secretName: "postgres-bootstrap",
-                items: [{ key: "init.sql", path: "init.sql" }],
-              },
-            },
-          ],
-        },
-      });
-      await apply({
-        apiVersion: "v1",
-        kind: "Service",
-        metadata: metadata("postgres"),
-        spec: { selector: { app: "postgres" }, ports: [{ port: 5432 }] },
-      });
-      await waitPod("postgres");
-      const postgresIP = (await get("pod", "postgres")).status.podIP;
       const configuration = createKubernetesInstallationConfiguration({
         authentication: { mode: "inCluster" },
         platformNamespace: system,
@@ -340,15 +223,6 @@ test(
         codexImage: images.runtime,
         cluster: `production-tui-${suffix}`,
       });
-      await createSecret("occ-installation-startup", {
-        "installation.yaml": JSON.stringify(configuration),
-      });
-      await createSecret("occ-database", {
-        "application-url": `postgresql://occ_app:${appPassword}@postgres.${system}.svc.cluster.local:5432/openclaw_enterprise`,
-        "migration-url": `postgresql://occ_migrator:${migrationPassword}@postgres.${system}.svc.cluster.local:5432/openclaw_enterprise`,
-      });
-      await createSecret("occ-auth", { secret: secret() });
-      const endpoint = (await get("endpoints", "kubernetes", "default")).subsets[0];
       const port = await new Promise((resolve) => {
         const server = net.createServer();
         server.listen(0, "127.0.0.1", () => {
@@ -357,45 +231,27 @@ test(
         });
       });
       const baseURL = `https://localhost:${port}`;
-      const adminEmail = `admin-${suffix}@example.invalid`;
-      const values = {
-        images: { controller: images.controller },
-        installation: { name: `Production TUI ${suffix}` },
-        auth: { baseUrl: baseURL },
-        bootstrap: { adminEmail, password: { claimName: "bootstrap-password" } },
-        database: { cidr: `${postgresIP}/32` },
-        cluster: { cidr: `${endpoint.addresses[0].ip}/32`, port: endpoint.ports[0].port },
-        api: { clients: [{ namespace: system, podLabels: { app: "production-tui-proxy" } }] },
+      await installProductionHelmControlPlane({
+        selection,
+        images,
+        namespace: system,
+        release,
+        directory,
+        suffix,
+        configuration,
+        authBaseURL: baseURL,
+        installationName: `Production TUI ${suffix}`,
+        apiClients: [{ namespace: system, podLabels: { app: "production-tui-proxy" } }],
         metrics: {
           enabled: true,
           scraperNamespaceLabels: { "kubernetes.io/metadata.name": system },
           scraperPodLabels: { app: "production-tui-proxy" },
         },
-        resources,
-      };
-      await writeFile(join(directory, "values.json"), JSON.stringify(values), { mode: 0o600 });
-      await run(
-        "helm",
-        [
-          "upgrade",
-          "--install",
-          release,
-          "deploy/helm/openclaw-enterprise",
-          "-n",
-          system,
-          "--kubeconfig",
-          selection.kubeconfigPath,
-          "--kube-context",
-          selection.kubernetesContext,
-          "-f",
-          join(directory, "values.json"),
-          "--wait",
-          "--timeout",
-          "300s",
-        ],
-        { timeout: 330_000 },
-      );
-      await record("Helm initialization, API and worker ready", { namespace: system });
+        run,
+        kubernetes,
+        createSecretValue: secret,
+        record,
+      });
 
       await run("openssl", [
         "req",

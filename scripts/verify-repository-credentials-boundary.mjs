@@ -4,21 +4,25 @@ import { fileURLToPath } from "node:url";
 import { parsers } from "prettier/plugins/typescript";
 
 const sourceRoot = fileURLToPath(new URL("../apps/controller/src/", import.meta.url));
-const credentialRoots = [
-  "drivers/repo/credentials",
-  "drivers/repo/github/credentials",
+const credentialDirectories = [
   "composition/repository-credentials",
+  "drivers/repo/credentials",
+  "drivers/repo/github",
+  "providers/repository-credentials",
 ];
 const processEntrypoints = ["repository-credentials.ts", "repository-credentials.mjs"];
 const requiredEntrypoints = [
   ...processEntrypoints,
   "composition/repository-credentials/check-config.ts",
+  "composition/repository-credentials/projected-inputs.ts",
+  "composition/repository-credentials/probe.ts",
   "drivers/repo/github/credentials/client/launch.ts",
   "drivers/repo/github/credentials/client/operator.ts",
   "drivers/repo/github/credentials/client/git-helper.ts",
   "drivers/repo/github/credentials/client/native-git.ts",
   "drivers/repo/github/credentials/client/router.ts",
 ];
+const clientDirectory = "drivers/repo/github/credentials/client/";
 const sourceExtensions = new Set([".ts", ".mts", ".cts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"]);
 
 // Adding an I/O owner or member requires security review; see the owning test guide.
@@ -26,7 +30,9 @@ const reviewedImports = {
   "drivers/repo/github/credentials/material.ts": {
     "node:crypto": ["KeyObject", "constants", "sign"],
   },
-  "drivers/repo/github/credentials/provider-transport/request.ts": { "node:https": ["request"] },
+  "drivers/repo/github/credentials/provider-transport/request.ts": {
+    "node:https": ["request"],
+  },
   "drivers/repo/github/credentials/client/commands.ts": { "node:child_process": ["spawnSync"] },
   "drivers/repo/github/credentials/client/config.ts": {
     "node:fs/promises": ["lstat", "mkdir", "mkdtemp", "open", "rename", "rm"],
@@ -62,11 +68,31 @@ const reviewedImports = {
     "node:fs": ["constants"],
     "node:fs/promises": ["lstat", "open"],
   },
+  "composition/repository-credentials/platform.ts": {
+    "node:fs": ["constants"],
+    "node:fs/promises": ["open", "stat"],
+    "node:tls": ["createSecureContext"],
+  },
+  "composition/repository-credentials/projected-inputs.ts": {
+    "node:fs": ["constants"],
+    "node:fs/promises": ["lstat", "mkdir", "open", "readdir", "readlink", "realpath", "unlink"],
+  },
+  "composition/repository-credentials/probe.ts": { "node:http": ["request"] },
+  "providers/repository-credentials/control-client.ts": { "node:http": ["request"] },
+  "composition/repository-credentials/registry.ts": {
+    "node:fs": ["constants"],
+    "node:fs/promises": ["open", "stat"],
+  },
+  "drivers/repo/github/credentials/registry.ts": { "node:crypto": ["createHash"] },
+  "drivers/repo/github/driver.ts": {
+    "@openclaw-enterprise/occ": ["DependencyUnavailableError", "ScopeViolationError"],
+  },
   "drivers/repo/credentials/lifecycle.ts": { "node:crypto": ["randomUUID"] },
   "drivers/repo/credentials/server.ts": {
     "node:fs/promises": ["chmod", "lstat", "realpath", "unlink"],
     "node:http": ["createServer"],
     "node:https": ["createServer"],
+    "node:net": ["connect"],
   },
   "drivers/repo/credentials/sessions.ts": {
     "node:crypto": ["createHash", "randomBytes", "randomUUID"],
@@ -91,6 +117,10 @@ const senderConsumers = {
   },
   "drivers/repo/credentials/transport/upstream.ts": {
     "drivers/repo/credentials/transport/agent.ts": ["createUpstreamSender"],
+  },
+  "providers/repository-credentials/control-client.ts": {
+    "composition/repository-credentials/platform.ts": ["UnixRepositoryCredentialControlClient"],
+    "drivers/repo/github/driver.ts": ["RepositoryCredentialControlError"],
   },
 };
 const rawGlobals = new Set([
@@ -137,8 +167,16 @@ const reviewedProcessMembers = {
   "drivers/repo/github/credentials/client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
   "drivers/repo/github/credentials/client/private-files.ts": ["getuid"],
   "composition/repository-credentials/protected-file.ts": ["getuid"],
-  "repository-credentials.ts": ["argv", "exitCode", "stderr", "stdout"],
   "composition/repository-credentials/service.ts": ["exit", "once", "stderr", "stdout"],
+  "composition/repository-credentials/projected-inputs.ts": [
+    "argv",
+    "exitCode",
+    "getuid",
+    "stderr",
+    "stdout",
+  ],
+  "composition/repository-credentials/probe.ts": ["exitCode"],
+  "repository-credentials.ts": ["argv", "exitCode", "stderr", "stdout"],
   "repository-credentials.mjs": ["exitCode", "stderr"],
   "drivers/repo/credentials/server.ts": ["getuid"],
 };
@@ -162,6 +200,9 @@ function slash(path) {
 }
 
 async function sourceFiles(root) {
+  if (!(await lstat(root)).isDirectory()) {
+    throw new Error(`Credential source must be a directory: ${root}`);
+  }
   const files = [];
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const path = join(root, entry.name);
@@ -213,6 +254,17 @@ function unwrappedValue(node) {
   return node;
 }
 
+function relativeSource(path, root, specifier, sources) {
+  const target = slash(relative(root, resolve(dirname(path), specifier)));
+  if (sources.has(target)) {
+    return target;
+  }
+  const extension = extname(target);
+  const sourceExtension = { ".js": ".ts", ".mjs": ".mts", ".cjs": ".cts" }[extension];
+  const sourceTarget = sourceExtension && target.slice(0, -extension.length) + sourceExtension;
+  return sourceTarget && sources.has(sourceTarget) ? sourceTarget : target;
+}
+
 function inspectSource(path, root, sources, ast) {
   const file = slash(relative(root, path));
   const failures = [];
@@ -221,8 +273,19 @@ function inspectSource(path, root, sources, ast) {
     if (node.type !== "ImportDeclaration" || node.importKind === "type") {
       continue;
     }
-    if (node.source.value.startsWith(".") || ordinaryBuiltins.has(node.source.value)) {
+    const source = node.source.value;
+    if (ordinaryBuiltins.has(source)) {
       continue;
+    }
+    if (source.startsWith(".")) {
+      const target = relativeSource(path, root, source, sources);
+      const restricted =
+        senderConsumers[target] ||
+        (!file.startsWith(clientDirectory) && target.startsWith(clientDirectory)) ||
+        (file === "repository-credentials.mjs" && source === "../dist/repository-credentials.js");
+      if (!restricted) {
+        continue;
+      }
     }
     for (const specifier of node.specifiers) {
       if (specifier.importKind !== "type") {
@@ -239,9 +302,10 @@ function inspectSource(path, root, sources, ast) {
       return;
     }
     if (specifier.startsWith(".")) {
-      let target = slash(relative(root, resolve(dirname(path), specifier)));
+      const target = relativeSource(path, root, specifier, sources);
       if (
         file === "repository-credentials.mjs" &&
+        kind === "import" &&
         specifier === "../dist/repository-credentials.js" &&
         names.join() === "main"
       ) {
@@ -257,30 +321,29 @@ function inspectSource(path, root, sources, ast) {
         return;
       }
       if (!sources.has(target)) {
-        const sourceExtension = { ".js": ".ts", ".mjs": ".mts", ".cjs": ".cts" }[extname(target)];
-        const sourceTarget =
-          sourceExtension && target.slice(0, -extname(target).length) + sourceExtension;
-        if (!sourceTarget || !sources.has(sourceTarget)) {
-          deny(node, `runtime import has no scanned credential source: ${specifier}`);
-          return;
-        }
-        target = sourceTarget;
+        deny(node, `runtime import has no scanned credential source: ${specifier}`);
+        return;
       }
-      if (
-        file.startsWith("drivers/repo/github/credentials/client/") &&
-        !target.startsWith("drivers/repo/github/credentials/client/")
-      ) {
+      if (file.startsWith(clientDirectory) && !target.startsWith(clientDirectory)) {
         deny(node, `client runtime cannot load service owner ${target}`);
       }
       const consumers = senderConsumers[target];
-      if (consumers && !names.every((binding) => consumers[file]?.includes(binding))) {
+      if (
+        consumers &&
+        (kind !== "import" || !names.every((binding) => consumers[file]?.includes(binding)))
+      ) {
         deny(node, `raw sender ${target} is not reviewed for ${file}`);
       }
-      if (
-        !file.startsWith("drivers/repo/github/credentials/client/") &&
-        target.startsWith("drivers/repo/github/credentials/client/")
-      ) {
-        deny(node, `service code cannot load client command owner ${target}`);
+      if (!file.startsWith(clientDirectory) && target.startsWith(clientDirectory)) {
+        const rendersSessionFiles =
+          file === "drivers/repo/github/driver.ts" &&
+          target === `${clientDirectory}config.ts` &&
+          kind === "import" &&
+          names.length === 1 &&
+          names[0] === "encodeRepositoryCredentialSessionFiles";
+        if (!rendersSessionFiles) {
+          deny(node, `service code cannot load client command owner ${target}`);
+        }
       }
       return;
     }
@@ -391,7 +454,7 @@ function inspectSource(path, root, sources, ast) {
 
 export async function verifyRepositoryCredentialBoundary(root = sourceRoot) {
   const files = [];
-  for (const directory of credentialRoots) {
+  for (const directory of credentialDirectories) {
     const path = join(root, directory);
     const stat = await lstat(path).catch((error) => {
       if (error.code !== "ENOENT") {

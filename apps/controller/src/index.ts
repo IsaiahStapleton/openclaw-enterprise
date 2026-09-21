@@ -45,6 +45,7 @@ import {
   type OpenClawConfigurationDocument,
   type PermissionAction,
   type ProviderSummary,
+  type RepositoryBindingRequest,
   type ResourceKind,
   type ResourceRef,
   type Role,
@@ -649,6 +650,9 @@ function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
     providerId: agent.providerId,
     executionMode: agent.executionMode,
     ...(agent.plugins === undefined ? {} : { plugins: agent.plugins }),
+    ...(agent.repositoryBindings === undefined
+      ? {}
+      : { repositoryBindings: agent.repositoryBindings }),
     harnessAuth: agent.harnessAuth,
     ...(agent.activeRevisionId === undefined ? {} : { activeRevisionId: agent.activeRevisionId }),
     desiredRuntimeState: agent.desiredRuntimeState,
@@ -682,6 +686,18 @@ function clientRevision(revision: Readonly<AgentRevision>): Record<string, unkno
     ...(revision.secretDriverId === undefined ? {} : { secretDriverId: revision.secretDriverId }),
     ...(revision.secretBindings === undefined ? {} : { secretBindings: revision.secretBindings }),
     ...(revision.plugins === undefined ? {} : { plugins: revision.plugins }),
+    ...(revision.repositoryCredentials === undefined
+      ? {}
+      : {
+          repositoryCredentials: {
+            driver: revision.repositoryCredentials.driver,
+            deadlineWallMs: revision.repositoryCredentials.deadlineWallMs,
+            bindings: revision.repositoryCredentials.bindings.map(({ repositoryRef, profile }) => ({
+              repositoryRef,
+              profile,
+            })),
+          },
+        }),
     harnessAuth: harnessAuthBindingFromSnapshot(revision.harnessAuth),
     createdAt: revision.createdAt,
   };
@@ -2442,6 +2458,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             ? {}
             : { harnessAuth: body.harnessAuth as HarnessAuthBinding | null }),
           ...(body?.plugins === undefined ? {} : { plugins: body.plugins as never }),
+          ...(body?.repositoryBindings === undefined
+            ? {}
+            : {
+                repositoryBindings: body.repositoryBindings as readonly RepositoryBindingRequest[],
+              }),
         });
         await unit.audit.append(
           event(
@@ -2492,6 +2513,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             ? {}
             : { harnessAuth: body.harnessAuth as HarnessAuthBinding | null }),
           ...(body?.plugins === undefined ? {} : { plugins: body.plugins as never }),
+          ...(body?.repositoryBindings === undefined
+            ? {}
+            : {
+                repositoryBindings: body.repositoryBindings as readonly RepositoryBindingRequest[],
+              }),
         });
         await unit.audit.append(
           event(

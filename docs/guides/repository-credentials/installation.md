@@ -1,0 +1,186 @@
+# Install repository access for Kubernetes Agents
+
+Enable the optional repository credential service alongside the single OCC
+worker. Complete the [production installation prerequisites](../deploy/production-installation.md)
+and use its operator shell, `KUBECONFIG_FILE`, `CONTEXT`, `OCC_INPUT_DIRECTORY`
+and `openclaw-system` namespace. Run these commands from the repository root.
+The supported consumer is Kubernetes Compute-owned embedded OpenClaw with
+`api_key` authentication and no Sandbox Driver.
+
+## Prepare the registry and protected inputs
+
+Create `registry.json` using the [canonical registry schema](../../reference/repository-credentials.md#canonical-platform-registry).
+Use the real GitHub App, installation and numeric repository IDs, and the
+server-assigned OCC Namespace IDs. One App installation can serve several
+repository entries; each Agent binding still admits a separate single-repository
+session. The example below uses Provider ID `repository-provider`, registry
+maximum duration `86400`, and all three profiles.
+
+Choose the Namespace first with `occ namespace list` on an existing installation.
+For a fresh installation, initially leave this optional capability disabled,
+bootstrap OCC, then obtain its Namespace IDs before enabling it. Repository
+names or Kubernetes namespace names do not substitute for those IDs.
+
+Place these operator inputs in a private directory such as `/secure/occ/repositories`:
+
+| File                 | Required contents                                                |
+| -------------------- | ---------------------------------------------------------------- |
+| `registry.json`      | Nonsecret canonical registry with exact Namespace/profile policy |
+| `config.json`        | Service configuration below                                      |
+| `private-key.pem`    | Existing RSA private key for the registry's GitHub App           |
+| `tls.crt`, `tls.key` | Gateway certificate chain and matching private key               |
+| `ca.crt`             | Public PEM CA trust for that certificate, without private keys   |
+
+Provision the certificate through your issuer. Its DNS SAN must cover
+`openclaw-enterprise-repository-credentials.openclaw-system.svc`; change the
+namespace consistently if installing elsewhere. The internal Service exposes
+HTTPS 443 and forwards to sidecar port 8443. Do not disable certificate
+verification or use the TLS private-key Secret as the public trust input.
+
+Write `config.json` with the same Provider ID and duration policy as the registry:
+
+```json
+{
+  "gateway": {
+    "publicOrigin": "https://openclaw-enterprise-repository-credentials.openclaw-system.svc",
+    "listen": "0.0.0.0:8443",
+    "controlSocket": "/run/openclaw/repository-control/private/control.sock"
+  },
+  "sessionPolicy": {
+    "maximumDurationSeconds": 86400,
+    "defaultProfile": "git-write",
+    "allowedProfiles": ["git-read", "git-write", "git-full"]
+  },
+  "backend": {
+    "kind": "github-app-registry",
+    "providerId": "repository-provider"
+  }
+}
+```
+
+This is the Kubernetes projection input. The sidecar supplies protected registry,
+App-key and TLS file paths after copying its selected projection into private
+owned files. For direct standalone startup, use the
+[standalone configuration](../../reference/repository-credentials.md#standalone-service-inputs)
+with explicit file paths instead.
+
+```bash
+chmod 700 /secure/occ/repositories
+chmod 600 /secure/occ/repositories/config.json \
+  /secure/occ/repositories/private-key.pem /secure/occ/repositories/tls.key
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  create configmap occ-repository-registry-v1 \
+  --from-file=registry.json=/secure/occ/repositories/registry.json \
+  --dry-run=client -o json | \
+  python3 -c 'import json,sys; value=json.load(sys.stdin); value["immutable"]=True; json.dump(value,sys.stdout)' | \
+  kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" apply -f -
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  create secret generic occ-repository-service \
+  --from-file=config.json=/secure/occ/repositories/config.json
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  create secret generic occ-repository-app \
+  --from-file=private-key.pem=/secure/occ/repositories/private-key.pem
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  create secret tls occ-repository-tls \
+  --cert=/secure/occ/repositories/tls.crt --key=/secure/occ/repositories/tls.key
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  create secret generic occ-repository-ca \
+  --from-file=ca.crt=/secure/occ/repositories/ca.crt
+```
+
+These commands create new operator-owned inputs and intentionally fail on
+existing Secret names. Keep key contents out of Installation YAML, Helm values,
+Agent configuration and command arguments.
+
+## Select composition and network access
+
+Add the [GitHub Provider and Driver fragment](../../reference/providers.md#github-repository-credentials)
+to the existing Installation YAML. Set its Provider ID to `repository-provider`
+and `sessionDurationSeconds` to `86400`. Select the optional capability through
+`drivers.repo` and the matching Provider `drivers.repo` member; keep the configured
+Driver ID unchanged. Keep the shown registry, control socket
+and public CA paths; Helm mounts exactly those locations.
+
+Add this peer under the existing
+`drivers.compute.configuration.network` object, retaining its other settings:
+
+```yaml
+repositoryCredentials:
+  namespace: openclaw-system
+  podLabels:
+    app.kubernetes.io/name: openclaw-enterprise
+    app.kubernetes.io/instance: oce
+    app.kubernetes.io/component: worker
+  port: 8443
+```
+
+Use the actual Helm release name for `app.kubernetes.io/instance`. Grant the
+chart's tenant-worker RoleBinding in each tenant namespace as described in the
+[Agent preparation guide](../deploy/production-agents.md#grant-tenant-rolebindings).
+With the feature enabled, that role includes the material Secret operations
+needed by Compute. The Agent never mounts the control socket or App key.
+
+Build the service with `pnpm credentials:build` and `pnpm credentials:image`,
+then publish and select its immutable image reference. Also build the full
+Agent runtime using the [repository-root Docker context](../repository-credentials.md#prepare-the-platform-installation).
+Add the following to your existing Helm values, replacing image and network
+placeholders before rendering:
+
+```yaml
+repositoryCredentials:
+  enabled: true
+  image: "<credential-service-image>@sha256:<digest>"
+  providerId: repository-provider
+  registryConfigMapName: occ-repository-registry-v1
+  serviceConfigSecretName: occ-repository-service
+  appKeySecretName: occ-repository-app
+  tlsSecretName: occ-repository-tls
+  publicCaSecretName: occ-repository-ca
+  upstreamCidrs:
+    - "<approved GitHub upstream CIDR>"
+```
+
+Supply current operator-approved ranges for GitHub HTTPS destinations. The chart
+adds worker-Pod egress on port 443 and tenant-gateway ingress on port 8443; the
+Compute peer enables the corresponding Agent egress. Existing model/network
+rules still apply. Because worker and sidecar share a Pod network namespace,
+these rules are not a per-container isolation boundary.
+
+## Install and verify
+
+Update the operator-owned startup Secret from the edited Installation YAML; use
+your configured Secret name/key if they differ from the defaults below. The
+command reads the file and does not print its contents. Render and review the
+complete chart, then apply the values through the existing release:
+
+```bash
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  create secret generic occ-installation-startup \
+  --from-file=installation.yaml="$OCC_INPUT_DIRECTORY/installation.yaml" \
+  --dry-run=client -o yaml | \
+  kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" apply -f -
+helm template oce deploy/helm/openclaw-enterprise --namespace openclaw-system \
+  -f "$OCC_INPUT_DIRECTORY/values.yaml" > /tmp/oce-rendered.yaml
+helm upgrade --install oce deploy/helm/openclaw-enterprise \
+  --kubeconfig "$KUBECONFIG_FILE" --kube-context "$CONTEXT" \
+  --namespace openclaw-system -f "$OCC_INPUT_DIRECTORY/values.yaml" \
+  --wait --timeout 5m
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  rollout status deployment/openclaw-enterprise-worker
+```
+
+Expect one worker Pod containing worker and credential-service containers, a
+`Recreate` deployment, and the internal HTTPS Service. The API mounts only the
+registry and public CA; the worker additionally mounts the private control
+socket; App/TLS private inputs stay in the service container. Kubernetes API
+service-account token projection is worker-only. Confirm those mounts from the
+rendered manifests before deploying an Agent.
+
+A ready sidecar confirms protected startup and the control listener. Continue
+with [Agent creation, deployment and a repository task](../repository-credentials.md#create-and-deploy-an-agent)
+to verify the actual consumer. Registry or certificate mismatch fails closed;
+check IDs, exact paths, DNS SAN and public trust first. A service restart loses
+in-memory sessions; worker maintenance replaces runtime material within the
+frozen deadline. Updating policy requires a new immutable registry ConfigMap and
+consistent selection by all three consumers; existing admitted grants are not
+silently widened.

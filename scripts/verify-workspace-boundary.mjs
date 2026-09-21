@@ -106,11 +106,7 @@ const sources = (
   await Promise.all(activeSourceRoots.map((path) => sourceFiles(join(repositoryRoot, path))))
 ).flat();
 for (const name of activeApplications) {
-  const entrypoints = [
-    "index.ts",
-    "server.mjs",
-    "composition/repository-credentials/check-config.ts",
-  ];
+  const entrypoints = ["index.ts", "server.mjs"];
   for (const entrypoint of entrypoints) {
     assert.ok(
       sources.includes(join(repositoryRoot, "apps", name, "src", entrypoint)),

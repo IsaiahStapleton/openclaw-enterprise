@@ -14,7 +14,15 @@ import {
   writeSessionClientConfiguration,
 } from "./service-resources.mjs";
 
-export { appModule, appRoot, appExtension, repositoryRoot } from "./runtime.mjs";
+export {
+  appModule,
+  appRoot,
+  appExtension,
+  credentialDriverModule,
+  githubProviderModule,
+  credentialClientPath,
+  repositoryRoot,
+} from "./runtime.mjs";
 
 export async function createServiceConfiguration(t, limits = {}) {
   const { validateServiceConfig } = await appModule("drivers/repo/credentials/configuration");

@@ -69,12 +69,16 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
     let upstream: IncomingMessage | undefined;
     let dispatched = false;
     let failed = false;
+    let inputCompleted = false;
     let receivedHeaders = false;
     const pending: Promise<unknown>[] = [];
-    const cancel = () => {
+    const stopUpstream = () => {
       failed = true;
       outbound?.destroy();
       upstream?.destroy();
+    };
+    const cancel = () => {
+      stopUpstream();
       options.request.destroy();
       options.response.destroy();
     };
@@ -158,6 +162,7 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
         () => {
           stopInput?.();
           inputStall.close();
+          inputCompleted = true;
           // An upstream may need the complete upload before it can respond.
           if (!failed && !receivedHeaders) {
             stopHeaders = options.clock.schedule(plan.limits.firstHeaderMs, cancel);
@@ -246,7 +251,18 @@ export function createUpstreamSender(options: UpstreamSenderOptions): ExchangeSe
       return { kind: "completed", status };
     } catch {
       if (dispatched) {
-        cancel();
+        // An active input pipeline owns the incoming socket. Preserve it for a
+        // service error only after the pipeline settles, before response headers.
+        if (
+          inputCompleted &&
+          !context.signal.aborted &&
+          !options.response.headersSent &&
+          !options.response.destroyed
+        ) {
+          stopUpstream();
+        } else {
+          cancel();
+        }
       }
       return {
         kind: dispatched ? "possibly-dispatched" : "not-dispatched",

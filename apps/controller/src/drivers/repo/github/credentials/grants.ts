@@ -1,23 +1,29 @@
 import type { AuthorityIdentity, ResolvedGrant } from "../../credentials/backend-contracts.ts";
-import type { GitHubConfiguration } from "./types.ts";
+import type { GitHubConfiguration, GitHubFactoryOptions } from "./types.ts";
 import { sameAuthority } from "./driver/state.ts";
 
 type GrantDependencies = Readonly<{
   config: GitHubConfiguration;
   gatewayOrigin: string;
+  selectedBinding?: GitHubFactoryOptions["binding"];
 }>;
 
-export function createGrantResolver({ config, gatewayOrigin }: GrantDependencies) {
+export function createGrantResolver({ config, gatewayOrigin, selectedBinding }: GrantDependencies) {
   function resolve(profile: string): ResolvedGrant {
     if (profile !== "git-read" && profile !== "git-write" && profile !== "git-full") {
       throw new Error("unsupported-profile");
     }
+    if (selectedBinding && profile !== selectedBinding.profile) {
+      throw new Error("unsupported-profile");
+    }
     return Object.freeze({
-      binding: Object.freeze({
-        providerInstanceId: config.providerInstanceId,
-        repositoryId: config.repositoryId,
-        grantId: `${config.configVersion}:${profile}`,
-      }),
+      binding:
+        selectedBinding?.identity ??
+        Object.freeze({
+          providerInstanceId: config.providerInstanceId,
+          repositoryId: config.repositoryId,
+          grantId: `${config.configVersion}:${profile}`,
+        }),
       client: Object.freeze({
         gatewayOrigin,
         gitRemote: `${gatewayOrigin}/${config.repository}.git`,
@@ -29,7 +35,9 @@ export function createGrantResolver({ config, gatewayOrigin }: GrantDependencies
     });
   }
   function forAuthority(authority: AuthorityIdentity) {
-    const profile = (["git-read", "git-write", "git-full"] as const).find((value) =>
+    const profile = (
+      selectedBinding ? [selectedBinding.profile] : (["git-read", "git-write", "git-full"] as const)
+    ).find((value) =>
       sameAuthority({ ...resolve(value).binding, sessionId: authority.sessionId }, authority),
     );
     if (!profile || !authority.sessionId) {

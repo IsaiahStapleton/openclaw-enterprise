@@ -1,9 +1,11 @@
 # Providers
 
 A Provider is Installation-owned configuration that gives related Drivers an
-authenticated client. Agents may reference it through nullable `providerId`;
-this neither grants permissions nor changes model or Harness selection.
-The bundled ChatGPT client manages upstream service accounts, not inference.
+authenticated client. The bundled ChatGPT client manages upstream service
+accounts. Its nullable Agent `providerId` association neither grants permissions
+nor changes model or Harness selection. The GitHub Provider owns repository
+credential configuration for the selected `RepoDriver` and uses the separate
+Agent `repositoryBindings` selection.
 Providers have no OCC resource or write API. Installation administrators can
 discover nonsecret configured IDs and types through `GET /providers`.
 
@@ -46,8 +48,9 @@ drivers:
 
 The singular `provider` key is an array; omission or `[]` means none. IDs are
 unique strings of 1–200 characters without leading/trailing whitespace or ASCII
-control characters. `openai` is an operator-chosen ID; `chatgpt` is the only
-bundled type. Its workspace UUID identifies the upstream workspace, not a Namespace.
+control characters. `openai` is an operator-chosen ID. The bundled types are
+`chatgpt` and `github`; each has its own closed configuration and required member
+Driver. A ChatGPT workspace UUID identifies the upstream workspace, not a Namespace.
 
 `apiKeyPath` must be an absolute mounted file path. The key needs
 `chatgpt.enterprise.service_account.write` and authority for that workspace.
@@ -60,6 +63,41 @@ selected `service_account` Driver must be configured together with matching IDs.
 OCC selects one Driver per capability, so only one ChatGPT Provider is supported.
 Missing, conflicting, or unselected members reject configuration.
 
+### GitHub repository credentials
+
+The GitHub Provider selects one canonical nonsecret JSON registry:
+
+```yaml
+provider:
+  - id: github-primary
+    type: github
+    configuration:
+      registryPath: /etc/openclaw/repository-registry/registry.json
+    drivers:
+      repo: repository-credentials
+drivers:
+  repo:
+    id: repository-credentials
+    configuration:
+      controlSocket: /run/openclaw/repository-control/private/control.sock
+      sessionDurationSeconds: 86400
+      publicCaPath: /etc/openclaw/repository-ca/ca.crt
+```
+
+Keep the ordinary required Driver settings alongside this fragment. One GitHub
+Provider is supported and may coexist with one ChatGPT Provider. Its member ID
+must match the selected `repo` Driver. The registry's Provider
+ID must match the definition, and the session duration must fit the registry's
+maximum. Unsupported Driver packages or configuration keys fail startup.
+
+The API, worker, and credential service consume the same immutable, versioned
+registry ConfigMap. Its exact Namespace, repository, and profile policies own
+admission; no repository list is stored in Helm values. Follow the
+[repository credential reference](repository-credentials.md) for registry fields
+and the [operator guide](../guides/repository-credentials.md) for service setup.
+The capability requires the bundled Kubernetes Compute Driver without a Sandbox
+Driver; admitted Agents must use its supported embedded runtime and authentication.
+
 ## Driver and client contract
 
 The [Provider contract](../../packages/contracts/src/index.ts) groups an ID,
@@ -68,10 +106,19 @@ concrete client, and declared member IDs. Composition constructs
 Membership is established there; the ordinary Driver registry retains its
 `(capability, id)` identities and has no generic Provider ownership field.
 
-Only the API reads the admin key and constructs the client and ServiceAccount
-Driver. The worker receives nonsecret Provider definitions for reconciliation.
+Only the API reads the ChatGPT admin key and constructs its client and
+ServiceAccount Driver. The worker receives nonsecret ChatGPT definitions for reconciliation.
 Existing Driver lifecycle, controller/state injection, Compute credential
 storage, installed factory signatures, and package trust rules remain unchanged.
+
+For GitHub, API and worker construct `GitHubRepoDriver` from
+`Provider<RepositoryCredentialControlClient>`, the validated registry, and the
+selected duration. Construction reads the public CA but never connects the
+private control socket. API resolution is local policy; the worker invokes
+session operations. The Provider client validates full private control responses;
+the Driver then returns the [four-field public status](repository-credentials.md#repo-driver-contract).
+Only the separate service owns the App key, private TLS material, token
+acquisition, and forwarding engine.
 
 ## Agent association and immutable deployment
 
@@ -81,7 +128,7 @@ storage, installed factory signatures, and package trust rules remain unchanged.
 | ----------------------- | ------------ | ---------------------------- |
 | Omitted                 | Save `null`. | Preserve current value.      |
 | `null`                  | Save `null`. | Clear the draft reference.   |
-| Known ID                | Save the ID. | Replace the draft reference. |
+| Known ChatGPT ID        | Save the ID. | Replace the draft reference. |
 | Malformed or unknown ID | Reject.      | Reject.                      |
 
 PATCH still requires `configurationId`. Malformed/empty IDs return
@@ -90,6 +137,10 @@ No Provider is inferred from model configuration or an account, and saving an
 Agent makes no upstream call. Deployment copies `providerId` into an immutable
 AgentRevision; later draft edits cannot change that snapshot. PostgreSQL stores
 the snapshot in the immutable revision row's `provider_id` column.
+
+A GitHub Provider ID is invalid in this field. The console's model Provider
+selector shows ChatGPT entries; the general `/providers` inventory includes both
+types. Repository access uses the separate admitted binding policy.
 
 Secret-backed API-key harness bindings support
 providerless Agents. Managed `access_token` deployment requires dedicated Codex

@@ -6,6 +6,12 @@ import {
   PluginToolPolicySchema,
 } from "./api/resources.ts";
 import { Check } from "typebox/value";
+import type {
+  RepositoryBindingSelection,
+  RepositoryCredentialMaterialRef,
+  RepositoryCredentialRuntimeBinding,
+  RepositoryRevisionState,
+} from "./repo.ts";
 
 export {
   LOGGING_LEVELS,
@@ -15,6 +21,22 @@ export {
   type LoggingLevel,
 } from "./logging.ts";
 
+export type {
+  AdmittedRepositoryBinding,
+  OpenRepositorySessionInput,
+  OpenRepositorySessionResult,
+  RepositoryBindingRequest,
+  RepositoryBindingSelection,
+  RepoDriver,
+  RepositoryCredentialGrantIdentity,
+  RepositoryCredentialMaterialRef,
+  RepositoryCredentialResolution,
+  RepositoryCredentialRuntimeBinding,
+  RepositoryCredentialSessionFiles,
+  RepositoryCredentialSessionStatus,
+  RepositoryRevisionState,
+} from "./repo.ts";
+
 export const DRIVER_CAPABILITIES = Object.freeze([
   "iam",
   "compute",
@@ -23,11 +45,12 @@ export const DRIVER_CAPABILITIES = Object.freeze([
   "secret",
   "sandbox",
   "plugin",
+  "repo",
 ] as const);
 
 export type DriverCapability = (typeof DRIVER_CAPABILITIES)[number];
 
-export type ProviderType = "chatgpt";
+export type ProviderType = ProviderDefinition["type"];
 
 export type ProviderRef = string | null;
 
@@ -37,12 +60,22 @@ export interface ProviderConfiguration {
   readonly credentialTtlSeconds?: number;
 }
 
-export interface ProviderDefinition {
+export interface ChatGPTProviderDefinition {
   readonly id: string;
-  readonly type: ProviderType;
+  readonly type: "chatgpt";
   readonly configuration: ProviderConfiguration;
   readonly drivers: Readonly<Record<"service_account", string>>;
 }
+
+export interface GitHubRepositoryCredentialProviderDefinition {
+  readonly id: string;
+  readonly type: "github";
+  readonly configuration: { readonly registryPath: string };
+  readonly drivers: { readonly repo: string };
+}
+
+export type ProviderDefinition =
+  ChatGPTProviderDefinition | GitHubRepositoryCredentialProviderDefinition;
 
 export interface ProviderSummary {
   readonly id: string;
@@ -211,6 +244,7 @@ export type ResolvedHarnessAuth =
 export interface ComputeRevisionContext {
   readonly harnessAuth: ResolvedHarnessAuth;
   readonly secretEnvironment: readonly SecretEnvironmentProjection[];
+  readonly repositoryCredentials?: readonly RepositoryCredentialRuntimeBinding[];
 }
 
 export type PluginApprovalMode = "always" | "never" | "prompt" | "auto";
@@ -358,6 +392,7 @@ export interface Agent extends Scope {
   readonly harnessAuth: HarnessAuthBinding | null;
   readonly executionMode: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
+  readonly repositoryBindings?: readonly RepositoryBindingSelection[];
   readonly servicePrincipalId: string;
   readonly activeRevisionId?: string;
   readonly createdAt: string;
@@ -391,6 +426,7 @@ export interface AgentRevision extends Scope {
   readonly secretDriverId?: string;
   readonly secretBindings?: SecretBindings;
   readonly plugins?: PluginRevisionState;
+  readonly repositoryCredentials?: RepositoryRevisionState;
   readonly harnessAuth: HarnessAuthSnapshot;
   readonly servicePrincipalId: string;
   readonly createdAt: string;
@@ -404,6 +440,9 @@ export function freezeAgentRevision(revision: AgentRevision): Readonly<AgentRevi
       ? {}
       : { secretBindings: immutableCopy(revision.secretBindings) }),
     ...(revision.plugins === undefined ? {} : { plugins: immutableCopy(revision.plugins) }),
+    ...(revision.repositoryCredentials === undefined
+      ? {}
+      : { repositoryCredentials: immutableCopy(revision.repositoryCredentials) }),
     harness: Object.freeze({ ...revision.harness }),
     compute: Object.freeze({ ...revision.compute }),
     harnessAuth: immutableCopy(revision.harnessAuth),
@@ -784,6 +823,7 @@ export interface ComputeReadiness extends Scope {
   readonly ready: boolean;
   readonly warnings?: readonly PluginDeploymentWarning[];
   readonly runtimeFailure?: RuntimeFailureEvidence;
+  readonly repositoryCredentialMaterialMissing?: readonly RepositoryCredentialMaterialRef[];
 }
 
 /** Authorized, server-admitted resource identities for an Agent-owned runtime. */
@@ -818,6 +858,10 @@ export interface ComputeDriver extends Driver {
     auth: HarnessAuthSnapshot,
     configuration: OpenClawConfigurationDocument,
     secretBindings?: SecretBindings,
+  ): void;
+  validateRepositoryCredentials?(
+    harness: RevisionHarnessDescriptor,
+    sandboxDriverId?: string,
   ): void;
   preflight?(): Promise<void | ComputePreflightResult>;
   setLifecycleDrivers?(drivers: readonly Driver[]): void;
