@@ -79,6 +79,10 @@
                     "label": "Deployment"
                   },
                   {
+                    "page": "guides/topics/agent-presets",
+                    "label": "Presets"
+                  },
+                  {
                     "page": "guides/topics/agent-compute",
                     "label": "Compute"
                   },
@@ -198,7 +202,8 @@
               "reference/configuration/secrets",
               "reference/security/runtime-isolation",
               "reference/agents",
-              "reference/agent-plugins"
+              "reference/agent-plugins",
+              "reference/presets"
             ]
           },
           {
@@ -720,7 +725,8 @@
               "documentation-inventory/repository-guidance",
               "documentation-inventory/repository-specs-1",
               "documentation-inventory/repository-specs-2",
-              "documentation-inventory/repository-specs-3"
+              "documentation-inventory/repository-specs-3",
+              "flows/agent-presets"
             ]
           }
         ]

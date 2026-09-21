@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { chromium } from "playwright";
 
+import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { createConsoleAppFixture, providerFixtures } from "../helpers/console-app.mjs";
+import { authenticatedHeaders } from "../helpers/auth-session.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 
@@ -581,6 +583,7 @@ test("Agent creation preserves edited JSON across mode changes and resets to the
   await mode.selectOption("dedicated");
   assert.equal(await configuration.inputValue(), edited);
 
+  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Reset template" }).click();
   const resetTemplate = JSON.parse(await configuration.inputValue());
   assert.equal(resetTemplate.agents.defaults.model, "codex/gpt-5.1");
@@ -976,4 +979,162 @@ test("Channel drawer saves channel edits without exposing Secret values or dropp
   assert.equal(configuration.data.values.agents.defaults.model, "codex/gpt-5.1");
 
   await page.screenshot({ path: join(artifacts, "agent-channels.png"), fullPage: true });
+});
+
+test("Presets render variables into independent Agent drafts and keep partial-save retries fixed", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const root = await mkdtemp(join(tmpdir(), "occ-preset-browser-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  // Use production Configuration admission, including native credential restrictions.
+  const configurationDriver = new FilesystemConfigurationDriver(root);
+  fixture.controller.registerDriver(configurationDriver);
+  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const namespace = await fixture.createNamespace("Preset authoring", { ready: true });
+  const secret = await fixture.createSecret(
+    namespace.id,
+    "Preset channel token",
+    "test-channel-token",
+  );
+  await fixture.createAgent(namespace.id, "Existing Agent");
+  const values = nativeValues("{{ vars.marker }}", {
+    harnessId: "codex",
+    providerModel: "gpt-5.1",
+  });
+  values.plugins.entries.knowledge.config.enabled = "{{ vars.enabled }}";
+  values.plugins.entries.knowledge.config.count = "{{ vars.count }}";
+  const plugins = { "occ-plugin:diffs": { enabled: true, approvalMode: "always" } };
+  const secretBindings = { CHANNEL_TOKEN: { source: secret.ref, delivery: { type: "env" } } };
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: {
+      name: "Reusable Agent",
+      template: {
+        variables: {
+          name: { type: "string" },
+          execution: { type: "string", default: "dedicated" },
+          marker: { type: "string", default: "initial" },
+          enabled: { type: "boolean", default: false },
+          count: { type: "number", default: 0 },
+        },
+        agent: { name: "{{ vars.name }}", executionMode: "{{ vars.execution }}", plugins },
+        configuration: { values, secretBindings },
+      },
+    },
+  });
+  assert.equal(preset.status, 201, JSON.stringify(preset.body));
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByLabel("Variable: name", { exact: true }).waitFor();
+  const save = page.getByRole("button", { name: "Create Agent", exact: true });
+  const apply = page.getByRole("button", { name: "Apply Preset" });
+  assert.equal(await save.isDisabled(), true);
+  await apply.click();
+  await page.getByRole("alert").filter({ hasText: /name/ }).waitFor();
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
+  await page.getByLabel("Variable: name", { exact: true }).fill("Existing Agent");
+  await apply.click();
+  assert.equal(await save.isEnabled(), true);
+  const beforeInvalidApply = await page
+    .getByLabel("Configuration JSON", { exact: true })
+    .inputValue();
+  await page.getByLabel("Variable: execution", { exact: true }).fill("invalid");
+  await apply.click();
+  await page
+    .getByText("Rendered Preset contains invalid Agent fields or Secret bindings.")
+    .waitFor();
+  assert.equal(await save.isDisabled(), true);
+  assert.equal(
+    await page.getByLabel("Configuration JSON", { exact: true }).inputValue(),
+    beforeInvalidApply,
+  );
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
+  await page.getByLabel("Variable: execution", { exact: true }).fill("dedicated");
+  await apply.click();
+  const rendered = JSON.parse(
+    await page.getByLabel("Configuration JSON", { exact: true }).inputValue(),
+  );
+  assert.deepEqual(rendered.plugins.entries.knowledge.config, {
+    marker: "initial",
+    thresholds: [1, 2, 3],
+    enabled: false,
+    count: 0,
+  });
+  assert.deepEqual(
+    JSON.parse(await page.getByLabel("Plugin selections JSON").inputValue()),
+    plugins,
+  );
+  assert.deepEqual(
+    JSON.parse(await page.getByLabel("Secret bindings JSON").inputValue()),
+    secretBindings,
+  );
+  await page.getByLabel("Variable: marker", { exact: true }).fill("changed");
+  assert.equal(await save.isDisabled(), true);
+  await apply.click();
+  // Deletion after selection must not invalidate this independent local copy.
+  assert.equal(
+    (
+      await fixture.rawRequest("DELETE", `/namespaces/${namespace.id}/presets/${preset.data.id}`, {
+        headers: authenticatedHeaders(await fixture.signIn()),
+      })
+    ).response.status,
+    204,
+  );
+  await page.getByLabel("Agent name", { exact: true }).fill("Edited name");
+  const edited = JSON.parse(
+    await page.getByLabel("Configuration JSON", { exact: true }).inputValue(),
+  );
+  edited.plugins.entries.knowledge.config.thresholds = [5, 6];
+  await page.getByLabel("Configuration JSON", { exact: true }).fill(JSON.stringify(edited));
+  // Canceling a re-Apply preserves the edited draft and its ability to save.
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await apply.click();
+  assert.equal(await save.isEnabled(), true);
+  assert.deepEqual(
+    JSON.parse(await page.getByLabel("Configuration JSON", { exact: true }).inputValue()),
+    edited,
+  );
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page.getByLabel("Preset template").selectOption("");
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Edited name");
+  assert.equal(await page.getByLabel("Preset template").inputValue(), preset.data.id);
+  await page.getByLabel("Agent name", { exact: true }).fill("Existing Agent");
+  const conflict = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await save.click();
+  assert.equal((await conflict).status(), 409);
+  await page.getByText(/conflicts with the saved state/).waitFor();
+  assert.equal(await apply.isDisabled(), true);
+  assert.equal(await page.getByLabel("Variable: marker", { exact: true }).isDisabled(), true);
+  assert.equal(
+    await page.getByLabel("Secret bindings JSON").evaluate((node) => node.readOnly),
+    true,
+  );
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  await page.getByLabel("Agent name", { exact: true }).fill("Preset Agent");
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await save.click();
+  const created = await (await createdResponse).json();
+  assert.equal(created.data.name, "Preset Agent");
+  assert.deepEqual(created.data.plugins, plugins);
+  const saved = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${created.data.configurationId}`,
+  );
+  assert.deepEqual(saved.data.secretBindings, secretBindings);
+  assert.equal(saved.data.values.plugins.entries.knowledge.config.marker, "changed");
+  assert.deepEqual(saved.data.values.plugins.entries.knowledge.config.thresholds, [5, 6]);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  assert.equal(
+    pathRequests(requests, "GET", `/namespaces/${namespace.id}/presets/${preset.data.id}`).length,
+    1,
+  );
 });

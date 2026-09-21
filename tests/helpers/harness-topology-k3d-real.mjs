@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { renderPresetTemplate } from "../../packages/contracts/src/index.ts";
 import {
   authenticatedHeaders,
   createAuthenticatedControllerRequest,
@@ -1715,23 +1716,71 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
             },
           },
         };
+  // Exercise Preset selection through the same creation APIs as the console. The
+  // scoped caller still needs its own Secret grants; the template grants nothing.
+  const launchValues = nativeConfiguration(harnessId, slack, nativeOptions);
+  const templateValues = structuredClone(launchValues);
+  const modelReference = templateValues.agents.defaults.model;
+  templateValues.agents.defaults.model = "{{ vars.model }}";
+  templateValues.agents.defaults.models = {
+    "{{ vars.model }}": templateValues.agents.defaults.models[modelReference],
+  };
+  const presetsPath = `/namespaces/${namespaceId}/presets`;
+  const preset = await adminRequest("POST", presetsPath, {
+    name: `production-${mode}-${randomUUID()}`,
+    template: {
+      variables: {
+        name: { type: "string" },
+        model: { type: "string", default: modelReference },
+        secretId: { type: "string" },
+      },
+      agent: {
+        name: "{{ vars.name }}",
+        executionMode: mode,
+        harnessAuth: {
+          method: "api_key",
+          source: { ...secretApi.model.ref, id: "{{ vars.secretId }}" },
+        },
+      },
+      configuration: {
+        values: templateValues,
+        ...(Object.keys(secretBindings).length === 0 ? {} : { secretBindings }),
+      },
+    },
+  });
+  assert.equal(preset.status, 201, JSON.stringify(preset.error));
+  const presetPath = `${presetsPath}/${preset.data.id}`;
+  const selectedPreset = await adminRequest("GET", presetPath);
+  assert.equal(selectedPreset.status, 200, JSON.stringify(selectedPreset.error));
+  const launch = renderPresetTemplate(selectedPreset.data.template, {
+    name: `production-${mode}-${randomUUID()}`,
+    secretId: secretApi.model.ref.id,
+  });
+  assert.deepEqual(launch.configuration.values, launchValues);
   const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
-    values: nativeConfiguration(harnessId, slack, nativeOptions),
-    ...(Object.keys(secretBindings).length === 0 ? {} : { secretBindings }),
+    ...launch.configuration,
   });
   assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
   if (Object.keys(secretBindings).length > 0) {
     assert.deepEqual(configuration.data.secretBindings, secretBindings);
   }
   const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {
-    name: `production-${mode}-${randomUUID()}`,
+    ...launch.agent,
     configurationId: configuration.data.id,
-    executionMode: mode,
-    harnessAuth: { method: "api_key", source: secretApi.model.ref },
   });
   assert.equal(agent.status, 201, JSON.stringify(agent.error));
   assert.deepEqual(agent.data.harnessAuth, { method: "api_key", source: secretApi.model.ref });
+  const changedPreset = await adminRequest("PATCH", presetPath, { template: {} });
+  assert.equal(changedPreset.status, 200, JSON.stringify(changedPreset.error));
+  const deletedPreset = await adminRequest("DELETE", presetPath);
+  assert.equal(deletedPreset.status, 204, JSON.stringify(deletedPreset.error));
+  const independentConfiguration = await request(
+    "GET",
+    `/namespaces/${namespaceId}/configurations/${configuration.data.id}`,
+  );
+  assert.equal(independentConfiguration.status, 200);
+  assert.deepEqual(independentConfiguration.data.values, launchValues);
   const persistedAgent = await storedAgent(observerPool, namespaceId, agent.data.id);
   const gatewayToken = await provisionAgentTransportSecret(directory, placement, agent.data.id, {
     gatewayPassword,

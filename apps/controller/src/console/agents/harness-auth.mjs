@@ -130,6 +130,21 @@ export function createHarnessAuthFields(context, binding = null) {
       secret.disabled = value;
       account.disabled = value || !accountsLoaded;
     },
+    setBinding(value) {
+      method.value = value?.method ?? "";
+      secret.value = value?.method === "api_key" ? value.source.id : "";
+      if (value?.method === "chatgpt_service_account") {
+        if (![...account.options].some((option) => option.value === value.serviceAccountId)) {
+          account.append(
+            element("option", { value: value.serviceAccountId }, value.serviceAccountId),
+          );
+        }
+        account.value = value.serviceAccountId;
+      } else {
+        account.value = "";
+      }
+      update();
+    },
     async readBinding() {
       if (!method.value) {
         return null;

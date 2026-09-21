@@ -14,21 +14,24 @@ Agent; it does not verify an Agent you create in the console.
 
 1. Sign in, select the intended Namespace, open **Agents**, and select
    **Create Agent**.
-2. Enter a name that is unique within the Namespace. Choose an execution mode
+2. To reuse a [Preset](../presets.md), choose one, fill its variables, and select
+   **Apply Preset**. Review the copied settings; you can edit every value.
+   Leave **No Preset** selected to start from standard defaults.
+3. Enter a name that is unique within the Namespace. Choose an execution mode
    and review the starter Configuration JSON. Dedicated uses `codex/gpt-5.1`;
    embedded uses `openai/gpt-5.1`. These are example models. Confirm your
    Installation has access to the model you choose. The form requires a JSON
    object. Changing modes updates untouched JSON; use **Reset template** if you
    want to replace your edits.
-3. If you need Slack or Microsoft Teams, use the channel cards and select
+4. If you need Slack or Microsoft Teams, use the channel cards and select
    **Dedicated**. Channel settings and their plugin entries are saved with the
    Configuration when you select **Create Agent**. You can provision Slack
    credentials in the console after creation; Teams credentials and deployment
    use the [operator workflow](../../guides/deploy/production-agents.md#configure-the-agent-runtime).
-4. Choose how the Agent will authenticate to its model. Use one of the options
+5. Choose how the Agent will authenticate to its model. Use one of the options
    below, or choose **None** to save a draft and select a method later. A draft
    without a compatible method cannot be deployed.
-5. Select **Create Agent**. A successful save opens the Agent detail page on
+6. Select **Create Agent**. A successful save opens the Agent detail page on
    **Saved draft**. No revision or workload exists yet. You can create or edit
    [workspace files](../console.md#edit-workspace-files) after deployment, once
    the gateway is reachable; the creation form does not save file contents.
@@ -46,7 +49,7 @@ administrator to [grant it before deploying](../../guides/deploy/production-agen
 See [harness authentication](../agents.md#harness-authentication) for the full rules.
 
 If the Configuration saves but Agent creation fails, the form shows its ID and
-keeps its JSON and execution mode fixed. Correct the Agent name or selections and
+keeps its JSON, Secret bindings, execution mode, and Preset controls fixed. Correct the Agent name or selections and
 retry to reuse that Configuration. The two saves are separate; a failed Agent
 save does not remove the Configuration. If a response is lost, the save may have
 succeeded. The form disables further creation until you leave or refresh it.
