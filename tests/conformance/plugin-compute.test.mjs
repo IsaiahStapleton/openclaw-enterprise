@@ -112,7 +112,7 @@ async function readStatusFromHandlerAsync(handler, path) {
   return JSON.parse(body);
 }
 
-async function readRuntimeDiagnosticsFromHandler(handler) {
+async function readRuntimeChannelChecksFromHandler(handler) {
   return readStatusFromHandlerAsync(handler, "/openclaw/runtime/diagnostics");
 }
 
@@ -1711,134 +1711,20 @@ test("Kubernetes startup failure evidence requires the exact runtime Pod report"
   ]);
 });
 
-test("Kubernetes diagnostics read exact runtime Pod checks through the apiserver proxy", async () => {
-  const driver = createKubernetesComputeDriver(kubernetesOptions());
-  const candidate = revision({
-    compute: { id: driver.id, implementation: driver.implementation },
-    plugins: codexNoPluginState(),
-  });
-  const namespace = kubernetesNamespaceName(tenant.id);
-  const namespaceObject = {
-    ...driver.manifest("v1", "Namespace", namespace, { namespaceId: tenant.id }),
-    status: { phase: "Active" },
-  };
-  const podForRole = (role) => ({
-    apiVersion: "v1",
-    kind: "Pod",
-    metadata: {
-      name: `${role}-runtime-diagnostics`,
-      namespace,
-      uid: `pod-${role}-runtime-diagnostics`,
-      labels: {
-        "openclaw.dev/agent": candidate.agentId,
-        "openclaw.dev/revision": candidate.id,
-        "openclaw.dev/workload-role": role,
-      },
-    },
-    status: {
-      containerStatuses: [{ name: role, containerID: `containerd://runtime-diagnostics-${role}` }],
-    },
-  });
-  const pods = { agent: podForRole("agent"), gateway: podForRole("gateway") };
-  const requests = [];
-  driver.clients = async () => ({
-    core: {
-      listNamespace: async () => ({ apiVersion: "v1", kind: "NamespaceList", items: [] }),
-      readNamespace: async () => namespaceObject,
-      listNamespacedPod: async (request) => {
-        requests.push({ kind: "list", request });
-        const role = request.labelSelector.includes("openclaw.dev/workload-role=agent")
-          ? "agent"
-          : "gateway";
-        return { apiVersion: "v1", kind: "PodList", items: [pods[role]] };
-      },
-      connectGetNamespacedPodProxyWithPath: async (request) => {
-        requests.push({ kind: "proxy", request });
-        const role = request.name.startsWith("agent-") ? "agent" : "gateway";
-        return JSON.stringify({
-          revisionId: candidate.id,
-          container: role,
-          podUid: pods[role].metadata.uid,
-          observedAt: "2026-09-21T00:00:00.000Z",
-          ready: role === "gateway",
-          checks: [
-            {
-              component: role,
-              check: role === "gateway" ? "connectivity" : "runtime-status",
-              state: role === "gateway" ? "failed" : "succeeded",
-              checkedAt: "2026-09-21T00:00:00.000Z",
-              ...(role === "gateway" ? { code: "DISCONNECTED" } : {}),
-            },
-          ],
-        });
-      },
-    },
-  });
-
-  const diagnostics = await driver.diagnoseAgentDeployment({
-    namespace: tenant,
-    agent,
-    revision: candidate,
-  });
-
-  assert.equal(diagnostics.revisionId, candidate.id);
-  assert.match(diagnostics.observedAt, /^\d{4}-\d{2}-\d{2}T/);
-  assert.deepEqual(diagnostics.checks, [
-    {
-      component: "agent",
-      check: "runtime-status",
-      state: "succeeded",
-      checkedAt: "2026-09-21T00:00:00.000Z",
-    },
-    {
-      component: "gateway",
-      check: "connectivity",
-      state: "failed",
-      checkedAt: "2026-09-21T00:00:00.000Z",
-      code: "DISCONNECTED",
-    },
-  ]);
-  assert.deepEqual(
-    requests.filter(({ kind }) => kind === "proxy").map(({ request }) => request),
-    [
-      {
-        name: "agent-runtime-diagnostics:18791",
-        namespace,
-        path: "openclaw/runtime/diagnostics",
-      },
-      {
-        name: "gateway-runtime-diagnostics:18791",
-        namespace,
-        path: "openclaw/runtime/diagnostics",
-      },
-    ],
-  );
-});
-
-test("gateway runtime diagnostics translate Slack status into safe checks", async () => {
-  const files = new Map();
-  const spawned = [];
+test("gateway runtime status maps native Slack channel status without provider data", async () => {
+  const revisionId = "revision-plugin-compute-1";
   let statusHandler;
-  const childWithJson = (payload) => {
-    const child = {
-      stdout: {
-        on(event, callback) {
-          if (event === "data") {
-            queueMicrotask(() => callback(Buffer.from(JSON.stringify(payload))));
-          }
-        },
-      },
-      on(event, callback) {
-        if (event === "close") {
-          queueMicrotask(() => callback(0));
-        }
-      },
-      kill(signal) {
-        spawned.push({ kill: signal });
-      },
-    };
-    return child;
+  let channelStatus = {
+    channels: { slack: { configured: true, connected: true } },
+    channelAccounts: {
+      slack: [{ accountId: "default", configured: true, connected: true, probe: { ok: true } }],
+    },
+    channelDefaultAccountId: { slack: "default" },
   };
+  let channelStatusCalls = 0;
+  let holdChannelStatusResponse = false;
+  let pendingChannelStatusListeners;
+  const childKillSignals = [];
   const sandbox = {
     AbortController,
     AbortSignal,
@@ -1848,20 +1734,24 @@ test("gateway runtime diagnostics translate Slack status into safe checks", asyn
     console: { error() {} },
     process: {
       env: {
-        HOME: "/home/node",
-        OPENCLAW_AGENT_REVISION_ID: "revision-slack-diagnostics",
+        OPENCLAW_AGENT_REVISION_ID: revisionId,
         OPENCLAW_GATEWAY_PORT: "8080",
         OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
         OPENCLAW_RUNTIME_STATUS_PORT: "18791",
-        OPENCLAW_POD_UID: "pod-gateway-slack-diagnostics",
+        OPENCLAW_POD_UID: "pod-gateway-status-1",
       },
       on() {},
       exit(code) {
         throw new Error(`unexpected process exit ${code}`);
       },
     },
-    setTimeout,
-    clearTimeout,
+    setInterval() {
+      return { unref() {} };
+    },
+    setTimeout() {
+      return { unref() {} };
+    },
+    clearTimeout() {},
     require(specifier) {
       if (specifier === "node:http") {
         return {
@@ -1881,89 +1771,224 @@ test("gateway runtime diagnostics translate Slack status into safe checks", asyn
             return { isDirectory: () => true };
           },
           mkdirSync() {},
+          readFileSync() {
+            throw new Error("unexpected file read");
+          },
           readdirSync() {
             return [];
           },
-          readFileSync(path) {
-            if (!files.has(path)) {
-              throw new Error(`Missing mocked file: ${path}`);
-            }
-            return files.get(path);
-          },
           rmSync() {},
-          writeFileSync(path, data) {
-            files.set(path, String(data));
-          },
+          writeFileSync() {},
         };
       }
       if (specifier === "node:child_process") {
         return {
           spawn(command, args) {
-            spawned.push({ command, args });
-            if (args.includes("channels")) {
-              return childWithJson({
-                channels: { slack: { configured: true, connected: false } },
-                channelDefaultAccountId: { slack: "slack-account" },
-                channelAccounts: {
-                  slack: [
-                    { accountId: "slack-account", probe: { ok: false, error: "invalid_auth" } },
-                  ],
+            if (args?.[1] !== "channels") {
+              return { on() {}, kill() {} };
+            }
+            assert.equal(command, "node");
+            assert.deepEqual(plain(args), [
+              "/app/openclaw.mjs",
+              "channels",
+              "status",
+              "--channel",
+              "slack",
+              "--json",
+              "--probe",
+              "--timeout",
+              "10000",
+            ]);
+            channelStatusCalls += 1;
+            const listeners = {};
+            const child = {
+              stdout: {
+                on(event, listener) {
+                  listeners["stdout:" + event] = listener;
                 },
+              },
+              kill(signal) {
+                childKillSignals.push(signal);
+              },
+              on(event, listener) {
+                listeners[event] = listener;
+              },
+            };
+            if (holdChannelStatusResponse) {
+              pendingChannelStatusListeners = listeners;
+            } else {
+              queueMicrotask(() => {
+                listeners["stdout:data"]?.(Buffer.from(JSON.stringify(channelStatus)));
+                listeners.close?.(0, null);
               });
             }
-            return { on() {}, kill() {} };
-          },
-          spawnSync() {
-            return { status: 0 };
+            return child;
           },
         };
-      }
-      if (specifier === "node:path") {
-        return { join };
       }
       return nodeRequire(specifier);
     },
   };
 
   vm.runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, sandbox);
+  await Promise.resolve();
+
   assert.ok(statusHandler);
-
-  const diagnostics = await readRuntimeDiagnosticsFromHandler(statusHandler);
-
-  assert.equal(diagnostics.revisionId, "revision-slack-diagnostics");
-  assert.equal(diagnostics.container, "gateway");
-  assert.equal(diagnostics.podUid, "pod-gateway-slack-diagnostics");
-  assert.equal(diagnostics.ready, true);
-  assert.deepEqual(diagnostics.checks, [
-    {
-      component: "gateway",
-      check: "configuration",
-      state: "succeeded",
-      checkedAt: diagnostics.observedAt,
-    },
-    {
-      component: "gateway",
-      check: "authentication",
-      state: "failed",
-      checkedAt: diagnostics.observedAt,
-      code: "AUTHENTICATION_FAILED",
-    },
-    {
-      component: "gateway",
-      check: "connectivity",
-      state: "failed",
-      checkedAt: diagnostics.observedAt,
-      code: "DISCONNECTED",
-    },
-  ]);
-  assert.ok(
-    spawned.some(
-      ({ command, args }) =>
-        command === "node" &&
-        plain(args).join(" ") ===
-          "/app/openclaw.mjs channels status --channel slack --json --probe --timeout 10000",
-    ),
+  const ready = await readRuntimeStatusFromHandler(statusHandler);
+  assert.equal(ready.revisionId, revisionId);
+  assert.equal(channelStatusCalls, 0);
+  const checked = await readRuntimeChannelChecksFromHandler(statusHandler);
+  assert.deepEqual(
+    checked.checks.map(({ component, check, state, code }) => ({ component, check, state, code })),
+    [
+      { component: "gateway", check: "configuration", state: "succeeded", code: undefined },
+      { component: "gateway", check: "authentication", state: "succeeded", code: undefined },
+      { component: "gateway", check: "connectivity", state: "succeeded", code: undefined },
+    ],
   );
+
+  channelStatus = { configOnly: true, configuredChannels: [] };
+  const disabled = await readRuntimeChannelChecksFromHandler(statusHandler);
+  assert.deepEqual(
+    disabled.checks.map(({ check, state, code }) => ({ check, state, code })),
+    [
+      { check: "configuration", state: "failed", code: "NOT_CONFIGURED" },
+      { check: "authentication", state: "unknown", code: undefined },
+      { check: "connectivity", state: "unknown", code: undefined },
+    ],
+  );
+
+  channelStatus = {
+    channels: { slack: { configured: true } },
+    channelAccounts: {
+      slack: [
+        { accountId: "default", configured: true, probe: { ok: false, error: "invalid_auth" } },
+      ],
+    },
+    channelDefaultAccountId: { slack: "default" },
+  };
+  const rejected = await readRuntimeChannelChecksFromHandler(statusHandler);
+  assert.deepEqual(
+    rejected.checks.map(({ check, state, code }) => ({ check, state, code })),
+    [
+      { check: "configuration", state: "succeeded", code: undefined },
+      { check: "authentication", state: "failed", code: "AUTHENTICATION_FAILED" },
+      { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+    ],
+  );
+
+  channelStatus = {
+    channels: { slack: { configured: true } },
+    channelAccounts: {
+      slack: [
+        {
+          accountId: "default",
+          configured: true,
+          probe: {
+            ok: false,
+            error:
+              "An API error occurred: invalid_auth; code: slack_webapi_platform_error; slack error: invalid_auth",
+          },
+        },
+      ],
+    },
+    channelDefaultAccountId: { slack: "default" },
+  };
+  const sdkWrappedRejection = await readRuntimeChannelChecksFromHandler(statusHandler);
+  assert.deepEqual(
+    sdkWrappedRejection.checks.map(({ check, state, code }) => ({ check, state, code })),
+    [
+      { check: "configuration", state: "succeeded", code: undefined },
+      { check: "authentication", state: "failed", code: "AUTHENTICATION_FAILED" },
+      { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+    ],
+  );
+
+  channelStatus = {
+    channels: { slack: { configured: true, connected: true } },
+    channelAccounts: {
+      slack: [
+        {
+          accountId: "default",
+          configured: true,
+          connected: true,
+          probe: { ok: false, error: "probe timed out after 10000ms" },
+        },
+      ],
+    },
+    channelDefaultAccountId: { slack: "default" },
+  };
+  const probeFailed = await readRuntimeChannelChecksFromHandler(statusHandler);
+  assert.deepEqual(
+    probeFailed.checks.map(({ check, state, code }) => ({ check, state, code })),
+    [
+      { check: "configuration", state: "succeeded", code: undefined },
+      { check: "authentication", state: "unknown", code: "PROBE_FAILED" },
+      { check: "connectivity", state: "succeeded", code: undefined },
+    ],
+  );
+
+  channelStatus = {
+    channels: { slack: { configured: true, connected: true } },
+    channelAccounts: {
+      slack: [{ accountId: "secondary", configured: true, connected: true, probe: { ok: true } }],
+    },
+    channelDefaultAccountId: { slack: "missing-default" },
+  };
+  const missingDefault = await readRuntimeChannelChecksFromHandler(statusHandler);
+  assert.deepEqual(
+    missingDefault.checks.map(({ check, state, code }) => ({ check, state, code })),
+    [
+      { check: "configuration", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+      { check: "authentication", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+      { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+    ],
+  );
+
+  channelStatus = { configOnly: true };
+  const malformedFallback = await readRuntimeChannelChecksFromHandler(statusHandler);
+  assert.deepEqual(
+    malformedFallback.checks.map(({ check, state, code }) => ({ check, state, code })),
+    [
+      { check: "configuration", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+      { check: "authentication", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+      { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+    ],
+  );
+
+  holdChannelStatusResponse = true;
+  const requestListeners = {};
+  const responseListeners = {};
+  const abortedRequest = statusHandler(
+    {
+      method: "GET",
+      url: "/openclaw/runtime/diagnostics",
+      on(event, listener) {
+        requestListeners[event] = listener;
+      },
+      off() {},
+    },
+    {
+      writeHead() {
+        throw new Error("aborted response must not write headers");
+      },
+      end() {
+        throw new Error("aborted response must not write a body");
+      },
+      on(event, listener) {
+        responseListeners[event] = listener;
+      },
+      off() {},
+    },
+  );
+  await Promise.resolve();
+  assert.ok(pendingChannelStatusListeners);
+  requestListeners.aborted();
+  assert.deepEqual(childKillSignals.slice(-1), ["SIGTERM"]);
+  pendingChannelStatusListeners.close?.(null, "SIGTERM");
+  await abortedRequest;
+  responseListeners.close?.();
+  assert.equal(channelStatusCalls, 8);
 });
 
 test("Codex runtime gates startup and readiness on a successful native authentication turn", async (t) => {
