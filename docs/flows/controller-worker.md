@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
 updated: 2026-09-20
-last_updated_session: authoring-run/a2f901df-d27a-4a05-9468-e1ee895ae89d
+last_updated_session: codex/01a0bce5-9f29-7110-85fd-6b140674d362
 ---
 
 # Controller Worker Flow
@@ -236,11 +236,9 @@ revision is staged inactive until that commit. A changed active pointer causes
 After the pointer commit, the worker finishes required activation and retires
 the predecessor. `completeActivatedRevision()` then rechecks the exact active
 revision and claim, appends activation evidence, and completes work in a second
-transaction. This deliberately does not claim that infrastructure effects and
-database state are one atomic transaction. Interrupted finalization is retried;
-the already-active branch re-observes the candidate before finishing activation
-and retirement safely. That re-observation prevents a plugin failure retained by
-Compute from being mistaken for success after a claim loss.
+transaction. Infrastructure effects and database state are not atomic. Retried
+finalization rechecks the already-active candidate before activation and
+retirement, so a retained plugin failure cannot become success after claim loss.
 
 Stop finalization rechecks the live claim, Agent owner, and stopped desired state.
 After all captured cleanup succeeds, it clears `activeRevisionId` only when
@@ -262,23 +260,36 @@ table-level delete privilege for these records.
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.defer`,
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.retry`
 
-Pending convergence returns work to the queue with backoff and restores the
-attempt consumed by the claim. Real dependency failures retain that attempt and
-retry within the configured budget. Permanent failures, exhausted attempts, and
-the convergence deadline produce terminal failure instead. See the
+Pending convergence requeues work with backoff and restores the consumed attempt.
+Dependency failures consume attempts within the retry budget. Permanent failures,
+exhausted attempts, and the convergence deadline terminate work. See the
 [controller reference](../reference/controller.md) for the supported outcomes
 and the [settings reference](../reference/settings/operations.md#controller-worker-environment)
 for their timing controls.
 
 Terminal work rows store the overall `reason_code` and one optional `result_data`
 object for success or failure details. Successful revision work stores
-`{ warnings: [...] }`; a convergence deadline failure stores `{ timeoutMs }`.
+`{ warnings: [...] }`; a convergence deadline failure stores required
+`timeoutMs` and optional `runtimeFailure` from the exact candidate runtime.
+Compute observes cached startup results through its private status path,
+including unready Harnesses without plugins, and verifies the Pod/container
+incarnation after collection. It does not repeat the model probe. Missing or
+invalidated evidence leaves the cause unspecified.
+
+`packages/occ/src/state/controller-work.ts:validateFailureData` validates reads
+and writes; the PostgreSQL constraint enforces the matching persisted shape.
+Other failure reasons still reject data.
 `PostgresWorkQueue.complete` and `PostgresWorkQueue.fail` publish that data under
 the live claim. The deployment status projection derives its separate `error`
 and `warnings` fields from the saved result. Stale claims cannot publish outcomes or warnings. Completion needs no
 runtime receipt acknowledgment or post-commit cleanup protocol. The original
 deployment's warnings remain a historical startup result; later maintenance
 observations do not rewrite that completed deployment.
+
+The existing deployment GET reads this durable row only and requires exact
+revision `read` access. It makes no runtime or provider calls. Stored evidence
+survives Pod deletion and controller restart; queued, running, and successful
+deployments have no failure error. See [deployment status](../reference/agents.md#deployment-status).
 
 Legacy terminal work rows derive `reason_code` from durable audit evidence.
 A successful revision is marked `REVISION_ACTIVATED` only
@@ -343,6 +354,8 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-20 17:23: Document cached startup failure capture and persistence through the existing deployment GET. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 1ff76eb2)
 
 - 2026-09-20 10:50: Documented legacy terminal work outcome backfill during migration 0019, including unknown result data and fallback behavior. (authoring-run/a2f901df-d27a-4a05-9468-e1ee895ae89d - 08b1b8fe)
 

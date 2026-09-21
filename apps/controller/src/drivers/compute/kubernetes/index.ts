@@ -54,6 +54,7 @@ import type {
   SecretBindings,
   SecretEnvironmentProjection,
   LoggingLevel,
+  RuntimeFailureEvidence,
 } from "@openclaw-enterprise/contracts";
 import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterprise/contracts";
 import { DependencyUnavailableError, ResourceConflictError } from "@openclaw-enterprise/occ";
@@ -256,6 +257,12 @@ interface PluginRuntimeStatus {
   readonly failures: readonly PluginDeploymentWarning[];
 }
 
+interface PrivateStatusReadback {
+  readonly status: unknown;
+  readonly podUid: string;
+  readonly containerId: string | undefined;
+}
+
 class OwnershipFailure extends Error {}
 class ConfigurationFailure extends Error {}
 
@@ -325,6 +332,13 @@ const CONFIGURATION_VOLUME = "openclaw-configuration";
 const PLUGIN_RUNTIME_VOLUME = "openclaw-plugin-runtime";
 const PLUGIN_RUNTIME_STATUS_PORT = 18_791;
 const PLUGIN_RUNTIME_STATUS_PATH = "/openclaw/plugin-runtime/status";
+const RUNTIME_STATUS_PATH = "/openclaw/runtime/status";
+const COMPUTE_PRIVATE_STATUS_ENVIRONMENT = new Set([
+  "OPENCLAW_AGENT_REVISION_ID",
+  "OPENCLAW_RUNTIME_STATUS_CONTAINER",
+  "OPENCLAW_RUNTIME_STATUS_PORT",
+  "OPENCLAW_POD_UID",
+]);
 const AGENT_REVISION_ANNOTATION = "openclaw.dev/agent-revision";
 const AGENT_REVISION_ID_ANNOTATION = "openclaw.dev/agent-revision-id";
 const APPLY_CONTENT_TYPE = "application/apply-patch+yaml";
@@ -346,6 +360,8 @@ const SERVICE_ACCOUNT_WORKSPACE_KEY = "workspace-id";
 const CODEX_ACCESS_TOKEN = "CODEX_ACCESS_TOKEN";
 const CODEX_CHATGPT_WORKSPACE_ID = "CODEX_CHATGPT_WORKSPACE_ID";
 const MAX_RUNTIME_CREDENTIAL_BYTES = 65_536;
+const MAX_RUNTIME_STATUS_RESPONSE_BYTES = 65_536;
+const RUNTIME_STATUS_IDENTIFIER = /^[A-Za-z0-9._~:@-]{1,64}$/u;
 const RUNTIME_STATE_VOLUME_SIZE = "1Gi";
 const GATEWAY_PRIVATE_STATE_VOLUME = "openclaw-gateway-state";
 const GATEWAY_PRIVATE_STATE_SIZE = "10Gi";
@@ -1559,7 +1575,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
           ? "gateway"
           : "agent"
         : undefined;
-    const incomplete = async (): Promise<ComputeReadiness> => result;
+    const incomplete = async (): Promise<ComputeReadiness> => {
+      const runtimeFailure = await this.safeRuntimeFailureObservation(revision, namespace);
+      return runtimeFailure === undefined ? result : { ...result, runtimeFailure };
+    };
     const ready = async (
       expectedWarnings?: readonly PluginDeploymentWarning[],
     ): Promise<ComputeReadiness> => {
@@ -3415,12 +3434,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return isNonEmptyString(containerStatus?.containerID) ? containerStatus.containerID : undefined;
   }
 
-  private async pluginRuntimeStatus(
+  private runtimeStatusContainers(revision: AgentRevision): readonly ("agent" | "gateway")[] {
+    return revision.harness.mode === "embedded" ? ["gateway"] : ["agent", "gateway"];
+  }
+
+  private async privateStatusReadback(
     revision: AgentRevision,
     namespace: string,
     container: "agent" | "gateway",
-    expectedWarnings?: readonly PluginDeploymentWarning[],
-  ): Promise<PluginRuntimeStatus | undefined> {
+    path: string,
+  ): Promise<PrivateStatusReadback | undefined> {
     const pods = (await this.revisionPods(revision, namespace, container)).filter(
       (pod) => asRecord(pod.metadata)?.deletionTimestamp === undefined,
     );
@@ -3429,41 +3452,178 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     const pod = pods[0]!;
     const metadata = asRecord(pod.metadata);
-    const podName = required(metadata?.name, "Plugin runtime Pod name");
-    const podUid = required(metadata?.uid, "Plugin runtime Pod UID");
+    const podName = metadata?.name;
+    const podUid = metadata?.uid;
+    if (!isNonEmptyString(podName) || !isNonEmptyString(podUid)) {
+      return undefined;
+    }
     const containerId = this.podContainerId(pod, container);
-    const clients = await this.clients();
     let parsed: unknown;
     try {
-      parsed = await this.request(() =>
+      const clients = await this.clients();
+      const raw = await this.request(() =>
         clients.core.connectGetNamespacedPodProxyWithPath({
           name: `${podName}:${PLUGIN_RUNTIME_STATUS_PORT}`,
           namespace,
-          path: PLUGIN_RUNTIME_STATUS_PATH.slice(1),
+          path: path.slice(1),
         }),
       );
+      parsed = this.boundedRuntimeStatusResponse(raw);
     } catch (error) {
       if (numericErrorStatus(error) === 404 || numericErrorStatus(error) === 503) {
         return undefined;
       }
       throw error;
     }
-    if (typeof clients.core.readNamespacedPod === "function") {
-      const latestPod = await this.request(() =>
-        clients.core.readNamespacedPod({ name: podName, namespace }),
-      );
-      const latestMetadata = asRecord(asRecord(latestPod)?.metadata);
-      const latestContainerId = this.podContainerId(latestPod, container);
-      if (
-        latestMetadata?.uid !== podUid ||
-        latestMetadata.deletionTimestamp !== undefined ||
-        ((containerId !== undefined || latestContainerId !== undefined) &&
-          latestContainerId !== containerId)
-      ) {
-        return undefined;
+    const latestPods = (await this.revisionPods(revision, namespace, container)).filter(
+      (candidate) => asRecord(candidate.metadata)?.deletionTimestamp === undefined,
+    );
+    if (latestPods.length !== 1) {
+      return undefined;
+    }
+    const latestMetadata = asRecord(latestPods[0]!.metadata);
+    const latestContainerId = this.podContainerId(latestPods[0], container);
+    if (
+      latestMetadata?.name !== podName ||
+      latestMetadata.uid !== podUid ||
+      latestMetadata.deletionTimestamp !== undefined ||
+      ((containerId !== undefined || latestContainerId !== undefined) &&
+        latestContainerId !== containerId)
+    ) {
+      return undefined;
+    }
+    return { status: parsed, podUid, containerId };
+  }
+
+  private boundedRuntimeStatusResponse(value: unknown): unknown {
+    if (typeof value === "string") {
+      if (Buffer.byteLength(value, "utf8") > MAX_RUNTIME_STATUS_RESPONSE_BYTES) {
+        throw new DependencyUnavailableError("Runtime status returned oversized data.");
+      }
+      try {
+        return JSON.parse(value);
+      } catch {
+        throw new DependencyUnavailableError("Runtime status returned invalid data.");
       }
     }
-    const status = asRecord(parsed);
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      throw new DependencyUnavailableError("Runtime status returned invalid data.");
+    }
+    if (
+      serialized === undefined ||
+      Buffer.byteLength(serialized, "utf8") > MAX_RUNTIME_STATUS_RESPONSE_BYTES
+    ) {
+      throw new DependencyUnavailableError("Runtime status returned oversized data.");
+    }
+    return value;
+  }
+
+  private runtimeFailureEvidence(value: unknown): RuntimeFailureEvidence | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+    const failed = asRecord(value);
+    if (
+      failed === undefined ||
+      !this.validRuntimeStatusIdentifier(failed.component) ||
+      !this.validRuntimeStatusIdentifier(failed.check) ||
+      !this.validRuntimeStatusIdentifier(failed.code) ||
+      !this.validIsoTimestamp(failed.checkedAt)
+    ) {
+      throw new DependencyUnavailableError("Runtime failure status returned invalid data.");
+    }
+    return Object.freeze({
+      component: failed.component,
+      check: failed.check,
+      checkedAt: failed.checkedAt,
+      code: failed.code,
+    });
+  }
+
+  private validRuntimeStatusIdentifier(value: unknown): value is string {
+    return typeof value === "string" && RUNTIME_STATUS_IDENTIFIER.test(value);
+  }
+
+  private validIsoTimestamp(value: unknown): value is string {
+    return typeof value === "string" && !Number.isNaN(Date.parse(value));
+  }
+
+  private cachedRuntimeFailureEvidence(
+    value: unknown,
+    revision: AgentRevision,
+    container: "agent" | "gateway",
+    podUid: string,
+  ): RuntimeFailureEvidence | undefined {
+    const status = asRecord(value);
+    if (
+      status === undefined ||
+      status.revisionId !== revision.id ||
+      status.container !== container ||
+      status.podUid !== podUid
+    ) {
+      throw new DependencyUnavailableError("Runtime failure status returned invalid data.");
+    }
+    return this.runtimeFailureEvidence(status.runtimeFailure);
+  }
+
+  private async safeRuntimeFailureObservation(
+    revision: AgentRevision,
+    namespace: string,
+  ): Promise<RuntimeFailureEvidence | undefined> {
+    if (this.options.runtime === undefined) {
+      return undefined;
+    }
+    const ownerSignal = currentComputeAbortSignal();
+    try {
+      for (const container of this.runtimeStatusContainers(revision)) {
+        const readback = await this.privateStatusReadback(
+          revision,
+          namespace,
+          container,
+          RUNTIME_STATUS_PATH,
+        );
+        if (readback === undefined) {
+          continue;
+        }
+        const failure = this.cachedRuntimeFailureEvidence(
+          readback.status,
+          revision,
+          container,
+          readback.podUid,
+        );
+        if (failure !== undefined) {
+          return failure;
+        }
+      }
+      return undefined;
+    } catch {
+      if (ownerSignal?.aborted) {
+        throw ownerSignal.reason;
+      }
+      return undefined;
+    }
+  }
+
+  private async pluginRuntimeStatus(
+    revision: AgentRevision,
+    namespace: string,
+    container: "agent" | "gateway",
+    expectedWarnings?: readonly PluginDeploymentWarning[],
+  ): Promise<PluginRuntimeStatus | undefined> {
+    const readback = await this.privateStatusReadback(
+      revision,
+      namespace,
+      container,
+      PLUGIN_RUNTIME_STATUS_PATH,
+    );
+    if (readback === undefined) {
+      return undefined;
+    }
+    const status = asRecord(readback.status);
+    const podUid = readback.podUid;
     if (
       status === undefined ||
       status.revisionId !== revision.id ||
@@ -3573,11 +3733,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private sandboxEnvironmentVariables(value: unknown): readonly SandboxEnvironmentVariable[] {
     const variables = Array.isArray(value) ? value : [];
-    return variables.map((item) => {
+    return variables.flatMap((item): readonly SandboxEnvironmentVariable[] => {
       const variable = asRecord(item);
       const name = required(variable?.name, "Harness environment variable name");
+      if (COMPUTE_PRIVATE_STATUS_ENVIRONMENT.has(name)) {
+        return [];
+      }
       if (typeof variable?.value === "string") {
-        return { name, value: variable.value };
+        return [{ name, value: variable.value }];
       }
       const secretKeyRef = asRecord(asRecord(variable?.valueFrom)?.secretKeyRef);
       if (
@@ -3586,10 +3749,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
         typeof secretKeyRef.key === "string" &&
         secretKeyRef.key.trim().length > 0
       ) {
-        return {
-          name,
-          valueFrom: { secretKeyRef: { name: secretKeyRef.name, key: secretKeyRef.key } },
-        };
+        return [
+          {
+            name,
+            valueFrom: { secretKeyRef: { name: secretKeyRef.name, key: secretKeyRef.key } },
+          },
+        ];
       }
       throw new ConfigurationFailure(
         `Harness environment variable ${name} must be a literal or SecretKeyRef.`,
@@ -5004,6 +5169,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
       pluginRuntime !== undefined &&
       Object.values(pluginRuntime.runtime.selections).some((selection) => selection.enabled);
     const needsPluginStatus = needsPluginRuntime && hasEnabledPlugins;
+    const statusRevisionId = configuration?.revisionId ?? ownership.revisionId;
+    const needsRuntimeStatus =
+      runtime !== undefined &&
+      (role === "agent" || role === "gateway") &&
+      statusRevisionId !== undefined;
+    const needsPrivateStatus = needsPluginStatus || needsRuntimeStatus;
     if (needsPluginRuntime) {
       volumes.push({
         name: PLUGIN_RUNTIME_VOLUME,
@@ -5040,13 +5211,28 @@ export class KubernetesComputeDriver implements ComputeDriver {
         );
       }
     }
-    if (needsPluginStatus) {
-      const statusRevisionId = configuration?.revisionId ?? ownership.revisionId;
+    if (needsPrivateStatus) {
       variables.push(
         {
           name: "OPENCLAW_AGENT_REVISION_ID",
-          value: required(statusRevisionId, "Plugin runtime revision ID"),
+          value: required(statusRevisionId, "Runtime status revision ID"),
         },
+        {
+          name: "OPENCLAW_RUNTIME_STATUS_CONTAINER",
+          value: role,
+        },
+        {
+          name: "OPENCLAW_RUNTIME_STATUS_PORT",
+          value: String(PLUGIN_RUNTIME_STATUS_PORT),
+        },
+        {
+          name: "OPENCLAW_POD_UID",
+          valueFrom: { fieldRef: { fieldPath: "metadata.uid" } },
+        },
+      );
+    }
+    if (needsPluginStatus) {
+      variables.push(
         {
           name: "OPENCLAW_PLUGIN_STATUS_CONTAINER",
           value: role,
@@ -5054,10 +5240,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
         {
           name: "OPENCLAW_PLUGIN_STATUS_PORT",
           value: String(PLUGIN_RUNTIME_STATUS_PORT),
-        },
-        {
-          name: "OPENCLAW_POD_UID",
-          valueFrom: { fieldRef: { fieldPath: "metadata.uid" } },
         },
       );
       if (pluginWarnings.length > 0) {
@@ -5280,7 +5462,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
                 ...(variables.length === 0 ? {} : { env: variables }),
                 ports: [
                   { containerPort: port, name: role === "agent" && runtime ? "websocket" : "http" },
-                  ...(needsPluginStatus
+                  ...(needsPrivateStatus
                     ? [{ containerPort: PLUGIN_RUNTIME_STATUS_PORT, name: "plugin-status" }]
                     : []),
                 ],

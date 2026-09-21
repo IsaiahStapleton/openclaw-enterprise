@@ -3739,14 +3739,51 @@
                               "additionalProperties": false,
                               "properties": {
                                 "code": { "maxLength": 64, "minLength": 1, "type": "string" },
-                                "data": { "additionalProperties": {}, "type": "object" },
+                                "data": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "runtimeFailure": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "check": {
+                                          "maxLength": 64,
+                                          "minLength": 1,
+                                          "pattern": "^[A-Za-z0-9._~:@-]{1,64}$",
+                                          "type": "string"
+                                        },
+                                        "checkedAt": {
+                                          "format": "date-time",
+                                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$",
+                                          "type": "string"
+                                        },
+                                        "code": {
+                                          "maxLength": 64,
+                                          "minLength": 1,
+                                          "pattern": "^[A-Za-z0-9._~:@-]{1,64}$",
+                                          "type": "string"
+                                        },
+                                        "component": {
+                                          "maxLength": 64,
+                                          "minLength": 1,
+                                          "pattern": "^[A-Za-z0-9._~:@-]{1,64}$",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["component", "check", "checkedAt", "code"],
+                                      "type": "object"
+                                    },
+                                    "timeoutMs": { "minimum": 1, "type": "integer" }
+                                  },
+                                  "required": ["timeoutMs"],
+                                  "type": "object"
+                                },
                                 "message": { "minLength": 1, "type": "string" }
                               },
                               "required": ["code", "message"],
                               "type": "object"
                             }
                           ],
-                          "description": "Null unless deployment failed. A failure contains code, a fixed safe message, and optional allowlisted data. CONVERGENCE_DEADLINE_EXCEEDED may include data.timeoutMs. Native error text is never returned."
+                          "description": "Null unless deployment failed. A failure contains code, a fixed safe message, and optional allowlisted data. CONVERGENCE_DEADLINE_EXCEEDED may include data.timeoutMs and data.runtimeFailure with bounded startup-failure evidence. Native error text is never returned."
                         },
                         "namespaceId": {
                           "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",

@@ -200,8 +200,16 @@ OCC_TEST_KUBERNETES_CONTEXT=k3d-oce
 OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_k8s_local
 OCC_TEST_KUBERNETES_GATEWAY_IMAGE=<gateway-image>@sha256:<digest>
 OCC_TEST_KUBERNETES_AGENT_IMAGE=<codex-image>@sha256:<digest>
+OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS=<api-server-proxy-source>/32
 OCC_TEST_OPENAI_MODEL=gpt-5.1
 ```
+
+The startup failure cases use dedicated Codex with plugins enabled and disabled.
+They assert the saved failure through deployment GET after failed Pod deletion
+and controller restart. This proves retained startup evidence, not live health.
+Set the private status proxy CIDRs to the actual API-server Pod-proxy source;
+CI preparation supplies them. For manual clusters, follow the
+[networking setup](../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking).
 
 Private workspace-file routing has a separate [gateway-routing suite](gateway-routing.md) with additional Envoy Gateway, cert-manager, and test-CA setup.
 

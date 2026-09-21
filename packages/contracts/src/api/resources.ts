@@ -28,6 +28,18 @@ import {
   PluginApprovalsReviewerSchema,
 } from "./common.ts";
 
+const RuntimeFailureIdentifier = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[A-Za-z0-9._~:@-]{1,64}$",
+});
+
+const RuntimeEvidenceTimestamp = Type.String({
+  format: "date-time",
+  pattern:
+    "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$",
+});
+
 export const InstallationSchema = Type.Object(
   { id: InstallationId, name: Name, createdAt: Timestamp },
   { additionalProperties: false },
@@ -348,14 +360,32 @@ export const AgentDeploymentStatusSchema = Type.Object(
           {
             code: Type.String({ minLength: 1, maxLength: 64 }),
             message: Type.String({ minLength: 1 }),
-            data: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Unknown())),
+            data: Type.Optional(
+              Type.Object(
+                {
+                  timeoutMs: Type.Integer({ minimum: 1 }),
+                  runtimeFailure: Type.Optional(
+                    Type.Object(
+                      {
+                        component: RuntimeFailureIdentifier,
+                        check: RuntimeFailureIdentifier,
+                        checkedAt: RuntimeEvidenceTimestamp,
+                        code: RuntimeFailureIdentifier,
+                      },
+                      { additionalProperties: false },
+                    ),
+                  ),
+                },
+                { additionalProperties: false },
+              ),
+            ),
           },
           { additionalProperties: false },
         ),
       ],
       {
         description:
-          "Null unless deployment failed. A failure contains code, a fixed safe message, and optional allowlisted data. CONVERGENCE_DEADLINE_EXCEEDED may include data.timeoutMs. Native error text is never returned.",
+          "Null unless deployment failed. A failure contains code, a fixed safe message, and optional allowlisted data. CONVERGENCE_DEADLINE_EXCEEDED may include data.timeoutMs and data.runtimeFailure with bounded startup-failure evidence. Native error text is never returned.",
       },
     ),
     warnings: Type.Array(

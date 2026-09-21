@@ -93,6 +93,19 @@ A Driver that supports provisioning but not deletion fails Agent deletion
 permanently on its first worker attempt. Drivers that implement neither optional
 method are unaffected.
 
+### Startup failure evidence
+
+`ComputeReadiness.runtimeFailure` optionally reports a bounded startup failure
+for the exact observed revision. Compute owns collection and classification;
+the core does not inspect native runtime output. Evidence contains safe
+`component`, `check`, `checkedAt`, and `code` fields, never credentials or raw
+provider errors. An unavailable or untrusted observation omits the evidence.
+
+At the convergence deadline, the worker persists that observation with its
+terminal result. The existing [deployment status API](../agents.md#deployment-status)
+returns the saved evidence under the caller's exact-revision read permission.
+It does not invoke Compute while serving the GET request.
+
 ### Runtime logging ownership
 
 Omitting `runtimeLogging` or setting it to `"platform"` uses the bundled

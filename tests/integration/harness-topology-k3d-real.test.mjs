@@ -17,6 +17,7 @@ import {
   assertSameNamespaceSecretSharing,
   assertSecretApiNegativeRows,
   assertSecretApiRotationAndRedeploy,
+  assertStartupFailureDeploymentStatusDurable,
   assertUnauthorizedCodexSocket,
   assertUnboundSecretDeletion,
   hash,
@@ -251,5 +252,27 @@ test(
     await assertUnboundSecretDeletion(context, topology);
     await assertSecretApiRotationAndRedeploy(context, topology);
     await assertNativeReferenceNegativeControl(context, topology);
+  },
+);
+
+test(
+  "production dedicated Codex startup failure status survives Pod deletion and controller restart with plugins disabled",
+  { ...requiresProductionCluster, timeout: 660_000 },
+  async (context) => {
+    const topology = await arrangeProductionTopology(context, "dedicated", undefined, {
+      worker: { convergenceTimeoutMs: 60_000, maxAttempts: 100 },
+    });
+    await assertStartupFailureDeploymentStatusDurable(context, topology, { pluginsEnabled: false });
+  },
+);
+
+test(
+  "production dedicated Codex startup failure status survives Pod deletion and controller restart with plugins enabled",
+  { ...requiresProductionCluster, timeout: 660_000 },
+  async (context) => {
+    const topology = await arrangeProductionTopology(context, "dedicated", undefined, {
+      worker: { convergenceTimeoutMs: 60_000, maxAttempts: 100 },
+    });
+    await assertStartupFailureDeploymentStatusDurable(context, topology, { pluginsEnabled: true });
   },
 );

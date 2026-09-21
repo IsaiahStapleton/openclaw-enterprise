@@ -770,12 +770,20 @@ export interface PluginDeploymentWarning {
   readonly pluginId: string;
 }
 
+export interface RuntimeFailureEvidence {
+  readonly component: string;
+  readonly check: string;
+  readonly checkedAt: string;
+  readonly code: string;
+}
+
 export interface ComputeReadiness extends Scope {
   readonly namespaceId: string;
   readonly agentId: string;
   readonly revisionId: string;
   readonly ready: boolean;
   readonly warnings?: readonly PluginDeploymentWarning[];
+  readonly runtimeFailure?: RuntimeFailureEvidence;
 }
 
 /** Authorized, server-admitted resource identities for an Agent-owned runtime. */
