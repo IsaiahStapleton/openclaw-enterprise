@@ -442,6 +442,23 @@
                 ]
               },
               {
+                "group": "CheatSheets",
+                "pages": [
+                  {
+                    "page": "reference/cheatsheets/api",
+                    "label": "API"
+                  },
+                  {
+                    "page": "reference/cheatsheets/database-entities",
+                    "label": "Database Entities"
+                  },
+                  {
+                    "page": "reference/cheatsheets/environment-variables",
+                    "label": "Environment Variables"
+                  }
+                ]
+              },
+              {
                 "group": "CLI",
                 "pages": [
                   {
