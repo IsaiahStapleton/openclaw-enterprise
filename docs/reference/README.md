@@ -2,8 +2,16 @@
 
 <a id="feature-reference"></a>
 
-Use Reference to look up commands, flags, HTTP operations, request and response
-fields, and permissions for OpenClaw Control Plane (OCC).
+Use Reference to look up commands and flags, HTTP operations and permissions,
+request and response fields, PostgreSQL tables, and environment variables for
+the OpenClaw Control Plane (OCC).
+
+## Cheat sheets
+
+- [API](cheatsheets/api.md): public methods and what they do, by entity.
+- [Permissions](cheatsheets/permissions.md): all IAM actions, resources, and access scopes.
+- [Database entities](cheatsheets/database-entities.md): PostgreSQL tables, their purpose, and their columns.
+- [Environment variables](cheatsheets/environment-variables.md): variables by topic.
 
 ## CLI
 

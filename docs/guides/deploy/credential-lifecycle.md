@@ -95,6 +95,6 @@ the affected workloads and revoke at the credential's authority. Updating or
 deleting a Secret alone cannot remove values from running processes. Verify
 rejection, provision replacements through the appropriate path above, and resume
 only the intended applications or Agents. To stop an Agent, use its exact stop
-endpoint; OCC has no Agent deletion endpoint. IAM revocation prevents OCC from
-accepting or starting later operations, but it cannot retract credentials
-already delivered to a process.
+endpoint. To permanently remove it, [delete the Agent](../../reference/agents.md#deletion);
+teardown is asynchronous. IAM revocation prevents OCC from accepting or starting
+later operations, but it cannot retract credentials already delivered to a process.

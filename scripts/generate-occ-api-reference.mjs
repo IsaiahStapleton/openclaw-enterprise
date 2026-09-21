@@ -6,6 +6,36 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const documentPath = new URL("../packages/contracts/openapi/occ-api.openapi.json", import.meta.url);
 const referenceDirectoryPath = new URL("../docs/reference/api/", import.meta.url);
+const httpMethods = new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace"]);
+
+// Curated entity order and subdivisions; unmatched operations keep their OpenAPI tag.
+const cheatSheetEntities = [
+  { title: "Authentication accounts", tag: "Authentication", paths: ["/api/auth/accounts"] },
+  {
+    title: "Authentication sessions",
+    tag: "Authentication",
+    paths: ["/api/auth/session", "/api/auth/sign-in", "/api/auth/sign-out"],
+  },
+  { title: "Service API keys", tag: "Authentication", paths: ["/api/auth/service-keys"] },
+  { title: "Installation" },
+  { title: "Namespaces" },
+  { title: "Agents" },
+  { title: "Agent deployments" },
+  { title: "Agent revisions" },
+  { title: "Agent runtime credentials", tag: "Agents", paths: ["/runtime-credentials"] },
+  { title: "Agent workspace files", tag: "Agents", paths: ["/workspace/files"] },
+  { title: "Configurations" },
+  { title: "IAM access bindings", tag: "IAM", paths: ["/iam/access-bindings"] },
+  { title: "IAM roles", tag: "IAM", paths: ["/iam/roles"] },
+  { title: "Secrets" },
+  { title: "Service accounts" },
+  {
+    title: "Service account credentials",
+    tag: "Service accounts",
+    paths: ["/credential", "/credentials"],
+  },
+  { title: "Providers" },
+];
 
 function slugifySegment(value) {
   return (
@@ -257,17 +287,16 @@ function operationRows(operations) {
 }
 
 function errorSchema(document) {
+  const operations = operationEntries(document).map(({ operation }) => operation);
   return (
-    Object.values(document.paths)
-      .flatMap((operations) => Object.values(operations))
+    operations
       .flatMap((operation) => Object.entries(operation.responses))
       .find(([status, response]) => {
         const schema = resolveSchema(response.content?.["application/json"]?.schema, document);
         return !status.startsWith("2") && schema.properties?.error?.properties?.details;
       })
       ?.at(1).content["application/json"].schema ??
-    Object.values(document.paths)
-      .flatMap((operations) => Object.values(operations))
+    operations
       .flatMap((operation) => Object.entries(operation.responses))
       .find(([status, response]) => {
         return !status.startsWith("2") && response.content?.["application/json"]?.schema;
@@ -287,7 +316,8 @@ function introduction(document) {
       "This reference is generated from the",
       "[checked-in OpenAPI contract](../../packages/contracts/openapi/occ-api.openapi.json).",
       "Run `pnpm openapi:generate` after changing an API route or schema;",
-      "`pnpm openapi:check` verifies the generated contract and API reference.",
+      "`pnpm openapi:check` verifies the generated contract, this reference,",
+      "and the [API cheat sheet](cheatsheets/api.md).",
     ].join("\n"),
     [
       "The exported contract comes from the development-enabled OCC app, which is",
@@ -306,14 +336,16 @@ function introduction(document) {
 
 function operationEntries(document) {
   return Object.entries(document.paths).flatMap(([path, operations]) =>
-    Object.entries(operations).map(([method, operation]) => ({
-      anchor: operationAnchor(path, method),
-      method,
-      operation,
-      operationId: operation.operationId,
-      path,
-      tag: operation.tags?.[0] ?? "Untagged",
-    })),
+    Object.entries(operations)
+      .filter(([method]) => httpMethods.has(method))
+      .map(([method, operation]) => ({
+        anchor: operationAnchor(path, method),
+        method,
+        operation,
+        operationId: operation.operationId,
+        path,
+        tag: operation.tags?.[0] ?? "Untagged",
+      })),
   );
 }
 
@@ -401,6 +433,101 @@ function referencePage(document, groups) {
   return `${sections.join("\n\n")}\n`;
 }
 
+function cheatSheetEntityOrder(title) {
+  const index = cheatSheetEntities.findIndex((entity) => entity.title === title);
+  if (index !== -1) {
+    return index;
+  }
+
+  const lastSibling = cheatSheetEntities.findLastIndex((entity) => entity.tag === title);
+  return lastSibling === -1 ? cheatSheetEntities.length : lastSibling + 0.5;
+}
+
+function cheatSheetOperationOrder({ method, operationId, path }) {
+  // Keep native administration after Agent lifecycle operations in the compact index.
+  if (method === "get" && path.endsWith("/native-admin")) {
+    return 5;
+  }
+  if (method === "get") {
+    return operationId.startsWith("list") ? 0 : 1;
+  }
+  if (method === "post" && /^(?:create|bootstrap|provision)/.test(operationId)) {
+    return 2;
+  }
+  if (method === "patch" || method === "put") {
+    return 3;
+  }
+  if (method === "delete") {
+    return 6;
+  }
+  return 4;
+}
+
+function cheatSheetPage(document) {
+  const groups = new Map();
+  const operationIds = new Set();
+  const operationAnchors = new Map();
+
+  for (const entry of operationEntries(document)) {
+    if (typeof entry.operationId !== "string" || !entry.operationId.trim()) {
+      throw new Error(
+        `Missing OpenAPI operationId for ${entry.method.toUpperCase()} ${entry.path}.`,
+      );
+    }
+    if (operationIds.has(entry.operationId)) {
+      throw new Error(`Duplicate OpenAPI operationId: ${entry.operationId}.`);
+    }
+    operationIds.add(entry.operationId);
+
+    const route = `${entry.method.toUpperCase()} ${entry.path}`;
+    if (typeof entry.operation.summary !== "string" || !entry.operation.summary.trim()) {
+      throw new Error(`Missing OpenAPI summary for ${route}.`);
+    }
+    const summary = entry.operation.summary.trim().replace(/\s+/g, " ");
+
+    if (operationAnchors.has(entry.anchor)) {
+      throw new Error(
+        `Duplicate API reference anchor ${entry.anchor} for ${operationAnchors.get(entry.anchor)} and ${route}.`,
+      );
+    }
+    operationAnchors.set(entry.anchor, route);
+
+    const entity = cheatSheetEntities.find(
+      ({ tag, paths }) =>
+        tag === entry.tag &&
+        paths?.some((path) => entry.path.endsWith(path) || entry.path.includes(`${path}/`)),
+    );
+    const title = entity?.title ?? entry.tag;
+    if (!groups.has(title)) {
+      groups.set(title, []);
+    }
+    groups.get(title).push({ ...entry, summary });
+  }
+
+  const sections = ["# API cheat sheet", generatedComment(), "## Operations"];
+  const entities = [...groups].sort(
+    ([left], [right]) => cheatSheetEntityOrder(left) - cheatSheetEntityOrder(right),
+  );
+  for (const [title, operations] of entities) {
+    operations.sort(
+      (left, right) =>
+        cheatSheetOperationOrder(left) - cheatSheetOperationOrder(right) ||
+        left.operationId.localeCompare(right.operationId, "en"),
+    );
+    sections.push(
+      `### ${title}`,
+      operations
+        .map(
+          ({ anchor, operationId, summary }) =>
+            `- [\`${operationId}\`](../api.md#${anchor}): ${summary}${/[.!?]$/.test(summary) ? "" : "."}`,
+        )
+        .join("\n"),
+    );
+  }
+
+  return `${sections.join("\n\n")}\n`;
+}
+
 export function generateApiReferenceOutputs(document) {
   const groups = referenceGroups(document);
   const outputs = [
@@ -408,6 +535,11 @@ export function generateApiReferenceOutputs(document) {
       label: "API reference",
       path: "docs/reference/api.md",
       content: referencePage(document, groups),
+    },
+    {
+      label: "API cheat sheet",
+      path: "docs/reference/cheatsheets/api.md",
+      content: cheatSheetPage(document),
     },
   ];
   return outputs;

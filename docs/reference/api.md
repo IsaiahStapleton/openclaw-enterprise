@@ -7,7 +7,8 @@ Version `0.1.0`; OpenAPI `3.1.0`.
 This reference is generated from the
 [checked-in OpenAPI contract](../../packages/contracts/openapi/occ-api.openapi.json).
 Run `pnpm openapi:generate` after changing an API route or schema;
-`pnpm openapi:check` verifies the generated contract and API reference.
+`pnpm openapi:check` verifies the generated contract, this reference,
+and the [API cheat sheet](cheatsheets/api.md).
 
 The exported contract comes from the development-enabled OCC app, which is
 why the generated title is `Development OCC API`. Use

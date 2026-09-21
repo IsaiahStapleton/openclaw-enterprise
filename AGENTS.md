@@ -179,6 +179,25 @@ adjacent pages.
 Do not add migration documentation, migration-specific rollout instructions,
 or per-migration database preparation guidance unless explicitly requested.
 
+### Keep reference cheat sheets current
+
+When adding or changing documentation in one of the areas below, check every
+affected [Reference cheat sheet](docs/reference/README.md#cheat-sheets) and
+update it in the same change if its inventory or short descriptions change.
+Link to the owning documentation for detail instead of copying it.
+
+- [API](docs/reference/cheatsheets/api.md): public operations and their summaries.
+  Update the owning route or OpenAPI schema, then run `pnpm openapi:generate`
+  and `pnpm openapi:check`. Do not edit the generated sheet by hand.
+- [Permissions](docs/reference/cheatsheets/permissions.md): IAM actions, resource
+  kinds, scopes, and required grants.
+- [Database entities](docs/reference/cheatsheets/database-entities.md): PostgreSQL
+  tables, their purpose, and columns.
+- [Environment variables](docs/reference/cheatsheets/environment-variables.md):
+  supported configuration variables; test-only variables stay in `docs/testing/`.
+
+Check the manually maintained sheets against their owning sources and run `pnpm docs:check`.
+
 ## Documentation length budget
 
 Review pages above **1,500 visible words** for repetition and scope. Pages of
