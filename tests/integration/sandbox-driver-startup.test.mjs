@@ -35,7 +35,11 @@ function sandboxInstallation() {
       policy: {
         process: { runAsUser: "1000", runAsGroup: "1000" },
         networkPolicies: [
-          { name: "model-egress", endpoints: [{ host: "api.openai.com", ports: [443] }] },
+          {
+            name: "model-egress",
+            endpoints: [{ host: "api.openai.com", ports: [443] }],
+            binaries: [{ path: "/app/bin/model-client" }],
+          },
         ],
       },
     },
@@ -97,6 +101,19 @@ test("startup rejects OpenShell network values outside the v0.1 protocol enums",
       environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
     }),
     /OpenShell network policy model-egress TLS mode must be one of: skip, terminate/,
+  );
+});
+
+test("startup rejects OpenShell network policies without binary identities", async (t) => {
+  const configuration = sandboxInstallation();
+  configuration.drivers.sandbox.configuration.policy.networkPolicies[0].binaries = [];
+
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
+    }),
+    /OpenShell network policy model-egress requires at least one binary path/,
   );
 });
 

@@ -57,6 +57,7 @@ test("OpenShell client serializes v0.1 workspace scopes and network enums", asyn
           network_policies: {
             model: {
               name: "model",
+              binaries: [{ path: "/app/bin/model-client" }],
               endpoints: [
                 {
                   host: "api.openai.com",
@@ -93,6 +94,9 @@ test("OpenShell client serializes v0.1 workspace scopes and network enums", asyn
       enforcement: "NETWORK_ENFORCEMENT_MODE_ENFORCE",
       access: "NETWORK_ACCESS_PRESET_FULL",
     });
+    assert.deepEqual(createRequests[0].spec.policy.network_policies.model.binaries, [
+      { path: "/app/bin/model-client" },
+    ]);
   } finally {
     client.close();
     await new Promise((resolve) => server.tryShutdown(resolve));

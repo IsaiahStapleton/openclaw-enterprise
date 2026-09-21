@@ -10,10 +10,10 @@ OpenShell version this integration targets,
 [`v0.1.0-pre.5`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0-pre.5), cannot accept the
 Kubernetes Secret-backed environment entries or projected workload identity a
 dedicated Codex Agent requires. The Enterprise Driver rejects deployment rather
-than starting an incorrectly credentialed Harness. The existing OpenShell
-integration verifies that rejection; it does not establish a successful Agent
-deployment or model response. Use Kubernetes Compute without OpenShell when
-you need to run Agents.
+than starting an incorrectly credentialed Harness. The real integration keeps
+that rejection proof and has a separate CI-only compatibility bridge for a real
+in-Sandbox model turn. That bridge is not a supported deployment path. Use
+Kubernetes Compute without OpenShell when you need to run Agents.
 
 Embedded OpenClaw also fails when OpenShell is selected; the integration is
 designed only for dedicated Codex. See the [upstream requirements](#current-upstream-preconditions)
@@ -65,11 +65,11 @@ The Driver configures all three available
 [SandboxDriver containment facets](sandbox.md#containment-facets). Applying them
 to a running Agent requires upstream support:
 
-| Facet        | Current OpenShell behavior                                                                  |
-| ------------ | ------------------------------------------------------------------------------------------- |
-| `networking` | OpenShell network policies for Harness tool traffic, plus Kubernetes baseline policies.     |
-| `filesystem` | Approved PVC subpath mounts and OpenShell filesystem policy for read-only/read-write paths. |
-| `process`    | OpenShell process policy, including the configured run-as user and group.                   |
+| Facet        | Current OpenShell behavior                                                                    |
+| ------------ | --------------------------------------------------------------------------------------------- |
+| `networking` | Binary-scoped OpenShell policies for Harness tool traffic, plus Kubernetes baseline policies. |
+| `filesystem` | Approved PVC subpath mounts and OpenShell filesystem policy for read-only/read-write paths.   |
+| `process`    | OpenShell process policy, including the configured run-as user and group.                     |
 
 There is no `exec` facet. Command-level authorization and per-tool dynamic
 sandbox creation are deferred; `exec` remains a tool invocation that runs inside
@@ -115,13 +115,18 @@ drivers:
           runAsGroup: "1000"
         networkPolicies:
           - name: model-egress
+            binaries:
+              - path: /path/to/model-client
             endpoints:
               - host: api.openai.com
                 ports: [443]
                 protocol: tcp
+                tls: skip
 ```
 
-The optional endpoint fields use OpenShell's configuration spellings: `tls`
+Each pre.5 network policy requires at least one binary identity with a nonempty
+executable path. OpenShell applies the endpoints only to those
+binaries. The optional endpoint fields use OpenShell's configuration spellings: `tls`
 accepts `skip` or `terminate`; `enforcement` accepts `enforce` or `audit`; and
 `access` accepts `read_only`, `read_write`, or `full`. OpenShell pre.5 treats
 `terminate` as a deprecated alias for automatic TLS detection and termination.
@@ -177,7 +182,7 @@ exempts the whole Pod, the cluster must also install a fail-closed admission
 policy that restricts the exemption to the approved OpenShell workload shape:
 trusted OpenShell images by digest, expected ServiceAccounts, approved
 Namespaces, expected labels, and the exact elevated capabilities needed by
-OpenShell init or sidecar containers.
+OpenShell init and supervisor components.
 
 Do not grant wildcard tenant permissions to the SandboxDriver. It is wired to
 use the same authenticated Kubernetes client as the Kubernetes Compute Driver;
@@ -209,6 +214,9 @@ require upstream OpenShell to satisfy all of these conditions:
   template bridge is not a supported workaround.
 - OpenShell must preserve all approved Agent workspace PVC subpath mounts
   without falling back to its default workspace claim or mounting the PVC root.
+- OpenShell must preserve the immutable plugin-runtime `runtime.json` and
+  `config.toml` ConfigMap entries at `/etc/openclaw/plugin-runtime`. The Codex
+  entrypoint reads these files even when the Agent selects no optional plugins.
 - OpenShell must support exact environment entries backed by Kubernetes
   `secretKeyRef`, including the startup app-server token Secret. Stock
   OpenShell `v0.1.0-pre.5` cannot receive those entries through the current gateway

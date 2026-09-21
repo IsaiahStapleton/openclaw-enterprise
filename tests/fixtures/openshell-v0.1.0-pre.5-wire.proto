@@ -56,6 +56,13 @@ message SandboxPolicy {
 message NetworkPolicyRule {
   string name = 1;
   repeated NetworkEndpoint endpoints = 2;
+  repeated NetworkBinary binaries = 3;
+}
+
+message NetworkBinary {
+  string path = 1;
+  reserved 2;
+  reserved "harness";
 }
 
 message NetworkEndpoint {

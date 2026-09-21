@@ -2,149 +2,134 @@
 
 This note records the September 21, 2026 local experiment against
 [`v0.1.0-pre.5`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0-pre.5). Use it to
-plan the next OpenShell integration change. It is evidence from a disposable test
-environment, not a supported setup procedure or proof that OpenShell can run a
-production Agent.
+plan the next OpenShell integration change. It is evidence from a disposable
+test environment, not a supported setup procedure or proof that OpenShell can
+run a production Agent.
 
 ## Result
 
 The experiment deployed the exact pre.5 OpenShell gateway, sandbox runtime, and
-supervisor images to a disposable k3d cluster. OpenShell created a Sandbox custom
-resource and a provider-owned Agent Pod. Kubernetes reported that Pod as Ready,
-and the integration verified its expected PVC mounts, restricted container
-security context, secret non-exposure, and gateway routing.
+supervisor images to a disposable k3d cluster. The CI-only compatibility case
+passed: **1 passed, 0 failed, 0 skipped** in about three minutes. OpenShell
+created a Sandbox custom resource and provider-owned Agent Pod, and the real
+Codex app server completed an authenticated model turn over its Pod-loopback
+WebSocket.
 
-The positive integration still failed: **0 passed, 1 failed, 0 skipped**. The
-Codex app-server process inside the Agent exited before it listened on port
-18790, so the gateway returned HTTP 408 with
-`CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE`. No provider model request
-completed.
+The same test verified the staged workload token's identity claims, required
+read-only and writable mounts, restricted process privileges, secret
+non-exposure, allowed and denied filesystem operations, binary-scoped allowed
+and denied network operations, Sandbox replacement, and cleanup. It also
+verified that the OCC Agent Service selected the active revision.
 
-Pod readiness was not sufficient evidence of Agent readiness. After the
-canonical process exited, the OpenShell boundary process remained alive and the
-Pod stayed Ready.
+This is not production support. Stock pre.5 still cannot receive the native
+Secret, projected-token, or plugin-runtime ConfigMap shapes. A Service-routed
+app-server WebSocket reset during the experiment, so the model turn used Pod
+loopback and does not prove production gateway-to-agent routing.
 
 ## Experiment scope
 
 The run used the branch for
-[#272](https://github.com/openclaw/openclaw-enterprise/pull/272) at commit
-`b3a4c004`, model `gpt-5.6-sol`, and the real OpenShell k3d integration. The
-existing stock test selects the expected fail-closed case because pre.5 cannot
-accept the required Secret-backed environment or projected workload identity.
-To reach later startup stages, the experiment changed only an isolated worktree
-and added temporary compatibility adaptations based on the approach explored in
+[#272](https://github.com/openclaw/openclaw-enterprise/pull/272) on a working
+tree based on commit `946f5b52`, model `gpt-5.6-sol`, and the real OpenShell k3d
+integration. Mode `0` retains the expected fail-closed case. Mode `1` adds an
+explicit test-only compatibility path based on the approach explored in
 [#146](https://github.com/openclaw/openclaw-enterprise/pull/146).
 
-The disposable cluster used K3s v1.36.4. Its imported image manifests had these
-digests:
+The disposable cluster used K3s v1.36.4. It selected these immutable image
+references:
 
-| Image                                       | Imported manifest digest                                                  |
-| ------------------------------------------- | ------------------------------------------------------------------------- |
-| OpenShell gateway                           | `sha256:d9e71ec3cc334abba58f83fff051f6c7891b2b123d5bd2a37d10e25cca9fd7d1` |
-| OpenShell sandbox runtime                   | `sha256:fee4be7a3aac56a23f7c52446aad9bfe3e196e1e921dfa71b629b1316b84e22b` |
-| OpenShell supervisor                        | `sha256:8f11658a225197612ec5e0ecf68ebb03a135ac1e51f363f5a335424ad990bdb7` |
-| Original OpenClaw/Codex runtime             | `sha256:d8bcbb159805deddab818b050b6335c3095af9cefcce8770ce59109d68d6f77e` |
-| Test-only UID-compatible runtime derivative | `sha256:6b66054d5e2a47b44f34c0ec746751d680c0c72af710744a2251ccb8f79d32a9` |
+| Image                          | Selected digest                                                           |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| OpenShell gateway              | `sha256:0d58d9bb9fbad1f5bceafaea0f5af2e57e9b520809fef85cfc6d10027f095bba` |
+| OpenShell sandbox runtime      | `sha256:6b133b8e97083f6e6218811401b6c1e11d127484c83c3818730f9cd465146c2f` |
+| OpenShell supervisor           | `sha256:40febe95703b2a810f264003499a8e094de7c54020328d17c1c0279b4e09e6f9` |
+| OpenClaw gateway/Codex runtime | `sha256:d8bcbb159805deddab818b050b6335c3095af9cefcce8770ce59109d68d6f77e` |
 
-The adaptations were:
+The compatibility path makes these test-only adaptations:
 
 - Materialize `APP_SERVER_TOKEN` and `OPENAI_API_KEY` from their exact
-  `SecretKeyRef` sources into a private, revision-specific PVC subpath, then read
-  them from the Agent startup wrapper.
+  `SecretKeyRef` sources into a private, revision-specific PVC subpath, then
+  read them from the Agent startup wrapper.
+- Copy the immutable plugin-runtime ConfigMap's `runtime.json` and `config.toml`
+  into a read-only revision-specific PVC subpath. This restores the runtime
+  files introduced by the Agent-owned plugin configuration change.
+- Project the exact audience-bound Agent ServiceAccount token into the bootstrap
+  Job, copy it into a private PVC subpath, and verify its claims from the
+  provider-owned Harness.
 - Split the large inline Node command into arguments below OpenShell's 32 KiB
   argument limit.
-- Omit the projected service-principal token to avoid the unsupported pre.5
-  volume shape.
-- Use a disposable derivative of the same Codex runtime image with its Codex
-  home owned by UID 10001, which pre.5 selected for the workload.
+- Preserve the `node` executable as the main binary identity and place writable
+  Codex state under the shared workspace so UID 10001 can initialize it.
+- Remove the unsupported projected-token volume from only the OpenShell gateway
+  request after staging the same token through the bootstrap Job.
+- Send the executable identities required by pre.5 network policy and use
+  uninspected TLS relay for clients that do not trust OpenShell's inspection CA.
 
-These changes intentionally weakened the production proof. They established how
-far pre.5 could start, but did not satisfy the SandboxDriver contract. None of
-the adaptations were committed to PR #272.
+These changes form a test compatibility layer. They prove how pre.5 behaves
+after an operator supplies the missing projections, but they do not satisfy the
+production SandboxDriver contract.
 
-## Observed failure sequence
+## Observed sequence
 
-| Stage                             | Observation                                                                             | Consequence                                                                                                          |
-| --------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Stock request                     | Pre.5 rejected the exact Secret-backed environment and projected service-token volume.  | The supported test correctly failed closed before activation.                                                        |
-| Pod-template bridge               | Suspending and recreating the Sandbox Pod allowed a projected token to be added.        | Pre.5 rejected the recreated Pod because its workload Pod UID no longer matched the admitted runtime resource claim. |
-| Identity omitted                  | The Sandbox, supervisor, gateway, and Agent Pod reached Running or Ready.               | This proved resource creation only; it did not prove the production workload identity.                               |
-| Credential bridge, first attempt  | Credential files were mode `0400`, owned by UID 1000, while the Agent ran as UID 10001. | The startup wrapper could not read either credential and exited.                                                     |
-| Credential ownership corrected    | The wrapper could read both files.                                                      | Startup progressed to the runtime entrypoint.                                                                        |
-| Runtime image ownership corrected | UID 10001 could access `/home/node/.codex`.                                             | Startup progressed far enough to reveal the missing runtime artifact.                                                |
-| Canonical stderr captured         | Node reported `ENOENT` for `/etc/openclaw/plugin-runtime/runtime.json`.                 | The app-server exited, port 18790 refused connections, and the model turn returned HTTP 408.                         |
+| Stage                   | Observation                                                                   | Consequence                                                               |
+| ----------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Stock request           | Pre.5 rejected Secret-backed environment before Sandbox creation.             | Mode `0` preserved the production fail-closed proof.                      |
+| Credential bootstrap    | The operator Job staged both exact Secret values with read-only permissions.  | The canonical entrypoint received credentials without env exposure.       |
+| Plugin bootstrap        | The Job staged `runtime.json` and `config.toml` from the immutable ConfigMap. | Plugin initialization reached readiness instead of failing with `ENOENT`. |
+| Identity bootstrap      | The Job staged the audience-bound Agent token and the Harness read it.        | The test verified identity claims, not native OpenShell token projection. |
+| Binary network policy   | Pre.5 received exact curl and Codex executable paths.                         | Allowed destinations succeeded and an unapproved destination failed.      |
+| App-server loopback     | The provider-owned Agent completed a real model turn.                         | Pre.5 execution and model access were proved inside the Sandbox.          |
+| OCC Service route       | The Service selected the active revision, but its WebSocket reset.            | Production gateway-to-agent transport remains unproved.                   |
+| Replacement and cleanup | A suspended Pod was replaced by one new Sandbox and the old Sandbox left.     | Provider lifecycle cleanup completed without duplicate Sandboxes.         |
 
-The final failure happened before model-provider authentication. This experiment
-therefore says nothing about whether the selected credential or model would have
-completed a turn.
+## Source boundary
 
-## Source boundary behind the final failure
-
-The Kubernetes Compute path creates and mounts the plugin runtime artifacts that
-the dedicated Codex entrypoint consumes. The entrypoint reads
-`OPENCLAW_PLUGIN_RUNTIME_MANIFEST`, then writes the Codex configuration under
-`CODEX_HOME`; see
+Kubernetes Compute creates the plugin runtime artifacts that the dedicated Codex
+entrypoint consumes. The entrypoint reads `OPENCLAW_PLUGIN_RUNTIME_MANIFEST` and
+writes the Codex configuration under `CODEX_HOME`; see
 [`runtime-entrypoints.ts`](../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts).
 
-The OpenShell request builder currently translates `workspaceMounts` into PVC
-volumes and adds the projected service-principal volume. It does not translate
-the plugin runtime ConfigMap mount; see
-[`openshell.ts`](../../apps/controller/src/drivers/sandbox/openshell.ts). During
-the experiment, the expected `plugin-runtime-*` ConfigMap existed in the Agent
-Namespace, but the provider-owned Pod had no mount at
-`/etc/openclaw/plugin-runtime`.
-
-This is a contract gap, not a reason to copy ConfigMap contents through another
-test-only PVC bridge. The next design must preserve the complete immutable
-Harness workload requirements through the SandboxDriver boundary.
+The OpenShell request builder translates approved workspace PVC mounts and the
+projected ServiceAccount token. Pre.5 does not support the Secret-backed
+environment, projected token, or plugin ConfigMap shapes through its gateway
+API; see [`openshell.ts`](../../apps/controller/src/drivers/sandbox/openshell.ts).
+The compatibility bootstrap copies those exact inputs without changing the
+production Driver's fail-closed behavior.
 
 ## Recommended next steps
 
-1. Define the complete dedicated Harness projection contract before changing the
-   driver. Inventory every native Kubernetes Compute input that the canonical
-   process needs: immutable image, command, environment, Secret references,
-   runtime ConfigMaps, PVC subpaths, per-Agent ServiceAccount, projected token,
-   ports, resources, and security context.
-2. Decide which missing shapes require upstream OpenShell support and which
-   require a richer OCE SandboxDriver contract. Keep OpenShell-specific
-   translation in the OpenShell Driver; do not special-case it in platform core.
-3. Require upstream support for the exact Secret references, per-Agent
-   ServiceAccount, projected audience-bound token, and immutable runtime
-   ConfigMap mounts. Do not use the credential PVC or suspend-and-patch bridges
-   as production behavior.
-4. Resolve runtime user semantics explicitly. Either OpenShell must honor the
-   immutable image user or the admitted workload contract must select a UID that
-   the runtime image supports. A test-only image ownership rewrite is not a
-   release solution.
-5. Extend the positive integration only after the complete request is supported.
-   The first success checkpoint must confirm that the canonical app-server is
-   listening, not merely that the boundary Pod is Ready. Then require the real
-   model turn, workload identity, filesystem and egress enforcement, replacement,
-   and cleanup assertions already defined by the positive case.
-6. Keep the stock pre.5 negative lane until an upstream version satisfies the
-   contract. When selecting a newer version, run the negative and positive cases
-   deliberately so a prerequisite failure cannot be mistaken for a successful
+1. Extend the SandboxDriver workload contract only if a complete, backend-neutral
+   projection model is required. Keep OpenShell-specific translation in the
+   OpenShell Driver.
+2. Require upstream support for exact Secret references, the per-Agent
+   ServiceAccount, projected audience-bound token, immutable plugin-runtime
+   ConfigMap, and every approved PVC subpath.
+3. Resolve the pre.5 Service-routed app-server WebSocket reset before treating
+   an OpenShell deployment as production-capable.
+4. Remove the operator bootstrap Job when upstream OpenShell accepts the complete
+   request. Run the same model, identity, filesystem, egress, replacement, and
+   cleanup assertions through that native path.
+5. Keep mode `0` so a projection regression cannot be mistaken for a successful
    Agent deployment.
 
 ## Re-run criteria
 
 Follow the [OpenShell test guide](openshell.md) and use its CI-owned preparation
-path. Enable `OCC_TEST_OPENSHELL_SECRET_PROJECTION=1` only when the selected
-upstream runtime supports every required projection without a local bridge. A
-successful handoff must record all of the following:
+path. Use `OCC_TEST_OPENSHELL_SECRET_PROJECTION=0` for unchanged production
+requirements and `1` for the documented CI compatibility bridge. Record:
 
-- exact OpenShell source tag and immutable gateway, sandbox, and supervisor image
-  digests;
+- exact OpenShell source tag and immutable gateway, sandbox, and supervisor
+  image digests;
 - immutable OpenClaw gateway and Codex runtime image digests;
 - real Sandbox and provider-owned Agent identities;
 - canonical app-server listener and authenticated model-turn evidence;
-- exact workload identity and mount assertions;
+- workload identity and mount assertions;
 - filesystem, network, replacement, and cleanup results; and
 - test totals with no prerequisite skips.
 
 Do not record credentials, Secret values, temporary kubeconfigs, or local state
-paths. The disposable resources from this experiment were removed, and the
-credential file used for the run was left untouched.
+paths. The per-test Namespaces were removed. The disposable cluster was retained
+for follow-up, and the credential file used for the run was left untouched.
 
 ## Related source
 
@@ -153,4 +138,3 @@ credential file used for the run was left untouched.
 - [OpenShell provisioning flow](../flows/openshell-sandbox-provisioning.md)
 - [Real OpenShell integration](../../tests/integration/sandbox-driver-openshell-k3d-real.test.mjs)
 - [OpenShell Kubernetes fixture](../../tests/helpers/openshell-kubernetes-real.mjs)
-- [Real gateway model-turn assertion](../../tests/helpers/kubernetes-real.mjs)

@@ -145,11 +145,17 @@ export function createOpenShellInstallationConfiguration({
         networkPolicies: [
           {
             name: "openclaw",
-            endpoints: [{ host: "www.openclaw.org", ports: [443] }],
+            endpoints: [{ host: "www.openclaw.org", ports: [443], tls: "skip" }],
+            binaries: [{ path: "/usr/bin/curl" }],
           },
           {
             name: "model-provider",
-            endpoints: [{ host: "api.openai.com", ports: [443] }],
+            endpoints: [{ host: "api.openai.com", ports: [443], tls: "skip" }],
+            binaries: [
+              {
+                path: "/app/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+              },
+            ],
           },
         ],
       },
@@ -773,7 +779,7 @@ export function createOpenShellKubernetesFixture({
     assert.equal(claims.sub, `system:serviceaccount:${namespace}:${pod.spec.serviceAccountName}`);
   }
 
-  function assertApprovedOpenShellPrivileges(pod) {
+  function assertApprovedOpenShellPrivileges(pod, { compatibilityBridge = false } = {}) {
     assert.equal(
       pod.spec.runtimeClassName,
       openShellRuntimeClass,
@@ -784,26 +790,23 @@ export function createOpenShellKubernetesFixture({
         (container) => container.securityContext?.capabilities?.add ?? [],
       ),
     );
-    for (const capability of ["NET_ADMIN", "NET_RAW"]) {
-      assert.equal(
-        initCapabilities.has(capability),
-        true,
-        `OpenShell network initialization must explicitly request ${capability}.`,
-      );
-    }
+    assert.deepEqual(
+      [...initCapabilities],
+      [],
+      "OpenShell pre.5 must not add capabilities to workload Pod init containers.",
+    );
     const networkSidecar = pod.spec.containers.find(({ name }) =>
       ["openshell-network", "openshell-supervisor-network"].includes(name),
     );
-    assert.ok(networkSidecar, "OpenShell must provide its dedicated network sidecar.");
-    const networkCapabilities = new Set(networkSidecar.securityContext?.capabilities?.add ?? []);
-    for (const capability of ["SYS_PTRACE", "DAC_READ_SEARCH"]) {
-      assert.equal(
-        networkCapabilities.has(capability),
-        false,
-        `binary-unaware network enforcement must not grant the sidecar ${capability}.`,
-      );
-    }
-    const container = harnessContainer(pod);
+    assert.equal(
+      networkSidecar,
+      undefined,
+      "OpenShell pre.5 must keep its network supervisor outside the workload Pod.",
+    );
+    const container = compatibilityBridge
+      ? pod.spec.containers.find(({ name }) => name === "agent")
+      : harnessContainer(pod);
+    assert.ok(container, "the provider-owned Pod must contain its Agent container.");
     assert.equal(container.securityContext?.allowPrivilegeEscalation, false);
     assert.deepEqual(container.securityContext?.capabilities?.drop, ["ALL"]);
     assert.notEqual(container.securityContext?.runAsUser, 0);
@@ -833,8 +836,22 @@ export function createOpenShellKubernetesFixture({
     }
   }
 
-  async function requestCodexTurnFromGatewayPod({ namespace, gatewayPod, providerModel, prompt }) {
+  async function requestCodexTurnFromPod({
+    namespace,
+    pod,
+    container,
+    providerModel,
+    prompt,
+    appServerUrl,
+    appServerTokenPath,
+  }) {
     const script = String.raw`
+      const appServerUrl = ${JSON.stringify(appServerUrl)} ?? process.env.APP_SERVER_URL;
+      const appServerToken = ${
+        appServerTokenPath === undefined
+          ? "process.env.APP_SERVER_TOKEN"
+          : `require("node:fs").readFileSync(${JSON.stringify(appServerTokenPath)}, "utf8")`
+      };
       const timeout = setTimeout(() => fail(new Error("Codex harness turn timed out")), 300000);
       const pending = new Map();
       const items = [];
@@ -854,8 +871,8 @@ export function createOpenShellKubernetesFixture({
         return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
       }
 
-      const socket = new WebSocket(process.env.APP_SERVER_URL, {
-        headers: { authorization: "Bearer " + process.env.APP_SERVER_TOKEN },
+      const socket = new WebSocket(appServerUrl, {
+        headers: { authorization: "Bearer " + appServerToken },
       });
 
       socket.addEventListener("open", async () => {
@@ -914,9 +931,47 @@ export function createOpenShellKubernetesFixture({
         if (!finished) fail(new Error("Codex harness connection closed before completion"));
       });
     `;
+    const containerArguments = container === undefined ? [] : ["--container", container];
     return JSON.parse(
-      await kubectl("exec", gatewayPod, "--namespace", namespace, "--", "node", "-e", script),
+      await kubectl(
+        "exec",
+        pod,
+        "--namespace",
+        namespace,
+        ...containerArguments,
+        "--",
+        "node",
+        "-e",
+        script,
+      ),
     );
+  }
+
+  async function requestCodexTurnFromGatewayPod({ namespace, gatewayPod, providerModel, prompt }) {
+    return requestCodexTurnFromPod({
+      namespace,
+      pod: gatewayPod,
+      providerModel,
+      prompt,
+    });
+  }
+
+  async function requestCodexTurnFromOpenShellHarnessPod({
+    namespace,
+    harnessPod,
+    providerModel,
+    prompt,
+    appServerTokenPath,
+  }) {
+    return requestCodexTurnFromPod({
+      namespace,
+      pod: harnessPod,
+      container: "agent",
+      providerModel,
+      prompt,
+      appServerUrl: `ws://127.0.0.1:${harnessPort}`,
+      appServerTokenPath,
+    });
   }
 
   async function startGatewayPortForward(namespace, serviceName) {
@@ -941,6 +996,7 @@ export function createOpenShellKubernetesFixture({
     assertGatewayBootstrapPolicies,
     assertNoSecretBytes,
     requestCodexTurnFromGatewayPod,
+    requestCodexTurnFromOpenShellHarnessPod,
     startGatewayPortForward,
   };
 }

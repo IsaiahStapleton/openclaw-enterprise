@@ -39,6 +39,11 @@ export interface OpenShellNetworkEndpoint {
 export interface OpenShellNetworkPolicyRule {
   readonly name: string;
   readonly endpoints: readonly OpenShellNetworkEndpoint[];
+  readonly binaries: readonly OpenShellNetworkBinary[];
+}
+
+export interface OpenShellNetworkBinary {
+  readonly path: string;
 }
 
 export interface OpenShellSandboxDriverOptions {
@@ -623,6 +628,7 @@ function networkPolicies(options: OpenShellSandboxDriverOptions) {
       nonempty(policy.name, "OpenShell network policy name"),
       {
         name: policy.name,
+        binaries: networkPolicyBinaries(policy),
         endpoints: policy.endpoints.map((endpoint) => {
           const description = `OpenShell network policy ${policy.name}`;
           const tls = optionalEnumValue(endpoint.tls, NETWORK_TLS_MODES, `${description} TLS mode`);
@@ -648,6 +654,17 @@ function networkPolicies(options: OpenShellSandboxDriverOptions) {
       },
     ]),
   );
+}
+
+function networkPolicyBinaries(policy: OpenShellNetworkPolicyRule) {
+  if (!Array.isArray(policy.binaries) || policy.binaries.length === 0) {
+    throw new OpenShellSandboxConfigurationFailure(
+      `OpenShell network policy ${policy.name} requires at least one binary path.`,
+    );
+  }
+  return policy.binaries.map((binary) => ({
+    path: nonempty(binary.path, `OpenShell network policy ${policy.name} binary path`),
+  }));
 }
 
 function sandboxSpec(

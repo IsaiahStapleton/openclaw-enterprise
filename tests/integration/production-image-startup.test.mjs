@@ -120,6 +120,7 @@ function productionInstallation(adminKeyPath) {
               {
                 name: "dns",
                 endpoints: [{ host: "1.1.1.1", ports: [53], protocol: "udp" }],
+                binaries: [{ path: "/app/bin/dns-client" }],
               },
             ],
           },
