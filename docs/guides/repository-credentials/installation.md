@@ -180,7 +180,10 @@ A ready sidecar confirms protected startup and the control listener. Continue
 with [Agent creation, deployment and a repository task](../repository-credentials.md#create-and-deploy-an-agent)
 to verify the actual consumer. Registry or certificate mismatch fails closed;
 check IDs, exact paths, DNS SAN and public trust first. A service restart loses
-in-memory sessions; worker maintenance replaces runtime material within the
-frozen deadline. Updating policy requires a new immutable registry ConfigMap and
-consistent selection by all three consumers; existing admitted grants are not
-silently widened.
+in-memory sessions. A lost session already delivered to an Agent fails its
+revision and queues runtime retirement; worker maintenance does not recreate it.
+Inspect retained cleanup obligations before explicitly deploying a new authorized
+revision. That deployment does not settle old cleanup or replay repository
+operations. See [restart and cleanup limits](../../reference/repository-credentials.md#repo-driver-contract).
+Updating policy requires a new immutable registry ConfigMap and consistent
+selection by all three consumers; existing admitted grants are not silently widened.
