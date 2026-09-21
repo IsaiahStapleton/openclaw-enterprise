@@ -13,11 +13,15 @@ for how OCC reads and writes its data.
 
 ### `installation`
 
+Stores the single OCC Installation record.
+
 - `id`
 - `name`
 - `created_at`
 
 ### `namespaces`
+
+Tracks platform Namespaces, their lifecycle status, and any existing Kubernetes namespace they use.
 
 - `id`
 - `name`
@@ -27,6 +31,8 @@ for how OCC reads and writes its data.
 - `deleted_at`
 
 ### `agents`
+
+Stores Agent drafts, their desired runtime state, and the active revision reference.
 
 - `id`
 - `namespace_id`
@@ -46,6 +52,8 @@ for how OCC reads and writes its data.
 
 ### `agent_revisions`
 
+Stores numbered, immutable snapshots of Agent settings accepted for deployment.
+
 - `id`
 - `namespace_id`
 - `agent_id`
@@ -56,6 +64,8 @@ for how OCC reads and writes its data.
 
 ### `configurations`
 
+Stores each Agent Configuration’s current generation and Secret bindings; the Driver stores values.
+
 - `id`
 - `namespace_id`
 - `kind`
@@ -64,6 +74,8 @@ for how OCC reads and writes its data.
 - `created_at`
 
 ### `secrets`
+
+Stores Secret metadata and backend references; Secret values are kept by the selected Driver.
 
 - `id`
 - `namespace_id`
@@ -77,12 +89,16 @@ for how OCC reads and writes its data.
 
 ### `service_accounts`
 
+Stores Namespace service accounts and any credential Secret references.
+
 - `id`
 - `namespace_id`
 - `name`
 - `credential`
 
 ### `service_account_driver_bindings`
+
+Links managed accounts to a Provider, Driver, upstream account, workspace, and any issued credential.
 
 - `service_account_id`
 - `namespace_id`
@@ -96,6 +112,8 @@ for how OCC reads and writes its data.
 
 ### `iam_identities`
 
+Stores human Principals and service identities, including those owned by an Agent.
+
 - `id`
 - `namespace_id`
 - `agent_id`
@@ -105,11 +123,15 @@ for how OCC reads and writes its data.
 
 ### `iam_groups`
 
+Defines native IAM groups at Installation or Namespace scope.
+
 - `id`
 - `namespace_id`
 - `name`
 
 ### `iam_group_memberships`
+
+Links human Principals to their native IAM groups.
 
 - `namespace_id`
 - `group_id`
@@ -117,12 +139,16 @@ for how OCC reads and writes its data.
 
 ### `iam_roles`
 
+Defines native IAM roles as sets of actions and resource kinds.
+
 - `id`
 - `namespace_id`
 - `name`
 - `permissions`
 
 ### `iam_access_bindings`
+
+Grants a native IAM role to an identity or group, optionally for a specific resource.
 
 - `id`
 - `namespace_id`
@@ -134,6 +160,8 @@ for how OCC reads and writes its data.
 
 ### `iam_restrictions`
 
+Defines native IAM rules that deny actions on a resource kind or specific resource, overriding grants.
+
 - `id`
 - `namespace_id`
 - `action`
@@ -144,6 +172,8 @@ for how OCC reads and writes its data.
 ## Audit and controller
 
 ### `audit_events`
+
+Keeps an append-only record of bootstrap, changes to resources, and authorization denials.
 
 - `id`
 - `occurred_at`
@@ -157,6 +187,8 @@ for how OCC reads and writes its data.
 - `details`
 
 ### `controller_work`
+
+Queues and tracks controller work for Namespace and Agent lifecycle changes and revision deployments.
 
 - `idempotency_key`
 - `namespace_id`
@@ -180,6 +212,8 @@ for how OCC reads and writes its data.
 
 ### `user`
 
+Stores the profiles of people provisioned to sign in.
+
 - `id`
 - `name`
 - `email`
@@ -189,6 +223,8 @@ for how OCC reads and writes its data.
 - `updated_at`
 
 ### `session`
+
+Stores expiring browser sessions for signed-in users.
 
 - `id`
 - `expires_at`
@@ -200,6 +236,8 @@ for how OCC reads and writes its data.
 - `user_id`
 
 ### `account`
+
+Links a user to their sign-in account; provisioned password accounts store a password hash.
 
 - `id`
 - `account_id`
@@ -217,6 +255,8 @@ for how OCC reads and writes its data.
 
 ### `verification`
 
+Stores expiring verification records managed by Better Auth.
+
 - `id`
 - `identifier`
 - `value`
@@ -225,6 +265,8 @@ for how OCC reads and writes its data.
 - `updated_at`
 
 ### `apikey`
+
+Stores hashed service API keys and their settings for IAM service identities.
 
 - `id`
 - `config_id`

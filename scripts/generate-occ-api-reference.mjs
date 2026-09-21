@@ -480,6 +480,11 @@ function cheatSheetPage(document) {
     operationIds.add(entry.operationId);
 
     const route = `${entry.method.toUpperCase()} ${entry.path}`;
+    if (typeof entry.operation.summary !== "string" || !entry.operation.summary.trim()) {
+      throw new Error(`Missing OpenAPI summary for ${route}.`);
+    }
+    const summary = entry.operation.summary.trim().replace(/\s+/g, " ");
+
     if (operationAnchors.has(entry.anchor)) {
       throw new Error(
         `Duplicate API reference anchor ${entry.anchor} for ${operationAnchors.get(entry.anchor)} and ${route}.`,
@@ -496,7 +501,7 @@ function cheatSheetPage(document) {
     if (!groups.has(title)) {
       groups.set(title, []);
     }
-    groups.get(title).push(entry);
+    groups.get(title).push({ ...entry, summary });
   }
 
   const sections = ["# API cheat sheet", generatedComment(), "## Operations"];
@@ -512,7 +517,10 @@ function cheatSheetPage(document) {
     sections.push(
       `### ${title}`,
       operations
-        .map(({ anchor, operationId }) => `- [\`${operationId}\`](../api.md#${anchor})`)
+        .map(
+          ({ anchor, operationId, summary }) =>
+            `- [\`${operationId}\`](../api.md#${anchor}): ${summary}${/[.!?]$/.test(summary) ? "" : "."}`,
+        )
         .join("\n"),
     );
   }
