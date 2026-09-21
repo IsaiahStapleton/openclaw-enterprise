@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import test from "node:test";
+import test, { before } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 import {
   repositoryMaterialDeployment,
@@ -20,6 +31,63 @@ const client = {
   apiHost: "credentials.example.test",
   repository: "example/project",
 };
+
+let nativeClientImport;
+
+before(async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "repository-material-client-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const repository = fileURLToPath(new URL("../../", import.meta.url));
+  const build = join(root, "build");
+  await mkdir(join(build, "scripts"), { recursive: true });
+  await mkdir(join(build, "apps/controller/dist"), { recursive: true });
+  await cp(
+    join(repository, "scripts/build-repository-credentials.mjs"),
+    join(build, "scripts/build-repository-credentials.mjs"),
+  );
+  // Like the detached-package suite, use the real artifact builder and this
+  // checkout's TypeScript output. A workspace build is a prerequisite.
+  await cp(join(repository, "apps/controller/dist"), join(build, "apps/controller/dist"), {
+    recursive: true,
+  });
+  await cp(
+    join(repository, "deploy/runtime/repository-credentials"),
+    join(build, "deploy/runtime/repository-credentials"),
+    { recursive: true },
+  );
+  await symlink(join(repository, "node_modules"), join(build, "node_modules"));
+  const result = spawnSync(
+    process.execPath,
+    [join(build, "scripts/build-repository-credentials.mjs")],
+    {
+      encoding: "utf8",
+      timeout: 30000,
+      env: { PATH: process.env.PATH },
+    },
+  );
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const artifact = join(root, "client");
+  await cp(join(build, ".build/repository-credentials/client"), artifact, { recursive: true });
+  await rm(build, { recursive: true, force: true });
+  const nativeClient = pathToFileURL(
+    join(artifact, "dist/drivers/repo/github/credentials/client/native-git.js"),
+  ).href;
+  // Relocate only the installed module lookup. The initializer and emitted
+  // preparer execute unchanged, with their real detached dependency closure.
+  // This does not prove the runtime image installs the bundle at /opt/oce.
+  nativeClientImport = `data:text/javascript,${encodeURIComponent(`
+    import { registerHooks } from "node:module";
+    registerHooks({
+      resolve(specifier, context, nextResolve) {
+        return nextResolve(
+          specifier === "/opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/native-git.js"
+            ? ${JSON.stringify(nativeClient)} : specifier,
+          context,
+        );
+      },
+    });
+  `)}`;
+});
 
 async function projectionFixture(t, { count = 1 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "repository-runtime-material-"));
@@ -84,10 +152,17 @@ async function projectionFixture(t, { count = 1 } = {}) {
   const run = () =>
     spawnSync(
       process.execPath,
-      ["-e", REPOSITORY_MATERIAL_INIT_ENTRYPOINT, JSON.stringify(descriptor)],
+      [
+        "--import",
+        nativeClientImport,
+        "-e",
+        REPOSITORY_MATERIAL_INIT_ENTRYPOINT,
+        JSON.stringify(descriptor),
+      ],
       {
         encoding: "utf8",
         timeout: 10000,
+        env: { PATH: process.env.PATH },
       },
     );
   return { root, sourceRoot, targetRoot, generation, descriptor, bindings, run };
@@ -101,6 +176,30 @@ test("the actual repository init process turns projected Secrets into private ru
   const retry = fixture.run();
   assert.equal(retry.status, 0, retry.stderr);
   assert.equal((await lstat(fixture.targetRoot)).mode & 0o777, 0o700);
+  const gitconfig = join(fixture.targetRoot, "gitconfig");
+  assert.equal((await lstat(gitconfig)).mode & 0o777, 0o600);
+  const setting = (name) => {
+    const result = spawnSync(
+      "git",
+      ["--no-replace-objects", "config", "--file", gitconfig, "--get-all", name],
+      {
+        encoding: "utf8",
+        timeout: 10000,
+        env: { PATH: process.env.PATH },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  assert.equal(setting(`url.${client.gatewayOrigin}/.insteadOf`), "https://github.com/\n");
+  assert.equal(setting(`credential.${client.gatewayOrigin}.useHttpPath`), "true\n");
+  assert.equal(setting(`http.${client.gatewayOrigin}.sslVerify`), "true\n");
+  assert.equal(setting(`http.${client.gatewayOrigin}.followRedirects`), "false\n");
+  assert.equal(
+    setting(`credential.${client.gatewayOrigin}.helper`),
+    `\n!'/usr/local/bin/node' '/opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/git-helper.js' manifest '/run/oce/repository-credentials' '${fixture.descriptor.manifest.generation}'\n`,
+  );
+  const nativeConfig = await readFile(gitconfig, "utf8");
   for (const [index, binding] of fixture.descriptor.manifest.bindings.entries()) {
     const directory = join(fixture.targetRoot, "sessions", basename(binding.directory));
     for (const name of ["", "gh"]) {
@@ -116,7 +215,37 @@ test("the actual repository init process turns projected Secrets into private ru
       assert.equal(await readFile(path, "utf8"), content);
       assert.equal(result.stderr.includes(fixture.bindings[index].files.bearer), false);
     }
+    assert.equal(nativeConfig.includes(fixture.bindings[index].files.bearer), false);
   }
+});
+
+test("repository init does not publish sessions when native Git configuration cannot be prepared", async (t) => {
+  const fixture = await projectionFixture(t, { count: 2 });
+  const binding = fixture.descriptor.manifest.bindings[1];
+  // Both sessions remain individually valid, but one canonical host cannot be
+  // routed to two gateways. The real native preparer must reject the generation.
+  binding.client = {
+    ...client,
+    gatewayOrigin: "https://other-credentials.example.test",
+    gitRemote: "https://other-credentials.example.test/example/project.git",
+    apiHost: "other-credentials.example.test",
+  };
+  const files = encodeRepositoryCredentialSessionFiles({
+    session: { sessionId: binding.sessionId, deadlineWallMs: binding.deadlineWallMs },
+    bearer: fixture.bindings[1].files.bearer,
+    client: binding.client,
+  });
+  const directory = join(fixture.generation, basename(binding.directory));
+  for (const [name, content] of Object.entries(files)) {
+    await rm(join(directory, name));
+    await writeFile(join(directory, name), content, { mode: 0o444 });
+  }
+  const result = fixture.run();
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "Repository credential material initialization failed.\n");
+  await assert.rejects(lstat(fixture.targetRoot), { code: "ENOENT" });
+  assert.deepEqual(await readdir(dirname(fixture.targetRoot)), []);
 });
 
 test("repository init validates the complete projection before publishing any session", async (t) => {
