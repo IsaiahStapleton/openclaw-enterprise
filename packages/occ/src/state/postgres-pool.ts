@@ -5,11 +5,13 @@ import { parseIntoClientConfig } from "pg-connection-string";
 export async function createPostgresPool(
   databaseUrl: string,
   {
-    max,
     authMode = process.env.OCC_DATABASE_AUTH ?? "password",
-  }: { readonly max?: number; readonly authMode?: string } = {},
+    ...limits
+  }: Pick<
+    pg.PoolConfig,
+    "max" | "connectionTimeoutMillis" | "statement_timeout" | "query_timeout" | "options"
+  > & { readonly authMode?: string } = {},
 ): Promise<pg.Pool> {
-  const limits = max === undefined ? {} : { max };
   if (authMode === "password") {
     return new pg.Pool({ connectionString: databaseUrl, ...limits });
   }

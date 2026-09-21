@@ -337,15 +337,66 @@ test(
       }),
       { name: "ScopeViolationError" },
     );
+    for (const data of [
+      { timeoutMs: 900_000, runtimeFailure: null },
+      { timeoutMs: 900_000, runtimeFailure: { component: "gateway" } },
+      {
+        timeoutMs: 900_000,
+        runtimeFailure: {
+          component: "gateway",
+          check: "readyz",
+          checkedAt: "2026-02-30T20:30:00.000Z",
+          code: "STARTUP_FAILED",
+        },
+      },
+      {
+        timeoutMs: 900_000,
+        runtimeFailure: {
+          component: "gateway",
+          check: "readyz",
+          checkedAt: "2026-09-19T20:30:00.000Z",
+          code: "STARTUP_FAILED",
+          raw: "unsafe",
+        },
+      },
+    ]) {
+      await assert.rejects(
+        queue.fail(invalidClaim, { code: "CONVERGENCE_DEADLINE_EXCEEDED", data }),
+        { name: "ScopeViolationError" },
+      );
+    }
     const stillClaimed = await queue.findWork(invalidKey);
     assert.equal(stillClaimed.state, "claimed");
+    const runtimeFailure = {
+      component: "gateway",
+      check: "readyz",
+      checkedAt: "2026-09-19T20:30:00.000Z",
+      code: "STARTUP_FAILED",
+    };
     await queue.fail(invalidClaim, {
       code: "CONVERGENCE_DEADLINE_EXCEEDED",
-      data: { timeoutMs: 900_000 },
+      data: { timeoutMs: 900_000, runtimeFailure },
     });
     const deadline = await queue.findWork(invalidKey);
     assert.equal(deadline.state, "failed_permanent");
-    assert.deepEqual(deadline.resultData, { timeoutMs: 900_000 });
+    assert.deepEqual(deadline.resultData, { timeoutMs: 900_000, runtimeFailure });
+    for (const resultData of [
+      { timeoutMs: 900_000, raw: "unsafe" },
+      { timeoutMs: 0, runtimeFailure },
+      {
+        timeoutMs: 900_000,
+        runtimeFailure: { ...runtimeFailure, checkedAt: "2026-02-30T20:30:00.000Z" },
+      },
+      { timeoutMs: 900_000, runtimeFailure: { ...runtimeFailure, raw: "unsafe" } },
+    ]) {
+      await assert.rejects(
+        pool.query(
+          `UPDATE occ.controller_work SET result_data = $2::jsonb WHERE idempotency_key = $1`,
+          [invalidKey, JSON.stringify(resultData)],
+        ),
+        { code: "23514" },
+      );
+    }
 
     const exhaustedClaim = await claimExpected(queue, exhaustedKey);
     await queue.retry(exhaustedClaim, {

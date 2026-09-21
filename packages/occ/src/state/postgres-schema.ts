@@ -1,5 +1,6 @@
 import type {
   AgentDesiredRuntimeState,
+  AgentStatus,
   HarnessExecutionMode,
   HarnessAuthBinding,
   PluginDesiredState,
@@ -241,6 +242,7 @@ export const agents = occSchema.table(
       .$type<AgentDesiredRuntimeState>()
       .notNull()
       .default("stopped"),
+    status: text("status").$type<AgentStatus>().notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (table): PgTableExtraConfigValue[] => [
@@ -257,6 +259,11 @@ export const agents = occSchema.table(
     check(
       "agents_desired_runtime_state_valid",
       sql`${table.desiredRuntimeState} IN ('running', 'stopped')`,
+    ),
+    check("agents_status_valid", sql`${table.status} IN ('active', 'deleting')`),
+    check(
+      "agents_deleting_is_stopped",
+      sql`${table.status} <> 'deleting' OR ${table.desiredRuntimeState} = 'stopped'`,
     ),
     check(
       "agents_provider_id_valid",
@@ -310,7 +317,7 @@ export const agents = occSchema.table(
       foreignColumns: [iamIdentities.namespaceId, iamIdentities.agentId, iamIdentities.id],
     })
       .onUpdate("restrict")
-      .onDelete("restrict"),
+      .onDelete("no action"),
   ],
 );
 
@@ -486,7 +493,7 @@ export const iamIdentities = occSchema.table(
       foreignColumns: [agents.namespaceId, agents.id],
     })
       .onUpdate("restrict")
-      .onDelete("restrict"),
+      .onDelete("no action"),
     check("iam_identities_kind_valid", sql`${table.kind} IN ('principal', 'service_principal')`),
     check(
       "iam_identities_kind_ownership",
@@ -679,20 +686,22 @@ export const controllerWork = occSchema.table(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
   },
   (table) => [
+    // Migration 0017 makes both work-owner constraints deferrable; Drizzle
+    // models their NO ACTION semantics but not FK deferral.
     foreignKey({
       name: "controller_work_agent_owner",
       columns: [table.namespaceId, table.agentId],
       foreignColumns: [agents.namespaceId, agents.id],
     })
       .onUpdate("restrict")
-      .onDelete("restrict"),
+      .onDelete("no action"),
     foreignKey({
       name: "controller_work_revision_owner",
       columns: [table.namespaceId, table.agentId, table.revisionId],
       foreignColumns: [agentRevisions.namespaceId, agentRevisions.agentId, agentRevisions.id],
     })
       .onUpdate("restrict")
-      .onDelete("restrict"),
+      .onDelete("no action"),
     check(
       "controller_work_idempotency_key_length",
       sql`char_length(${table.idempotencyKey}) BETWEEN 1 AND 512`,
@@ -716,7 +725,7 @@ export const controllerWork = occSchema.table(
         OR (${table.agentId} IS NOT NULL AND ${table.revisionId} IS NULL
           AND ${table.namespaceTarget} IS NULL
           AND ${table.agentTarget} IS NOT NULL
-          AND ${table.agentTarget} = 'stopped')
+          AND ${table.agentTarget} IN ('stopped', 'deleted'))
         OR (${table.agentId} IS NOT NULL AND ${table.revisionId} IS NOT NULL
           AND ${table.namespaceTarget} IS NULL AND ${table.agentTarget} IS NULL)
       )`,
@@ -755,10 +764,29 @@ export const controllerWork = occSchema.table(
             ${table.state} = 'failed_permanent'
             AND ${table.reasonCode} = 'CONVERGENCE_DEADLINE_EXCEEDED'
             AND ${table.resultData} ? 'timeoutMs'
-            AND (${table.resultData} - 'timeoutMs') = '{}'::jsonb
+            AND (${table.resultData} - 'timeoutMs' - 'runtimeFailure') = '{}'::jsonb
             AND jsonb_typeof(${table.resultData}->'timeoutMs') = 'number'
             AND (${table.resultData}->>'timeoutMs') ~ '^[1-9][0-9]{0,15}$'
             AND (${table.resultData}->>'timeoutMs')::numeric <= 9007199254740991
+            AND (
+              NOT (${table.resultData} ? 'runtimeFailure')
+              OR (
+                jsonb_typeof(${table.resultData}->'runtimeFailure') = 'object'
+                AND (${table.resultData}->'runtimeFailure') ?& ARRAY['component', 'check', 'checkedAt', 'code']
+                AND ((${table.resultData}->'runtimeFailure') - 'component' - 'check' - 'checkedAt' - 'code') = '{}'::jsonb
+                AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,component}') = 'string'
+                AND char_length(${table.resultData} #>> '{runtimeFailure,component}') BETWEEN 1 AND 64
+                AND (${table.resultData} #>> '{runtimeFailure,component}') ~ '^[A-Za-z0-9._~:@-]{1,64}$'
+                AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,check}') = 'string'
+                AND char_length(${table.resultData} #>> '{runtimeFailure,check}') BETWEEN 1 AND 64
+                AND (${table.resultData} #>> '{runtimeFailure,check}') ~ '^[A-Za-z0-9._~:@-]{1,64}$'
+                AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,checkedAt}') = 'string'
+                AND occ.iso_timestamp_is_valid(${table.resultData} #>> '{runtimeFailure,checkedAt}')
+                AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,code}') = 'string'
+                AND char_length(${table.resultData} #>> '{runtimeFailure,code}') BETWEEN 1 AND 64
+                AND (${table.resultData} #>> '{runtimeFailure,code}') ~ '^[A-Za-z0-9._~:@-]{1,64}$'
+              )
+            )
           )
           OR (
             ${table.state} = 'succeeded'

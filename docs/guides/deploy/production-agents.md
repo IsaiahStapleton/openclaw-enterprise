@@ -1,17 +1,25 @@
 # Deploy and verify production Agents
 
-Deploy an Agent into a ready Namespace and verify its active runtime. Complete
+Deploy an Agent into a ready Namespace and verify that its model answers. Complete
 [control-plane installation](production-installation.md) and its authenticated
 API check first. Run commands from the repository root in the same operator shell,
-retaining its credentials and Kubernetes context.
+retaining its credentials and Kubernetes context. For an OpenAI API key, you or
+an Installation administrator must also [grant the Agent access to the model
+Secret](#grant-the-agent-access-to-its-model-secret) before deployment.
 
 ## Prepare each Namespace
 
 ### Use a driver-managed Kubernetes namespace
 
 Fresh bootstrap creates a platform Namespace named `default`. Run
-`occ namespace list` and select its server-assigned ID as
-`NAMESPACE_ID`. The worker creates
+`occ namespace list` and export its server-assigned ID:
+
+```bash
+occ namespace list
+export NAMESPACE_ID='<ID shown for default>'
+```
+
+The worker creates
 the backing Kubernetes namespace and labels it with
 `openclaw.dev/namespace=$NAMESPACE_ID`. This is separate from Kubernetes'
 built-in `default` namespace. Once the worker has created it, discover and
@@ -20,7 +28,7 @@ export its name for the tenant RoleBindings:
 ```bash
 TENANT_NAMESPACE="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
   get namespaces -l "openclaw.dev/namespace=$NAMESPACE_ID" -o json | \
-  python3 -c 'import json,sys; items=json.load(sys.stdin)["items"]; assert len(items) == 1, "Expected one backing Namespace; check worker provisioning"; print(items[0]["metadata"]["name"])')" && export TENANT_NAMESPACE
+  python3 -c 'import json,sys; items=json.load(sys.stdin)["items"]; print(items[0]["metadata"]["name"]) if len(items)==1 else sys.exit("Expected one backing Namespace; check worker provisioning")')" && export TENANT_NAMESPACE
 ```
 
 If no backing namespace is found, check the worker logs and repeat discovery
@@ -101,8 +109,8 @@ Post the Configuration and capture the server-generated ID:
 
 ```bash
 export OCC_NAMESPACE="$NAMESPACE_ID"
-CONFIGURATION_RESPONSE="$(occ configuration create --file configuration.json --output json)"
-CONFIGURATION_ID="$(printf '%s' "$CONFIGURATION_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+CONFIGURATION_RESPONSE="$(occ configuration create --file configuration.json --output json)" &&
+CONFIGURATION_ID="$(printf '%s' "$CONFIGURATION_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')" &&
 export CONFIGURATION_ID
 ```
 
@@ -118,47 +126,115 @@ account and matching Provider as described in [Agent harness authentication](../
 ```bash
 : "${AGENT_EXECUTION_MODE:?choose embedded or dedicated above}"
 : "${HARNESS_SECRET_ID:?set the OCC Secret ID containing the key}"
+export HARNESS_SECRET_ID
 printf '{"name":"production-agent","configurationId":"%s","executionMode":"%s","harnessAuth":{"method":"api_key","source":{"kind":"secret","namespaceId":"%s","id":"%s"}}}\n' \
   "$CONFIGURATION_ID" "$AGENT_EXECUTION_MODE" "$NAMESPACE_ID" "$HARNESS_SECRET_ID" > agent.json
-AGENT_RESPONSE="$(occ agent create --file agent.json --output json)"
-AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
-export AGENT_ID
+AGENT_RESPONSE="$(occ agent create --file agent.json --output json)" &&
+AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')" &&
+AGENT_SERVICE_PRINCIPAL_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["servicePrincipalId"])')" &&
+export AGENT_ID AGENT_SERVICE_PRINCIPAL_ID
 ```
 
-Before deploying, hand `NAMESPACE_ID`, `AGENT_ID`, and `HARNESS_SECRET_ID` to an
-administrator or integration with access to controller-owned IAM state. They
-must locate this Agent's stable service principal and grant it `operate` on this
-exact Secret, then confirm the grant is persisted. Ordinary API-only operators
-cannot discover that private principal or create this grant through OCC endpoints.
-Kubernetes RoleBindings do not substitute for it. See the
-[exact-source IAM prerequisite](../../reference/drivers/kubernetes-secret.md#bind-a-secret-to-gateway-environment).
+### Grant the Agent access to its model Secret
 
-For an Agent without any revisions, the console can provision initial transport
-and Slack credentials through the exact-Agent API. See
-[initial runtime credentials](../../reference/console/create-and-deploy.md#initial-runtime-credentials).
-The operator commands below remain available for installations using externally
-provisioned inputs. Do not use both paths to replace an existing credential group.
+The deploying caller and the Agent's service principal both need `operate` on
+the exact Secret. To grant the Agent access, use a credential with Installation
+`administer`, `read` on this Namespace, and `read` on the exact Secret. The fresh
+bootstrap service key has these permissions with native IAM unless a Restriction
+denies access. If you use a more limited credential, give `NAMESPACE_ID`,
+`AGENT_ID`, and `HARNESS_SECRET_ID` to an Installation administrator. They can
+look up the service principal and then run the commands below. Kubernetes
+RoleBindings do not grant OCC access.
+
+```bash
+export NAMESPACE_ID AGENT_ID HARNESS_SECRET_ID
+export OCC_NAMESPACE="$NAMESPACE_ID"
+AGENT_LOOKUP="$(occ agent get "$AGENT_ID" --output json)" &&
+AGENT_SERVICE_PRINCIPAL_ID="$(printf '%s' "$AGENT_LOOKUP" | python3 -c 'import json,sys; print(json.load(sys.stdin)["servicePrincipalId"])')" &&
+export AGENT_SERVICE_PRINCIPAL_ID
+```
+
+Create the Role once per Namespace, or use `occ iam role list --output json` to
+find a Role with exactly the permission shown and export its ID as `IAM_ROLE_ID`:
+
+```bash
+cat > model-secret-role.json <<'JSON'
+{"name":"Use a model Secret","permissions":[{"action":"operate","resourceKind":"secret"}]}
+JSON
+IAM_ROLE_RESPONSE="$(occ iam role create --file model-secret-role.json --output json)" &&
+IAM_ROLE_ID="$(printf '%s' "$IAM_ROLE_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')" &&
+export IAM_ROLE_ID
+```
+
+Bind the Role to this Agent and this Secret, then read the stored binding:
+
+```bash
+: "${NAMESPACE_ID:?}" "${AGENT_SERVICE_PRINCIPAL_ID:?}" "${IAM_ROLE_ID:?}" "${HARNESS_SECRET_ID:?}"
+python3 -c 'import json,os; print(json.dumps({"subjectKind":"identity","subjectId":os.environ["AGENT_SERVICE_PRINCIPAL_ID"],"roleId":os.environ["IAM_ROLE_ID"],"resourceKind":"secret","resourceId":os.environ["HARNESS_SECRET_ID"]}))' > model-secret-binding.json &&
+IAM_BINDING_RESPONSE="$(occ iam access-binding create --file model-secret-binding.json --output json)" &&
+IAM_BINDING_ID="$(printf '%s' "$IAM_BINDING_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')" &&
+export IAM_BINDING_ID
+
+IAM_BINDING="$(occ iam access-binding get "${IAM_BINDING_ID:?}" --output json)" &&
+printf '%s' "$IAM_BINDING" | python3 -c '
+import json, os, sys
+binding = json.load(sys.stdin)
+expected = {
+    "namespaceId": os.environ["NAMESPACE_ID"],
+    "subjectKind": "identity",
+    "subjectId": os.environ["AGENT_SERVICE_PRINCIPAL_ID"],
+    "roleId": os.environ["IAM_ROLE_ID"],
+    "resourceKind": "secret",
+    "resourceId": os.environ["HARNESS_SECRET_ID"],
+}
+if any(binding.get(key) != value for key, value in expected.items()):
+    sys.exit("Binding does not match this Agent and Secret.")
+print("Exact Agent Secret binding is stored")
+'
+```
+
+Continue only after the confirmation. If a create response is lost, inspect
+`occ iam role list --output json` or `occ iam access-binding list --output json`
+before retrying; duplicate bindings can coexist. The stored binding does not
+override a matching Restriction. See [Namespace IAM policy](../../reference/authorization.md#manage-namespace-policy).
+
+### Prepare transport credentials and deploy
+
+For an Agent without any revisions, the console can generate initial transport
+credentials through the exact-Agent API. It stores Slack tokens separately as
+Namespace Secrets and binds them to the Agent; see [initial runtime
+credentials](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
+and the [Slack setup guide](../integrations/slack.md). The operator commands
+below can supply transport credentials externally. Do not use both paths to
+replace an existing transport bundle.
 
 Create the tenant transport Secret using the Agent ID suffix. Token-mode
 gateways use `gateway-token`; dedicated Codex also uses `app-server-token`.
-For native `gateway.auth.mode: "trusted-proxy"`, omit `gateway.auth.token`.
-The Secret may still contain `gateway-token`, but Compute does not project
-`OPENCLAW_GATEWAY_TOKEN` for that explicit mode.
+For native `gateway.auth.mode: "trusted-proxy"`, omit `gateway.auth.token`;
+Compute does not project it in that mode. To verify model responses through an
+operator's local Kubernetes connection, configure the `gateway-password` Secret
+reference and enable the native HTTP endpoint as described in
+[Model response verification](../operate/model-verification.md). The initial
+credential API generates this password too; it never returns it in an API response.
 
 ```bash
 umask 077
-AGENT_SUFFIX="$(printf %s "$AGENT_ID" | shasum -a 256 | cut -c1-12)"
-SECRET_DIRECTORY="$(mktemp -d)"
-openssl rand -hex 32 | tr -d '\n' > "$SECRET_DIRECTORY/app-server-token"
-openssl rand -hex 32 | tr -d '\n' > "$SECRET_DIRECTORY/gateway-token"
+AGENT_SUFFIX="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "${AGENT_ID:?}")" &&
+SECRET_DIRECTORY="$(mktemp -d /tmp/occ-agent-transport.XXXXXXXX)" &&
+python3 -c 'import secrets,sys; sys.stdout.write(secrets.token_hex(32))' > "$SECRET_DIRECTORY/app-server-token" &&
+python3 -c 'import secrets,sys; sys.stdout.write(secrets.token_hex(32))' > "$SECRET_DIRECTORY/gateway-token" &&
+python3 -c 'import secrets,sys; sys.stdout.write(secrets.token_hex(32))' > "$SECRET_DIRECTORY/gateway-password" &&
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
   -n "$TENANT_NAMESPACE" create secret generic "openclaw-agent-transport-$AGENT_SUFFIX" \
   --from-file=app-server-token="$SECRET_DIRECTORY/app-server-token" \
-  --from-file=gateway-token="$SECRET_DIRECTORY/gateway-token"
+  --from-file=gateway-token="$SECRET_DIRECTORY/gateway-token" \
+  --from-file=gateway-password="$SECRET_DIRECTORY/gateway-password"
 ```
 
-Embedded OpenClaw uses only the gateway token. Dedicated Codex uses both
-transport tokens. Model authentication comes from the saved `harnessAuth` binding.
+Token-authenticated embedded OpenClaw uses the gateway token; dedicated Codex
+also uses the app-server token. Trusted-proxy gateways use the separately
+configured password for a direct local connection. Model authentication comes
+from the saved `harnessAuth` binding.
 Kubernetes projects its source only into the model-executing workload; initial
 transport/channel provisioning does not accept model keys. Keep credential values
 out of Helm values, Installation YAML, Configurations, shell history, and this
@@ -167,10 +243,10 @@ repository.
 Deploy the Agent and capture the immutable revision ID:
 
 ```bash
-REVISION_RESPONSE="$(occ agent deploy "$AGENT_ID" --output json)"
-REVISION_ID="$(printf '%s' "$REVISION_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
-export REVISION_ID
-printf '%s' "$REVISION_RESPONSE" | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["id"] == os.environ["REVISION_ID"] and data["agentId"] == os.environ["AGENT_ID"] and data["configurationId"] == os.environ["CONFIGURATION_ID"]'
+REVISION_RESPONSE="$(occ agent deploy "$AGENT_ID" --output json)" &&
+REVISION_ID="$(printf '%s' "$REVISION_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')" &&
+export REVISION_ID &&
+printf '%s' "$REVISION_RESPONSE" | python3 -c 'import json,os,sys; data=json.load(sys.stdin); expected={"id":os.environ["REVISION_ID"],"agentId":os.environ["AGENT_ID"],"configurationId":os.environ["CONFIGURATION_ID"]}; sys.exit("Revision does not match this Agent and Configuration." if any(data.get(k)!=v for k,v in expected.items()) else 0)'
 ```
 
 `occ` exits unsuccessfully when deployment is rejected and returns the created
@@ -183,63 +259,148 @@ Secrets.
 ## Verify production workloads
 
 Wait for `GET /namespaces/$NAMESPACE_ID/agents/$AGENT_ID` to report the
-expected `activeRevisionId`, then verify one denied and one allowed gateway
-connection for the selected Agent. A Helm release, rendered chart, or ready
-controller does not prove tenant runtime, gateway WebSocket authentication, or
-a model turn. Use the production TUI proof below when the accepted evidence is
-an interactive model-backed session.
+expected `activeRevisionId`, then require a real model response from that
+Agent. Choose the check for your gateway authentication:
+
+- Token: [attach with the OpenClaw TUI](#attach-with-the-openclaw-tui).
+- Trusted proxy: [verify rejection of an unauthenticated request and a real
+  model response](../operate/model-verification.md) over an operator's local
+  Kubernetes connection. This uses a separate gateway password.
+
+A Helm release, ready controller, or active revision does not show that the
+Agent can reach its model.
 
 ## Attach with the OpenClaw TUI
 
-Find the Ready gateway Pod for the active revision by matching the mounted
-immutable ConfigMap:
+Use the requested `REVISION_ID`. This Bash function waits up to five minutes
+for OCC to select it and for exactly one Ready gateway Pod to mount its
+immutable ConfigMap. A previous revision cannot satisfy both checks:
 
 ```bash
-AGENT_SUFFIX="$(printf %s "$AGENT_ID" | shasum -a 256 | cut -c1-12)"
-REVISION_SUFFIX="$(printf %s "$REVISION_ID" | shasum -a 256 | cut -c1-12)"
-EXPECTED_CONFIGMAP="gateway-$AGENT_SUFFIX-rev-$REVISION_SUFFIX"
-GATEWAY_PODS_JSON="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
-  -n "$TENANT_NAMESPACE" get pods \
-  -l "app.kubernetes.io/managed-by=openclaw-enterprise,openclaw.dev/workload-role=gateway,openclaw.dev/namespace=$NAMESPACE_ID,openclaw.dev/agent=$AGENT_ID" \
-  -o json)"
-GATEWAY_POD="$(printf '%s' "$GATEWAY_PODS_JSON" | python3 -c 'import json,sys; pods=[p for p in json.load(sys.stdin)["items"] if not p["metadata"].get("deletionTimestamp") and p.get("status",{}).get("phase")=="Running" and any(c.get("type")=="Ready" and c.get("status")=="True" for c in p.get("status",{}).get("conditions",[])) and any(v.get("configMap",{}).get("name")==sys.argv[1] for v in p["spec"].get("volumes",[]))]; assert len(pods)==1, f"expected exactly one Ready active gateway Pod, got {len(pods)}"; print(pods[0]["metadata"]["name"])' "$EXPECTED_CONFIGMAP")"
-export GATEWAY_POD
+find_gateway_for_revision() {
+  local agent agent_suffix revision_suffix expected_configmap pods pod status attempt
+  if [ "${OCC_NAMESPACE:?}" != "${NAMESPACE_ID:?}" ]; then
+    printf '%s\n' 'OCC_NAMESPACE must match NAMESPACE_ID.' >&2
+    return 1
+  fi
+  agent_suffix="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "${AGENT_ID:?}")" || return 1
+  revision_suffix="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "${REVISION_ID:?}")" || return 1
+  expected_configmap="gateway-$agent_suffix-rev-$revision_suffix"
+  for ((attempt = 1; attempt <= 60; attempt++)); do
+    agent="$(occ agent get "$AGENT_ID" --output json)" || return 1
+    if printf '%s' "$agent" | python3 -c '
+import json, sys
+agent = json.load(sys.stdin)
+if agent.get("activeRevisionId") != sys.argv[1]:
+    sys.exit(3)
+' "$REVISION_ID"; then
+      pods="$(kubectl --kubeconfig "${KUBECONFIG_FILE:?}" --context "${CONTEXT:?}" \
+        -n "${TENANT_NAMESPACE:?}" get pods \
+        -l "app.kubernetes.io/managed-by=openclaw-enterprise,openclaw.dev/workload-role=gateway,openclaw.dev/namespace=$NAMESPACE_ID,openclaw.dev/agent=$AGENT_ID,openclaw.dev/revision=$REVISION_ID" \
+        -o json)" || return 1
+      if pod="$(printf '%s' "$pods" | python3 -c '
+import json, sys
+expected = sys.argv[1]
+ready = [
+    pod for pod in json.load(sys.stdin)["items"]
+    if not pod["metadata"].get("deletionTimestamp")
+    and pod.get("status", {}).get("phase") == "Running"
+    and any(c.get("type") == "Ready" and c.get("status") == "True"
+            for c in pod.get("status", {}).get("conditions", []))
+    and any(v.get("configMap", {}).get("name") == expected
+            for v in pod["spec"].get("volumes", []))
+]
+if len(ready) > 1:
+    sys.exit("Multiple Ready Pods match the requested revision; refusing to choose.")
+if not ready:
+    sys.exit(3)
+print(ready[0]["metadata"]["name"])
+' "$expected_configmap")"; then
+        printf '%s\n' "$pod"
+        return 0
+      else
+        status=$?
+        if [ "$status" -ne 3 ]; then return "$status"; fi
+      fi
+    else
+      status=$?
+      if [ "$status" -ne 3 ]; then return "$status"; fi
+    fi
+    if [ "$attempt" -lt 60 ]; then sleep 5; fi
+  done
+  printf '%s\n' 'No unique Ready gateway Pod for the requested active revision.' >&2
+  return 1
+}
 ```
 
-Attach from the exported `$GATEWAY_POD`:
+Attach only after the lookup succeeds. If it times out, check [deployment
+status](../../reference/agents.md#deployment-status) and retry; do not use a
+previous Pod or the Agent-wide Service.
 
 ```bash
-E2E_SESSION="production-tui-$(date +%Y%m%d%H%M%S)"
-NONCE="$(python3 -c 'import secrets; print("OPENCLAW_TUI_" + secrets.token_hex(8))')"
-kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$TENANT_NAMESPACE" \
-  exec -it "$GATEWAY_POD" -c gateway -- env -u OPENAI_API_KEY \
-  OPENCLAW_STATE_DIR=/tmp/occ-tui-client node /app/openclaw.mjs tui \
-  --session "$E2E_SESSION" --message "Reply exactly: $NONCE"
+if GATEWAY_POD="$(find_gateway_for_revision)"; then
+  TUI_SESSION="production-tui-$(date +%Y%m%d%H%M%S)" &&
+  NONCE="$(python3 -c 'import secrets; print("OPENCLAW_TUI_" + secrets.token_hex(8))')" &&
+  kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$TENANT_NAMESPACE" \
+    exec -it "$GATEWAY_POD" -c gateway -- env -u OPENAI_API_KEY \
+    OPENCLAW_STATE_DIR=/tmp/occ-tui-client node /app/openclaw.mjs tui \
+    --session "$TUI_SESSION" --message "Reply exactly: $NONCE"
+else
+  false
+fi
 ```
 
-The TUI uses the Pod-local WebSocket listener and injected gateway token. The
-extra client process unsets `OPENAI_API_KEY`; model access stays in the serving
-gateway path. Ctrl+D exits only the client.
+Confirm the model replies with the exact nonce. The TUI uses the Pod-local
+WebSocket listener and injected gateway token. The extra client process unsets
+`OPENAI_API_KEY`; model access stays in the serving gateway path. Ctrl+D exits
+only the client.
 
 This Pod-local TUI procedure requires token authentication. It does not apply
 to gateways configured with the trusted-proxy authentication used by private
 workspace-file routing; that mode intentionally has no gateway token. Use the
-OCC file API for the supported administration path in that configuration.
+[separate password check](../operate/model-verification.md) to verify model
+responses in that mode. Use the OCC file API for workspace-file administration.
 
 ## End the operator session
 
-Remove only temporary local delivery copies:
+After model verification, remove only temporary delivery copies created by
+these guides. The command leaves a caller-supplied `OCC_SERVICE_KEY_FILE` and
+the protected original `OCC_BOOTSTRAP_KEY_FILE` untouched:
 
 ```bash
-rm -- "$OCC_SERVICE_KEY_FILE"
-test -z "${OCC_SERVICE_KEY_DIRECTORY:-}" || rmdir -- "$OCC_SERVICE_KEY_DIRECTORY"
+case "${OCC_SERVICE_KEY_DIRECTORY:-}" in
+  /tmp/occ-service-key.[[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]])
+    if [ -n "${OCC_BOOTSTRAP_KEY_FILE:-}" ] &&
+       [ "${OCC_SERVICE_KEY_FILE:-}" = "$OCC_SERVICE_KEY_DIRECTORY/occ-service-key.json" ] &&
+       [ "$OCC_SERVICE_KEY_FILE" != "$OCC_BOOTSTRAP_KEY_FILE" ] &&
+       [ -d "$OCC_SERVICE_KEY_DIRECTORY" ] && [ ! -L "$OCC_SERVICE_KEY_DIRECTORY" ]; then
+      rm -f -- "$OCC_SERVICE_KEY_FILE" && rmdir -- "$OCC_SERVICE_KEY_DIRECTORY"
+    else
+      printf '%s\n' 'Service-key path was not the documented temporary copy; nothing was deleted.' >&2
+    fi ;;
+  '') ;;
+  *) printf '%s\n' 'Service-key directory was not created by this guide; nothing was deleted.' >&2 ;;
+esac
 unset OCC_SERVICE_KEY_FILE OCC_SERVICE_KEY_DIRECTORY
+
+case "${SECRET_DIRECTORY:-}" in
+  /tmp/occ-agent-transport.[[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]])
+    if [ -d "$SECRET_DIRECTORY" ] && [ ! -L "$SECRET_DIRECTORY" ]; then
+      rm -f -- "$SECRET_DIRECTORY/app-server-token" "$SECRET_DIRECTORY/gateway-token" "$SECRET_DIRECTORY/gateway-password" &&
+      rmdir -- "$SECRET_DIRECTORY"
+    fi ;;
+  '') ;;
+  *) printf '%s\n' 'Transport directory was not created by this guide; nothing was deleted.' >&2 ;;
+esac
+unset SECRET_DIRECTORY
 ```
 
-This does not revoke the key or remove protected bootstrap storage.
+This does not revoke the service key or delete the Kubernetes Secrets. Keep
+the original in protected bootstrap storage; bootstrap will not reissue it.
 
 ## Related
 
 - [Private routing for workspace files](workspace-routing.md).
+- [Troubleshoot the platform](../operate/troubleshooting.md).
 - [Stop or remove a production deployment](../deploy.md#stop-or-remove-a-production-deployment).
 - [Production TUI flow](../../flows/production-tui.md).

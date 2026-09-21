@@ -35,6 +35,11 @@ namespace preservation, and PostgreSQL API-plus-worker reconciliation. No model
 key is needed. Missing all cluster selectors skips the suite; partial selectors
 fail, and a missing database skips the API-plus-worker case.
 
+Set `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` to an imported immutable runtime image
+reference to extend the API-plus-worker case through real runtime credential
+Secret and private-state claim deletion. The case uses nonfunctional fixture
+credentials and performs no model turn.
+
 The tests require an explicit loopback `k3d-*` context and enforcing
 NetworkPolicies. They create scoped RBAC and resources, and configure the
 selected cluster's local-path provisioner for shared filesystem tests. Because
@@ -53,8 +58,9 @@ The suite inspects restricted tenant labels, quotas and limits, NetworkPolicies,
 nonroot execution, `RuntimeDefault` seccomp, dropped capabilities, denied
 privilege escalation, a read-only root filesystem, and resource bounds. A
 skipped cluster case does not verify enforcement. The HTTP fixture exercises
-infrastructure; real Agent turns require the runtime images and credentials
-below.
+infrastructure. Its API-plus-worker case verifies Secret binding admission and
+gateway projection with synthetic values, but genuine Slack/channel runtime
+requires the runtime images and credentials below.
 
 Live Configuration ConfigMap CRUD and least-privilege RBAC cases require the
 selected disposable cluster and tenant credentials. Without those inputs, they
@@ -194,8 +200,16 @@ OCC_TEST_KUBERNETES_CONTEXT=k3d-oce
 OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_k8s_local
 OCC_TEST_KUBERNETES_GATEWAY_IMAGE=<gateway-image>@sha256:<digest>
 OCC_TEST_KUBERNETES_AGENT_IMAGE=<codex-image>@sha256:<digest>
+OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS=<api-server-proxy-source>/32
 OCC_TEST_OPENAI_MODEL=gpt-5.1
 ```
+
+The startup failure cases use dedicated Codex with plugins enabled and disabled.
+They assert the saved failure through deployment GET after failed Pod deletion
+and controller restart. This proves retained startup evidence, not live health.
+Set the private status proxy CIDRs to the actual API-server Pod-proxy source;
+CI preparation supplies them. For manual clusters, follow the
+[networking setup](../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking).
 
 Private workspace-file routing has a separate [gateway-routing suite](gateway-routing.md) with additional Envoy Gateway, cert-manager, and test-CA setup.
 
@@ -254,12 +268,13 @@ minimum line; a manually selected server must be 1.35 or later. The test
 exercises the real version endpoint through its scoped controller identity
 before creating tenant resources.
 
-| Variable                         | Requirement                                                                                        |
-| -------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_KUBERNETES_KUBECONFIG` | Absolute path to the dedicated disposable local-cluster kubeconfig.                                |
-| `OCC_TEST_KUBERNETES_CONTEXT`    | Explicit context whose HTTPS API server is loopback-only with an explicit port.                    |
-| `OCC_TEST_KUBERNETES_IMAGE`      | Locally available fixture image already imported into the selected cluster.                        |
-| `OCC_TEST_DATABASE_URL`          | Required for API-and-worker coverage; must select a dedicated, migrated `openclaw_k8s_*` database. |
+| Variable                            | Requirement                                                                                        |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `OCC_TEST_KUBERNETES_KUBECONFIG`    | Absolute path to the dedicated disposable local-cluster kubeconfig.                                |
+| `OCC_TEST_KUBERNETES_CONTEXT`       | Explicit context whose HTTPS API server is loopback-only with an explicit port.                    |
+| `OCC_TEST_KUBERNETES_IMAGE`         | Locally available fixture image already imported into the selected cluster.                        |
+| `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` | Optional immutable runtime image for credential Secret and private-state teardown proof.           |
+| `OCC_TEST_DATABASE_URL`             | Required for API-and-worker coverage; must select a dedicated, migrated `openclaw_k8s_*` database. |
 
 Follow the canonical
 [Kubernetes HTTP fixture testing guide](#kubernetes-http-fixture)

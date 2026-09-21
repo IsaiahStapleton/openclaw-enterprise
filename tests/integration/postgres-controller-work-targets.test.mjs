@@ -96,10 +96,12 @@ test(
       { name: "Namespace ready", target: [null, null, "ready", null], valid: true },
       { name: "Namespace deleted", target: [null, null, "deleted", null], valid: true },
       { name: "Agent stop", target: [agentId, null, null, "stopped"], valid: true },
+      { name: "Agent deleted", target: [agentId, null, null, "deleted"], valid: true },
       { name: "Agent revision", target: [agentId, revisionId, null, null], valid: true },
       { name: "all-null target", target: [null, null, null, null], valid: false },
       { name: "Agent without target", target: [agentId, null, null, null], valid: false },
       { name: "stop without Agent", target: [null, null, null, "stopped"], valid: false },
+      { name: "delete without Agent", target: [null, null, null, "deleted"], valid: false },
       { name: "Namespace target with Agent", target: [agentId, null, "ready", null], valid: false },
       {
         name: "Namespace and stop targets",

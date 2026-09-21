@@ -42,6 +42,7 @@ import type {
   ConfigurationOwnership,
   ConfigurationRepository,
   InstallationRepository,
+  IAMPolicyRepository,
   NamespaceRepository,
   PersistedNamespace,
   PlatformAuditSink,
@@ -242,6 +243,7 @@ function agentFromRow(row: PostgresRow): Readonly<Agent> {
     harnessAuth,
     ...(activeRevisionId === undefined ? {} : { activeRevisionId }),
     desiredRuntimeState,
+    status: text(row, "status") as Agent["status"],
     createdAt: timestamp(row, "created_at"),
   });
 }
@@ -874,6 +876,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           "heartbeat",
           "pending",
           "complete",
+          "completeAgentDeletion",
           "defer",
           "retry",
           "fail",
@@ -1635,7 +1638,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           await client.query(
             `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                     a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                    a.active_revision_id, a.desired_runtime_state, a.created_at
+                    a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
              FROM occ.agents AS a
              JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
              WHERE a.namespace_id = $1 AND a.id = $2${lock ? " FOR UPDATE OF a" : ""}`,
@@ -1655,7 +1658,7 @@ export class PostgresPlatformState implements PlatformStateStore {
             await client.query(
               `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                       a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                      a.active_revision_id, a.desired_runtime_state, a.created_at
+                      a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
                FROM occ.agents AS a
                JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
                WHERE a.namespace_id = $1 ORDER BY a.created_at, a.id`,
@@ -1696,6 +1699,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           ...withoutPlugins,
           ...(plugins === undefined ? {} : { plugins }),
           desiredRuntimeState: "stopped" as const,
+          status: "active" as const,
         });
         await client.query(
           `INSERT INTO occ.agents
@@ -1752,9 +1756,9 @@ export class PostgresPlatformState implements PlatformStateStore {
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
-                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                           a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                          a.active_revision_id, a.desired_runtime_state, a.created_at`,
+                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [
                 namespaceId,
                 agentId,
@@ -1785,10 +1789,10 @@ export class PostgresPlatformState implements PlatformStateStore {
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2
                 AND a.active_revision_id IS NOT DISTINCT FROM $3::text
-                AND n.id = a.namespace_id AND n.deleted_at IS NULL
-                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
+                  RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                           a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                          a.active_revision_id, a.desired_runtime_state, a.created_at`,
+                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedRevisionId ?? null, candidateRevisionId],
             )
           ).rows,
@@ -1803,9 +1807,9 @@ export class PostgresPlatformState implements PlatformStateStore {
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2 AND a.active_revision_id = $3
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
-               RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                          a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                         a.active_revision_id, a.desired_runtime_state, a.created_at`,
+                         a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedRevisionId],
             )
           ).rows,
@@ -1822,10 +1826,32 @@ export class PostgresPlatformState implements PlatformStateStore {
                WHERE a.namespace_id = $1 AND a.id = $2
                  AND a.desired_runtime_state = ANY($3::text[])
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
+                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+                         a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
+                         a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
+              [namespaceId, agentId, expectedStates, next],
+            )
+          ).rows,
+        )[0];
+        return updated === undefined ? undefined : agentFromRow(updated);
+      },
+      transitionAgentStatus: async (namespaceId, agentId, expected, next) => {
+        const expectedStatuses = Array.isArray(expected) ? expected : [expected];
+        // Only a row currently holding one of the expected statuses matches, as
+        // in transitionNamespaceStatus. Callers that treat an already-deleting
+        // Agent as success check its status before transitioning.
+        const updated = rows(
+          (
+            await client.query(
+              `UPDATE occ.agents AS a SET status = $4
+               FROM occ.namespaces AS n
+               WHERE a.namespace_id = $1 AND a.id = $2
+                 AND a.status = ANY($3::text[])
+                 AND n.id = a.namespace_id AND n.deleted_at IS NULL
                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                          a.provider_id, a.plugins, a.service_principal_id, a.harness_auth,
-                         a.active_revision_id, a.desired_runtime_state, a.created_at`,
-              [namespaceId, agentId, expectedStates, next],
+                         a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
+              [namespaceId, agentId, expectedStatuses, next],
             )
           ).rows,
         )[0];
@@ -1938,6 +1964,202 @@ export class PostgresPlatformState implements PlatformStateStore {
       },
     };
 
+    const roleFromRow = (row: PostgresRow): Readonly<Role> => {
+      const namespaceId = optionalText(row, "namespace_id");
+      const name = optionalText(row, "name");
+      return immutableCopy({
+        id: text(row, "id"),
+        ...(namespaceId === undefined ? {} : { namespaceId }),
+        ...(name === undefined ? {} : { name }),
+        permissions: permissions(row.permissions),
+      });
+    };
+
+    const accessBindingFromRow = (row: PostgresRow): Readonly<AccessBinding> => {
+      const namespaceId = optionalText(row, "namespace_id");
+      const resourceKind = optionalText(row, "resource_kind");
+      const resourceId = optionalText(row, "resource_id");
+      const identitySubjectId = optionalText(row, "identity_subject_id");
+      const groupSubjectId = optionalText(row, "group_subject_id");
+      return immutableCopy({
+        id: text(row, "id"),
+        ...(namespaceId === undefined ? {} : { namespaceId }),
+        subjectKind: identitySubjectId === undefined ? "group" : "identity",
+        subjectId: identitySubjectId ?? groupSubjectId!,
+        roleId: text(row, "role_id"),
+        ...(resourceKind === undefined
+          ? {}
+          : { resourceKind: resourceKind as NonNullable<AccessBinding["resourceKind"]> }),
+        ...(resourceId === undefined ? {} : { resourceId }),
+      });
+    };
+
+    const lockTarget = async (
+      namespaceId: string,
+      resourceKind: NonNullable<AccessBinding["resourceKind"]>,
+      resourceId: string,
+    ): Promise<boolean> => {
+      const queryByKind: Record<string, string> = {
+        agent: "SELECT 1 FROM occ.agents WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
+        agent_revision: "SELECT 1 FROM occ.agent_revisions WHERE namespace_id = $1 AND id = $2",
+        configuration:
+          "SELECT 1 FROM occ.configurations WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
+        secret: "SELECT 1 FROM occ.secrets WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
+        service_account:
+          "SELECT 1 FROM occ.service_accounts WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
+      };
+      const query = queryByKind[resourceKind];
+      if (query === undefined) {
+        return false;
+      }
+      const found = await client.query(query, [namespaceId, resourceId]);
+      return found.rowCount === 1;
+    };
+
+    const iamPolicy: IAMPolicyRepository = {
+      listRoles: async (namespaceId) =>
+        Object.freeze(
+          rows(
+            (
+              await client.query(
+                "SELECT id, namespace_id, name, permissions FROM occ.iam_roles WHERE namespace_id = $1 ORDER BY id",
+                [namespaceId],
+              )
+            ).rows,
+          ).map(roleFromRow),
+        ),
+      getRole: async (namespaceId, roleId) => {
+        const found = rows(
+          (
+            await client.query(
+              "SELECT id, namespace_id, name, permissions FROM occ.iam_roles WHERE namespace_id = $1 AND id = $2",
+              [namespaceId, roleId],
+            )
+          ).rows,
+        )[0];
+        return found === undefined ? undefined : roleFromRow(found);
+      },
+      createRole: async (role) => {
+        await this.requireInitialized(context);
+        const namespace = await namespaces.lockNamespace(role.namespaceId ?? "");
+        if (
+          namespace === undefined ||
+          (namespace.status !== "provisioning" && namespace.status !== "ready") ||
+          role.namespaceId !== namespace.id ||
+          role.permissions.length === 0
+        ) {
+          throw new ScopeViolationError("The IAM Role must belong to an available Namespace.");
+        }
+        await client.query(
+          "INSERT INTO occ.iam_roles (id, namespace_id, name, permissions) VALUES ($1, $2, $3, $4::jsonb)",
+          [role.id, namespace.id, role.name ?? null, JSON.stringify(role.permissions)],
+        );
+        return immutableCopy(role);
+      },
+      deleteRole: async (namespaceId, roleId) => {
+        const existing = await iamPolicy.getRole(namespaceId, roleId);
+        if (existing === undefined) {
+          return false;
+        }
+        const references = await client.query(
+          "SELECT 1 FROM occ.iam_access_bindings WHERE namespace_id = $1 AND role_id = $2 LIMIT 1",
+          [namespaceId, roleId],
+        );
+        if (references.rowCount !== 0) {
+          throw new ResourceConflictError("The IAM Role is referenced by an AccessBinding.");
+        }
+        const deleted = await client.query(
+          "DELETE FROM occ.iam_roles WHERE namespace_id = $1 AND id = $2",
+          [namespaceId, roleId],
+        );
+        return deleted.rowCount === 1;
+      },
+      listAccessBindings: async (namespaceId) =>
+        Object.freeze(
+          rows(
+            (
+              await client.query(
+                `SELECT id, namespace_id, identity_subject_id, group_subject_id, role_id,
+                        resource_kind, resource_id
+                 FROM occ.iam_access_bindings
+                 WHERE namespace_id = $1 ORDER BY id`,
+                [namespaceId],
+              )
+            ).rows,
+          ).map(accessBindingFromRow),
+        ),
+      getAccessBinding: async (namespaceId, bindingId) => {
+        const found = rows(
+          (
+            await client.query(
+              `SELECT id, namespace_id, identity_subject_id, group_subject_id, role_id,
+                      resource_kind, resource_id
+               FROM occ.iam_access_bindings
+               WHERE namespace_id = $1 AND id = $2`,
+              [namespaceId, bindingId],
+            )
+          ).rows,
+        )[0];
+        return found === undefined ? undefined : accessBindingFromRow(found);
+      },
+      createAccessBinding: async (binding) => {
+        await this.requireInitialized(context);
+        const namespace = await namespaces.lockNamespace(binding.namespaceId ?? "");
+        if (
+          namespace === undefined ||
+          (namespace.status !== "provisioning" && namespace.status !== "ready") ||
+          binding.namespaceId !== namespace.id ||
+          binding.subjectKind !== "identity" ||
+          binding.resourceKind === undefined ||
+          binding.resourceId === undefined
+        ) {
+          throw new ScopeViolationError(
+            "The IAM AccessBinding must belong to an available Namespace.",
+          );
+        }
+        const identity = await client.query(
+          `SELECT 1 FROM occ.iam_identities
+           WHERE namespace_id = $1 AND id = $2 AND kind = 'service_principal'`,
+          [namespace.id, binding.subjectId],
+        );
+        if (identity.rowCount !== 1) {
+          throw new ScopeViolationError(
+            "The IAM AccessBinding subject does not belong to the exact Namespace.",
+          );
+        }
+        if ((await iamPolicy.getRole(namespace.id, binding.roleId)) === undefined) {
+          throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
+        }
+        if (!(await lockTarget(namespace.id, binding.resourceKind, binding.resourceId))) {
+          throw new ScopeViolationError(
+            "The IAM AccessBinding target does not belong to the exact Namespace.",
+          );
+        }
+        await client.query(
+          `INSERT INTO occ.iam_access_bindings
+           (id, namespace_id, identity_subject_id, group_subject_id, role_id,
+            resource_kind, resource_id)
+           VALUES ($1, $2, $3, NULL, $4, $5, $6)`,
+          [
+            binding.id,
+            namespace.id,
+            binding.subjectId,
+            binding.roleId,
+            binding.resourceKind,
+            binding.resourceId,
+          ],
+        );
+        return immutableCopy(binding);
+      },
+      deleteAccessBinding: async (namespaceId, bindingId) => {
+        const deleted = await client.query(
+          "DELETE FROM occ.iam_access_bindings WHERE namespace_id = $1 AND id = $2",
+          [namespaceId, bindingId],
+        );
+        return deleted.rowCount === 1;
+      },
+    };
+
     return {
       installations,
       namespaces,
@@ -1946,6 +2168,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       serviceAccounts,
       agents,
       revisions,
+      iamPolicy,
       audit: {
         append: async (event) => {
           await this.requireInstallation(context, event.installationId);
@@ -2000,7 +2223,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           let agentId: string | undefined;
           let revisionId: string | undefined;
           let namespaceTarget: "ready" | "deleted" | undefined;
-          let agentTarget: "stopped" | undefined;
+          let agentTarget: "stopped" | "deleted" | undefined;
           if (operation.kind === "namespace") {
             if (namespaceId !== operation.resourceId) {
               throw new ScopeViolationError("Namespace work does not match its exact owner.");
@@ -2021,6 +2244,10 @@ export class PostgresPlatformState implements PlatformStateStore {
             }
             agentId = text(owner, "agent_id");
           } else if (operation.kind === "agent") {
+            // Validate the Agent-wide target before resolving its exact owner.
+            if (namespaceId === operation.resourceId) {
+              throw new ScopeViolationError("Agent work must name its exact Agent.");
+            }
             const owner = rows(
               (
                 await client.query(
@@ -2041,7 +2268,9 @@ export class PostgresPlatformState implements PlatformStateStore {
           await queue.enqueue({
             idempotencyKey:
               operation.kind === "agent"
-                ? `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`
+                ? operation.target === "stopped"
+                  ? `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`
+                  : `agent:${operation.resourceId}:${operation.action}:${operation.target}`
                 : `${operation.kind}:${operation.resourceId}:${operation.action}${
                     namespaceTarget === undefined ? "" : `:${namespaceTarget}`
                   }`,
@@ -2075,6 +2304,9 @@ export class PostgresPlatformState implements PlatformStateStore {
                 resourceId: revisionId ?? agentId ?? namespaceId,
                 actorId: text(row, "actor_id"),
               };
+              // The three shapes are distinguished by which owner columns are
+              // populated: a revision names one, Agent teardown names only its
+              // Agent, and Namespace work names neither and carries a target.
               if (agentId === undefined) {
                 const target = text(row, "namespace_target");
                 if (target !== "ready" && target !== "deleted") {
@@ -2086,10 +2318,13 @@ export class PostgresPlatformState implements PlatformStateStore {
               }
               if (revisionId === undefined) {
                 const target = text(row, "agent_target");
-                if (target !== "stopped") {
+                if (target !== "stopped" && target !== "deleted") {
                   throw new DependencyUnavailableError(
                     "Persisted Agent work has an invalid target.",
                   );
+                }
+                if (target === "deleted") {
+                  return immutableCopy({ ...base, kind: "agent", target });
                 }
                 const key = text(row, "idempotency_key");
                 const prefix = `agent:${agentId}:reconcile:${target}:`;

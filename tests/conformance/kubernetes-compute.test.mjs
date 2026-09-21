@@ -136,6 +136,12 @@ function routedRevision(driver, overrides = {}) {
     configurationGeneration: 1,
     configuration: {
       agents: { defaults: { model: "codex/gpt-5" } },
+      logging: {
+        level: "info",
+        consoleLevel: "info",
+        consoleStyle: "json",
+      },
+      diagnostics: { otel: { logs: false } },
       gateway: {
         trustedProxies: ["10.42.0.0/16"],
         allowRealIpFallback: true,
@@ -891,7 +897,13 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
   assert.deepEqual(route.spec.rules[0].matches, [
     { path: { type: "Exact", value: `/namespaces/${tenant.id}/agents/${revision.agentId}` } },
   ]);
+  assert.deepEqual(route.spec.rules[1].matches, [
+    { path: { type: "PathPrefix", value: `/namespaces/${tenant.id}/agents/${revision.agentId}/` } },
+  ]);
   assert.deepEqual(route.spec.rules[0].backendRefs, [
+    { group: "", kind: "Service", name, port: 8080 },
+  ]);
+  assert.deepEqual(route.spec.rules[1].backendRefs, [
     { group: "", kind: "Service", name, port: 8080 },
   ]);
   assert.deepEqual(route.spec.rules[0].filters, [
@@ -906,10 +918,44 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
           { name: "x-occ-identity", value: "occ-workspace-files" },
           { name: "x-real-ip", value: "%DOWNSTREAM_DIRECT_REMOTE_ADDRESS_WITHOUT_PORT%" },
         ],
-        remove: ["x-forwarded-for", "forwarded", "x-openclaw-scopes"],
+        remove: ["authorization", "cookie", "forwarded", "x-forwarded-for", "x-openclaw-scopes"],
       },
     },
   ]);
+  assert.deepEqual(route.spec.rules[1].filters, [
+    {
+      type: "URLRewrite",
+      urlRewrite: {
+        path: { type: "ReplacePrefixMatch", replacePrefixMatch: "/" },
+      },
+    },
+    route.spec.rules[0].filters[1],
+  ]);
+
+  // Node enrollment uses an exact device-authenticated endpoint, not the
+  // operator UI prefix route or its injected administrative identity.
+  const nodeRoute = driver.gatewayRoute(revision, ownership, namespace, service, "node");
+  assert.equal(nodeRoute.spec.rules.length, 1);
+  assert.deepEqual(nodeRoute.spec.rules[0].matches, [
+    { path: { type: "Exact", value: `/namespaces/${tenant.id}/agents/${revision.agentId}/node` } },
+  ]);
+  const nodeHeaders = nodeRoute.spec.rules[0].filters.find(
+    (filter) => filter.type === "RequestHeaderModifier",
+  ).requestHeaderModifier;
+  assert.equal(
+    nodeHeaders.set.some(({ name }) => name === "x-occ-identity"),
+    false,
+  );
+  for (const header of [
+    "authorization",
+    "cookie",
+    "x-occ-identity",
+    "x-api-key",
+    "x-openclaw-scopes",
+    "tailscale-user-login",
+  ]) {
+    assert.ok(nodeHeaders.remove.includes(header), `node route must strip ${header}`);
+  }
 
   const ingress = driver
     .networkPolicies(ownership, namespace)
@@ -960,6 +1006,163 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
   }
   assert.notEqual(derivedOutputs[0].endpoint, derivedOutputs[2].endpoint);
   assert.notDeepEqual(derivedOutputs[0].hostnames, derivedOutputs[2].hostnames);
+
+  const plainGateway = driver.deployment(
+    name,
+    ownership,
+    namespace,
+    "openclaw-enterprise/gateway-fixture:local",
+    name,
+    "gateway",
+    {},
+    "info",
+    driver.gatewayConfiguration(revision),
+  );
+  const plainPod = plainGateway.spec.template.spec;
+  const plainEnvironment = Object.fromEntries(
+    plainPod.containers[0].env.map((entry) => [entry.name, entry]),
+  );
+  assert.equal(plainEnvironment.OPENCLAW_CONFIG_PATH.value, "/etc/openclaw/openclaw.json");
+  assert.deepEqual(
+    plainPod.containers[0].volumeMounts.find(({ name }) => name === "openclaw-configuration"),
+    { name: "openclaw-configuration", mountPath: "/etc/openclaw", readOnly: true },
+  );
+  assert.equal(plainPod.initContainers[0].args[0].includes("copyFileSync"), false);
+
+  const runtimeDriver = createKubernetesComputeDriver(
+    routedOptions({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+      },
+    }),
+  );
+  const runtimeRevision = routedRevision(runtimeDriver);
+  const runtimeName = `gateway-${digest(runtimeRevision.agentId)}`;
+  const runtimeGateway = runtimeDriver.deployment(
+    runtimeName,
+    { namespaceId: tenant.id, agentId: runtimeRevision.agentId },
+    namespace,
+    "openclaw-enterprise/gateway-fixture:local",
+    runtimeName,
+    "gateway",
+    {},
+    "info",
+    runtimeDriver.gatewayConfiguration(runtimeRevision),
+  );
+  const runtimePod = runtimeGateway.spec.template.spec;
+  const runtimeEnvironment = Object.fromEntries(
+    runtimePod.containers[0].env.map((entry) => [entry.name, entry]),
+  );
+  assert.equal(runtimeEnvironment.OPENCLAW_CONFIG_PATH.value, "/etc/openclaw/openclaw.json");
+  assert.deepEqual(
+    runtimePod.containers[0].volumeMounts.find(({ name }) => name === "openclaw-configuration"),
+    { name: "openclaw-configuration", mountPath: "/etc/openclaw", readOnly: true },
+  );
+  assert.equal(
+    runtimePod.initContainers[0].volumeMounts.some(({ name }) => name === "openclaw-configuration"),
+    false,
+  );
+  assert.equal(runtimePod.initContainers[0].args[0].includes("copyFileSync"), false);
+
+  const nativeAdminRevision = routedRevision(runtimeDriver, {
+    id: "revision-routed-native-admin",
+    configuration: {
+      ...runtimeRevision.configuration,
+      gateway: {
+        ...runtimeRevision.configuration.gateway,
+        controlUi: {
+          enabled: true,
+          allowedOrigins: ["https://agent-routed.example.internal"],
+        },
+        auth: {
+          ...runtimeRevision.configuration.gateway.auth,
+          trustedProxy: {
+            ...runtimeRevision.configuration.gateway.auth.trustedProxy,
+            deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
+          },
+        },
+      },
+    },
+  });
+  const nativeAdminGateway = runtimeDriver.deployment(
+    runtimeName,
+    { namespaceId: tenant.id, agentId: nativeAdminRevision.agentId },
+    namespace,
+    "openclaw-enterprise/gateway-fixture:local",
+    runtimeName,
+    "gateway",
+    {},
+    "info",
+    runtimeDriver.gatewayConfiguration(nativeAdminRevision),
+  );
+  const nativeAdminPod = nativeAdminGateway.spec.template.spec;
+  const nativeAdminEnvironment = Object.fromEntries(
+    nativeAdminPod.containers[0].env.map((entry) => [entry.name, entry]),
+  );
+  assert.equal(
+    nativeAdminEnvironment.OPENCLAW_CONFIG_PATH.value,
+    "/home/node/.openclaw/openclaw.json",
+  );
+  assert.deepEqual(
+    nativeAdminPod.containers[0].volumeMounts.find(({ name }) => name === "openclaw-configuration"),
+    { name: "openclaw-configuration", mountPath: "/etc/openclaw-managed", readOnly: true },
+  );
+  assert.deepEqual(
+    nativeAdminPod.initContainers[0].volumeMounts.find(
+      ({ name }) => name === "openclaw-configuration",
+    ),
+    { name: "openclaw-configuration", mountPath: "/etc/openclaw-managed", readOnly: true },
+  );
+  assert.match(
+    nativeAdminPod.initContainers[0].args[0],
+    /copyFileSync\("\/etc\/openclaw-managed\/openclaw\.json", "\/home\/node\/\.openclaw\/openclaw\.json"\)/,
+  );
+
+  const privateRuntimeDriver = createKubernetesComputeDriver(
+    options({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+      },
+    }),
+  );
+  const privateNativeAdminRevision = {
+    ...nativeAdminRevision,
+    compute: { id: privateRuntimeDriver.id, implementation: privateRuntimeDriver.implementation },
+  };
+  const privateNativeAdminGateway = privateRuntimeDriver.deployment(
+    runtimeName,
+    { namespaceId: tenant.id, agentId: privateNativeAdminRevision.agentId },
+    namespace,
+    "openclaw-enterprise/gateway-fixture:local",
+    runtimeName,
+    "gateway",
+    {},
+    "info",
+    privateRuntimeDriver.gatewayConfiguration(privateNativeAdminRevision),
+  );
+  const privateNativeAdminPod = privateNativeAdminGateway.spec.template.spec;
+  const privateNativeAdminEnvironment = Object.fromEntries(
+    privateNativeAdminPod.containers[0].env.map((entry) => [entry.name, entry]),
+  );
+  assert.equal(
+    privateNativeAdminEnvironment.OPENCLAW_CONFIG_PATH.value,
+    "/etc/openclaw/openclaw.json",
+  );
+  assert.deepEqual(
+    privateNativeAdminPod.containers[0].volumeMounts.find(
+      ({ name }) => name === "openclaw-configuration",
+    ),
+    { name: "openclaw-configuration", mountPath: "/etc/openclaw", readOnly: true },
+  );
+  assert.equal(
+    privateNativeAdminPod.initContainers[0].volumeMounts.some(
+      ({ name }) => name === "openclaw-configuration",
+    ),
+    false,
+  );
+  assert.equal(privateNativeAdminPod.initContainers[0].args[0].includes("copyFileSync"), false);
 
   for (const [configuration, expected] of [
     [
@@ -1229,27 +1432,15 @@ test("Kubernetes drivers require explicit authentication, images, and production
   );
 });
 
-test("the canonical Kubernetes runtime isolates transport and channel Secrets", () => {
+test("the canonical Kubernetes runtime validates channel proxy configuration", () => {
   const runtime = {
     transportSecretPrefix: "transport",
     gatewayStorageClassName: "local-path",
   };
   assert.doesNotThrow(() => createKubernetesComputeDriver(options({ runtime })));
-  assert.throws(
-    () =>
-      createKubernetesComputeDriver(
-        options({
-          runtime: {
-            ...runtime,
-            channels: { secretPrefix: "transport", proxyUrl: "http://10.42.0.15:3128" },
-          },
-        }),
-      ),
-    /credentials must remain separate/i,
-  );
 
   for (const proxyUrl of ["http://10.42.0.15:3128", "https://[2001:db8::15]:8443"]) {
-    const channels = { secretPrefix: "channel", proxyUrl };
+    const channels = { proxyUrl };
     assert.doesNotThrow(() =>
       createKubernetesComputeDriver(options({ runtime: { ...runtime, channels } })),
     );
@@ -1262,25 +1453,12 @@ test("the canonical Kubernetes runtime isolates transport and channel Secrets", 
     "http://10.42.0.15:3128/unreviewed",
     "http://10.42.0.15:3128?token=secret",
   ]) {
-    const channels = { secretPrefix: "channel", proxyUrl };
+    const channels = { proxyUrl };
     assert.throws(
       () => createKubernetesComputeDriver(options({ runtime: { ...runtime, channels } })),
       /HTTP\(S\) IP endpoint/i,
     );
   }
-
-  assert.throws(
-    () =>
-      createKubernetesComputeDriver(
-        options({
-          runtime: {
-            ...runtime,
-            channels: { secretPrefix: " ", proxyUrl: "http://10.42.0.15:3128" },
-          },
-        }),
-      ),
-    /channel Secret name prefix/i,
-  );
 });
 
 test("dedicated Codex localhost seccomp profile is validated and rendered only on the Agent container", () => {
@@ -1399,7 +1577,7 @@ test("dedicated Codex projects the account-owned token and workspace without exp
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
+        channels: { proxyUrl: "http://10.42.0.15:3128" },
       },
     }),
   );
@@ -1482,9 +1660,9 @@ test("dedicated Codex projects the account-owned token and workspace without exp
   assert.equal(gatewayEnvironment.has("CODEX_ACCESS_TOKEN"), false);
   assert.equal(gatewayEnvironment.has("CODEX_CHATGPT_WORKSPACE_ID"), false);
   assert.equal(gatewayEnvironment.has("OPENAI_API_KEY"), false);
-  assert.equal(gatewayEnvironment.has("SLACK_APP_TOKEN"), true);
-  assert.equal(gatewayEnvironment.has("SLACK_BOT_TOKEN"), true);
-  assert.equal(gatewayEnvironment.has("MSTEAMS_APP_PASSWORD"), true);
+  assert.equal(gatewayEnvironment.has("SLACK_APP_TOKEN"), false);
+  assert.equal(gatewayEnvironment.has("SLACK_BOT_TOKEN"), false);
+  assert.equal(gatewayEnvironment.has("MSTEAMS_APP_PASSWORD"), false);
 });
 
 test("account-token authentication grants only the exact Codex revision outbound HTTPS", () => {
@@ -1543,13 +1721,13 @@ test("account-token authentication grants only the exact Codex revision outbound
   assert.notDeepEqual(successor.spec.podSelector, policy.spec.podSelector);
 });
 
-test("native channel providers supply only owning gateway secrets and reviewed proxy egress", async () => {
+test("native channel providers require Secret bindings and project them only to the gateway", async () => {
   const driver = createKubernetesComputeDriver(
     options({
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
+        channels: { proxyUrl: "http://10.42.0.15:3128" },
       },
     }),
   );
@@ -1570,6 +1748,48 @@ test("native channel providers supply only owning gateway secrets and reviewed p
     servicePrincipalId: "service-principal-agent-a",
     createdAt: tenant.createdAt,
   };
+  const secretEnvironment = [
+    {
+      name: "SLACK_APP_TOKEN",
+      namespaceId: tenant.id,
+      agentId,
+      secretId: "sec_00000000-0000-4000-8000-000000000001",
+      backendRef: { namespaceName: namespace, name: "occ-slack-app", key: "value", uid: "app-uid" },
+    },
+    {
+      name: "SLACK_BOT_TOKEN",
+      namespaceId: tenant.id,
+      agentId,
+      secretId: "sec_00000000-0000-4000-8000-000000000002",
+      backendRef: { namespaceName: namespace, name: "occ-slack-bot", key: "value", uid: "bot-uid" },
+    },
+    {
+      name: "MSTEAMS_APP_PASSWORD",
+      namespaceId: tenant.id,
+      agentId,
+      secretId: "sec_00000000-0000-4000-8000-000000000003",
+      backendRef: {
+        namespaceName: namespace,
+        name: "occ-teams-password",
+        key: "value",
+        uid: "teams-uid",
+      },
+    },
+  ];
+  const secretBindings = Object.freeze({
+    SLACK_APP_TOKEN: {
+      source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[0].secretId },
+      delivery: { type: "env" },
+    },
+    SLACK_BOT_TOKEN: {
+      source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[1].secretId },
+      delivery: { type: "env" },
+    },
+    MSTEAMS_APP_PASSWORD: {
+      source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[2].secretId },
+      delivery: { type: "env" },
+    },
+  });
 
   for (const [channels, expectedSecrets] of [
     [{ slack: {} }, ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]],
@@ -1592,9 +1812,22 @@ test("native channel providers supply only owning gateway secrets and reviewed p
   ]) {
     const configuredRevision = {
       ...revision,
-      configuration: { ...revision.configuration, channels },
+      configuration: { agents: { defaults: { model: "codex/gpt-5" } }, channels },
+      secretBindings,
+      secretDriverId: "secret-kubernetes",
     };
+    assert.doesNotThrow(() =>
+      driver.validateHarnessAuth(
+        configuredRevision.harness,
+        configuredRevision.harnessAuth,
+        configuredRevision.configuration,
+        configuredRevision.secretBindings,
+      ),
+    );
     const enabled = driver.enabledChannels(configuredRevision);
+    const expectedSecretEnvironment = expectedSecrets.map((name) =>
+      secretEnvironment.find((item) => item.name === name),
+    );
     const gateway = driver.deployment(
       `gateway-${suffix}`,
       { namespaceId: tenant.id, agentId },
@@ -1609,6 +1842,7 @@ test("native channel providers supply only owning gateway secrets and reviewed p
       undefined,
       undefined,
       enabled,
+      expectedSecretEnvironment,
     );
     const environment = gateway.spec.template.spec.containers[0].env;
 
@@ -1622,7 +1856,12 @@ test("native channel providers supply only owning gateway secrets and reviewed p
     ]) {
       const variable = environment.find(({ name }) => name === key);
       if (expectedSecrets.includes(key)) {
-        assert.deepEqual(variable.valueFrom.secretKeyRef, { name: `channel-${suffix}`, key });
+        const projection = secretEnvironment.find((item) => item.name === key);
+        assert.deepEqual(variable.valueFrom.secretKeyRef, {
+          name: projection.backendRef.name,
+          key: projection.backendRef.key,
+          optional: false,
+        });
         assert.equal(environment.filter(({ name }) => name === key).length, 1);
       } else {
         assert.equal(variable, undefined);
@@ -1663,6 +1902,8 @@ test("native channel providers supply only owning gateway secrets and reviewed p
       undefined,
       undefined,
       preparedAuth(driver, namespace, false),
+      [],
+      [],
     );
     const agentEnvironment = agent.spec.template.spec.containers[0].env;
     for (const key of [...expectedSecrets, "HTTPS_PROXY"]) {
@@ -1743,13 +1984,31 @@ test("native channel providers supply only owning gateway secrets and reviewed p
     }),
     /Unsupported OpenClaw channel provider "discord"\./,
   );
+  assert.throws(
+    () =>
+      driver.validateHarnessAuth(
+        revision.harness,
+        revision.harnessAuth,
+        {
+          agents: { defaults: { model: "codex/gpt-5" } },
+          channels: {
+            slack: {
+              appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+              botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+            },
+          },
+        },
+        { SLACK_APP_TOKEN: secretBindings.SLACK_APP_TOKEN },
+      ),
+    /Secret bindings/i,
+  );
 
   const ipv6 = createKubernetesComputeDriver(
     options({
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        channels: { secretPrefix: "channel", proxyUrl: "https://[2001:db8::15]:8443" },
+        channels: { proxyUrl: "https://[2001:db8::15]:8443" },
       },
     }),
   );
@@ -1778,6 +2037,60 @@ test("native channel providers supply only owning gateway secrets and reviewed p
       ports: [{ protocol: "TCP", port: 8443 }],
     },
   ]);
+});
+
+test("Kubernetes cached runtime failure evidence is native-only and readiness-passive", async () => {
+  const revision = routedRevision(createKubernetesComputeDriver(options()), {
+    id: "revision-runtime-failure-evidence",
+    agentId: "agent-runtime-failure-evidence",
+    configurationId: "cfg_runtime_failure_evidence",
+    servicePrincipalId: "service-principal-runtime-failure-evidence",
+  });
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const nonNative = createKubernetesComputeDriver(options());
+  let attemptedProxy = false;
+  nonNative.apiClients = Promise.resolve({
+    core: {
+      async listNamespacedPod() {
+        attemptedProxy = true;
+        throw Object.assign(new Error("pods/proxy denied"), { statusCode: 403 });
+      },
+    },
+  });
+
+  assert.equal(await nonNative.safeRuntimeFailureObservation(revision, namespace), undefined);
+  assert.equal(attemptedProxy, false);
+
+  const native = createKubernetesComputeDriver(
+    options({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+      },
+    }),
+  );
+  const nativeRevision = {
+    ...revision,
+    compute: { id: native.id, implementation: native.implementation },
+  };
+  native.apiClients = Promise.resolve({
+    core: {
+      async listNamespacedPod() {
+        throw Object.assign(new Error("pods/proxy denied"), { statusCode: 403 });
+      },
+    },
+  });
+  assert.equal(await native.safeRuntimeFailureObservation(nativeRevision, namespace), undefined);
+
+  const cancellation = new Error("runtime evidence cancelled");
+  const owner = new AbortController();
+  owner.abort(cancellation);
+  await assert.rejects(
+    withComputeAbortSignal(owner.signal, () =>
+      native.safeRuntimeFailureObservation(nativeRevision, namespace),
+    ),
+    (error) => error === cancellation,
+  );
 });
 
 test("embedded replacement cuts over an unready shared gateway and waits for actual startup readiness", async () => {
@@ -2437,6 +2750,18 @@ test("containment-only Sandbox cleanup retries after its Compute-owned workload 
         assert.equal(deploymentPresent, false);
         return { apiVersion: "v1", kind: "PodList", items: [] };
       },
+      async readNamespacedPersistentVolumeClaim() {
+        throw notFound();
+      },
+      async readNamespacedConfigMap() {
+        throw notFound();
+      },
+      async readNamespacedService() {
+        throw notFound();
+      },
+      async readNamespacedServiceAccount() {
+        throw notFound();
+      },
     },
     apps: {
       async readNamespacedDeployment({ name }) {
@@ -2453,7 +2778,16 @@ test("containment-only Sandbox cleanup retries after its Compute-owned workload 
         deploymentPresent = false;
       },
     },
-    objects: {},
+    networking: {
+      async readNamespacedNetworkPolicy() {
+        throw notFound();
+      },
+    },
+    objects: {
+      async read() {
+        throw notFound();
+      },
+    },
   });
 
   // The first cleanup failure occurs after workload removal and must keep retirement retryable.
@@ -2473,7 +2807,7 @@ test("containment-only Sandbox cleanup retries after its Compute-owned workload 
   await driver.retireRevision(revision);
   assert.equal(deletionCalls.length, 1);
   assert.equal(cleanupCalls.length, 2);
-  assert.equal(gatewayReads, 1);
+  assert.ok(gatewayReads >= 1);
   for (const context of cleanupCalls) {
     assert.equal(context.namespace.id, revision.namespaceId);
     assert.equal(context.namespace.name, namespace);
@@ -3311,7 +3645,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
       runtime: {
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
-        channels: { secretPrefix: "channel", proxyUrl: "http://10.42.0.15:3128" },
+        channels: { proxyUrl: "http://10.42.0.15:3128" },
       },
       servicePrincipalCredentials: {
         mode: "projectedServiceAccountToken",
@@ -4253,6 +4587,211 @@ test("stopping a provider-owned Kubernetes revision waits for Sandbox workload t
   assert.equal(podObservations, 2);
 });
 
+test("retiring a running embedded revision waits for gateway Pods and removes owned artifacts", async () => {
+  const driver = createKubernetesComputeDriver(
+    options({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+        channels: { secretPrefix: "channel", proxyUrl: "http://192.0.2.10:3128" },
+      },
+    }),
+  );
+  const revision = routedRevision(driver, {
+    id: "revision-embedded-deletion",
+    agentId: "agent-embedded-deletion",
+    harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+    configuration: {
+      agents: { defaults: { model: "openai/gpt-5" } },
+      gateway: { controlUi: { enabled: false } },
+    },
+    plugins: {
+      driver: { id: "occ-plugin", implementation: "occ/openclaw-plugin" },
+      plugins: { "occ-plugin:diffs": { enabled: true, approvalMode: "always" } },
+    },
+  });
+  const namespace = kubernetesNamespaceName(revision.namespaceId);
+  const gatewayName = `gateway-${digest(revision.agentId)}`;
+  const agentName = `agent-${digest(revision.agentId)}`;
+  const gatewayOwnership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+  const agentOwnership = {
+    ...gatewayOwnership,
+    servicePrincipalId: revision.servicePrincipalId,
+  };
+  const revisionOwnership = { ...agentOwnership, revisionId: revision.id };
+  const configurationName = `${gatewayName}-rev-${digest(revision.id)}`;
+  const pluginName = `plugin-runtime-${digest(revision.agentId)}-rev-${digest(revision.id)}`;
+  const key = (kind, name) => `${kind}:${name}`;
+  const objects = new Map();
+  const save = (object) => {
+    object.metadata.uid ??= `${object.metadata.name}-uid`;
+    objects.set(key(object.kind, object.metadata.name), structuredClone(object));
+  };
+  const missing = (kind, name) =>
+    Object.assign(new Error(`${kind} ${name} not found`), { code: 404 });
+
+  save({
+    ...driver.manifest("v1", "Namespace", namespace, { namespaceId: revision.namespaceId }),
+    status: { phase: "Active" },
+  });
+  const gateway = driver.manifest(
+    "apps/v1",
+    "Deployment",
+    gatewayName,
+    gatewayOwnership,
+    namespace,
+  );
+  gateway.metadata.annotations["openclaw.dev/agent-revision-id"] = revision.id;
+  save(gateway);
+  save(
+    driver.service(gatewayName, gatewayOwnership, namespace, {
+      "app.kubernetes.io/name": gatewayName,
+    }),
+  );
+  save(driver.manifest("v1", "ServiceAccount", agentName, agentOwnership, namespace));
+  save(driver.gatewayPrivateStateClaim(revision.agentId, gatewayOwnership, namespace));
+  save(driver.manifest("v1", "ConfigMap", configurationName, gatewayOwnership, namespace));
+  save(driver.manifest("v1", "ConfigMap", pluginName, revisionOwnership, namespace));
+  const policies = [
+    ...driver.agentNetworkPolicies(revision, namespace),
+    driver.channelNetworkPolicy(revision, [], namespace),
+  ];
+  for (const policy of policies) {
+    save(policy);
+  }
+  const sibling = driver.manifest(
+    "v1",
+    "ConfigMap",
+    "sibling-agent-artifact",
+    { namespaceId: revision.namespaceId, agentId: "agent-sibling" },
+    namespace,
+  );
+  save(sibling);
+
+  const deletions = [];
+  let podObservations = 0;
+  const read = (kind, name) => {
+    const value = objects.get(key(kind, name));
+    if (value === undefined) {
+      throw missing(kind, name);
+    }
+    return structuredClone(value);
+  };
+  const remove = (kind, request) => {
+    const current = read(kind, request.name);
+    assert.equal(request.body?.preconditions?.uid, current.metadata.uid);
+    deletions.push({ kind, name: request.name });
+    objects.delete(key(kind, request.name));
+    return {};
+  };
+  driver.apiClients = Promise.resolve({
+    core: {
+      async listNamespace() {
+        return { apiVersion: "v1", kind: "NamespaceList", items: [] };
+      },
+      async readNamespace({ name }) {
+        return read("Namespace", name);
+      },
+      async listNamespacedPod({ namespace: requestedNamespace, labelSelector }) {
+        assert.equal(requestedNamespace, namespace);
+        assert.match(labelSelector, /openclaw\.dev\/workload-role=gateway/);
+        podObservations += 1;
+        deletions.push({ kind: "PodList", name: revision.id });
+        return {
+          apiVersion: "v1",
+          kind: "PodList",
+          items:
+            podObservations === 1
+              ? [
+                  {
+                    apiVersion: "v1",
+                    kind: "Pod",
+                    metadata: {
+                      name: "terminating-embedded-gateway",
+                      namespace,
+                      labels: {
+                        "openclaw.dev/namespace": revision.namespaceId,
+                        "openclaw.dev/agent": revision.agentId,
+                        "openclaw.dev/revision": revision.id,
+                        "openclaw.dev/workload-role": "gateway",
+                      },
+                    },
+                  },
+                ]
+              : [],
+        };
+      },
+      async readNamespacedConfigMap({ name }) {
+        return read("ConfigMap", name);
+      },
+      async deleteNamespacedConfigMap(request) {
+        return remove("ConfigMap", request);
+      },
+      async readNamespacedServiceAccount({ name }) {
+        return read("ServiceAccount", name);
+      },
+      async deleteNamespacedServiceAccount(request) {
+        return remove("ServiceAccount", request);
+      },
+      async readNamespacedService({ name }) {
+        return read("Service", name);
+      },
+      async deleteNamespacedService(request) {
+        return remove("Service", request);
+      },
+      async readNamespacedPersistentVolumeClaim({ name }) {
+        return read("PersistentVolumeClaim", name);
+      },
+      async deleteNamespacedPersistentVolumeClaim(request) {
+        return remove("PersistentVolumeClaim", request);
+      },
+    },
+    apps: {
+      async readNamespacedDeployment({ name }) {
+        return read("Deployment", name);
+      },
+      async deleteNamespacedDeployment(request) {
+        return remove("Deployment", request);
+      },
+    },
+    networking: {
+      async readNamespacedNetworkPolicy({ name }) {
+        return read("NetworkPolicy", name);
+      },
+      async deleteNamespacedNetworkPolicy(request) {
+        return remove("NetworkPolicy", request);
+      },
+    },
+    objects: {
+      async read({ metadata }) {
+        return read("HTTPRoute", metadata.name);
+      },
+    },
+  });
+
+  await driver.retireRevision(revision);
+
+  assert.equal(podObservations, 2);
+  const podWait = deletions.findIndex(({ kind }) => kind === "PodList");
+  assert.ok(podWait > deletions.findIndex(({ kind }) => kind === "Deployment"));
+  assert.ok(
+    podWait < deletions.findIndex(({ kind }) => kind === "PersistentVolumeClaim"),
+    "persistent state must not be deleted until the exact gateway Pod has terminated",
+  );
+  for (const [kind, name] of [
+    ["Deployment", gatewayName],
+    ["Service", gatewayName],
+    ["ServiceAccount", agentName],
+    ["PersistentVolumeClaim", driver.gatewayPrivateStateClaimName(revision.agentId)],
+    ["ConfigMap", configurationName],
+    ["ConfigMap", pluginName],
+    ...policies.map((policy) => ["NetworkPolicy", policy.metadata.name]),
+  ]) {
+    assert.equal(objects.has(key(kind, name)), false, `${kind} ${name} must be deleted`);
+  }
+  assert.deepEqual(objects.get(key("ConfigMap", sibling.metadata.name)), sibling);
+});
+
 test("retirement preserves active storage and node routing and deletes exact owned UIDs", async () => {
   const driver = createKubernetesComputeDriver(
     routedOptions({
@@ -4278,6 +4817,25 @@ test("retirement preserves active storage and node routing and deletes exact own
   const gatewayAccount = driver.manifest("v1", "ServiceAccount", gatewayName, ownership, namespace);
   gatewayAccount.metadata.uid = "gateway-account-uid";
   let observedServiceAccount = gatewayAccount;
+  const agentName = `agent-${digest(agentId)}`;
+  const agentOwnership = {
+    ...ownership,
+    servicePrincipalId: "service-agent-revision-storage",
+  };
+  const agentService = driver.service(agentName, agentOwnership, namespace, {
+    "openclaw.dev/agent": agentId,
+    "openclaw.dev/revision": "revision-2",
+    "openclaw.dev/workload-role": "agent",
+  });
+  agentService.metadata.uid = "agent-service-uid";
+  const agentAccount = driver.manifest(
+    "v1",
+    "ServiceAccount",
+    agentName,
+    agentOwnership,
+    namespace,
+  );
+  agentAccount.metadata.uid = "agent-account-uid";
   const route = driver.gatewayRoute(
     { id: "revision-2", revision: 2, namespaceId: tenant.id, agentId },
     ownership,
@@ -4302,7 +4860,10 @@ test("retirement preserves active storage and node routing and deletes exact own
   };
   driver.apiClients = Promise.resolve({
     apps: {
-      async readNamespacedDeployment() {
+      async readNamespacedDeployment({ name }) {
+        if (name !== gatewayName) {
+          return missing();
+        }
         if (observedGateway === undefined) {
           return missing();
         }
@@ -4313,6 +4874,10 @@ test("retirement preserves active storage and node routing and deletes exact own
       },
     },
     core: {
+      async listNamespacedPod() {
+        return { apiVersion: "v1", kind: "PodList", items: [] };
+      },
+      readNamespacedConfigMap: missing,
       async readNamespacedPersistentVolumeClaim({ name }) {
         const claim = claims.find(({ metadata }) => metadata.name === name);
         if (claim === undefined) {
@@ -4323,7 +4888,10 @@ test("retirement preserves active storage and node routing and deletes exact own
       async deleteNamespacedPersistentVolumeClaim(request) {
         deletions.push(["PersistentVolumeClaim", request]);
       },
-      async readNamespacedService() {
+      async readNamespacedService({ name }) {
+        if (name === agentName) {
+          return structuredClone(agentService);
+        }
         if (observedService === undefined) {
           return missing();
         }
@@ -4335,7 +4903,10 @@ test("retirement preserves active storage and node routing and deletes exact own
           throw new Error("service delete failed");
         }
       },
-      async readNamespacedServiceAccount() {
+      async readNamespacedServiceAccount({ name }) {
+        if (name === agentName) {
+          return structuredClone(agentAccount);
+        }
         if (observedServiceAccount === undefined) {
           return missing();
         }
@@ -4344,6 +4915,9 @@ test("retirement preserves active storage and node routing and deletes exact own
       async deleteNamespacedServiceAccount(request) {
         deletions.push(["ServiceAccount", request]);
       },
+    },
+    networking: {
+      readNamespacedNetworkPolicy: missing,
     },
     objects: {
       async read({ kind, metadata }) {
@@ -4390,21 +4964,33 @@ test("retirement preserves active storage and node routing and deletes exact own
     },
   });
   await driver.removeRetiredGateway(
-    { id: "revision-1", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+    {
+      id: "revision-1",
+      agentId,
+      namespaceId: tenant.id,
+      servicePrincipalId: "service-agent-revision-storage",
+      harness: { mode: "dedicated" },
+    },
     namespace,
   );
   assert.deepEqual(deletions, []);
   failServiceDelete = true;
   await assert.rejects(
     driver.removeRetiredGateway(
-      { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+      {
+        id: "revision-2",
+        agentId,
+        namespaceId: tenant.id,
+        servicePrincipalId: "service-agent-revision-storage",
+        harness: { mode: "dedicated" },
+      },
       namespace,
     ),
     /service delete failed/,
   );
   assert.deepEqual(
     deletions.map(([kind]) => kind),
-    ["PersistentVolumeClaim", "PersistentVolumeClaim", "HTTPRoute", "Service"],
+    ["HTTPRoute", "Service"],
   );
   assert.equal(
     deletions.some(([kind]) => kind === "Deployment"),
@@ -4415,14 +5001,16 @@ test("retirement preserves active storage and node routing and deletes exact own
   deletions.length = 0;
   failServiceDelete = false;
   await driver.removeRetiredGateway(
-    { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+    {
+      id: "revision-2",
+      agentId,
+      namespaceId: tenant.id,
+      servicePrincipalId: "service-agent-revision-storage",
+      harness: { mode: "dedicated" },
+    },
     namespace,
   );
   assert.deepEqual(deletions, [
-    ...claims.map(({ metadata }) => [
-      "PersistentVolumeClaim",
-      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
-    ]),
     [
       "HTTPRoute",
       {
@@ -4446,6 +5034,18 @@ test("retirement preserves active storage and node routing and deletes exact own
       "Deployment",
       { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-uid" } } },
     ],
+    ...claims.map(({ metadata }) => [
+      "PersistentVolumeClaim",
+      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
+    ]),
+    [
+      "Service",
+      { name: agentName, namespace, body: { preconditions: { uid: "agent-service-uid" } } },
+    ],
+    [
+      "ServiceAccount",
+      { name: agentName, namespace, body: { preconditions: { uid: "agent-account-uid" } } },
+    ],
   ]);
 
   deletions.length = 0;
@@ -4454,14 +5054,16 @@ test("retirement preserves active storage and node routing and deletes exact own
   observedServiceAccount = gatewayAccount;
   observedRoute = route;
   await driver.removeRetiredGateway(
-    { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+    {
+      id: "revision-2",
+      agentId,
+      namespaceId: tenant.id,
+      servicePrincipalId: "service-agent-revision-storage",
+      harness: { mode: "dedicated" },
+    },
     namespace,
   );
   assert.deepEqual(deletions, [
-    ...claims.map(({ metadata }) => [
-      "PersistentVolumeClaim",
-      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
-    ]),
     [
       "HTTPRoute",
       {
@@ -4481,6 +5083,18 @@ test("retirement preserves active storage and node routing and deletes exact own
       "ServiceAccount",
       { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-account-uid" } } },
     ],
+    ...claims.map(({ metadata }) => [
+      "PersistentVolumeClaim",
+      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
+    ]),
+    [
+      "Service",
+      { name: agentName, namespace, body: { preconditions: { uid: "agent-service-uid" } } },
+    ],
+    [
+      "ServiceAccount",
+      { name: agentName, namespace, body: { preconditions: { uid: "agent-account-uid" } } },
+    ],
   ]);
 
   deletions.length = 0;
@@ -4495,7 +5109,13 @@ test("retirement preserves active storage and node routing and deletes exact own
     },
   };
   await driver.removeRetiredGateway(
-    { id: "revision-2", agentId, namespaceId: tenant.id, harness: { mode: "dedicated" } },
+    {
+      id: "revision-2",
+      agentId,
+      namespaceId: tenant.id,
+      servicePrincipalId: "service-agent-revision-storage",
+      harness: { mode: "dedicated" },
+    },
     namespace,
   );
   assert.deepEqual(deletions, []);
@@ -4503,7 +5123,12 @@ test("retirement preserves active storage and node routing and deletes exact own
   // Preparation can run while the previous Gateway still serves requests. A
   // failed candidate must not acquire and then delete that Gateway's node route.
   observedGateway = structuredClone(gateway);
-  const active = routedRevision(driver, { id: "revision-2", revision: 2, agentId });
+  const active = routedRevision(driver, {
+    id: "revision-2",
+    revision: 2,
+    agentId,
+    servicePrincipalId: agentOwnership.servicePrincipalId,
+  });
   observedGateway.metadata.annotations["openclaw.dev/agent-revision"] = String(active.revision);
   const candidate = { ...active, id: "revision-3", revision: 3 };
   await driver.reconcileGatewayRoute(active, ownership, namespace);

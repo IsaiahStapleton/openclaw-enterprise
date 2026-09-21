@@ -2,11 +2,14 @@
 
 The Kubernetes Compute Driver runs OpenClaw Agents on Kubernetes. It provisions
 or adopts an isolated namespace for each tenant and creates an OpenClaw gateway
-for each deployed Agent, with either an embedded or dedicated Agent Harness. When the optional
-[OpenShell SandboxDriver](openshell-sandbox.md) is selected, the Compute Driver still
-owns namespace, gateway, ServiceAccount, PVC, routing, and revision lifecycle,
-but delegates the dedicated Codex Harness Pod to the OpenShell Sandbox
-controller.
+for each deployed Agent, with either an embedded or dedicated Agent Harness.
+Kubernetes supports a managed model API key for both modes and a managed
+ChatGPT service-account credential for dedicated Codex only.
+
+The optional [OpenShell Sandbox Driver](openshell-sandbox.md) is designed to
+own the dedicated Codex Harness Pod while Compute keeps the other resources.
+Stock OpenShell cannot provide required credential and workload-identity
+projections; Agent deployment with OpenShell is unsupported.
 
 For detailed operator contracts, see:
 
@@ -171,16 +174,19 @@ node-level execution fencing.
 
 The Agent's Harness configuration determines its execution topology:
 
-- **Embedded:** OpenClaw runs the gateway and Harness in one Pod. This mode
-  supports an Agent-scoped model API key and does not require shared storage.
+- **Embedded:** OpenClaw runs the gateway and Harness in one Pod. It accepts
+  an Agent-scoped model API key, uses `openai/` models, and does not require
+  shared storage.
 - **Dedicated:** The gateway and Codex Harness run in separate Pods with
   separate ServiceAccounts. They communicate through authenticated app-server
-  transport and share an Agent-owned PersistentVolumeClaim.
+  transport and share an Agent-owned PersistentVolumeClaim. Codex accepts an
+  Agent-scoped model API key or a managed ChatGPT service-account credential,
+  and permits `openai/` or `codex/` models.
 
-Provider-issued access tokens and enabled external channels require dedicated
-execution. Unsupported Harness and execution-mode combinations fail deployment.
-OpenShell sandboxing currently supports only this dedicated Codex path; embedded
-OpenClaw Agents fail closed when the OpenShell SandboxDriver is selected.
+Enabled external channels require dedicated execution. Unsupported Harness and
+execution-mode combinations fail deployment. OpenShell is designed for
+dedicated Codex only, but stock OpenShell currently blocks that deployment;
+embedded OpenClaw is rejected as well.
 
 Stopping an Agent first deletes its exact gateway route and gateway runtime,
 then removes the dedicated Harness Deployment or delegates provider-owned

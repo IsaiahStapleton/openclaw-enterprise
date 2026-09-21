@@ -149,8 +149,22 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
   configuration and operator verification remain in the feature references and guides.
 - `docs/flows/` explains runtime execution through the current source. Link to
   reference for normative behavior and to guides for operator procedures.
-- `docs/guides/` owns operator procedures. Keep overview pages concise and
+- `docs/guides/` owns procedures for product users and operators, including
+  people using the console, CLI, or HTTP API. Keep overview pages concise and
   split coherent tasks into named child pages linked from their overview.
+- `docs/contributing/` owns onboarding and workflows for people changing the
+  platform. Link the root `CONTRIBUTING.md` for contribution policy and the
+  relevant reference, flow, or testing page for detailed behavior.
+- The site has six menu sections: **Getting Started**, **Topics**, **Integrations**,
+  **Operate**, and **Reference** serve people using or administering the product;
+  **Contribute** serves people changing the platform. Each menu switches sidebars.
+  Register each Markdown page once in `docs/docs.json`; put deep implementation
+  and testing pages in the owning tab's `hidden` list when an index links them.
+  Hidden pages keep their routes and search entries. Cross-link shared subjects;
+  keep existing file paths and heading anchors when changing navigation.
+- Use short Title Case sidebar labels and descriptive sentence-case article
+  titles. Use nested groups when they clarify the reader's task; give menus a
+  useful overview and list prerequisite steps before actions that need them.
 - Top-level `specs/` records implementation proposals, milestones, and delivery
   history. Completed specifications do not override current feature reference.
 
@@ -164,6 +178,25 @@ boundaries, verification, and troubleshooting. Update navigation and affected
 adjacent pages.
 Do not add migration documentation, migration-specific rollout instructions,
 or per-migration database preparation guidance unless explicitly requested.
+
+### Keep reference cheat sheets current
+
+When adding or changing documentation in one of the areas below, check every
+affected [Reference cheat sheet](docs/reference/README.md#cheat-sheets) and
+update it in the same change if its inventory or short descriptions change.
+Link to the owning documentation for detail instead of copying it.
+
+- [API](docs/reference/cheatsheets/api.md): public operations and their summaries.
+  Update the owning route or OpenAPI schema, then run `pnpm openapi:generate`
+  and `pnpm openapi:check`. Do not edit the generated sheet by hand.
+- [Permissions](docs/reference/cheatsheets/permissions.md): IAM actions, resource
+  kinds, scopes, and required grants.
+- [Database entities](docs/reference/cheatsheets/database-entities.md): PostgreSQL
+  tables, their purpose, and columns.
+- [Environment variables](docs/reference/cheatsheets/environment-variables.md):
+  supported configuration variables; test-only variables stay in `docs/testing/`.
+
+Check the manually maintained sheets against their owning sources and run `pnpm docs:check`.
 
 ## Documentation length budget
 

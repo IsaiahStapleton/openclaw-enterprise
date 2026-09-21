@@ -69,6 +69,12 @@ const requiresGatewayRouting = {
       ? requiresProductionCluster.skip
       : "Set OCC_TEST_GATEWAY_ROUTING_REAL=1 with Envoy Gateway, cert-manager, and an imported controller image for private routing proof.",
 };
+const requiresNativeAdminRouting = {
+  skip:
+    process.env.OCC_TEST_NATIVE_ADMIN_REAL === "1"
+      ? requiresGatewayRouting.skip
+      : "Set OCC_TEST_NATIVE_ADMIN_REAL=1 with the gateway-routing prerequisites, Playwright Chromium, and a dedicated native-admin Agent domain such as native.localhost.",
+};
 const requiresLiveSlack = {
   skip: slackSelected
     ? false
@@ -78,10 +84,10 @@ const installationName = "OpenClaw Kubernetes harness topology integration";
 const authSecret = "kubernetes-harness-topology-auth-secret-32-bytes";
 const authBaseURL = "http://127.0.0.1";
 const modelPrefix = "openclaw-agent-model";
-const channelPrefix = "openclaw-agent-channels";
 const secretRotationProbe = "SECRET_ROTATION_PROBE";
 const peerSecretRotationProbe = "SECRET_ROTATION_PEER_PROBE";
 const sharedSecretRotationProbe = "SECRET_ROTATION_SHARED_PROBE";
+const startupFailurePluginId = "codex-plugin:linear@openai-curated-remote";
 const deniedPort = 18791;
 const sharedWorkspaceVolumeName = "openclaw-workspace";
 const sharedWorkspaceClaimSize = "40Gi";
@@ -319,6 +325,11 @@ async function createScopedController(context, identifier, platformNamespace, ku
       {
         op: "add",
         path: "/rules/-",
+        value: { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "watch"] },
+      },
+      {
+        op: "add",
+        path: "/rules/-",
         value: {
           apiGroups: [""],
           resources: ["persistentvolumeclaims"],
@@ -401,6 +412,8 @@ async function startInClusterControllerApi(
     authBaseURL,
     controller,
     controllerPort,
+    nativeAdminDomain,
+    nativeAdminSharedCookieDomain,
     platformNamespace,
     workspaceGateway,
   },
@@ -519,6 +532,23 @@ async function startInClusterControllerApi(
                       valueFrom: { secretKeyRef: { name: authSecretName, key: "secret" } },
                     },
                     { name: "OCC_AUTH_BASE_URL", value: authBaseURL },
+                    {
+                      name: "OCC_AGENT_NATIVE_ADMIN_ENABLED",
+                      value: nativeAdminDomain === undefined ? "false" : "true",
+                    },
+                    ...(nativeAdminDomain === undefined
+                      ? []
+                      : [
+                          { name: "OCC_AGENT_NATIVE_ADMIN_DOMAIN", value: nativeAdminDomain },
+                          ...(nativeAdminSharedCookieDomain === undefined
+                            ? []
+                            : [
+                                {
+                                  name: "OCC_AUTH_COOKIE_DOMAIN",
+                                  value: nativeAdminSharedCookieDomain,
+                                },
+                              ]),
+                        ]),
                     {
                       name: "OCC_HOST",
                       valueFrom: { fieldRef: { fieldPath: "status.podIP" } },
@@ -679,6 +709,15 @@ function installationConfiguration(authentication, platformNamespace, slack, opt
   configuration.drivers.secret.configuration.authentication = authentication;
   configuration.drivers.configuration.id = "configuration-kubernetes-production";
   configuration.drivers.compute.id = "compute-kubernetes-production";
+  configuration.drivers.plugin = { id: "codex-plugin", configuration: {} };
+  const pluginStatusProxyCidrs = process.env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS;
+  if (pluginStatusProxyCidrs !== undefined && pluginStatusProxyCidrs.trim().length > 0) {
+    configuration.drivers.compute.configuration.network.pluginStatusProxySourceCidrs =
+      pluginStatusProxyCidrs
+        .split(",")
+        .map((cidr) => cidr.trim())
+        .filter(Boolean);
+  }
   configuration.drivers.compute.configuration.resources.namespace.quota = {
     pods: "8",
     "requests.cpu": "2",
@@ -693,7 +732,6 @@ function installationConfiguration(authentication, platformNamespace, slack, opt
   }
   if (slack !== undefined) {
     configuration.drivers.compute.configuration.runtime.channels = {
-      secretPrefix: channelPrefix,
       proxyUrl: slack.proxyUrl,
     };
   }
@@ -814,6 +852,8 @@ function secretApiProtectedValues(topology, extra = []) {
     topology.secretApi?.rotatedSharedProbeValue,
     topology.secretApi?.missingBackendValue,
     topology.secretApi?.unboundDeleteValue,
+    topology.secretApi?.slackAppValue,
+    topology.secretApi?.slackBotValue,
     ...extra,
   ];
 }
@@ -1141,31 +1181,6 @@ async function storedAgent(pool, namespaceId, agentId) {
   };
 }
 
-async function provisionAgentChannelSecret(directory, namespace, agentId, slack) {
-  const suffix = hash(agentId);
-  const tokenDirectory = await mkdtemp(join(directory, `channel-tokens-${suffix}-`));
-  try {
-    const appTokenPath = join(tokenDirectory, "slack-app-token");
-    const botTokenPath = join(tokenDirectory, "slack-bot-token");
-    await Promise.all([
-      writeFile(appTokenPath, slack.appToken, { mode: 0o600 }),
-      writeFile(botTokenPath, slack.botToken, { mode: 0o600 }),
-    ]);
-    await kubectl(
-      "create",
-      "secret",
-      "generic",
-      `${channelPrefix}-${suffix}`,
-      "--namespace",
-      namespace,
-      `--from-file=SLACK_APP_TOKEN=${appTokenPath}`,
-      `--from-file=SLACK_BOT_TOKEN=${botTokenPath}`,
-    );
-  } finally {
-    await rm(tokenDirectory, { recursive: true, force: true });
-  }
-}
-
 async function arrangeProductionTopology(context, mode, slack, options = {}) {
   const loggingObservationStartedAt = Date.now();
   const includeSecretProbes = options.secretLifecycle === true;
@@ -1177,10 +1192,11 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       email: `admin-kubernetes-${hash(identifier)}@example.test`,
       password: `kubernetes-harness-${identifier}`,
     });
-  const controllerAuthBaseURL =
+  const bootstrapAuthBaseURL =
     options.controllerPort === undefined
       ? authBaseURL
       : `http://127.0.0.1:${options.controllerPort}`;
+  const controllerAuthBaseURL = options.publicOrigin ?? bootstrapAuthBaseURL;
   const gatewayPassword =
     options.gatewayPassword === true ? randomBytes(32).toString("base64url") : undefined;
   const platformNamespace = `oce-production-${mode}-${hash(identifier)}`;
@@ -1349,11 +1365,18 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       email: credentials.email,
       password: credentials.password,
       authSecret,
-      authBaseURL: controllerAuthBaseURL,
+      authBaseURL: bootstrapAuthBaseURL,
       installationName,
     });
     activeInstallation = await platformState.loadInstallation();
     assert.ok(activeInstallation, "development bootstrap must persist the Installation");
+    await ensureHarnessAdminPrincipal(
+      observerPool,
+      createPostgresControllerAuth,
+      activeInstallation,
+      credentials,
+      controllerAuthBaseURL,
+    );
     createdFreshInstallation = true;
   }
 
@@ -1365,6 +1388,8 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       authBaseURL: controllerAuthBaseURL,
       controller,
       controllerPort: options.controllerPort,
+      nativeAdminDomain: options.nativeAdmin?.domain,
+      nativeAdminSharedCookieDomain: options.nativeAdmin?.sharedCookieDomain,
       platformNamespace,
       workspaceGateway,
     });
@@ -1407,7 +1432,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       return response;
     };
   }
-  const adminRequest = await requestFactory(credentials);
+  let adminRequest = await requestFactory(credentials);
   let request = adminRequest;
   let secretAssignmentPrincipalId;
   const events = [];
@@ -1544,6 +1569,29 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       process.env.OPENAI_API_KEY,
     );
     secretApi = { assignmentPrincipalId: secretAssignmentPrincipalId, model: modelSecret };
+    if (slack !== undefined) {
+      const slackAppValue = slack.appToken;
+      const slackBotValue = slack.botToken;
+      const slackAppSecret = await createApiSecret(
+        request,
+        namespaceId,
+        "slack-app-token",
+        slackAppValue,
+      );
+      const slackBotSecret = await createApiSecret(
+        request,
+        namespaceId,
+        "slack-bot-token",
+        slackBotValue,
+      );
+      secretApi = {
+        ...secretApi,
+        slackApp: slackAppSecret,
+        slackBot: slackBotSecret,
+        slackAppValue,
+        slackBotValue,
+      };
+    }
     if (includeSecretProbes) {
       const initialProbeValue = `secret-rotation-initial-${randomUUID()}`;
       const probeSecret = await createApiSecret(
@@ -1582,6 +1630,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       );
       secretApi = {
         assignmentPrincipalId: secretAssignmentPrincipalId,
+        ...secretApi,
         model: modelSecret,
         probe: probeSecret,
         peerProbe: peerProbeSecret,
@@ -1618,6 +1667,8 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     await Promise.all(
       [
         secretApi.model,
+        secretApi.slackApp,
+        secretApi.slackBot,
         secretApi.probe,
         secretApi.peerProbe,
         secretApi.sharedProbe,
@@ -1632,12 +1683,20 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   }
 
   const harnessId = mode === "dedicated" ? "codex" : "openclaw";
-  const secretBindings = !includeSecretProbes
-    ? undefined
-    : {
-        [secretRotationProbe]: secretBinding(secretApi.probe.ref),
-        [sharedSecretRotationProbe]: secretBinding(secretApi.sharedProbe.ref),
-      };
+  const secretBindings = {
+    ...(includeSecretProbes
+      ? {
+          [secretRotationProbe]: secretBinding(secretApi.probe.ref),
+          [sharedSecretRotationProbe]: secretBinding(secretApi.sharedProbe.ref),
+        }
+      : {}),
+    ...(slack === undefined
+      ? {}
+      : {
+          SLACK_APP_TOKEN: secretBinding(secretApi.slackApp.ref),
+          SLACK_BOT_TOKEN: secretBinding(secretApi.slackBot.ref),
+        }),
+  };
   const selectedNativeOptions =
     workspaceGateway === undefined
       ? options.nativeOptions
@@ -1668,10 +1727,10 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
     values: nativeConfiguration(harnessId, slack, nativeOptions),
-    ...(secretBindings === undefined ? {} : { secretBindings }),
+    ...(Object.keys(secretBindings).length === 0 ? {} : { secretBindings }),
   });
   assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
-  if (secretBindings !== undefined) {
+  if (Object.keys(secretBindings).length > 0) {
     assert.deepEqual(configuration.data.secretBindings, secretBindings);
   }
   const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {
@@ -1686,9 +1745,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   const gatewayToken = await provisionAgentTransportSecret(directory, placement, agent.data.id, {
     gatewayPassword,
   });
-  if (slack !== undefined) {
-    await provisionAgentChannelSecret(directory, placement, agent.data.id, slack);
-  }
   {
     const revisionsBefore = await request(
       "GET",
@@ -1719,7 +1775,13 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       "missing Agent service-principal Secret operate must reject deployment before revision admission",
     );
     await Promise.all(
-      [secretApi.model, secretApi.probe, secretApi.sharedProbe]
+      [
+        secretApi.model,
+        secretApi.slackApp,
+        secretApi.slackBot,
+        secretApi.probe,
+        secretApi.sharedProbe,
+      ]
         .filter(Boolean)
         .map((secret) =>
           grantSecretOperate(
@@ -1774,7 +1836,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   );
   assert.equal(observedRevision.status, 200, JSON.stringify(observedRevision.error));
   assert.deepEqual(observedRevision.data.harnessAuth, deployed.data.harnessAuth);
-  if (secretApi !== undefined) {
+  if (secretApi !== undefined && secretApi.configuration.secretBindings !== undefined) {
     assert.deepEqual(observedRevision.data.secretBindings, secretApi.configuration.secretBindings);
   }
   assert.equal(
@@ -1836,6 +1898,32 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       false,
     );
   }
+  if (slack !== undefined) {
+    const slackAppStorage = await storedSecret(observerPool, namespaceId, secretApi.slackApp.id);
+    const slackBotStorage = await storedSecret(observerPool, namespaceId, secretApi.slackBot.id);
+    const gatewayContainer = gatewayPod.spec.containers[0];
+    assertRequiredSecretKeyRef(
+      gatewayContainer.env.find(({ name }) => name === "SLACK_APP_TOKEN").valueFrom.secretKeyRef,
+      { name: slackAppStorage.backendRef.name, key: slackAppStorage.backendRef.key },
+      "Slack app token must be projected from the bound Secret into the gateway",
+    );
+    assertRequiredSecretKeyRef(
+      gatewayContainer.env.find(({ name }) => name === "SLACK_BOT_TOKEN").valueFrom.secretKeyRef,
+      { name: slackBotStorage.backendRef.name, key: slackBotStorage.backendRef.key },
+      "Slack bot token must be projected from the bound Secret into the gateway",
+    );
+    if (harnessPod !== undefined) {
+      assert.equal(
+        harnessPod.spec.containers.some((container) =>
+          (container.env ?? []).some(({ name }) =>
+            ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"].includes(name),
+          ),
+        ),
+        false,
+        "channel Secrets must stay out of the dedicated Codex workload",
+      );
+    }
+  }
   const gatewayVersion = (
     await kubectl(
       "exec",
@@ -1870,10 +1958,37 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   if (slack === undefined) {
     forwarding = await startGatewayForward();
   }
+  const restartControllerApi = async () => {
+    assert.equal(
+      workspaceGateway,
+      undefined,
+      "controller restart proof is scoped to the local Fastify production harness",
+    );
+    const previousUrl = controllerUrl;
+    await productionApp.close();
+    productionApp = await composeProduction({
+      mode: "production",
+      host: "127.0.0.1",
+      databaseUrl,
+      authSecret,
+      authBaseURL: controllerAuthBaseURL,
+      drivers,
+    });
+    if (previousUrl !== undefined) {
+      await productionApp.listen({
+        host: "127.0.0.1",
+        port: Number(new URL(previousUrl).port),
+      });
+      controllerUrl = previousUrl;
+    }
+    adminRequest = await requestFactory(credentials);
+    request = adminRequest;
+  };
   return {
     mode,
     placement,
     namespaceId,
+    installation: activeInstallation,
     platformNamespace,
     gatewayImage,
     workspaceGateway,
@@ -1885,8 +2000,9 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     apiSecretRole: controller.apiSecretRole,
     apiAccount: controller.apiAccount,
     kubernetesNamespaceName,
-    adminRequest,
-    request,
+    adminRequest: (...args) => adminRequest(...args),
+    request: (...args) => request(...args),
+    restartControllerApi,
     events,
     agent: agent.data,
     persistedAgent,
@@ -2031,7 +2147,7 @@ async function assertActualModelTurn(topology) {
 
 // Exercise the regular Secret -> Agent draft -> deployment -> worker -> native startup path.
 // The failure log distinguishes rejected native authentication from ordinary startup latency.
-async function assertInvalidHarnessAuthStaysUnready(context, topology) {
+async function assertInvalidHarnessAuthStaysUnready(context, topology, options = {}) {
   const namespaceId = topology.agent.namespaceId;
   const agentPath = `/namespaces/${namespaceId}/agents/${topology.agent.id}`;
   const validBinding = structuredClone(topology.agent.harnessAuth);
@@ -2052,6 +2168,7 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology) {
   const rebound = await topology.request("PATCH", agentPath, {
     configurationId: topology.agent.configurationId,
     harnessAuth: { method: "api_key", source: invalidSecret.ref },
+    ...(options.plugins === undefined ? {} : { plugins: options.plugins }),
   });
   assertNoSecretMaterial(rebound, [invalidKey], "invalid-key binding response");
   assert.equal(rebound.status, 200, JSON.stringify(rebound.error));
@@ -2204,6 +2321,9 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology) {
   const historical = await topology.request("GET", `${agentPath}/revisions/${predecessor.id}`);
   assert.equal(historical.status, 200);
   assert.deepEqual(historical.data.harnessAuth, predecessor.harnessAuth);
+  if (options.recover === false) {
+    return { revision: candidate.data, rejectedPod };
+  }
   if (topology.mode === "dedicated") {
     await assertActualModelTurn(topology);
     const afterTurn = await topology.request("GET", agentPath);
@@ -2247,6 +2367,115 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology) {
     topology.mode === "dedicated"
       ? "dedicated: invalid-key candidate stayed unready; predecessor served and valid binding recovered"
       : "embedded: invalid-key replacement left the shared gateway unavailable; valid redeploy recovered",
+  );
+}
+
+function assertRuntimeFailureEvidence(value) {
+  assert.deepEqual(
+    Object.keys(value).sort(),
+    ["check", "checkedAt", "code", "component"],
+    "startup failure evidence must contain only the allowlisted runtime fields",
+  );
+  for (const key of ["component", "check", "code"]) {
+    assert.equal(typeof value[key], "string", `runtime failure ${key} must be a string`);
+    assert.match(value[key], /^[A-Za-z0-9._~:@-]{1,64}$/);
+  }
+  assert.equal(Number.isNaN(Date.parse(value.checkedAt)), false);
+}
+
+async function deploymentStatus(topology, revisionId) {
+  const response = await topology.request(
+    "GET",
+    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/deployments/${revisionId}`,
+  );
+  assert.equal(response.status, 200, JSON.stringify(response.error));
+  assertNoSecretMaterial(
+    response,
+    secretApiProtectedValues(topology, [process.env.OPENAI_API_KEY]),
+    "deployment status response",
+  );
+  return response.data;
+}
+
+async function deleteRevisionPods(topology, revisionId) {
+  const pods = (await resources("pods", topology.placement)).filter((pod) => {
+    const { metadata } = pod;
+    if (
+      metadata.deletionTimestamp !== undefined ||
+      metadata.labels?.["openclaw.dev/agent"] !== topology.agent.id
+    ) {
+      return false;
+    }
+    if (metadata.labels?.["openclaw.dev/workload-role"] === "agent") {
+      return metadata.labels?.["openclaw.dev/revision"] === revisionId;
+    }
+    return (
+      metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
+      gatewayConsumesRevision(pod, topology.agent.id, revisionId)
+    );
+  });
+  await Promise.all(
+    pods.map((pod) =>
+      kubectl(
+        "delete",
+        "pod",
+        pod.metadata.name,
+        "--namespace",
+        topology.placement,
+        "--wait=true",
+        "--timeout=90s",
+      ),
+    ),
+  );
+  return pods;
+}
+
+async function assertStartupFailureDeploymentStatusDurable(context, topology, options = {}) {
+  const plugins = options.pluginsEnabled
+    ? { [startupFailurePluginId]: { enabled: true, approvalMode: "auto" } }
+    : {};
+  const failure = await assertInvalidHarnessAuthStaysUnready(context, topology, {
+    plugins,
+    recover: false,
+  });
+  const failed = await deploymentStatus(topology, failure.revision.id);
+  assert.deepEqual(
+    Object.keys(failed).sort(),
+    ["agentId", "deploymentId", "error", "namespaceId", "status", "warnings"],
+    "deployment status must use the approved durable status shape",
+  );
+  assert.equal(failed.deploymentId, failure.revision.id);
+  assert.equal(failed.namespaceId, topology.agent.namespaceId);
+  assert.equal(failed.agentId, topology.agent.id);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.error.code, "CONVERGENCE_DEADLINE_EXCEEDED");
+  assert.equal(typeof failed.error.message, "string");
+  assert.equal(typeof failed.error.data.timeoutMs, "number");
+  assert.ok(failed.error.data.timeoutMs > 0);
+  assertRuntimeFailureEvidence(failed.error.data.runtimeFailure);
+  assert.ok(Array.isArray(failed.warnings));
+  const deletedPods = await deleteRevisionPods(topology, failure.revision.id);
+  assert.ok(
+    deletedPods.length > 0,
+    "durability proof must delete the failed native Pod before re-reading deployment status",
+  );
+  const afterPodDeletion = await deploymentStatus(topology, failure.revision.id);
+  assert.deepEqual(
+    afterPodDeletion,
+    failed,
+    "failed deployment status must survive native Pod deletion and restart opportunities",
+  );
+  await topology.restartControllerApi();
+  const afterControllerRestart = await deploymentStatus(topology, failure.revision.id);
+  assert.deepEqual(
+    afterControllerRestart,
+    failed,
+    "failed deployment status must survive controller API restart",
+  );
+  context.diagnostic(
+    `startup failure durability: ${failure.revision.id} plugins ${
+      options.pluginsEnabled ? "enabled" : "disabled"
+    } retained ${failed.error.code}`,
   );
 }
 
@@ -4273,15 +4502,16 @@ export {
   assertSameNamespaceSecretSharing,
   assertSecretApiNegativeRows,
   assertSecretApiRotationAndRedeploy,
+  assertStartupFailureDeploymentStatusDurable,
   assertUnauthorizedCodexSocket,
   assertUnboundSecretDeletion,
-  channelPrefix,
   hash,
   inspectProjectedIdentity,
   inspectWorkloadEnvironment,
   kubectl,
   modelPrefix,
   requiresGatewayRouting,
+  requiresNativeAdminRouting,
   requiresLiveSlack,
   requiresProductionCluster,
   requiresProductionClusterOtelLogs,

@@ -3,7 +3,8 @@
 A Namespace is an isolated environment for a team, tenant, or workload. It owns
 its [Agents](agents.md), [service accounts](service-accounts.md), their
 identities, and their access rules. Resources in one Namespace cannot be
-discovered, changed, or used from another Namespace.
+discovered, changed, or used from another Namespace. See the
+[IAM overview](../guides/topics/iam.md) for how access is granted.
 
 Each OpenClaw Enterprise deployment has one Installation and can contain
 multiple Namespaces:
@@ -112,8 +113,9 @@ Kubernetes namespaces are deleted normally.
 
 A Namespace containing any Agent, Configuration, or service account
 cannot be deleted and returns `409 NAMESPACE_NOT_EMPTY`. Delete unreferenced
-Configurations and service accounts before deleting their Namespace. The
-current API does not yet provide an Agent deletion endpoint.
+Agents, Configurations, and service accounts before deleting their Namespace.
+Agent deletion is asynchronous; wait until each deleted Agent disappears from
+reads before retrying Namespace deletion.
 
 ## Isolation and gateways
 
@@ -143,9 +145,8 @@ workload is ready.
 - `404`: The Namespace does not exist, belongs outside the requested scope, or
   has already been tombstoned.
 - `409 NAMESPACE_NOT_EMPTY`: Remove the Namespace's unreferenced
-  Configurations and service accounts before deletion; remaining Agents also
-  prevent deletion, and the public Agent deletion operation is not available
-  yet.
+  Agents, Configurations, and service accounts before deletion. An Agent whose
+  teardown is still in progress continues to make the Namespace nonempty.
 - Without an eligible [controller worker](controller.md) against the same
   PostgreSQL database, lifecycle work remains queued and the Namespace can stay
   `provisioning` or `deleting`. Infrastructure readiness is asynchronous.

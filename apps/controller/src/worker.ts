@@ -23,6 +23,7 @@ import type {
   SecretBindings,
   SecretDriver,
   ResolvedHarnessAuth,
+  RuntimeFailureEvidence,
   SecretEnvironmentProjection,
   SecretReference,
 } from "@openclaw-enterprise/contracts";
@@ -40,6 +41,7 @@ import {
   type PostgresPool,
   type PostgresQueryClient,
   type PostgresWorkQueueOptions,
+  validateRuntimeFailureEvidence,
 } from "@openclaw-enterprise/occ";
 import {
   providerDefinitionMap,
@@ -49,8 +51,10 @@ import {
 import type { InstallationRuntimeDrivers } from "./composition/installation-config.ts";
 import { resolveApprovedHarness } from "./composition/production-harness.ts";
 import { withComputeAbortSignal } from "./drivers/compute/operation-context.ts";
+import type { OccMetrics, WorkKind, WorkOutcome } from "./metrics/index.ts";
 
 export interface ControllerWorkerOptions {
+  readonly metrics?: OccMetrics;
   readonly pool: PostgresPool & PostgresQueryClient;
   readonly mode?: "development" | "production";
   readonly drivers?: InstallationRuntimeDrivers;
@@ -90,6 +94,12 @@ interface AgentStopDispatchResult extends DispatchResult {
   readonly revision?: Readonly<AgentRevision>;
 }
 
+interface AgentDeletionDispatchResult extends DispatchResult {
+  readonly namespace?: Readonly<Namespace>;
+  readonly agent?: Readonly<Agent>;
+  readonly revisions?: readonly Readonly<AgentRevision>[];
+}
+
 function positiveInteger(value: number, name: string): number {
   if (!isPositiveSafeInteger(value)) {
     throw new Error(`${name} must be a positive safe integer.`);
@@ -103,6 +113,9 @@ function workOperation(claim: ClaimedWork): string {
   }
   if (claim.agentTarget === "stopped") {
     return "agent.stop";
+  }
+  if (claim.agentTarget === "deleted") {
+    return "agent.delete";
   }
   if (claim.namespaceTarget === "deleted") {
     return "namespace.delete";
@@ -136,7 +149,9 @@ function validDriver(driver: ComputeDriver): boolean {
     typeof driver.deleteNamespace === "function" &&
     typeof driver.prepareRevision === "function" &&
     typeof driver.stopRevision === "function" &&
-    typeof driver.retireRevision === "function"
+    typeof driver.retireRevision === "function" &&
+    (driver.deleteAgentRuntimeCredentials === undefined ||
+      typeof driver.deleteAgentRuntimeCredentials === "function")
   );
 }
 
@@ -279,6 +294,33 @@ function pluginWarningsResultData(
   return Object.freeze({ warnings });
 }
 
+function safeRuntimeFailureEvidence(value: unknown): RuntimeFailureEvidence | undefined {
+  try {
+    return validateRuntimeFailureEvidence(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function runtimeFailureFromObservation(observation: unknown): RuntimeFailureEvidence | undefined {
+  if (typeof observation !== "object" || observation === null || Array.isArray(observation)) {
+    return undefined;
+  }
+  return safeRuntimeFailureEvidence(
+    (observation as { readonly runtimeFailure?: unknown }).runtimeFailure,
+  );
+}
+
+function convergenceDeadlineResultData(
+  timeoutMs: number,
+  runtimeFailure: RuntimeFailureEvidence | undefined,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    timeoutMs,
+    ...(runtimeFailure === undefined ? {} : { runtimeFailure }),
+  });
+}
+
 function revisionSecretBindings(
   revision: Readonly<AgentRevision>,
 ): { readonly bindings: SecretBindings } | { readonly result: RevisionDispatchResult } {
@@ -298,6 +340,8 @@ function uniqueSecretRefs(bindings: SecretBindings): SecretReference[] {
 }
 
 export class ControllerWorker {
+  private readonly metrics: OccMetrics | undefined;
+  private passOutcome: WorkOutcome = "error";
   private readonly state: PostgresPlatformState;
   private readonly queue: PostgresWorkQueue;
   private readonly compute: ComputeDriver;
@@ -326,6 +370,7 @@ export class ControllerWorker {
   private pendingHealth: Promise<void> | undefined;
 
   constructor(options: ControllerWorkerOptions) {
+    this.metrics = options.metrics;
     this.mode = options.mode ?? "development";
     if (this.mode !== "development" && this.mode !== "production") {
       throw new Error("The controller worker mode must be development or production.");
@@ -468,7 +513,30 @@ export class ControllerWorker {
         await this.queue.recoverStale();
         const claim = await this.queue.claim();
         if (claim !== undefined) {
-          await this.process(claim);
+          const started = process.hrtime.bigint();
+          this.passOutcome = "error";
+          try {
+            await this.process(claim);
+          } catch (error) {
+            this.passOutcome = error instanceof WorkClaimLostError ? "claim_lost" : "error";
+            throw error;
+          } finally {
+            let kind: WorkKind = "namespace_ensure";
+            if (claim.agentTarget === "deleted") {
+              kind = "agent_delete";
+            } else if (claim.agentTarget === "stopped") {
+              kind = "agent_stop";
+            } else if (claim.revisionId !== undefined) {
+              kind = "agent_revision";
+            } else if (claim.namespaceTarget === "deleted") {
+              kind = "namespace_delete";
+            }
+            this.metrics?.observeWork(
+              kind,
+              this.passOutcome,
+              Number(process.hrtime.bigint() - started) / 1e9,
+            );
+          }
           await this.health(true);
           continue;
         }
@@ -664,7 +732,11 @@ export class ControllerWorker {
       return;
     }
     if (claim.agentTarget !== undefined) {
-      await this.processAgentStop(claim);
+      if (claim.agentTarget === "deleted") {
+        await this.processAgentDeletion(claim);
+      } else {
+        await this.processAgentStop(claim);
+      }
       return;
     }
     if (claim.agentId !== undefined || claim.namespaceTarget === undefined) {
@@ -836,6 +908,253 @@ export class ControllerWorker {
     await this.finalizeAgentStop(claim, result);
   }
 
+  private async processAgentDeletion(claim: ClaimedWork): Promise<void> {
+    let result: AgentDeletionDispatchResult;
+    try {
+      if (
+        claim.agentId === undefined ||
+        claim.agentTarget !== "deleted" ||
+        claim.namespaceTarget !== undefined
+      ) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "INVALID_TARGET",
+        });
+        return;
+      }
+      const resources = await this.state.read(async (view) => {
+        const namespace = await view.namespaces.findNamespace(claim.namespaceId);
+        const agent = await view.agents.findAgent(claim.namespaceId, claim.agentId!);
+        const revisions =
+          agent === undefined
+            ? []
+            : await view.revisions.listRevisions(claim.namespaceId, claim.agentId!);
+        return { namespace, agent, revisions };
+      });
+      const { namespace, agent, revisions } = resources;
+      if (namespace === undefined || agent === undefined) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "INVALID_AGENT_OWNER",
+        });
+        return;
+      }
+      if (agent.status !== "deleting" || agent.desiredRuntimeState !== "stopped") {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "INVALID_AGENT_STATE",
+          namespace,
+          agent,
+          revisions,
+        });
+        return;
+      }
+      const denied = await this.authorizeAgentDeletion(claim, agent);
+      if (denied !== undefined) {
+        await this.finalizeAgentDeletion(claim, { ...denied, namespace, agent, revisions });
+        return;
+      }
+      if (
+        revisions.some(
+          (revision) =>
+            revision.namespaceId !== namespace.id ||
+            revision.agentId !== agent.id ||
+            revision.servicePrincipalId !== agent.servicePrincipalId,
+        )
+      ) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "INVALID_REVISION_OWNER",
+          namespace,
+          agent,
+          revisions,
+        });
+        return;
+      }
+      if (
+        revisions.some(
+          (revision) =>
+            revision.compute.id !== this.compute.id ||
+            revision.compute.implementation !== this.compute.implementation,
+        )
+      ) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "COMPUTE_DRIVER_MISMATCH",
+          namespace,
+          agent,
+          revisions,
+        });
+        return;
+      }
+      if (
+        this.compute.provisionAgentRuntimeCredentials !== undefined &&
+        this.compute.deleteAgentRuntimeCredentials === undefined
+      ) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "permanent",
+          code: "CREDENTIAL_DELETION_UNSUPPORTED",
+          namespace,
+          agent,
+          revisions,
+        });
+        return;
+      }
+      if (revisions.length > 0 && this.compute.bindAgent !== undefined) {
+        await this.withClaimHeartbeat(claim, async () => {
+          await this.compute.bindAgent!({ namespace, agent });
+        });
+      }
+      for (const revision of revisions) {
+        await this.withClaimHeartbeat(claim, () => this.compute.retireRevision(revision));
+      }
+      if (this.compute.deleteAgentRuntimeCredentials !== undefined) {
+        await this.withClaimHeartbeat(claim, () =>
+          this.compute.deleteAgentRuntimeCredentials!({ namespace, agent }),
+        );
+      }
+      result = {
+        outcome: "success",
+        code: "AGENT_DELETED",
+        namespace,
+        agent,
+        revisions,
+      };
+    } catch (error) {
+      if (error instanceof WorkClaimLostError) {
+        throw error;
+      }
+      result = { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
+    }
+    await this.finalizeAgentDeletion(claim, result);
+  }
+
+  private async authorizeAgentDeletion(
+    claim: ClaimedWork,
+    agent: Readonly<Agent>,
+  ): Promise<AgentDeletionDispatchResult | undefined> {
+    const authorization: AuthorizationRequest = {
+      principalId: claim.actorId,
+      action: "delete",
+      resource: { kind: "agent", id: agent.id, namespaceId: agent.namespaceId },
+    };
+    const state = await this.loadIAMState();
+    const decision = await this.iamDecision(this.iam, authorization);
+    if (!state.identities.some((identity) => identity.id === claim.actorId)) {
+      return { outcome: "permanent", code: "ACTOR_REVOKED", authorization, decision };
+    }
+    if (!decision.allowed) {
+      return {
+        outcome: "permanent",
+        code: "AUTHORIZATION_DENIED",
+        authorization,
+        decision,
+      };
+    }
+    return undefined;
+  }
+
+  private async finalizeAgentDeletion(
+    claim: ClaimedWork,
+    result: AgentDeletionDispatchResult,
+  ): Promise<void> {
+    if (result.outcome === "success") {
+      if (claim.agentId === undefined) {
+        throw new Error("The worker Agent deletion context is unavailable.");
+      }
+      await this.state.transactWithQueue(
+        async (_unit, queue) =>
+          queue.completeAgentDeletion(claim, claim.namespaceId, claim.agentId!),
+        this.queueOptions,
+      );
+    } else {
+      await this.state.transactWithQueue(async (unit, queue) => {
+        if ((await queue.heartbeat(claim)) === undefined) {
+          throw new WorkClaimLostError();
+        }
+        const terminalFailure =
+          result.outcome === "permanent" ||
+          (result.outcome === "retry" && claim.attemptCount >= this.maxAttempts);
+        if (result.decision !== undefined) {
+          await this.appendAgentDeletionDenial(unit, claim, result);
+        } else if (terminalFailure) {
+          await this.appendAgentDeletionOutcome(unit, claim, result);
+        }
+        if (terminalFailure) {
+          await queue.fail(claim, { code: result.code });
+        } else {
+          await queue.retry(claim, { code: result.code });
+        }
+      }, this.queueOptions);
+    }
+    this.passOutcome =
+      result.outcome === "retry" && claim.attemptCount >= this.maxAttempts
+        ? "permanent"
+        : result.outcome;
+    this.emit({
+      event: "worker.completed",
+      ...workLogFields(claim),
+      namespaceId: claim.namespaceId,
+      agentId: claim.agentId,
+      result: result.outcome,
+      outcome: result.outcome,
+      code: result.code,
+    });
+  }
+
+  private async appendAgentDeletionOutcome(
+    unit: PlatformUnitOfWork,
+    claim: ClaimedWork,
+    result: AgentDeletionDispatchResult,
+  ): Promise<void> {
+    if (this.installation === undefined || claim.agentId === undefined) {
+      throw new Error("The worker Agent deletion audit context is unavailable.");
+    }
+    await unit.audit.append({
+      id: `aud_${randomUUID()}`,
+      installationId: this.installation.id,
+      namespaceId: claim.namespaceId,
+      occurredAt: new Date().toISOString(),
+      kind: "mutation",
+      actorId: claim.actorId,
+      source: "occ",
+      action: "openclaw.agents.lifecycle.delete",
+      resource: { kind: "agent", id: claim.agentId, namespaceId: claim.namespaceId },
+      iamDriverId: this.iamDriverId,
+      outcome: "failure",
+      details: {
+        computeDriverId: this.compute.id,
+        reasonCode: result.code,
+      },
+    });
+  }
+
+  private async appendAgentDeletionDenial(
+    unit: PlatformUnitOfWork,
+    claim: ClaimedWork,
+    result: AgentDeletionDispatchResult,
+  ): Promise<void> {
+    if (this.installation === undefined || claim.agentId === undefined) {
+      throw new Error("The worker Agent deletion authorization context is unavailable.");
+    }
+    await unit.audit.append({
+      id: `aud_${randomUUID()}`,
+      installationId: this.installation.id,
+      namespaceId: claim.namespaceId,
+      occurredAt: new Date().toISOString(),
+      kind: "authorization_denial",
+      actorId: claim.actorId,
+      source: "occ",
+      action: "openclaw.agents.delete",
+      resource: { kind: "agent", id: claim.agentId, namespaceId: claim.namespaceId },
+      iamDriverId: this.iamDriverId,
+      ...(result.authorization === undefined ? {} : { authorization: result.authorization }),
+      ...(result.decision === undefined ? {} : { decisionReason: result.decision.reason }),
+      reasonCode: result.code,
+      outcome: "denied",
+    });
+  }
+
   private async authorizeAgentStop(
     claim: ClaimedWork,
     agent: Readonly<Agent>,
@@ -902,6 +1221,16 @@ export class ControllerWorker {
         await queue.retry(claim, { code: result.code });
       }
     }, this.queueOptions);
+    this.passOutcome =
+      result.outcome === "retry" && claim.attemptCount >= this.maxAttempts
+        ? "permanent"
+        : result.outcome;
+    if (result.outcome === "success" && result.code !== "STOP_SUPERSEDED") {
+      this.metrics?.observeAgentOperation(
+        "stop",
+        Math.max(0, Date.now() - claim.createdAt.getTime()) / 1000,
+      );
+    }
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),
@@ -1137,7 +1466,12 @@ export class ControllerWorker {
             computePluginWarnings(observation.warnings, revision) ?? Object.freeze([]),
           );
           if (!observation.ready) {
-            await this.finalizeActiveRevision(claim, revision, "REVISION_INCOMPLETE");
+            await this.finalizeActiveRevision(
+              claim,
+              revision,
+              "REVISION_INCOMPLETE",
+              runtimeFailureFromObservation(observation),
+            );
             return;
           }
           if (this.shouldActivatePublishedRevision(compute)) {
@@ -1381,7 +1715,12 @@ export class ControllerWorker {
         computePluginWarnings(observation.warnings, revision) ?? Object.freeze([]),
       );
       if (!observation.ready) {
-        return { outcome: "pending", code: "REVISION_INCOMPLETE" };
+        const runtimeFailure = runtimeFailureFromObservation(observation);
+        return {
+          outcome: "pending",
+          code: "REVISION_INCOMPLETE",
+          ...(runtimeFailure === undefined ? {} : { data: { runtimeFailure } }),
+        };
       }
       const agent = await this.state.read((view) =>
         view.agents.findAgent(revision.namespaceId, revision.agentId),
@@ -1578,11 +1917,18 @@ export class ControllerWorker {
           ...result,
           outcome: "permanent",
           code: "CONVERGENCE_DEADLINE_EXCEEDED",
-          data: { timeoutMs: this.convergenceTimeoutMs },
+          data: convergenceDeadlineResultData(
+            this.convergenceTimeoutMs,
+            safeRuntimeFailureEvidence(result.data?.runtimeFailure),
+          ),
         }
       : result;
     let activated: Readonly<AgentRevision> | undefined;
     let stoppedCandidate: Readonly<AgentRevision> | undefined;
+    let committedOutcome: WorkOutcome =
+      resolved.outcome === "retry" && claim.attemptCount >= this.maxAttempts
+        ? "permanent"
+        : resolved.outcome;
     await this.state.transactWithQueue(async (unit, queue) => {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
@@ -1597,6 +1943,7 @@ export class ControllerWorker {
           current.activeRevisionId !== resolved.expectedActiveRevisionId
         ) {
           await queue.retry(claim, { code: "ACTIVE_REVISION_CHANGED" });
+          committedOutcome = claim.attemptCount >= this.maxAttempts ? "permanent" : "retry";
           return;
         }
         if (current.desiredRuntimeState !== "running") {
@@ -1611,6 +1958,7 @@ export class ControllerWorker {
         );
         if (activeAgent === undefined) {
           await queue.retry(claim, { code: "ACTIVE_REVISION_CHANGED" });
+          committedOutcome = claim.attemptCount >= this.maxAttempts ? "permanent" : "retry";
           return;
         }
         activated = resolved.revision;
@@ -1643,6 +1991,7 @@ export class ControllerWorker {
       return;
     }
     const compute = this.compute;
+    this.passOutcome = committedOutcome;
     if (activated !== undefined) {
       try {
         const current = await this.state.read((view) =>
@@ -1696,6 +2045,7 @@ export class ControllerWorker {
       }
       await queue.complete(claim, { code });
     }, this.queueOptions);
+    this.passOutcome = "success";
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),
@@ -1755,8 +2105,18 @@ export class ControllerWorker {
       }
       completed = true;
     }, this.queueOptions);
+    this.passOutcome = result.outcome;
     if (!completed) {
+      this.passOutcome = claim.attemptCount >= this.maxAttempts ? "permanent" : "retry";
       return;
+    }
+    // Original admission time survives queue waits and retries. Maintenance and
+    // superseded work must not count as additional successful deployments.
+    if (claim.idempotencyKey === `agent_revision:${revision.id}:reconcile`) {
+      this.metrics?.observeAgentOperation(
+        "deploy",
+        Math.max(0, Date.now() - claim.createdAt.getTime()) / 1000,
+      );
     }
     this.emit({
       event: "worker.completed",
@@ -1774,6 +2134,7 @@ export class ControllerWorker {
     claim: ClaimedWork,
     revision: Readonly<AgentRevision>,
     code: string,
+    runtimeFailure?: RuntimeFailureEvidence,
   ): Promise<void> {
     if (
       this.maintenanceIntervalMs === undefined ||
@@ -1782,9 +2143,11 @@ export class ControllerWorker {
       await this.finalizeRevision(claim, {
         outcome: "pending",
         code,
+        ...(runtimeFailure === undefined ? {} : { data: { runtimeFailure } }),
       });
       return;
     }
+    let superseded = false;
     await this.state.transactWithQueue(async (unit, queue) => {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
@@ -1796,6 +2159,7 @@ export class ControllerWorker {
         agent.activeRevisionId !== revision.id
       ) {
         await queue.complete(claim);
+        superseded = true;
         return;
       }
       // Keep each failed observation bounded without permanently abandoning
@@ -1803,6 +2167,7 @@ export class ControllerWorker {
       await queue.fail(claim, { code });
       await this.enqueueMaintenance(queue, claim, revision);
     }, this.queueOptions);
+    this.passOutcome = superseded ? "success" : "permanent";
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),
@@ -1988,6 +2353,10 @@ export class ControllerWorker {
         await queue.retry(claim, { code: resolved.code });
       }
     }, this.queueOptions);
+    this.passOutcome =
+      resolved.outcome === "retry" && claim.attemptCount >= this.maxAttempts
+        ? "permanent"
+        : resolved.outcome;
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),

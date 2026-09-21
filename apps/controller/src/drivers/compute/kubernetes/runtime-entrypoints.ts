@@ -45,7 +45,14 @@ const { createServer: pluginCreateServer } = require("node:http");
 const CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS ?? "10000");
 const CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS ?? "60000");
 const PLUGIN_STATUS_PATH = "/openclaw/plugin-runtime/status";
+const RUNTIME_STATUS_PATH = "/openclaw/runtime/status";
 const PLUGIN_DIAGNOSTIC_CODES = new Set(["PLUGIN_INSTALL_FAILED", "PLUGIN_AUTH_REQUIRED"]);
+const RUNTIME_FAILURE_CODES = new Set([
+  "LOGIN_FAILED",
+  "MODEL_PROBE_FAILED",
+  "MODEL_PROBE_TIMEOUT",
+  "UNAVAILABLE",
+]);
 const pluginBaseAppServerToken = process.env.APP_SERVER_TOKEN;
 
 ${PLUGIN_APP_SERVER_TOKEN_DERIVATION_HELPER}
@@ -142,6 +149,19 @@ function pluginRuntimeStatusPort() {
   return port;
 }
 
+function runtimeStatusPort() {
+  if (process.env.OPENCLAW_RUNTIME_STATUS_PORT === undefined) return undefined;
+  const port = Number(process.env.OPENCLAW_RUNTIME_STATUS_PORT);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("Runtime status port is invalid.");
+  }
+  return port;
+}
+
+function runtimeStatusContainer() {
+  return requireNonEmptyString(process.env.OPENCLAW_RUNTIME_STATUS_CONTAINER, "Runtime status container");
+}
+
 let pluginStatusReport = {
   revisionId: process.env.OPENCLAW_AGENT_REVISION_ID ?? "",
   container: process.env.OPENCLAW_PLUGIN_STATUS_CONTAINER ?? "",
@@ -151,6 +171,8 @@ let pluginStatusReport = {
   successfulPluginIds: [],
   failures: [],
 };
+
+let runtimeStartupFailure;
 
 function publishPluginRuntimeStatus(report) {
   if (pluginRuntimeStatusPort() === undefined) return;
@@ -172,12 +194,55 @@ function publishPluginRuntimeStatus(report) {
   };
 }
 
+function publishRuntimeFailure(check, code) {
+  if (runtimeStatusPort() === undefined) return;
+  requireNonEmptyString(check, "Runtime failure check");
+  if (!RUNTIME_FAILURE_CODES.has(code)) {
+    throw new Error("Runtime failure code is invalid.");
+  }
+  runtimeStartupFailure = {
+    component: runtimeStatusContainer(),
+    check,
+    checkedAt: new Date().toISOString(),
+    code,
+  };
+}
+
+function publishRuntimeReady() {
+  if (runtimeStatusPort() === undefined) return;
+  runtimeStartupFailure = undefined;
+}
+
+function runtimeStatusReport() {
+  return {
+    revisionId: requireNonEmptyString(process.env.OPENCLAW_AGENT_REVISION_ID, "Runtime status revision ID"),
+    container: runtimeStatusContainer(),
+    podUid: requireNonEmptyString(process.env.OPENCLAW_POD_UID, "Runtime status Pod UID"),
+    ...(runtimeStartupFailure === undefined ? {} : { runtimeFailure: runtimeStartupFailure }),
+  };
+}
+
 function startPluginRuntimeStatusServer() {
-  const port = pluginRuntimeStatusPort();
+  const port = runtimeStatusPort() ?? pluginRuntimeStatusPort();
   if (port === undefined) return;
   const server = pluginCreateServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-    if (request.method !== "GET" || pathname !== PLUGIN_STATUS_PATH) {
+    if (request.method !== "GET" || (pathname !== RUNTIME_STATUS_PATH && pathname !== PLUGIN_STATUS_PATH)) {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "not_found" }));
+      return;
+    }
+    if (pathname === RUNTIME_STATUS_PATH) {
+      if (runtimeStatusPort() === undefined) {
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "not_found" }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(runtimeStatusReport()));
+      return;
+    }
+    if (pluginRuntimeStatusPort() === undefined) {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "not_found" }));
       return;
@@ -949,7 +1014,8 @@ async function installCodexPlugins(runtime, failures = []) {
 `;
 
 const AUTH_PROBE_FAILURE_HELPER = String.raw`
-function holdFailedAuthentication() {
+function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE") {
+  publishRuntimeFailure(check, code);
   console.error("Harness model authentication probe failed.");
   // Hold unready until an explicit restart; readiness polls never submit model calls.
   setInterval(() => {}, 3600000);
@@ -960,15 +1026,15 @@ function holdFailedAuthentication() {
 // Its JSON status, not its process exit status alone, establishes provider acceptance.
 const OPENCLAW_AUTH_PROBE_HELPERS = String.raw`
 ${AUTH_PROBE_FAILURE_HELPER}
-function probeOpenClawAuthentication() {
+function probeOpenClawAuthenticationFailureCode() {
   const fs = require("node:fs");
   const { spawnSync } = require("node:child_process");
   const directory = fs.mkdtempSync("/tmp/openclaw-auth-probe-");
   try {
     const model = process.env.OPENCLAW_HARNESS_MODEL;
-    if (typeof model !== "string" || !model.startsWith("openai/") || !process.env.OPENAI_API_KEY?.trim()) return false;
+    if (typeof model !== "string" || !model.startsWith("openai/") || !process.env.OPENAI_API_KEY?.trim()) return "UNAVAILABLE";
     const configuration = JSON.parse(process.env.OPENCLAW_HARNESS_PROBE_CONFIG);
-    if (configuration.agents?.defaults?.model !== model) return false;
+    if (configuration.agents?.defaults?.model !== model) return "UNAVAILABLE";
     configuration.agents.defaults.workspace = directory + "/workspace";
     fs.mkdirSync(directory + "/workspace", { mode: 0o700 });
     const configPath = directory + "/openclaw.json";
@@ -989,13 +1055,16 @@ function probeOpenClawAuthentication() {
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
     });
-    if (result.status !== 0 || result.error) return false;
+    if (result.error?.code === "ETIMEDOUT" || result.signal === "SIGKILL") return "MODEL_PROBE_TIMEOUT";
+    if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
     const results = JSON.parse(result.stdout).auth?.probes?.results;
     return Array.isArray(results) && results.length === 1 &&
       results[0].provider === "openai" && results[0].model === model &&
-      results[0].source === "env" && results[0].status === "ok";
+      results[0].source === "env" && results[0].status === "ok"
+        ? undefined
+        : "MODEL_PROBE_FAILED";
   } catch {
-    return false;
+    return "MODEL_PROBE_FAILED";
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -1062,8 +1131,12 @@ function forwardTermination(child) {
   process.on("SIGINT", () => forward("SIGINT"));
 }
 
-if (process.env.OPENCLAW_HARNESS_PROBE_CONFIG !== undefined && !probeOpenClawAuthentication()) {
-  holdFailedAuthentication();
+const openClawAuthenticationFailureCode =
+  process.env.OPENCLAW_HARNESS_PROBE_CONFIG === undefined
+    ? undefined
+    : probeOpenClawAuthenticationFailureCode();
+if (openClawAuthenticationFailureCode !== undefined) {
+  holdFailedAuthentication("model-probe", openClawAuthenticationFailureCode);
 } else {
 mkdirSync("/home/node/.openclaw", { recursive: true });
 mkdirSync("/home/node/workspace", { recursive: true });
@@ -1177,6 +1250,7 @@ if (workspaceNodeId !== undefined) {
   commands.allow = [...new Set([...(commands.allow ?? []), "file.fetch", "file.stat", "file.write", "file.create", "dir.list", "workspace.memory", "workspace.skills"])];
   writeOpenClawConfig(config);
 }
+publishRuntimeReady();
 const child = spawn(
   "node",
   ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
@@ -1272,17 +1346,17 @@ const login = spawnSync("codex", loginArguments, {
   timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
 });
 if (login.status !== 0 || login.error) {
-  holdFailedAuthentication();
+  holdFailedAuthentication("login", "LOGIN_FAILED");
 } else {
 delete process.env.CODEX_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
 delete process.env.CODEX_CHATGPT_WORKSPACE_ID;
 
-function probeCodexAuthentication() {
+function probeCodexAuthenticationFailureCode() {
   const directory = mkdtempSync("/tmp/codex-auth-probe-");
   try {
     const selectedModel = process.env.OPENCLAW_HARNESS_MODEL;
-    if (typeof selectedModel !== "string" || !/^(openai|codex)\/.+/.test(selectedModel)) return false;
+    if (typeof selectedModel !== "string" || !/^(openai|codex)\/.+/.test(selectedModel)) return "UNAVAILABLE";
     // Pinned native features suppress executable and external tools. Metadata may
     // still advertise apply_patch: read-only + never denies its writes. Any tool
     // event makes this probe unsuccessful, including harmless request_user_input.
@@ -1313,28 +1387,32 @@ function probeCodexAuthentication() {
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
     });
-    if (result.status !== 0 || result.error) return false;
+    if (result.error?.code === "ETIMEDOUT" || result.signal === "SIGKILL") return "MODEL_PROBE_TIMEOUT";
+    if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
     const events = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
     const allowed = new Set(["thread.started", "turn.started", "turn.completed", "item.started", "item.updated", "item.completed"]);
     // Native item.error is an advisory (for example missing catalog metadata),
     // distinct from fatal top-level error/turn.failed. A completed model turn is
     // still required; no tool item can satisfy this authentication check.
     if (events.some((event) => !allowed.has(event.type) ||
-      (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type)))) return false;
+      (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type)))) return "MODEL_PROBE_FAILED";
     return events.filter((event) => event.type === "turn.completed").length === 1 &&
       events.filter((event) => event.type === "turn.started").length === 1 &&
       events.at(-1)?.type === "turn.completed" &&
       events.some((event) => event.type === "item.completed" && event.item?.type === "agent_message" &&
-        typeof event.item.text === "string" && event.item.text.trim().length > 0);
+        typeof event.item.text === "string" && event.item.text.trim().length > 0)
+        ? undefined
+        : "MODEL_PROBE_FAILED";
   } catch {
-    return false;
+    return "MODEL_PROBE_FAILED";
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 }
 
-if (!probeCodexAuthentication()) {
-  holdFailedAuthentication();
+const codexAuthenticationFailureCode = probeCodexAuthenticationFailureCode();
+if (codexAuthenticationFailureCode !== undefined) {
+  holdFailedAuthentication("model-probe", codexAuthenticationFailureCode);
 } else {
 
 function forwardTermination(child) {
@@ -1352,6 +1430,7 @@ function forwardTermination(child) {
 if (pluginRuntimeStatusPort() !== undefined) {
   process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(pluginStatusReport.startupId);
 }
+publishRuntimeReady();
 const digest = createHash("sha256").update(process.env.APP_SERVER_TOKEN).digest("hex");
 const child = spawn(
   "codex",

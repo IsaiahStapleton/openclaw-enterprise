@@ -1,251 +1,252 @@
 # ComputeDriver contract
 
-`ComputeDriver` owns Namespace infrastructure, Agent gateways, workload
-orchestration, and the AgentRevision lifecycle. OCC selects one ComputeDriver
-for the Installation. A selected
-[SandboxDriver](sandbox.md) can own a dedicated Harness workload while
-Compute retains Namespace, gateway, identity, routing, and activation ownership.
-IAM owns authorization. Compare the bundled implementations in the
-[ComputeDriver feature matrix](compute-matrix.md).
+## Overview
 
-The exported interface is in
-[shared contracts](../../../packages/contracts/src/index.ts). See
-[Driver selection](selection.md) for supported composition and package trust,
-and [deployment](../../guides/deploy.md) for operator setup.
+`ComputeDriver` prepares and removes Namespace infrastructure and runs Agent
+revisions. OpenClaw Control Plane (OCC) selects one Compute Driver per
+Installation, authorizes operations, and records each revision's configuration;
+that record cannot change. Compute manages the Agent gateway, workload identity,
+routing, and activation; it also reports when the workload is ready. Its backend owns the underlying
+resources. A selected [SandboxDriver](sandbox.md) can create a dedicated Harness
+workload; Compute keeps its other responsibilities.
 
-## Core lifecycle operations
+See [Driver selection](selection.md) for supported combinations and package trust,
+the [feature matrix](compute-matrix.md) to compare Drivers, and the
+[design status](../../design.md#implementation-status) for differences between
+current and planned placement.
 
-- `ensureNamespace(namespace)` validates or prepares tenant placement before an
-  Agent exists; providers must not require a startup-guessed Agent identity.
-- Optional `bindAgent({ namespace, agent })` receives the actual server-admitted
-  Namespace, Agent, and service-principal identities after IAM authorization
-  and before any revision operation. A name-configured provider can use it to
-  bind an existing company-specific tenant without caller-authored resource IDs.
-- `validateHarnessAuth(harness, auth, configuration)` validates the admitted
-  Harness, immutable authentication snapshot, and native Configuration without
-  side effects. Although optional in the TypeScript interface, deployment requires
-  this hook: its absence is a dependency-unavailable error; a thrown validation
-  error becomes a resource conflict before any revision is queued.
-- `prepareRevision(revision, context)` creates or reuses that Agent's gateway and
-  realizes its immutable Harness topology: one combined gateway/Harness for
-  `embedded` OpenClaw or a separate exact-revision Codex workload for
-  `dedicated` execution. Compute creates the workload unless the selected
-  SandboxDriver implements `provisionHarness`.
-- `stopRevision(revision)` idempotently removes inbound routing and terminates
-  execution for the exact revision. It invokes workload-stop hooks and delegated
-  Sandbox cleanup while retaining revision snapshots, runtime credentials,
-  workspace data, and other Agent-owned persistent state.
-- `retireRevision(revision)` first revokes that revision's workload access,
-  then stops its owned embedded gateway or dedicated Codex workload and delegates
-  provider-owned Sandbox cleanup when applicable. It preserves an Agent gateway
-  already owned by a replacement revision.
-- `deleteNamespace(namespace)` performs provider-supported teardown; providers
-  without an approved deletion path must fail closed without removing any
-  Agent-owned resource or physical namespace.
+## Interface
 
-Namespace, admitted Agent context, and AgentRevision identify the exact tenant,
-Agent, revision, ServicePrincipal, and immutable harness placement; IAM owns
-authorization. Logical Compute ownership does not require the Gateway and
-Harness to share a Kubernetes cluster or a physical resource writer.
-Bundled Kubernetes supports both embedded OpenClaw and dedicated Codex with
-[managed Agent harness authentication](../agents.md#harness-authentication).
-Bundled SSH supports embedded OpenClaw with operator-managed `runtime`
-credentials; it rejects managed bindings and dedicated Codex. Bundled Docker
-rejects all harness authentication bindings.
+The [shared contracts](../../../packages/contracts/src/index.ts) define the types.
+Every `ComputeDriver` has an `id`,
+an `implementation`, and `capability: "compute"`.
 
-The worker passes `ComputeRevisionContext` to preparation and activation after
-reauthorizing the immutable revision. Its `harnessAuth` contains the admitted
-API-key source with its current authoritative OCC backend reference, or the exact
-managed-account credential and private Provider binding. For operator-managed
-credentials, it contains only `{ method: "runtime" }`, with no delivery reference.
-None of these forms contains credential bytes. Its separate `secretEnvironment` contains
-Configuration bindings for gateway credentials. Drivers must preserve this
-separation and project model credentials only into the selected Harness workload;
-see the [credential delivery flow](../../flows/native-service-account-credential-delivery.md).
+### Core lifecycle operations
+
+| Required method                       | What it does                                                                                                                                                                                                                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ensureNamespace(namespace)`          | Prepares or checks infrastructure for the specified Namespace. Returns `namespaceReady`. Runs before an Agent exists; do not require or guess its ID.                                                                                                               |
+| `deleteNamespace(namespace)`          | Returns `namespaceDeleted` after supported teardown. OCC permits deletion only for an empty Namespace. If the backend has no approved deletion path, fail without deleting the physical namespace or Agent resources.                                               |
+| `prepareRevision(revision, context?)` | Creates or reuses the Agent gateway and prepares the configured embedded OpenClaw or dedicated Codex workload. Returns `ready` for that Namespace, Agent, and revision, plus optional plugin warnings. `ready: false` stays pending; OCC rejects an invalid result. |
+| `stopRevision(revision)`              | Removes inbound routing and stops execution for this revision, including applicable hooks and Sandbox cleanup. Safe to repeat; retains snapshots, runtime credentials, workspace data, and other persistent Agent state.                                            |
+| `retireRevision(revision)`            | Revokes workload access, then stops the workload and requests applicable Sandbox cleanup. Preserves an Agent gateway already owned by its replacement.                                                                                                              |
+
+Namespace results identify the Namespace and can mark a failure `retryable` or
+`permanent`. Success requires a true flag and no failure.
+Methods without a return value must reject if they cannot complete. The revision
+context is optional in TypeScript; the worker supplies it to preparation and
+activation after authorization.
+
+### Optional additions
+
+| Method or declaration                                                  | When it is needed                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bindAgent({ namespace, agent })`                                      | Receives the approved Namespace, Agent, and ServicePrincipal before the worker operates on a revision. It may be asynchronous. Failure stops that attempt before further runtime work.                                                              |
+| `validateHarnessAuth(harness, auth, configuration)`                    | Deployment requires this check of the Harness, authentication snapshot, and native Configuration. It must have no side effects. A missing method causes a dependency-unavailable error; a thrown error becomes a resource conflict before queueing. |
+| `activateRevision(revision, context?)`, `deactivateRevision(revision)` | Production startup requires both. The worker also calls activation if a development Driver provides it. See [revision stages](#production-revision-stages).                                                                                         |
+| `setLifecycleDrivers(drivers)`                                         | Startup requires it when another selected Driver provides [Compute hooks](#optional-selected-driver-hooks).                                                                                                                                         |
+| `activationOrder`, `maintenanceIntervalMs`                             | Control [activation timing](#production-revision-stages) and optional [maintenance](#optional-active-runtime-maintenance).                                                                                                                          |
+
+### Optional startup preflight
+
+`preflight()` checks dependencies before production startup completes. A thrown
+error blocks startup. The API and worker log warnings as `compute.preflight-warning`
+and continue; each warning has a stable `code` and a `message` safe to log.
+Bundled Kubernetes Compute requires preflight in production; other Drivers may
+omit it.
+
+### Optional gateway endpoint resolution
+
+`getGatewayEndpoint(revision)` returns a private WSS address derived from trusted
+Driver settings and approved resource IDs, or `undefined` if gateway access is
+unsupported. OCC calls it after authorizing access to the Agent and selecting
+its active revision. The method does not check readiness, authorize the caller,
+grant backend route permissions, or save a URL in Agent Configuration. Connection
+errors are dependency failures.
+
+Workspace-file access uses the returned WSS endpoint. The opt-in
+[Agent native admin UI](../agent-native-admin.md#agent-host-identity) derives
+an HTTPS base with the same authority and Agent path for native HTTP and
+WebSocket proxying; the Driver method's WSS return contract stays unchanged.
+A missing method or unsupported endpoint prevents native admin access.
+See [Kubernetes private routes](kubernetes-compute/networking-and-isolation.md#private-agent-gateway-routes)
+for the bundled route implementation.
+
+### Optional initial runtime credential provisioning
+
+`getAgentRuntimeCredentialStatus(binding)` returns `transportConfigured`: whether
+complete generated transport credentials are stored for this Agent.
+`provisionAgentRuntimeCredentials(binding, input)` accepts an empty input object and
+sets up those transport credentials. Channel credentials use Namespace Secrets and
+Configuration `secretBindings` instead of this endpoint. The caller holds Namespace
+and Agent locks and requires a ready Namespace with no earlier Agent revision. It
+passes approved identities, never physical storage names. Missing methods return an
+error. External writes can survive a database or audit failure; refresh status
+before retrying. See the [initial credential workflow](../console/create-and-deploy.md#initial-runtime-credentials).
+
+`deleteAgentRuntimeCredentials(binding)` is the idempotent teardown counterpart.
+During Agent deletion, the worker calls it after retiring every revision and
+before removing the Agent's database identity. Kubernetes Compute deletes only
+the admitted Agent-owned transport and Slack Secrets and treats absence as
+success. Namespace-owned Harness model authentication survives Agent deletion.
+A Driver that supports provisioning but not deletion fails Agent deletion
+permanently on its first worker attempt. Drivers that implement neither optional
+method are unaffected.
+
+### Startup failure evidence
+
+`ComputeReadiness.runtimeFailure` optionally reports a bounded startup failure
+for the exact observed revision. Compute owns collection and classification;
+the core does not inspect native runtime output. Evidence contains safe
+`component`, `check`, `checkedAt`, and `code` fields, never credentials or raw
+provider errors. An unavailable or untrusted observation omits the evidence.
+
+At the convergence deadline, the worker persists that observation with its
+terminal result. The existing [deployment status API](../agents.md#deployment-status)
+returns the saved evidence under the caller's exact-revision read permission.
+It does not invoke Compute while serving the GET request.
+
+### Runtime logging ownership
+
+Omitting `runtimeLogging` or setting it to `"platform"` uses the bundled
+[Harness logging policy](../harness-execution.md#runtime-logging). With `"driver"`,
+OCC preserves native logging after any Sandbox changes, validates it through
+ConfigurationDriver, and records it in the immutable revision. Compute must
+apply that configuration and reject unsupported changes. The Driver operator owns
+log destinations, credentials, redaction, access, and delivery; the bundled
+Collector's privacy and export guarantees do not apply.
+
+The gateway and Harness emit their own logs in either mode. Compute need not
+transport or query them, and they do not pass through OCC. OCC process logs,
+lifecycle results, and audit records use their own paths.
+
+## IAM
+
+OCC authenticates callers and asks the selected [IAMDriver](iam.md) to authorize
+the requested operation on the specified resource. Before doing the work, the
+worker rechecks the original caller's authority. It does not proceed if access
+was denied or revoked, or IAM is unavailable. Backend credentials cannot replace
+platform authorization. Compute cannot choose a different Principal, Namespace,
+Agent, or revision.
+
+Reading initial credential status requires Agent `read`; provisioning requires
+Agent `read` and `operate`. Resolving a gateway endpoint also requires access to
+that Agent. See [authorization](../authorization.md).
+
+`ComputeRevisionContext.harnessAuth` contains either the approved API-key source
+and its current backend reference, the managed-account credential reference and
+private Provider binding, or just `{ method: "runtime" }` for operator-managed
+authentication. None contains credential values. The separate `secretEnvironment`
+contains Configuration bindings for gateway credentials. Deliver model credentials
+only to the selected Harness workload. Channel tokens are ordinary Namespace Secrets
+referenced by Configuration bindings; never expose them in responses, Configuration,
+audit, logs, or errors. See the [credential delivery flow](../../flows/native-service-account-credential-delivery.md).
+Installed Drivers run with control-plane privileges. Validating a package does
+not isolate untrusted code.
+
+## Lifecycle
+
+### Driver initialization and shutdown
+
+At startup, each API or worker process constructs the selected Driver from trusted
+Installation configuration, validates its identity and methods, attaches required
+hooks, and runs production preflight when required or provided. The shared
+interface has no `initialize`, `dispose`, or `destroy` method. Stopping the process does not delete
+managed resources. See the [Driver loading flow](../../flows/driver-plugin-loading.md).
+
+### Production revision stages
+
+OCC records the Compute identity, Harness placement, and Configuration in the
+immutable revision. Before dispatch, the worker checks that the selected Compute
+still matches, rechecks authorization, and resolves current credential references.
+While preparing a replacement, the worker preserves the previous route until
+activation checks that the active revision is still the expected one and switches
+the route. Activation lets the candidate serve; it must be safe to repeat and
+requires the configured runtime to be ready and authenticated. Deactivation is a
+separate stage for an unpublished candidate;
+use `stopRevision` to stop execution.
+
+With the default `activationOrder: "afterCommit"`, the worker publishes the
+active revision before activating it and retries finalization when needed. On the
+first production deployment, it deactivates an unpublished dedicated candidate.
+A Driver that keeps one stable Agent runtime can select `"beforeCommit"`; the
+worker then activates the candidate before publishing it and skips that initial
+deactivation. If a required stage becomes unavailable, the worker cannot proceed.
+
+### SandboxDriver coordination
+
+A selected Sandbox currently works only with bundled Kubernetes Compute. Compute
+isolates the Namespace, then calls the Sandbox's optional Namespace setup. It
+prepares the gateway and, if the Sandbox creates the dedicated Harness, passes
+the workload identity, approved mounts, and environment references backed by
+Secrets. Otherwise Compute creates the workload itself. Compute waits for that
+workload, activates its route, and calls Sandbox cleanup before removing resources
+owned by the provider. See the [Sandbox contract](sandbox.md).
+
+### Optional selected-driver hooks
+
+Other selected Drivers may provide `afterNamespacePrepared`, `beforeWorkloadStart`,
+`beforeWorkloadStop`, and `beforeNamespaceDelete`. Hooks run in selection order;
+cleanup runs in reverse. Startup hooks affect the combined embedded workload or
+the dedicated Harness, never a dedicated gateway. Their limited `opaque-`
+environment cannot contain plaintext credentials or reserved names. Hooks cannot
+change images, commands, placement, networking, authorization, or revision data.
+
+Hooks must be safe to repeat. If preparation fails, Compute undoes completed
+hooks. If revocation fails, teardown waits for a retry. If rollback is cancelled,
+cleanup gets a separate signal with a time limit. See the [hook execution flow](../../flows/compute-driver-lifecycle-hooks.md).
+
+### Optional active-runtime maintenance
+
+`maintenanceIntervalMs` must be a positive safe integer. After activation or
+maintenance, OCC atomically queues another pass for the same Agent, revision,
+and original deployment Principal. The worker prepares and activates the revision
+again; those operations must be safe to repeat. Failed observations, including
+asynchronous binding failures, schedule another authorized pass without changing
+the active revision. Maintenance survives worker restarts and ends when a newer
+revision replaces it. Without an interval, lifecycle work responds to events. New deployments have limited retries.
 
 ### Plugin startup warnings
 
-Preparation returns readiness for the exact Namespace, Agent, and revision. A
-Driver may return `warnings`, containing only an admitted `pluginId` and
-`PLUGIN_INSTALL_FAILED` or `PLUGIN_AUTH_REQUIRED`. Warnings describe the current
-startup attempt and may accompany `ready: true` only after failed selections
-are safely disabled and the remaining runtime passes its readiness checks.
+Readiness warnings contain an approved `pluginId` and either `PLUGIN_INSTALL_FAILED`
+or `PLUGIN_AUTH_REQUIRED`. The Driver may return `ready: true` only if it has
+safely disabled failed plugins and the remaining runtime is ready. OCC records
+the warnings from a successful deployment while the worker still owns the job.
+The record is neither a live health check nor an acknowledgment.
+Restarting recalculates the warnings. Missing or untrusted startup status cannot
+prove readiness. See [Kubernetes startup status](kubernetes-compute.md#plugin-startup-status).
 
-OCC stores the observed warnings with the successful deployment result under the
-live worker claim. A later runtime restart recomputes plugin results; the saved
-deployment result is historical, not a live plugin-health query. No receipt or
-post-commit acknowledgment is required. Missing or untrusted startup status
-cannot establish safe effective configuration or readiness.
-The [Kubernetes startup implementation](kubernetes-compute.md#plugin-startup-status)
-defines its workload coverage and transport.
+## Limits
 
-## Optional startup preflight
+- Implementations differ in topology, credentials, Namespace deletion, and
+  private gateway access; see the [feature matrix](compute-matrix.md). The gateway
+  and Harness need not share a cluster or a component that writes their resources.
+- Initial credential helpers cannot rotate credentials, manage model
+  authentication, or prove that credentials work or workloads are ready.
+- Compute cannot query runtime logs. Selecting a different Driver does not migrate
+  revisions that recorded the previous Driver's identity.
 
-`preflight()` verifies external dependencies before production readiness. It
-may return structured warnings with a stable `code` and safe `message`; the API
-and worker emit each warning as `compute.preflight-warning` and continue.
-Thrown errors still block startup. Production requires preflight from the
-bundled Kubernetes Compute Driver. Other implementations expose it when their
-dependency checks require startup validation.
+## Troubleshooting
 
-## SandboxDriver coordination
-
-Current startup composes a selected SandboxDriver only with bundled Kubernetes
-Compute. In that composition, Compute:
-
-1. Establishes the Namespace and baseline isolation before invoking optional
-   `SandboxDriver.ensureNamespace`.
-2. Prepares the Agent gateway, workload identity, approved workspace mounts,
-   Services, and revision-specific Harness requirements.
-3. Invokes optional `SandboxDriver.provisionHarness`; otherwise, it creates the
-   ordinary Harness workload itself.
-4. Waits for the exact revision's workload, activates its existing route, and
-   invokes `SandboxDriver.cleanup` before removing provider-owned resources.
-
-The SandboxDriver receives the Compute-provided Namespace context, immutable
-revision, exact projected ServiceAccount identity, approved mounts, and
-Secret-backed environment references. OCC remains responsible for authorization
-and immutable revision admission.
-
-## Production revision stages
-
-`activateRevision(revision, context)` and `deactivateRevision(revision)` are optional in
-the shared TypeScript contract. `stopRevision` is required for every Compute
-Driver. Trusted startup additionally requires both activation stages on every
-production-selected Compute Driver before returning a runtime. When a development Driver
-implements `activateRevision`, the worker invokes it after the active-revision
-commit and on finalization retry, unless the Driver selects `beforeCommit`.
-The worker fails closed if
-a required stage becomes unavailable during execution. Replacement preparation
-preserves the predecessor's Service selector until fenced activation succeeds.
-
-Drivers that keep one stable Agent-owned runtime across revisions can declare
-`activationOrder: "beforeCommit"`. The worker then activates and verifies the
-candidate before publishing its active revision and does not deactivate an
-already-serving dedicated runtime during initial adoption. Existing Drivers
-retain their default post-commit activation behavior. A Driver's activation
-must remain idempotent and must not report success before its effective
-configuration and authenticated runtime are actually ready.
-
-## Runtime logging ownership
-
-Runtime logging ownership is a deployment design choice, independent of whether
-the runtime is newly provisioned or adopted. The installed ComputeDriver declares
-one of two modes:
-
-- **Platform-managed (default):** OCC admits the logging policy described in
-  [Harness execution](../harness-execution.md#runtime-logging). Bundled Docker,
-  Kubernetes, and SSH Compute use this policy, with optional Collector export.
-- **Deployment-managed (`runtimeLogging: "driver"`):** the runtime platform
-  manages its logging configuration and collection. This allows deployments to
-  use their own logging infrastructure without moving collection into ComputeDriver.
-
-Keep the default when using the bundled logging policy. Select deployment-managed
-logging only when the runtime platform provides its own configuration and
-collection path; it does not automatically connect that path to OCC. Gateway and
-Harness continue to emit their own logs in either mode. Neither mode requires a
-separate log backend per component or routes runtime logs through the OCC API.
-
-In deployment-managed mode, OCC preserves the native logging configuration
-(after any Sandbox transformation), validates it through ConfigurationDriver,
-and freezes it in the revision without imposing the bundled Collector's policy.
-The Driver must reject unsupported logging changes and realize the admitted
-configuration exactly; this does not permit ignoring revision fields.
-
-The `"driver"` value declares responsibility at the Driver boundary; it does not
-require the Driver to transport, store, or query logs. The Compute contract has
-no runtime-log query operation. Lifecycle results and failures still reach OCC
-through Driver operations, independently of the log collection path.
-
-This declaration belongs to the trusted installed Driver, not tenant YAML or a
-request option. Its operator owns runtime logging destinations, credentials,
-redaction, access controls, and delivery verification. The bundled Collector's
-privacy and export guarantees do not cover that separate pipeline. OCC process
-logging, authorization, immutable revisions, and durable audit are unchanged.
-
-## Optional gateway endpoint resolution
-
-`getGatewayEndpoint(revision)` returns the private WSS endpoint for an admitted
-AgentRevision, or `undefined` when the Driver does not support gateway access.
-OCC invokes it after exact-Agent authorization and active-revision selection.
-The resolver derives an address from trusted Driver settings and resource IDs;
-it does not establish readiness, perform user authorization, or persist a URL in
-Agent Configuration. Native connection failures remain dependency failures.
-
-Bundled Kubernetes Compute uses this capability for
-[private Agent routes](kubernetes-compute/networking-and-isolation.md#private-agent-gateway-routes).
-Docker and SSH do not implement it. Optional resolution does not change the required
-revision lifecycle operations or grant the API Kubernetes route permissions.
-
-## Optional active-runtime maintenance
-
-A provider that must continuously observe and repair an already-active Agent
-can declare `maintenanceIntervalMs` as a positive safe integer. After a
-successful activation or maintenance pass, OCC atomically enqueues the next
-exact-Agent, exact-revision reconciliation in its existing durable work queue.
-The original deployment Principal remains the actor and is reauthorized before
-every subsequent provider operation; revoked access therefore fails closed.
-
-Maintenance runs `prepareRevision` again before idempotent activation. It
-preserves the current active revision, stops naturally when a newer revision
-supersedes it, and survives worker restarts without a separate scheduler,
-provider database, or elevated service identity. Drivers without the optional
-interval retain their existing event-driven lifecycle.
-
-Failed active-runtime observations, including asynchronous `bindAgent` lookups,
-schedule another authorized maintenance pass without changing the active revision.
-Binding failure prevents subsequent runtime effects; each new pass checks the
-original actor again. New deployments retain their bounded retry budget.
-
-## Optional selected-driver hooks
-
-An Installation-selected non-Compute Driver can expose
-`computeLifecycleHooks`:
-
-1. `afterNamespacePrepared(namespace, signal)` runs after Namespace infrastructure readiness.
-2. `beforeWorkloadStart(revision, launch, signal)` runs before workload launch.
-3. `beforeWorkloadStop(revision, signal)` runs before workload teardown.
-4. `beforeNamespaceDelete(namespace, signal)` runs before tenant teardown.
-
-Captured hooks run in selection order and unwind in reverse. Workload-start
-hooks run before the combined embedded gateway or separate dedicated Codex;
-their bounded `opaque-` environment reaches only that workload, never a
-dedicated gateway. Reserved names, plaintext credentials, and changes to
-images, commands, placement, networking, authorization, or immutable revision
-data are rejected. Hooks must be idempotent; preparation failure compensates
-completed hooks, revocation failure blocks teardown for safe retry, and
-cancelled rollback receives a bounded cleanup signal.
+| Symptom                                 | What to check                                                                                                                                                                                                              |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Startup fails                           | Check the selected Driver, required production stages, hooks, and whether preflight threw an error. Fix the cause and confirm startup completes. Preflight warnings alone do not block it.                                 |
+| Deployment fails before work is queued  | Check the Harness and authentication settings and whether `validateHarnessAuth` exists. Fix the combination or Driver and confirm OCC creates a revision.                                                                  |
+| Revision stays unready                  | Check that the Driver reported the correct Namespace, Agent, and revision; that the workload is ready and authenticated; and that plugin startup status can be trusted. After the fix, confirm the revision becomes ready. |
+| Cleanup or replacement stalls           | Check revocation, hooks, and Sandbox cleanup. Fix it and retry; confirm cleanup or activation completes. A missing workload alone does not prove cleanup succeeded.                                                        |
+| Maintenance stops after a policy change | Check that the original Principal is still authorized and IAM is available. Restore the intended permission or start a newly authorized operation, then confirm reconciliation resumes.                                    |
+| Credential setup partially fails        | Refresh stored status before retrying; confirm the required groups report configured. It does not prove the provider accepts them.                                                                                         |
 
 ## Implementations
 
-- [Docker ComputeDriver](docker-compute.md)
-- [Kubernetes ComputeDriver](kubernetes-compute.md)
-- [SSH ComputeDriver](ssh-compute.md): raw Linux hosts, embedded OpenClaw, and systemd lifecycle.
-- [SandboxDriver contract](sandbox.md)
-- [Docker Compose development flow](../../flows/docker-compose-development.md)
-- [ComputeDriver lifecycle-hook execution flow](../../flows/compute-driver-lifecycle-hooks.md)
-- [Harness execution topology flow](../../flows/harness-execution-topology.md)
+- [Docker ComputeDriver](docker-compute.md): development container runtime.
+- [Kubernetes ComputeDriver](kubernetes-compute.md): embedded and dedicated workloads.
+- [SSH ComputeDriver](ssh-compute.md): raw Linux hosts and embedded OpenClaw.
 
-## Optional initial runtime credential provisioning
+## Related
 
-`getAgentRuntimeCredentialStatus(binding)` reports whether the admitted Agent's
-transport and Slack credential groups are stored. The
-`transportConfigured` and `slackConfigured` flags describe
-complete, correctly owned storage; they do not probe provider authentication or
-workload readiness.
-
-`provisionAgentRuntimeCredentials(binding, input)` supports initial transport
-and optional Slack credential setup. Model auth uses Agent `harnessAuth` and is
-validated separately at deployment. OCC authorizes the exact
-Agent and holds Namespace and Agent locks while checking that no historical
-revision exists and invoking the selected Driver. Drivers receive admitted
-`ComputeAgentBinding`, never caller-selected physical storage names. Unsupported
-Drivers fail explicitly.
-
-The bundled Kubernetes implementation creates missing whole Secrets and generates
-transport tokens and a local gateway password internally. It rejects foreign or malformed objects and
-conflicting supplied values, preserves complete matching groups on retry, and
-never rotates or deletes credentials. Partial external writes survive database
-or audit failure; callers must refresh stored status before retrying. Credential
-values must not appear in response metadata, Configuration, audit, or errors.
-See the [console workflow](../console/create-and-deploy.md#initial-runtime-credentials).
+- [Harness execution](../harness-execution.md) and [Agent lifecycle](../agents.md)
+- [Driver selection](selection.md) and [deployment guide](../../guides/deploy.md)
+- [Controller reconciliation](../controller/reconciliation.md) and [Harness execution topology](../../flows/harness-execution-topology.md)
+- [Worker source](../../../apps/controller/src/worker.ts) and [OCC admission and resource operations](../../../packages/occ/src/index.ts)
+- [Docker Compose development flow](../../flows/docker-compose-development.md) and [verification guide](../../testing/README.md)

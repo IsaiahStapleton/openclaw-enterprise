@@ -1,0 +1,9 @@
+apiVersion: 1
+providers:
+  - name: OCC development
+    folder: OCC
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /etc/occ-dashboard

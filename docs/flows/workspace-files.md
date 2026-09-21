@@ -1,6 +1,6 @@
 ---
 created: 2026-08-31
-updated: 2026-09-19
+updated: 2026-09-20
 last_updated_session: 01a082d6-50c7-7953-808f-7e609f6fc7cb
 ---
 
@@ -90,31 +90,26 @@ admission and native access.
 ### 3. Compute resolves a route and OCC loads the current key
 
 `apps/controller/src/composition/workspace-files.ts:createWorkspaceFilesAccess`
-uses `ComputeDriver.getGatewayEndpoint(revision)`. Kubernetes returns
-`wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>` without reading
-Kubernetes resources. The optional hostname defaults to the same Service DNS
-name used by Helm, derived from the shared Gateway's name and namespaces.
-Preparation and activation create or repair the route;
-resolution itself does not prove that the gateway is serving.
+uses `ComputeDriver.getGatewayEndpoint(revision)` to resolve
+`wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>`. The default hostname
+matches Helm's Service DNS. Resolution does not prove readiness.
 
-`apps/controller/src/drivers/compute/kubernetes/index.ts:reconcileGatewayRoute`
-also provisions a distinct `/node` HTTPRoute and route SecurityPolicy for
-runtime-enabled dedicated revisions. They share the same TLS listener and
-Agent Service. The node route strips administrative identity headers and
-relies on native device authentication; it never uses OCC's service key.
-The node route keeps the deployed Gateway's revision during candidate preparation;
-activation transfers ownership after replacing the Gateway Deployment.
-Preparation also repairs a missing node route under the serving revision, so
-first enrollment does not wait for the candidate's activation.
-`removeStoppedGateway` and `removeRetiredGateway` remove the exact revision's
-node endpoint before its policy, with ownership and UID checks. The
-[node endpoint contract](../reference/gateway-routing.md#native-node-endpoint)
-separates this route provisioning from Harness enrollment and launch.
+`kubernetes/index.ts:reconcileGatewayRoute` provisions operator routing and a
+separate exact `/node` HTTPRoute and SecurityPolicy for dedicated runtimes.
+Only operator routing allows native admin UI subpaths. Both strip authorization
+and cookies; node routing also strips administrative identity headers, relying
+on native device authentication instead of OCC's key.
+Preparation creates or repairs the node route under the serving revision;
+activation transfers ownership after replacing Gateway. This allows enrollment
+before candidate activation. Stop and retirement remove the exact revision's
+endpoint before its policy, checking ownership and UID. See the
+[node endpoint contract](../reference/gateway-routing.md#native-node-endpoint).
 
 Dedicated runtime revisions require private routing and an enrollment client.
 `verifyGatewayRoutingConfiguration` rejects missing wiring before Kubernetes
 access, so removing shared storage cannot silently select a Gateway-local workspace.
-The enrollment integration is in progress; it is not a deployable storage split.
+The enrollment path is implemented; matching runtime images and deployed
+Enterprise acceptance remain unverified.
 The local Compute path in
 `apps/controller/src/drivers/compute/kubernetes/index.ts:prepareWorkspaceNode`
 uses native setup RPCs through
@@ -146,7 +141,8 @@ uses native setup RPCs through
   same invocation.
 - Activation reads the exact revision's saved device ID. `GATEWAY_RUNTIME_ENTRYPOINT`
   adds the native `file-transfer.config.workspaces.main` binding to its runtime
-  config; the immutable revision ConfigMap stays unchanged. Candidate preparation
+  config before clearing the startup-failure observation and spawning Gateway;
+  the immutable revision ConfigMap stays unchanged. Candidate preparation
   leaves the serving revision's binding intact. Losing an established binding
   fails rather than restoring local file reads.
 - Default node grants permit reading the four owner documents, `BOOTSTRAP.md`,
@@ -270,6 +266,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-20 19:37: Combined native admin UI subpath routing with the exact node endpoint and retained startup status ordering during upstream integration. (01a082d6-50c7-7953-808f-7e609f6fc7cb - afe3861dfec5d288fd5a4651a9e052e935e6493d)
 
 - 2026-09-19 15:37: Required dedicated runtime routing before workload changes; reconciled node startup with plugin readiness and moved the native node probe into OCC's existing in-cluster fixture. (01a082d6-50c7-7953-808f-7e609f6fc7cb - 30878c9b0f830126e8433b76d1c7174227d311b6)
 

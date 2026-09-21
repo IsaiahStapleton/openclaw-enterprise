@@ -1,15 +1,17 @@
 # Local Kubernetes and development operations
 
-Build digest-pinned local Kubernetes images, verify Kubernetes TUI access, or
-stop the development stack. Run commands from the repository root. Use the
-[production deployment sequence](../deploy.md#production) for Namespace and Agent setup.
+Build images for a disposable Kubernetes cluster, stop the development stack
+without deleting its data, or check local Agent access. Run
+commands from the repository root. If you are installing the platform for the
+first time, start with [Local Setup](../quickstart.md). For Namespace and Agent
+setup on an existing installation, use the [production deployment sequence](../deploy.md#production).
 
 ## Build images for local Kubernetes
 
-This uses the same build/import path as the local Kubernetes tests. Build the
-controller from this checkout and one combined OpenClaw/Codex image for both
-Installation image slots. Local build digests vary by build and platform, so
-read them from the imported images instead of copying a sample digest.
+Build the controller from this checkout and one combined OpenClaw/Codex image
+for both Installation image slots. The local Kubernetes tests use the same
+build and import commands. Local digests vary by build and platform; read them
+from the imported images instead of copying a sample digest.
 
 Prerequisites: Docker, k3d, and [yq v4](https://github.com/mikefarah/yq).
 Create a disposable single-server cluster without changing your kubeconfig:
@@ -77,27 +79,29 @@ run `KUBECONFIG="$KUBECONFIG_FILE" k3d cluster delete "$CLUSTER"`.
 
 ## Stop development safely
 
-Run the exact command under `Cleanup` in the `dev-up` output. The Podman form
-uses `occ dev down` with `compose.podman.yaml` and the forwarded Compose options.
-Keep any `CONTAINER_CONNECTION` or `CONTAINER_HOST` selection used for startup.
-The CLI retains that connection, including macOS machine connections. See the
+Run the exact command under `Cleanup` in the `dev-up` output. For Podman, it
+uses `occ dev down` with `compose.podman.yaml` and the Compose options passed at
+startup. Keep any `CONTAINER_CONNECTION` or `CONTAINER_HOST` selection used for
+startup, including macOS machine connections. See the
 [cleanup flow](../../flows/docker-compose-development.md#3-clean-up-docker-or-podman-compose)
 for how the host connection and worker socket are handled.
 
-This preserves PostgreSQL, Configuration, and bootstrap-key volumes. Add
-`--volumes` only when deliberately deleting the local
-Installation after accounting for Agent containers and tenant networks owned by
-Docker Compute.
+This preserves PostgreSQL, Configuration, and bootstrap-key volumes. Use
+`--volumes` only to delete the local Installation. First account for any Agent
+containers and tenant networks owned by Docker Compute.
 
 ## Development end-to-end TUI
 
-Docker and Podman Compose currently support control-plane startup and Namespace
-operations, but their Compute Driver rejects Agent harness authentication
-bindings. Agent deployment requires a binding, so the Compose Agent/TUI journey
-is unavailable. Exporting `OPENAI_API_KEY` to the worker does not enable it.
+Docker and Podman Compose support control-plane startup and Namespace
+operations. Their Compute Driver rejects the harness authentication binding
+required for Agent deployment. You cannot deploy an Agent or use its TUI through
+Compose; exporting `OPENAI_API_KEY` to the worker does not change this.
 
 For a local authenticated Agent and TUI trial, build the Kubernetes images above,
 then follow [production Agent deployment](production-agents.md) and
 [production TUI verification](production-agents.md#attach-with-the-openclaw-tui) against that disposable cluster.
 Complete the same Secret binding, exact IAM grants, and tenant RoleBindings as
-for a production installation.
+for a production installation. Choose the verification method that matches the
+gateway's authentication; a token-based TUI command cannot authenticate to a
+gateway in trusted-proxy mode. For the password-based method, see
+[verify a model response](../operate/model-verification.md).

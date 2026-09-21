@@ -14,7 +14,7 @@ DNS, approved gateway clients, and required communication between an Agent's
 gateway and dedicated Harness. Cross-tenant traffic, traffic between different
 Agents, Kubernetes API access, and cloud metadata access remain denied.
 
-For Compute-owned plugin startup reporting, set
+For Compute-owned startup failure evidence and plugin reporting, set
 `network.pluginStatusProxySourceCidrs` to the precise source addresses used by the
 Kubernetes API server when proxying requests to workload Pods. The policy allows
 those sources only to the private status port, TCP/18791; worker RBAC separately
@@ -86,8 +86,16 @@ native Configuration or an AgentRevision.
 `wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>` without Kubernetes
 API access. During preparation and activation, Compute reconciles an owned
 `HTTPRoute` in the tenant namespace, attached to the configured Gateway's
-`https` listener. It matches the exact Agent path and hostname, rewrites the
-path to `/`, and targets the existing same-namespace gateway Service.
+`https` listener. Both rules match the configured private hostname and target
+the existing same-namespace gateway Service:
+
+- The exact Agent path rewrites to `/`, preserving workspace-file WSS access.
+- A prefix rule below that Agent path rewrites the prefix to `/` and retains
+  the suffix for native UI assets, deep links, and WebSocket paths.
+
+OCC bounds proxy requests to the selected Agent base. Public native UI browser
+traffic enters through OCC; Envoy and gateway Services remain private. See
+[Agent native admin UI](../../agent-native-admin.md#agent-host-identity).
 Namespaces receive the Gateway membership label used by `allowedRoutes`.
 Runtime-enabled dedicated revisions also receive a `/node` route and a
 route-specific SecurityPolicy for native device authentication. The

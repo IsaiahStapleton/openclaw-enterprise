@@ -1,21 +1,26 @@
 # Platform console
 
-The controller serves a browser console at `/console/` on its existing origin.
-Use it to sign in, choose a Namespace, inspect accessible Agents, Providers, and
-Namespaces, create and deploy Agents, edit supported Slack or Microsoft Teams
-draft settings, provision supported initial runtime credentials, and read or
-replace supported live workspace files. Rollback, live runtime health, browser
-chat, and Agent deletion are unavailable in the console.
-The [deployment guide](../guides/deploy.md) owns runtime checks and operator
-procedures; the [generated API reference](api.md) owns supported management API
-shapes.
+Use the browser console at `/console/` on your OCC address to sign in, choose a
+Namespace, create and deploy Agents, and edit supported Slack or Microsoft Teams
+draft settings. You can also set up initial runtime credentials, read or replace
+supported live workspace files, and list the Agents, Providers, and Namespaces
+you can access. When the pilot is enabled, trusted operators can open an Agent's
+[native admin UI](#open-the-native-admin-ui). The console does not offer rollback,
+live runtime health, browser chat through OCE, or Agent deletion.
+
+For browser deployment instructions, follow [Create and deploy Agents](console/create-and-deploy.md).
+See the [deployment guide](../guides/deploy.md) for operator procedures and
+runtime checks, and the [API reference](api.md) for management operations.
 
 ## Start and sign in
 
-Start the controller through the [quickstart](../guides/quickstart.md#open-the-platform-console)
-or [deployment guide](../guides/deploy.md#open-the-platform-console), then visit
-`/console/`. **Username** means your provisioned account email. Enter its password
-and select **Login**. Public signup, SSO, and password recovery are unavailable.
+Open `/console/` at the address your administrator gave you. **Username** is
+your provisioned account email. Enter its password and select **Login**. Ask your
+administrator for access if you do not have an account or have forgotten your
+password; public signup, single sign-on, and self-service password recovery are
+unavailable. If you are setting up your own Installation, start with the
+[quickstart](../guides/quickstart.md#open-the-platform-console) or
+[deployment guide](../guides/deploy.md#open-the-platform-console).
 
 The console uses the existing [email/password session contract](authentication.md)
 with same-origin cookies. It does not store tokens or accept service keys. A
@@ -78,8 +83,10 @@ selected by OCC; the console has no live gateway health API and always shows
 installed runtime.
 
 The Channels tab edits Slack and Microsoft Teams settings on the saved
-Configuration draft. Saving patches only `values`, so existing
-`secretBindings` are retained by the backend. An existing plugin allowlist is
+Configuration draft. Teams is incomplete: the console cannot deploy a
+Teams-enabled draft, and configuring it does not provide the public Bot
+Framework endpoint the integration requires. Saving patches only `values`, so
+the backend retains existing `secretBindings`. An existing plugin allowlist is
 extended; an omitted allowlist stays omitted. Because a Configuration can be
 shared by multiple Agents, channel edits can affect future deployments of other
 Agents that reference the same Configuration.
@@ -145,6 +152,21 @@ replayed automatically. Review loaded contents before writing again. Files load
 and save independently; success for one file says nothing about another file's
 result. For unavailable gateways, follow the
 [workspace access setup](../guides/deploy/workspace-routing.md#agent-workspace-files).
+
+## Open the native admin UI
+
+When [Agent native admin UI access](agent-native-admin.md) is enabled, the
+Workspace files tab includes a **Native admin UI** panel for callers with exact
+Agent `administer` permission. The panel is hidden when the Installation disables
+the feature or when the caller lacks that grant. It reports stopped,
+unsupported, or unavailable gateway states without granting broader access.
+
+**Open native admin UI** opens the returned per-Agent URL in a new tab. The
+visible warning is part of the operator contract: the native UI can change the
+gateway outside OCE, and those changes are not recorded in AgentRevisions. Use
+OCE for durable configuration. The Agent tab uses the same OCE session cookie as
+the console through the configured shared cookie parent domain; native chat or
+other Agent-host activity does not extend that console session.
 
 ## Routes
 

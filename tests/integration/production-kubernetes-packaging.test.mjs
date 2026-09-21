@@ -44,6 +44,12 @@ const externalGatewayRoutingValues = {
   "gatewayRouting.hostname": "agents.example.internal",
   "gatewayRouting.issuerRef.name": "occ-private-issuer",
 };
+const agentNativeAdminValues = {
+  ...gatewayRoutingValues,
+  "agentNativeAdmin.enabled": "true",
+  "agentNativeAdmin.domain": "agents.example.invalid",
+  "agentNativeAdmin.sharedCookieDomain": "example.invalid",
+};
 const databaseCaValues = {
   "database.caSecretName": "occ-rds-ca",
   "database.caKey": "ca.pem",
@@ -90,6 +96,50 @@ async function resources(manifests) {
   });
   return parsed.trim().split("\n").map(JSON.parse);
 }
+
+test(
+  "metrics chart requires exact scraper selectors and isolates the extra Pod ports",
+  tooling,
+  async () => {
+    await assert.rejects(render({ "metrics.enabled": "true" }), /scraperNamespaceLabels/);
+    const selected = {
+      "metrics.enabled": "true",
+      "metrics.scraperNamespaceLabels.kubernetes\\.io/metadata\\.name": "monitoring",
+      "metrics.scraperPodLabels.app": "prometheus",
+    };
+    await assert.rejects(render({ ...selected, "metrics.port": "8080" }), /distinct/);
+    const objects = await resources((await render(selected)).stdout);
+    for (const component of ["api", "worker"]) {
+      const deployment = objects.find(
+        (item) =>
+          item.kind === "Deployment" && item.metadata.name === `openclaw-enterprise-${component}`,
+      );
+      const container = deployment.spec.template.spec.containers[0];
+      assert.ok(
+        container.ports.some((port) => port.name === "metrics" && port.containerPort === 9464),
+      );
+      assert.deepEqual(container.env.find((item) => item.name === "OCC_METRICS_HOST").valueFrom, {
+        fieldRef: { fieldPath: "status.podIP" },
+      });
+      const policy = objects.find(
+        (item) =>
+          item.kind === "NetworkPolicy" &&
+          item.metadata.name === `openclaw-enterprise-${component}-metrics`,
+      );
+      assert.deepEqual(policy.spec.ingress, [
+        {
+          from: [
+            {
+              namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "monitoring" } },
+              podSelector: { matchLabels: { app: "prometheus" } },
+            },
+          ],
+          ports: [{ protocol: "TCP", port: 9464 }],
+        },
+      ]);
+    }
+  },
+);
 
 function routeNamespaceLabel(namespace, gatewayName) {
   return createHash("sha256").update(`${namespace}/${gatewayName}`).digest("hex").slice(0, 12);
@@ -201,6 +251,52 @@ test("control-plane node selectors are optional unless configured", tooling, asy
     assert.equal(selected("Deployment", component).spec.template.spec.nodeSelector, undefined);
   }
 });
+
+test(
+  "Agent native admin pilot renders public host settings with private gateway routing",
+  tooling,
+  async () => {
+    const { stdout } = await render(agentNativeAdminValues);
+    const objects = await resources(stdout);
+    const deployment = (component) =>
+      objects.find(
+        ({ kind, metadata }) =>
+          kind === "Deployment" && metadata.labels["app.kubernetes.io/component"] === component,
+      );
+
+    const apiEnvironment = deployment("api").spec.template.spec.containers[0].env;
+    const workerEnvironment = deployment("worker").spec.template.spec.containers[0].env;
+    assert.deepEqual(
+      apiEnvironment.filter(({ name }) => name.startsWith("OCC_AGENT_NATIVE_ADMIN_")),
+      [
+        { name: "OCC_AGENT_NATIVE_ADMIN_ENABLED", value: "true" },
+        { name: "OCC_AGENT_NATIVE_ADMIN_DOMAIN", value: "agents.example.invalid" },
+      ],
+    );
+    assert.deepEqual(
+      apiEnvironment.filter(({ name }) => name === "OCC_AUTH_COOKIE_DOMAIN"),
+      [{ name: "OCC_AUTH_COOKIE_DOMAIN", value: "example.invalid" }],
+    );
+    assert.ok(!workerEnvironment.some(({ name }) => name.startsWith("OCC_AGENT_NATIVE_ADMIN_")));
+    assert.ok(!workerEnvironment.some(({ name }) => name === "OCC_AUTH_COOKIE_DOMAIN"));
+    assert.ok(apiEnvironment.some(({ name }) => name === "OCC_GATEWAY_API_KEY_PATH"));
+    assert.ok(objects.some(({ kind }) => kind === "Gateway"));
+    assert.ok(objects.some(({ kind }) => kind === "EnvoyProxy"));
+
+    const disabledObjects = await resources((await render()).stdout);
+    const disabledDeployment = (component) =>
+      disabledObjects.find(
+        ({ kind, metadata }) =>
+          kind === "Deployment" && metadata.labels["app.kubernetes.io/component"] === component,
+      );
+    const disabledApiEnvironment = disabledDeployment("api").spec.template.spec.containers[0].env;
+    assert.deepEqual(
+      disabledApiEnvironment.filter(({ name }) => name.startsWith("OCC_AGENT_NATIVE_ADMIN_")),
+      [{ name: "OCC_AGENT_NATIVE_ADMIN_ENABLED", value: "false" }],
+    );
+    assert.ok(!disabledApiEnvironment.some(({ name }) => name === "OCC_AUTH_COOKIE_DOMAIN"));
+  },
+);
 
 test(
   "the production Helm chart renders private least-privilege runtime and ordered bootstrap",
@@ -609,6 +705,25 @@ test(
       [
         "ChatGPT Provider without an admin Secret key",
         { ...chatgptValues, "provider.chatgpt.key": "" },
+      ],
+      [
+        "Agent native admin enabled without a public DNS suffix",
+        { "agentNativeAdmin.enabled": "true" },
+      ],
+      [
+        "Agent native admin configured with a wildcard DNS suffix",
+        { ...agentNativeAdminValues, "agentNativeAdmin.domain": "*.example.invalid" },
+      ],
+      [
+        "Agent native admin configured with a URL",
+        { ...agentNativeAdminValues, "agentNativeAdmin.domain": "https://agents.example.invalid" },
+      ],
+      [
+        "Agent native admin enabled without private Gateway routing",
+        {
+          "agentNativeAdmin.enabled": "true",
+          "agentNativeAdmin.domain": "agents.example.invalid",
+        },
       ],
       [
         "retired workspace-files endpoint ConfigMap",
