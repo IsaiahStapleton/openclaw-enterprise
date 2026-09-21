@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { request as httpsRequest } from "node:https";
+import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
@@ -257,32 +259,7 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics, re
 
   async function requestDeletion(owner) {
     const idempotencyKey = `agent:${owner.id}:reconcile:deleted`;
-    await state.transactWithQueue(async (unit, queue) => {
-      const current = await unit.agents.lockAgent(namespace.id, owner.id);
-      assert.ok(current);
-      const stopped = await unit.agents.transitionAgentDesiredRuntimeState(
-        namespace.id,
-        owner.id,
-        current.desiredRuntimeState,
-        "stopped",
-      );
-      assert.ok(stopped);
-      const deleting = await unit.agents.transitionAgentStatus(
-        namespace.id,
-        owner.id,
-        "active",
-        "deleting",
-      );
-      assert.ok(deleting);
-      await queue.enqueue({
-        idempotencyKey,
-        namespaceId: namespace.id,
-        agentId: owner.id,
-        agentTarget: "deleted",
-        actorId: actor.id,
-        availableAt: new Date(0),
-      });
-    });
+    await controller.deleteAgent(actor.id, namespace.id, owner.id);
     return { id: owner.id, idempotencyKey };
   }
 
@@ -491,13 +468,11 @@ test(
     const [
       { GitHubRepoDriver },
       { UnixRepositoryCredentialControlClient },
-      { createSystemClock },
       { startRegistryCredentialServiceFixture },
       { createServer },
     ] = await Promise.all([
       import("../../apps/controller/src/drivers/repo/github/driver.ts"),
       import("../../apps/controller/src/providers/repository-credentials/control-client.ts"),
-      import("../../apps/controller/src/drivers/repo/credentials/clock.ts"),
       import("../fixtures/repository-credentials/registry.mjs"),
       import("node:net"),
     ]);
@@ -508,10 +483,14 @@ test(
     });
     const port = reservation.address().port;
     await new Promise((resolve) => reservation.close(resolve));
+    const clock = createControlledClock();
+    const startedWall = clock.wallNow();
     const credentials = await startRegistryCredentialServiceFixture(context, {
       namespaceId: fixture.namespace.id,
       autoOpen: false,
-      clock: createSystemClock(),
+      // Worker admission IDs use real wall time. Preserve that progress while
+      // allowing this fixture's provider-retirement expiry to advance explicitly.
+      clock: { ...clock, wallNow: () => Date.now() + clock.wallNow() - startedWall },
       gateway: { listen: `127.0.0.1:${port}` },
     });
     const driver = new GitHubRepoDriver(
@@ -540,6 +519,7 @@ test(
     });
     const material = [];
     const events = [];
+    const retired = [];
     await fixture.start(
       {
         ...fixture.compute,
@@ -550,6 +530,10 @@ test(
         async prepareRevision(revision, deploymentContext) {
           material.push(...deploymentContext.repositoryCredentials);
           return fixture.compute.prepareRevision(revision, deploymentContext);
+        },
+        async retireRevision(revision) {
+          retired.push(revision.id);
+          return fixture.compute.retireRevision(revision);
         },
       },
       (event) => events.push(event),
@@ -600,6 +584,121 @@ test(
       );
       return cleanup.rowCount === 1 && cleanup.rows[0].state === "succeeded" ? true : undefined;
     });
+    await fixture.requestDeletion(owner);
+    await waitFor("disposed repository evidence to outlive its Agent", async () =>
+      (await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+      )) === undefined
+        ? true
+        : undefined,
+    );
+    const retained = await fixture.state.read((view) =>
+      view.repositorySessions.findAttempt(attempt.admissionId),
+    );
+    assert.equal(retained.phase, "disposed");
+    assert.equal(retained.liveRevisionId, null);
+    assert.equal(retained.revisionId, candidate.id);
+    assert.equal(retained.agentId, owner.id);
+    assert.deepEqual(retained.cleanupContext, {
+      driver: candidate.repositoryCredentials.driver,
+      binding: resolution.bindings[0],
+    });
+
+    // A provider retirement response can be lost after the remote effect. Only
+    // the service's eventual DISPOSED observation permits physical deletion.
+    const pendingOwner = await fixture.agent("repository-pending-deletion");
+    const pendingRevision = await fixture.revision(
+      pendingOwner,
+      1,
+      undefined,
+      candidate.repositoryCredentials,
+    );
+    await fixture.work(pendingRevision, "succeeded");
+    const pendingMaterial = material.at(-1);
+    const responseStatus = await new Promise((resolve, reject) => {
+      const outgoing = httpsRequest(
+        {
+          hostname: "127.0.0.1",
+          port: credentials.listeners.address.port,
+          path: "/fixture/repository.git/info/refs?service=git-upload-pack",
+          method: "GET",
+          ca: credentials.tls.ca,
+          agent: false,
+          headers: {
+            host: "credentials.example.test",
+            authorization: `Basic ${Buffer.from(`gateway-session:${pendingMaterial.files.bearer}`).toString("base64")}`,
+          },
+        },
+        (incoming) => {
+          incoming.resume();
+          incoming.once("end", () => resolve(incoming.statusCode));
+          incoming.once("error", reject);
+        },
+      );
+      outgoing.once("error", reject);
+      outgoing.end();
+    });
+    assert.equal(responseStatus, 200);
+    const provider = credentials.repositories[0].github;
+    assert.equal(provider.issuesOfTokens.length, 1);
+    provider.disconnectAfterMutation("DELETE", "/installation/token");
+    const deletion = await fixture.requestDeletion(pendingOwner);
+    await waitFor("pending cleanup to defer deletion after Compute retirement", async () =>
+      retired.includes(pendingRevision.id) &&
+      events.some(
+        (event) =>
+          event.workId === deletion.idempotencyKey && event.code === "REPOSITORY_CLEANUP_PENDING",
+      )
+        ? true
+        : undefined,
+    );
+    assert.equal(
+      (await driver.status(pendingMaterial.sessionId, new AbortController().signal)).state,
+      "CLOSED",
+    );
+    const [pendingAttempt] = await repositoryAttempts(fixture, pendingRevision);
+    assert.equal(pendingAttempt.phase, "closing");
+    assert.equal(pendingAttempt.liveRevisionId, pendingRevision.id);
+    assert.equal(
+      (
+        await fixture.state.read((view) =>
+          view.agents.findAgent(fixture.namespace.id, pendingOwner.id),
+        )
+      ).status,
+      "deleting",
+    );
+    assert.equal(
+      (
+        await fixture.observerPool.query(
+          "SELECT count(*)::integer AS count FROM occ.controller_work WHERE revision_id = $1 AND idempotency_key LIKE $2",
+          [pendingRevision.id, `agent_revision:${pendingRevision.id}:repository_cleanup:%`],
+        )
+      ).rows[0].count,
+      1,
+    );
+    await clock.advance(3_600_001);
+    await waitFor("settled provider cleanup to release physical deletion", async () =>
+      (await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, pendingOwner.id),
+      )) === undefined
+        ? true
+        : undefined,
+    );
+    const settled = await fixture.state.read((view) =>
+      view.repositorySessions.findAttempt(pendingAttempt.admissionId),
+    );
+    assert.equal(settled.phase, "disposed");
+    assert.equal(settled.liveRevisionId, null);
+    assert.equal(settled.deadlineWallMs, pendingAttempt.deadlineWallMs);
+    assert.deepEqual(settled.cleanupContext, pendingAttempt.cleanupContext);
+    assert.equal(provider.issuesOfTokens.length, 1, "deletion must never mint a replacement token");
+    assert.equal(
+      provider.trace.filter(
+        ({ method, target }) => method === "DELETE" && target === "/installation/token",
+      ).length,
+      1,
+      "uncertain provider retirement must not be replayed",
+    );
   },
 );
 

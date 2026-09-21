@@ -8,6 +8,7 @@ import type {
   RepositoryCredentialSessionStatus,
 } from "@openclaw-enterprise/contracts";
 import {
+  isRepositoryCleanupWork,
   WorkClaimLostError,
   type ClaimedWork,
   type PlatformUnitOfWork,
@@ -247,6 +248,9 @@ export class RepositoryCredentialLifecycle {
       let closeLive = claim.revisionId !== undefined;
       if (claim.agentTarget === "stopped") {
         closeLive = agent?.desiredRuntimeState === "stopped" && beforeSource;
+      } else if (claim.agentTarget === "deleted") {
+        closeLive =
+          agent?.status === "deleting" && agent.desiredRuntimeState === "stopped" && beforeSource;
       } else if (claim.namespaceTarget === "deleted") {
         closeLive = namespace?.status === "deleting" && beforeSource;
       }
@@ -270,6 +274,9 @@ export class RepositoryCredentialLifecycle {
     if (options.retireRuntime) {
       await this.dependencies.state.transactWithQueue(async (unit, queue) => {
         await this.heartbeat(queue, claim);
+        await unit.namespaces.lockNamespace(revision.namespaceId, { includeDeleted: true });
+        await unit.agents.lockAgent(revision.namespaceId, revision.agentId);
+        await this.heartbeat(queue, claim);
         const attempts = await unit.repositorySessions.listRevisionAttempts(owner(revision));
         for (const attempt of attempts) {
           if (attempt.phase === "opening" || attempt.phase === "open") {
@@ -281,7 +288,7 @@ export class RepositoryCredentialLifecycle {
     const attempts = await this.dependencies.state.read((view) =>
       view.repositorySessions.listRevisionAttempts(owner(revision)),
     );
-    let complete = true;
+    let complete = !attempts.some((attempt) => attempt.phase === "invalidated");
     for (const attempt of attempts.filter((candidate) => candidate.phase === "closing")) {
       try {
         const closed = await this.closeAttempt(claim, revision, attempt);
@@ -476,7 +483,7 @@ export class RepositoryCredentialLifecycle {
       }
       if (recovered.kind === "missing") {
         await this.advance(claim, closing, "invalidated");
-        return { settled: true, authorityClosed: true };
+        return { settled: false, authorityClosed: true };
       }
       this.validateStatus(recovered.status, closing, binding);
       closing = await this.advance(claim, closing, "closing", recovered.status.sessionId);
@@ -486,7 +493,7 @@ export class RepositoryCredentialLifecycle {
     );
     if (status === undefined) {
       await this.advance(claim, closing, "invalidated");
-      return { settled: true, authorityClosed: true };
+      return { settled: false, authorityClosed: true };
     }
     this.validateStatus(status, closing, binding);
     if (status.state === "DISPOSED") {
@@ -504,6 +511,9 @@ export class RepositoryCredentialLifecycle {
   ): Promise<Attempt> {
     return this.dependencies.state.transactWithQueue(async (unit, queue) => {
       await this.heartbeat(queue, claim);
+      await unit.namespaces.lockNamespace(revision.namespaceId, { includeDeleted: true });
+      await unit.agents.lockAgent(revision.namespaceId, revision.agentId);
+      await this.heartbeat(queue, claim);
       const closing = await this.advanceIn(unit, attempt, "closing", sessionId);
       await queue.enqueueRepositoryCleanup(claim, owner(revision));
       return closing;
@@ -518,7 +528,14 @@ export class RepositoryCredentialLifecycle {
   ): Promise<Attempt> {
     return this.dependencies.state.transactWithQueue(async (unit, queue) => {
       await this.heartbeat(queue, claim);
-      return this.advanceIn(unit, attempt, phase, sessionId);
+      await unit.namespaces.lockNamespace(attempt.namespaceId, { includeDeleted: true });
+      await unit.agents.lockAgent(attempt.namespaceId, attempt.agentId);
+      await this.heartbeat(queue, claim);
+      const advanced = await this.advanceIn(unit, attempt, phase, sessionId);
+      if (phase === "invalidated" && !isRepositoryCleanupWork(claim)) {
+        await queue.enqueueRepositoryCleanup(claim, attempt);
+      }
+      return advanced;
     }, this.dependencies.queueOptions);
   }
 

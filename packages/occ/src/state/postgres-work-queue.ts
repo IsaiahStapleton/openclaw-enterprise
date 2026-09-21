@@ -166,13 +166,22 @@ function transferRepositoryCleanupSql(continuingRevision = "false"): string {
       WHERE source.state = 'failed_permanent'
         AND NOT ${repositoryCleanupSql("source")}
         AND NOT (${continuingRevision})
+    ), cleanup_namespaces AS MATERIALIZED (
+      SELECT namespace.id, namespace.status
+      FROM occ.namespaces AS namespace
+      WHERE EXISTS (
+        SELECT 1 FROM cleanup_sources AS source WHERE source.namespace_id = namespace.id
+      )
+      ORDER BY namespace.id
+      FOR UPDATE OF namespace
     ), cleanup_agents AS MATERIALIZED (
-      SELECT agent.namespace_id, agent.id, agent.desired_runtime_state
+      SELECT agent.namespace_id, agent.id, agent.status, agent.desired_runtime_state
       FROM occ.agents AS agent
+      JOIN cleanup_namespaces AS namespace ON namespace.id = agent.namespace_id
       WHERE EXISTS (
         SELECT 1 FROM cleanup_sources AS source
-        WHERE source.namespace_id = agent.namespace_id AND source.agent_id = agent.id
-          AND source.agent_target = 'stopped' AND source.revision_id IS NULL
+        WHERE source.namespace_id = agent.namespace_id
+          AND (source.agent_id = agent.id OR source.namespace_target = 'deleted')
       )
       ORDER BY agent.namespace_id, agent.id
       FOR UPDATE OF agent
@@ -182,21 +191,34 @@ function transferRepositoryCleanupSql(continuingRevision = "false"): string {
         (source.revision_id = revision.id
           AND revision.admitted_spec->'repository_credentials' IS NOT NULL) AS retire_runtime,
         (source.revision_id IS NOT NULL OR
-          (source.agent_target = 'stopped' AND agent.desired_runtime_state = 'stopped'))
+          (source.agent_target = 'stopped' AND agent.desired_runtime_state = 'stopped') OR
+          (source.agent_target = 'deleted' AND agent.status = 'deleting'
+            AND agent.desired_runtime_state = 'stopped'))
           AS close_live
       FROM cleanup_sources AS source
       JOIN occ.agent_revisions AS revision ON revision.namespace_id = source.namespace_id
-      JOIN occ.agents AS owner
-        ON owner.namespace_id = revision.namespace_id AND owner.id = revision.agent_id
-      LEFT JOIN cleanup_agents AS agent
-        ON agent.namespace_id = source.namespace_id AND agent.id = source.agent_id
-      JOIN occ.namespaces AS namespace ON namespace.id = source.namespace_id
+      JOIN cleanup_agents AS agent
+        ON agent.namespace_id = revision.namespace_id AND agent.id = revision.agent_id
+      JOIN cleanup_namespaces AS namespace ON namespace.id = source.namespace_id
       WHERE (source.revision_id = revision.id AND source.agent_id = revision.agent_id)
         OR (source.agent_target = 'stopped' AND source.revision_id IS NULL
           AND source.agent_id = revision.agent_id AND revision.admitted_at <= source.created_at)
+        OR (source.agent_target = 'deleted' AND source.revision_id IS NULL
+          AND source.agent_id = revision.agent_id AND agent.status = 'deleting'
+          AND agent.desired_runtime_state = 'stopped' AND revision.admitted_at <= source.created_at)
         OR (source.namespace_target = 'deleted' AND source.agent_id IS NULL
           AND source.revision_id IS NULL AND namespace.status = 'deleting'
           AND revision.admitted_at <= source.created_at)
+    ), locked_attempts AS MATERIALIZED (
+      SELECT attempt.admission_id
+      FROM occ.repository_session_attempts AS attempt
+      WHERE EXISTS (
+        SELECT 1 FROM cleanup_revisions AS revision
+        WHERE attempt.namespace_id = revision.namespace_id
+          AND attempt.agent_id = revision.agent_id AND attempt.revision_id = revision.revision_id
+      )
+      ORDER BY attempt.namespace_id, attempt.agent_id, attempt.revision_id, attempt.admission_id
+      FOR UPDATE OF attempt
     ), closing_attempts AS (
       UPDATE occ.repository_session_attempts AS attempt
       SET phase = 'closing', updated_at = GREATEST(clock_timestamp(), attempt.updated_at)
@@ -204,6 +226,7 @@ function transferRepositoryCleanupSql(continuingRevision = "false"): string {
       WHERE revision.close_live
         AND attempt.namespace_id = revision.namespace_id
         AND attempt.agent_id = revision.agent_id AND attempt.revision_id = revision.revision_id
+        AND attempt.admission_id IN (SELECT admission_id FROM locked_attempts)
         AND attempt.phase IN ('opening', 'open')
       RETURNING attempt.namespace_id, attempt.agent_id, attempt.revision_id
     ), cleanup_obligations AS (
@@ -214,7 +237,7 @@ function transferRepositoryCleanupSql(continuingRevision = "false"): string {
       JOIN cleanup_revisions AS revision
         ON attempt.namespace_id = revision.namespace_id AND attempt.agent_id = revision.agent_id
         AND attempt.revision_id = revision.revision_id
-      WHERE attempt.phase = 'closing'
+      WHERE attempt.phase IN ('closing', 'invalidated')
     ), cleanup_inserted AS (
       INSERT INTO occ.controller_work (
         idempotency_key, namespace_id, agent_id, revision_id, actor_id,
@@ -504,12 +527,21 @@ export class PostgresWorkQueue {
          WHERE work.idempotency_key = $1 AND work.claim_token = $2::uuid
            AND work.state = 'claimed' AND work.lease_expires_at > clock_timestamp()
          FOR UPDATE OF work
+       ), namespace_owner AS MATERIALIZED (
+         SELECT namespace.id, namespace.status
+         FROM occ.namespaces AS namespace JOIN source ON source.namespace_id = namespace.id
+         FOR UPDATE OF namespace
+       ), agent_owner AS MATERIALIZED (
+         SELECT agent.* FROM occ.agents AS agent
+         JOIN namespace_owner AS namespace ON namespace.id = agent.namespace_id
+         WHERE agent.namespace_id = $3 AND agent.id = $4
+         FOR UPDATE OF agent
        ), owner AS MATERIALIZED (
          SELECT revision.namespace_id, revision.agent_id, revision.id AS revision_id
          FROM occ.agent_revisions AS revision
-         JOIN occ.agents AS agent
+         JOIN agent_owner AS agent
            ON agent.namespace_id = revision.namespace_id AND agent.id = revision.agent_id
-         JOIN occ.namespaces AS namespace ON namespace.id = revision.namespace_id
+         JOIN namespace_owner AS namespace ON namespace.id = revision.namespace_id
          JOIN source ON source.namespace_id = revision.namespace_id
          LEFT JOIN occ.agent_revisions AS source_revision
            ON source_revision.namespace_id = source.namespace_id
@@ -523,6 +555,9 @@ export class PostgresWorkQueue {
                AND revision.revision_number <= source_revision.revision_number)
              OR (source.agent_target = 'stopped' AND source.revision_id IS NULL
                AND source.agent_id = revision.agent_id AND revision.admitted_at <= source.created_at)
+             OR (source.agent_target = 'deleted' AND source.revision_id IS NULL
+               AND source.agent_id = revision.agent_id AND agent.status = 'deleting'
+               AND agent.desired_runtime_state = 'stopped' AND revision.admitted_at <= source.created_at)
              OR (source.namespace_target = 'deleted' AND source.agent_id IS NULL
                AND source.revision_id IS NULL AND namespace.status = 'deleting'
                AND revision.admitted_at <= source.created_at)
@@ -538,7 +573,7 @@ export class PostgresWorkQueue {
          WHERE source.lease_expires_at > clock_timestamp() AND ($7::boolean OR EXISTS (
            SELECT 1 FROM occ.repository_session_attempts AS attempt
            WHERE attempt.namespace_id = owner.namespace_id AND attempt.agent_id = owner.agent_id
-             AND attempt.revision_id = owner.revision_id AND attempt.phase = 'closing'
+             AND attempt.revision_id = owner.revision_id AND attempt.phase IN ('closing', 'invalidated')
          ))
          ${CLEANUP_CONFLICT_SQL}
          RETURNING *
@@ -697,7 +732,7 @@ export class PostgresWorkQueue {
     claim: WorkClaim,
     namespaceId: string,
     agentId: string,
-  ): Promise<void> {
+  ): Promise<"completed" | "cleanup-pending"> {
     validateClaim(claim);
     nonempty(namespaceId, "Agent deletion Namespace ID");
     nonempty(agentId, "Agent deletion Agent ID");
@@ -705,9 +740,14 @@ export class PostgresWorkQueue {
       "SELECT occ.finalize_agent_deletion($1::text, $2::text, $3::text, $4::uuid) AS completed",
       [namespaceId, agentId, claim.idempotencyKey, claim.claimToken],
     );
-    if ((completed.rows[0] as { completed?: unknown } | undefined)?.completed !== true) {
+    const outcome = (completed.rows[0] as { completed?: unknown } | undefined)?.completed;
+    if (outcome === null) {
+      return "cleanup-pending";
+    }
+    if (outcome !== true) {
       throw new WorkClaimLostError();
     }
+    return "completed";
   }
 
   async defer(claim: WorkClaim, pending: RetryableFailure): Promise<void> {

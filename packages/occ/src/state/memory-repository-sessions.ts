@@ -42,6 +42,7 @@ function sameOwner(attempt: RepositorySessionAttempt, owner: RepositoryRevisionO
 export function memoryRepositorySessions(
   attempts: Map<string, Readonly<RepositorySessionAttempt>>,
   findRevision: (owner: RepositoryRevisionOwner) => Readonly<AgentRevision> | undefined,
+  ownerAcceptsAdmission: (owner: RepositoryRevisionOwner) => boolean,
 ): RepositorySessionRepository {
   const list = (matches: (attempt: RepositorySessionAttempt) => boolean) =>
     Object.freeze(
@@ -84,10 +85,14 @@ export function memoryRepositorySessions(
     createAttempt: async (input) => {
       const revision = findRevision(input);
       const admitted = revision?.repositoryCredentials;
+      const binding = admitted?.bindings.find(
+        (candidate) => candidate.repositoryRef === input.repositoryRef,
+      );
       if (
+        !ownerAcceptsAdmission(input) ||
         admitted === undefined ||
         admitted.deadlineWallMs !== input.deadlineWallMs ||
-        !admitted.bindings.some((binding) => binding.repositoryRef === input.repositoryRef)
+        binding === undefined
       ) {
         throw new ScopeViolationError(
           "The repository session does not match its admitted revision.",
@@ -111,6 +116,8 @@ export function memoryRepositorySessions(
         namespaceId: input.namespaceId,
         agentId: input.agentId,
         revisionId: input.revisionId,
+        liveRevisionId: input.revisionId,
+        cleanupContext: { driver: admitted.driver, binding },
         repositoryRef: input.repositoryRef,
         admissionId: input.admissionId,
         durationSeconds: input.durationSeconds,

@@ -9,6 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import pg from "pg";
+import { repositoryCredentials } from "../fixtures/repository-credentials/session-state.mjs";
 import {
   catalogDigest,
   initialSchemaState,
@@ -1158,55 +1159,120 @@ test(
 );
 
 test(
+  "Canonical repository-prefix upgrade retains exact attempt cleanup context",
+  requiresHistoryPostgres,
+  async (context) => {
+    const fixture = await migrationHistoryFixture();
+    const db = await historyDatabase(context, fixture, "repository", { prefix: 26 });
+    const namespaceId = await seedCanonicalData(db);
+    const snapshot = repositoryCredentials();
+    const revisionId = `rev_${randomUUID()}`;
+    const admissionId = `admission-${randomUUID()}`;
+    const owner = (
+      await db.app.query(
+        `INSERT INTO occ.agent_revisions (id,namespace_id,agent_id,revision_number,admitted_spec,provider_id,admitted_at)
+     SELECT $2,namespace_id,agent_id,2,admitted_spec || jsonb_build_object('repository_credentials',$3::jsonb),provider_id,now()
+     FROM occ.agent_revisions WHERE namespace_id=$1 RETURNING agent_id`,
+        [namespaceId, revisionId, JSON.stringify(snapshot)],
+      )
+    ).rows[0].agent_id;
+    await db.app.query("UPDATE occ.agents SET desired_runtime_state='running' WHERE id=$1", [
+      owner,
+    ]);
+    await db.app.query(
+      `INSERT INTO occ.repository_session_attempts
+     (namespace_id,agent_id,revision_id,repository_ref,admission_id,duration_seconds,deadline_wall_ms,phase,created_at,updated_at)
+     VALUES($1,$2,$3,$4,$5,60,$6,'opening',now(),now())`,
+      [
+        namespaceId,
+        owner,
+        revisionId,
+        snapshot.bindings[0].repositoryRef,
+        admissionId,
+        snapshot.deadlineWallMs,
+      ],
+    );
+    const before = (
+      await db.app.query(
+        "SELECT to_jsonb(attempt) AS value FROM occ.repository_session_attempts AS attempt",
+      )
+    ).rows;
+    const receipts = await historyReceipts(db.migrator);
+    assert.deepEqual(await runHistoryMigration(db, "production", true), {
+      ok: true,
+      history: "repositoryCredentials",
+    });
+    assert.deepEqual(await runHistoryMigration(db), { ok: true, history: "repositoryCredentials" });
+    await assertCompletedHistory(db, receipts);
+    const retained = (
+      await db.app.query(
+        "SELECT to_jsonb(attempt) AS value FROM occ.repository_session_attempts AS attempt",
+      )
+    ).rows;
+    assert.deepEqual(
+      retained,
+      before.map(({ value }) => ({
+        value: {
+          ...value,
+          live_revision_id: revisionId,
+          cleanup_context: { driver: snapshot.driver, binding: snapshot.bindings[0] },
+        },
+      })),
+    );
+    assert.deepEqual(await runHistoryMigration(db, "production"), {
+      ok: true,
+      history: "completed",
+    });
+  },
+);
+
+test(
   "Canonical migration rollback preserves receipts and retries through the other command",
   requiresHistoryPostgres,
   async (context) => {
     const fixture = await migrationHistoryFixture();
-    for (const prefix of [0, 24]) {
-      await context.test(
-        prefix === 0 ? "fresh transaction" : "main upgrade transaction",
-        async (child) => {
-          const db = await historyDatabase(child, fixture, "rollback", { prefix });
-          if (prefix) {
-            await seedCanonicalData(db);
-          }
-          const before = await historySnapshot(db);
-          const data = prefix ? await canonicalData(db) : undefined;
-          // A database-local event trigger aborts the real final DDL. Drizzle must
-          // roll back every preceding SQL statement and receipt in that transaction.
-          await historyAdmin(
-            db,
-            db.name,
-            `CREATE FUNCTION public.reject_migration_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'migration rollback fixture' USING ERRCODE='55000'; END $$;
-        CREATE EVENT TRIGGER reject_migration_ddl ON ddl_command_start WHEN TAG IN ('ALTER FUNCTION') EXECUTE FUNCTION public.reject_migration_ddl()`,
+    for (const prefix of [0, 24, 26]) {
+      await context.test(`prefix ${prefix} transaction`, async (child) => {
+        const db = await historyDatabase(child, fixture, "rollback", { prefix });
+        if (prefix) {
+          await seedCanonicalData(db);
+        }
+        const before = await historySnapshot(db);
+        const data = prefix ? await canonicalData(db) : undefined;
+        // A database-local event trigger aborts the real final DDL. Drizzle must
+        // roll back every preceding SQL statement and receipt in that transaction.
+        await historyAdmin(
+          db,
+          db.name,
+          `CREATE FUNCTION public.reject_migration_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'migration rollback fixture' USING ERRCODE='55000'; END $$;
+        CREATE EVENT TRIGGER reject_migration_ddl ON ddl_command_start WHEN TAG IN ('${prefix === 26 ? "CREATE FUNCTION" : "ALTER FUNCTION"}') EXECUTE FUNCTION public.reject_migration_ddl()`,
+        );
+        assert.deepEqual(await runHistoryMigration(db), { ok: false, code: "MIGRATION_FAILED" });
+        assert.deepEqual(await historyReceipts(db.migrator), before.receipts);
+        assert.deepEqual(await migrationCatalog(db.migrator), before.occ);
+        if (prefix) {
+          assert.deepEqual(await canonicalData(db), data);
+        } else {
+          assert.equal(
+            (
+              await db.migrator.query(
+                "SELECT to_regclass('drizzle.__drizzle_migrations') AS ledger",
+              )
+            ).rows[0].ledger,
+            "drizzle.__drizzle_migrations",
           );
-          assert.deepEqual(await runHistoryMigration(db), { ok: false, code: "MIGRATION_FAILED" });
-          assert.deepEqual(await historyReceipts(db.migrator), before.receipts);
-          assert.deepEqual(await migrationCatalog(db.migrator), before.occ);
-          if (prefix) {
-            assert.deepEqual(await canonicalData(db), data);
-          } else {
-            assert.equal(
-              (
-                await db.migrator.query(
-                  "SELECT to_regclass('drizzle.__drizzle_migrations') AS ledger",
-                )
-              ).rows[0].ledger,
-              "drizzle.__drizzle_migrations",
-            );
-          }
-          await historyAdmin(
-            db,
-            db.name,
-            "DROP EVENT TRIGGER reject_migration_ddl; DROP FUNCTION public.reject_migration_ddl()",
-          );
-          assert.deepEqual(await runHistoryMigration(db, "production"), {
-            ok: true,
-            history: prefix ? "main" : "empty",
-          });
-          await assertCompletedHistory(db, before.receipts);
-        },
-      );
+        }
+        await historyAdmin(
+          db,
+          db.name,
+          "DROP EVENT TRIGGER reject_migration_ddl; DROP FUNCTION public.reject_migration_ddl()",
+        );
+        assert.deepEqual(await runHistoryMigration(db, "production"), {
+          ok: true,
+          history: prefix === 26 ? "repositoryCredentials" : prefix ? "main" : "empty",
+        });
+        await assertCompletedHistory(db, before.receipts);
+      });
     }
   },
 );

@@ -1,3 +1,5 @@
+import type { AdmittedRepositoryBinding, AgentRevision } from "@openclaw-enterprise/contracts";
+
 export interface RepositoryRevisionOwner {
   readonly namespaceId: string;
   readonly agentId: string;
@@ -8,6 +10,12 @@ export type RepositorySessionPhase = "opening" | "open" | "closing" | "disposed"
 
 /** Safe recovery identifiers only; gateway bearer material never belongs in State. */
 export interface RepositorySessionAttempt extends RepositoryRevisionOwner {
+  /** Cleared only after disposal, when the live revision is physically deleted. */
+  readonly liveRevisionId: string | null;
+  readonly cleanupContext: {
+    readonly driver: NonNullable<AgentRevision["repositoryCredentials"]>["driver"];
+    readonly binding: AdmittedRepositoryBinding;
+  };
   readonly repositoryRef: string;
   readonly admissionId: string;
   readonly durationSeconds: number;

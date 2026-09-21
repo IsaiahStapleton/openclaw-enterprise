@@ -354,6 +354,7 @@
         {
           "path": "tests/integration/postgres-migration-compatibility.test.mjs",
           "expectedTests": [
+            "Canonical repository-prefix upgrade retains exact attempt cleanup context",
             "Drizzle generates repository schema migrations without redundant regeneration",
             "Migration rejects legacy active_runtime state without changing persisted rows",
             "Migration rejects legacy harness_revision state without changing persisted rows",
@@ -405,7 +406,11 @@
             "transaction-scoped queue fencing rolls back Namespace mutation, completion, and audit together",
             "concurrent claims exclude one Namespace lifecycle and one Agent while distinct Agents progress",
             "a restarted queue recovers expired claims, fences old tokens, and persists exhausted failures",
-            "batch stale recovery reports each expired claim once and writes one audit event per item"
+            "batch stale recovery reports each expired claim once and writes one audit event per item",
+            "Agent deletion retains exact cleanup obligations on fail",
+            "Agent deletion retains exact cleanup obligations on retry",
+            "Agent deletion retains exact cleanup obligations on expired claim",
+            "Agent deletion retains exact cleanup obligations on exhausted queued"
           ]
         },
         {
@@ -430,6 +435,7 @@
         {
           "path": "tests/integration/postgres-worker-agent-revision.test.mjs",
           "expectedTests": [
+            "worker revalidates admitted repository selections through the concrete GitHub Driver and Unix control",
             "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
             "Agent stop cleans a terminal candidate without an active revision",
             "a deployment during active cleanup supersedes the remaining Agent stop effects",

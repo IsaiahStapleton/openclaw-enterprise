@@ -8,7 +8,8 @@ import type {
 import type { PostgresQueryClient } from "./postgres-work-queue.ts";
 
 const columns = `namespace_id, agent_id, revision_id, repository_ref, admission_id,
-  duration_seconds, deadline_wall_ms, phase, session_id, created_at, updated_at`;
+  duration_seconds, deadline_wall_ms, phase, session_id, created_at, updated_at,
+  live_revision_id, cleanup_context`;
 
 function attemptFromRow(value: unknown): Readonly<RepositorySessionAttempt> {
   const row = value as Record<string, unknown>;
@@ -42,6 +43,8 @@ function attemptFromRow(value: unknown): Readonly<RepositorySessionAttempt> {
     namespaceId: text("namespace_id"),
     agentId: text("agent_id"),
     revisionId: text("revision_id"),
+    liveRevisionId: row.live_revision_id === null ? null : text("live_revision_id"),
+    cleanupContext: row.cleanup_context as RepositorySessionAttempt["cleanupContext"],
     repositoryRef: text("repository_ref"),
     admissionId: text("admission_id"),
     durationSeconds,
@@ -85,7 +88,9 @@ export function postgresRepositorySessions(
     createAttempt: async (input) => {
       const result = await client.query(
         `INSERT INTO occ.repository_session_attempts
-         (${columns}) VALUES ($1, $2, $3, $4, $5, $6, $7, 'opening', NULL, $8, $8)
+         (namespace_id, agent_id, revision_id, repository_ref, admission_id,
+          duration_seconds, deadline_wall_ms, phase, session_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'opening', NULL, $8, $8)
          RETURNING ${columns}`,
         [
           input.namespaceId,

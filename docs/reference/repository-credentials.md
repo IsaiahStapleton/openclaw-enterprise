@@ -47,6 +47,18 @@ closed Git/gh schema. Status cannot regenerate those files.
 withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
 persisted `admitted_spec.repository_credentials` retain their meaning.
 
+State derives each attempt's immutable cleanup context from its admitted revision:
+the selected Driver and exact Provider, profile and grant binding. It retains
+original Namespace, Agent, revision, admission and session identities and deadlines
+after physical Agent deletion. These records contain no bearer or provider token.
+
+Agent deletion closes sessions and retires Compute resources before finalizing
+State. Physical deletion waits until every attempt is `disposed`; only then may
+the finalizer detach its live revision pointer and remove Agent/revision rows.
+`CLOSED`, missing service inventory and `invalidated` attempts retain cleanup Work
+and the deleting Agent. A session deadline alone does not settle provider cleanup.
+No automatic evidence pruning or durable token recovery is implemented.
+
 ## Configuration
 
 ### Canonical platform registry
