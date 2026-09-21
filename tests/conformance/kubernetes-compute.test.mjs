@@ -2717,12 +2717,11 @@ test("Kubernetes runtime diagnostics read exact private Pod status without nativ
           container: role,
           podUid: pods[role].metadata.uid,
           observedAt: "2026-09-19T12:00:00.000Z",
-          ready: role === "agent",
           checks: [
             {
               component: role,
               check: role === "agent" ? "auth" : "socket",
-              state: role === "agent" ? "succeeded" : "checking",
+              state: role === "agent" ? "succeeded" : "unknown",
               checkedAt: role === "agent" ? "2026-09-19T12:00:00.000Z" : null,
             },
           ],
@@ -2743,7 +2742,7 @@ test("Kubernetes runtime diagnostics read exact private Pod status without nativ
     diagnostics.checks.map(({ component, check, state }) => ({ component, check, state })),
     [
       { component: "agent", check: "auth", state: "succeeded" },
-      { component: "gateway", check: "socket", state: "checking" },
+      { component: "gateway", check: "socket", state: "unknown" },
     ],
   );
   assert.equal(diagnostics.checks.find((check) => check.component === "gateway")?.checkedAt, null);
@@ -2843,12 +2842,11 @@ test("Kubernetes runtime diagnostics reject missing timestamps and raced Pod rea
           container: "agent",
           podUid: pod.metadata.uid,
           observedAt: "2026-09-19T12:00:00.000Z",
-          ready: false,
           checks: [
             {
               component: "agent",
               check: "auth",
-              state: "checking",
+              state: "unknown",
               checkedAt: "2026-09-19T12:00:00.000Z",
             },
           ],

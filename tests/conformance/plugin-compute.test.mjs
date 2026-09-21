@@ -1714,13 +1714,7 @@ test("Kubernetes startup failure evidence requires the exact runtime Pod report"
 test("gateway runtime status maps native Slack channel status without provider data", async () => {
   const revisionId = "revision-plugin-compute-1";
   let statusHandler;
-  let channelStatus = {
-    channels: { slack: { configured: true, connected: true } },
-    channelAccounts: {
-      slack: [{ accountId: "default", configured: true, connected: true, probe: { ok: true } }],
-    },
-    channelDefaultAccountId: { slack: "default" },
-  };
+  let channelStatus;
   let channelStatusCalls = 0;
   let holdChannelStatusResponse = false;
   let pendingChannelStatusListeners;
@@ -1837,123 +1831,115 @@ test("gateway runtime status maps native Slack channel status without provider d
   const ready = await readRuntimeStatusFromHandler(statusHandler);
   assert.equal(ready.revisionId, revisionId);
   assert.equal(channelStatusCalls, 0);
-  const checked = await readRuntimeChannelChecksFromHandler(statusHandler);
-  assert.deepEqual(
-    checked.checks.map(({ component, check, state, code }) => ({ component, check, state, code })),
+  const assertSlackDiagnostics = async (status, expected, description) => {
+    channelStatus = status;
+    const diagnostics = await readRuntimeChannelChecksFromHandler(statusHandler);
+    assert.deepEqual(
+      diagnostics.checks.map(({ component }) => component),
+      ["gateway", "gateway", "gateway"],
+      `${description} components`,
+    );
+    assert.deepEqual(
+      diagnostics.checks.map(({ check, state, code }) => ({ check, state, code })),
+      expected,
+      description,
+    );
+  };
+
+  await assertSlackDiagnostics(
+    {
+      channels: { slack: { configured: true, connected: true } },
+      channelAccounts: {
+        slack: [{ accountId: "default", configured: true, connected: true, probe: { ok: true } }],
+      },
+      channelDefaultAccountId: { slack: "default" },
+    },
     [
-      { component: "gateway", check: "configuration", state: "succeeded", code: undefined },
-      { component: "gateway", check: "authentication", state: "succeeded", code: undefined },
-      { component: "gateway", check: "connectivity", state: "succeeded", code: undefined },
+      { check: "configuration", state: "succeeded", code: undefined },
+      { check: "authentication", state: "succeeded", code: undefined },
+      { check: "connectivity", state: "succeeded", code: undefined },
     ],
+    "connected",
   );
 
-  channelStatus = { configOnly: true, configuredChannels: [] };
-  const disabled = await readRuntimeChannelChecksFromHandler(statusHandler);
-  assert.deepEqual(
-    disabled.checks.map(({ check, state, code }) => ({ check, state, code })),
+  await assertSlackDiagnostics(
+    { configOnly: true, configuredChannels: [] },
     [
       { check: "configuration", state: "failed", code: "NOT_CONFIGURED" },
       { check: "authentication", state: "unknown", code: undefined },
       { check: "connectivity", state: "unknown", code: undefined },
     ],
+    "disabled",
   );
 
-  channelStatus = {
-    channels: { slack: { configured: true } },
-    channelAccounts: {
-      slack: [
-        { accountId: "default", configured: true, probe: { ok: false, error: "invalid_auth" } },
+  for (const error of [
+    "invalid_auth",
+    "An API error occurred: invalid_auth; code: slack_webapi_platform_error; slack error: invalid_auth",
+  ]) {
+    await assertSlackDiagnostics(
+      {
+        channels: { slack: { configured: true } },
+        channelAccounts: {
+          slack: [{ accountId: "default", configured: true, probe: { ok: false, error } }],
+        },
+        channelDefaultAccountId: { slack: "default" },
+      },
+      [
+        { check: "configuration", state: "succeeded", code: undefined },
+        { check: "authentication", state: "failed", code: "AUTHENTICATION_FAILED" },
+        { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
       ],
-    },
-    channelDefaultAccountId: { slack: "default" },
-  };
-  const rejected = await readRuntimeChannelChecksFromHandler(statusHandler);
-  assert.deepEqual(
-    rejected.checks.map(({ check, state, code }) => ({ check, state, code })),
-    [
-      { check: "configuration", state: "succeeded", code: undefined },
-      { check: "authentication", state: "failed", code: "AUTHENTICATION_FAILED" },
-      { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
-    ],
-  );
+      `invalid auth ${error}`,
+    );
+  }
 
-  channelStatus = {
-    channels: { slack: { configured: true } },
-    channelAccounts: {
-      slack: [
-        {
-          accountId: "default",
-          configured: true,
-          probe: {
-            ok: false,
-            error:
-              "An API error occurred: invalid_auth; code: slack_webapi_platform_error; slack error: invalid_auth",
+  await assertSlackDiagnostics(
+    {
+      channels: { slack: { configured: true, connected: true } },
+      channelAccounts: {
+        slack: [
+          {
+            accountId: "default",
+            configured: true,
+            connected: true,
+            probe: { ok: false, error: "probe timed out after 10000ms" },
           },
-        },
-      ],
+        ],
+      },
+      channelDefaultAccountId: { slack: "default" },
     },
-    channelDefaultAccountId: { slack: "default" },
-  };
-  const sdkWrappedRejection = await readRuntimeChannelChecksFromHandler(statusHandler);
-  assert.deepEqual(
-    sdkWrappedRejection.checks.map(({ check, state, code }) => ({ check, state, code })),
-    [
-      { check: "configuration", state: "succeeded", code: undefined },
-      { check: "authentication", state: "failed", code: "AUTHENTICATION_FAILED" },
-      { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
-    ],
-  );
-
-  channelStatus = {
-    channels: { slack: { configured: true, connected: true } },
-    channelAccounts: {
-      slack: [
-        {
-          accountId: "default",
-          configured: true,
-          connected: true,
-          probe: { ok: false, error: "probe timed out after 10000ms" },
-        },
-      ],
-    },
-    channelDefaultAccountId: { slack: "default" },
-  };
-  const probeFailed = await readRuntimeChannelChecksFromHandler(statusHandler);
-  assert.deepEqual(
-    probeFailed.checks.map(({ check, state, code }) => ({ check, state, code })),
     [
       { check: "configuration", state: "succeeded", code: undefined },
       { check: "authentication", state: "unknown", code: "PROBE_FAILED" },
       { check: "connectivity", state: "succeeded", code: undefined },
     ],
+    "probe timeout with connected transport",
   );
 
-  channelStatus = {
-    channels: { slack: { configured: true, connected: true } },
-    channelAccounts: {
-      slack: [{ accountId: "secondary", configured: true, connected: true, probe: { ok: true } }],
+  await assertSlackDiagnostics(
+    {
+      channels: { slack: { configured: true, connected: true } },
+      channelAccounts: {
+        slack: [{ accountId: "secondary", configured: true, connected: true, probe: { ok: true } }],
+      },
+      channelDefaultAccountId: { slack: "missing-default" },
     },
-    channelDefaultAccountId: { slack: "missing-default" },
-  };
-  const missingDefault = await readRuntimeChannelChecksFromHandler(statusHandler);
-  assert.deepEqual(
-    missingDefault.checks.map(({ check, state, code }) => ({ check, state, code })),
     [
       { check: "configuration", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
       { check: "authentication", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
       { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
     ],
+    "missing default account",
   );
 
-  channelStatus = { configOnly: true };
-  const malformedFallback = await readRuntimeChannelChecksFromHandler(statusHandler);
-  assert.deepEqual(
-    malformedFallback.checks.map(({ check, state, code }) => ({ check, state, code })),
+  await assertSlackDiagnostics(
+    { configOnly: true },
     [
       { check: "configuration", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
       { check: "authentication", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
       { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
     ],
+    "malformed config fallback",
   );
 
   holdChannelStatusResponse = true;

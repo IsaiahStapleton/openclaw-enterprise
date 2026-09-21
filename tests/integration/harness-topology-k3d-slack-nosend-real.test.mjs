@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assertActualModelTurn } from "../helpers/harness-topology-k3d-real.mjs";
+import {
+  assertActualModelTurn,
+  assertCurrentRuntimeDiagnosticsNoSend,
+} from "../helpers/harness-topology-k3d-real.mjs";
 
 import {
   arrangeNoSendSlackTopology,
@@ -10,13 +13,11 @@ import {
   assertNoSendSlackPrerequisites,
   assertNoSecretMaterial,
   assertUnreachableSlackNotConnected,
-  ensureNoSendSlackProxy,
   noSendSlackFixture,
+  requiredNoSendSlackProxy,
   requiresNoSendSlackInvalid,
   requiresNoSendSlackLive,
   requiresProductionCluster,
-  runDiagnostics,
-  slackNoSendShapeSummary,
 } from "../helpers/harness-topology-k3d-slack-nosend.mjs";
 
 test(
@@ -25,11 +26,10 @@ test(
   async (context) => {
     const slack = noSendSlackFixture({ proxyUrl: "http://127.0.0.1:9" });
     const { topology, protectedValues } = await arrangeNoSendSlackTopology(context, slack);
-    const diagnostics = await runDiagnostics(
+    const diagnostics = await assertCurrentRuntimeDiagnosticsNoSend(
+      context,
       topology,
-      topology.agent,
       topology.revision,
-      protectedValues,
     );
     assertUnreachableSlackNotConnected(diagnostics);
     assertNoSecretMaterial(diagnostics, protectedValues, "unreachable Slack diagnostics");
@@ -41,13 +41,12 @@ test(
   "production Slack no-send diagnostics map invalid Slack auth to failed code",
   { ...requiresNoSendSlackInvalid, timeout: 780_000 },
   async (context) => {
-    const slack = noSendSlackFixture({ proxyUrl: await ensureNoSendSlackProxy(context) });
+    const slack = noSendSlackFixture({ proxyUrl: requiredNoSendSlackProxy() });
     const { topology, protectedValues } = await arrangeNoSendSlackTopology(context, slack);
-    const diagnostics = await runDiagnostics(
+    const diagnostics = await assertCurrentRuntimeDiagnosticsNoSend(
+      context,
       topology,
-      topology.agent,
       topology.revision,
-      protectedValues,
     );
     assertInvalidAuthRejected(diagnostics);
     assertNoSecretMaterial(diagnostics, protectedValues, "invalid Slack auth diagnostics");
@@ -69,24 +68,19 @@ test(
       botToken,
       "SLACK_BOT_TOKEN or BOT_TOKEN is required for live no-send Slack diagnostics.",
     );
-    const proxyUrl = await ensureNoSendSlackProxy(context);
     const slack = noSendSlackFixture({
-      proxyUrl,
+      proxyUrl: requiredNoSendSlackProxy(),
       appToken,
       botToken,
       disableEventResponses: true,
     });
     const { topology, protectedValues } = await arrangeNoSendSlackTopology(context, slack);
-    context.diagnostic(
-      `slack no-send admitted shape: ${slackNoSendShapeSummary(topology.revision)}`,
-    );
     assertNoSendSlackPrerequisites(topology.revision);
     await assertActualModelTurn(topology);
-    const diagnostics = await runDiagnostics(
+    const diagnostics = await assertCurrentRuntimeDiagnosticsNoSend(
+      context,
       topology,
-      topology.agent,
       topology.revision,
-      protectedValues,
     );
     assertConnectedSlackChecks(diagnostics);
     assertNoSecretMaterial(diagnostics, protectedValues, "live Slack no-send diagnostics");

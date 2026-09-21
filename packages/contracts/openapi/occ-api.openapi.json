@@ -203,8 +203,6 @@
                     "component": { "maxLength": 64, "minLength": 1, "type": "string" },
                     "state": {
                       "anyOf": [
-                        { "const": "not_started", "type": "string" },
-                        { "const": "checking", "type": "string" },
                         { "const": "succeeded", "type": "string" },
                         { "const": "failed", "type": "string" },
                         { "const": "unknown", "type": "string" }
@@ -5520,8 +5518,6 @@
                               "component": { "maxLength": 64, "minLength": 1, "type": "string" },
                               "state": {
                                 "anyOf": [
-                                  { "const": "not_started", "type": "string" },
-                                  { "const": "checking", "type": "string" },
                                   { "const": "succeeded", "type": "string" },
                                   { "const": "failed", "type": "string" },
                                   { "const": "unknown", "type": "string" }

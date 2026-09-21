@@ -96,8 +96,7 @@ The caller needs exact Agent `read` and `operate`, plus read access to the exact
 AgentRevision. The revision must belong to the Agent in the requested Namespace.
 The response contains the `revisionId`, an `observedAt` timestamp, and up to 32
 generic `checks`. Each check includes `component`, `check`, `state`, nullable
-`checkedAt`, and optional safe `code`. States are `not_started`, `checking`,
-`succeeded`, `failed`, or `unknown`; the selected Compute implementation owns
+`checkedAt`, and optional safe `code`. States are `succeeded`, `failed`, or `unknown`; the selected Compute implementation owns
 their meaning and collection method. Unsupported Drivers or invalid Driver
 evidence return `503 DEPENDENCY_UNAVAILABLE`.
 

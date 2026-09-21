@@ -555,8 +555,6 @@ export const AgentDeploymentDiagnosticsSchema = Type.Object(
           component: Type.String({ minLength: 1, maxLength: 64 }),
           check: Type.String({ minLength: 1, maxLength: 64 }),
           state: Type.Union([
-            Type.Literal("not_started"),
-            Type.Literal("checking"),
             Type.Literal("succeeded"),
             Type.Literal("failed"),
             Type.Literal("unknown"),

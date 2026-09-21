@@ -2848,7 +2848,7 @@ async function assertCurrentRuntimeDiagnosticsNoSend(context, topology, revision
     assert.match(check.component, /^[A-Za-z0-9._~:@-]{1,64}$/);
     assert.match(check.check, /^[A-Za-z0-9._~:@-]{1,64}$/);
     assert.ok(
-      ["not_started", "checking", "succeeded", "failed", "unknown"].includes(check.state),
+      ["succeeded", "failed", "unknown"].includes(check.state),
       `unsupported diagnostic state ${check.state}`,
     );
     if (check.checkedAt !== null) {

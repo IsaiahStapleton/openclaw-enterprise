@@ -863,8 +863,7 @@ export interface AgentRuntimeCredentialStatus {
   readonly transportConfigured: boolean;
 }
 
-export type RuntimeDiagnosticState =
-  "not_started" | "checking" | "succeeded" | "failed" | "unknown";
+export type RuntimeDiagnosticState = "succeeded" | "failed" | "unknown";
 
 export interface RuntimeDiagnosticCheck {
   readonly component: string;

@@ -4593,11 +4593,7 @@ export class OpenClawController {
       value.component.length > 64 ||
       !isNonEmptyString(value.check) ||
       value.check.length > 64 ||
-      (state !== "not_started" &&
-        state !== "checking" &&
-        state !== "succeeded" &&
-        state !== "failed" &&
-        state !== "unknown") ||
+      (state !== "succeeded" && state !== "failed" && state !== "unknown") ||
       (value.checkedAt !== null &&
         (!isNonEmptyString(value.checkedAt) || Number.isNaN(Date.parse(value.checkedAt)))) ||
       (value.code !== undefined && (!isNonEmptyString(value.code) || value.code.length > 64))

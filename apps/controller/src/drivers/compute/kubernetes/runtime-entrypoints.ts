@@ -178,7 +178,6 @@ let pluginStatusReport = {
   failures: [],
 };
 
-let runtimeReady = false;
 let runtimeStartupFailure;
 
 function publishPluginRuntimeStatus(report) {
@@ -207,7 +206,6 @@ function publishRuntimeFailure(check, code) {
   if (!RUNTIME_DIAGNOSTIC_CODES.has(code)) {
     throw new Error("Runtime failure code is invalid.");
   }
-  runtimeReady = false;
   runtimeStartupFailure = {
     component: runtimeStatusContainer(),
     check,
@@ -218,7 +216,6 @@ function publishRuntimeFailure(check, code) {
 
 function publishRuntimeReady() {
   if (runtimeStatusPort() === undefined) return;
-  runtimeReady = true;
   runtimeStartupFailure = undefined;
 }
 
@@ -463,7 +460,6 @@ async function runtimeDiagnosticsReport(abortSignal) {
     container: runtimeStatusContainer(),
     podUid: requireNonEmptyString(process.env.OPENCLAW_POD_UID, "Runtime status Pod UID"),
     observedAt,
-    ready: runtimeReady,
     checks: (await slackChannelDiagnosticChecks(observedAt, abortSignal)).slice(0, 32),
   };
 }

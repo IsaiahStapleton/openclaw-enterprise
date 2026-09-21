@@ -1742,7 +1742,7 @@ Run explicit current-runtime diagnostics for one exact Agent revision
 | `data.checks[].checkedAt` | `string (date-time) or null` | Yes | — |
 | `data.checks[].code` | `string` | No | min length: 1; max length: 64 |
 | `data.checks[].component` | `string` | Yes | min length: 1; max length: 64 |
-| `data.checks[].state` | `"not_started" or "checking" or "succeeded" or "failed" or "unknown"` | Yes | — |
+| `data.checks[].state` | `"succeeded" or "failed" or "unknown"` | Yes | — |
 | `data.observedAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
 | `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `meta` | `object` | Yes | — |

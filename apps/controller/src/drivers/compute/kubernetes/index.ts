@@ -341,15 +341,6 @@ interface PrivateStatusReadback {
   readonly containerId: string | undefined;
 }
 
-interface RuntimeStatusReadback {
-  readonly revisionId: string;
-  readonly container: "agent" | "gateway";
-  readonly podUid: string;
-  readonly observedAt: string;
-  readonly ready: boolean;
-  readonly checks: readonly RuntimeDiagnosticCheck[];
-}
-
 class OwnershipFailure extends Error {}
 class ConfigurationFailure extends Error {}
 
@@ -1497,8 +1488,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return await withComputeAbortSignal(signal, async () => {
         const reports = await Promise.all(
           this.runtimeStatusContainers(revision).map(async (container) => {
-            const status = await this.runtimeStatus(revision, namespace, container);
-            if (status === undefined) {
+            const checks = await this.runtimeDiagnosticChecks(revision, namespace, container);
+            if (checks === undefined) {
               return [
                 {
                   component: container,
@@ -1509,7 +1500,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
                 } satisfies RuntimeDiagnosticCheck,
               ];
             }
-            return status.checks;
+            return checks;
           }),
         );
         return {
@@ -4592,11 +4583,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return revision.harness.mode === "embedded" ? ["gateway"] : ["agent", "gateway"];
   }
 
-  private async runtimeStatus(
+  private async runtimeDiagnosticChecks(
     revision: AgentRevision,
     namespace: string,
     container: "agent" | "gateway",
-  ): Promise<RuntimeStatusReadback | undefined> {
+  ): Promise<readonly RuntimeDiagnosticCheck[] | undefined> {
     const readback = await this.privateStatusReadback(
       revision,
       namespace,
@@ -4606,7 +4597,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (readback === undefined) {
       return undefined;
     }
-    return this.validRuntimeStatus(readback.status, revision, container, readback.podUid);
+    return this.validRuntimeDiagnosticChecks(readback.status, revision, container, readback.podUid);
   }
 
   private async privateStatusReadback(
@@ -4693,33 +4684,25 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return value;
   }
 
-  private validRuntimeStatus(
+  private validRuntimeDiagnosticChecks(
     value: unknown,
     revision: AgentRevision,
     container: "agent" | "gateway",
     podUid: string,
-  ): RuntimeStatusReadback {
+  ): readonly RuntimeDiagnosticCheck[] {
     const status = asRecord(value);
     if (
       status === undefined ||
       status.revisionId !== revision.id ||
       status.container !== container ||
       status.podUid !== podUid ||
-      typeof status.ready !== "boolean" ||
       !this.validIsoTimestamp(status.observedAt) ||
       !Array.isArray(status.checks) ||
       status.checks.length > 32
     ) {
       throw new DependencyUnavailableError("Runtime status returned invalid data.");
     }
-    return {
-      revisionId: revision.id,
-      container,
-      podUid,
-      observedAt: status.observedAt,
-      ready: status.ready,
-      checks: Object.freeze(status.checks.map((check) => this.validRuntimeDiagnosticCheck(check))),
-    };
+    return Object.freeze(status.checks.map((check) => this.validRuntimeDiagnosticCheck(check)));
   }
 
   private validRuntimeDiagnosticCheck(value: unknown): RuntimeDiagnosticCheck {
@@ -4747,13 +4730,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   private validRuntimeDiagnosticState(value: unknown): value is RuntimeDiagnosticState {
-    return (
-      value === "not_started" ||
-      value === "checking" ||
-      value === "succeeded" ||
-      value === "failed" ||
-      value === "unknown"
-    );
+    return value === "succeeded" || value === "failed" || value === "unknown";
   }
 
   private runtimeFailureEvidence(value: unknown): RuntimeFailureEvidence | undefined {
