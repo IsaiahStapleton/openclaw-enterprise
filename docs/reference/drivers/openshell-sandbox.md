@@ -6,7 +6,8 @@ gateway with a dedicated Codex Harness and the bundled
 Agents, revisions, Namespaces, routing, credentials, and authorization.
 
 **OpenShell is not supported for production Agent deployment.** The stock
-OpenShell version this integration targets, `v0.0.113`, cannot accept the
+OpenShell version this integration targets,
+[`v0.1.0-pre.5`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0-pre.5), cannot accept the
 Kubernetes Secret-backed environment entries or projected workload identity a
 dedicated Codex Agent requires. The Enterprise Driver rejects deployment rather
 than starting an incorrectly credentialed Harness. The existing OpenShell
@@ -103,7 +104,7 @@ drivers:
       kubernetes:
         runtimeClassName: openshell-sandbox
         serviceAccount:
-          mode: driverConfig
+          mode: gatewayConfigured
         sandboxDataMount:
           subPath: workspace
           mountPath: /sandbox/enterprise
@@ -119,6 +120,13 @@ drivers:
                 ports: [443]
                 protocol: tcp
 ```
+
+The optional endpoint fields use OpenShell's configuration spellings: `tls`
+accepts `skip`, `terminate`, or `passthrough`; `enforcement` accepts `enforce`
+or `audit`; and `access` accepts `read_only`, `read_write`, or `full`.
+`gatewayConfigured` is the only ServiceAccount mode for `v0.1.0-pre.5`; the
+gateway's configured sandbox ServiceAccount applies to every Sandbox it creates
+and does not satisfy the per-Agent production requirement below.
 
 The OpenShell gateway must be installed separately before this driver's
 `ensureNamespace` runs. The bundled driver does not install the gateway.
@@ -192,14 +200,14 @@ require upstream OpenShell to satisfy all of these conditions:
   creates for the Harness.
 - OpenShell must preserve the Harness's exact audience-bound, short-lived
   projected ServiceAccount token and read-only mount. Its gateway bootstrap
-  token is not a substitute. Stock OpenShell `v0.0.113` does not support
+  token is not a substitute. Stock OpenShell `v0.1.0-pre.5` does not support
   projected volumes in gateway driver configuration. An operator-created
   template bridge is not a supported workaround.
 - OpenShell must preserve all approved Agent workspace PVC subpath mounts
   without falling back to its default workspace claim or mounting the PVC root.
 - OpenShell must support exact environment entries backed by Kubernetes
   `secretKeyRef`, including the startup app-server token Secret. Stock
-  OpenShell `v0.0.113` cannot receive those entries through the current gateway
+  OpenShell `v0.1.0-pre.5` cannot receive those entries through the current gateway
   API, and the Enterprise Driver rejects them. A credential bridge is not a
   supported workaround.
 - OpenShell gateway authentication must be bound to the trusted caller and the
@@ -217,13 +225,14 @@ Common fail-closed errors include:
 - `OpenShell gateway Service is unavailable.`
 - `OpenShell gateway Pod is not ready.`
 - `OpenShell SandboxDriver only supports dedicated Codex Harness revisions.`
-- `OpenShell v0.0.113 cannot receive secretKeyRef environment ...`
+- `OpenShell v0.1.0-pre.5 cannot receive secretKeyRef environment ...`
 
 ## Related documentation
 
 - [Development and production deployment](../../guides/deploy.md)
 
 - [OpenShell testing](../../testing/openshell.md)
+- [OpenShell Sandbox provisioning flow](../../flows/openshell-sandbox-provisioning.md)
 - [SandboxDriver contract](sandbox.md)
 - [ComputeDriver contract](compute.md)
 - [Kubernetes ComputeDriver](kubernetes-compute.md)

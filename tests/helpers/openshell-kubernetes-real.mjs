@@ -199,10 +199,12 @@ function assertRenderedOpenShellImages({
   statefulSet,
   configMap,
   gatewayImage,
+  sandboxImage,
   supervisorImage,
   defaultTag,
 }) {
   const expectedGatewayImage = renderedOpenShellImage(gatewayImage, defaultTag);
+  const expectedSandboxImage = renderedOpenShellImage(sandboxImage, defaultTag);
   const expectedSupervisorImage = renderedOpenShellImage(supervisorImage, defaultTag);
   assert.equal(
     statefulSet.spec?.template?.spec?.containers?.find(({ name }) => name === "openshell-gateway")
@@ -217,6 +219,13 @@ function assertRenderedOpenShellImages({
   );
   assert.match(
     configMap.data?.["gateway.toml"] ?? "",
+    new RegExp(
+      `sandbox_runtime_image\\s*=\\s*${regexpEscape(JSON.stringify(expectedSandboxImage))}`,
+    ),
+    "OpenShell sandbox runtime image in gateway.toml must retain the imported immutable digest after Helm rendering.",
+  );
+  assert.match(
+    configMap.data?.["gateway.toml"] ?? "",
     new RegExp(`supervisor_image\\s*=\\s*${regexpEscape(JSON.stringify(expectedSupervisorImage))}`),
     "OpenShell supervisor image in gateway.toml must retain the imported immutable digest after Helm rendering.",
   );
@@ -228,13 +237,13 @@ export function createOpenShellKubernetesFixture({
   gatewayImage,
   codexImage,
   databaseUrl,
-  openShellCliPath,
   openShellGatewayImage,
+  openShellSandboxImage,
   openShellSupervisorImage,
   openShellRuntimeClass = "openshell-sandbox",
   openShellHelmPath,
   openShellHelmChart,
-  openShellChartVersion = "0.0.113",
+  openShellChartVersion = "0.1.0-pre.5",
 }) {
   const base = createRealKubernetesFixture({
     kubeconfigPath,
@@ -259,10 +268,6 @@ export function createOpenShellKubernetesFixture({
       "OPENAI_API_KEY is required for the API binding workflow; a model turn additionally requires genuine upstream Secret projection support.",
     );
     assert.ok(
-      openShellCliPath,
-      "OCC_TEST_OPENSHELL_CLI must point at the official OpenShell CLI binary.",
-    );
-    assert.ok(
       openShellHelmPath,
       "OCC_TEST_OPENSHELL_HELM must point at the Helm binary used to install the namespace-scoped OpenShell gateway.",
     );
@@ -272,6 +277,7 @@ export function createOpenShellKubernetesFixture({
     );
     for (const [name, image] of [
       ["OCC_TEST_OPENSHELL_GATEWAY_IMAGE", openShellGatewayImage],
+      ["OCC_TEST_OPENSHELL_SANDBOX_IMAGE", openShellSandboxImage],
       ["OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE", openShellSupervisorImage],
     ]) {
       assert.match(
@@ -280,7 +286,6 @@ export function createOpenShellKubernetesFixture({
         `${name} must select a real imported OpenShell image by immutable SHA-256 digest.`,
       );
     }
-    await execute(openShellCliPath, ["--help"], { maxBuffer: 1024 * 1024 });
     await execute("openssl", ["version"], { maxBuffer: 1024 * 1024 });
     await execute(openShellHelmPath, ["show", "chart", openShellHelmChart], {
       maxBuffer: 1024 * 1024,
@@ -507,10 +512,10 @@ export function createOpenShellKubernetesFixture({
       "--set=server.disableTls=true",
       "--set=server.auth.allowUnauthenticatedUsers=true",
       "--set=podSecurityContext.seccompProfile.type=RuntimeDefault",
-      "--set=supervisor.topology=sidecar",
-      "--set=supervisor.sidecar.processBinaryAwareNetworkPolicy=false",
+      "--set=supervisor.sandboxRuntime.networkPolicyEnforced=true",
       `--set-string=server.defaultRuntimeClassName=${openShellRuntimeClass}`,
       ...chartImageValues("image", openShellGatewayImage),
+      ...chartImageValues("sandboxRuntime.image", openShellSandboxImage),
       ...chartImageValues("supervisor.image", openShellSupervisorImage),
     ];
     if (sandboxServiceAccountName !== undefined) {
@@ -545,6 +550,7 @@ export function createOpenShellKubernetesFixture({
       statefulSet: await base.resource("statefulset", instance, namespace),
       configMap: await base.resource("configmap", `${instance}-config`, namespace),
       gatewayImage: openShellGatewayImage,
+      sandboxImage: openShellSandboxImage,
       supervisorImage: openShellSupervisorImage,
       defaultTag: openShellChartVersion,
     });

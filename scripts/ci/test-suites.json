@@ -46,6 +46,9 @@
           "path": "tests/conformance/occ-read.test.mjs"
         },
         {
+          "path": "tests/conformance/openshell-gateway-wire.test.mjs"
+        },
+        {
           "path": "tests/conformance/platform-state-memory.test.mjs"
         },
         {
@@ -771,8 +774,8 @@
         "OCC_TEST_KUBERNETES_AGENT_IMAGE",
         "OPENAI_API_KEY",
         "OCC_TEST_OPENAI_MODEL",
-        "OCC_TEST_OPENSHELL_CLI",
         "OCC_TEST_OPENSHELL_GATEWAY_IMAGE",
+        "OCC_TEST_OPENSHELL_SANDBOX_IMAGE",
         "OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE",
         "OCC_TEST_OPENSHELL_HELM",
         "OCC_TEST_OPENSHELL_HELM_CHART",
@@ -790,6 +793,7 @@
           "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
           "OCC_TEST_KUBERNETES_AGENT_IMAGE",
           "OCC_TEST_OPENSHELL_GATEWAY_IMAGE",
+          "OCC_TEST_OPENSHELL_SANDBOX_IMAGE",
           "OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE"
         ]
       },
@@ -797,7 +801,7 @@
         {
           "path": "tests/integration/sandbox-driver-openshell-k3d-real.test.mjs",
           "expectedTests": [
-            "OpenShell SandboxDriver provisions and enforces one provider-owned dedicated Codex Harness"
+            "stock OpenShell rejects unsupported Secret projection without activating the Agent"
           ]
         }
       ]

@@ -687,6 +687,7 @@
               "flows/service-api-keys",
               "flows/harness-execution-topology",
               "flows/compute-driver-lifecycle-hooks",
+              "flows/openshell-sandbox-provisioning",
               "flows/driver-plugin-loading",
               "flows/agent-plugins",
               "flows/agent-native-admin",

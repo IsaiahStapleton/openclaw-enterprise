@@ -31,9 +31,9 @@ export interface OpenShellNetworkEndpoint {
   readonly host: string;
   readonly ports: readonly number[];
   readonly protocol?: string;
-  readonly tls?: string;
-  readonly enforcement?: string;
-  readonly access?: string;
+  readonly tls?: "skip" | "terminate" | "passthrough";
+  readonly enforcement?: "enforce" | "audit";
+  readonly access?: "read_only" | "read_write" | "full";
 }
 
 export interface OpenShellNetworkPolicyRule {
@@ -56,8 +56,7 @@ export interface OpenShellSandboxDriverOptions {
   };
   readonly kubernetes: {
     readonly runtimeClassName: string;
-    readonly serviceAccount:
-      { readonly mode: "gatewayConfigured" } | { readonly mode: "driverConfig" };
+    readonly serviceAccount: { readonly mode: "gatewayConfigured" };
     readonly sandboxDataMount: {
       readonly claimName?: string;
       readonly subPath: string;
@@ -92,6 +91,39 @@ export interface OpenShellSandboxDriverSelection {
 }
 
 class OpenShellSandboxConfigurationFailure extends Error {}
+
+const NETWORK_TLS_MODES = Object.freeze({
+  skip: "NETWORK_TLS_MODE_SKIP",
+  terminate: "NETWORK_TLS_MODE_TERMINATE",
+  passthrough: "NETWORK_TLS_MODE_PASSTHROUGH",
+});
+const NETWORK_ENFORCEMENT_MODES = Object.freeze({
+  enforce: "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+  audit: "NETWORK_ENFORCEMENT_MODE_AUDIT",
+});
+const NETWORK_ACCESS_PRESETS = Object.freeze({
+  read_only: "NETWORK_ACCESS_PRESET_READ_ONLY",
+  read_write: "NETWORK_ACCESS_PRESET_READ_WRITE",
+  full: "NETWORK_ACCESS_PRESET_FULL",
+});
+
+function optionalEnumValue(
+  value: unknown,
+  values: Readonly<Record<string, string>>,
+  description: string,
+): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const key = nonempty(value, description);
+  const mapped = values[key];
+  if (mapped === undefined) {
+    throw new OpenShellSandboxConfigurationFailure(
+      `${description} must be one of: ${Object.keys(values).join(", ")}.`,
+    );
+  }
+  return mapped;
+}
 
 const DEFAULT_WORKSPACE = "default";
 const DEFAULT_SANDBOX_NAME_PREFIX = "sb";
@@ -224,7 +256,7 @@ function environment(requirements: HarnessWorkloadRequirements): Record<string, 
   for (const entry of requirements.environment) {
     if ("valueFrom" in entry) {
       throw new OpenShellSandboxConfigurationFailure(
-        `OpenShell v0.0.113 cannot receive secretKeyRef environment ${entry.name}; upstream Secret projection support is required.`,
+        `OpenShell v0.1.0-pre.5 cannot receive secretKeyRef environment ${entry.name}; upstream Secret projection support is required.`,
       );
     }
     result[nonempty(entry.name, "Environment variable name")] = entry.value;
@@ -593,16 +625,28 @@ function networkPolicies(options: OpenShellSandboxDriverOptions) {
       nonempty(policy.name, "OpenShell network policy name"),
       {
         name: policy.name,
-        endpoints: policy.endpoints.map((endpoint) => ({
-          host: nonempty(endpoint.host, `OpenShell network policy ${policy.name} host`),
-          ports: endpoint.ports.map((value) =>
-            port(value, `OpenShell network policy ${policy.name} port`),
-          ),
-          ...(endpoint.protocol === undefined ? {} : { protocol: endpoint.protocol }),
-          ...(endpoint.tls === undefined ? {} : { tls: endpoint.tls }),
-          ...(endpoint.enforcement === undefined ? {} : { enforcement: endpoint.enforcement }),
-          ...(endpoint.access === undefined ? {} : { access: endpoint.access }),
-        })),
+        endpoints: policy.endpoints.map((endpoint) => {
+          const description = `OpenShell network policy ${policy.name}`;
+          const tls = optionalEnumValue(endpoint.tls, NETWORK_TLS_MODES, `${description} TLS mode`);
+          const enforcement = optionalEnumValue(
+            endpoint.enforcement,
+            NETWORK_ENFORCEMENT_MODES,
+            `${description} enforcement mode`,
+          );
+          const access = optionalEnumValue(
+            endpoint.access,
+            NETWORK_ACCESS_PRESETS,
+            `${description} access preset`,
+          );
+          return {
+            host: nonempty(endpoint.host, `${description} host`),
+            ports: endpoint.ports.map((value) => port(value, `${description} port`)),
+            ...(endpoint.protocol === undefined ? {} : { protocol: endpoint.protocol }),
+            ...(tls === undefined ? {} : { tls }),
+            ...(enforcement === undefined ? {} : { enforcement }),
+            ...(access === undefined ? {} : { access }),
+          };
+        }),
       },
     ]),
   );
@@ -626,9 +670,6 @@ function sandboxSpec(
   const podConfig: Record<string, unknown> = {
     runtime_class_name: options.kubernetes.runtimeClassName,
   };
-  if (options.kubernetes.serviceAccount.mode === "driverConfig") {
-    podConfig.service_account_name = requirements.serviceAccountName;
-  }
   const driverConfig = {
     pod: podConfig,
     containers: {
@@ -706,12 +747,9 @@ function validateOptions(options: OpenShellSandboxDriverOptions): void {
     validateKubernetesResource(resource, `gateway.networkPolicyResources[${index}]`),
   );
   nonempty(options.kubernetes.runtimeClassName, "OpenShell RuntimeClass name");
-  if (
-    options.kubernetes.serviceAccount.mode !== "gatewayConfigured" &&
-    options.kubernetes.serviceAccount.mode !== "driverConfig"
-  ) {
+  if (options.kubernetes.serviceAccount.mode !== "gatewayConfigured") {
     throw new OpenShellSandboxConfigurationFailure(
-      "OpenShell serviceAccount mode must be gatewayConfigured or driverConfig.",
+      "OpenShell serviceAccount mode must be gatewayConfigured.",
     );
   }
   configurationObject(options.kubernetes.sandboxDataMount, "OpenShell sandbox data mount");

@@ -25,7 +25,7 @@ function sandboxInstallation() {
       gateway: { serviceName: "openshell-gateway", port: 50051 },
       kubernetes: {
         runtimeClassName: "openshell-sandbox",
-        serviceAccount: { mode: "driverConfig" },
+        serviceAccount: { mode: "gatewayConfigured" },
         sandboxDataMount: {
           subPath: "workspace",
           mountPath: "/sandbox/enterprise",
@@ -84,4 +84,31 @@ test("startup rejects invalid bundled OpenShell configuration before invoking an
     /drivers\.sandbox\.configuration does not match its Driver configuration schema/,
   );
   assert.equal(invokedFactory, false);
+});
+
+test("startup rejects OpenShell network values outside the v0.1 protocol enums", async (t) => {
+  const configuration = sandboxInstallation();
+  configuration.drivers.sandbox.configuration.policy.networkPolicies[0].endpoints[0].tls =
+    "inspect";
+
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
+    }),
+    /OpenShell network policy model-egress TLS mode must be one of: skip, terminate, passthrough/,
+  );
+});
+
+test("startup rejects the removed per-Sandbox OpenShell ServiceAccount mode", async (t) => {
+  const configuration = sandboxInstallation();
+  configuration.drivers.sandbox.configuration.kubernetes.serviceAccount.mode = "driverConfig";
+
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
+    }),
+    /OpenShell serviceAccount mode must be gatewayConfigured/,
+  );
 });

@@ -28,12 +28,12 @@ const codexImage =
   process.env.OCC_TEST_KUBERNETES_CODEX_IMAGE ??
   runtimeImage;
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
-const openShellCliPath = process.env.OCC_TEST_OPENSHELL_CLI;
 const openShellGatewayImage = process.env.OCC_TEST_OPENSHELL_GATEWAY_IMAGE;
+const openShellSandboxImage = process.env.OCC_TEST_OPENSHELL_SANDBOX_IMAGE;
 const openShellSupervisorImage = process.env.OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE;
 const openShellHelmPath = process.env.OCC_TEST_OPENSHELL_HELM;
 const openShellHelmChart = process.env.OCC_TEST_OPENSHELL_HELM_CHART;
-const openShellChartVersion = process.env.OCC_TEST_OPENSHELL_CHART_VERSION ?? "0.0.113";
+const openShellChartVersion = process.env.OCC_TEST_OPENSHELL_CHART_VERSION ?? "0.1.0-pre.5";
 const openShellRuntimeClass = process.env.OCC_TEST_OPENSHELL_RUNTIME_CLASS ?? "openshell-sandbox";
 const providerModel = (process.env.OCC_TEST_OPENAI_MODEL ?? "gpt-5.6-sol").replace(
   /^(?:openai|codex)\//,
@@ -47,8 +47,8 @@ const selected =
     gatewayImage,
     codexImage,
     databaseUrl,
-    openShellCliPath,
     openShellGatewayImage,
+    openShellSandboxImage,
     openShellSupervisorImage,
     openShellHelmPath,
     openShellHelmChart,
@@ -74,8 +74,8 @@ const fixture = createOpenShellKubernetesFixture({
   gatewayImage,
   codexImage,
   databaseUrl,
-  openShellCliPath,
   openShellGatewayImage,
+  openShellSandboxImage,
   openShellSupervisorImage,
   openShellRuntimeClass,
   openShellHelmPath,
@@ -1091,50 +1091,46 @@ async function assertEmbeddedOpenShellFailsClosed(topology) {
   );
 }
 
-test(
-  "stock OpenShell rejects unsupported Secret projection without activating the Agent",
-  { ...requiresOpenShellK3d, timeout: 900_000 },
-  async (context) => {
-    const topology = await prepareProductionInstallation(context, {
-      expectUnsupportedProjection: true,
-    });
-    await assertEmbeddedOpenShellFailsClosed(topology);
-  },
-);
-
-test(
-  "OpenShell with genuine Secret projection executes and enforces a provider-owned Codex Harness",
-  {
-    skip:
-      process.env.OCC_TEST_OPENSHELL_SECRET_PROJECTION === "1"
-        ? requiresOpenShellK3d.skip
-        : "Requires production Driver and upstream support for genuine Secret and ServicePrincipal projections; stock v0.0.113 is unsupported. Set OCC_TEST_OPENSHELL_SECRET_PROJECTION=1 only with that implementation.",
-    timeout: 900_000,
-  },
-  async (context) => {
-    const topology = await prepareProductionInstallation(context);
-    assert.equal(
-      topology.harnessPod.spec.serviceAccountName,
-      openShellAgentName(topology.agent.id),
-    );
-    assert.ok(topology.sandbox.metadata.name);
-    process.stderr.write(
-      "OpenShell integration: starting authenticated real gateway model turn.\n",
-    );
-    await assertGatewayModelTurn({
-      gatewayUrl: topology.gatewayUrl,
-      gatewayToken: topology.gatewayToken,
-      nonce: `OCC-OPENSHELL-${randomUUID()}`,
-      secrets: [process.env.OPENAI_API_KEY],
-    });
-    process.stderr.write(
-      "OpenShell integration: real gateway model turn passed; testing actual filesystem and network enforcement.\n",
-    );
-    await assertOpenShellToolFilesystemAndNetworkEnforcement(topology);
-    process.stderr.write(
-      "OpenShell integration: tool filesystem and egress verified; testing Pod-absent replacement and cleanup.\n",
-    );
-    await assertDuplicateReconciliationDoesNotDuplicateOpenShell(topology);
-    await assertEmbeddedOpenShellFailsClosed(topology);
-  },
-);
+if (process.env.OCC_TEST_OPENSHELL_SECRET_PROJECTION === "1") {
+  test(
+    "OpenShell with genuine Secret projection executes and enforces a provider-owned Codex Harness",
+    { ...requiresOpenShellK3d, timeout: 900_000 },
+    async (context) => {
+      const topology = await prepareProductionInstallation(context);
+      assert.equal(
+        topology.harnessPod.spec.serviceAccountName,
+        openShellAgentName(topology.agent.id),
+      );
+      assert.ok(topology.sandbox.metadata.name);
+      process.stderr.write(
+        "OpenShell integration: starting authenticated real gateway model turn.\n",
+      );
+      await assertGatewayModelTurn({
+        gatewayUrl: topology.gatewayUrl,
+        gatewayToken: topology.gatewayToken,
+        nonce: `OCC-OPENSHELL-${randomUUID()}`,
+        secrets: [process.env.OPENAI_API_KEY],
+      });
+      process.stderr.write(
+        "OpenShell integration: real gateway model turn passed; testing actual filesystem and network enforcement.\n",
+      );
+      await assertOpenShellToolFilesystemAndNetworkEnforcement(topology);
+      process.stderr.write(
+        "OpenShell integration: tool filesystem and egress verified; testing Pod-absent replacement and cleanup.\n",
+      );
+      await assertDuplicateReconciliationDoesNotDuplicateOpenShell(topology);
+      await assertEmbeddedOpenShellFailsClosed(topology);
+    },
+  );
+} else {
+  test(
+    "stock OpenShell rejects unsupported Secret projection without activating the Agent",
+    { ...requiresOpenShellK3d, timeout: 900_000 },
+    async (context) => {
+      const topology = await prepareProductionInstallation(context, {
+        expectUnsupportedProjection: true,
+      });
+      await assertEmbeddedOpenShellFailsClosed(topology);
+    },
+  );
+}

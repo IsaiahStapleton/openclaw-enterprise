@@ -107,7 +107,7 @@ function productionInstallation(adminKeyPath) {
           },
           kubernetes: {
             runtimeClassName: "openshell",
-            serviceAccount: { mode: "driverConfig" },
+            serviceAccount: { mode: "gatewayConfigured" },
             sandboxDataMount: {
               subPath: "sandboxes",
               mountPath: "/sandbox/data",

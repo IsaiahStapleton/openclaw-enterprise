@@ -9,9 +9,9 @@ and use the suite-specific infrastructure below.
 This suite needs the owned OpenShell CI recipe: a disposable K3s v1.36.4 k3d
 cluster, matched kubectl, the selected RuntimeClass bound to the cluster's
 `runc` handler, a successful RuntimeClass smoke Pod, Agent Sandbox
-CRDs/controller, OpenShell CLI/Helm/chart files, imported immutable OpenShell
-gateway and supervisor images, real gateway/Codex images, the Kubernetes test
-database, `openssl`, and `OPENAI_API_KEY`. The standard k3d recipe alone is
+CRDs/controller, Helm, the OpenShell chart source, imported immutable OpenShell
+gateway, sandbox runtime, and supervisor images, real gateway/Codex images, the
+Kubernetes test database, `openssl`, and `OPENAI_API_KEY`. The standard k3d recipe alone is
 insufficient because it does not install the CI-owned admission config,
 RuntimeClass, Agent Sandbox, or OpenShell assets.
 
@@ -54,7 +54,7 @@ selection fail rather than skip.
 
 The integration uses an operator-owned Helm wrapper to install the OpenShell
 gateway before delegating to the driver. The bundled driver does not install
-that gateway. Stock OpenShell `v0.0.113` cannot receive the required exact
+that gateway. Stock OpenShell `v0.1.0-pre.5` cannot receive the required exact
 `secretKeyRef` environment entries and projected workload identity through its
 gateway configuration. The test does not substitute a credential bridge or
 Pod-template patch. See the [production contract](../reference/drivers/openshell-sandbox.md#current-upstream-preconditions).
@@ -82,18 +82,23 @@ scoped environment file for this suite.
 | `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`    | Imported immutable real OpenClaw gateway image; `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` is accepted as a fallback.                                      |
 | `OCC_TEST_KUBERNETES_AGENT_IMAGE`      | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_CODEX_IMAGE` and runtime image fallbacks are accepted.                                    |
 | `OCC_TEST_DATABASE_URL`                | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                                                                            |
-| `OCC_TEST_OPENSHELL_CLI`               | Official OpenShell CLI binary.                                                                                                                      |
 | `OCC_TEST_OPENSHELL_HELM`              | Helm binary used to install the namespace-scoped OpenShell gateway.                                                                                 |
 | `OCC_TEST_OPENSHELL_HELM_CHART`        | OpenShell Helm chart path or chart archive.                                                                                                         |
 | `OCC_TEST_OPENSHELL_GATEWAY_IMAGE`     | Imported immutable OpenShell gateway image pinned by SHA-256 digest.                                                                                |
+| `OCC_TEST_OPENSHELL_SANDBOX_IMAGE`     | Imported immutable OpenShell sandbox runtime image pinned by SHA-256 digest.                                                                        |
 | `OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE`  | Imported immutable OpenShell supervisor image pinned by SHA-256 digest.                                                                             |
-| `OCC_TEST_OPENSHELL_CHART_VERSION`     | Optional OpenShell chart version; defaults to `0.0.113`.                                                                                            |
+| `OCC_TEST_OPENSHELL_CHART_VERSION`     | Optional OpenShell chart version; defaults to `0.1.0-pre.5`.                                                                                        |
 | `OCC_TEST_OPENSHELL_RUNTIME_CLASS`     | Existing RuntimeClass used by Agent Sandbox Pods; CI creates the selected RuntimeClass, defaulting to `openshell-sandbox`, with the `runc` handler. |
 
 The selected cluster must already expose the Agent Sandbox CRD and a ready Agent
 Sandbox controller. See the
 [OpenShell SandboxDriver testing guide](#openshell-sandbox) for
 the required cluster, image, database, RuntimeClass, and chart setup.
+
+The CI bootstrap verifies the `v0.1.0-pre.5` source archive checksum, packages
+the chart from that tag, and imports gateway, sandbox runtime, and supervisor
+images published under the tag's commit SHA. It does not depend on prerelease
+GitHub Release assets or a semver-tagged chart.
 
 ## Related
 
