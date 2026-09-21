@@ -133,6 +133,153 @@ function nativeValuesWithImplicitSlack(marker) {
   return { ...values, channels: { slack } };
 }
 
+async function routeChannelSecretApis(page, fixture, namespaceId, configurationId, values) {
+  const secrets = new Map();
+  const bindings = [];
+  const requests = [];
+  const role = {
+    id: "role-secret-operate",
+    namespaceId,
+    name: "Agent Secret operate",
+    permissions: [{ action: "operate", resourceKind: "secret" }],
+  };
+  let failNextSecretCreate;
+  const envelope = (data) => ({ data, meta: { requestId: `req_${randomUUID()}` } });
+
+  await page.route(
+    `${fixture.origin}/namespaces/${namespaceId}/secrets`,
+    async (route, request) => {
+      if (request.method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      const body = request.postDataJSON();
+      requests.push({ operation: "create-secret", body });
+      if (failNextSecretCreate !== undefined) {
+        const message = failNextSecretCreate;
+        failNextSecretCreate = undefined;
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: { code: "DEPENDENCY_UNAVAILABLE", message },
+            meta: { requestId: `req_${randomUUID()}` },
+          }),
+        });
+        return;
+      }
+      const id = `sec_${secrets.size + 1}`;
+      const secret = {
+        id,
+        namespaceId,
+        name: body.name,
+        ref: { kind: "secret", namespaceId, id },
+      };
+      secrets.set(secret.id, secret);
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify(envelope(secret)),
+      });
+    },
+  );
+
+  await page.route(
+    `${fixture.origin}/namespaces/${namespaceId}/secrets/*`,
+    async (route, request) => {
+      if (request.method() !== "PATCH") {
+        await route.fallback();
+        return;
+      }
+      const secretId = new URL(request.url()).pathname.split("/").at(-1);
+      const secret = secrets.get(secretId);
+      assert.ok(secret, `expected test Secret ${secretId} to exist`);
+      requests.push({ operation: "update-secret", id: secretId, body: request.postDataJSON() });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(envelope(secret)),
+      });
+    },
+  );
+
+  await page.route(
+    `${fixture.origin}/namespaces/${namespaceId}/iam/roles`,
+    async (route, request) => {
+      requests.push({ operation: `roles-${request.method().toLowerCase()}` });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(envelope([role])),
+      });
+    },
+  );
+
+  await page.route(
+    `${fixture.origin}/namespaces/${namespaceId}/iam/access-bindings`,
+    async (route, request) => {
+      if (request.method() === "GET") {
+        requests.push({ operation: "bindings-get" });
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(envelope(bindings)),
+        });
+        return;
+      }
+      if (request.method() === "POST") {
+        const body = request.postDataJSON();
+        const binding = { id: `binding-${bindings.length + 1}`, namespaceId, ...body };
+        requests.push({ operation: "binding-create", body });
+        bindings.push(binding);
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify(envelope(binding)),
+        });
+        return;
+      }
+      await route.fallback();
+    },
+  );
+
+  await page.route(
+    `${fixture.origin}/namespaces/${namespaceId}/configurations/${configurationId}`,
+    async (route, request) => {
+      if (request.method() !== "PATCH") {
+        await route.fallback();
+        return;
+      }
+      const body = request.postDataJSON();
+      requests.push({ operation: "configuration-patch", body });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          envelope({
+            id: configurationId,
+            namespaceId,
+            kind: "agent",
+            values,
+            secretBindings: body.secretBindings,
+            createdAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+          }),
+        ),
+      });
+    },
+  );
+
+  return {
+    bindings,
+    requests,
+    secrets,
+    failNextSecretCreate(message) {
+      failNextSecretCreate = message;
+    },
+  };
+}
+
 function nativeValuesWithImplicitTeams(marker) {
   return {
     ...nativeValues(marker),
@@ -147,7 +294,7 @@ function nativeValuesWithImplicitTeams(marker) {
   };
 }
 
-test("draft Agent deploy waits for stored runtime credential metadata", async (t) => {
+test("draft Agent deploy waits for generated runtime credentials", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Runtime credential gate", { ready: true });
@@ -158,18 +305,12 @@ test("draft Agent deploy waits for stored runtime credential metadata", async (t
     { executionMode: "dedicated" },
   );
   const requests = [];
-  let status = {
-    transportConfigured: false,
-    slackConfigured: false,
-  };
+  let status = { transportConfigured: false };
   const { page, artifacts } = await newPage(t, fixture);
   await routeRuntimeCredentials(page, fixture, namespace.id, agent.id, async (route, request) => {
     if (request.method() === "POST") {
       requests.push(request.postDataJSON());
-      status = {
-        transportConfigured: true,
-        slackConfigured: false,
-      };
+      status = { transportConfigured: true };
     }
     await route.fulfill({
       status: 200,
@@ -181,15 +322,22 @@ test("draft Agent deploy waits for stored runtime credential metadata", async (t
   await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
   await page.getByRole("heading", { name: "Runtime credentials" }).waitFor();
   await expectNoText(page, /Slack app token|Slack bot token/);
-  await page.getByText(/Deploy requires stored runtime credential metadata: Transport/).waitFor();
+  await page
+    .getByText(/Deploy requires stored credential metadata: Generated runtime credentials/)
+    .waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), true);
-  assert.equal(await page.getByRole("button", { name: "Save credentials" }).isDisabled(), false);
-  await page.getByRole("button", { name: "Save credentials" }).click();
-  await page.getByText("Credential metadata refreshed.").waitFor();
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Provision generated runtime credentials" })
+      .isDisabled(),
+    false,
+  );
+  await page.getByRole("button", { name: "Provision generated runtime credentials" }).click();
+  await page.getByText("Generated runtime credential metadata refreshed.").waitFor();
   assert.deepEqual(requests, [{}]);
   await page
     .getByText(
-      "Stored runtime credential metadata is present. This does not confirm live Slack readiness.",
+      "Stored credential metadata is present. This does not confirm live channel readiness.",
     )
     .waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), false);
@@ -221,12 +369,7 @@ test("Slack credential gate treats omitted enabled as enabled", async (t) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(
-        credentialEnvelope({
-          transportConfigured: true,
-          slackConfigured: false,
-        }),
-      ),
+      body: JSON.stringify(credentialEnvelope({ transportConfigured: true })),
     });
   });
 
@@ -234,9 +377,11 @@ test("Slack credential gate treats omitted enabled as enabled", async (t) => {
   await page.getByRole("heading", { name: "Runtime credentials" }).waitFor();
   await page.getByLabel("Slack app token").waitFor();
   await page.getByLabel("Slack bot token").waitFor();
-  await page.getByText(/Deploy requires stored runtime credential metadata: Slack/).waitFor();
+  await page
+    .getByText(/Deploy requires stored credential metadata: Slack Secret bindings/)
+    .waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), true);
-  assert.equal(await page.getByRole("button", { name: "Save credentials" }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
 });
 
 test("Teams-enabled drafts keep console deploy blocked", async (t) => {
@@ -256,12 +401,7 @@ test("Teams-enabled drafts keep console deploy blocked", async (t) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(
-        credentialEnvelope({
-          transportConfigured: true,
-          slackConfigured: false,
-        }),
-      ),
+      body: JSON.stringify(credentialEnvelope({ transportConfigured: true })),
     });
   });
 
@@ -273,76 +413,105 @@ test("Teams-enabled drafts keep console deploy blocked", async (t) => {
     )
     .waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), true);
-  assert.equal(await page.getByRole("button", { name: "Save credentials" }).isDisabled(), true);
+  await expectNoText(page, /Slack app token|Slack bot token/);
+  assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).count(), 0);
 });
 
-test("Slack credential fields appear only when Slack is enabled and unknown save failures require refresh", async (t) => {
+test("Slack credential fields save channel tokens through Secret bindings", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Slack credential gate", { ready: true });
-  const agent = await fixture.createAgent(
-    namespace.id,
-    "Slack Credential Agent",
-    nativeValues("slack", { slack: true }),
-    { executionMode: "dedicated" },
-  );
-  const requests = [];
-  let postCount = 0;
-  let status = {
-    transportConfigured: true,
-    slackConfigured: false,
-  };
+  const values = nativeValues("slack", { slack: true });
+  const agent = await fixture.createAgent(namespace.id, "Slack Credential Agent", values, {
+    executionMode: "dedicated",
+  });
   const hostileBackendMessage = "sk-hostile-backend-error-sentinel";
   const { page } = await newPage(t, fixture);
-  await routeRuntimeCredentials(page, fixture, namespace.id, agent.id, async (route, request) => {
-    if (request.method() === "POST") {
-      postCount += 1;
-      requests.push(request.postDataJSON());
-      if (postCount === 1) {
-        await route.fulfill({
-          status: 503,
-          contentType: "application/json",
-          body: JSON.stringify({
-            error: { code: "DEPENDENCY_UNAVAILABLE", message: hostileBackendMessage },
-            meta: { requestId: `req_${randomUUID()}` },
-          }),
-        });
-        return;
-      }
-      status = {
-        transportConfigured: true,
-        slackConfigured: true,
-      };
-    }
+  await routeRuntimeCredentials(page, fixture, namespace.id, agent.id, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(credentialEnvelope(status)),
+      body: JSON.stringify(credentialEnvelope({ transportConfigured: true })),
     });
   });
+  const channelApi = await routeChannelSecretApis(
+    page,
+    fixture,
+    namespace.id,
+    agent.configurationId,
+    values,
+  );
+  channelApi.failNextSecretCreate(hostileBackendMessage);
 
   await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
   await page.getByRole("heading", { name: "Runtime credentials" }).waitFor();
-  await page.getByText(/Deploy requires stored runtime credential metadata: Slack/).waitFor();
+  await page
+    .getByText(/Deploy requires stored credential metadata: Slack Secret bindings/)
+    .waitFor();
   await page.getByLabel("Slack app token").fill("xapp-console-secret");
   await page.getByLabel("Slack bot token").fill("xoxb-console-secret");
-  await page.getByRole("button", { name: "Save credentials" }).click();
-  await page.getByText(/Outcome unknown/).waitFor();
+  await page.getByRole("button", { name: "Save channel Secrets" }).click();
+  await page
+    .locator(".runtime-credentials .error", { hasText: /Outcome unknown/ })
+    .first()
+    .waitFor();
   await expectNoText(page, hostileBackendMessage);
-  assert.equal(await page.locator(".runtime-credentials .credential-status.missing").count(), 1);
-  assert.equal(await page.getByRole("button", { name: "Save credentials" }).isDisabled(), true);
+  assert.equal(await page.locator(".runtime-credentials .credential-status.missing").count(), 2);
+  assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), true);
   await expectNoText(page, /xapp-console-secret|xoxb-console-secret/);
 
   await page.getByRole("button", { name: "Refresh status" }).click();
-  await page.getByText(/Deploy requires stored runtime credential metadata: Slack/).waitFor();
+  await page
+    .getByText(/Deploy requires stored credential metadata: Slack Secret bindings/)
+    .waitFor();
   await page.getByLabel("Slack app token").fill("xapp-console-secret-2");
   await page.getByLabel("Slack bot token").fill("xoxb-console-secret-2");
-  await page.getByRole("button", { name: "Save credentials" }).click();
-  await page.getByText("Credential metadata refreshed.").waitFor();
-  assert.deepEqual(requests, [
-    { slack: { appToken: "xapp-console-secret", botToken: "xoxb-console-secret" } },
-    { slack: { appToken: "xapp-console-secret-2", botToken: "xoxb-console-secret-2" } },
+  await page.getByRole("button", { name: "Save channel Secrets" }).click();
+  await page
+    .getByText("Channel Secrets saved. Deploy the saved draft to deliver the new bindings.")
+    .waitFor();
+  await expectNoText(page, /xapp-console-secret-2|xoxb-console-secret-2/);
+
+  const secretCreates = channelApi.requests.filter(
+    ({ operation }) => operation === "create-secret",
+  );
+  assert.deepEqual(
+    secretCreates.map(({ body }) => ({ name: body.name, value: body.value })),
+    [
+      { name: "Slack Credential Agent Slack app token", value: "xapp-console-secret" },
+      { name: "Slack Credential Agent Slack app token", value: "xapp-console-secret-2" },
+      { name: "Slack Credential Agent Slack bot token", value: "xoxb-console-secret-2" },
+    ],
+  );
+  assert.deepEqual(
+    channelApi.bindings.map(({ subjectId, roleId, resourceKind, resourceId }) => ({
+      subjectId,
+      roleId,
+      resourceKind,
+      resourceId,
+    })),
+    [
+      {
+        subjectId: agent.servicePrincipalId,
+        roleId: "role-secret-operate",
+        resourceKind: "secret",
+        resourceId: "sec_1",
+      },
+      {
+        subjectId: agent.servicePrincipalId,
+        roleId: "role-secret-operate",
+        resourceKind: "secret",
+        resourceId: "sec_2",
+      },
+    ],
+  );
+  const configurationPatch = channelApi.requests.find(
+    ({ operation }) => operation === "configuration-patch",
+  );
+  assert.deepEqual(Object.keys(configurationPatch.body.secretBindings).sort(), [
+    "SLACK_APP_TOKEN",
+    "SLACK_BOT_TOKEN",
   ]);
   assert.equal(await page.getByRole("button", { name: "Deploy saved draft" }).isDisabled(), false);
 });

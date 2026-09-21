@@ -143,7 +143,8 @@ test("prepareLogging installs k3d Collector from the canonical Helm template", a
   assert.ok(helm[1].includes("--values"));
   assert.ok(helm[1].includes("logging.collector.exporter.cidr=172.18.0.23/32"));
   assert.ok(helm[1].includes("logging.collector.exporter.port=4318"));
-  assert.ok(helm[1].includes("cluster.cidr=10.89.0.2/32"));
+  assert.ok(helm[1].includes("--set-json"));
+  assert.ok(helm[1].includes('cluster.cidrs=["10.89.0.2/32"]'));
   assert.ok(helm[1].includes("cluster.port=6443"));
   const collectorApply = calls.find(
     ([command, args]) =>

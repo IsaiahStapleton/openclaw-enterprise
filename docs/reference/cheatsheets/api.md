@@ -1,0 +1,106 @@
+# API cheat sheet
+
+<!-- Generated from packages/contracts/openapi/occ-api.openapi.json. Do not edit directly. -->
+
+## Operations
+
+### Authentication accounts
+
+- [`createAuthAccount`](../api.md#post-apiauthaccounts): Create an administrator-controlled local auth account.
+
+### Authentication sessions
+
+- [`getAuthSession`](../api.md#get-apiauthsession): Inspect authentication without revealing session tokens.
+- [`signInEmail`](../api.md#post-apiauthsigninemail): Sign in with email and password.
+- [`signOut`](../api.md#post-apiauthsignout): Sign out of the current session.
+
+### Service API keys
+
+- [`createServiceKey`](../api.md#post-apiauthservicekeys): Issue a service API key.
+- [`revokeServiceKey`](../api.md#delete-apiauthservicekeyskeyid): Revoke a service API key.
+
+### Installation
+
+- [`getInstallation`](../api.md#get-installation): Get the singleton Installation.
+- [`bootstrapInstallation`](../api.md#post-installationbootstrap): Bootstrap the singleton Installation.
+
+### Namespaces
+
+- [`listNamespaces`](../api.md#get-namespaces): List authorized Namespaces.
+- [`getNamespace`](../api.md#get-namespacesnamespaceid): Get an exact Installation-owned Namespace.
+- [`createNamespace`](../api.md#post-namespaces): Create an Installation-owned Namespace.
+- [`deleteNamespace`](../api.md#delete-namespacesnamespaceid): Begin deletion of an empty Installation-owned Namespace.
+
+### Agents
+
+- [`listAgents`](../api.md#get-namespacesnamespaceidagents): List authorized Agents in one exact Namespace.
+- [`getAgent`](../api.md#get-namespacesnamespaceidagentsagentid): Get an exact Namespace-owned Agent.
+- [`createAgent`](../api.md#post-namespacesnamespaceidagents): Create a Namespace-owned Agent.
+- [`updateAgent`](../api.md#patch-namespacesnamespaceidagentsagentid): Replace an exact Namespace-owned Agent's editable draft.
+- [`deployAgent`](../api.md#post-namespacesnamespaceidagentsagentiddeploy): Admit an immutable revision from the Agent's saved draft.
+- [`stopAgent`](../api.md#post-namespacesnamespaceidagentsagentidstop): Stop one Agent while retaining its revision and persistent state.
+- [`getAgentNativeAdmin`](../api.md#get-namespacesnamespaceidagentsagentidnativeadmin): Resolve native admin UI launch availability for one Agent.
+- [`deleteAgent`](../api.md#delete-namespacesnamespaceidagentsagentid): Begin deletion of an exact Namespace-owned Agent and its AgentRevisions.
+
+### Agent deployments
+
+- [`getAgentDeployment`](../api.md#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentid): Get the durable deployment status for one admitted Agent revision.
+
+### Agent revisions
+
+- [`listAgentRevisions`](../api.md#get-namespacesnamespaceidagentsagentidrevisions): List authorized immutable revisions for one exact Agent.
+- [`getAgentRevision`](../api.md#get-namespacesnamespaceidagentsagentidrevisionsrevisionid): Get an exact authorized immutable Agent revision.
+
+### Agent runtime credentials
+
+- [`getAgentRuntimeCredentials`](../api.md#get-namespacesnamespaceidagentsagentidruntimecredentials): Get metadata for one Agent's provisioned runtime credentials.
+- [`provisionAgentRuntimeCredentials`](../api.md#post-namespacesnamespaceidagentsagentidruntimecredentials): Provision initial runtime credentials for one undeployed Agent.
+
+### Agent workspace files
+
+- [`getAgentWorkspaceFile`](../api.md#get-namespacesnamespaceidagentsagentidworkspacefilesname): Read an allowed workspace file from one active Agent.
+- [`putAgentWorkspaceFile`](../api.md#put-namespacesnamespaceidagentsagentidworkspacefilesname): Create or replace an allowed workspace file for one active Agent.
+
+### Configurations
+
+- [`getConfiguration`](../api.md#get-namespacesnamespaceidconfigurationsconfigurationid): Get an exact Namespace-owned Configuration.
+- [`createConfiguration`](../api.md#post-namespacesnamespaceidconfigurations): Create a native Namespace-owned Agent Configuration.
+- [`updateConfiguration`](../api.md#patch-namespacesnamespaceidconfigurationsconfigurationid): Replace values and increment an exact Namespace-owned Configuration generation.
+- [`deleteConfiguration`](../api.md#delete-namespacesnamespaceidconfigurationsconfigurationid): Delete an exact unreferenced Namespace-owned Configuration.
+
+### IAM access bindings
+
+- [`listIAMAccessBindings`](../api.md#get-namespacesnamespaceidiamaccessbindings): List exact Namespace IAM AccessBindings.
+- [`getIAMAccessBinding`](../api.md#get-namespacesnamespaceidiamaccessbindingsbindingid): Get an exact Namespace IAM AccessBinding.
+- [`createIAMAccessBinding`](../api.md#post-namespacesnamespaceidiamaccessbindings): Create an immutable exact-resource Namespace IAM AccessBinding.
+- [`deleteIAMAccessBinding`](../api.md#delete-namespacesnamespaceidiamaccessbindingsbindingid): Delete one exact Namespace IAM AccessBinding.
+
+### IAM roles
+
+- [`listIAMRoles`](../api.md#get-namespacesnamespaceidiamroles): List exact Namespace IAM Roles.
+- [`getIAMRole`](../api.md#get-namespacesnamespaceidiamrolesroleid): Get an exact Namespace IAM Role.
+- [`createIAMRole`](../api.md#post-namespacesnamespaceidiamroles): Create an immutable Namespace IAM Role.
+- [`deleteIAMRole`](../api.md#delete-namespacesnamespaceidiamrolesroleid): Delete an unreferenced exact Namespace IAM Role.
+
+### Secrets
+
+- [`getSecret`](../api.md#get-namespacesnamespaceidsecretssecretid): Get exact Namespace-owned Secret metadata without revealing material.
+- [`createSecret`](../api.md#post-namespacesnamespaceidsecrets): Create exact Namespace-owned Secret material and return metadata only.
+- [`updateSecret`](../api.md#patch-namespacesnamespaceidsecretssecretid): Replace exact Namespace-owned Secret material and return stable metadata.
+- [`deleteSecret`](../api.md#delete-namespacesnamespaceidsecretssecretid): Delete exact unbound Namespace-owned Secret material.
+
+### Service accounts
+
+- [`listServiceAccounts`](../api.md#get-namespacesnamespaceidserviceaccounts): List authorized Namespace-owned ServiceAccounts in one exact Namespace.
+- [`getServiceAccount`](../api.md#get-namespacesnamespaceidserviceaccountsserviceaccountid): Get an exact Namespace-owned ServiceAccount.
+- [`createServiceAccount`](../api.md#post-namespacesnamespaceidserviceaccounts): Create a native Namespace-owned ServiceAccount.
+- [`deleteServiceAccount`](../api.md#delete-namespacesnamespaceidserviceaccountsserviceaccountid): Delete an exact unreferenced Namespace-owned ServiceAccount.
+
+### Service account credentials
+
+- [`createServiceAccountCredential`](../api.md#post-namespacesnamespaceidserviceaccountsserviceaccountidcredentials): Issue a managed credential for an exact Namespace-owned ServiceAccount.
+- [`updateServiceAccountCredential`](../api.md#patch-namespacesnamespaceidserviceaccountsserviceaccountidcredential): Associate an exact Namespace-local credential reference with a ServiceAccount.
+
+### Providers
+
+- [`listProviders`](../api.md#get-providers): List configured Providers.

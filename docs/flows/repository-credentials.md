@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
-updated: "2026-09-19"
-last_updated_session: "authoring-run/8a16053e-895f-4ea3-8114-5bbe459856a0"
+updated: "2026-09-21"
+last_updated_session: "authoring-run/7c8439bf-8351-451a-8e82-a947e909fc31"
 ---
 
 # Repository credential service flow
@@ -33,7 +33,9 @@ graph TD
   Admission -->|Construction failed| ConstructionCleanup["Seal renewal access<br/>drain unpublished custody"]
   Operator -->|Repeat admission ID| Recovery["Return public status<br/>close and reopen explicitly"]
   Admission --> Files["CLI publishes private<br/>client directory"]
-  Files --> Client["Git or pinned gh<br/>calls gateway"]
+  Files --> Client["Stock Git helper or pinned gh<br/>selects exact session"]
+  Staged["Staged runtime generation"] --> Native["Prepare native include<br/>without reading bearers"]
+  Native -.->|Receiver publication supplied separately| Client
   Client --> Route["Validate auth, profile route<br/>and request capacity"]
   Route -->|Denied| Denial["Bounded local failure"]
   Route -->|Admitted| Credential["Reuse valid credential<br/>or acquire and capture"]
@@ -115,30 +117,40 @@ the CLI to attempt closure and report the session ID for operator follow-up.
 
 ### 3. Authenticate the selected client
 
-`apps/controller/src/drivers/repo/github/credentials/client/launch.ts:launchClient` owns the temporary
-home, subprocess, signal forwarding and cleanup. Cleanup retries transient removal
-failures up to three times. An unresolved removal emits the temporary directory
-path separately and preserves the child exit status or original launch error.
-It composes
+`apps/controller/src/drivers/repo/github/credentials/client/native-git.ts:prepareNativeGitConfiguration`
+is the private preparation CLI for staged material. It calls
+`apps/controller/src/drivers/repo/github/credentials/client/manifest.ts:readRuntimeRepositoryManifest`
+to validate the complete generation's public identities, final paths and file
+metadata. The renderer checks same-origin CA agreement and one gateway origin
+per canonical host, then emits deterministic host rewrites and origin-scoped
+credential/TLS defaults. Exclusive no-follow creation writes only the staged
+`gitconfig`; the material receiver owns deadline rechecks and atomic publication.
+This source path does not establish installed image or receiver qualification.
+
+Stock Git reads the resulting include and owns its normal command/configuration
+semantics. On authentication,
+`apps/controller/src/drivers/repo/github/credentials/client/git-helper.ts`
+parses the bounded credential protocol and verifies the embedded generation.
+`apps/controller/src/drivers/repo/github/credentials/client/targets.ts:selectGitCredential`
+matches the effective HTTPS origin and owner/repository, including optional `.git`
+and case-insensitive repository identity. Explicit reference/session pins must
+match that endpoint. Ambiguous duplicates, stale pins or expired selected sessions
+release no bearer. The helper reads only the selected bearer and clears the byte
+buffer after use; store/erase do not mutate material.
+
+`apps/controller/src/drivers/repo/github/credentials/client/router.ts:routeRepositoryClient`
+handles only gh. It validates the supported API/explicit-head PR invocation,
+selects a binding from its explicit target, inherited pin or native Git remotes,
+and propagates the exact generation/reference/session pin to children.
 `apps/controller/src/drivers/repo/github/credentials/client/environment.ts:createClientEnvironment`
-for the isolated environment and
-`apps/controller/src/drivers/repo/github/credentials/client/commands.ts:prepareClientCommand` for
-command validation and arguments. Git receives an exact destination helper and
-command-level prompt/redirect/auth configuration. Before launch, Git reads its
-effective configuration using the same repository-selection options; the launcher
-resets inherited URL-specific HTTP protections at matching specificity and
-rejects user-agent values containing carriage returns or newlines before starting
-the client, including values from included configuration. Ordinary user-agent
-values remain intact. It also rejects custom trust, client certificates, cookies
-and DNS overrides. It rejects HTTP(S) userinfo in remote fetch/push URLs and
-`insteadOf`/`pushInsteadOf` destinations, as well as direct network-command URLs,
-before Git can transmit URL credentials in place of the session helper. The same
-surfaces reject explicit remote-helper syntax. Clone options are validated before
-inspection; config/template/submodule options, inherited `init.templateDir` and conditional
-includes refuse because they introduce state or transports after preflight. The helper reads the gateway
-bearer only after matching HTTPS host and repository path. API execution checks
-`gh` 2.100.0 and retains canonical GitHub identity while selecting the configured
-gateway API host. Absolute API destinations and unqualified commands refuse.
+keeps gh token/config isolation while preserving normal HOME and system Git
+configuration. `apps/controller/src/drivers/repo/github/credentials/client/commands.ts:prepareGhCommand`
+checks gh 2.100.0 and the canonical host/port profile.
+`apps/controller/src/drivers/repo/github/credentials/client/launch.ts:launchClient`
+retains the operator's single-session entrypoint, stock Git execution, signal
+forwarding and the original child exit status. Git has no command parser or
+temporary-HOME cleanup phase. The [reference](../reference/repository-credentials.md#client-routing-and-limits)
+owns native configuration overrides, ambiguity and generation limits.
 
 ### 4. Reserve, acquire and dispatch
 
@@ -157,6 +169,10 @@ backend plans admitted routes through
 `apps/controller/src/drivers/repo/github/credentials/routes/classification.ts:classifyRoute`
 for target, method, profile and query classification. This provider-owned decision admits upload-pack discovery and execution for all
 three profiles, but rejects receive-pack discovery and execution for `git-read`.
+Git paths match the admitted owner/repository case-insensitively, with or without
+one optional `.git` suffix, then use the canonical admitted identity upstream.
+A literal `.git` repository name retains its suffix. Raw-target, endpoint, method,
+media, query and profile checks still apply; API request matching is unchanged.
 It admits REST and GraphQL only for `git-full`: selected repository metadata,
 PRs, issues and issue comments, plus `GET /meta` and `POST /graphql`, subject to
 the existing method, query, framing and media-type checks. Both Git-only profiles
@@ -222,6 +238,10 @@ It composes URL validation and pagination rewriting from
 `apps/controller/src/drivers/repo/github/credentials/response-urls.ts:createUrlRewriter`
 and `rewritePaginationLinks`, and resource-field rewriting from
 `apps/controller/src/drivers/repo/github/credentials/response-resources.ts:createResourceRewriter`.
+Before releasing bounded JSON, it removes `temp_clone_token` from repository
+objects, their `parent`/`source` relationships and PR `head.repo`/`base.repo`
+objects. Human text and unrelated metadata remain unchanged; this is not a
+generic credential-string scanner.
 The URL owner maps response links using the configured GitHub repository ID
 to the admitted `/repos/owner/repository` path before checking the route and
 resource purpose. A different repository ID remains refused. Issue-list
@@ -313,6 +333,20 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 03:34: Reconcile core normalization and response filtering with native client transport. (public authoring-run/7c8439bf-8351-451a-8e82-a947e909fc31 - aa6c43383764e0632f7f9a9aa4245473075e9ff6)
+
+- 2026-09-21 03:28: Document admitted Git path normalization and unchanged authorization checks. (public authoring-run/3a7b57ee-abdc-48f9-87c7-4527c7f42e8a - daf5e85cd6a4c967b91302fa68ad2e156b20e5a7)
+
+- 2026-09-20 21:55: Document accompanying GitHub response credential filtering at supported repository locations. (public authoring-run/85bfba42-19b5-4084-86ec-49dac9e45fba - 46627a2c38cb942fffcbc61ed5229c85fe01bef3)
+
+- 2026-09-19 21:29: Update common/backend ownership and source paths; distinguish finite shutdown from completed disposal. Verify composed source. (public authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b - 5d8329753f4e17402f619d392acc8fc3d112f620)
+
+- 2026-09-18 02:02: Document accompanying capture deadlines and failed-construction cleanup. (source `cce878092910f39770aa27baa64c6d710f9651f8`)
+
+- 2026-09-17 21:49: Document callable common lifecycle ownership. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
+
+- 2026-09-21 03:16: Document accompanying native Git preparation, manifest helper selection and gh-only routing. (authoring-run/2c944a97-e78b-44f1-86cf-ddfec705e0a6 - a0e96101ba7a7e111816103b0f6336f3b9dbeee8)
 
 - 2026-09-19 21:58: Align emitted Docker contexts and container qualification with the separate service and client artifacts. (public authoring-run/8a16053e-895f-4ea3-8114-5bbe459856a0 - 99d01c1759ef28fe1ec2e6e22496879e752b5cb5)
 

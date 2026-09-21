@@ -225,9 +225,11 @@ async function setup(context) {
     convergenceTimeoutMs = 900_000,
     mode = "production",
     emit = () => {},
+    metrics,
   ) {
     configuration.drivers.compute.id = computeDriver.id;
     worker = createControllerWorker({
+      metrics,
       pool: workerPool,
       mode,
       drivers: {

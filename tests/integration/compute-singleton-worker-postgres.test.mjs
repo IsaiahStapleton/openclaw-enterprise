@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { requiresPostgres, setup, waitFor } from "../helpers/compute-singleton-worker.mjs";
+import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
+import { PostgresMetricsSnapshot } from "../../packages/occ/src/index.ts";
 
 test(
   "production worker emits Compute preflight warnings before worker.started and continues startup",
@@ -202,29 +204,38 @@ test(
     const activations = [];
     const retirements = [];
     let failed = false;
+    const snapshot = new PostgresMetricsSnapshot(fixture.observerPool);
+    const metrics = createOccMetrics("worker", () => snapshot.collect());
 
-    await fixture.start({
-      ...fixture.compute,
-      activationOrder: "beforeCommit",
-      async preflight() {},
-      async activateRevision(candidate) {
-        activations.push({
-          revisionId: candidate.id,
-          activeRevisionId: await fixture.activeRevision(owner),
-        });
-        if (candidate.revision === 2 && !failed) {
-          failed = true;
-          throw new Error("provider readiness verification failed");
-        }
+    await fixture.start(
+      {
+        ...fixture.compute,
+        activationOrder: "beforeCommit",
+        async preflight() {},
+        async activateRevision(candidate) {
+          activations.push({
+            revisionId: candidate.id,
+            activeRevisionId: await fixture.activeRevision(owner),
+          });
+          if (candidate.revision === 2 && !failed) {
+            failed = true;
+            throw new Error("provider readiness verification failed");
+          }
+        },
+        async retireRevision(candidate) {
+          retirements.push({
+            revisionId: candidate.id,
+            activeRevisionId: await fixture.activeRevision(owner),
+          });
+          return fixture.compute.retireRevision(candidate);
+        },
       },
-      async retireRevision(candidate) {
-        retirements.push({
-          revisionId: candidate.id,
-          activeRevisionId: await fixture.activeRevision(owner),
-        });
-        return fixture.compute.retireRevision(candidate);
-      },
-    });
+      30_000,
+      900_000,
+      "production",
+      undefined,
+      metrics,
+    );
     await fixture.work(first);
 
     const second = await fixture.revision(owner, 2);
@@ -244,6 +255,11 @@ test(
       [second.id],
     );
     assert.deepEqual(failure.rows, [{ reason: "DEPENDENCY_UNAVAILABLE" }]);
+    // One failed provider pass is counted as a retry, not another deployment.
+    assert.match(
+      await metrics.exposition(),
+      /occ_reconciliation_attempts_total\{[^\n]*outcome="retry"[^\n]*\} 1/,
+    );
   },
 );
 
@@ -369,11 +385,14 @@ test(
     assert.equal((await fixture.work(second)).attempt_count, 1);
     assert.equal(secondActivationAttempts, 2);
     assert.equal(await fixture.activeRevision(owner), second.id);
+    // Recovery reobserves the published candidate before retrying activation so
+    // current readiness is checked even after the active pointer moves.
     assert.deepEqual(effects, [
       { action: "prepare", revisionId: first.id, activeRevisionId: null },
       { action: "activate", revisionId: first.id, activeRevisionId: first.id },
       { action: "prepare", revisionId: second.id, activeRevisionId: first.id },
       { action: "activate", revisionId: second.id, activeRevisionId: second.id },
+      { action: "prepare", revisionId: second.id, activeRevisionId: second.id },
       { action: "activate", revisionId: second.id, activeRevisionId: second.id },
       { action: "retire", revisionId: first.id, activeRevisionId: second.id },
     ]);
@@ -444,7 +463,10 @@ test(
 
     await fixture.observerPool.query(
       `UPDATE occ.controller_work
-       SET state = 'succeeded', completed_at = clock_timestamp(), updated_at = clock_timestamp()
+       SET state = 'succeeded',
+           completed_at = clock_timestamp(),
+           reason_code = 'REVISION_MAINTENANCE_SUPERSEDED',
+           updated_at = clock_timestamp()
        WHERE namespace_id = $1 AND state = 'queued'
          AND idempotency_key LIKE $2`,
       [fixture.namespace.id, `agent_revision:${candidate.id}:maintenance:%`],

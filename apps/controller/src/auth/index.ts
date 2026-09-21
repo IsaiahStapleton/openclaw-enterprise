@@ -1,12 +1,14 @@
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
+import { domainToASCII } from "node:url";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { APIError, betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
 import { splitSetCookieHeader } from "better-auth/cookies";
 import { memoryAdapter, type MemoryDB } from "better-auth/adapters/memory";
 import { apiKey } from "@better-auth/api-key";
 import type { ApiKey } from "@better-auth/api-key/types";
+import { parse as parseDomain } from "tldts";
 import type { ServicePrincipal } from "@openclaw-enterprise/contracts";
 import { createAuthPrincipalSeed, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
 import type { PostgresPool } from "@openclaw-enterprise/occ";
@@ -15,13 +17,17 @@ import type {
   AdmissionRequest,
   AdmissionVerifier,
   AdmittedCaller,
+  AdmittedSession,
 } from "../admission/admission-verifier.ts";
 import { AdmissionFailure } from "../admission/admission-verifier.ts";
 
 export const OCC_BETTER_AUTH_ISSUER_PREFIX = "occ:installation:";
 export const OCC_AUTH_COOKIE_PREFIX = "openclaw_occ";
+export const OCC_SHARED_AUTH_COOKIE_PREFIX = "openclaw_occ_shared";
 export const OCC_SERVICE_KEY_HEADER = "x-api-key";
 const SERVICE_KEY_CONFIG = "occ-service";
+const SAFE_COOKIE_DOMAIN =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 type ControllerBetterAuth = Auth<BetterAuthOptions & { plugins: ReturnType<typeof apiKey>[] }>;
 
 export interface ServiceKey {
@@ -40,6 +46,7 @@ export interface ControllerAuthOptions {
   readonly database?: BetterAuthOptions["database"];
   readonly memoryDatabase?: MemoryDB;
   readonly secureCookies?: boolean;
+  readonly sharedCookieDomain?: string;
 }
 
 export interface PostgresControllerAuthOptions extends Omit<
@@ -54,6 +61,8 @@ export interface AuthenticatedAccount {
   readonly email: string;
   readonly name: string;
 }
+
+export type AuthenticatedSession = AdmittedSession;
 
 export interface ProvisionAuthAccountInput {
   readonly email: string;
@@ -70,6 +79,8 @@ export interface AuthPrincipalSeedOptions {
 export interface ControllerAuth {
   readonly auth: ControllerBetterAuth;
   readonly issuer: string;
+  readonly sessionCookieName: string;
+  readonly sharedCookieDomain?: string;
   readonly admissionVerifier: ControllerAdmissionVerifier;
   createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount>;
   deleteAccount(account: Pick<AuthenticatedAccount, "id">): Promise<void>;
@@ -80,6 +91,7 @@ export interface ControllerAuth {
   signInEmail(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   signOut(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   session(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  resolveSession(request: FastifyRequest): Promise<AuthenticatedSession | undefined>;
   createServiceKey(input: {
     readonly principal: ServicePrincipal;
     readonly name: string;
@@ -110,6 +122,27 @@ export function betterAuthIssuer(installationId: string): string {
   return `${OCC_BETTER_AUTH_ISSUER_PREFIX}${installationId}:better-auth`;
 }
 
+export function normalizeSharedCookieDomain(domain: string | undefined): string | undefined {
+  const trimmed = domain?.trim().replace(/^\./, "").replace(/\.$/, "");
+  if (!isNonEmptyString(trimmed)) {
+    return undefined;
+  }
+  const normalized = domainToASCII(trimmed).toLowerCase();
+  if (!SAFE_COOKIE_DOMAIN.test(normalized)) {
+    throw new Error("OCC_AUTH_COOKIE_DOMAIN must be a DNS parent domain.");
+  }
+  const parsed = parseDomain(normalized, { allowPrivateDomains: true, validateHostname: true });
+  if (parsed.isIp || parsed.domain === null || parsed.publicSuffix === normalized) {
+    throw new Error("OCC_AUTH_COOKIE_DOMAIN must not be a public suffix.");
+  }
+  return normalized;
+}
+
+export function hostnameMatchesSharedCookieDomain(hostname: string, domain: string): boolean {
+  const normalizedHost = domainToASCII(hostname.trim().replace(/\.$/, "")).toLowerCase();
+  return normalizedHost === domain || normalizedHost.endsWith(`.${domain}`);
+}
+
 function authHeaders(headers: AdmissionHeaders | FastifyRequest["headers"] | undefined): Headers {
   if (headers instanceof Headers) {
     return new Headers(headers);
@@ -130,11 +163,50 @@ function authHeaders(headers: AdmissionHeaders | FastifyRequest["headers"] | und
   return prepared;
 }
 
-function setAuthHeaders(reply: FastifyReply, headers?: Headers | null): void {
+function sessionHeaders(
+  headers: AdmissionHeaders | FastifyRequest["headers"],
+  cookieName: string,
+): Headers {
+  const prepared = authHeaders(headers);
+  const count = (prepared.get("cookie") ?? "")
+    .split(";")
+    .filter((cookie) => cookie.slice(0, cookie.indexOf("=")).trim() === cookieName).length;
+  if (count > 1) {
+    throw new AdmissionFailure(401, "UNAUTHENTICATED", "The session cookie is ambiguous.");
+  }
+  return prepared;
+}
+
+function sessionCookieNames(prefix: string): readonly string[] {
+  return [`${prefix}.session_token`, `__Secure-${prefix}.session_token`];
+}
+
+function hostOnlySessionCookieClearance(enabled: boolean, activePrefix: string): readonly string[] {
+  if (!enabled) {
+    return [];
+  }
+  const names = new Set([
+    ...sessionCookieNames(OCC_AUTH_COOKIE_PREFIX),
+    ...sessionCookieNames(activePrefix),
+  ]);
+  return [...names].map((name) => {
+    const secure = name.startsWith("__Secure-") ? "; Secure" : "";
+    return `${name}=; Max-Age=0; Path=/; HttpOnly${secure}; SameSite=Lax`;
+  });
+}
+
+function setAuthHeaders(
+  reply: FastifyReply,
+  headers?: Headers | null,
+  additionalCookies: readonly string[] = [],
+): void {
   if (!headers) {
+    if (additionalCookies.length > 0) {
+      reply.header("set-cookie", [...additionalCookies]);
+    }
     return;
   }
-  const cookies: string[] = [];
+  const cookies: string[] = [...additionalCookies];
   headers.forEach((value, name) => {
     if (name.toLowerCase() === "set-cookie") {
       cookies.push(...splitSetCookieHeader(value));
@@ -230,6 +302,36 @@ function safeSessionResponse(response: unknown): {
   };
 }
 
+function safeAuthenticatedSession(response: unknown): AuthenticatedSession | undefined {
+  if (typeof response !== "object" || response === null) {
+    return undefined;
+  }
+  const { session, user } = response as { readonly session?: unknown; readonly user?: unknown };
+  if (
+    typeof session !== "object" ||
+    session === null ||
+    typeof user !== "object" ||
+    user === null
+  ) {
+    return undefined;
+  }
+  const { id, expiresAt } = session as Record<string, unknown>;
+  const { id: userId } = user as Record<string, unknown>;
+  if (!isNonEmptyString(id) || !isNonEmptyString(userId)) {
+    return undefined;
+  }
+  const expiry =
+    expiresAt instanceof Date
+      ? expiresAt
+      : typeof expiresAt === "string"
+        ? new Date(expiresAt)
+        : undefined;
+  if (expiry === undefined || Number.isNaN(expiry.getTime())) {
+    return undefined;
+  }
+  return { id, userId, expiresAt: expiry.toISOString() };
+}
+
 async function sendAuthEndpoint(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -240,10 +342,11 @@ async function sendAuthEndpoint(
   } | null>,
   data: (response: unknown) => unknown,
   failureMessage: string,
+  additionalCookies: readonly string[] = [],
 ): Promise<void> {
   try {
     const result = await run();
-    setAuthHeaders(reply, result?.headers);
+    setAuthHeaders(reply, result?.headers, additionalCookies);
     reply.status(result?.status ?? 200).send({
       data: data(result?.response ?? null),
       meta: { requestId: request.id },
@@ -293,9 +396,11 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
   readonly #auth: ControllerBetterAuth;
   readonly #installationId: string;
   readonly #issuer: string;
+  readonly #sessionCookieName: string;
 
-  constructor(auth: ControllerBetterAuth, installationId: string) {
+  constructor(auth: ControllerBetterAuth, installationId: string, cookieName: string) {
     this.#auth = auth;
+    this.#sessionCookieName = cookieName;
     this.#installationId = installationId;
     this.#issuer = betterAuthIssuer(installationId);
   }
@@ -340,18 +445,19 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
     }
 
     const session = await this.#auth.api.getSession({
-      headers,
+      headers: sessionHeaders(headers, this.#sessionCookieName),
       query: { disableCookieCache: true, disableRefresh: true },
       asResponse: false,
       returnHeaders: true,
     });
     const response = session && "response" in session ? session.response : session;
-    if (!response?.session || !isNonEmptyString(response.user?.id)) {
+    const authenticatedSession = safeAuthenticatedSession(response);
+    if (authenticatedSession === undefined) {
       throw new AdmissionFailure(401, "UNAUTHENTICATED", "A valid controller session is required.");
     }
 
     return {
-      externalIdentity: { issuer: this.#issuer, subject: response.user.id },
+      externalIdentity: { issuer: this.#issuer, subject: authenticatedSession.userId },
       admittedScope: {
         installationId: this.#installationId,
         ...(request.requestedScope.namespaceId === undefined
@@ -360,6 +466,7 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
       },
       decisionId: `adm_${randomUUID()}`,
       method: "session" as const,
+      session: authenticatedSession,
     };
   }
 }
@@ -400,6 +507,30 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   }
 
   const expectedBrowserOrigin = new URL(options.baseURL).origin;
+  const sharedCookieDomain = normalizeSharedCookieDomain(options.sharedCookieDomain);
+  if (
+    sharedCookieDomain !== undefined &&
+    !hostnameMatchesSharedCookieDomain(new URL(expectedBrowserOrigin).hostname, sharedCookieDomain)
+  ) {
+    throw new Error("OCC_AUTH_COOKIE_DOMAIN must contain the OCC_AUTH_BASE_URL host.");
+  }
+  if (
+    sharedCookieDomain !== undefined &&
+    (new URL(options.baseURL).protocol !== "https:" || options.secureCookies === false)
+  ) {
+    throw new Error("OCC_AUTH_COOKIE_DOMAIN requires secure HTTPS session cookies.");
+  }
+  const cookiePrefix =
+    sharedCookieDomain === undefined ? OCC_AUTH_COOKIE_PREFIX : OCC_SHARED_AUTH_COOKIE_PREFIX;
+  const sessionCookieBaseName = `${cookiePrefix}.session_token`;
+  const sessionCookieName =
+    new URL(options.baseURL).protocol === "https:"
+      ? `__Secure-${sessionCookieBaseName}`
+      : sessionCookieBaseName;
+  const hostOnlySessionCookieCleanup = hostOnlySessionCookieClearance(
+    sharedCookieDomain !== undefined,
+    cookiePrefix,
+  );
   const issuer = betterAuthIssuer(options.installationId);
   const auth = betterAuth<BetterAuthOptions & { plugins: ReturnType<typeof apiKey>[] }>({
     appName: "OpenClaw Enterprise Controller",
@@ -438,12 +569,17 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     trustedOrigins: [options.baseURL],
     rateLimit: { enabled: true },
     advanced: {
-      cookiePrefix: OCC_AUTH_COOKIE_PREFIX,
+      cookiePrefix,
+      ...(sharedCookieDomain === undefined
+        ? {}
+        : { crossSubDomainCookies: { enabled: true, domain: sharedCookieDomain } }),
       defaultCookieAttributes: {
         httpOnly: true,
         path: "/",
         sameSite: "lax",
-        secure: options.secureCookies ?? options.mode === "production",
+        secure:
+          sharedCookieDomain !== undefined ||
+          (options.secureCookies ?? options.mode === "production"),
       },
     },
   });
@@ -532,6 +668,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       },
       () => ({ authenticated: true }),
       "The caller did not provide valid authentication credentials.",
+      hostOnlySessionCookieCleanup,
     );
   }
 
@@ -543,7 +680,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         // Better Auth server API calls skip origin middleware without a Request context.
         requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
         return api.signOut({
-          headers: authHeaders(request.headers),
+          headers: sessionHeaders(request.headers, sessionCookieName),
           asResponse: false,
           returnHeaders: true,
           returnStatus: true,
@@ -551,6 +688,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       },
       (response) => response,
       "The controller session could not be revoked.",
+      hostOnlySessionCookieCleanup,
     );
   }
 
@@ -560,7 +698,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       reply,
       () =>
         api.getSession({
-          headers: authHeaders(request.headers),
+          headers: sessionHeaders(request.headers, sessionCookieName),
           query: { disableCookieCache: true, disableRefresh: true },
           asResponse: false,
           returnHeaders: true,
@@ -571,10 +709,29 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     );
   }
 
+  async function resolveSession(
+    request: FastifyRequest,
+  ): Promise<AuthenticatedSession | undefined> {
+    const result = await api.getSession({
+      headers: sessionHeaders(request.headers, sessionCookieName),
+      query: { disableCookieCache: true, disableRefresh: true },
+      asResponse: false,
+      returnHeaders: false,
+      returnStatus: false,
+    });
+    return safeAuthenticatedSession(result);
+  }
+
   return {
     auth,
     issuer,
-    admissionVerifier: new ControllerAdmissionVerifier(auth, options.installationId),
+    sessionCookieName,
+    ...(sharedCookieDomain === undefined ? {} : { sharedCookieDomain }),
+    admissionVerifier: new ControllerAdmissionVerifier(
+      auth,
+      options.installationId,
+      sessionCookieName,
+    ),
     createAccount,
     deleteAccount,
     principalSeed: (
@@ -590,6 +747,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     signInEmail,
     signOut,
     session,
+    resolveSession,
     async createServiceKey({ principal, name, expiresIn }) {
       // The server-only userId parameter is the plugin's referenceId; no human
       // account or session is created for this existing IAM automation identity.

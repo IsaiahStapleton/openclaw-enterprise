@@ -56,6 +56,22 @@ function rewriteRecord(
   return result;
 }
 
+function omitRepositoryCredentials(value: JsonValue): JsonValue {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const result: JsonObject = { ...value };
+  delete result.temp_clone_token;
+  // Follow repository relationships only; arbitrary metadata and human text remain intact.
+  for (const field of ["parent", "source"]) {
+    const repository = result[field];
+    if (repository !== undefined) {
+      result[field] = omitRepositoryCredentials(repository);
+    }
+  }
+  return result;
+}
+
 function rewriteItem(
   resource: ResourceKind,
   value: JsonValue,
@@ -65,6 +81,20 @@ function rewriteItem(
     return value;
   }
   const result = rewriteRecord(value, resourceFields[resource], dependencies);
+  if (resource === "repository") {
+    return omitRepositoryCredentials(result);
+  }
+  if (resource === "pull") {
+    for (const field of ["head", "base"]) {
+      const branch = result[field];
+      if (branch !== null && typeof branch === "object" && !Array.isArray(branch)) {
+        const repository = branch.repo;
+        if (repository !== undefined) {
+          result[field] = { ...branch, repo: omitRepositoryCredentials(repository) };
+        }
+      }
+    }
+  }
   const pullRequest = result.pull_request;
   if (
     resource === "issue" &&
@@ -78,7 +108,7 @@ function rewriteItem(
   return result;
 }
 
-/** Only qualified resource links are followed; other nested and human data stays intact. */
+/** Strip repository credentials and follow qualified links, preserving ordinary data. */
 export function createResourceRewriter(
   resource: ResourceKind,
   dependencies: ResourceRewriteDependencies,

@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenClaw Enterprise documentation navigation",
+  "type": "object",
+  "required": ["navigation"],
+  "properties": {
+    "navigation": {
+      "type": "object",
+      "required": ["languages"],
+      "properties": {
+        "languages": {
+          "type": "array",
+          "minItems": 1,
+          "contains": {
+            "type": "object",
+            "required": ["language"],
+            "properties": {
+              "language": {
+                "const": "en"
+              }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1,
+          "items": {
+            "$ref": "#/$defs/language"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "slug": {
+      "type": "string",
+      "description": "Path relative to docs/, without a .md suffix; use README for a folder index.",
+      "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\.md$)[^\\s/\\\\]+(?:/[^\\s/\\\\]+)*$"
+    },
+    "page": {
+      "type": "object",
+      "required": ["page"],
+      "properties": {
+        "page": {
+          "$ref": "#/$defs/slug"
+        },
+        "label": {
+          "$ref": "#/$defs/label",
+          "description": "Optional sidebar and breadcrumb label; the article, browser and search titles do not change."
+        }
+      },
+      "additionalProperties": false
+    },
+    "group": {
+      "type": "object",
+      "required": ["group", "pages"],
+      "properties": {
+        "group": {
+          "$ref": "#/$defs/label"
+        },
+        "pages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/slug"
+              },
+              {
+                "$ref": "#/$defs/page"
+              },
+              {
+                "$ref": "#/$defs/group"
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "tab": {
+      "type": "object",
+      "required": ["tab", "groups"],
+      "properties": {
+        "tab": {
+          "$ref": "#/$defs/label"
+        },
+        "groups": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Ordered sidebar groups. The first visible page is the tab landing page.",
+          "items": {
+            "$ref": "#/$defs/group"
+          }
+        },
+        "hidden": {
+          "type": "array",
+          "description": "Pages that retain their URLs and search entries without appearing in this sidebar.",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/slug"
+              },
+              {
+                "$ref": "#/$defs/page"
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "language": {
+      "type": "object",
+      "required": ["language", "tabs"],
+      "properties": {
+        "language": {
+          "$ref": "#/$defs/label"
+        },
+        "tabs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/tab"
+          }
+        }
+      }
+    }
+  }
+}

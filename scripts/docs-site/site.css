@@ -116,6 +116,7 @@ kbd {
   gap: 30px;
   overflow: auto;
   padding: 0 32px;
+  scroll-padding-inline: 32px;
 }
 .tabs a {
   display: block;
@@ -131,6 +132,9 @@ kbd {
 .tabs a[aria-current] {
   color: var(--ink);
   border-color: var(--brand);
+}
+.tabs a:focus-visible {
+  outline-offset: -2px;
 }
 .layout {
   display: grid;
@@ -153,7 +157,7 @@ kbd {
   align-self: start;
   max-height: calc(100vh - 180px);
   overflow: auto;
-  padding-right: 10px;
+  padding: 4px 10px 4px 4px;
 }
 #sidebar section {
   margin-bottom: 30px;
@@ -167,8 +171,24 @@ kbd {
   color: var(--muted);
   margin: 4px 0 14px;
 }
-#sidebar a {
-  display: block;
+#sidebar .sidebar-pages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+#sidebar .sidebar-pages .sidebar-pages {
+  margin-left: 12px;
+  padding-left: 5px;
+  border-left: 1px solid var(--line);
+}
+#sidebar .sidebar-pages li {
+  margin: 0;
+}
+#sidebar a,
+#sidebar summary {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
   padding: 8px 12px;
   border-left: 2px solid transparent;
   color: var(--text);
@@ -181,8 +201,35 @@ kbd {
   color: var(--brand);
   background: color-mix(in srgb, var(--brand) 6%, transparent);
 }
-#sidebar a:hover {
+#sidebar summary {
+  justify-content: space-between;
+  gap: 12px;
+  list-style: none;
+  cursor: pointer;
+}
+#sidebar summary::-webkit-details-marker {
+  display: none;
+}
+#sidebar summary::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-right: 3px;
+  flex: 0 0 7px;
+  border: solid currentColor;
+  border-width: 0 1px 1px 0;
+  transform: rotate(-45deg);
+}
+#sidebar details[open] > summary::after {
+  transform: rotate(45deg) translate(-2px, -2px);
+}
+#sidebar details[data-active] > summary,
+#sidebar a:hover,
+#sidebar summary:hover {
   color: var(--ink);
+}
+#sidebar :is(a, summary):focus-visible {
+  outline-offset: 2px;
 }
 .breadcrumb {
   font:
@@ -190,6 +237,38 @@ kbd {
     monospace;
   color: var(--muted);
   margin: 5px 0 30px;
+}
+.breadcrumb ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.doc .breadcrumb li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.breadcrumb li + li::before {
+  content: "";
+  height: 10px;
+  border-right: 1px solid var(--muted);
+  transform: rotate(20deg);
+}
+.breadcrumb a {
+  color: inherit;
+  text-decoration: none;
+}
+.breadcrumb a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.breadcrumb [aria-current] {
+  color: var(--ink);
 }
 .doc {
   min-width: 0;
@@ -659,6 +738,7 @@ dialog::backdrop {
   .tabs {
     padding: 0 18px;
     gap: 24px;
+    scroll-padding-inline: 18px;
   }
   .tabs a {
     font-size: 11px;
@@ -668,13 +748,13 @@ dialog::backdrop {
     display: block;
     padding: 20px 20px 48px;
   }
-  #menu {
+  html[data-docs-navigation] #menu {
     display: block;
     width: 100%;
     margin-bottom: 25px;
   }
   #sidebar {
-    display: none;
+    display: block;
     position: static;
     max-height: 60vh;
     margin-bottom: 25px;
@@ -682,8 +762,12 @@ dialog::backdrop {
     background: var(--surface);
     border-radius: 8px;
   }
-  #sidebar.open {
-    display: block;
+  html[data-docs-navigation] #sidebar:not(.open) {
+    display: none;
+  }
+  #sidebar a,
+  #sidebar summary {
+    min-height: 44px;
   }
   .doc h1 {
     font-size: 30px;

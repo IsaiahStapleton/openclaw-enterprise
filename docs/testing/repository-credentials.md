@@ -152,6 +152,25 @@ nondelivery from ambiguous response loss. Owner regressions cover delayed
 settlement, frozen or adjusted wall clocks, short configured safety margins,
 and cleanup retaining credential material after authentication becomes ineligible.
 
+## Check native Git selection
+
+The client configuration and router cases use stock Git with generated native
+configuration. They cover endpoint case and optional `.git` spelling, exact
+host/port/username, staged preparation, private files and CA agreement. Duplicate
+bindings require explicit valid pins; stale pins, expired selections and
+generation replacement release no bearer. Local hooks, aliases, moves, removals
+and worktrees remain native Git behavior. Run both files directly:
+
+```sh
+node --test tests/integration/repository-credentials-client-config.test.mjs \
+  tests/integration/repository-credentials-router.test.mjs
+```
+
+The real Git journey verifies committed moves/removals and upstream refs. The gh
+case records native child Git through private HOME configuration. The installed
+image's system include, multi-repository registry and Compute publication require
+separate platform qualification; helper selection alone does not prove them.
+
 ## Qualify emitted artifacts
 
 Build the final artifacts and run the detached package check first:

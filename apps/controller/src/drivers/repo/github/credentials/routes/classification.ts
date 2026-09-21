@@ -61,13 +61,21 @@ function classifyGitRoute(
   repository: string,
   profile: GitHubProfile,
 ): Route | undefined {
-  const { raw, path, query } = target;
+  const { path, query } = target;
+  const parts = /^\/([^/]+\/[^/]+)\/(.*)$/.exec(path);
+  const identity = repository.toLowerCase();
+  const requested = parts?.[1]?.toLowerCase();
+  // Compare both spellings with the admitted identity; a literal .git name keeps its suffix.
+  if (requested !== identity && requested !== `${identity}.git`) {
+    return;
+  }
+  const endpoint = parts![2];
   const git = `/${repository}.git/`;
   if (head.headers["git-protocol"] !== undefined && head.headers["git-protocol"] !== "version=2") {
     return;
   }
   if (
-    path === `${git}info/refs` &&
+    endpoint === "info/refs" &&
     head.method === "GET" &&
     (query === "service=git-upload-pack" ||
       (profile !== "git-read" && query === "service=git-receive-pack"))
@@ -75,24 +83,24 @@ function classifyGitRoute(
     return {
       kind: "git-discovery",
       effect: query.includes("receive") ? "write" : "read",
-      target: raw,
+      target: `${git}info/refs?${query}`,
     };
   }
   if (query || head.method !== "POST") {
     return;
   }
   if (
-    path === `${git}git-upload-pack` &&
+    endpoint === "git-upload-pack" &&
     head.headers["content-type"] === "application/x-git-upload-pack-request"
   ) {
-    return { kind: "git-fetch", effect: "read", target: raw };
+    return { kind: "git-fetch", effect: "read", target: `${git}git-upload-pack` };
   }
   if (
     profile !== "git-read" &&
-    path === `${git}git-receive-pack` &&
+    endpoint === "git-receive-pack" &&
     head.headers["content-type"] === "application/x-git-receive-pack-request"
   ) {
-    return { kind: "git-push", effect: "write", target: raw };
+    return { kind: "git-push", effect: "write", target: `${git}git-receive-pack` };
   }
   return;
 }
@@ -226,8 +234,9 @@ export function classifyRoute(
   if (!target) {
     return;
   }
-  if (target.path.startsWith(`/${policy.repository}.git/`)) {
-    return classifyGitRoute(head, target, policy.repository, policy.profile);
+  const git = classifyGitRoute(head, target, policy.repository, policy.profile);
+  if (git) {
+    return git;
   }
   if (policy.profile !== "git-full" || head.contentEncoding !== "identity") {
     return;

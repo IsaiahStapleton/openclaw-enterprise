@@ -502,6 +502,25 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
       "    throw error;",
       "  }",
       "});",
+      'for (const stage of ["ready-status", "warning-status", "initial-rollout", "warning-rollout", "secretauthvalue-stage"]) {',
+      '  test(stage === "secretauthvalue-stage" ? "unsafe plugin stage" : stage, () => {',
+      '    const error = new Error("secretauthvalue-message");',
+      '    error.openclawCiDiagnostic = { kind: "kubernetes-plugin-status", stage, body: "secretauthvalue-body" };',
+      '    if (stage === "warning-rollout") error.openclawCiDiagnostic.pods = [',
+      '      { phase: "Pending", ready: false, scheduled: true, secret: "secretauthvalue", containers: [',
+      '        { name: "gateway", restartCount: 2, exitCode: 1, waitingReason: "CrashLoopBackOff", terminatedReason: "Error", message: "secretauthvalue" },',
+      '        { name: "secretauthvalue", restartCount: 3 },',
+      '        { name: "gateway", restartCount: 4 }',
+      "      ] },",
+      '      { phase: "secretauthvalue" },',
+      '      { phase: "Running", ready: "secretauthvalue", scheduled: "secretauthvalue", containers: [',
+      '        { name: "prepare-private-state", restartCount: -1, exitCode: 256, waitingReason: "secretauthvalue", terminatedReason: "secretauthvalue" }',
+      "      ] },",
+      '      { phase: "Failed" }',
+      "    ];",
+      "    throw error;",
+      "  });",
+      "}",
       "",
     ].join("\n"),
   );
@@ -567,6 +586,35 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     (entry) => entry.name === "rejects unsafe controller HTTP diagnostic",
   );
   assert.equal(unsafeFailure.error.diagnostic, undefined);
+  // Keep the failed wait identifiable without exposing arbitrary runtime output.
+  for (const stage of ["ready-status", "warning-status", "initial-rollout"]) {
+    const failure = summary.files[0].tests.find((entry) => entry.name === stage);
+    assert.deepEqual(failure.error.diagnostic, { kind: "kubernetes-plugin-status", stage });
+  }
+  const rolloutFailure = summary.files[0].tests.find((entry) => entry.name === "warning-rollout");
+  assert.deepEqual(rolloutFailure.error.diagnostic, {
+    kind: "kubernetes-plugin-status",
+    stage: "warning-rollout",
+    pods: [
+      {
+        phase: "Pending",
+        ready: false,
+        scheduled: true,
+        containers: [
+          {
+            name: "gateway",
+            restartCount: 2,
+            exitCode: 1,
+            waitingReason: "CrashLoopBackOff",
+            terminatedReason: "Error",
+          },
+        ],
+      },
+      { phase: "Running", containers: [{ name: "prepare-private-state" }] },
+    ],
+  });
+  const unsafeStage = summary.files[0].tests.find((entry) => entry.name === "unsafe plugin stage");
+  assert.equal(unsafeStage.error.diagnostic, undefined);
 });
 
 test("audit rejects obsolete manifest selectors", async (t) => {

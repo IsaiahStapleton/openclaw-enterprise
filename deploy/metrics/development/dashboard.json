@@ -1,0 +1,408 @@
+{
+  "uid": "occ-development",
+  "title": "OCC development",
+  "schemaVersion": 39,
+  "version": 4,
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "tags": ["occ", "development"],
+  "panels": [
+    {
+      "id": 2,
+      "title": "Agents by lifecycle state",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (lifecycle_state) (occ_agents and on (job, instance, cluster, installation) (up == 1))",
+          "legendFormat": "{{lifecycle_state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Persisted deployment/stop progress, not continuous runtime health. Stopped Agents are separate from never-deployed drafts."
+    },
+    {
+      "id": 10,
+      "title": "Agent operation p95 (admission to completion)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (operation, le) (rate(occ_agent_operation_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "title": "Oldest pending work age",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max (occ_work_oldest_pending_age_seconds and on (job, instance, cluster, installation) (up == 1))",
+          "legendFormat": "oldest pending"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Pending work (shared)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max (occ_work_pending and on (job, instance, cluster, installation) (up == 1))",
+          "legendFormat": "{{service}} {{outcome}} {{lifecycle_state}} {{status_class}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Reconciliation passes per second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(occ_reconciliation_attempts_total[1m]))",
+          "legendFormat": "{{service}} {{outcome}} {{lifecycle_state}} {{status_class}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "title": "Retries and permanent failures per second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (work_kind, outcome) (rate(occ_reconciliation_attempts_total{outcome=~\"retry|permanent|error|claim_lost\"}[5m])) or on () label_replace(0 * max(up{job=\"occ-worker\"} == 1), \"outcome\", \"none\", \"\", \"\")",
+          "legendFormat": "{{work_kind}} {{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": "Shows zero when a worker is being scraped successfully and no retry or failure series exist. An unavailable worker does not produce a zero fallback."
+    },
+    {
+      "id": 12,
+      "title": "Reconciliation p95 by work kind",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (work_kind, le) (rate(occ_reconciliation_attempt_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{work_kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "Requests per second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status_class) (rate(occ_http_requests_total[1m]))",
+          "legendFormat": "{{service}} {{outcome}} {{lifecycle_state}} {{status_class}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 14,
+      "title": "API 5xx percentage",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (sum(rate(occ_http_requests_total{status_class=\"5xx\"}[5m])) or vector(0)) / sum(rate(occ_http_requests_total[5m]))",
+          "legendFormat": "5xx"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "HTTP p95 (seconds)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(occ_http_request_duration_seconds_bucket[1m])))",
+          "legendFormat": "{{service}} {{outcome}} {{lifecycle_state}} {{status_class}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 1,
+      "title": "Scrape health",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 24
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=~\"occ-api|occ-worker\"}",
+          "legendFormat": "{{service}} {{outcome}} {{lifecycle_state}} {{status_class}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "title": "Resident memory by process",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 24
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "occ_process_resident_memory_bytes",
+          "legendFormat": "{{service}} {{outcome}} {{lifecycle_state}} {{status_class}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "title": "CPU cores by process",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(occ_process_cpu_seconds_total[1m])",
+          "legendFormat": "{{service}} {{outcome}} {{lifecycle_state}} {{status_class}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 9,
+      "title": "Event-loop maximum lag",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "occ-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 32
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "occ_nodejs_eventloop_lag_max_seconds",
+          "legendFormat": "{{service}} {{outcome}} {{lifecycle_state}} {{status_class}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}
