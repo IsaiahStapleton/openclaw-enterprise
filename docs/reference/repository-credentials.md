@@ -53,9 +53,11 @@ Deadlines do not settle provider cleanup. Evidence pruning and durable token
 recovery are unimplemented.
 
 Worker restart can retain surviving service sessions and Compute material.
-Missing exposed sessions or unsettled closure block same-revision replacement,
-including Compute repair. `REPOSITORY_SESSION_RECOVERY_UNSAFE` fails the revision
-and queues runtime retirement while retaining cleanup. Never-delivered openings
+Known closing sessions block same-revision replacement, including Compute repair,
+with retryable `REPOSITORY_CLEANUP_PENDING` until confirmed `DISPOSED`. Existing
+Work bounds and the original revision deadline still apply. Missing exposed
+sessions remain irrecoverable: `REPOSITORY_SESSION_RECOVERY_UNSAFE` fails the
+revision and queues runtime retirement while retaining cleanup. Never-delivered openings
 without a recorded session ID remain recoverable; known sessions require disposal
 before replacement. Users may explicitly deploy a new authorized revision. This
 neither settles old cleanup nor replays Git/API mutations; credential disposal

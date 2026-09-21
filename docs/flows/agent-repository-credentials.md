@@ -1,7 +1,7 @@
 ---
 created: "2026-09-18"
 updated: "2026-09-21"
-last_updated_session: "authoring-run/f4034e1f-9090-4f83-87c7-189e172017e2"
+last_updated_session: "authoring-run/7ba8b1a5-628b-45f2-9ec9-25ce904b82d9"
 ---
 
 # Agent repository credential flow
@@ -48,12 +48,15 @@ graph TD
   Service -->|Existing open session| Retained["<b>Retained material</b><br/>No bearer recovery"]
   Service -->|Lost response| Recover["<b>Recover only</b><br/>Find or fence, then close"]
   Recover -->|Never delivered or disposed| Attempt
-  Recover -->|Known session unsettled| Refuse["<b>Fail revision</b><br/>Retain cleanup obligation"]
+  Recover -->|Known closing session| Wait["<b>Wait for disposal</b><br/>Bounded retry, no remint"]
+  Wait --> Worker
+  Recover -->|Known session missing| Refuse["<b>Fail revision</b><br/>Retain cleanup obligation"]
   New --> Compute["<b>Compute delivery</b><br/>Validate complete set"]
   Retained --> Compute
   Compute -->|Missing retained files| Repair["<b>Repair exact subset</b><br/>Close and verify disposal"]
   Repair -->|Disposed| Compute
-  Repair -->|Unsettled| Refuse
+  Repair -->|Closing| Wait
+  Repair -->|Missing| Refuse
   Refuse --> Close
   Compute --> Pod["<b>Private generation</b><br/>Init files, replace Pod"]
   Pod --> Command["<b>Git or gh command</b><br/>Pin target and session"]
@@ -72,7 +75,7 @@ graph TD
   classDef condition fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
   class API,Revision,Attempt,Queue state
   class Worker,Service,New,Retained,Compute,Pod,Command,Gateway,Close,Done,Delete,Finalize operation
-  class Recover,Repair,Refuse condition
+  class Recover,Repair,Refuse,Wait condition
 ```
 
 ## Execution Trace
@@ -149,7 +152,9 @@ unfinished opening attempt uses `recoverOnly` to find or fence the original
 admission and closes any recovered session. Fresh material requires confirmed
 disposal of a known session, or a missing opening with no recorded session ID:
 that opening never delivered material through the worker. An invalidated known
-session blocks automatic replacement in the same revision. The worker checks
+session blocks automatic replacement in the same revision. A known closing
+session raises retryable `REPOSITORY_CLEANUP_PENDING`; replacement waits for
+confirmed disposal within the existing Work bounds and revision deadline. The worker checks
 retained attempts again under its admission transaction's Namespace/Agent locks.
 Validated `DISPOSED` observations are persisted without another close request;
 later service pruning cannot erase that confirmed settlement.
@@ -167,7 +172,8 @@ validates exact ownership and file contents before creating immutable
 Agent/revision/session-owned Secrets. It reports the precise missing retained
 subset. The worker's `RepositoryCredentialLifecycle.repair` closes that subset
 and requires disposal before replacement, then retries Compute once. Missing
-inventory or unresolved closure fails the revision instead of reminting.
+inventory fails the revision. Pending closure keeps replacement blocked while
+the existing bounded retry or active-revision continuation waits for disposal.
 
 `apps/controller/src/drivers/compute/kubernetes/repository-material.ts:repositoryMaterialDeployment`
 mounts Secret projections only in the init container. The init entrypoint in
@@ -302,6 +308,8 @@ State/worker, real-client, installed/runtime and live-provider checks.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 17:15: Distinguish pending disposal from irrecoverable session loss in the accompanying worker correction. (authoring-run/7ba8b1a5-628b-45f2-9ec9-25ce904b82d9 - 47995c58a5f9d267040e510110ca28ffa3d3a226)
 
 - 2026-09-21 15:48: Trace refusal of unsafe same-revision replacement and canonical retention registration in the accompanying changes. (authoring-run/f4034e1f-9090-4f83-87c7-189e172017e2 - 08a9b693de5fe959d26e698435017e0114e3e46e)
 

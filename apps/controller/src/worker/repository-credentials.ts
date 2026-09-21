@@ -152,10 +152,18 @@ export class RepositoryCredentialLifecycle {
           (attempt) =>
             attempt.repositoryRef === binding.repositoryRef &&
             attempt.sessionId !== undefined &&
-            (attempt.phase === "invalidated" || attempt.phase === "closing"),
+            attempt.phase === "invalidated",
         )
       ) {
         throw new RepositoryCredentialAuthorityError("REPOSITORY_SESSION_RECOVERY_UNSAFE");
+      }
+      if (
+        attempts.some(
+          (attempt) =>
+            attempt.repositoryRef === binding.repositoryRef && attempt.phase === "closing",
+        )
+      ) {
+        throw new Error("REPOSITORY_CLEANUP_PENDING");
       }
       const existing = attempts.find(
         (attempt) =>
@@ -387,10 +395,17 @@ export class RepositoryCredentialLifecycle {
           (prior) =>
             prior.repositoryRef === binding.repositoryRef &&
             prior.sessionId !== undefined &&
-            (prior.phase === "invalidated" || prior.phase === "closing"),
+            prior.phase === "invalidated",
         )
       ) {
         throw new RepositoryCredentialAuthorityError("REPOSITORY_SESSION_RECOVERY_UNSAFE");
+      }
+      if (
+        attempts.some(
+          (prior) => prior.repositoryRef === binding.repositoryRef && prior.phase === "closing",
+        )
+      ) {
+        throw new Error("REPOSITORY_CLEANUP_PENDING");
       }
       const deadlineWallMs = revision.repositoryCredentials!.deadlineWallMs;
       const durationSeconds = Math.min(
