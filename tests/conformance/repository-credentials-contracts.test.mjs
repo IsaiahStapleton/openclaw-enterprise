@@ -182,6 +182,77 @@ test("REST issue and PR responses preserve informational URLs on reads and succe
     });
   }
 });
+test("repository responses omit cloning credentials at repository locations without changing ordinary data", async (t) => {
+  const { bind } = await createGitHubPlanningFixture(t);
+  const api = "https://api.github.com/repos/fixture/repository";
+  const gateway = "https://credentials.example/repos/fixture/repository";
+  const metadata = {
+    id: 73,
+    url: api,
+    description: "Document the temp_clone_token field without changing human text",
+    clone_url: "https://github.com/fixture/repository.git",
+    custom_properties: { temp_clone_token: "a property name, not a provider credential" },
+  };
+  const repository = {
+    ...metadata,
+    temp_clone_token: "synthetic-root-cloning-credential",
+    parent: { ...metadata, temp_clone_token: "synthetic-parent-cloning-credential" },
+    source: {
+      ...metadata,
+      temp_clone_token: "synthetic-source-cloning-credential",
+      parent: { ...metadata, temp_clone_token: "synthetic-ancestor-cloning-credential" },
+    },
+  };
+  const cleanRepository = {
+    ...metadata,
+    parent: metadata,
+    source: { ...metadata, parent: metadata },
+  };
+  const pull = pullResponse({
+    head: { ref: "topic", repo: repository },
+    base: { ref: "main", repo: repository },
+  });
+  const cleanPull = {
+    ...pull,
+    url: `${gateway}/pulls/1`,
+    comments_url: `${gateway}/issues/1/comments`,
+    issue_url: `${gateway}/issues/1`,
+    head: { ref: "topic", repo: cleanRepository },
+    base: { ref: "main", repo: cleanRepository },
+  };
+  for (const { name, method, path, input, expected } of [
+    {
+      name: "repository",
+      method: "GET",
+      path: "",
+      input: repository,
+      expected: { ...cleanRepository, url: gateway },
+    },
+    { name: "pull read", method: "GET", path: "/pulls/1", input: pull, expected: cleanPull },
+    { name: "pull list", method: "GET", path: "/pulls", input: [pull], expected: [cleanPull] },
+    { name: "pull create", method: "POST", path: "/pulls", input: pull, expected: cleanPull },
+    { name: "pull update", method: "PATCH", path: "/pulls/1", input: pull, expected: cleanPull },
+    {
+      name: "deleted head repository",
+      method: "GET",
+      path: "/pulls/1",
+      input: { ...pull, head: { ref: "topic", repo: null } },
+      expected: { ...cleanPull, head: { ref: "topic", repo: null } },
+    },
+  ]) {
+    await t.test(name, () => {
+      const original = structuredClone(input);
+      const plan = bind().plan(head(method, `/repos/fixture/repository${path}`));
+      assert.equal(plan.kind, undefined);
+      // Exercise the selected backend policy and the JSON boundary, not a replacement sanitizer.
+      const serialized = JSON.stringify(plan.responsePolicy.rewriteJson(input));
+      assert.deepEqual(JSON.parse(serialized), expected);
+      assert.doesNotMatch(serialized, /synthetic-[a-z]+-cloning-credential/);
+      assert.deepEqual(input, original);
+    });
+  }
+});
+
 test("followed JSON links validate field purpose while GraphQL human URLs remain intact", async (t) => {
   const { bind } = await createGitHubPlanningFixture(t);
   const bound = bind();

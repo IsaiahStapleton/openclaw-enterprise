@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
-updated: "2026-09-19"
-last_updated_session: "authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b"
+updated: "2026-09-20"
+last_updated_session: "authoring-run/85bfba42-19b5-4084-86ec-49dac9e45fba"
 ---
 
 # Repository credential lifecycle flow
@@ -56,6 +56,14 @@ sufficient validity at acceptance, reuse, and dispatch. `provider-queue.ts` boun
 provider work; `lifecycle/exchange.ts:executeExchange` joins tracked exchange work
 before releasing the original use.
 
+The GitHub backend selects `response.ts:createResponsePolicy` when planning an
+admitted request. Before bounded JSON is released, its
+`response-resources.ts:createResourceRewriter` rewrites qualified machine links
+and removes `temp_clone_token` from repository objects, their `parent`/`source`
+relationships, and pull-request `head.repo`/`base.repo` objects. Nested repository
+links remain informational. Human text and unrelated metadata are preserved;
+the policy does not scan arbitrary fields for credential-like strings.
+
 ### 3. Close admission and settle cleanup
 
 `apps/controller/src/drivers/repo/credentials/service.ts:createCredentialService`
@@ -89,6 +97,8 @@ listeners, clients, containers, or live-provider behavior.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-20 21:55: Document accompanying GitHub response credential filtering at supported repository locations. (public authoring-run/85bfba42-19b5-4084-86ec-49dac9e45fba - 46627a2c38cb942fffcbc61ed5229c85fe01bef3)
 
 - 2026-09-19 21:29: Update common/backend ownership and source paths; distinguish finite shutdown from completed disposal. Verify composed source. (public authoring-run/a55f804b-53b3-40df-a5d5-b6a2f425544b - 5d8329753f4e17402f619d392acc8fc3d112f620)
 
