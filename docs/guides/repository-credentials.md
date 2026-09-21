@@ -166,9 +166,13 @@ API operations require `git-full`.
 Inspect the actual remote commit and PR to confirm completion. If a push or
 mutation has an uncertain response, inspect remote state before repeating it.
 Stop the Agent through the normal lifecycle when finished; inspect pending
-cleanup separately. A service restart can replace private runtime material and
-restart the embedded gateway, but cannot renew the revision's absolute deadline.
-After expiry, a new authorized deployment is required.
+cleanup separately. A worker restart can retain a surviving service session. If
+the credential service loses an already delivered session, the revision fails and
+its runtime is retired; it cannot automatically receive replacement credentials.
+Inspect retained cleanup obligations and explicitly deploy a new authorized
+revision to continue. A new deployment neither settles old cleanup nor replays
+Git/API operations. The revision's absolute deadline is never renewed; expiry
+also requires a new authorized deployment.
 
 ## Use the standalone service
 
