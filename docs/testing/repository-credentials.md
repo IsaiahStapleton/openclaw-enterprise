@@ -86,8 +86,12 @@ native configuration and credential-protocol owners.
 The builder takes emitted modules from `apps/controller/dist` and stages service
 and client artifacts under `.build/repository-credentials/`. The service contains
 `dist/repository-credentials.js` and the check-config entrypoint. The client
-packages the native preparer, gh router, `launch.js`, `operator.js`, and `git-helper.js` under
-`dist/drivers/repo/github/credentials/client/`, plus their runtime dependencies.
+currently seeds `launch.js`, `operator.js`, and `git-helper.js` under
+`dist/drivers/repo/github/credentials/client/`; the native preparer is reachable
+through `launch.js`. The source also has the gh-only `router.ts` entrypoint.
+Packaging work in [PR #224](https://github.com/openclaw/openclaw-enterprise/pull/224)
+must seed and qualify that router in the detached client closure before claiming
+packaged gh routing.
 The package test starts the detached service, admits and closes a session over
 its Unix socket, and runs the emitted launcher and Git helper. Both artifacts
 run without workspace source or runtime `node_modules`; missing modules fail
@@ -119,6 +123,7 @@ Then run:
 ```sh
 node --test tests/conformance/repository-credentials-backend-conformance.test.mjs \
   tests/integration/repository-credentials-git.test.mjs \
+  tests/integration/repository-credentials-native-paths.test.mjs \
   tests/integration/repository-credentials-gh.test.mjs
 ```
 
@@ -131,6 +136,15 @@ separate platform qualification. The alternate backend
 uses the same common owners while varying repository identity, authentication,
 credential lifetime, and renewal behavior. It establishes conformance, not support
 for another production provider.
+
+The native-path cases clone, fetch new content and push through canonical GitHub
+URLs with mixed owner/repository case, with and without `.git`. They observe
+canonical upstream paths and accepted refs/content through the real classifier,
+HTTPS sender and `git-http-backend`. Cold discovery challenges issue no token;
+cold read-only receive-pack and representative raw-path/API denials contact no
+upstream. Count the five container child cases separately from their host wrapper.
+These cases do not add literal-`.git` repository or multi-repository registry
+runtime proof; the existing helper ambiguity/pin cases remain their own evidence.
 
 The `repository-credentials-container` CI lane prepares a source toolchain image,
 records its ID, and extracts its checked gh binary. Its required inputs and test

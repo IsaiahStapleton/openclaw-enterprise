@@ -987,6 +987,9 @@
         },
         {
           "path": "tests/integration/repository-credentials-gh.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-native-paths.test.mjs"
         }
       ]
     }
