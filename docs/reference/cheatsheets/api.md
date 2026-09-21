@@ -1,5 +1,7 @@
 # API cheat sheet
 
+<!-- Generated from packages/contracts/openapi/occ-api.openapi.json. Do not edit directly. -->
+
 ## Operations
 
 ### Authentication accounts

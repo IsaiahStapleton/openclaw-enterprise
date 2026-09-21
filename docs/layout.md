@@ -86,7 +86,8 @@ Do not install dependencies as a verification side effect.
   installed, run `pnpm format:fix`, inspect the diff, then `pnpm format:check`.
 - Keep generated outputs owned by their generator. Update API schemas and routes,
   then use `pnpm openapi:generate` and `pnpm openapi:check` for
-  `packages/contracts/openapi/occ-api.openapi.json` and `docs/reference/api.md`.
+  `packages/contracts/openapi/occ-api.openapi.json`, `docs/reference/api.md`, and
+  `docs/reference/cheatsheets/api.md`.
 
 ## Documentation placement
 

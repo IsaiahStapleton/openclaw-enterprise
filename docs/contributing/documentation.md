@@ -66,6 +66,6 @@ navigation, diagrams, or other presentation changes. Run `pnpm format:check`
 when the existing root dependencies match the lockfile. Do not add or run tests
 for documentation changes, including docs-site presentation.
 
-The [HTTP API reference](../reference/api.md) is generated. Update its owning
-routes, schemas, or generator and run `pnpm openapi:generate`; do not edit the
-generated page directly.
+The [HTTP API reference](../reference/api.md) and [API cheat sheet](../reference/cheatsheets/api.md)
+are generated. Edit the owning routes, schemas, or generator; then run
+`pnpm openapi:generate` and `pnpm openapi:check`. Do not edit either page by hand.

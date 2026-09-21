@@ -33,7 +33,7 @@ git diff --check
 ```
 
 The build renders published Markdown pages under `docs/`, including pages hidden
-from the sidebar and the generated HTTP API reference. It omits document Changelogs,
+from the sidebar and the generated API pages. It omits document Changelogs,
 empty Manual Notes, and pages marked `published: false`. It checks local page
 links and heading anchors, then builds the search index. Source files, deployment
 assets, and historical specs outside `docs/` link to the Enterprise repository
@@ -45,8 +45,8 @@ presentation; use the build, formatting, link checks, and visual inspection.
 
 The full repository checks (`pnpm format:check` and `pnpm openapi:check`) require
 the controller workspace dependencies from `pnpm install --frozen-lockfile`.
-The API Markdown can also be checked against the checked-in schema with
-`node scripts/generate-occ-api-reference.mjs --check`.
+Both API Markdown pages can also be checked against the checked-in OpenAPI
+contract with `node scripts/generate-occ-api-reference.mjs --check`.
 
 ## Edit the source
 
@@ -65,8 +65,9 @@ Other pages use their source path without `.md`, such as `/guides/quickstart/`.
 Assets under `docs/assets/` are served at `/assets/`. Keep paths and existing
 heading anchors when changing only the navigation or label.
 
-For the generated [HTTP API reference](reference/api.md), edit the owning routes,
-schemas, or generator and run `pnpm openapi:generate`; never edit its output by hand.
+The [HTTP API reference](reference/api.md) and [API cheat sheet](reference/cheatsheets/api.md)
+are generated. Edit the owning routes, schemas, or generator; then run
+`pnpm openapi:generate` and `pnpm openapi:check`. Do not edit either page by hand.
 
 ## Interactive Driver matrices
 

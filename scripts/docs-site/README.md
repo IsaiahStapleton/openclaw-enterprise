@@ -90,7 +90,8 @@ the site and its search index, `node scripts/docs-site/build.mjs --check` to
 check links and anchors without writing files, and `pnpm docs:check-length` for
 word limits. Inspect navigation and presentation in the browser. Run
 `pnpm openapi:check` with the controller workspace installed when changing the
-generated API source.
+source for the generated [HTTP API reference](../../docs/reference/api.md) or
+[API cheat sheet](../../docs/reference/cheatsheets/api.md).
 
 The docs package is intentionally outside the active application workspace. Its
 independent lockfile lets docs-only contributors install the renderer without
