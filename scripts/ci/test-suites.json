@@ -231,6 +231,15 @@
           ]
         },
         {
+          "path": "tests/integration/occ-metrics.test.mjs",
+          "expectedTests": [
+            "API metrics follow real authenticated routes and keep replica registries isolated",
+            "metrics settings reject exposed development binds and disabled stray settings",
+            "worker inventory reflects PostgreSQL activation and redeployment without replica multiplication",
+            "real table contention fails overlapping scrapes and recovers"
+          ]
+        },
+        {
           "path": "tests/integration/postgres-auth-accounts.test.mjs",
           "expectedTests": [
             "fresh PostgreSQL development bootstrap writes a usable administrator service key",
@@ -809,7 +818,8 @@
     },
     "logging-collector": {
       "env": {
-        "OCC_TEST_LOGGING_COLLECTOR": "1"
+        "OCC_TEST_LOGGING_COLLECTOR": "1",
+        "OCC_TEST_METRICS_MONITORING": "1"
       },
       "requiredEnv": ["OCC_TEST_LOGGING_NODE_IMAGE"],
       "prepare": {
@@ -828,6 +838,12 @@
         {
           "path": "tests/integration/ci-logging-collector.test.mjs",
           "expectedTests": ["prepareLogging backend receives real OTLP/HTTP logs and writes JSONL"]
+        },
+        {
+          "path": "tests/integration/occ-metrics-monitoring.test.mjs",
+          "expectedTests": [
+            "Prometheus remote write records real OCC traffic and Grafana provisions its dashboard"
+          ]
         }
       ]
     },

@@ -51,8 +51,10 @@ import {
 import type { InstallationRuntimeDrivers } from "./composition/installation-config.ts";
 import { resolveApprovedHarness } from "./composition/production-harness.ts";
 import { withComputeAbortSignal } from "./drivers/compute/operation-context.ts";
+import type { OccMetrics, WorkKind, WorkOutcome } from "./metrics/index.ts";
 
 export interface ControllerWorkerOptions {
+  readonly metrics?: OccMetrics;
   readonly pool: PostgresPool & PostgresQueryClient;
   readonly mode?: "development" | "production";
   readonly drivers?: InstallationRuntimeDrivers;
@@ -338,6 +340,8 @@ function uniqueSecretRefs(bindings: SecretBindings): SecretReference[] {
 }
 
 export class ControllerWorker {
+  private readonly metrics: OccMetrics | undefined;
+  private passOutcome: WorkOutcome = "error";
   private readonly state: PostgresPlatformState;
   private readonly queue: PostgresWorkQueue;
   private readonly compute: ComputeDriver;
@@ -366,6 +370,7 @@ export class ControllerWorker {
   private pendingHealth: Promise<void> | undefined;
 
   constructor(options: ControllerWorkerOptions) {
+    this.metrics = options.metrics;
     this.mode = options.mode ?? "development";
     if (this.mode !== "development" && this.mode !== "production") {
       throw new Error("The controller worker mode must be development or production.");
@@ -508,7 +513,30 @@ export class ControllerWorker {
         await this.queue.recoverStale();
         const claim = await this.queue.claim();
         if (claim !== undefined) {
-          await this.process(claim);
+          const started = process.hrtime.bigint();
+          this.passOutcome = "error";
+          try {
+            await this.process(claim);
+          } catch (error) {
+            this.passOutcome = error instanceof WorkClaimLostError ? "claim_lost" : "error";
+            throw error;
+          } finally {
+            let kind: WorkKind = "namespace_ensure";
+            if (claim.agentTarget === "deleted") {
+              kind = "agent_delete";
+            } else if (claim.agentTarget === "stopped") {
+              kind = "agent_stop";
+            } else if (claim.revisionId !== undefined) {
+              kind = "agent_revision";
+            } else if (claim.namespaceTarget === "deleted") {
+              kind = "namespace_delete";
+            }
+            this.metrics?.observeWork(
+              kind,
+              this.passOutcome,
+              Number(process.hrtime.bigint() - started) / 1e9,
+            );
+          }
           await this.health(true);
           continue;
         }
@@ -1059,6 +1087,10 @@ export class ControllerWorker {
         }
       }, this.queueOptions);
     }
+    this.passOutcome =
+      result.outcome === "retry" && claim.attemptCount >= this.maxAttempts
+        ? "permanent"
+        : result.outcome;
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),
@@ -1189,6 +1221,16 @@ export class ControllerWorker {
         await queue.retry(claim, { code: result.code });
       }
     }, this.queueOptions);
+    this.passOutcome =
+      result.outcome === "retry" && claim.attemptCount >= this.maxAttempts
+        ? "permanent"
+        : result.outcome;
+    if (result.outcome === "success" && result.code !== "STOP_SUPERSEDED") {
+      this.metrics?.observeAgentOperation(
+        "stop",
+        Math.max(0, Date.now() - claim.createdAt.getTime()) / 1000,
+      );
+    }
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),
@@ -1883,6 +1925,10 @@ export class ControllerWorker {
       : result;
     let activated: Readonly<AgentRevision> | undefined;
     let stoppedCandidate: Readonly<AgentRevision> | undefined;
+    let committedOutcome: WorkOutcome =
+      resolved.outcome === "retry" && claim.attemptCount >= this.maxAttempts
+        ? "permanent"
+        : resolved.outcome;
     await this.state.transactWithQueue(async (unit, queue) => {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
@@ -1897,6 +1943,7 @@ export class ControllerWorker {
           current.activeRevisionId !== resolved.expectedActiveRevisionId
         ) {
           await queue.retry(claim, { code: "ACTIVE_REVISION_CHANGED" });
+          committedOutcome = claim.attemptCount >= this.maxAttempts ? "permanent" : "retry";
           return;
         }
         if (current.desiredRuntimeState !== "running") {
@@ -1911,6 +1958,7 @@ export class ControllerWorker {
         );
         if (activeAgent === undefined) {
           await queue.retry(claim, { code: "ACTIVE_REVISION_CHANGED" });
+          committedOutcome = claim.attemptCount >= this.maxAttempts ? "permanent" : "retry";
           return;
         }
         activated = resolved.revision;
@@ -1943,6 +1991,7 @@ export class ControllerWorker {
       return;
     }
     const compute = this.compute;
+    this.passOutcome = committedOutcome;
     if (activated !== undefined) {
       try {
         const current = await this.state.read((view) =>
@@ -1996,6 +2045,7 @@ export class ControllerWorker {
       }
       await queue.complete(claim, { code });
     }, this.queueOptions);
+    this.passOutcome = "success";
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),
@@ -2055,8 +2105,18 @@ export class ControllerWorker {
       }
       completed = true;
     }, this.queueOptions);
+    this.passOutcome = result.outcome;
     if (!completed) {
+      this.passOutcome = claim.attemptCount >= this.maxAttempts ? "permanent" : "retry";
       return;
+    }
+    // Original admission time survives queue waits and retries. Maintenance and
+    // superseded work must not count as additional successful deployments.
+    if (claim.idempotencyKey === `agent_revision:${revision.id}:reconcile`) {
+      this.metrics?.observeAgentOperation(
+        "deploy",
+        Math.max(0, Date.now() - claim.createdAt.getTime()) / 1000,
+      );
     }
     this.emit({
       event: "worker.completed",
@@ -2087,6 +2147,7 @@ export class ControllerWorker {
       });
       return;
     }
+    let superseded = false;
     await this.state.transactWithQueue(async (unit, queue) => {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
@@ -2098,6 +2159,7 @@ export class ControllerWorker {
         agent.activeRevisionId !== revision.id
       ) {
         await queue.complete(claim);
+        superseded = true;
         return;
       }
       // Keep each failed observation bounded without permanently abandoning
@@ -2105,6 +2167,7 @@ export class ControllerWorker {
       await queue.fail(claim, { code });
       await this.enqueueMaintenance(queue, claim, revision);
     }, this.queueOptions);
+    this.passOutcome = superseded ? "success" : "permanent";
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),
@@ -2290,6 +2353,10 @@ export class ControllerWorker {
         await queue.retry(claim, { code: resolved.code });
       }
     }, this.queueOptions);
+    this.passOutcome =
+      resolved.outcome === "retry" && claim.attemptCount >= this.maxAttempts
+        ? "permanent"
+        : resolved.outcome;
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),

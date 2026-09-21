@@ -102,6 +102,10 @@ queue states, authorization, and recovery.
 
 ## Observability
 
+Optional [OCC metrics](metrics.md) expose request, reconciliation, Agent inventory,
+and process measurements through separate private API/worker listeners. Metrics
+remain active independently of log level.
+
 Use the [observability guide](../guides/observability.md) to set log levels,
 configure export, and verify delivery. The API and worker share the OCC Pino
 logger. The API disables Fastify's default request logging and emits one

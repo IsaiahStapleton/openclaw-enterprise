@@ -3384,3 +3384,5 @@ export class OpenClawController {
     }
   }
 }
+export { PostgresMetricsSnapshot } from "./state/postgres-metrics.ts";
+export type { PlatformMetricsSnapshot } from "./state/postgres-metrics.ts";

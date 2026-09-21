@@ -1,5 +1,8 @@
 # Settings reference
 
+For `OCC_METRICS_ENABLED`, `OCC_METRICS_HOST`, `OCC_METRICS_PORT`, and their
+private-listener boundary, see [OCC metrics](metrics.md).
+
 Use this reference to configure the OpenClaw Enterprise controller and worker,
 local Compose stack, PostgreSQL and its migrations, and Drivers. Development
 uses local admission. The default Compose profile uses PostgreSQL and the

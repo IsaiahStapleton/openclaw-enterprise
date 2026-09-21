@@ -5,6 +5,11 @@ reported by each workflow.
 
 ## GitHub Actions
 
+Metrics HTTP/persistence coverage belongs to the `postgres` lane, including a
+separate migrator-role connection for test-only table contention. The
+`logging-collector` lane also runs real Prometheus/Grafana collection and
+dashboard provisioning. See [metrics testing](metrics.md) for local setup.
+
 The [suite map](../../scripts/ci/test-suites.json) assigns each active test file to exactly one lane, with its required inputs and preparation resources. Check its coverage after adding or renaming tests:
 
 ```sh

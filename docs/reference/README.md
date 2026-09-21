@@ -28,6 +28,11 @@ requests and explains the responses. The [API reference](api.md) lists exact
 paths, schemas, permissions, and error codes. It is generated from the checked-in
 [OpenAPI contract](../../packages/contracts/openapi/occ-api.openapi.json).
 
+## Metrics
+
+The [OCC metrics reference](metrics.md) defines application and process metrics
+and the private listener configuration.
+
 ## Related
 
 <span id="features"></span>

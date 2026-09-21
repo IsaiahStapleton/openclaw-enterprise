@@ -1,17 +1,16 @@
 ---
 created: 2026-08-28
-updated: 2026-09-20
-last_updated_session: codex/01a0bce5-9f29-7110-85fd-6b140674d362
+updated: 2026-09-21
+last_updated_session: codex/01a0af6f-d097-7ef0-a2b7-c8ce31703bd9
 ---
 
 # Controller Worker Flow
 
 ## Overview
 
-The worker claims PostgreSQL work committed by the HTTP API, rechecks the
-original actor's authorization, invokes Compute, and persists results under its
-live claim. This trace follows Namespace, Agent stop/deletion, and AgentRevision work through
-completion, deferral, retry, or permanent failure. The
+The worker claims API-admitted PostgreSQL work, rechecks authorization, invokes
+Compute, and persists results under its live claim. This trace follows Namespace,
+Agent stop/deletion, and AgentRevision work. The
 [controller reference](../reference/controller.md) owns the contract and the
 [deployment guide](../guides/deploy.md) owns process setup.
 
@@ -75,8 +74,13 @@ support `setLifecycleDrivers`; invalid or unavailable selected capabilities stop
 startup. Production then runs Compute preflight before emitting `worker.started`
 and starting `run()`.
 
-The worker has no HTTP listener, session service, or provider-admin client;
-Compose and Helm run it separately from the API.
+The worker has no resource API.
+Metrics use a private listener and one read-only database connection.
+Concurrent scrapes share a
+`packages/occ/src/state/postgres-metrics.ts:PostgresMetricsSnapshot.collect`
+read of persisted lifecycle, backlog depth, and oldest age. This distinguishes
+stopped from draft Agents without probing runtime health. Pass metrics follow
+finalization independently of logging; see the [metrics contract](../reference/metrics.md).
 
 ### 2. Commit API admission and the durable work record
 
@@ -91,11 +95,10 @@ or `deleteAgent`.
 within the transaction. State, admission audit, and work commit or roll back together.
 
 The queue freezes actor, Namespace owner, lifecycle target, and exact Agent and
-immutable AgentRevision for revision work. Agent lifecycle work has an exact
-Agent owner and a `stopped` or `deleted` target without inventing a revision.
-Its idempotency key identifies the operation. Reusing that key with a different
-actor, owner, or target is rejected. The API returns accepted lifecycle state
-without waiting for Compute; the next owner is the independent worker.
+immutable AgentRevision for revision work. Agent lifecycle work identifies its
+Agent and `stopped` or `deleted` target without a revision. Reusing an idempotency
+key with a different actor, owner, or target is rejected. The API returns accepted
+state without waiting for Compute; the worker takes over.
 
 ### 3. Recover expired claims and claim one eligible operation
 
@@ -195,14 +198,10 @@ them fails permanently before binding or retirement. Compute retirement owns
 workload termination and Sandbox cleanup; the worker does not invoke either
 independently.
 
-`withClaimHeartbeat()` renews the claim before starting each effect and then
-roughly every third of its lease duration while the effect runs. The initial
-renewal also keeps a sequence of short effects alive when no individual effect
-lasts long enough for its timer to fire. It propagates an abort signal into
-Compute. A lost lease, failed
-heartbeat, or worker shutdown aborts the operation context and raises
-`WorkClaimLostError`. The stale worker cannot publish its result under an expired
-or replaced token.
+`withClaimHeartbeat()` renews before each effect and every third of the lease
+duration, protecting sequences of short effects too. Lease loss, heartbeat failure,
+or shutdown aborts Compute and raises `WorkClaimLostError`. Expired or replaced
+claim tokens cannot publish results.
 
 While Compute runs, successful renewals also request a throttled health update.
 Neither starting an effect nor renewing its lease waits for that update: slow
@@ -247,12 +246,20 @@ stop even if it retains that active pointer while preparing. It appends lifecycl
 evidence and completes the same work item. Revision rows and persistent runtime
 state are not deleted.
 
+After commit, `completeActivatedRevision()` and `finalizeAgentStop()` record
+admission-to-completion duration through `apps/controller/src/metrics/index.ts:createOccMetrics`.
+Queue waits and retries count; maintenance and superseded work do not.
+Process death before observation can lose a sample.
+
 Deletion finalization uses a restricted database function rather than the
 generic queue completion path. In one transaction it validates the live claim,
 removes the Agent's revisions, service principal, API keys, and exact IAM
 references, records lifecycle-delete success, deletes the Agent, and removes its
 work rows. An expired or replaced claim removes nothing; `occ_app` has no direct
 table-level delete privilege for these records.
+`finalizeAgentDeletion()` records committed `agent_delete` outcomes. Snapshots
+count deleting Agents as `stopping`, permanent cleanup failures as `failed`,
+and remove completed deletions from inventory.
 
 ### 7. Defer, retry, or stop and hand off the next iteration
 
@@ -286,10 +293,9 @@ runtime receipt acknowledgment or post-commit cleanup protocol. The original
 deployment's warnings remain a historical startup result; later maintenance
 observations do not rewrite that completed deployment.
 
-The existing deployment GET reads this durable row only and requires exact
-revision `read` access. It makes no runtime or provider calls. Stored evidence
-survives Pod deletion and controller restart; queued, running, and successful
-deployments have no failure error. See [deployment status](../reference/agents.md#deployment-status).
+Deployment GET requires exact revision `read` access and reads only durable
+state, surviving Pod deletion and controller restart. Queued, running, and
+successful deployments have no failure error. See [deployment status](../reference/agents.md#deployment-status).
 
 Legacy terminal work rows derive `reason_code` from durable audit evidence.
 A successful revision is marked `REVISION_ACTIVATED` only
@@ -355,7 +361,9 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 
 ## Changelog
 
-- 2026-09-20 17:23: Document cached startup failure capture and persistence through the existing deployment GET. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 1ff76eb2)
+- 2026-09-21 00:56: Integrate Agent-deletion metrics. (01a0af6f-d097-7ef0-a2b7-c8ce31703bd9 - 1de0877d28f7c77e6ef4aab97531ad7d56b583d0)
+
+- 2026-09-20 17:23: Document cached startup failure persistence. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 1ff76eb2)
 
 - 2026-09-20 10:50: Documented legacy terminal work outcome backfill during migration 0019, including unknown result data and fallback behavior. (authoring-run/a2f901df-d27a-4a05-9468-e1ee895ae89d - 08b1b8fe)
 
@@ -367,6 +375,9 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 - 2026-09-17 20:28: Removed the first-failure receipt and acknowledgment lifecycle under the approved best-effort plugin decision. (NOT_IN_SPEC)
 
 - 2026-09-17 12:09: Separate health reporting from claim renewal, preserve lease-loss fencing, and restore admitted Agent bindings before stop effects. (01a03526-12b3-7f50-b599-e8414052909d - 683d0e253ad827af7c6098650097fa6a8ad61f57)
+
+- 2026-09-17 07:34: Add lifecycle snapshots, oldest pending age, and post-commit operation timing alongside the accompanying implementation. (authoring-run/7f165131-ca19-465b-a7a6-7138c2065f72 - d4dc39fc8c7f86917387a738fc1d3892c98a46bd)
+
 - 2026-09-17 01:22: Include failed candidates and interrupted retirement in exact Agent-stop cleanup, preserving later deployments and retained state. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 73c2ef49)
 
 - 2026-09-08 07:53: Include optional development activation and retry in the post-commit handoff. (01a07d92-d866-7731-afe5-abab67d8966c - 4d83087229961f3665b923d2581c0b71b988cc9c)

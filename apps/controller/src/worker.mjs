@@ -7,6 +7,9 @@ import {
 } from "./composition/installation-config.ts";
 import { createOccLogger, createWorkerLogEmitter, emitOccLogEvent } from "./logging.ts";
 import { createControllerWorker } from "./worker.ts";
+import { PostgresMetricsSnapshot } from "@openclaw-enterprise/occ";
+import { createOccMetrics } from "./metrics/index.ts";
+import { metricsConfiguration, startMetricsListener } from "./metrics/listener.ts";
 
 function positiveEnvironment(name, fallback) {
   const raw = process.env[name];
@@ -64,8 +67,22 @@ let readinessPath;
 let logger;
 let logging;
 let startupConfiguration;
+let metricsPool;
+let metricsListener;
+let metricsClosing;
+async function closeMetrics() {
+  metricsClosing ??= (async () => {
+    try {
+      await metricsListener?.close();
+    } finally {
+      await metricsPool?.end();
+    }
+  })();
+  return metricsClosing;
+}
 try {
   const { databaseUrl, mode, ...options } = configuration();
+  const metricsSettings = metricsConfiguration(process.env, mode);
   startupConfiguration = await loadStartupConfigurationSnapshot({ mode });
   logging = startupConfiguration.logging;
   logger = createOccLogger({ component: "occ-worker", level: logging.level });
@@ -93,7 +110,24 @@ try {
     }
   }
   pool = await createPostgresPool(databaseUrl);
+  let metrics;
+  if (metricsSettings !== undefined) {
+    metricsPool = await createPostgresPool(databaseUrl, {
+      max: 1,
+      connectionTimeoutMillis: 500,
+      statement_timeout: 1500,
+      query_timeout: 1500,
+      options: "-c default_transaction_read_only=on",
+    });
+    metricsPool.on("error", () =>
+      emitOccLogEvent(logger, { event: "worker.error", code: "METRICS_DATABASE_UNAVAILABLE" }),
+    );
+    const snapshot = new PostgresMetricsSnapshot(metricsPool);
+    metrics = createOccMetrics("worker", () => snapshot.collect());
+    metricsListener = await startMetricsListener(metrics, metricsSettings);
+  }
   worker = createControllerWorker({
+    metrics,
     pool,
     mode,
     ...options,
@@ -108,12 +142,21 @@ try {
   });
   await worker.start();
 
+  let closing = false;
   async function shutdown() {
+    if (closing) {
+      return;
+    }
+    closing = true;
     try {
       if (readinessPath !== undefined) {
         await unlink(readinessPath).catch(() => {});
       }
-      await worker.stop();
+      try {
+        await closeMetrics();
+      } finally {
+        await worker.stop();
+      }
       process.exitCode = 0;
     } catch {
       emitOccLogEvent(logger, { event: "worker.error", code: "SHUTDOWN_FAILED" });
@@ -123,6 +166,7 @@ try {
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
 } catch (error) {
+  await closeMetrics().catch(() => {});
   if (readinessPath !== undefined) {
     await unlink(readinessPath).catch(() => {});
   }

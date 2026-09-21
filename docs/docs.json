@@ -412,6 +412,14 @@
                     "label": "Observability"
                   },
                   {
+                    "page": "guides/observability/metrics",
+                    "label": "Metrics Scraping"
+                  },
+                  {
+                    "page": "reference/metrics",
+                    "label": "Metrics Reference"
+                  },
+                  {
                     "page": "guides/operate/troubleshooting",
                     "label": "Troubleshoot"
                   }
@@ -613,6 +621,10 @@
                       {
                         "page": "testing/ci",
                         "label": "CI"
+                      },
+                      {
+                        "page": "testing/metrics",
+                        "label": "Metrics Dashboard"
                       }
                     ]
                   }

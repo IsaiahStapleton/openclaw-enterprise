@@ -1504,6 +1504,9 @@ async function prepareFile({ lane, file, statePath }) {
     });
     resourceIds.push(database.resourceId);
     env.OCC_TEST_DATABASE_URL = database.appUrl;
+    if (relativeFile.endsWith("occ-metrics.test.mjs")) {
+      env.OCC_METRICS_TEST_MIGRATION_DATABASE_URL = database.migrationUrl;
+    }
   }
 
   if (relativeFile.endsWith("postgres-bootstrap-failures.test.mjs")) {

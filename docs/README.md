@@ -26,6 +26,10 @@ If you are still learning the product, start with [Concepts](guides/concepts.md)
 | [Reference](reference/README.md)              | Look up OCC CLI commands and HTTP API operations.                        |
 | [Contribute](contributing/README.md)          | Set up a development environment and change the platform or its docs.    |
 
+For application metrics, see the [OCC metrics contract](reference/metrics.md),
+[production scraping](guides/observability/metrics.md), and the
+[development dashboard](testing/metrics.md).
+
 Trusted operators can use the [Agent native admin UI](reference/agent-native-admin.md) pilot to open the stock OpenClaw UI through OCC.
 
 <a id="platform-developer-guide"></a>

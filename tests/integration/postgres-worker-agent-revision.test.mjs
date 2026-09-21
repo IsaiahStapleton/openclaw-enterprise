@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
+import { PostgresMetricsSnapshot } from "../../packages/occ/src/index.ts";
 import {
   authorizedPrincipal,
   cleanupProviderFixtures,
@@ -17,7 +19,7 @@ import {
   waitFor,
 } from "../helpers/postgres-provider-state.mjs";
 
-async function setup(context, { leaseDurationMs = 30_000, onHealthy } = {}) {
+async function setup(context, { leaseDurationMs = 30_000, onHealthy, metrics } = {}) {
   const [
     { Pool },
     { createControllerWorker },
@@ -276,6 +278,7 @@ async function setup(context, { leaseDurationMs = 30_000, onHealthy } = {}) {
     const configuredDrivers = createProviderWorkerDrivers(computeDriver, providers ?? []);
     const drivers = transformDrivers({ ...configuredDrivers, secretDriver });
     worker = createControllerWorker({
+      metrics,
       pool,
       pollIntervalMs: 15,
       leaseDurationMs,
@@ -506,7 +509,11 @@ test(
   "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context);
+    const metrics = createOccMetrics("worker", () =>
+      new PostgresMetricsSnapshot(fixture.observerPool).collect(),
+    );
+    const fixture = await setup(context, { metrics });
+    const before = await new PostgresMetricsSnapshot(fixture.observerPool).collect();
     const owner = await fixture.agent("stop-target");
     const sibling = await fixture.agent("stop-sibling");
     const targetRevision = await fixture.revision(owner, 1);
@@ -522,6 +529,12 @@ test(
           return revision.revision === 2 ? { ...observation, ready: false } : observation;
         },
         async stopRevision(revision) {
+          const during = await new PostgresMetricsSnapshot(fixture.observerPool).collect();
+          assert.equal(
+            during.agents.stopping,
+            before.agents.stopping + 1,
+            "stop stays in progress until Compute shutdown commits",
+          );
           const current = await fixture.state.read((view) =>
             view.agents.findAgent(fixture.namespace.id, owner.id),
           );
@@ -554,6 +567,24 @@ test(
     const firstStop = await fixture.requestStop(owner);
     const completedStop = await fixture.work(firstStop, "succeeded");
     assert.equal(completedStop.attempt_count, 2);
+    // Stop work must retain its own bounded kind and committed retry/success
+    // outcomes after integrating stop support with metrics instrumentation.
+    const exposition = await metrics.exposition();
+    assert.match(
+      exposition,
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="stop"[^\n]*\} 1(?:\n|$)/,
+    );
+    const after = await new PostgresMetricsSnapshot(fixture.observerPool).collect();
+    assert.equal(after.agents.stopped, before.agents.stopped + 1);
+    assert.equal(after.agents.running, before.agents.running + 1);
+    for (const outcome of ["retry", "success"]) {
+      assert.match(
+        exposition,
+        new RegExp(
+          `occ_reconciliation_attempts_total\\{[^\\n]*work_kind="agent_stop"[^\\n]*outcome="${outcome}"[^\\n]*\\} 1`,
+        ),
+      );
+    }
     const [stopped, unaffected, retainedRevision] = await fixture.state.read(async (view) =>
       Promise.all([
         view.agents.findAgent(fixture.namespace.id, owner.id),
@@ -821,7 +852,10 @@ test(
   "Agent deletion retries teardown, removes owned state, and preserves sibling resources",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context);
+    let snapshot;
+    const metrics = createOccMetrics("worker", () => snapshot.collect());
+    const fixture = await setup(context, { metrics });
+    snapshot = new PostgresMetricsSnapshot(fixture.observerPool);
     const owner = await fixture.agent("delete-target");
     const sibling = await fixture.agent("delete-sibling");
     const targetRevision = await fixture.revision(owner, 1);
@@ -893,6 +927,20 @@ test(
       return deleted === undefined ? true : undefined;
     });
 
+    await fixture.stop();
+    // Deletion passes have their own work kind and record the committed retry
+    // and completion, rather than appearing as Namespace errors.
+    const exposition = await metrics.exposition();
+    assert.match(
+      exposition,
+      /occ_reconciliation_attempts_total\{[^}]*work_kind="agent_delete"[^}]*outcome="retry"[^}]*\} 1/,
+    );
+    assert.match(
+      exposition,
+      /occ_reconciliation_attempts_total\{[^}]*work_kind="agent_delete"[^}]*outcome="success"[^}]*\} 1/,
+    );
+    assert.doesNotMatch(exposition, /work_kind="namespace_ensure"[^}]*outcome="error"/);
+
     const [survivingAgent, survivingRevision, survivingConfiguration] = await fixture.state.read(
       async (view) =>
         Promise.all([
@@ -950,16 +998,33 @@ test(
   "Agent deletion fails closed when a credential-provisioning Driver cannot delete credentials",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context);
+    let snapshot;
+    const metrics = createOccMetrics("worker", () => snapshot.collect());
+    const fixture = await setup(context, { metrics });
+    snapshot = new PostgresMetricsSnapshot(fixture.observerPool);
     const owner = await fixture.agent("delete-credentials-unsupported");
+    const before = await snapshot.collect();
+    const deletion = await fixture.requestDeletion(owner);
+    // Even a draft enters teardown while deletion is queued. Failed cleanup
+    // retains the Agent and must remain visible as a failed lifecycle.
+    const pending = await snapshot.collect();
+    assert.equal(pending.agents.draft, before.agents.draft - 1);
+    assert.equal(pending.agents.stopping, before.agents.stopping + 1);
     await fixture.start({
       ...fixture.compute,
       async provisionAgentRuntimeCredentials() {},
     });
 
-    const deletion = await fixture.requestDeletion(owner);
     const failed = await fixture.work(deletion, "failed_permanent");
     assert.equal(failed.attempt_count, 1);
+    await fixture.stop();
+    const after = await snapshot.collect();
+    assert.equal(after.agents.failed, before.agents.failed + 1);
+    assert.equal(after.agents.draft, before.agents.draft - 1);
+    assert.match(
+      await metrics.exposition(),
+      /occ_reconciliation_attempts_total\{[^}]*work_kind="agent_delete"[^}]*outcome="permanent"[^}]*\} 1/,
+    );
     const retained = await fixture.state.read((view) =>
       view.agents.findAgent(fixture.namespace.id, owner.id),
     );
@@ -1128,7 +1193,10 @@ test(
   "a deployment admitted after stop supersedes stale stop work before Compute mutation",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context);
+    const metrics = createOccMetrics("worker", () =>
+      new PostgresMetricsSnapshot(fixture.observerPool).collect(),
+    );
+    const fixture = await setup(context, { metrics });
     const owner = await fixture.agent("stop-then-deploy");
     const first = await fixture.revision(owner, 1);
     const stoppedRevisions = [];
@@ -1194,6 +1262,10 @@ test(
     assert.equal(running.desiredRuntimeState, "running");
     assert.equal(running.activeRevisionId, second.id);
     assert.deepEqual(stoppedRevisions, []);
+    assert.match(
+      await metrics.exposition(),
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="stop"[^\n]*\} 0(?:\n|$)/,
+    );
     const audit = await fixture.observerPool.query(
       `SELECT details->>'reasonCode' AS reason_code
        FROM occ.audit_events
@@ -1316,7 +1388,11 @@ test(
   "Agent stop reauthorizes the recorded actor before Compute mutation",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context);
+    const metrics = createOccMetrics("worker", () =>
+      new PostgresMetricsSnapshot(fixture.observerPool).collect(),
+    );
+    const fixture = await setup(context, { metrics });
+    const before = await new PostgresMetricsSnapshot(fixture.observerPool).collect();
     const owner = await fixture.agent("stop-reauthorization");
     const revision = await fixture.revision(owner, 1);
     const stoppedRevisions = [];
@@ -1341,6 +1417,14 @@ test(
     );
     await fixture.start(compute, () => {}, undefined, undefined, fixture.createWorkerPool());
     await fixture.work(stop, "failed_permanent");
+    assert.equal(
+      (await new PostgresMetricsSnapshot(fixture.observerPool).collect()).agents.failed,
+      before.agents.failed + 1,
+    );
+    assert.match(
+      await metrics.exposition(),
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="stop"[^\n]*\} 0(?:\n|$)/,
+    );
 
     assert.deepEqual(stoppedRevisions, []);
     const current = await fixture.state.read((view) =>
@@ -1568,7 +1652,10 @@ test(
   "maintenance retains its real lease across consecutive short predecessor retirements",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context, { leaseDurationMs: 1_200 });
+    const metrics = createOccMetrics("worker", () =>
+      new PostgresMetricsSnapshot(fixture.observerPool).collect(),
+    );
+    const fixture = await setup(context, { metrics, leaseDurationMs: 1_200 });
     const owner = await fixture.agent("short-retirement-lease");
     const first = await fixture.revision(owner, 1);
     const events = [];
@@ -1616,6 +1703,11 @@ test(
       return result.rows[0];
     });
     assert.equal(maintenance.attempt_count, 1);
+    // Periodic reconciliation must not inflate successful deployment counts.
+    assert.match(
+      await metrics.exposition(),
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="deploy"[^\n]*\} 2(?:\n|$)/,
+    );
     assert.ok(completedRetirements >= 25, "activation and all predecessors were retired");
     const active = await fixture.state.read((view) =>
       view.agents.findAgent(fixture.namespace.id, owner.id),
@@ -2080,7 +2172,10 @@ test(
   "an older revision retry is superseded without preparing or retiring a newer active revision",
   requiresPostgres,
   async (context) => {
-    const fixture = await setup(context);
+    const metrics = createOccMetrics("worker", () =>
+      new PostgresMetricsSnapshot(fixture.observerPool).collect(),
+    );
+    const fixture = await setup(context, { metrics });
     const owner = await fixture.agent("superseded-retry");
     const older = await fixture.revision(owner, 1);
     const newer = await fixture.revision(owner, 2);
@@ -2103,6 +2198,10 @@ test(
     );
 
     await Promise.all([fixture.work(newer, "succeeded"), fixture.work(older, "succeeded")]);
+    assert.match(
+      await metrics.exposition(),
+      /occ_agent_operation_duration_seconds_count\{[^\n]*operation="deploy"[^\n]*\} 1(?:\n|$)/,
+    );
     // Newer publication retires every older candidate. The later superseded retry
     // must contribute no preparation or retirement against the active revision.
     assert.deepEqual(effects, [
