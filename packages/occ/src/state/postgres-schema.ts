@@ -764,10 +764,29 @@ export const controllerWork = occSchema.table(
             ${table.state} = 'failed_permanent'
             AND ${table.reasonCode} = 'CONVERGENCE_DEADLINE_EXCEEDED'
             AND ${table.resultData} ? 'timeoutMs'
-            AND (${table.resultData} - 'timeoutMs') = '{}'::jsonb
+            AND (${table.resultData} - 'timeoutMs' - 'runtimeFailure') = '{}'::jsonb
             AND jsonb_typeof(${table.resultData}->'timeoutMs') = 'number'
             AND (${table.resultData}->>'timeoutMs') ~ '^[1-9][0-9]{0,15}$'
             AND (${table.resultData}->>'timeoutMs')::numeric <= 9007199254740991
+            AND (
+              NOT (${table.resultData} ? 'runtimeFailure')
+              OR (
+                jsonb_typeof(${table.resultData}->'runtimeFailure') = 'object'
+                AND (${table.resultData}->'runtimeFailure') ?& ARRAY['component', 'check', 'checkedAt', 'code']
+                AND ((${table.resultData}->'runtimeFailure') - 'component' - 'check' - 'checkedAt' - 'code') = '{}'::jsonb
+                AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,component}') = 'string'
+                AND char_length(${table.resultData} #>> '{runtimeFailure,component}') BETWEEN 1 AND 64
+                AND (${table.resultData} #>> '{runtimeFailure,component}') ~ '^[A-Za-z0-9._~:@-]{1,64}$'
+                AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,check}') = 'string'
+                AND char_length(${table.resultData} #>> '{runtimeFailure,check}') BETWEEN 1 AND 64
+                AND (${table.resultData} #>> '{runtimeFailure,check}') ~ '^[A-Za-z0-9._~:@-]{1,64}$'
+                AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,checkedAt}') = 'string'
+                AND occ.iso_timestamp_is_valid(${table.resultData} #>> '{runtimeFailure,checkedAt}')
+                AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,code}') = 'string'
+                AND char_length(${table.resultData} #>> '{runtimeFailure,code}') BETWEEN 1 AND 64
+                AND (${table.resultData} #>> '{runtimeFailure,code}') ~ '^[A-Za-z0-9._~:@-]{1,64}$'
+              )
+            )
           )
           OR (
             ${table.state} = 'succeeded'

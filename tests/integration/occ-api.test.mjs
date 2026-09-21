@@ -432,7 +432,11 @@ async function createInjectedFixture(options = {}) {
         ? { controller }
         : {
             createController(installation) {
-              platformState = new InMemoryPlatformState({ auditSink });
+              const baseState = new InMemoryPlatformState({ auditSink });
+              platformState =
+                options.deploymentWorks === undefined
+                  ? baseState
+                  : stateWithDeploymentWork(baseState, options.deploymentWorks);
               controller = new OpenClawController(installation, {
                 state: platformState,
                 recordOperations: options.recordOperations ?? false,
@@ -540,6 +544,26 @@ async function configuredController(options = {}) {
   return {
     fixture,
     request: (method, pathname, options) => injectedRequest(fixture.app, method, pathname, options),
+  };
+}
+
+function stateWithDeploymentWork(state, deploymentWorks) {
+  const withWork = (view) => ({
+    ...view,
+    operations: {
+      ...view.operations,
+      findWork: async (requestedKey) =>
+        deploymentWorks.has(requestedKey)
+          ? Object.freeze({ ...deploymentWorks.get(requestedKey) })
+          : view.operations.findWork(requestedKey),
+    },
+  });
+  return {
+    read: (operation) => state.read((view) => operation(withWork(view))),
+    transact: (operation) => state.transact((view) => operation(withWork(view))),
+    transactWithQueue: (operation, options) =>
+      state.transactWithQueue((view, queue) => operation(withWork(view), queue), options),
+    registerRollback: (rollback) => state.registerRollback(rollback),
   };
 }
 
@@ -1203,7 +1227,8 @@ test("Agent Provider API preserves nullable drafts and immutable revision associ
 });
 
 test("Agent deployment status polls the admitted revision work with exact read authorization", async () => {
-  const fixture = await createInjectedFixture({ recordOperations: true });
+  const deploymentWorks = new Map();
+  const fixture = await createInjectedFixture({ deploymentWorks, recordOperations: true });
   const controller = {
     request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
   };
@@ -1228,6 +1253,41 @@ test("Agent deployment status polls the admitted revision work with exact read a
     agentId: agent.id,
     status: "queued",
     error: null,
+    warnings: [],
+  });
+  const runtimeFailure = {
+    component: "gateway",
+    check: "readyz",
+    checkedAt: "2026-09-19T20:30:00.000Z",
+    code: "STARTUP_FAILED",
+  };
+  deploymentWorks.set(`agent_revision:${admitted.data.id}:reconcile`, {
+    idempotencyKey: `agent_revision:${admitted.data.id}:reconcile`,
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    revisionId: admitted.data.id,
+    actorId: fixture.principal.id,
+    state: "failed_permanent",
+    availableAt: new Date(0),
+    attemptCount: 1,
+    completedAt: new Date("2026-09-19T20:31:00.000Z"),
+    reasonCode: "CONVERGENCE_DEADLINE_EXCEEDED",
+    resultData: { timeoutMs: 900_000, runtimeFailure },
+    createdAt: new Date(0),
+    updatedAt: new Date("2026-09-19T20:31:00.000Z"),
+  });
+  const failedStatus = await controller.request("GET", path);
+  assert.equal(failedStatus.status, 200, JSON.stringify(failedStatus.body));
+  assert.deepEqual(failedStatus.data, {
+    deploymentId: admitted.data.id,
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    status: "failed",
+    error: {
+      code: "CONVERGENCE_DEADLINE_EXCEEDED",
+      message: "Deployment convergence deadline exceeded.",
+      data: { timeoutMs: 900_000, runtimeFailure },
+    },
     warnings: [],
   });
 
@@ -1263,7 +1323,8 @@ test("Agent deployment status polls the admitted revision work with exact read a
   assert.equal(parentDenied.status, 403);
   const readableDeployment = await injectedRequest(readerApp, "GET", path);
   assert.equal(readableDeployment.status, 200, JSON.stringify(readableDeployment.body));
-  assert.equal(readableDeployment.data.status, "queued");
+  assert.equal(readableDeployment.data.status, "failed");
+  assert.deepEqual(readableDeployment.data.error?.data?.runtimeFailure, runtimeFailure);
 
   fixture.state.roles.find(
     (role) => role.id === "role-deployment-status-reader",

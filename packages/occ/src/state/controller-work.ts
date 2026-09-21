@@ -1,5 +1,9 @@
 import { immutableCopy, isNonEmptyString, isPositiveSafeInteger } from "@openclaw-enterprise/utils";
+import type { RuntimeFailureEvidence } from "@openclaw-enterprise/contracts";
+
 import { ScopeViolationError } from "../errors.ts";
+
+export type { RuntimeFailureEvidence } from "@openclaw-enterprise/contracts";
 
 export type ControllerWorkState = "queued" | "claimed" | "succeeded" | "failed_permanent";
 
@@ -83,6 +87,10 @@ export interface PermanentFailure {
   readonly summary?: string;
 }
 
+const RUNTIME_FAILURE_IDENTIFIER = /^[A-Za-z0-9._~:@-]{1,64}$/u;
+const ISO_TIMESTAMP =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/u;
+
 export function safeFailureCode(value: string): string {
   const normalized = nonempty(value, "Controller work failure code")
     .toUpperCase()
@@ -98,6 +106,71 @@ export function nonempty(value: string, name: string): string {
   return value;
 }
 
+function validateRuntimeFailureIdentifier(value: unknown, name: string): string {
+  if (typeof value !== "string" || !RUNTIME_FAILURE_IDENTIFIER.test(value)) {
+    throw new ScopeViolationError(`${name} must be a safe identifier.`);
+  }
+  return value;
+}
+
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function validIsoTimestamp(value: string): boolean {
+  const match = ISO_TIMESTAMP.exec(value);
+  if (match === null) {
+    return false;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHour = match[7] === undefined ? 0 : Number(match[7]);
+  const offsetMinute = match[8] === undefined ? 0 : Number(match[8]);
+  const daysInMonth = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return (
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= daysInMonth[month - 1]! &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 59 &&
+    offsetHour <= 23 &&
+    offsetMinute <= 59
+  );
+}
+
+export function validateRuntimeFailureEvidence(value: unknown): RuntimeFailureEvidence {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ScopeViolationError("Runtime failure evidence must be an object.");
+  }
+  const evidence = value as Partial<RuntimeFailureEvidence>;
+  const keys = Object.keys(evidence);
+  if (
+    keys.length !== 4 ||
+    !keys.includes("component") ||
+    !keys.includes("check") ||
+    !keys.includes("checkedAt") ||
+    !keys.includes("code")
+  ) {
+    throw new ScopeViolationError("Runtime failure evidence has unsupported fields.");
+  }
+  const checkedAt = evidence.checkedAt;
+  if (typeof checkedAt !== "string" || !validIsoTimestamp(checkedAt)) {
+    throw new ScopeViolationError("Runtime failure evidence requires an ISO timestamp.");
+  }
+  return Object.freeze({
+    component: validateRuntimeFailureIdentifier(evidence.component, "Runtime failure component"),
+    check: validateRuntimeFailureIdentifier(evidence.check, "Runtime failure check"),
+    checkedAt,
+    code: validateRuntimeFailureIdentifier(evidence.code, "Runtime failure code"),
+  });
+}
+
 export function validateFailureData(
   reasonCode: string,
   data: unknown,
@@ -110,7 +183,12 @@ export function validateFailureData(
       throw new ScopeViolationError("Convergence deadline failure data must be an object.");
     }
     const keys = Object.keys(data);
-    if (keys.length !== 1 || keys[0] !== "timeoutMs") {
+    if (
+      keys.length < 1 ||
+      keys.length > 2 ||
+      !keys.includes("timeoutMs") ||
+      keys.some((key) => key !== "timeoutMs" && key !== "runtimeFailure")
+    ) {
       throw new ScopeViolationError("Convergence deadline failure data has unsupported fields.");
     }
     const timeoutMs = (data as { readonly timeoutMs?: unknown }).timeoutMs;
@@ -119,7 +197,13 @@ export function validateFailureData(
         "Convergence deadline failure data requires a positive timeout.",
       );
     }
-    return Object.freeze({ timeoutMs });
+    const runtimeFailure = (data as { readonly runtimeFailure?: unknown }).runtimeFailure;
+    return Object.freeze({
+      timeoutMs,
+      ...(runtimeFailure === undefined
+        ? {}
+        : { runtimeFailure: validateRuntimeFailureEvidence(runtimeFailure) }),
+    });
   }
   throw new ScopeViolationError("Controller work failure data is not allowed for this code.");
 }

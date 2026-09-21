@@ -77,10 +77,10 @@ async function waitForCondition(description, condition) {
   assert.fail(`Timed out waiting for ${description}.`);
 }
 
-function readStatusFromHandler(handler) {
+function readStatusFromHandler(handler, path = "/openclaw/plugin-runtime/status") {
   let body = "";
   handler(
-    { method: "GET", url: "/openclaw/plugin-runtime/status" },
+    { method: "GET", url: path },
     {
       writeHead() {},
       end(chunk) {
@@ -89,6 +89,10 @@ function readStatusFromHandler(handler) {
     },
   );
   return JSON.parse(body);
+}
+
+function readRuntimeStatusFromHandler(handler) {
+  return readStatusFromHandler(handler, "/openclaw/runtime/status");
 }
 
 const tenant = {
@@ -1763,6 +1767,64 @@ test("Kubernetes plugin runtime status requires the exact ready Pod report", asy
   }
 });
 
+test("Kubernetes startup failure evidence requires the exact runtime Pod report", async () => {
+  const driver = createKubernetesComputeDriver(kubernetesOptions());
+  const candidate = revision({
+    compute: { id: driver.id, implementation: driver.implementation },
+    plugins: codexNoPluginState(),
+  });
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const pod = {
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: {
+      name: "agent-runtime-status",
+      namespace,
+      uid: "pod-runtime-status-1",
+      labels: {
+        "openclaw.dev/agent": candidate.agentId,
+        "openclaw.dev/revision": candidate.id,
+        "openclaw.dev/workload-role": "agent",
+      },
+    },
+    status: {
+      containerStatuses: [{ name: "agent", containerID: "containerd://runtime-status-1" }],
+    },
+  };
+  const failure = {
+    component: "agent",
+    check: "model-probe",
+    checkedAt: "2026-09-20T12:00:00.000Z",
+    code: "MODEL_PROBE_FAILED",
+  };
+  const requests = [];
+  driver.clients = async () => ({
+    core: {
+      listNamespacedPod: async () => ({ apiVersion: "v1", kind: "PodList", items: [pod] }),
+      connectGetNamespacedPodProxyWithPath: async (request) => {
+        requests.push(request);
+        return JSON.stringify({
+          revisionId: candidate.id,
+          container: "agent",
+          podUid: "pod-runtime-status-1",
+          runtimeFailure: failure,
+        });
+      },
+    },
+  });
+
+  const observed = await driver.safeRuntimeFailureObservation(candidate, namespace);
+
+  assert.deepEqual(observed, failure);
+  assert.deepEqual(requests, [
+    {
+      name: "agent-runtime-status:18791",
+      namespace,
+      path: "openclaw/runtime/status",
+    },
+  ]);
+});
+
 test("Codex runtime gates startup and readiness on a successful native authentication turn", async (t) => {
   const started = { type: "turn.started" };
   const assistant = { type: "item.completed", item: { type: "agent_message", text: "READY" } };
@@ -1817,9 +1879,12 @@ test("Codex runtime gates startup and readiness on a successful native authentic
       try {
         const diagnostics = [];
         const idleTimers = [];
+        const revisionId = "revision-runtime-auth-gate";
+        let statusHandler;
         let appServerStarts = 0;
         let nativeCalls = 0;
         const sandbox = {
+          URL,
           console: {
             error(message) {
               diagnostics.push(message);
@@ -1834,6 +1899,10 @@ test("Codex runtime gates startup and readiness on a successful native authentic
               CODEX_LOGIN_MODE: "api_key",
               OPENAI_API_KEY: "fixture-api-key",
               OPENCLAW_HARNESS_MODEL: "codex/gpt-4.1",
+              OPENCLAW_AGENT_REVISION_ID: revisionId,
+              OPENCLAW_RUNTIME_STATUS_CONTAINER: "agent",
+              OPENCLAW_RUNTIME_STATUS_PORT: "18791",
+              OPENCLAW_POD_UID: "pod-runtime-auth-gate",
               OPENCLAW_PLUGIN_READY_MARKER: marker,
               APP_SERVER_TOKEN: "fixture-transport-token",
               APP_SERVER_PORT: "4500",
@@ -1853,6 +1922,14 @@ test("Codex runtime gates startup and readiness on a successful native authentic
                   throw new Error("no plugin runtime payload is configured");
                 },
                 writeFileSync,
+              };
+            }
+            if (specifier === "node:http") {
+              return {
+                createServer(handler) {
+                  statusHandler = handler;
+                  return { listen() {} };
+                },
               };
             }
             if (specifier === "node:child_process") {
@@ -1880,11 +1957,17 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         };
         vm.runInNewContext(AGENT_RUNTIME_ENTRYPOINT, sandbox);
         assert.equal(nativeCalls, scenario.loginStatus === 1 ? 1 : 2);
+        assert.ok(statusHandler);
+        const runtimeStatus = readRuntimeStatusFromHandler(statusHandler);
+        assert.equal(runtimeStatus.revisionId, revisionId);
+        assert.equal(runtimeStatus.container, "agent");
+        assert.equal(runtimeStatus.podUid, "pod-runtime-auth-gate");
         if (scenario.ready) {
           assert.equal(appServerStarts, 1);
           assert.deepEqual(diagnostics, []);
           assert.equal(idleTimers.length, 0);
           assert.equal(readFileSync(marker, "utf8"), "ready\n");
+          assert.equal(runtimeStatus.runtimeFailure, undefined);
         } else {
           assert.equal(appServerStarts, 0);
           assert.deepEqual(diagnostics, ["Harness model authentication probe failed."]);
@@ -1892,6 +1975,16 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           assert.equal(typeof idleTimers[0].callback, "function");
           assert.ok(idleTimers[0].delay > 0);
           assert.equal(existsSync(marker), false);
+          assert.equal(runtimeStatus.runtimeFailure.component, "agent");
+          assert.equal(
+            runtimeStatus.runtimeFailure.check,
+            scenario.loginStatus === 1 ? "login" : "model-probe",
+          );
+          assert.equal(
+            runtimeStatus.runtimeFailure.code,
+            scenario.loginStatus === 1 ? "LOGIN_FAILED" : "MODEL_PROBE_FAILED",
+          );
+          assert.match(runtimeStatus.runtimeFailure.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
         }
       } finally {
         rmSync(directory, { recursive: true, force: true });
@@ -2221,16 +2314,25 @@ test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin
       .filter((variable) =>
         [
           "OPENCLAW_AGENT_REVISION_ID",
+          "OPENCLAW_RUNTIME_STATUS_CONTAINER",
+          "OPENCLAW_RUNTIME_STATUS_PORT",
           "OPENCLAW_PLUGIN_STATUS_CONTAINER",
           "OPENCLAW_PLUGIN_STATUS_PORT",
         ].includes(variable.name),
       )
       .map((variable) => [variable.name, variable.value]),
-    [],
+    [
+      ["OPENCLAW_AGENT_REVISION_ID", "revision-plugin-compute-1"],
+      ["OPENCLAW_RUNTIME_STATUS_CONTAINER", "agent"],
+      ["OPENCLAW_RUNTIME_STATUS_PORT", "18791"],
+    ],
   );
   assert.deepEqual(
     container.ports.map((port) => [port.name, port.containerPort]),
-    [["websocket", 18790]],
+    [
+      ["websocket", 18790],
+      ["plugin-status", 18791],
+    ],
   );
 });
 

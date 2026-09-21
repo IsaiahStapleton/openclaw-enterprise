@@ -84,6 +84,13 @@ probe. `failed` means the original work reached a terminal failed outcome or
 completed without activating the requested revision.
 
 Errors use fixed platform codes, messages, and allowlisted `error.data`.
+For `CONVERGENCE_DEADLINE_EXCEEDED`, data contains positive `timeoutMs` and may
+include `runtimeFailure` with safe `component`, `check`, `checkedAt`, and `code`
+fields captured by Compute from that revision's runtime. The primary code and
+message remain unchanged. Missing evidence leaves the cause unspecified.
+The result is persisted with terminal work and survives runtime deletion or
+controller restart. Polling this endpoint reads stored state only; it performs
+no runtime, provider, or model probes and requires no Agent `operate` permission.
 A successful deployment can include plugin warnings containing a closed code
 and admitted `pluginId`; see [Agent plugins](agent-plugins.md#lifecycle). These
 warnings record the observed startup result, not live plugin health.

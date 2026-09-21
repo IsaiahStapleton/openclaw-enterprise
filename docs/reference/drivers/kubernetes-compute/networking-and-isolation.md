@@ -14,7 +14,7 @@ DNS, approved gateway clients, and required communication between an Agent's
 gateway and dedicated Harness. Cross-tenant traffic, traffic between different
 Agents, Kubernetes API access, and cloud metadata access remain denied.
 
-For Compute-owned plugin startup reporting, set
+For Compute-owned startup failure evidence and plugin reporting, set
 `network.pluginStatusProxySourceCidrs` to the precise source addresses used by the
 Kubernetes API server when proxying requests to workload Pods. The policy allows
 those sources only to the private status port, TCP/18791; worker RBAC separately

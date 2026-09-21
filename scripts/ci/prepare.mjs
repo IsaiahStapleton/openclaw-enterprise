@@ -1462,6 +1462,7 @@ async function prepareK3dModelLane(statePath, state, env, options) {
   const cluster = await ensureK3dCluster(statePath, state);
   env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
   env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
+  env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS = cluster.pluginStatusProxyCidrs;
   if (cluster.kubectl) {
     env.OCC_KUBECTL_BIN = cluster.kubectl;
   }
