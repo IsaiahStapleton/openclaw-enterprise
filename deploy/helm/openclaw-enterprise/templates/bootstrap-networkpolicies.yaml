@@ -25,8 +25,10 @@ spec:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
     - to:
+        {{- range .Values.database.cidrs }}
         - ipBlock:
-            cidr: {{ .Values.database.cidr }}
+            cidr: {{ . }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.database.port }}

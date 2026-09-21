@@ -105,6 +105,7 @@ test("service API keys authenticate scoped automation without replacing sessions
       { action: "delete", resourceKind: "configuration" },
       { action: "read", resourceKind: "agent" },
       { action: "operate", resourceKind: "agent" },
+      { action: "delete", resourceKind: "agent" },
     ],
   });
   policy.bindings.push({
@@ -135,7 +136,7 @@ test("service API keys authenticate scoped automation without replacing sessions
     },
   );
 
-  await t.test("occ CLI creates and deletes a real Configuration and stops an Agent", async (t) => {
+  await t.test("occ CLI exercises Configuration CRUD and Agent stop/delete", async (t) => {
     const directory = await mkdtemp(join(tmpdir(), "openclaw-occ-cli-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const keyFile = join(directory, "service-key.json");
@@ -262,6 +263,14 @@ test("service API keys authenticate scoped automation without replacing sessions
       },
       { id: agent.data.id, desiredRuntimeState: "stopped" },
     );
+
+    const deleting = await run(occCli, ["agent", "delete", agent.data.id], { env });
+    assert.match(deleting.stdout, /STATUS/);
+    assert.match(deleting.stdout, new RegExp(`${agent.data.id}.*deleting`));
+    const deletingAgent = await run(occCli, ["agent", "get", agent.data.id, "--output", "json"], {
+      env,
+    });
+    assert.equal(JSON.parse(deletingAgent.stdout).status, "deleting");
 
     await assert.rejects(
       run(occCli, ["installation", "get", "--output", "json"], { env }),

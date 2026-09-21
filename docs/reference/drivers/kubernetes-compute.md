@@ -2,11 +2,14 @@
 
 The Kubernetes Compute Driver runs OpenClaw Agents on Kubernetes. It provisions
 or adopts an isolated namespace for each tenant and creates an OpenClaw gateway
-for each deployed Agent, with either an embedded or dedicated Agent Harness. When the optional
-[OpenShell SandboxDriver](openshell-sandbox.md) is selected, the Compute Driver still
-owns namespace, gateway, ServiceAccount, PVC, routing, and revision lifecycle,
-but delegates the dedicated Codex Harness Pod to the OpenShell Sandbox
-controller.
+for each deployed Agent, with either an embedded or dedicated Agent Harness.
+Kubernetes supports a managed model API key for both modes and a managed
+ChatGPT service-account credential for dedicated Codex only.
+
+The optional [OpenShell Sandbox Driver](openshell-sandbox.md) is designed to
+own the dedicated Codex Harness Pod while Compute keeps the other resources.
+Stock OpenShell cannot provide required credential and workload-identity
+projections; Agent deployment with OpenShell is unsupported.
 
 For detailed operator contracts, see:
 
@@ -129,6 +132,7 @@ drivers:
         expirationSeconds: 900
       runtime:
         gatewayStorageClassName: sqlite-block
+        nodeSelector: { oce-role: agents }
         transportSecretPrefix: openclaw-agent-transport
         # Optional; first install this reviewed profile on every eligible node.
         codexSeccompProfile: profiles/codex-0.152.1.json
@@ -152,7 +156,8 @@ Kubernetes API certificates must be verified in either mode.
 ### Images and resources
 
 Configure separate gateway and Agent images, CPU and memory requests and limits,
-and namespace-level resource quotas and container defaults. Production requires
+namespace-level resource quotas and container defaults, and an optional
+`runtime.nodeSelector` for gateway and Agent Pods. Production requires
 `images.requireImmutableDigest: true` and SHA-256 image digests.
 
 See [network configuration](kubernetes-compute/networking-and-isolation.md#networking)
@@ -169,16 +174,19 @@ node-level execution fencing.
 
 The Agent's Harness configuration determines its execution topology:
 
-- **Embedded:** OpenClaw runs the gateway and Harness in one Pod. This mode
-  supports an Agent-scoped model API key and does not require shared storage.
+- **Embedded:** OpenClaw runs the gateway and Harness in one Pod. It accepts
+  an Agent-scoped model API key, uses `openai/` models, and does not require
+  shared storage.
 - **Dedicated:** The gateway and Codex Harness run in separate Pods with
   separate ServiceAccounts. They communicate through authenticated app-server
-  transport and share an Agent-owned PersistentVolumeClaim.
+  transport and share an Agent-owned PersistentVolumeClaim. Codex accepts an
+  Agent-scoped model API key or a managed ChatGPT service-account credential,
+  and permits `openai/` or `codex/` models.
 
-Provider-issued access tokens and enabled external channels require dedicated
-execution. Unsupported Harness and execution-mode combinations fail deployment.
-OpenShell sandboxing currently supports only this dedicated Codex path; embedded
-OpenClaw Agents fail closed when the OpenShell SandboxDriver is selected.
+Enabled external channels require dedicated execution. Unsupported Harness and
+execution-mode combinations fail deployment. OpenShell is designed for
+dedicated Codex only, but stock OpenShell currently blocks that deployment;
+embedded OpenClaw is rejected as well.
 
 Stopping an Agent first deletes its exact gateway route and gateway runtime,
 then removes the dedicated Harness Deployment or delegates provider-owned
@@ -187,6 +195,40 @@ an ordinary Harness Deployment is absent. Stop retains Agent-owned
 PersistentVolumeClaims and runtime credential Secrets. Retirement remains the
 destructive revision cleanup operation. Repeated stop observes exact ownership
 and converges when the runtime objects are already absent.
+
+### Plugin startup status
+
+Compute-owned embedded OpenClaw and dedicated Codex runtimes publish a private
+current-startup result after attempting requested plugins and verifying effective
+configuration. The result identifies the revision and runtime instance, with
+successful selection IDs and safe `PLUGIN_INSTALL_FAILED` or
+`PLUGIN_AUTH_REQUIRED` warnings for disabled selections.
+
+Kubernetes Compute reads the exact owned workload's status endpoint through the
+authenticated Kubernetes Pod proxy. Tenant-local controller RBAC permits this
+read; workload ServiceAccounts receive no Kubernetes write credentials. The
+endpoint is not part of the public gateway API. Compute validates workload
+ownership, startup identity, admitted selection keys, and closed warning codes.
+Missing, malformed, or foreign status cannot establish readiness.
+
+For embedded OpenClaw, startup explicitly disables failed plugin entries and
+removes their managed tool allowances before starting the gateway. For dedicated
+Codex, the separate gateway applies the Agent's current result to its bridge
+configuration before serving and refreshes that configuration after a changed
+restart result. Failed-only Codex app bindings are disabled; successful selections
+retain their admitted policy, including shared app bindings they require.
+
+The Codex app-server credential is derived from the Agent's transport Secret,
+revision, and startup identity. A gateway configured for the previous startup
+cannot authenticate to a restarted Agent. Its supervisor obtains the new status,
+applies the matching exclusions, and starts the gateway with the new credential.
+This closes the interval before the supervisor's next status poll.
+
+The worker records warnings with successful deployment completion under its live
+claim. A runtime restart recomputes status instead of preserving the first
+failure. There are no plugin receipt ConfigMaps, Pod finalizers, failure latches,
+or post-commit acknowledgment steps. This behavior does not mutate requested
+revision selections, uninstall account-wide plugins, or promise rollback.
 
 See the [Harness execution topology flow](../../flows/harness-execution-topology.md)
 for additional execution details.
@@ -203,8 +245,8 @@ for additional execution details.
   readiness marker at process start so a marker left in the Pod's temporary
   volume by a previous container attempt cannot make a restarted runtime ready.
   Native plugin startup, authentication, transport, and installation failures
-  remain generic workload startup failures unless the native runtime provides a
-  trusted typed failure source.
+  remain generic workload startup failures unless the Compute-owned runtime
+  reports a verified current-startup warning for an admitted selected plugin.
 - **Gateway storage is pending or rejected:** Check the configured
   `runtime.gatewayStorageClassName`, available `10Gi` capacity, filesystem
   support, worker PVC permissions, and the PVC's exact ownership. Preserve

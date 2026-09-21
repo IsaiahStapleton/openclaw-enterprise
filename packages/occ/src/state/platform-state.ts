@@ -2,8 +2,10 @@ import { RepositoryTransactionLifetime } from "../ports/transaction.ts";
 import { bindPlatformUnitOfWork } from "../ports/platform-unit-of-work.ts";
 import { createPlatformReadView } from "../ports/platform-read-view.ts";
 import type {
+  AccessBinding,
   Agent,
   AgentDesiredRuntimeState,
+  AgentStatus,
   AgentRevision,
   AuditEvent,
   HarnessExecutionMode,
@@ -17,6 +19,7 @@ import type {
   SecretBindings,
   ServiceAccount,
   ServiceAccountCredential,
+  Role,
 } from "@openclaw-enterprise/contracts";
 import {
   normalizePluginDesiredState,
@@ -31,6 +34,7 @@ import {
   ResourceConflictError,
   ScopeViolationError,
 } from "../errors.ts";
+import type { ControllerWork } from "./controller-work.ts";
 
 export interface InstallationReadRepository {
   findInstallation(installationId: string): Promise<Readonly<Installation> | undefined>;
@@ -104,6 +108,20 @@ export interface AgentRepository extends AgentReadRepository {
     agentId: string,
     expected: AgentDesiredRuntimeState | readonly AgentDesiredRuntimeState[],
     next: AgentDesiredRuntimeState,
+  ): Promise<Readonly<Agent> | undefined>;
+  /**
+   * Moves the Agent between lifecycle states, returning undefined when the
+   * Agent is absent or does not currently hold one of `expected`. Deletion is
+   * asynchronous, so the transition is the boundary that stops concurrent
+   * mutations from admitting work the teardown has already enumerated. Callers
+   * that treat an already-deleting Agent as success check its status first,
+   * as `deleteNamespace` does for a Namespace.
+   */
+  transitionAgentStatus(
+    namespaceId: string,
+    agentId: string,
+    expected: AgentStatus | readonly AgentStatus[],
+    next: AgentStatus,
   ): Promise<Readonly<Agent> | undefined>;
 }
 
@@ -432,14 +450,41 @@ export type PlatformOperation =
       readonly kind: "agent";
       readonly target: "stopped";
       readonly operationId: string;
+    })
+  | (PlatformOperationBase & {
+      /**
+       * Agent teardown is scoped to the Agent, not one revision: it retires
+       * every revision the Agent owns.
+       */
+      readonly kind: "agent";
+      readonly target: "deleted";
+      readonly operationId?: never;
     });
 
 export interface PlatformOperationReadRepository {
   list(): Promise<readonly Readonly<PlatformOperation>[]>;
+  findWork(idempotencyKey: string): Promise<Readonly<ControllerWork> | undefined>;
 }
 
 export interface PlatformOperationRepository extends PlatformOperationReadRepository {
   append(operation: PlatformOperation): Promise<void>;
+}
+
+export interface IAMPolicyReadRepository {
+  listRoles(namespaceId: string): Promise<readonly Readonly<Role>[]>;
+  getRole(namespaceId: string, roleId: string): Promise<Readonly<Role> | undefined>;
+  listAccessBindings(namespaceId: string): Promise<readonly Readonly<AccessBinding>[]>;
+  getAccessBinding(
+    namespaceId: string,
+    bindingId: string,
+  ): Promise<Readonly<AccessBinding> | undefined>;
+}
+
+export interface IAMPolicyRepository extends IAMPolicyReadRepository {
+  createRole(role: Role): Promise<Readonly<Role>>;
+  deleteRole(namespaceId: string, roleId: string): Promise<boolean>;
+  createAccessBinding(binding: AccessBinding): Promise<Readonly<AccessBinding>>;
+  deleteAccessBinding(namespaceId: string, bindingId: string): Promise<boolean>;
 }
 
 export interface PlatformReadView {
@@ -450,6 +495,7 @@ export interface PlatformReadView {
   readonly serviceAccounts: ServiceAccountReadRepository;
   readonly agents: AgentReadRepository;
   readonly revisions: AgentRevisionReadRepository;
+  readonly iamPolicy: IAMPolicyReadRepository;
   readonly operations: PlatformOperationReadRepository;
 }
 
@@ -461,6 +507,7 @@ export interface PlatformUnitOfWork extends PlatformReadView {
   readonly serviceAccounts: ServiceAccountRepository;
   readonly agents: AgentRepository;
   readonly revisions: AgentRevisionRepository;
+  readonly iamPolicy: IAMPolicyRepository;
   readonly audit: PlatformAuditRepository;
   readonly operations: PlatformOperationRepository;
 }
@@ -495,12 +542,23 @@ interface PlatformSnapshot {
   readonly serviceAccounts: Map<string, Readonly<ServiceAccount>>;
   readonly agents: Map<string, Readonly<Agent>>;
   readonly revisions: Map<string, readonly Readonly<AgentRevision>[]>;
+  readonly roles: Map<string, Readonly<Role>>;
+  readonly bindings: Map<string, Readonly<AccessBinding>>;
   readonly audit: Readonly<AuditEvent>[];
   readonly operations: Readonly<PlatformOperation>[];
 }
 
 function agentKey(namespaceId: string, agentId: string): string {
   return `${namespaceId}\u0000${agentId}`;
+}
+
+function operationIdempotencyKey(operation: Readonly<PlatformOperation>): string {
+  if (operation.kind === "agent") {
+    return `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`;
+  }
+  return `${operation.kind}:${operation.resourceId}:${operation.action}${
+    operation.kind === "namespace" ? `:${operation.target}` : ""
+  }`;
 }
 
 function cloneSnapshot(snapshot: PlatformSnapshot): PlatformSnapshot {
@@ -527,6 +585,10 @@ function cloneSnapshot(snapshot: PlatformSnapshot): PlatformSnapshot {
         Object.freeze(revisions.map((revision) => immutableCopy(revision))),
       ]),
     ),
+    roles: new Map(Array.from(snapshot.roles, ([key, role]) => [key, immutableCopy(role)])),
+    bindings: new Map(
+      Array.from(snapshot.bindings, ([key, binding]) => [key, immutableCopy(binding)]),
+    ),
     audit: snapshot.audit.map((event) => immutableCopy(event)),
     operations: snapshot.operations.map((operation) => immutableCopy(operation)),
   };
@@ -536,6 +598,10 @@ function assertInitialized(snapshot: PlatformSnapshot): void {
   if (!snapshot.installation) {
     throw new ScopeViolationError("The server-owned Installation has not been initialized.");
   }
+}
+
+function iamPolicyKey(namespaceId: string, id: string): string {
+  return `${namespaceId}\u0000${id}`;
 }
 
 const secretIdentifier =
@@ -1181,6 +1247,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         ...withoutPlugins,
         ...(plugins === undefined ? {} : { plugins }),
         desiredRuntimeState: "stopped" as const,
+        status: "active" as const,
       });
       snapshot.agents.set(key, saved);
       return immutableCopy(saved);
@@ -1198,6 +1265,29 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         return undefined;
       }
       const saved = immutableCopy({ ...agent, desiredRuntimeState: next });
+      snapshot.agents.set(key, saved);
+      return immutableCopy(saved);
+    },
+    transitionAgentStatus: async (namespaceId, agentId, expected, next) => {
+      const key = agentKey(namespaceId, agentId);
+      const agent = snapshot.agents.get(key);
+      const expectedStatuses = Array.isArray(expected) ? expected : [expected];
+      if (
+        agent === undefined ||
+        agent.namespaceId !== namespaceId ||
+        !expectedStatuses.includes(agent.status)
+      ) {
+        return undefined;
+      }
+      // Mirrors agents_status_valid and the one-way active -> deleting path the
+      // database enforces; deletion removes the row, so nothing returns to active.
+      if (agent.status !== next && !(agent.status === "active" && next === "deleting")) {
+        throw new ScopeViolationError("The Agent lifecycle transition is invalid.");
+      }
+      if (next === "deleting" && agent.desiredRuntimeState !== "stopped") {
+        throw new ScopeViolationError("A deleting Agent must already be stopped.");
+      }
+      const saved = immutableCopy({ ...agent, status: next });
       snapshot.agents.set(key, saved);
       return immutableCopy(saved);
     },
@@ -1336,6 +1426,149 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     },
   };
 
+  const agentRevisionExists = (namespaceId: string, revisionId: string): boolean =>
+    Array.from(snapshot.revisions.values())
+      .flat()
+      .some((revision) => revision.namespaceId === namespaceId && revision.id === revisionId);
+
+  const managedPolicyResourceExists = async (
+    namespaceId: string,
+    resourceKind: NonNullable<AccessBinding["resourceKind"]>,
+    resourceId: string,
+  ): Promise<boolean> => {
+    if (resourceKind === "agent") {
+      return (await agents.findAgent(namespaceId, resourceId)) !== undefined;
+    }
+    if (resourceKind === "agent_revision") {
+      return agentRevisionExists(namespaceId, resourceId);
+    }
+    if (resourceKind === "configuration") {
+      return (await configurations.findConfiguration(namespaceId, resourceId)) !== undefined;
+    }
+    if (resourceKind === "secret") {
+      return (await secrets.findSecret(namespaceId, resourceId)) !== undefined;
+    }
+    if (resourceKind === "service_account") {
+      return (await serviceAccounts.findServiceAccount(namespaceId, resourceId)) !== undefined;
+    }
+    return false;
+  };
+
+  const namespaceServicePrincipalExists = (namespaceId: string, identityId: string): boolean =>
+    Array.from(snapshot.agents.values()).some(
+      (agent) =>
+        agent.namespaceId === namespaceId &&
+        agent.servicePrincipalId === identityId &&
+        snapshot.namespaces.get(namespaceId)?.deletedAt === undefined,
+    );
+
+  const iamPolicy: IAMPolicyRepository = {
+    listRoles: async (namespaceId) =>
+      Object.freeze(
+        Array.from(snapshot.roles.values())
+          .filter((role) => role.namespaceId === namespaceId)
+          .map((role) => immutableCopy(role)),
+      ),
+    getRole: async (namespaceId, roleId) => {
+      const role = snapshot.roles.get(iamPolicyKey(namespaceId, roleId));
+      return role === undefined ? undefined : immutableCopy(role);
+    },
+    createRole: async (role) => {
+      assertInitialized(snapshot);
+      const namespace = await namespaces.lockNamespace(role.namespaceId ?? "");
+      if (
+        namespace === undefined ||
+        (namespace.status !== "provisioning" && namespace.status !== "ready")
+      ) {
+        throw new ScopeViolationError("The IAM Role belongs to an unavailable Namespace.");
+      }
+      const key = iamPolicyKey(namespace.id, role.id);
+      if (
+        snapshot.roles.has(key) ||
+        Array.from(snapshot.roles.values()).some((candidate) => candidate.id === role.id)
+      ) {
+        throw new ResourceConflictError("The server generated an existing IAM Role identity.");
+      }
+      if (role.namespaceId !== namespace.id || role.permissions.length === 0) {
+        throw new ScopeViolationError("The IAM Role must be Namespace-scoped and nonempty.");
+      }
+      const saved = immutableCopy(role);
+      snapshot.roles.set(key, saved);
+      return immutableCopy(saved);
+    },
+    deleteRole: async (namespaceId, roleId) => {
+      const key = iamPolicyKey(namespaceId, roleId);
+      if (!snapshot.roles.has(key)) {
+        return false;
+      }
+      if (
+        Array.from(snapshot.bindings.values()).some(
+          (binding) => binding.namespaceId === namespaceId && binding.roleId === roleId,
+        )
+      ) {
+        throw new ResourceConflictError("The IAM Role is referenced by an AccessBinding.");
+      }
+      snapshot.roles.delete(key);
+      return true;
+    },
+    listAccessBindings: async (namespaceId) =>
+      Object.freeze(
+        Array.from(snapshot.bindings.values())
+          .filter((binding) => binding.namespaceId === namespaceId)
+          .map((binding) => immutableCopy(binding)),
+      ),
+    getAccessBinding: async (namespaceId, bindingId) => {
+      const binding = snapshot.bindings.get(iamPolicyKey(namespaceId, bindingId));
+      return binding === undefined ? undefined : immutableCopy(binding);
+    },
+    createAccessBinding: async (binding) => {
+      assertInitialized(snapshot);
+      const namespaceId = binding.namespaceId ?? "";
+      const namespace = await namespaces.lockNamespace(namespaceId);
+      if (
+        namespace === undefined ||
+        (namespace.status !== "provisioning" && namespace.status !== "ready")
+      ) {
+        throw new ScopeViolationError("The IAM AccessBinding belongs to an unavailable Namespace.");
+      }
+      const role = await iamPolicy.getRole(namespace.id, binding.roleId);
+      if (role === undefined) {
+        throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
+      }
+      if (
+        binding.subjectKind !== "identity" ||
+        !namespaceServicePrincipalExists(namespace.id, binding.subjectId)
+      ) {
+        throw new ScopeViolationError(
+          "The IAM AccessBinding subject does not belong to the exact Namespace.",
+        );
+      }
+      if (
+        binding.resourceKind === undefined ||
+        binding.resourceId === undefined ||
+        !(await managedPolicyResourceExists(namespace.id, binding.resourceKind, binding.resourceId))
+      ) {
+        throw new ScopeViolationError(
+          "The IAM AccessBinding target does not belong to the exact Namespace.",
+        );
+      }
+      const key = iamPolicyKey(namespace.id, binding.id);
+      if (
+        snapshot.bindings.has(key) ||
+        Array.from(snapshot.bindings.values()).some((candidate) => candidate.id === binding.id)
+      ) {
+        throw new ResourceConflictError(
+          "The server generated an existing IAM AccessBinding identity.",
+        );
+      }
+      const saved = immutableCopy(binding);
+      snapshot.bindings.set(key, saved);
+      return immutableCopy(saved);
+    },
+    deleteAccessBinding: async (namespaceId, bindingId) =>
+      snapshot.bindings.delete(iamPolicyKey(namespaceId, bindingId)),
+  };
+
   return {
     installations,
     namespaces,
@@ -1344,6 +1577,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     serviceAccounts,
     agents,
     revisions,
+    iamPolicy,
     audit: {
       async append(event) {
         if (event.installationId !== snapshot.installation?.id) {
@@ -1375,14 +1609,23 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
             "Namespace work does not match its exact lifecycle target.",
           );
         }
-        if (
-          operation.kind === "agent" &&
-          (operation.namespaceId === operation.resourceId ||
-            !snapshot.agents.has(agentKey(operation.namespaceId, operation.resourceId)) ||
-            operation.target !== "stopped" ||
-            !isNonEmptyString(operation.operationId))
-        ) {
-          throw new ScopeViolationError("Agent work does not match its exact lifecycle target.");
+        // Agent-wide work names the Agent itself, never its owning Namespace.
+        // Mirrors the owner resolution and controller_work_agent_owner foreign
+        // key the database applies to the same operation.
+        if (operation.kind === "agent") {
+          if (operation.namespaceId === operation.resourceId) {
+            throw new ScopeViolationError("Agent work must name its exact Agent.");
+          }
+          const owner = snapshot.agents.get(agentKey(operation.namespaceId, operation.resourceId));
+          if (owner === undefined || owner.namespaceId !== operation.namespaceId) {
+            throw new ScopeViolationError("Agent work does not match its exact owner.");
+          }
+          if (operation.target !== "stopped" && operation.target !== "deleted") {
+            throw new ScopeViolationError("Agent work does not match its exact lifecycle target.");
+          }
+          if (operation.target === "stopped" && !isNonEmptyString(operation.operationId)) {
+            throw new ScopeViolationError("Agent stop work requires its exact operation identity.");
+          }
         }
         const duplicate = snapshot.operations.find(
           (existing) =>
@@ -1394,7 +1637,9 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
             (existing.kind !== "agent" ||
               (operation.kind === "agent" &&
                 existing.target === operation.target &&
-                existing.operationId === operation.operationId)),
+                (existing.target === "deleted" ||
+                  (operation.target === "stopped" &&
+                    existing.operationId === operation.operationId)))),
         );
         if (duplicate !== undefined) {
           if (
@@ -1411,6 +1656,44 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       },
       list: async () =>
         Object.freeze(snapshot.operations.map((operation) => immutableCopy(operation))),
+      findWork: async (idempotencyKey) => {
+        const operation = snapshot.operations.find(
+          (candidate) => operationIdempotencyKey(candidate) === idempotencyKey,
+        );
+        if (operation === undefined) {
+          return undefined;
+        }
+        const now = new Date(0);
+        const revisionOwner =
+          operation.kind === "agent_revision"
+            ? Array.from(snapshot.revisions.values())
+                .flat()
+                .find(
+                  (revision) =>
+                    revision.namespaceId === operation.namespaceId &&
+                    revision.id === operation.resourceId,
+                )?.agentId
+            : undefined;
+        return immutableCopy({
+          idempotencyKey,
+          namespaceId: operation.namespaceId,
+          ...(operation.kind === "agent" ? { agentId: operation.resourceId } : {}),
+          ...(operation.kind === "agent_revision"
+            ? {
+                ...(revisionOwner === undefined ? {} : { agentId: revisionOwner }),
+                revisionId: operation.resourceId,
+              }
+            : {}),
+          actorId: operation.actorId,
+          ...(operation.kind === "namespace" ? { namespaceTarget: operation.target } : {}),
+          ...(operation.kind === "agent" ? { agentTarget: operation.target } : {}),
+          state: "queued",
+          availableAt: now,
+          attemptCount: 0,
+          createdAt: now,
+          updatedAt: now,
+        });
+      },
     },
   };
 }
@@ -1425,6 +1708,8 @@ export class InMemoryPlatformState implements PlatformStateStore {
     serviceAccounts: new Map(),
     agents: new Map(),
     revisions: new Map(),
+    roles: new Map(),
+    bindings: new Map(),
     audit: [],
     operations: [],
   };

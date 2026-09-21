@@ -11,13 +11,13 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { NativeIAMDriver, createAuthPrincipalSeed } from "../../packages/iam/src/index.ts";
 import { OpenClawController, PostgresPlatformState } from "../../packages/occ/src/index.ts";
-import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import { createDevelopmentComputeDriver } from "./development.mjs";
 import { createDevelopmentIAMState } from "./development-iam-state.mjs";
 import { createInstallationDriverConfiguration } from "./installation-driver-configuration.mjs";
 import { createTestConfigurationDriver } from "./configuration-driver.mjs";
 import { createTestSecretDriver } from "./secret-driver.mjs";
+import { createTestKubernetesComputeDriver } from "./kubernetes-compute.mjs";
 import { ensureDevelopmentBootstrap } from "./bootstrap-installation.mjs";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
@@ -131,6 +131,7 @@ export async function cleanupNamespaces(pool, namespaceIds) {
       `UPDATE occ.controller_work
        SET state = 'failed_permanent',
            completed_at = clock_timestamp(),
+           reason_code = 'TEST_FIXTURE_CLEANUP',
            claim_token = NULL,
            lease_expires_at = NULL,
            updated_at = clock_timestamp()
@@ -166,6 +167,7 @@ export async function cleanupProviderFixtures(pool, namespaceId, cleanup) {
            claim_token = NULL,
            lease_expires_at = NULL,
            completed_at = clock_timestamp(),
+           reason_code = 'TEST_FIXTURE_CLEANUP',
            updated_at = clock_timestamp()
        WHERE namespace_id = $1
          AND revision_id = ANY($2::text[])
@@ -247,9 +249,10 @@ export async function seedProviderBinding(pool, account, options = {}) {
 
 export function registerCoreDrivers(controller, state, options = {}) {
   const iam = new NativeIAMDriver(state, { id: "native-iam", implementation: "native" });
+  const harnessAuthDriver = createTestKubernetesComputeDriver("provider-state-harness-auth");
   const compute = {
     ...createDevelopmentComputeDriver(),
-    validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
+    validateHarnessAuth: harnessAuthDriver.validateHarnessAuth.bind(harnessAuthDriver),
   };
   const configuration = createTestConfigurationDriver();
   controller.registerDriver(iam);
@@ -351,9 +354,10 @@ export async function createProviderFixture(context) {
 
   function startWorker(options = {}) {
     const calls = [];
+    const harnessAuthDriver = createTestKubernetesComputeDriver("provider-worker-harness-auth");
     const compute = {
       ...createDevelopmentComputeDriver(),
-      validateHarnessAuth: KubernetesComputeDriver.prototype.validateHarnessAuth,
+      validateHarnessAuth: harnessAuthDriver.validateHarnessAuth.bind(harnessAuthDriver),
     };
     const providers = options.providers ?? [providerDefinition()];
     const drivers = createProviderWorkerDrivers(

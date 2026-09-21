@@ -1,5 +1,8 @@
 # Implementation specifications
 
+[First Enterprise container release](32-first-container-release.md) — Implementing;
+protected marker bootstrap and first private SHA-addressed controller/runtime publication.
+
 This directory records individual proposals, implementation plans, milestones,
 and delivery decisions. The documents describe work at a point in time. Their
 existing filenames and historical content remain intact in [`.archive/`](.archive/).
@@ -46,11 +49,16 @@ one Agent auth binding for supplied OpenAI keys and issued ChatGPT account crede
 [Gateway–Harness storage split](28-gateway-harness-storage-split.md) — Proposed;
 #76/#89 draft covering storage ownership, live edits and first-start files.
 
+- [Initial OCC Prometheus metrics](28-occ-prometheus-metrics.md) — Implementing;
+  API/worker instrumentation, Agent inventory, private scraping, and replica
+  aggregation. Local proof recorded; runtime/cluster acceptance outstanding.
+
 See the [OpenClaw testing infrastructure report](reports/openclaw-testing-infrastructure.md) for the source audit behind the proposed CI coverage.
 
 | Implementation record                                                            | Recorded status                                                                                                                                                                            | Current reference                                                                                                                                         |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Agent stop without revision mutation](29-agent-stop.md)                         | Implementing                                                                                                                                                                               | [Agents](../docs/reference/agents.md) and [Agent deployment](../docs/reference/agents/deployment.md)                                                      |
+| [Agent deletion and revision teardown](28-agent-deletion.md)                     | Implementing; stages 1-3 landed; sequenced behind Agent stop                                                                                                                               | [Agents](../docs/reference/agents.md) and [API](../docs/reference/api.md); teardown pending                                                               |
 | [SSH Compute Driver](21-ssh-compute-driver.md)                                   | Completed; conformance, startup, and real-host container proof passed 2026-09-05                                                                                                           | [SSH Compute Driver](../docs/reference/drivers/ssh-compute.md)                                                                                            |
 | [Agent workload tags](21-agent-workload-tags.md)                                 | Planning; draft awaiting review and user direction                                                                                                                                         | Proposed; [Agent](../docs/reference/agents.md) and [Sandbox](../docs/reference/drivers/sandbox.md) contracts remain unchanged                             |
 | [Common OpenTelemetry logging](20-common-otel-logging.md)                        | Implemented; Docker, Kubernetes and Helm logging proof passed; OpenShell live proof unavailable                                                                                            | [Settings](../docs/reference/settings.md), [Harness execution](../docs/reference/harness-execution.md)                                                    |
@@ -92,3 +100,5 @@ Use the linked current references for supported behavior.
 | [Proposal: SandboxDriver Provisioning and Lifecycle](.archive/13-sandbox-driver-provisioning.md)                                                         | draft                                                                                                     | [SandboxDriver](../docs/reference/drivers/sandbox.md)                                                                                                |
 | [Feature Spec: Service API keys](.archive/13-service-api-keys.md)                                                                                        | Implementation complete                                                                                   | [Authentication](../docs/reference/authentication/service-api-keys.md#service-api-keys)                                                              |
 | [Feature Spec: SecretDriver storage and delivery](.archive/14-secret-driver.md)                                                                          | Implemented and verified for Namespace-owned Secret storage and delivery; broader runtime limits recorded | [Kubernetes Secret Driver](../docs/reference/drivers/kubernetes-secret.md)                                                                           |
+
+[Agent native admin UI pilot](31-agent-native-admin-ui.md) — Implementing; trusted pilot operators open the stock full-admin UI through exact-Agent OCC admission.

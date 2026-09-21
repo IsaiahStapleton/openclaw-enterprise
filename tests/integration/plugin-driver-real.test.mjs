@@ -94,6 +94,11 @@ test(
       plugins: { allow: allowedPlugins, enabled: true },
       tools: { allow: ["read", nativePluginId], deny: ["exec"] },
     });
+    assert.deepEqual(
+      deployedPrimary.status.warnings,
+      [],
+      "the expected-success OpenClaw plugin proof requires a clean plugin install.",
+    );
     const deployedSibling = await fixture.deployAndWait(sibling);
     assert.equal(Object.keys(deployedSibling.revision.plugins?.plugins ?? {}).length, 0);
 
@@ -343,6 +348,289 @@ test(
       turnMarker,
       toolName,
       resultPattern,
+    });
+  },
+);
+
+test(
+  "curated Codex plugin failure succeeds with a warning, disables the failed plugin, and preserves a sibling Agent",
+  {
+    skip: pluginProofSkipReason("codex_failure"),
+    timeout: 900_000,
+  },
+  async (context) => {
+    const successPluginId =
+      process.env.OCC_TEST_CODEX_SUCCESS_PLUGIN_ID ??
+      "codex-plugin:google-calendar@openai-curated-remote";
+    const failureCandidates = (
+      process.env.OCC_TEST_CODEX_FAILURE_PLUGIN_IDS ??
+      [
+        "codex-plugin:microsoft-sharepoint@openai-curated-remote",
+        "codex-plugin:outlook-calendar@openai-curated-remote",
+        "codex-plugin:financial-charts@openai-curated-remote",
+      ].join("\n")
+    )
+      .split("\n")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0 && entry !== successPluginId);
+    const successTurnMarker = `CODEX_BEST_EFFORT_SUCCESS_${randomUUID()}`;
+    const successPrompt =
+      process.env.OCC_TEST_CODEX_CALENDAR_PROMPT ??
+      `Use the Google Calendar list_calendars tool with max_results 1 to read the calendars visible to this test account, then answer with the exact marker ${successTurnMarker}.`;
+    const successExpectedPatterns = (
+      process.env.OCC_TEST_CODEX_CALENDAR_EXPECT ?? successTurnMarker
+    )
+      .split("\n")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const successToolName = process.env.OCC_TEST_CODEX_CALENDAR_TOOL_NAME;
+    const successResultPattern = process.env.OCC_TEST_CODEX_CALENDAR_RESULT_EXPECT;
+
+    const credential = await readCodexServiceAccountCredential();
+    const fixture = await createPluginDriverRealFixture(context, {
+      pluginDriverId: "codex-plugin",
+      databaseUrl: process.env.OCC_TEST_PLUGIN_DRIVER_CODEX_FAILURE_DATABASE_URL,
+      codexCredential: credential,
+    });
+    const account = await fixture.createCodexServiceAccountFromToken({
+      accessToken: credential.accessToken,
+      name: `cpf-${randomUUID().slice(0, 8)}`,
+    });
+    assertNoSecretMaterial(
+      account,
+      [credential.accessToken, credential.workspaceId],
+      "ServiceAccount metadata must not expose Codex credential material.",
+    );
+
+    const primary = await fixture.createAgent({
+      harnessId: "codex",
+      executionMode: "dedicated",
+      name: `cpf-primary-${randomUUID().slice(0, 8)}`,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+      providerId: "openai",
+    });
+    const sibling = await fixture.createAgent({
+      harnessId: "codex",
+      executionMode: "dedicated",
+      name: `cpf-sibling-${randomUUID().slice(0, 8)}`,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+      providerId: "openai",
+    });
+
+    // Select the known connected app through OCC before native discovery: a
+    // plugin-free revision deliberately disables the remote catalog feature.
+    const selectedSuccess = await fixture.selectPlugin(primary.id, {
+      pluginId: successPluginId,
+      enabled: true,
+      approvalMode: "auto",
+      approvalsReviewer: "auto_review",
+    });
+    assert.equal(selectedSuccess.enabled, true);
+    const deployedPrimary = await fixture.deployAndWait(primary);
+    assert.deepEqual(Object.keys(deployedPrimary.revision.plugins?.plugins ?? {}), [
+      successPluginId,
+    ]);
+    const catalog = await fixture.listCodexNativeCatalog(primary, [
+      successPluginId,
+      ...failureCandidates,
+    ]);
+    context.diagnostic(
+      `native Codex catalog candidates: ${catalog.length} entries, ${catalog.filter((entry) => entry.detailAvailable).length} readable details, ${catalog.filter((entry) => entry.appCount > 0).length} with apps`,
+    );
+    const catalogById = new Map(catalog.map((entry) => [entry.id, entry]));
+    const successEntry = catalogById.get(successPluginId);
+    assert.ok(
+      successEntry,
+      `native Codex catalog did not contain success plugin ${successPluginId}`,
+    );
+    const successAppIds = new Set(successEntry.appIds);
+    const failureEntry = failureCandidates
+      .map((pluginId) => catalogById.get(pluginId))
+      .find(
+        (entry) =>
+          entry?.detailAvailable === true &&
+          entry.appCount > 0 &&
+          entry.appIds.some((appId) => !successAppIds.has(appId)),
+      );
+    assert.ok(
+      failureEntry,
+      `native Codex catalog did not contain any configured failure candidate: ${failureCandidates.join(
+        ", ",
+      )}`,
+    );
+    const failurePluginId = failureEntry.id;
+    context.diagnostic(
+      `native Codex catalog selected success=${successPluginId} apps=${successEntry.appCount ?? "unknown"} failure=${failurePluginId} apps=${failureEntry.appCount ?? "unknown"}`,
+    );
+    function assertBestEffortDeploymentStatus(status, deploymentId) {
+      assert.equal(status.deploymentId, deploymentId);
+      assert.equal(status.namespaceId, fixture.namespaceId);
+      assert.equal(status.agentId, primary.id);
+      assert.equal(status.status, "succeeded");
+      assert.equal(status.error, null);
+      assert.equal(status.warnings.length, 1);
+      assert.equal(status.warnings[0].pluginId, failurePluginId);
+      assert.ok(
+        ["PLUGIN_AUTH_REQUIRED", "PLUGIN_INSTALL_FAILED"].includes(status.warnings[0].code),
+        `unexpected plugin warning code ${status.warnings[0].code}`,
+      );
+    }
+
+    const installedSuccess = await fixture.codexNativePluginDetail(primary, successEntry);
+    assert.equal(installedSuccess.installed, true);
+    assert.equal(installedSuccess.enabled, true);
+    assert.equal(installedSuccess.remotePluginId, successEntry.remotePluginId);
+    const deployedSibling = await fixture.deployAndWait(sibling);
+    assert.equal(
+      Object.keys(deployedSibling.revision.plugins?.plugins ?? {}).length,
+      0,
+      "the sibling Agent starts without desired plugins.",
+    );
+    const siblingPodBefore = await fixture.gatewayPodIdentity(sibling);
+    const sentinel = {
+      name: `codex-failure-${randomUUID().slice(0, 8)}.txt`,
+      content: `sibling workspace sentinel ${randomUUID()}`,
+    };
+    const siblingWorkspaceBefore = await fixture.writeWorkspaceSentinel(sibling, sentinel);
+    assert.equal(siblingWorkspaceBefore.content, sentinel.content);
+
+    const selectedFailure = await fixture.selectPlugin(primary.id, {
+      pluginId: failurePluginId,
+      enabled: true,
+      approvalMode: "auto",
+      approvalsReviewer: "auto_review",
+    });
+    assert.equal(selectedFailure.enabled, true);
+    const deployedWithWarning = await fixture.deployAndWait(primary);
+    assertBestEffortDeploymentStatus(deployedWithWarning.status, deployedWithWarning.revision.id);
+    assert.deepEqual(Object.keys(deployedWithWarning.revision.plugins?.plugins ?? {}), [
+      successPluginId,
+      failurePluginId,
+    ]);
+    assertBestEffortDeploymentStatus(
+      await fixture.getDeploymentStatus(primary.id, deployedWithWarning.revision.id),
+      deployedWithWarning.revision.id,
+    );
+    const primaryAfterWarning = await fixture.getAgent(primary.id);
+    assert.equal(primaryAfterWarning.activeRevisionId, deployedWithWarning.revision.id);
+    assert.equal(primaryAfterWarning.plugins[successPluginId].enabled, true);
+    assert.equal(primaryAfterWarning.plugins[failurePluginId].enabled, true);
+
+    const effective = await fixture.codexEffectivePluginConfiguration(primary, {
+      successEntry,
+      failureEntry,
+    });
+    assert.equal(
+      effective.successBridge?.enabled,
+      true,
+      `missing enabled success bridge ${effective.successBridgeSlug}; keys=${effective.bridgePluginKeys.join(",")}`,
+    );
+    assert.equal(
+      effective.failureBridge?.enabled,
+      false,
+      `missing disabled failure bridge ${effective.failureBridgeSlug}; keys=${effective.bridgePluginKeys.join(",")}`,
+    );
+    for (const [appId, config] of Object.entries(effective.successApps)) {
+      assert.equal(config?.enabled, true, `${appId} must stay enabled for the successful plugin.`);
+    }
+    for (const [appId, config] of Object.entries(effective.failedOnlyApps)) {
+      assert.equal(config?.enabled, false, `${appId} must be explicitly disabled after failure.`);
+    }
+
+    const restarted = await fixture.restartActiveCodexAgentPod(primary);
+    const restartedEffective = await fixture.waitFor(
+      "gateway configuration to synchronize with the restarted Codex Agent",
+      async () => {
+        const candidate = await fixture.codexEffectivePluginConfiguration(primary, {
+          successEntry,
+          failureEntry,
+        });
+        if (
+          candidate.gatewayRuntime !== restarted.gatewayAfter.podName ||
+          candidate.codexRuntime !== restarted.agentAfter.podName ||
+          candidate.successBridge?.enabled !== true ||
+          candidate.failureBridge?.enabled !== false ||
+          !Object.values(candidate.successApps).every((config) => config?.enabled === true) ||
+          !Object.values(candidate.failedOnlyApps).every((config) => config?.enabled === false)
+        ) {
+          return undefined;
+        }
+        return candidate;
+      },
+    );
+    assert.equal(
+      restartedEffective.gatewayRuntime,
+      restarted.gatewayAfter.podName,
+      "effective gateway configuration must be read from the gateway Pod that survived the Agent restart.",
+    );
+    assert.equal(
+      restartedEffective.codexRuntime,
+      restarted.agentAfter.podName,
+      "effective Codex app configuration must be read from the fresh Agent Pod.",
+    );
+    assert.equal(restartedEffective.successBridge?.enabled, true);
+    assert.equal(
+      restartedEffective.failureBridge?.enabled,
+      false,
+      `missing disabled failure bridge ${restartedEffective.failureBridgeSlug}; keys=${restartedEffective.bridgePluginKeys.join(",")}`,
+    );
+    for (const [appId, config] of Object.entries(restartedEffective.successApps)) {
+      assert.equal(config?.enabled, true, `${appId} must stay enabled after runtime restart.`);
+    }
+    for (const [appId, config] of Object.entries(restartedEffective.failedOnlyApps)) {
+      assert.equal(
+        config?.enabled,
+        false,
+        `${appId} must stay explicitly disabled after runtime restart.`,
+      );
+    }
+
+    const successSessionKey = `agent:main:codex-best-effort-success-${randomUUID()}`;
+    const content = await fixture.normalGatewayTurn({
+      agent: primary,
+      gatewayToken: deployedWithWarning.gatewayToken,
+      sessionKey: successSessionKey,
+      prompt: `${successPrompt}\nInclude this marker in the final answer: ${successTurnMarker}`,
+      expectedPatterns: successExpectedPatterns.includes(successTurnMarker)
+        ? successExpectedPatterns
+        : [...successExpectedPatterns, successTurnMarker],
+      secrets: [credential.accessToken, credential.workspaceId],
+    });
+    assertNoSecretMaterial(
+      content,
+      [credential.accessToken, credential.workspaceId],
+      "Codex best-effort plugin proof response must not expose service-account credentials.",
+    );
+    const calendarEvidence = await fixture.assertSessionToolCallEvidence(primary, {
+      sessionKey: successSessionKey,
+      turnMarker: successTurnMarker,
+      toolName: successToolName,
+      resultPattern: successResultPattern,
+    });
+    context.diagnostic(`native Codex calendar proof tool=${calendarEvidence.toolName}`);
+
+    assertBestEffortDeploymentStatus(
+      await fixture.getDeploymentStatus(primary.id, deployedWithWarning.revision.id),
+      deployedWithWarning.revision.id,
+    );
+
+    const siblingAfterFailure = await fixture.getAgent(sibling.id);
+    assert.equal(
+      Object.keys(siblingAfterFailure.plugins ?? {}).length,
+      0,
+      "the warning-producing primary deployment must not mutate sibling desired plugins.",
+    );
+    assert.deepEqual(
+      await fixture.gatewayPodIdentity(sibling),
+      siblingPodBefore,
+      "the warning-producing primary deployment must not replace the sibling Agent workload.",
+    );
+    assert.deepEqual(await fixture.readWorkspaceSentinel(sibling, { name: sentinel.name }), {
+      runtime: siblingWorkspaceBefore.runtime,
+      path: siblingWorkspaceBefore.path,
+      sha256: siblingWorkspaceBefore.sha256,
+      length: siblingWorkspaceBefore.length,
+      content: sentinel.content,
     });
   },
 );

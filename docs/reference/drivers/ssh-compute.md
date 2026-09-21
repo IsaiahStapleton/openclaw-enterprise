@@ -1,24 +1,26 @@
 # SSH Compute Driver
 
-`SshComputeDriver` (`compute-ssh`, implementation `occ/ssh`) realizes Namespaces
-and embedded OpenClaw AgentRevisions on operator-owned Linux hosts over SSH.
-Each Agent has one systemd gateway unit. OCC still owns resources, authorization,
-immutable admission, and activation; the Driver owns only their host realization.
-Trusted Installation YAML can select this bundled Driver in development or production.
+Use the SSH Compute Driver to run embedded OpenClaw on operator-managed
+Linux hosts. It prepares each Namespace over SSH and runs one systemd gateway
+unit per Agent. OCC still owns Agent resources, authorization, revisions, and
+activation. Trusted Installation YAML can select `compute-ssh` (implementation
+`occ/ssh`) in development or production.
 
-Select `harnessAuth: { "method": "runtime" }` for embedded OpenClaw. The operator
-supplies model credentials on the host; OCC does not deliver or validate them.
-Managed API-key and ChatGPT account bindings remain unsupported on SSH, as does
-dedicated Codex.
+Select `harnessAuth: { "method": "runtime" }` and supply model credentials on
+the host. OCC does not deliver or validate those credentials; confirm access
+with a real model response. SSH does not support dedicated Codex, an OCC
+Secret-backed model API key, or a managed ChatGPT account. Use
+[Kubernetes Compute](kubernetes-compute.md) if you need those options.
 
 ## Requirements and configuration
 
 Provision Linux with systemd, util-linux `flock`, `getent`, the shadow account
 management tools (`useradd`, `userdel`, `groupadd`, `groupdel`), a root SSH
 account, Node.js 24, and a readable OpenClaw entrypoint. The controller processes
-need the system `ssh` executable and protected identity and known-hosts files;
-the controller image's `docker.io/library/node:24-bookworm` base ships the OpenSSH client.
-The Driver never installs or upgrades host software and has no `sudo` fallback.
+need the system `ssh` executable and protected identity and known-hosts files.
+The Compose `node:24-bookworm` base includes OpenSSH; provide the client
+yourself if you choose another controller image base. The Driver never installs
+or upgrades host software and has no `sudo` fallback.
 API and worker production preflight both verify configured hosts, so both
 processes need these SSH inputs. Hosts receive no controller credentials,
 database access, or Installation YAML.

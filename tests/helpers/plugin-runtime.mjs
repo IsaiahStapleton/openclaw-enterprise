@@ -17,23 +17,34 @@ export function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
         },
       ),
     ],
+    ...(options.files ?? []),
   ]);
   const sandbox = {
+    Buffer,
     JSON,
+    files,
     process: {
-      env: { OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json", HOME: "/home/node" },
+      env: {
+        OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
+        HOME: "/home/node",
+        ...(options.env ?? {}),
+      },
     },
     require(specifier) {
       if (specifier === "node:child_process") {
         return {
-          spawnSync(command, args, options) {
-            calls.push({ command, args, options });
+          spawnSync(command, args, spawnOptions) {
+            options.beforeSpawn?.(command, args, sandbox);
+            calls.push({ command, args, options: spawnOptions });
             return responses.shift() ?? { status: 0, stdout: "", stderr: "" };
           },
         };
       }
       if (specifier === "node:fs") {
         return {
+          existsSync(path) {
+            return files.has(path);
+          },
           mkdirSync() {},
           readFileSync(path) {
             if (!files.has(path)) {
@@ -48,11 +59,19 @@ export function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
       }
       return nodeRequire(specifier);
     },
+    result: {},
   };
-  vm.runInNewContext(
-    `${PLUGIN_RUNTIME_HELPERS}
-installOpenClawPlugins(${JSON.stringify(runtime)});`,
-    sandbox,
-  );
-  return { calls, files };
+  try {
+    vm.runInNewContext(
+      `${PLUGIN_RUNTIME_HELPERS}
+result.value = installOpenClawPlugins(${JSON.stringify(runtime)}, ${JSON.stringify(options.failures ?? [])});`,
+      sandbox,
+    );
+  } catch (error) {
+    if (options.captureError === true) {
+      return { calls, files, error };
+    }
+    throw error;
+  }
+  return { calls, files, value: sandbox.result.value };
 }

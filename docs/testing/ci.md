@@ -5,6 +5,11 @@ reported by each workflow.
 
 ## GitHub Actions
 
+Metrics HTTP/persistence coverage belongs to the `postgres` lane, including a
+separate migrator-role connection for test-only table contention. The
+`logging-collector` lane also runs real Prometheus/Grafana collection and
+dashboard provisioning. See [metrics testing](metrics.md) for local setup.
+
 The [suite map](../../scripts/ci/test-suites.json) assigns each active test file to exactly one lane, with its required inputs and preparation resources. Check its coverage after adding or renaming tests:
 
 ```sh
@@ -15,11 +20,19 @@ Both workflows reuse the [run-ci-lane action](../../.github/actions/run-ci-lane/
 
 The `checks-baseline` lane runs `pnpm docs:check`: pages above 1,500 visible words
 are flagged for review and pages above 2,500 fail, except the approved single-page
-[API reference](../reference/api.md). The generated API, site build, navigation,
+[API reference](../reference/api.md) and `AGENTS.md` instruction files (see the
+[length policy](../../AGENTS.md#documentation-length-budget)). The generated API, site build, navigation,
 and links must pass. Run `pnpm docs:check-length` for the word-count
 check alone.
 
 The PR workflow runs exactly five lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, and logging collector. Full Integration runs through manual dispatch using the immutable event commit. All lanes require `main` except `k3d-model`, which also accepts a branch explicitly allowed by the `integration-model` environment. Environment gates apply only to lanes that declare an environment; `helper-timeout` and standalone `logging-collector` declare none. The ChatGPT `provider-account` lane keeps its main-only credential environment without per-run approval. Other model, routing, Slack, OpenShell, and additional OpenTelemetry lanes require separately approved environments. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
+
+The Kubernetes fixture lane uses a server and worker node with shared test-owned
+local-path storage. Preparation registers and verifies the fixture image's digest
+on both nodes and derives the API server's proxy source `/32` from its route to
+the worker Pod network. It supplies that address to the
+[plugin status tests](plugins.md#local-and-integration-suites), which exercise
+the private status endpoint across nodes with NetworkPolicy enforcement.
 
 Implementation status: routing, OpenShell, and logging now have concrete CI preparation contracts. Routing installs pinned Gateway API, cert-manager v1.18.4, and Envoy Gateway v1.6.7 controller manifests and generates a private test CA. OpenShell creates an owned K3s v1.36.4 cluster, installs a matched kubectl, configures the selected RuntimeClass with the cluster's `runc` handler, verifies handler availability with a smoke Pod, installs OpenShell CLI/chart assets, imports gateway and supervisor images, and installs Agent Sandbox resources. Only the disposable CI OpenShell cluster exempts its selected RuntimeClass from Pod Security Admission. Preparation proves that a violating ordinary Pod is rejected in a restricted namespace and that the same Pod is admitted with the selected class. The full OpenShell suite proves provider-owned supervisor enforcement for filesystem, endpoint/L7 network, and process boundaries while preserving the current binary-unaware sidecar policy. Logging preparation owns a real OpenTelemetry Collector backend with JSONL evidence, and `OCC_TEST_OTEL_LOGS_URL` is no longer a required external input. The Collector and Docker-model jobs use the shared [setup-test-docker action](../../.github/actions/setup-test-docker/action.yml) to pin Docker 29.4.0, which supports the production `fluentd-write-timeout` logging option. The action stops the preinstalled daemon on the ephemeral runner, installs Docker 29.4.0 through the SHA-pinned official Docker setup action, and points `/var/run/docker.sock` at the action socket so the CLI, production Compose, and Driver use one daemon. Other jobs keep the runner Docker daemon. Full-suite acceptance remains incomplete until main-only protected hosted execution records every selected lane. See the [delivery status](../../specs/19-github-actions-test-coverage/delivery-status.md#delivery-status) for current proof boundaries and live gaps.
 
@@ -28,6 +41,12 @@ Each lane runs whole test files. The runner validates actual Node case results a
 Prepare infrastructure only on a disposable host or through the reviewed CI helpers. Each run owns its Compose project, file-specific databases, cluster and temporary files. CI writes private cleanup state under `RUNNER_TEMP` and uploads only sanitized result JSON, so hosted-runner cleanup state is unavailable after the job ends. Local failures can retain cleanup state while the host and state path still exist. On local Docker Desktop or equivalent VM-backed Docker hosts, run one Kubernetes lane at a time when disk or network pressure has caused measured instability. The GitHub matrix remains parallel; this local guidance is for reproducible operator runs. Model/service tests require the approved credentials and spend policy described in the [implementation specification](../../specs/19-github-actions-test-coverage.md); configuring workflow files does not prove those tests have passed.
 
 See the [execution flow](../flows/github-actions-testing.md) for entrypoints, result accounting, cleanup and failure interpretation. Use the [suite-specific guides](README.md#integration-tests) to reproduce a run locally.
+
+A lane retry replaces that lane's result artifact within the workflow run so the
+aggregate reads its latest result. Other lanes keep their existing artifacts.
+Preserve a failed result before retrying if it is needed for investigation;
+earlier attempt logs remain available. Reruns still require every selected lane
+and the aggregate to pass.
 
 ### Integration coverage by trigger
 
@@ -56,7 +75,10 @@ The dispatcher cannot approve their own run. Have a different collaborator
 perform one of those actions. Remove the branch rule after the proof completes.
 Other lanes, including `all` and `provider-account`, remain main-only. This lane
 runs the real Kubernetes topology tests, including embedded invalid-credential
-cutover and recovery; passing ordinary fixture CI does not prove those outcomes.
+cutover and recovery. It also runs the local first-Agent proof: a fresh installer
+deploys and reuses their own Agent, verifies real model responses, and cannot
+replace the credential after external changes. Ordinary fixture CI does not
+run these tests.
 
 ### Integration tests outside automatic CI
 
@@ -66,7 +88,7 @@ whether a test has ever passed in a local or hosted run.
 
 #### Manual Full Integration lanes
 
-In GitHub Actions, these nine files run only when explicitly selected in
+In GitHub Actions, these ten files run only when explicitly selected in
 [Full Integration](../../.github/workflows/full-integration.yml), using
 the listed lane or `all`. The model/service lanes require their configured
 credentials and infrastructure. All credentialed lanes except `provider-account`
@@ -79,6 +101,7 @@ testing the real helper deadline.
 | ------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `docker-model`     | [docker-compute-real.test.mjs](../../tests/integration/docker-compute-real.test.mjs)                             | Docker Compose deployment and real embedded OpenClaw/dedicated Codex model turns.                                        |
 | `k3d-model`        | [harness-topology-k3d-real.test.mjs](../../tests/integration/harness-topology-k3d-real.test.mjs)                 | Dedicated Codex continuity across Pod replacement and embedded model turns with persisted credentials or the Secret API. |
+| `k3d-model`        | [local-first-agent-real.test.mjs](../../tests/integration/local-first-agent-real.test.mjs)                       | Fresh local Agent deployment and reuse with real model replies; external changes block credential replacement.           |
 | `gateway-routing`  | [harness-topology-k3d-routing-real.test.mjs](../../tests/integration/harness-topology-k3d-routing-real.test.mjs) | Dedicated Codex consumption of workspace files through the real Envoy/OCC route.                                         |
 | `production-tui`   | [production-tui-k3d-real.test.mjs](../../tests/integration/production-tui-k3d-real.test.mjs)                     | Helm-installed production control plane, interactive TUI, and revision cutover.                                          |
 | `slack`            | [harness-topology-k3d-slack-real.test.mjs](../../tests/integration/harness-topology-k3d-slack-real.test.mjs)     | Real Slack ingress and a gateway-authored reply through the approved proxy and Codex Agent.                              |

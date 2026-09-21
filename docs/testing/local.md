@@ -19,9 +19,9 @@ pnpm test:integration
 
 `check:workspace` checks the active workspace.
 The test scripts above run the same canonical workspace verification before
-their selected Node.js tests. `openapi:check` compares generated routes and both
-API artifacts with the checked-in versions. `typecheck` and `build` currently
-invoke the same TypeScript build command.
+their selected Node.js tests. `openapi:check` compares generated routes and the
+OpenAPI contract, HTTP API reference, and API cheat sheet with the checked-in
+versions. `typecheck` and `build` currently invoke the same TypeScript build command.
 
 The [conformance tests](../../tests/conformance) cover domain rules and selected
 Driver contracts. Kubernetes conformance tests use fixtures and rendered
@@ -134,6 +134,12 @@ history; that fixture does not prove runtime dispatch, worker leases, Compute
 Driver effects, PostgreSQL persistence, live Provider health, or deployed Agent
 runtime behavior.
 
+Native admin UI coverage in this suite should prove panel visibility, warning
+copy, shared-cookie Agent-host admission, denied service API keys, wrong or
+unknown Agent hosts, and revision-change reconnect behavior. It does not prove
+a real gateway, private Envoy routing, or that the OCE session cookie is stripped
+before the native gateway; cover those in the native admin integration proof.
+
 Run the API/static boundary checks without a browser:
 
 ```sh
@@ -183,18 +189,20 @@ The hook checks active source and root files; authored documentation also needs
 the full formatting check below.
 
 The root formatting scripts cover active source files, root Markdown, and
-authored `docs/**/*.md`. The generated API reference is excluded and verified by
-`pnpm openapi:check`. Run the complete authored-file check with:
+`docs/**/*.md` except the full generated HTTP API reference, which
+`pnpm openapi:check` verifies. Run the complete authored-file check with:
 
 ```bash
 pnpm format:check
 git diff --check
 ```
 
-After changing API routes or schemas, regenerate the API artifacts with
-`pnpm openapi:generate` and verify them with `pnpm openapi:check`. To check the
-generated Markdown against the checked-in OpenAPI contract without loading
-controller dependencies, run `node scripts/generate-occ-api-reference.mjs --check`.
+After changing API routes or schemas, run `pnpm openapi:generate` to update the
+OpenAPI contract, [HTTP API reference](../reference/api.md), and
+[API cheat sheet](../reference/cheatsheets/api.md); then verify them with
+`pnpm openapi:check`. To check both Markdown pages against
+the checked-in OpenAPI contract without loading controller dependencies, run
+`node scripts/generate-occ-api-reference.mjs --check`.
 
 See the [architecture guide](../ARCHITECTURE.md) for ownership and runtime
 boundaries, the [quickstart](../guides/quickstart.md) for the default local

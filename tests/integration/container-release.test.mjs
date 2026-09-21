@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ghcrPackageName,
+  github,
   repository,
   publishWorkflow,
   validateCi,
@@ -9,6 +10,7 @@ import {
   validateEnvironment,
   validatePackage,
   validatePreparedImage,
+  verifyGhcr,
 } from "../../scripts/ci/container-release.mjs";
 
 const sourceSha = "a".repeat(40);
@@ -59,20 +61,58 @@ test("public container preparation requires the exact false string", () => {
   }
 });
 
-test("container promotion retains private source and workflow identity even with PUBLISH false", () => {
-  const workflow = ".github/workflows/container-promote.yml";
-  const promotion = {
-    ...env,
-    GITHUB_WORKFLOW_REF: `${repository}/${workflow}@refs/heads/main`,
-  };
-  for (const PUBLISH of [undefined, "true", "false"]) {
-    validateContext({ ...promotion, PUBLISH }, repo, workflow);
-    assert.throws(
-      () => validateContext({ ...promotion, PUBLISH }, { ...repo, private: false }, workflow),
-      /Publication requires the private Enterprise repository/,
+for (const workflow of [
+  ".github/workflows/container-promote.yml",
+  ".github/workflows/container-bootstrap.yml",
+]) {
+  test(`${workflow} retains private source and workflow identity even with PUBLISH false`, () => {
+    const promotion = {
+      ...env,
+      GITHUB_WORKFLOW_REF: `${repository}/${workflow}@refs/heads/main`,
+    };
+    for (const PUBLISH of [undefined, "true", "false"]) {
+      validateContext({ ...promotion, PUBLISH }, repo, workflow);
+      assert.throws(
+        () => validateContext({ ...promotion, PUBLISH }, { ...repo, private: false }, workflow),
+        /Publication requires the private Enterprise repository/,
+      );
+    }
+    assert.throws(() => validateContext({ ...env, PUBLISH: "false" }, repo, workflow));
+  });
+}
+
+test("only explicit bootstrap lookups tolerate missing package metadata", async (t) => {
+  // The external API supplies status codes; the real client must distinguish
+  // absence from authorization failures before harmless bootstrap is permitted.
+  const token = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "test-token";
+  t.after(() => {
+    if (token === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = token;
+    }
+  });
+  for (const status of [401, 403, 404, 429, 500]) {
+    t.mock.method(globalThis, "fetch", async () => new Response(null, { status }));
+    await assert.rejects(
+      github("orgs/openclaw/packages/container/example"),
+      new RegExp(`\\(${status}\\)`),
     );
+    const lookup = github("orgs/openclaw/packages/container/example", { allowNotFound: true });
+    if (status === 404) {
+      assert.equal(await lookup, null);
+    } else {
+      await assert.rejects(lookup, new RegExp(`\\(${status}\\)`));
+    }
+    t.mock.restoreAll();
   }
-  assert.throws(() => validateContext({ ...env, PUBLISH: "false" }, repo, workflow));
+  const pkg = { name: "example", visibility: "private" };
+  t.mock.method(globalThis, "fetch", async () => Response.json(pkg));
+  assert.deepEqual(
+    await github("orgs/openclaw/packages/container/example", { allowNotFound: true }),
+    pkg,
+  );
 });
 
 test("container context rejects malformed repository privacy in preparation and publication", () => {
@@ -81,6 +121,137 @@ test("container context rejects malformed repository privacy in preparation and 
       assert.throws(() => validateContext({ ...env, PUBLISH }, { ...repo, private: privateValue }));
     }
   }
+});
+
+test("post-marker metadata retries only 404 and remains bounded", async (t) => {
+  const token = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "test-token";
+  t.after(() => {
+    if (token === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = token;
+    }
+  });
+  // Accelerate only the backoff; the real client still interprets API responses.
+  t.mock.method(globalThis, "setTimeout", (resolve) => queueMicrotask(resolve));
+  const pkg = { name: "example", package_type: "container", visibility: "private" };
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () =>
+    ++calls === 1 ? new Response(null, { status: 404 }) : Response.json(pkg),
+  );
+  assert.deepEqual(
+    await github("orgs/openclaw/packages/container/example", { retryNotFound: true }),
+    pkg,
+  );
+  assert.equal(calls, 2);
+  for (const status of [401, 403, 404, 429, 500]) {
+    calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls += 1;
+      return new Response(null, { status });
+    });
+    await assert.rejects(
+      github("orgs/openclaw/packages/container/example", { retryNotFound: true }),
+      new RegExp(`\\(${status}\\)`),
+    );
+    assert.equal(calls, status === 404 ? 6 : 1);
+  }
+});
+
+test("GHCR repository omission needs independent linkage evidence for this run attempt", async (t) => {
+  const token = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "test-token";
+  t.after(() => {
+    if (token === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = token;
+    }
+  });
+  const image = "ghcr.io/openclaw/openclaw-enterprise-controller";
+  const context = {
+    ...env,
+    GITHUB_RUN_ID: "123",
+    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_ACTOR: "publisher",
+    GITHUB_TRIGGERING_ACTOR: "rerunner",
+  };
+  // GHCR can omit repository even for a connected package. Approval history
+  // comes from GitHub's documented workflow-run reviews endpoint, not OCI labels.
+  let pkg = {
+    name: "openclaw-enterprise-controller",
+    package_type: "container",
+    visibility: "private",
+  };
+  const approval = {
+    state: "approved",
+    user: { login: "maintainer", type: "User" },
+    environments: [{ id: 42, name: "container-publish" }],
+    comment: `Verified GHCR linkage: ${image} -> ${repository}; source=${sourceSha}; run=123; attempt=2`,
+  };
+  let reviews = [approval];
+  t.mock.method(globalThis, "fetch", async (url) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith("/approvals")) {
+      return Response.json(reviews);
+    }
+    if (path.endsWith("/environments/container-publish")) {
+      return Response.json({ id: 42 });
+    }
+    if (path.endsWith("/versions")) {
+      return Response.json([]);
+    }
+    if (path.endsWith("/packages/container/openclaw-enterprise-controller")) {
+      return Response.json(pkg);
+    }
+    throw new Error(`Unexpected metadata request: ${path}`);
+  });
+  await verifyGhcr(image, digest, `sha-${sourceSha}`, context);
+  pkg.repository = null;
+  await verifyGhcr(image, digest, `sha-${sourceSha}`, context);
+  // No approval, an ordinary approval, stale evidence, another destination,
+  // self-review, or a different environment must not authorize source bytes.
+  for (const patch of [
+    { comment: "" },
+    { state: "rejected" },
+    { comment: approval.comment.replace("attempt=2", "attempt=1") },
+    { comment: approval.comment.replace("run=123", "run=456") },
+    { comment: approval.comment.replace(sourceSha, "c".repeat(40)) },
+    { comment: approval.comment.replace(image, `${image}-other`) },
+    { user: { login: "publisher", type: "User" } },
+    { user: { login: "rerunner", type: "User" } },
+    { environments: [{ id: 41, name: "container-publish" }] },
+  ]) {
+    reviews = [{ ...approval, ...patch }];
+    await assert.rejects(
+      verifyGhcr(image, digest, `sha-${sourceSha}`, context),
+      /linkage confirmation/,
+    );
+  }
+  reviews = [];
+  await assert.rejects(
+    verifyGhcr(image, digest, `sha-${sourceSha}`, context),
+    /linkage confirmation/,
+  );
+  reviews = [approval];
+  for (const patch of [
+    { visibility: "public" },
+    { visibility: undefined },
+    { name: "other" },
+    { repository: { ...repo, full_name: "openclaw/other" } },
+    { repository: { ...repo, private: false } },
+    { repository: {} },
+  ]) {
+    const original = pkg;
+    pkg = { ...pkg, ...patch };
+    await assert.rejects(verifyGhcr(image, digest, `sha-${sourceSha}`, context));
+    pkg = original;
+  }
+  // Explicit correct repository metadata continues to work without fallback.
+  pkg.repository = repo;
+  reviews = [];
+  await verifyGhcr(image, digest, `sha-${sourceSha}`, context);
 });
 
 test("container release requires exact successful CI identity and its aggregate job", () => {
@@ -151,6 +322,17 @@ test("container publication rejects unprotected environments and public or unrel
     repository: repo,
   };
   validatePackage(pkg, image);
+  // Only harmless bootstrap can accept missing linkage without review evidence.
+  for (const repository of [undefined, null]) {
+    const unreported = { ...pkg, repository };
+    assert.throws(() => validatePackage(unreported, image));
+    assert.equal(validatePackage(unreported, image, { allowMissingRepository: true }), false);
+    assert.throws(() =>
+      validatePackage({ ...unreported, visibility: "public" }, image, {
+        allowMissingRepository: true,
+      }),
+    );
+  }
   assert.throws(() => validatePackage({ ...pkg, visibility: "public" }, image));
   assert.throws(() => validatePackage({ ...pkg, repository: { ...repo, private: false } }, image));
   assert.throws(() =>
@@ -186,4 +368,55 @@ test("prepared OCI metadata cannot cross source, image, attempt, CI or base-imag
   }
   assert.throws(() => validatePreparedImage({ ...metadata, digest: "latest" }, expected));
   assert.throws(() => validatePreparedImage({ ...metadata, platform: "linux/arm64" }, expected));
+});
+
+test("metadata GET transport retries are bounded, diagnostic and do not retry denials", async (t) => {
+  const token = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "test-token";
+  t.after(() => {
+    if (token === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = token;
+    }
+  });
+  t.mock.method(globalThis, "setTimeout", (resolve) => queueMicrotask(resolve));
+  const path = "orgs/openclaw/packages/container/example";
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new TypeError("fetch failed with a secret diagnostic");
+    }
+    if (calls === 2) {
+      return {
+        status: 200,
+        text: async () => {
+          throw new Error("body interrupted");
+        },
+      };
+    }
+    return Response.json({ visibility: "private" });
+  });
+  assert.deepEqual(await github(path), { visibility: "private" });
+  assert.equal(calls, 3);
+  calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    throw new TypeError("fetch failed with a secret diagnostic");
+  });
+  await assert.rejects(github(path), (error) => {
+    assert.equal(error.message, `GitHub GET ${path} transport failed after 3 attempts.`);
+    return true;
+  });
+  assert.equal(calls, 3);
+  for (const status of [401, 403, 404, 429, 500]) {
+    calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls += 1;
+      return new Response(null, { status });
+    });
+    await assert.rejects(github(path), new RegExp(`\\(${status}\\)`));
+    assert.equal(calls, 1);
+  }
 });

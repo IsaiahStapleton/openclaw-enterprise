@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, isIPv4 } from "node:net";
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
@@ -106,6 +106,10 @@ function laneName(lane) {
     return lane.name;
   }
   throw new Error("CI lane must be a string or an object with a name.");
+}
+
+function progress(lane, message) {
+  process.stderr.write(`[prepare:${laneName(lane)}] ${message}\n`);
 }
 
 function filePath(file) {
@@ -582,6 +586,7 @@ async function ensureK3dCluster(statePath, state) {
   }
   await commandAvailable(process.env.OPENCLAW_CI_K3D_BIN ?? "k3d", ["version"]);
   const openShell = state.lane === "openshell";
+  const crossNodePluginStatus = state.lane === "k3d-fixture-configuration";
   if (!openShell) {
     await commandAvailable(process.env.OCC_KUBECTL_BIN ?? "kubectl", ["version", "--client=true"]);
   }
@@ -590,11 +595,19 @@ async function ensureK3dCluster(statePath, state) {
   const directory = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), `${cluster}-`));
   await chmod(directory, 0o700);
   const kubeconfig = join(directory, "kubeconfig");
+  const sharedStorage = crossNodePluginStatus ? join(directory, "storage") : undefined;
+  if (sharedStorage) {
+    await mkdir(sharedStorage, { mode: 0o700 });
+  }
   const resource = addResource(state, "k3d-cluster", {
     name: cluster,
     directory,
     kubeconfig,
     context: `k3d-${cluster}`,
+    nodes: [
+      `k3d-${cluster}-server-0`,
+      ...(crossNodePluginStatus ? [`k3d-${cluster}-agent-0`] : []),
+    ],
     ...(!openShell ? { nodeImage: "+v1.35" } : {}),
   });
   await writeState(statePath, state);
@@ -625,7 +638,8 @@ async function ensureK3dCluster(statePath, state) {
     "--servers",
     "1",
     "--agents",
-    "0",
+    crossNodePluginStatus ? "1" : "0",
+    ...(sharedStorage ? ["--volume", `${sharedStorage}:/var/lib/rancher/k3s/storage@all`] : []),
     "--api-port",
     `127.0.0.1:${apiPort}`,
     "--kubeconfig-update-default=false",
@@ -666,8 +680,152 @@ async function ensureK3dCluster(statePath, state) {
     }
     resource.kubernetesVersion = gitVersion;
   }
+  if (crossNodePluginStatus) {
+    const worker = await execFile(process.env.OCC_KUBECTL_BIN ?? "kubectl", [
+      "--kubeconfig",
+      kubeconfig,
+      "--context",
+      resource.context,
+      "get",
+      "node",
+      `k3d-${cluster}-agent-0`,
+      "-o",
+      "json",
+    ]);
+    const podCidr = JSON.parse(worker.stdout)?.spec?.podCIDR;
+    const destination = typeof podCidr === "string" ? podCidr.split("/")[0] : undefined;
+    if (!isIPv4(destination ?? "")) {
+      throw new Error("The plugin status worker must have an IPv4 Pod CIDR.");
+    }
+    // Cross-node API proxy traffic uses the server's overlay route source, which
+    // can differ from its InternalIP. Admit only that observed address in tests.
+    const route = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
+      "exec",
+      `k3d-${cluster}-server-0`,
+      "ip",
+      "route",
+      "get",
+      destination,
+    ]);
+    const sources = [...route.stdout.matchAll(/\bsrc\s+(\S+)/g)].map((match) => match[1]);
+    if (
+      sources.length !== 1 ||
+      !isIPv4(sources[0]) ||
+      sources[0] === "0.0.0.0" ||
+      sources[0].startsWith("127.")
+    ) {
+      throw new Error(
+        "Unable to determine the cross-node plugin status proxy source IPv4 address.",
+      );
+    }
+    resource.pluginStatusProxyCidrs = `${sources[0]}/32`;
+    await verifyFixtureStorage(resource);
+  }
   await markResourceReady(statePath, state, resource);
   return resource;
+}
+
+async function verifyFixtureStorage(cluster, timeoutSeconds = 120) {
+  const kubectl = process.env.OCC_KUBECTL_BIN ?? "kubectl";
+  const scope = [
+    "--kubeconfig",
+    cluster.kubeconfig,
+    "--context",
+    cluster.context,
+    "--namespace",
+    "kube-system",
+  ];
+  try {
+    await execFile(
+      kubectl,
+      [
+        ...scope,
+        "rollout",
+        "status",
+        "deployment/local-path-provisioner",
+        `--timeout=${timeoutSeconds}s`,
+      ],
+      { timeoutMs: (timeoutSeconds + 10) * 1_000 },
+    );
+  } catch {
+    // This fixture lane has no provider credentials. Limit diagnostics to its
+    // storage controller; never serialize arbitrary Pod specs or tenant logs.
+    const observations = await Promise.allSettled([
+      execFile(
+        kubectl,
+        [...scope, "get", "pods", "--selector=app=local-path-provisioner", "-o", "json"],
+        { timeoutMs: 10_000 },
+      ),
+      ...[false, true].map((previous) =>
+        execFile(
+          kubectl,
+          [
+            ...scope,
+            "logs",
+            "deployment/local-path-provisioner",
+            "--tail=30",
+            ...(previous ? ["--previous"] : []),
+          ],
+          { timeoutMs: 10_000 },
+        ),
+      ),
+      execFile(kubectl, [...scope.slice(0, 4), "get", "nodes", "-o", "json"], {
+        timeoutMs: 10_000,
+      }),
+    ]);
+    let pods = [];
+    if (observations[0].status === "fulfilled") {
+      try {
+        pods = (JSON.parse(observations[0].value.stdout).items ?? []).map((pod) => ({
+          name: pod.metadata?.name,
+          node: pod.spec?.nodeName,
+          nodeSelector: pod.spec?.nodeSelector,
+          phase: pod.status?.phase,
+          conditions: (pod.status?.conditions ?? []).map(({ type, status, reason, message }) => ({
+            type,
+            status,
+            reason,
+            message,
+          })),
+          containers: (pod.status?.containerStatuses ?? []).map((container) => ({
+            name: container.name,
+            image: container.image,
+            ready: container.ready,
+            restarts: container.restartCount,
+            waiting: container.state?.waiting,
+            terminated: container.state?.terminated?.reason,
+          })),
+        }));
+      } catch {
+        // Preserve the storage failure even when Kubernetes diagnostics are incomplete.
+      }
+    }
+    let nodes = [];
+    if (observations[3].status === "fulfilled") {
+      try {
+        nodes = (JSON.parse(observations[3].value.stdout).items ?? []).map((node) => ({
+          name: node.metadata?.name,
+          unschedulable: node.spec?.unschedulable,
+          taints: node.spec?.taints,
+          conditions: (node.status?.conditions ?? [])
+            .filter(({ type }) =>
+              ["Ready", "DiskPressure", "MemoryPressure", "PIDPressure"].includes(type),
+            )
+            .map(({ type, status, reason, message }) => ({ type, status, reason, message })),
+        }));
+      } catch {
+        // Do not replace the storage failure with a diagnostic parsing failure.
+      }
+    }
+    const logs = observations
+      .slice(1, 3)
+      .map((result) =>
+        result.status === "fulfilled" ? result.value.stdout.slice(-4_000) : "unavailable",
+      );
+    throw new Error(
+      `CI fixture storage controller is not ready: ${JSON.stringify({ kubernetesVersion: cluster.kubernetesVersion, pods, nodes, logs })}`,
+    );
+  }
 }
 
 async function validateLoopbackKubeconfig(
@@ -727,6 +885,75 @@ async function prepareFixtureImage(statePath, state, cluster) {
   return { image: registered.reference, resourceId: resource.id };
 }
 
+async function pinFixtureImageInK3d(cluster, image) {
+  const name = "openclaw-ci-fixture-image-pin";
+  const manifestPath = join(cluster.directory, `${name}.json`);
+  const manifest = {
+    apiVersion: "apps/v1",
+    kind: "DaemonSet",
+    metadata: { name, namespace: "kube-system" },
+    spec: {
+      selector: { matchLabels: { app: name } },
+      template: {
+        metadata: { labels: { app: name } },
+        spec: {
+          automountServiceAccountToken: false,
+          nodeSelector: { "kubernetes.io/os": "linux" },
+          tolerations: [{ operator: "Exists" }],
+          containers: [
+            {
+              name: "pin",
+              image,
+              imagePullPolicy: "Never",
+              command: ["node", "-e", "setInterval(() => {}, 2147483647)"],
+              resources: {
+                requests: { cpu: "1m", memory: "8Mi" },
+                limits: { cpu: "25m", memory: "128Mi" },
+              },
+              securityContext: {
+                allowPrivilegeEscalation: false,
+                capabilities: { drop: ["ALL"] },
+                readOnlyRootFilesystem: true,
+                runAsNonRoot: true,
+                runAsUser: 1000,
+                seccompProfile: { type: "RuntimeDefault" },
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  await execFile(process.env.OCC_KUBECTL_BIN ?? "kubectl", [
+    "--kubeconfig",
+    cluster.kubeconfig,
+    "--context",
+    cluster.context,
+    "--namespace",
+    "kube-system",
+    "apply",
+    "-f",
+    manifestPath,
+  ]);
+  await execFile(
+    process.env.OCC_KUBECTL_BIN ?? "kubectl",
+    [
+      "--kubeconfig",
+      cluster.kubeconfig,
+      "--context",
+      cluster.context,
+      "--namespace",
+      "kube-system",
+      "rollout",
+      "status",
+      `daemonset/${name}`,
+      "--timeout=120s",
+    ],
+    { timeoutMs: 130_000 },
+  );
+}
+
 function immutableDigest(image) {
   return image.match(/@sha256:([a-f0-9]{64})$/i)?.[1]?.toLowerCase();
 }
@@ -769,7 +996,8 @@ async function dockerImageId(image) {
     "{{.Id}}",
     image,
   ]);
-  const id = inspected.stdout.trim();
+  const value = inspected.stdout.trim();
+  const id = /^[a-f0-9]{64}$/i.test(value) ? `sha256:${value}` : value;
   assertDockerImageId(id, `Docker image ${image}`);
   return id;
 }
@@ -794,26 +1022,28 @@ async function ensureDockerSourceImage(state, image, envName) {
 }
 
 async function assertK3dImageReference(cluster, reference, envName) {
-  const listed = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-    "exec",
-    `k3d-${cluster.name}-server-0`,
-    "ctr",
-    "-n",
-    "k8s.io",
-    "images",
-    "list",
-  ]);
-  const found = listed.stdout.split(/\r?\n/).some((entry) => entry.split(/\s+/)[0] === reference);
-  if (!found) {
-    throw new Error(`Unable to find imported ${envName} reference ${reference}.`);
+  for (const node of cluster.nodes) {
+    const listed = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
+      "exec",
+      node,
+      "ctr",
+      "-n",
+      "k8s.io",
+      "images",
+      "list",
+    ]);
+    const found = listed.stdout.split(/\r?\n/).some((entry) => entry.split(/\s+/)[0] === reference);
+    if (!found) {
+      throw new Error(`Unable to find imported ${envName} reference ${reference}.`);
+    }
+    await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
+      "exec",
+      node,
+      "crictl",
+      "inspecti",
+      reference,
+    ]);
   }
-  await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-    "exec",
-    `k3d-${cluster.name}-server-0`,
-    "crictl",
-    "inspecti",
-    reference,
-  ]);
 }
 
 async function registerImageInK3d(statePath, state, cluster, image, envName) {
@@ -867,11 +1097,11 @@ async function registerImageInK3d(statePath, state, cluster, image, envName) {
   try {
     // k3d can exit successfully after containerd rejects missing index content.
     // Export only the platform pulled locally, then verify the imported reference.
-    await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
+    const containerEngine = process.env.OCC_DOCKER_BIN ?? "docker";
+    await execFile(containerEngine, [
       "image",
       "save",
-      "--platform",
-      platform,
+      ...(basename(containerEngine) === "podman" ? [] : ["--platform", platform]),
       "--output",
       archive,
       importReference,
@@ -908,17 +1138,19 @@ async function registerImageInK3d(statePath, state, cluster, image, envName) {
   // Workloads use the actual imported platform manifest, not a registry index digest.
   // The approved source image remains recorded and was verified before transport.
   const runtimeReference = `${importReference.slice(0, importReference.lastIndexOf(":"))}@${digest}`;
-  await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-    "exec",
-    `k3d-${cluster.name}-server-0`,
-    "ctr",
-    "-n",
-    "k8s.io",
-    "images",
-    "tag",
-    importReference,
-    runtimeReference,
-  ]);
+  for (const node of cluster.nodes) {
+    await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
+      "exec",
+      node,
+      "ctr",
+      "-n",
+      "k8s.io",
+      "images",
+      "tag",
+      importReference,
+      runtimeReference,
+    ]);
+  }
   await assertK3dImageReference(cluster, runtimeReference, envName);
   resource.reference = runtimeReference;
   await markResourceReady(statePath, state, resource);
@@ -930,16 +1162,34 @@ async function prepareK3dRuntimeImages(
   state,
   cluster,
   env,
-  { buildRuntime = false } = {},
+  { buildController = false, buildRuntime = false } = {},
 ) {
-  if (
+  const needsController = buildController && !process.env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE;
+  const needsRuntime =
     buildRuntime &&
-    (!process.env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE || !process.env.OCC_TEST_KUBERNETES_AGENT_IMAGE)
-  ) {
-    const built = await buildRuntimeImages(statePath, state, { runtime: true });
+    (!process.env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE ||
+      !process.env.OCC_TEST_KUBERNETES_AGENT_IMAGE);
+  if (needsController || needsRuntime) {
+    const images = [
+      needsController ? "controller" : undefined,
+      needsRuntime ? "gateway and Codex runtime" : undefined,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    progress(
+      state.lane,
+      `Building the current ${images} image${needsController && needsRuntime ? "s" : ""}.`,
+    );
+    const built = await buildRuntimeImages(statePath, state, {
+      controller: needsController,
+      runtime: needsRuntime,
+      nodeBaseImage: effectiveLaneEnv(state.lane, env).NODE_BASE_IMAGE,
+    });
     Object.assign(env, built.env);
-    env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE = built.env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE;
-    env.OCC_TEST_KUBERNETES_AGENT_IMAGE = built.env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE;
+    if (needsRuntime) {
+      env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE = built.env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE;
+      env.OCC_TEST_KUBERNETES_AGENT_IMAGE = built.env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE;
+    }
   }
   const inputs = {
     OCC_TEST_KUBERNETES_GATEWAY_IMAGE:
@@ -948,16 +1198,25 @@ async function prepareK3dRuntimeImages(
       env.OCC_TEST_KUBERNETES_AGENT_IMAGE ?? process.env.OCC_TEST_KUBERNETES_AGENT_IMAGE,
   };
   requireEnv(Object.keys(inputs), inputs);
+  progress(state.lane, "Importing the gateway and Codex runtime images into k3d.");
   for (const [name, value] of Object.entries(inputs)) {
     const image = await registerImageInK3d(statePath, state, cluster, value, name);
     env[name] = image.reference;
-    if (name === "OCC_TEST_KUBERNETES_GATEWAY_IMAGE") {
-      env.OCC_TEST_KUBERNETES_GATEWAY_DOCKER_IMAGE = image.hostImageId;
-    }
+  }
+  if (buildController) {
+    const controller = await registerImageInK3d(
+      statePath,
+      state,
+      cluster,
+      env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE ?? process.env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE,
+      "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
+    );
+    env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE = controller.reference;
   }
   // Replace the build tag with its imported digest before publishing the next step's inputs.
   env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE = env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE;
   if (lanePrepare(state.lane).codexSeccomp) {
+    progress(state.lane, "Deriving and installing the dedicated Codex seccomp profile.");
     const seccomp = await prepareCodexSeccompProfile({
       cluster,
       image: env.OCC_TEST_KUBERNETES_AGENT_IMAGE,
@@ -1093,9 +1352,31 @@ async function prepareLane({ lane, statePath }) {
       await ensurePostgresServer(resolvedStatePath, state);
       const cluster = await ensureK3dCluster(resolvedStatePath, state);
       const fixture = await prepareFixtureImage(resolvedStatePath, state, cluster);
+      // Both fixture tests use the same local-only image. Keep it active on
+      // every node so kubelet image garbage collection cannot remove it.
+      await pinFixtureImageInK3d(cluster, fixture.image);
+      // The suites restart this controller when enabling shared storage. Verify
+      // replacement scheduling after image imports consume the runner's disk.
+      await execFile(
+        process.env.OCC_KUBECTL_BIN ?? "kubectl",
+        [
+          "--kubeconfig",
+          cluster.kubeconfig,
+          "--context",
+          cluster.context,
+          "--namespace",
+          "kube-system",
+          "rollout",
+          "restart",
+          "deployment/local-path-provisioner",
+        ],
+        { timeoutMs: 10_000 },
+      );
+      await verifyFixtureStorage(cluster);
       env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
       env.OCC_TEST_KUBERNETES_IMAGE = fixture.image;
+      env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS = cluster.pluginStatusProxyCidrs;
       break;
     }
     case "docker-model":
@@ -1106,13 +1387,16 @@ async function prepareLane({ lane, statePath }) {
       await prepareLaneLogging(resolvedStatePath, state, env);
       break;
     case "k3d-model":
+      progress(name, "Starting an isolated PostgreSQL service.");
       await ensurePostgresServer(resolvedStatePath, state);
+      progress(name, "Creating a disposable loopback k3d cluster.");
       await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: true });
       break;
     case "gateway-routing": {
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await ensurePostgresServer(resolvedStatePath, state);
       const cluster = await prepareK3dModelLane(resolvedStatePath, state, env, {
+        buildController: true,
         buildRuntime: true,
       });
       const routing = await prepareGatewayRouting({ cluster, execFile });
@@ -1178,6 +1462,7 @@ async function prepareK3dModelLane(statePath, state, env, options) {
   const cluster = await ensureK3dCluster(statePath, state);
   env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
   env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
+  env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS = cluster.pluginStatusProxyCidrs;
   if (cluster.kubectl) {
     env.OCC_KUBECTL_BIN = cluster.kubectl;
   }
@@ -1219,6 +1504,9 @@ async function prepareFile({ lane, file, statePath }) {
     });
     resourceIds.push(database.resourceId);
     env.OCC_TEST_DATABASE_URL = database.appUrl;
+    if (relativeFile.endsWith("occ-metrics.test.mjs")) {
+      env.OCC_METRICS_TEST_MIGRATION_DATABASE_URL = database.migrationUrl;
+    }
   }
 
   if (relativeFile.endsWith("postgres-bootstrap-failures.test.mjs")) {
@@ -1249,7 +1537,26 @@ async function prepareFile({ lane, file, statePath }) {
   }
   return {
     env,
-    cleanup: async () => cleanupResourceIds(resolvedStatePath, resourceIds),
+    cleanup: async () => {
+      try {
+        if (name === "k3d-fixture-configuration") {
+          const cluster = effectiveState.resources.find(
+            (resource) => resource.kind === "k3d-cluster",
+          );
+          // Suites restart the storage controller after selecting shared storage.
+          // Run this in the runner parent so sanitized child reports cannot hide
+          // infrastructure diagnostics after that configuration change.
+          try {
+            await verifyFixtureStorage(cluster, 5);
+          } catch (error) {
+            console.error(error.message);
+            throw error;
+          }
+        }
+      } finally {
+        await cleanupResourceIds(resolvedStatePath, resourceIds);
+      }
+    },
   };
 }
 

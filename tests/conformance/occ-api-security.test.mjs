@@ -392,7 +392,7 @@ test("existing namespace adoption requires installation administration and waits
   assert.equal(ready.response.status, 201);
 });
 
-test("Agent configuration replacement requires exact Agent update authorization and keeps identity private", async () => {
+test("Agent configuration replacement requires exact Agent update authorization and returns Agent service principal identity", async () => {
   const fixture = await createFixture();
   await bootstrap(fixture);
   const namespace = await createNamespace(fixture, "Tenant A");
@@ -405,7 +405,7 @@ test("Agent configuration replacement requires exact Agent update authorization 
   });
   assert.equal(updated.response.status, 200);
   assert.equal(updated.payload.data.configurationId, replacement.id);
-  assert.equal(Object.hasOwn(updated.payload.data, "servicePrincipalId"), false);
+  assert.equal(updated.payload.data.servicePrincipalId, agent.servicePrincipalId);
 
   const readOnly = fixture.createApp(fixture.tenantAReader);
   const denied = await request(readOnly, `/namespaces/${namespace.id}/agents/${agent.id}`, {

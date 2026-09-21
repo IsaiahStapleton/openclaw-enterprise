@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
+import { PLUGIN_RUNTIME_HELPERS } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import { ensureDevelopmentBootstrap } from "./bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "./harness-configuration.mjs";
 import { grantAgentSecretOperate } from "./postgres-harness-auth.mjs";
@@ -228,6 +229,8 @@ function installationConfiguration({
   configuration.drivers.configuration.id = "configuration-kubernetes-plugin-real";
   configuration.drivers.compute.id = "compute-kubernetes-plugin-real";
   configuration.drivers.plugin = { id: pluginDriverId, configuration: {} };
+  configuration.drivers.compute.configuration.network.pluginStatusProxySourceCidrs =
+    pluginProofPluginStatusProxyCidrs();
   if (codexServiceAccountImport !== undefined) {
     configuration.provider = [
       {
@@ -250,11 +253,29 @@ function installationConfiguration({
     pods: "8",
     "requests.cpu": "2",
     "requests.memory": "2Gi",
-    "limits.cpu": "8",
-    "limits.memory": "4Gi",
+    // Two Agent/gateway pairs plus an overlapping revision during cutover.
+    "limits.cpu": "12",
+    "limits.memory": "6Gi",
   };
   configuration.drivers.compute.configuration.servicePrincipalCredentials.expirationSeconds = 3_600;
   return configuration;
+}
+
+function pluginProofPluginStatusProxyCidrs() {
+  const configured = process.env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS;
+  assert.ok(
+    configured && configured.trim().length > 0,
+    "OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS must contain at least one CIDR.",
+  );
+  const cidrs = configured
+    .split(/[,\n]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  assert.ok(
+    cidrs.length > 0,
+    "OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS must contain at least one CIDR.",
+  );
+  return cidrs;
 }
 
 async function codexServiceAccountImportConfiguration(directory, credential) {
@@ -416,6 +437,30 @@ const sessionEvidenceScript = String.raw`
     }
     return "";
   }
+  function hasStructuredResult(value) {
+    if (Array.isArray(value)) {
+      return value.some((entry) => hasStructuredResult(entry));
+    }
+    if (value && typeof value === "object") {
+      if (value.type === "text" && typeof value.text === "string") {
+        return hasStructuredResult(value.text);
+      }
+      return Object.keys(value).length > 0;
+    }
+    if (typeof value !== "string") return false;
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return false;
+    try {
+      return hasStructuredResult(JSON.parse(trimmed));
+    } catch {
+      return false;
+    }
+  }
+  function matchesToolName(name) {
+    if (typeof name !== "string") return false;
+    if (toolName) return name === toolName;
+    return /(^|[._:-])list[_-]?calendars$/i.test(name);
+  }
   try {
     db.exec("PRAGMA busy_timeout=5000");
     const session = db.prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?").get(sessionKey);
@@ -498,7 +543,7 @@ const sessionEvidenceScript = String.raw`
           const blockType = block?.type ?? "unknown";
           contentBlockTypeCounts[blockType] = (contentBlockTypeCounts[blockType] ?? 0) + 1;
           if (typeof block?.name === "string") observedToolNames.add(block.name);
-          if (block?.type === "toolCall" && block.name === toolName) {
+          if (block?.type === "toolCall" && matchesToolName(block.name)) {
             const toolPrefix = prefixForToolMirrorIdentity(mirrorIdentity, ":call");
             if (toolPrefix !== undefined) turn(toolPrefix).toolCallMirrorSeen = true;
             calls.push({ seq: row.seq, id: block.id, name: block.name, mirrorIdentity });
@@ -520,7 +565,9 @@ const sessionEvidenceScript = String.raw`
           toolCallId: message.toolCallId,
           toolName: message.toolName,
           isError: message.isError === true,
-          matchesResult: contains(message, resultPattern) || textOf(message.content).includes(resultPattern),
+          matchesResult: resultPattern
+            ? contains(message, resultPattern) || textOf(message.content).includes(resultPattern)
+            : hasStructuredResult(message.content),
           mirrorIdentity,
         });
       }
@@ -567,6 +614,16 @@ function codexToolTurnPrefix(identity, suffix) {
   return index === -1 ? undefined : withoutSuffix.slice(0, index);
 }
 
+function codexBridgeSlug(pluginId) {
+  const prefix = "codex-plugin:";
+  const marketplaceSuffix = "@openai-curated-remote";
+  assert.ok(
+    pluginId.startsWith(prefix) && pluginId.endsWith(marketplaceSuffix),
+    `Codex plugin ID ${pluginId} must identify the curated remote marketplace.`,
+  );
+  return pluginId.slice(prefix.length, -marketplaceSuffix.length);
+}
+
 const gatewayHttpConfigScript = String.raw`
   const { existsSync, readFileSync } = require("node:fs");
   const candidates = [
@@ -584,10 +641,149 @@ const gatewayHttpConfigScript = String.raw`
       hasCodexPluginEntry: config?.plugins?.entries?.codex?.enabled === true,
       hasAppsFeature: config?.features?.apps === true,
       hasRemotePluginFeature: config?.features?.remote_plugin === true,
+      codexPlugins:
+        config?.plugins?.entries?.codex?.config?.codexPlugins?.plugins ?? {},
     }));
     process.exit(0);
   }
   process.stdout.write(JSON.stringify({ exists: false }));
+`;
+
+const codexLocalAppServerTokenScript = String.raw`
+async function useLocalPluginRuntimeAppServerToken() {
+  const port = pluginRuntimeStatusPort();
+  if (port === undefined) {
+    throw new Error("Local plugin runtime status port is required for app-server authentication.");
+  }
+  const response = await fetch("http://127.0.0.1:" + port + PLUGIN_STATUS_PATH, {
+    signal: AbortSignal.timeout(CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS),
+  });
+  if (response.status !== 200) {
+    throw new Error("Local plugin runtime status is unavailable.");
+  }
+  const status = await response.json();
+  if (
+    !isPlainObject(status) ||
+    status.revisionId !== pluginRuntimeRevisionId() ||
+    status.container !== "agent" ||
+    status.phase !== "ready" ||
+    typeof status.startupId !== "string" ||
+    status.startupId.length === 0
+  ) {
+    throw new Error("Local plugin runtime status is not ready.");
+  }
+  process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(status.startupId);
+}
+`;
+
+// Query the already authenticated Agent app-server through the same protocol client
+// used by startup; a separate gateway never receives the model credential.
+const codexNativeCatalogScript = String.raw`
+${PLUGIN_RUNTIME_HELPERS}
+${codexLocalAppServerTokenScript}
+(async () => {
+  await useLocalPluginRuntimeAppServerToken();
+  // Startup has already resolved and installed A from this native catalog.
+  const listed = await codexAppServerRequest("plugin/list", {});
+  const requestedIds = new Set(JSON.parse(process.argv[1]));
+  const entries = [];
+  for (const entry of pluginRuntimeTranslator.codexCatalogEntries(listed)) {
+    if (!requestedIds.has(entry.id)) continue;
+    const [params] = pluginRuntimeTranslator.codexReadParamsForSelections({
+      [entry.id]: { enabled: true, approvalMode: "auto", approvalsReviewer: "auto_review" },
+    }, listed);
+    try {
+      const detail = await codexAppServerRequest("plugin/read", params);
+      if (!isPlainObject(detail?.plugin) || !Array.isArray(detail.plugin.apps)) {
+        throw new Error("Native plugin detail is incomplete.");
+      }
+      const appIds = detail.plugin.apps
+        .map((app) => app?.id)
+        .filter((id) => typeof id === "string" && id.length > 0);
+      entries.push({ ...entry, remotePluginId: params.pluginName,
+        detailAvailable: true, appCount: detail.plugin.apps.length, appIds });
+    } catch {
+      entries.push({ ...entry, remotePluginId: params.pluginName, detailAvailable: false });
+    }
+  }
+  process.stdout.write(JSON.stringify({ entries }));
+})().catch(() => {
+  process.stderr.write("Native Codex catalog query failed.");
+  process.exitCode = 1;
+});
+`;
+
+const codexNativePluginReadScript = String.raw`
+${PLUGIN_RUNTIME_HELPERS}
+${codexLocalAppServerTokenScript}
+(async () => {
+  await useLocalPluginRuntimeAppServerToken();
+  const detail = await codexAppServerRequest("plugin/read", {
+    remoteMarketplaceName: "openai-curated-remote",
+    pluginName: process.argv[1],
+  });
+  const plugin = detail?.plugin;
+  const summary = plugin?.summary;
+  if (!isPlainObject(summary) || !Array.isArray(plugin.apps)) {
+    throw new Error("Native plugin detail is incomplete.");
+  }
+  process.stdout.write(JSON.stringify({
+    summaryId: summary.id,
+    remotePluginId: summary.remotePluginId,
+    installed: summary.installed === true,
+    enabled: summary.enabled === true,
+    marketplaceName: plugin.marketplaceName,
+    appCount: plugin.apps.length,
+    appIds: plugin.apps
+      .map((app) => app?.id)
+      .filter((id) => typeof id === "string" && id.length > 0),
+  }));
+})().catch(() => {
+  process.stderr.write("Native Codex installed-plugin query failed.");
+  process.exitCode = 1;
+});
+`;
+
+const codexAppConfigurationScript = String.raw`
+${PLUGIN_RUNTIME_HELPERS}
+${codexLocalAppServerTokenScript}
+(async () => {
+  await useLocalPluginRuntimeAppServerToken();
+  const config = await readCodexAppConfiguration();
+  process.stdout.write(JSON.stringify({
+    apps: config?.apps ?? {},
+    features: config?.features ?? {},
+  }));
+})().catch(() => {
+  process.stderr.write("Native Codex app configuration query failed.");
+  process.exitCode = 1;
+});
+`;
+
+const workspaceSentinelScript = String.raw`
+  const { createHash } = require("node:crypto");
+  const { mkdirSync, readFileSync, writeFileSync } = require("node:fs");
+  const { join } = require("node:path");
+  const operation = process.argv[1];
+  const name = process.argv[2];
+  const content = process.argv[3] ?? "";
+  if (typeof name !== "string" || !/^[A-Za-z0-9._-]{1,80}$/.test(name)) {
+    throw new Error("workspace sentinel name is invalid.");
+  }
+  const path = join("/home/node/workspace", name);
+  mkdirSync("/home/node/workspace", { recursive: true });
+  if (operation === "write") {
+    writeFileSync(path, content, "utf8");
+  } else if (operation !== "read") {
+    throw new Error("workspace sentinel operation is invalid.");
+  }
+  const value = readFileSync(path, "utf8");
+  process.stdout.write(JSON.stringify({
+    path,
+    sha256: createHash("sha256").update(value).digest("hex"),
+    length: value.length,
+    content: value,
+  }));
 `;
 
 function httpErrorSummary(status, body, secrets) {
@@ -619,7 +815,13 @@ function assertDiagnosticText(value, secrets) {
   return text;
 }
 
-function createNativePluginAssertions({ gatewayUrl, execGateway, proofMode = "openclaw" }) {
+function createNativePluginAssertions({
+  gatewayUrl,
+  execGateway,
+  execCodex,
+  waitFor,
+  proofMode = "openclaw",
+}) {
   assert.ok(
     proofMode === "openclaw" || proofMode === "codex",
     "native plugin proof mode must be openclaw or codex.",
@@ -656,6 +858,27 @@ function createNativePluginAssertions({ gatewayUrl, execGateway, proofMode = "op
       pluginId,
     ]);
     return JSON.parse(execution.stdout);
+  }
+
+  function isTransientGatewayReadinessAssertion(error) {
+    return (
+      error?.name === "AssertionError" &&
+      (String(error.message).includes("the exact Agent must have running workload Pods") ||
+        String(error.message).includes("the exact Agent gateway Pod"))
+    );
+  }
+
+  async function waitForGatewayChatCompletionsEnabled(agent) {
+    return waitFor("gateway runtime configuration readiness", async () => {
+      try {
+        return await assertGatewayChatCompletionsEnabled(agent);
+      } catch (error) {
+        if (isTransientGatewayReadinessAssertion(error)) {
+          return undefined;
+        }
+        throw error;
+      }
+    });
   }
 
   async function normalGatewayTurn({
@@ -721,8 +944,8 @@ function createNativePluginAssertions({ gatewayUrl, execGateway, proofMode = "op
       sessionEvidenceScript,
       sessionKey,
       turnMarker,
-      toolName,
-      resultPattern,
+      toolName ?? "",
+      resultPattern ?? "",
     ]);
     return { runtime: execution.label, ...JSON.parse(execution.stdout) };
   }
@@ -770,7 +993,7 @@ function createNativePluginAssertions({ gatewayUrl, execGateway, proofMode = "op
     );
     assert.ok(
       matched,
-      `native transcript for ${options.sessionKey} did not include ${options.toolName} with a matching successful result: ${JSON.stringify(
+      `native transcript for ${options.sessionKey} did not include ${options.toolName ?? "a list_calendars tool"} with a matching successful result: ${JSON.stringify(
         {
           runtime: evidence.runtime,
           sessionId: evidence.sessionId,
@@ -865,11 +1088,116 @@ function createNativePluginAssertions({ gatewayUrl, execGateway, proofMode = "op
     );
   }
 
+  async function listCodexNativeCatalog(agent, pluginIds) {
+    assert.equal(proofMode, "codex", "native Codex catalog discovery requires Codex proof mode.");
+    const execution = await execCodex(agent, [
+      "node",
+      "-e",
+      codexNativeCatalogScript,
+      JSON.stringify(pluginIds),
+    ]);
+    const parsed = JSON.parse(execution.stdout);
+    assert.ok(Array.isArray(parsed.entries), "native Codex catalog discovery must return entries.");
+    return parsed.entries.map((entry) => ({
+      id: String(entry.id),
+      name: String(entry.name),
+      remotePluginId: String(entry.remotePluginId),
+      detailAvailable: entry.detailAvailable === true,
+      appCount: Number.isSafeInteger(entry.appCount) ? entry.appCount : undefined,
+      appIds: Array.isArray(entry.appIds) ? entry.appIds.map(String) : [],
+    }));
+  }
+
+  async function codexNativePluginDetail(agent, entry) {
+    assert.equal(proofMode, "codex", "native Codex plugin detail requires Codex proof mode.");
+    const execution = await execCodex(agent, [
+      "node",
+      "-e",
+      codexNativePluginReadScript,
+      entry.remotePluginId,
+    ]);
+    return { runtime: execution.label, ...JSON.parse(execution.stdout) };
+  }
+
+  async function codexAppConfiguration(agent) {
+    assert.equal(proofMode, "codex", "native Codex app configuration requires Codex proof mode.");
+    const execution = await execCodex(agent, ["node", "-e", codexAppConfigurationScript]);
+    return { runtime: execution.label, ...JSON.parse(execution.stdout) };
+  }
+
+  async function codexEffectivePluginConfiguration(agent, { successEntry, failureEntry }) {
+    assert.equal(
+      proofMode,
+      "codex",
+      "native Codex effective plugin configuration requires Codex proof mode.",
+    );
+    const [gateway, appConfig] = await Promise.all([
+      waitForGatewayChatCompletionsEnabled(agent),
+      codexAppConfiguration(agent),
+    ]);
+    const bridgePlugins = gateway.codexPlugins ?? {};
+    const successBridgeSlug = codexBridgeSlug(successEntry.id);
+    const failureBridgeSlug = codexBridgeSlug(failureEntry.id);
+    const successBridge = bridgePlugins[successBridgeSlug];
+    const failureBridge = bridgePlugins[failureBridgeSlug];
+    const successAppIds = new Set(successEntry.appIds ?? []);
+    const failedOnlyAppIds = (failureEntry.appIds ?? []).filter(
+      (appId) => !successAppIds.has(appId),
+    );
+    assert.ok(
+      failedOnlyAppIds.length > 0,
+      `Codex failure proof requires at least one app mapped only to ${failureEntry.id}.`,
+    );
+    return {
+      gatewayRuntime: gateway.runtime,
+      codexRuntime: appConfig.runtime,
+      bridgePluginKeys: Object.keys(bridgePlugins).sort(),
+      successBridgeSlug,
+      failureBridgeSlug,
+      successBridge,
+      failureBridge,
+      successApps: Object.fromEntries(
+        (successEntry.appIds ?? []).map((appId) => [appId, appConfig.apps?.[appId]]),
+      ),
+      failedOnlyApps: Object.fromEntries(
+        failedOnlyAppIds.map((appId) => [appId, appConfig.apps?.[appId]]),
+      ),
+    };
+  }
+
+  async function writeWorkspaceSentinel(agent, { name, content }) {
+    const execution = await execGateway(agent, [
+      "node",
+      "-e",
+      workspaceSentinelScript,
+      "write",
+      name,
+      content,
+    ]);
+    return { runtime: execution.label, ...JSON.parse(execution.stdout) };
+  }
+
+  async function readWorkspaceSentinel(agent, { name }) {
+    const execution = await execGateway(agent, [
+      "node",
+      "-e",
+      workspaceSentinelScript,
+      "read",
+      name,
+    ]);
+    return { runtime: execution.label, ...JSON.parse(execution.stdout) };
+  }
+
   return {
     normalGatewayTurn,
     assertSessionToolCallEvidence,
     assertNoSessionToolCallEvidence,
     readOpenClawPluginPolicy,
+    listCodexNativeCatalog,
+    codexNativePluginDetail,
+    codexEffectivePluginConfiguration,
+    writeWorkspaceSentinel,
+    readWorkspaceSentinel,
   };
 }
 
@@ -922,6 +1250,24 @@ export async function createPluginDriverRealFixture(
   const gatewayTokens = new Map();
   let tenantNamespace;
 
+  function isKubernetesNotFound(error) {
+    return /NotFound|not found/i.test(`${error?.stderr ?? ""}\n${error?.message ?? ""}`);
+  }
+
+  async function waitForTenantNamespaceDeletion() {
+    if (tenantNamespace === undefined) {
+      return;
+    }
+    try {
+      await kubectl("wait", "--for=delete", `namespace/${tenantNamespace}`, "--timeout=60s");
+    } catch (error) {
+      if (isKubernetesNotFound(error)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
   context.after(async () => {
     const failures = [];
     async function cleanup(operation) {
@@ -945,8 +1291,9 @@ export async function createPluginDriverRealFixture(
     }
     if (tenantNamespace !== undefined) {
       await cleanup(() =>
-        kubectl("delete", "namespace", tenantNamespace, "--ignore-not-found=true"),
+        kubectl("delete", "namespace", tenantNamespace, "--ignore-not-found=true", "--wait=false"),
       );
+      await cleanup(() => waitForTenantNamespaceDeletion());
     }
     for (const role of ["api", "worker"]) {
       await cleanup(() =>
@@ -964,6 +1311,8 @@ export async function createPluginDriverRealFixture(
         "clusterrole",
         `${proofPrefix}-namespaces-${suffix}`,
         `${proofPrefix}-tenant-${suffix}`,
+        `${proofPrefix}-tenant-pods-${suffix}`,
+        `${proofPrefix}-tenant-pods-proxy-${suffix}`,
         `${proofPrefix}-secrets-${suffix}`,
         "--ignore-not-found=true",
       ),
@@ -991,6 +1340,20 @@ export async function createPluginDriverRealFixture(
     `${proofPrefix}-tenant-${suffix}`,
     "--verb=create,get,list,patch,update,delete",
     "--resource=deployments.apps,services,serviceaccounts,configmaps,endpointslices.discovery.k8s.io,networkpolicies.networking.k8s.io,resourcequotas,limitranges,persistentvolumeclaims",
+  );
+  await kubectl(
+    "create",
+    "clusterrole",
+    `${proofPrefix}-tenant-pods-${suffix}`,
+    "--verb=get,list,watch",
+    "--resource=pods",
+  );
+  await kubectl(
+    "create",
+    "clusterrole",
+    `${proofPrefix}-tenant-pods-proxy-${suffix}`,
+    "--verb=get",
+    "--resource=pods/proxy",
   );
   await kubectl(
     "create",
@@ -1114,7 +1477,7 @@ export async function createPluginDriverRealFixture(
     serviceKey = (
       await auth.createServiceKey({
         principal: servicePrincipal,
-        name: `plugin-driver-real-proof-${suffix}`,
+        name: `pdr-${suffix}`,
       })
     ).key;
   } else {
@@ -1182,12 +1545,35 @@ export async function createPluginDriverRealFixture(
   await kubectl(
     "create",
     "rolebinding",
+    `${proofPrefix}-worker-pods`,
+    "--namespace",
+    tenantNamespace,
+    `--clusterrole=${proofPrefix}-tenant-pods-${suffix}`,
+    `--serviceaccount=${platformNamespace}:${workerIdentity.account}`,
+  );
+  await kubectl(
+    "create",
+    "rolebinding",
+    `${proofPrefix}-worker-pods-proxy`,
+    "--namespace",
+    tenantNamespace,
+    `--clusterrole=${proofPrefix}-tenant-pods-proxy-${suffix}`,
+    `--serviceaccount=${platformNamespace}:${workerIdentity.account}`,
+  );
+  await kubectl(
+    "create",
+    "rolebinding",
     `${proofPrefix}-api-secrets`,
     "--namespace",
     tenantNamespace,
     `--clusterrole=${proofPrefix}-secrets-${suffix}`,
     `--serviceaccount=${platformNamespace}:${api.account}`,
   );
+  await waitFor(`namespace ${createdNamespace.data.id} to become API-ready`, async () => {
+    const observed = await request("GET", `/namespaces/${createdNamespace.data.id}`);
+    assert.equal(observed.status, 200, JSON.stringify(observed.error));
+    return observed.data.status === "ready" ? observed.data : undefined;
+  });
 
   const agentApi = createAgentPluginApi({ request, namespaceId: createdNamespace.data.id });
 
@@ -1244,34 +1630,257 @@ export async function createPluginDriverRealFixture(
       `/namespaces/${createdNamespace.data.id}/agents/${agent.id}/deploy`,
     );
     assert.equal(deployed.status, 202, JSON.stringify(deployed.error));
-    await waitFor(`revision ${deployed.data.id} activation`, async () => {
-      const observed = await request(
-        "GET",
-        `/namespaces/${createdNamespace.data.id}/agents/${agent.id}`,
-      );
-      assert.equal(observed.status, 200, JSON.stringify(observed.error));
-      return observed.data.activeRevisionId === deployed.data.id ? observed.data : undefined;
-    });
+    try {
+      await waitFor(`revision ${deployed.data.id} activation`, async () => {
+        const observed = await request(
+          "GET",
+          `/namespaces/${createdNamespace.data.id}/agents/${agent.id}`,
+        );
+        assert.equal(observed.status, 200, JSON.stringify(observed.error));
+        const deployment = await getDeploymentStatus(agent.id, deployed.data.id);
+        assert.notEqual(deployment.status, "failed", JSON.stringify(deployment.error));
+        return observed.data.activeRevisionId === deployed.data.id ? observed.data : undefined;
+      });
+    } catch (error) {
+      const diagnostics = await deploymentActivationDiagnostics(agent, deployed.data.id, events);
+      assert.fail(`${error.message} Diagnostics: ${JSON.stringify(diagnostics)}`);
+    }
     await waitForPluginProofWorkerSuccess(waitFor, events, deployed.data.id, {
       description: `worker completion of ${deployed.data.id}`,
       diagnostics: () => sanitizedPluginProofWorkerEvents(events, deployed.data.id),
     });
-    return { revision: deployed.data, gatewayToken };
+    const status = await getDeploymentStatus(agent.id, deployed.data.id);
+    assert.equal(status.status, "succeeded", JSON.stringify(status.error));
+    return { revision: deployed.data, gatewayToken, status };
+  }
+
+  async function getDeploymentStatus(agentId, deploymentId) {
+    const status = await request(
+      "GET",
+      `/namespaces/${createdNamespace.data.id}/agents/${agentId}/deployments/${deploymentId}`,
+    );
+    assert.equal(status.status, 200, JSON.stringify(status.error));
+    return status.data;
+  }
+
+  async function deploymentActivationDiagnostics(agent, revisionId, workerEvents) {
+    return {
+      revisionId,
+      agentId: agent.id,
+      namespaceId: createdNamespace.data.id,
+      agent: await safeDiagnostic(async () => {
+        const observed = await request(
+          "GET",
+          `/namespaces/${createdNamespace.data.id}/agents/${agent.id}`,
+        );
+        assert.equal(observed.status, 200, JSON.stringify(observed.error));
+        return {
+          activeRevisionId: observed.data.activeRevisionId ?? null,
+          desiredRuntimeState: observed.data.desiredRuntimeState ?? null,
+        };
+      }),
+      deployment: await safeDiagnostic(async () => {
+        const status = await getDeploymentStatus(agent.id, revisionId);
+        return {
+          deploymentId: status.deploymentId,
+          status: status.status,
+          namespaceId: status.namespaceId,
+          agentId: status.agentId,
+          warnings: status.warnings,
+        };
+      }),
+      controllerWork: await safeDiagnostic(async () => {
+        const { rows } = await pool.query(
+          `SELECT state, reason_code, result_data, attempt_count, available_at, created_at, updated_at, completed_at
+             FROM occ.controller_work
+            WHERE revision_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1`,
+          [revisionId],
+        );
+        if (rows[0] === undefined) {
+          return null;
+        }
+        const row = rows[0];
+        return {
+          state: row.state,
+          reasonCode: row.reason_code,
+          warnings: row.result_data?.warnings ?? [],
+          attemptCount: row.attempt_count,
+          availableAt: row.available_at,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          completedAt: row.completed_at,
+        };
+      }),
+      workerEvents: sanitizedPluginProofWorkerEvents(workerEvents, revisionId),
+    };
+  }
+
+  async function safeDiagnostic(operation) {
+    try {
+      return await operation();
+    } catch (error) {
+      return {
+        unavailable: true,
+        reason: error?.name ?? "Error",
+      };
+    }
+  }
+
+  function isPodReady(pod) {
+    return pod.status?.conditions?.some(
+      ({ type, status }) => type === "Ready" && status === "True",
+    );
+  }
+
+  function gatewayPodPrefix(agent) {
+    return `gateway-${hash(agent.id)}`;
+  }
+
+  async function gatewayPods(agent) {
+    const prefix = gatewayPodPrefix(agent);
+    return (await resources("pods", tenantNamespace)).filter(
+      (pod) =>
+        pod.metadata.labels?.["openclaw.dev/agent"] === agent.id &&
+        pod.metadata.deletionTimestamp === undefined &&
+        pod.metadata.name?.startsWith(prefix),
+    );
+  }
+
+  async function waitForSameGatewayPodReady(agent, expected) {
+    return waitFor(`existing gateway Pod ${expected.podName} to become Ready`, async () => {
+      const pods = await gatewayPods(agent);
+      const samePod = pods.find(
+        (pod) => pod.metadata.name === expected.podName && pod.metadata.uid === expected.podUid,
+      );
+      if (samePod !== undefined) {
+        return isPodReady(samePod) ? podIdentity(samePod) : undefined;
+      }
+      const replacement = pods.find(
+        (pod) => pod.metadata.name !== expected.podName || pod.metadata.uid !== expected.podUid,
+      );
+      assert.equal(
+        replacement,
+        undefined,
+        `Codex Agent restart must not replace gateway Pod ${expected.podName}.`,
+      );
+      return undefined;
+    });
   }
 
   async function gatewayPod(agent) {
-    const pods = (await resources("pods", tenantNamespace)).filter(
-      (pod) => pod.metadata.labels?.["openclaw.dev/agent"] === agent.id,
-    );
+    const pods = await gatewayPods(agent);
     assert.ok(pods.length > 0, "the exact Agent must have running workload Pods to inspect.");
-    const prefix = `gateway-${hash(agent.id)}`;
-    const pod = pods.find((candidate) => candidate.metadata.name?.startsWith(prefix));
-    assert.ok(pod, `the exact Agent gateway Pod ${prefix} must be running.`);
+    const pod = pods.find(isPodReady);
+    assert.ok(pod, `the exact Agent gateway Pod ${gatewayPodPrefix(agent)} must be running.`);
     return pod;
+  }
+
+  function podIdentity(pod) {
+    return {
+      podName: pod.metadata.name,
+      podUid: pod.metadata.uid,
+      revisionId: pod.metadata.labels?.["openclaw.dev/revision"],
+      role: pod.metadata.labels?.["openclaw.dev/workload-role"] ?? "gateway",
+    };
+  }
+
+  async function gatewayPodIdentity(agent) {
+    const pod = await gatewayPod(agent);
+    return podIdentity(pod);
+  }
+
+  async function activeReadyCodexAgentPods(agent, activeRevisionId) {
+    return (await resources("pods", tenantNamespace)).filter(
+      (pod) =>
+        pod.metadata.labels?.["openclaw.dev/agent"] === agent.id &&
+        pod.metadata.labels?.["openclaw.dev/revision"] === activeRevisionId &&
+        pod.metadata.labels?.["openclaw.dev/workload-role"] === "agent" &&
+        pod.metadata.deletionTimestamp === undefined &&
+        pod.status?.conditions?.some(({ type, status }) => type === "Ready" && status === "True"),
+    );
+  }
+
+  async function activeCodexAgentPod(agent, activeRevisionId) {
+    const pods = await activeReadyCodexAgentPods(agent, activeRevisionId);
+    assert.equal(pods.length, 1, "native inspection requires the exact active Ready Codex Pod.");
+    return pods[0];
+  }
+
+  async function restartActiveCodexAgentPod(agent) {
+    assert.equal(
+      pluginDriverId,
+      "codex-plugin",
+      "Agent-only restart proof requires a dedicated Codex Agent workload.",
+    );
+    const current = await agentApi.getAgent(agent.id);
+    assert.ok(current.activeRevisionId, "the exact Agent must have an active revision to restart.");
+    const activeRevisionId = current.activeRevisionId;
+    const gatewayBefore = await gatewayPodIdentity(agent);
+    const agentBefore = podIdentity(await activeCodexAgentPod(agent, activeRevisionId));
+    await kubectl(
+      "delete",
+      "pod",
+      agentBefore.podName,
+      "--namespace",
+      tenantNamespace,
+      "--wait=false",
+    );
+    const agentAfter = await waitFor(
+      `active revision ${activeRevisionId} Codex Agent Pod restart`,
+      async () => {
+        const pods = await activeReadyCodexAgentPods(agent, activeRevisionId);
+        if (pods.length !== 1) {
+          return undefined;
+        }
+        const candidate = podIdentity(pods[0]);
+        return candidate.podUid === agentBefore.podUid ? undefined : candidate;
+      },
+    );
+    const gatewayAfter = await waitForSameGatewayPodReady(agent, gatewayBefore);
+    assert.deepEqual(
+      gatewayAfter,
+      gatewayBefore,
+      "Codex Agent restart must leave the existing gateway Pod serving the revision.",
+    );
+    return {
+      revisionId: activeRevisionId,
+      agentBefore,
+      agentAfter,
+      gatewayBefore,
+      gatewayAfter,
+    };
   }
 
   const nativeAssertions = createNativePluginAssertions({
     proofMode: pluginDriverId === "codex-plugin" ? "codex" : "openclaw",
+    waitFor,
+    execCodex: async (agent, argv) => {
+      const current = await agentApi.getAgent(agent.id);
+      const pods = (await resources("pods", tenantNamespace)).filter(
+        (pod) =>
+          pod.metadata.labels?.["openclaw.dev/agent"] === agent.id &&
+          pod.metadata.labels?.["openclaw.dev/revision"] === current.activeRevisionId &&
+          pod.metadata.labels?.["openclaw.dev/workload-role"] === "agent" &&
+          pod.metadata.deletionTimestamp === undefined &&
+          pod.status.conditions?.some(({ type, status }) => type === "Ready" && status === "True"),
+      );
+      assert.equal(pods.length, 1, "native inspection requires the exact active Ready Codex Pod.");
+      return {
+        label: pods[0].metadata.name,
+        stdout: await kubectl(
+          "exec",
+          pods[0].metadata.name,
+          "--namespace",
+          tenantNamespace,
+          "--container",
+          "agent",
+          "--",
+          ...argv,
+        ),
+      };
+    },
     gatewayUrl: async (agent) => {
       const forwarding = await startPortForward(tenantNamespace, `gateway-${hash(agent.id)}`);
       forwarders.push(forwarding);
@@ -1335,10 +1944,18 @@ export async function createPluginDriverRealFixture(
     removePluginSelection: agentApi.removePluginSelection,
     getAgent: agentApi.getAgent,
     deployAndWait,
+    getDeploymentStatus,
+    gatewayPodIdentity,
+    restartActiveCodexAgentPod,
     normalGatewayTurn: nativeAssertions.normalGatewayTurn,
     assertSessionToolCallEvidence: nativeAssertions.assertSessionToolCallEvidence,
     assertNoSessionToolCallEvidence: nativeAssertions.assertNoSessionToolCallEvidence,
     readOpenClawPluginPolicy: nativeAssertions.readOpenClawPluginPolicy,
+    listCodexNativeCatalog: nativeAssertions.listCodexNativeCatalog,
+    codexNativePluginDetail: nativeAssertions.codexNativePluginDetail,
+    codexEffectivePluginConfiguration: nativeAssertions.codexEffectivePluginConfiguration,
+    writeWorkspaceSentinel: nativeAssertions.writeWorkspaceSentinel,
+    readWorkspaceSentinel: nativeAssertions.readWorkspaceSentinel,
     bindOpenAIModelSecret,
   };
 }

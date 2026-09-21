@@ -41,7 +41,15 @@ function installedPluginResponses() {
 
 test("OpenClaw runtime helper installs exact admitted package pins and verifies the install record", async () => {
   const runtime = openClawRuntime();
-  const { calls, files } = runOpenClawRuntimeHelper(runtime, installedPluginResponses());
+  const firstInstallConfig = { path: undefined, config: undefined };
+  const { calls, files } = runOpenClawRuntimeHelper(runtime, installedPluginResponses(), {
+    beforeSpawn(command, args, sandbox) {
+      if (command === "node" && args[1] === "plugins" && args[2] === "install") {
+        firstInstallConfig.path = sandbox.process.env.OPENCLAW_CONFIG_PATH;
+        firstInstallConfig.config = JSON.parse(sandbox.files.get(firstInstallConfig.path));
+      }
+    },
+  });
 
   assert.deepEqual(JSON.parse(JSON.stringify(calls.map((call) => call.args))), [
     [
@@ -56,6 +64,9 @@ test("OpenClaw runtime helper installs exact admitted package pins and verifies 
     ["/app/openclaw.mjs", "plugins", "registry", "--refresh", "--json"],
     ["/app/openclaw.mjs", "plugins", "inspect", "diffs", "--json"],
   ]);
+  assert.equal(firstInstallConfig.path, "/home/node/.openclaw/openclaw.json");
+  assert.deepEqual(firstInstallConfig.config.plugins.entries, { diffs: { enabled: true } });
+  assert.deepEqual(firstInstallConfig.config.tools.alsoAllow, ["existing-tool", "diffs"]);
 
   const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   assert.equal(effective.gateway.port, 8080);
@@ -64,6 +75,38 @@ test("OpenClaw runtime helper installs exact admitted package pins and verifies 
   assert.deepEqual(effective.plugins.entries, { diffs: { enabled: true } });
   assert.deepEqual(effective.tools.alsoAllow, ["existing-tool", "diffs"]);
 });
+
+for (const [name, tools] of [
+  ["profile grants", { alsoAllow: ["existing-tool"] }],
+  ["explicit allowlist", { allow: ["read"] }],
+  ["operator plugin grant", { allow: ["diffs"] }],
+]) {
+  test(`OpenClaw runtime helper reports install warnings and preserves ${name}`, () => {
+    const runtime = openClawRuntime();
+    const result = runOpenClawRuntimeHelper(
+      runtime,
+      [{ status: 1, stdout: "", stderr: "native install failed" }],
+      {
+        baseConfig: { tools },
+        env: {
+          OPENCLAW_PLUGIN_STATUS_PORT: "18791",
+          OPENCLAW_AGENT_REVISION_ID: "revision-plugin-compute-1",
+          OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
+        },
+      },
+    );
+
+    assert.deepEqual(JSON.parse(JSON.stringify(result.value)), {
+      successfulPluginIds: [],
+      failures: [{ pluginId: "occ-plugin:diffs", code: "PLUGIN_INSTALL_FAILED" }],
+    });
+    assert.equal(result.calls.length, 1);
+    const effective = JSON.parse(result.files.get("/home/node/.openclaw/openclaw.json"));
+    assert.deepEqual(effective.plugins.entries, { diffs: { enabled: false } });
+    // Remove only startup's generated grant; emptying an operator allowlist would widen access.
+    assert.deepEqual(effective.tools, tools);
+  });
+}
 
 test("OpenClaw runtime helper fails before readiness when raw Codex bridge config conflicts", () => {
   const runtime = {

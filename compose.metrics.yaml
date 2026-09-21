@@ -1,0 +1,63 @@
+# Development-only: collectors share each OCC process's network namespace so
+# the application metrics listeners remain bound to loopback.
+services:
+  controller:
+    environment:
+      OCC_METRICS_ENABLED: "true"
+      OCC_METRICS_HOST: "127.0.0.1"
+      OCC_METRICS_PORT: "9464"
+  worker:
+    environment:
+      OCC_METRICS_ENABLED: "true"
+      OCC_METRICS_HOST: "127.0.0.1"
+      OCC_METRICS_PORT: "9464"
+  metrics-api:
+    image: docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+    network_mode: service:controller
+    command:
+      - --agent
+      - --config.file=/etc/prometheus/occ.yaml
+      - --storage.agent.path=/prometheus
+      - --web.listen-address=127.0.0.1:9091
+    volumes:
+      - ./deploy/metrics/development/api.yaml:/etc/prometheus/occ.yaml:ro
+    depends_on: [controller, prometheus]
+    mem_limit: 256m
+  metrics-worker:
+    image: docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+    network_mode: service:worker
+    command:
+      - --agent
+      - --config.file=/etc/prometheus/occ.yaml
+      - --storage.agent.path=/prometheus
+      - --web.listen-address=127.0.0.1:9091
+    volumes:
+      - ./deploy/metrics/development/worker.yaml:/etc/prometheus/occ.yaml:ro
+    depends_on: [worker, prometheus]
+    mem_limit: 256m
+  prometheus:
+    image: docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+    command:
+      - --config.file=/etc/prometheus/occ.yaml
+      - --web.enable-remote-write-receiver
+      - --storage.tsdb.retention.time=24h
+      - --storage.tsdb.retention.size=256MB
+    ports: ["127.0.0.1:${OCC_PROMETHEUS_PORT:-9090}:9090"]
+    volumes:
+      - ./deploy/metrics/development/prometheus.yaml:/etc/prometheus/occ.yaml:ro
+    networks: [development]
+    mem_limit: 512m
+  grafana:
+    image: docker.io/grafana/grafana@sha256:ac461fb352abc50da10a51c7d02462e9c05488f11f53f14b3ad79a8145f638a0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${OCC_METRICS_GRAFANA_PASSWORD:?Choose a development Grafana password}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports: ["127.0.0.1:${OCC_GRAFANA_PORT:-3001}:3000"]
+    volumes:
+      - ./deploy/metrics/development/grafana:/etc/grafana/provisioning:ro
+      - ./deploy/metrics/development/dashboard.json:/etc/occ-dashboard/occ.json:ro
+    depends_on: [prometheus]
+    networks: [development]
+    mem_limit: 512m

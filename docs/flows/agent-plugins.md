@@ -1,6 +1,6 @@
 ---
 created: 2026-09-08
-updated: 2026-09-18
+updated: 2026-09-21
 last_updated_session: codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed
 ---
 
@@ -32,24 +32,18 @@ approval internals remain the Harness's responsibility.
 
 ```mermaid
 graph TD
-  subgraph API["Agent configuration"]
-    A["Agent create/update with plugins"] --> B["Authorize exact Agent and validate structure"]
-    B --> C["Commit desired map and audit"]
-  end
-  subgraph OCC["Deployment admission"]
-    C -->|explicit deploy| D["Freeze requested map and Driver identity"]
-  end
-  subgraph Compute["Kubernetes revision workload"]
-    D -->|existing embedded gateway| R["Stage replacement; commit candidate pointer"]
-    R --> S["Stop old gateway; install and ready replacement"]
-    D -->|no embedded gateway to replace| F["Resolve catalog; install and ready runtime"]
-    F -->|ready| G["Commit candidate pointer; finish activation"]
-    F -->|failure| H["Preparation failed; prior pointer unchanged"]
-    S -->|ready| I["Complete reconciliation"]
-    G -->|success| I
-    S -->|failure| J["Incomplete revision; candidate pointer retained"]
-    G -->|failure| J
-  end
+  A["Save authorized plugin selections"] --> B["Snapshot requested revision"]
+  B --> C["Resolve native metadata and policy"]
+  C --> D["Attempt selected installs"]
+  D -->|install rejection or auth required| E["Disable failed selections; collect warnings"]
+  D -->|success| F["Verify native identity and effective policy"]
+  E --> F
+  F -->|invalid or unsafe| X["Keep runtime unready"]
+  F -->|verified| G["Publish current startup status"]
+  G --> H["Apply matching gateway configuration"]
+  H -->|ready| I["Compute returns readiness and warnings"]
+  I --> J["Worker completes deployment under live claim"]
+  G -->|runtime restart| C
 ```
 
 ## Execution Trace
@@ -120,7 +114,9 @@ admitted configuration. The runtime image must first gain the required native
 flag; the pinned release does not support it.
 Native inspection verifies plugin ID, package name, runtime/install version,
 recorded integrity, and the runtime source's containment in the install path.
-Failure stops startup before the replacement gateway becomes ready.
+Verification failure stops startup before the replacement gateway becomes ready.
+A confirmed install rejection instead disables that optional selection and
+removes its managed tool allowance before the gateway starts.
 
 Dedicated Codex uses one of two fixed bootstrap configurations in its isolated
 `CODEX_HOME`: empty selections disable the apps/plugins/remote-plugin features;
@@ -134,13 +130,50 @@ At startup, native `plugin/list` discovers the `openai-curated-remote` marketpla
 `plugin/read` resolves each selection using the summary's opaque remote identity.
 The shared translator validates the entire selection set before Compute writes
 native app configuration with `config/batchWrite`, including optional
-`approvals_reviewer`. Compute then calls `plugin/install`, rejects missing app
-authentication, rereads native metadata, and checks installed/enabled identity,
-release version, and app mapping against the resolved selection. Finally,
+`approvals_reviewer`. Compute then calls `plugin/install` for each enabled selection, collecting confirmed
+install rejections and missing app authentication as warnings. It rereads native
+metadata for successful selections and checks installed/enabled identity, release
+version, and app mapping against the resolved selection. Failed-only app bindings
+are explicitly disabled; shared bindings needed by successful selections retain
+their admitted policy. Disabled selections remain denied in configuration and
+do not contribute install attempts or startup results. Finally,
 `config/read` verifies the effective configuration overlay before readiness.
 Codex owns its private cache layout and integrity; Enterprise does not inspect
 private cache files. The Driver does not install packages in OCC. The normal
 Codex readiness path remains responsible for runtime health.
+
+For Compute-owned Kubernetes workloads, a selected OpenClaw install command's
+normal nonzero exit, a matching Codex `plugin/install` error response, or a
+successful Codex install response with apps needing authentication contributes
+only an admitted `{pluginId, code}` warning. Transport loss, timeouts, signals,
+malformed responses, discovery failures, and policy failures retain their
+ordinary startup failure behavior. Provider-owned Harnesses retain their
+existing startup path.
+
+The runtime exposes a private current-startup status response after verifying
+effective configuration. Kubernetes Compute validates the exact workload,
+revision, startup instance, selection keys, and closed warning codes before
+returning readiness and warnings. The status is recomputed after restart; it is
+not a durable record of the first failure.
+
+Dedicated Codex runs separately from its gateway. The gateway blocks each failed
+bridge selection before serving, preventing native bridge activation from
+retrying that plugin during a turn. It must refresh its effective configuration
+when the Agent startup result changes. Missing or untrusted status cannot
+establish readiness. Requested revision selections remain unchanged.
+
+Compute installs the narrow status NetworkPolicies before starting the first
+dedicated gateway that requires plugin status. It creates that gateway only after the
+Agent and its plugin status are ready and the Agent Service selects that revision.
+Existing gateways and full runtime NetworkPolicies retain their normal revision
+activation boundary.
+
+The Agent and gateway derive an app-server credential from the existing transport
+Secret, revision ID, and Agent startup ID. The gateway receives that credential
+only after reading the matching status and rendering its exclusions. After an
+Agent restart, the previous gateway process cannot authenticate with its old
+credential while its supervisor waits for the next status poll. The supervisor
+publishes non-ready status before stopping a gateway whose peer result changed.
 
 ### 5. Complete revision reconciliation
 
@@ -160,6 +193,13 @@ is not installation/readiness evidence. Normal Agent turns use native policy;
 old workload state follows ordinary retirement. The persistent Agent workspace
 and Kubernetes gateway state database retain their Agent-owned lifecycle.
 
+The worker stores current plugin warnings in the successful work result under its
+live claim; the [worker flow](controller-worker.md#7-defer-retry-or-stop-and-hand-off-the-next-iteration)
+explains persistence and the deployment status projection. Claim loss prevents a stale completion write; a later worker reads
+current readiness again. There is no receipt acknowledgment, failed-plugin
+shutdown, or permanent failure latch. Saved deployment warnings describe the
+completed deployment attempt rather than ongoing runtime health.
+
 ## Debugging and Verification
 
 - Compare `Agent.plugins` with the active revision snapshot and deployment status.
@@ -173,6 +213,10 @@ and Kubernetes gateway state database retain their Agent-owned lifecycle.
 - With SSH Compute, any nonempty requested plugin map should fail before host
   effects. Clear the Agent's plugin map or deploy through a compatible
   Kubernetes runtime.
+- For plugin warnings, check deployment status for `PLUGIN_INSTALL_FAILED` or
+  `PLUGIN_AUTH_REQUIRED` and the admitted `pluginId`. Confirm the corresponding
+  runtime and gateway entries are disabled. Do not infer plugin attribution
+  from arbitrary native logs.
 - Prove behavior with a model-chosen plugin call during a normal Agent turn,
   then disable/remove on a later deployment and verify another Agent is unchanged.
   Source or fixture tests alone do not establish native runtime compatibility.
@@ -183,7 +227,7 @@ and Kubernetes gateway state database retain their Agent-owned lifecycle.
 ## Related docs
 
 - [Agent plugin reference](../reference/agent-plugins.md).
-- [PluginDriver selection and limits](../reference/drivers/plugin.md).
+- [PluginDriver selection and limits](../reference/drivers/plugin-bundled.md).
 - [Controller worker](controller-worker.md).
 - [Harness execution topology](harness-execution-topology.md).
 - [Deployment guide](../guides/deploy.md).
@@ -195,7 +239,17 @@ and Kubernetes gateway state database retain their Agent-owned lifecycle.
 
 ## Changelog
 
+- 2026-09-21 21:23: Reconciled policy composition and installation without enablement changes with optional-plugin warnings and the bundled Driver reference; runtime release and Kubernetes proof remain pending (codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed - 9405e20)
+
 - 2026-09-18 17:38: Documented plugin policy conflict rejection, tool allowlist composition, and installation without enablement changes; runtime release and Kubernetes proof remain pending (codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed - 724dcb5)
+
+- 2026-09-18 17:17: Linked plugin warning persistence to the generalized controller work result. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 6a582ce9)
+
+- 2026-09-17 20:28: Replaced terminal plugin receipts with verified optional-plugin exclusion, current startup status, and successful deployment warnings; runtime verification in progress. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 7771526d)
+- 2026-09-17: Verified native OpenClaw and Codex plugin turns, successful warning persistence, failed selection exclusion, and Agent-only restart recovery. Ordered initial dedicated gateway startup after its Agent status dependency. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - a5a11ad1)
+- 2026-09-17 20:28: Removed the first-failure receipt and acknowledgment lifecycle under the approved best-effort plugin decision. (NOT_IN_SPEC)
+
+- 2026-09-17 15:02: Added the Kubernetes receipt and terminal plugin-failure path for Compute-owned plugin startup without claiming native proof completion. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 58ead994)
 
 - 2026-09-08 16:05: Corrected Codex Linear support to the existing bridge path and kept live local-Kubernetes proof pending (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - 79021fa)
 - 2026-09-08 17:02: Recorded current Codex Linear proof boundary: native install/readiness passed, bridge app batch request passed, force-refresh app state showed Linear enabled/callable, and a normal turn invoked Linear `list_teams` before timing out in native `waitingOnApproval` without a result (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - 79021fa)
