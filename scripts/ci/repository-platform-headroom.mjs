@@ -129,18 +129,6 @@ async function main() {
       return path === androidRoot || path?.startsWith(`${androidRoot}/`);
     }),
   );
-  receipt.stage = "sdk-measurement";
-  const size = (
-    await execute(
-      "/usr/bin/du",
-      ["--summarize", "--one-file-system", "--block-size=1", "--", androidRoot],
-      60_000,
-    )
-  )
-    .trim()
-    .split(/\s+/)[0];
-  assert(/^\d+$/.test(size) && Number.isSafeInteger(Number(size)));
-  receipt.sdkAllocatedBytes = Number(size);
   receipt.stage = "sdk-removal";
   // The privileged timeout can terminate root-owned rm; the runner cannot.
   await execute(

@@ -90,7 +90,21 @@ test("credential source boundary rejects new raw capabilities in the real source
       const saved = join(temporary, "missing-source");
       await rename(path, saved);
       try {
-        await assert.rejects(verifyRepositoryCredentialBoundary(root), { code: "ENOENT" });
+        await assert.rejects(verifyRepositoryCredentialBoundary(root), (error) => {
+          if (file === "repository-credentials.ts" || file === "repository-credentials.mjs") {
+            assert.match(
+              error.message,
+              /^Repository credential boundary requires security review:\n/,
+            );
+            assert.ok(
+              error.message.split("\n").includes(`Missing credential entrypoint: ${file}`),
+              error.message,
+            );
+          } else {
+            assert.equal(error.message, `Missing or invalid credential source root: ${file}`);
+          }
+          return true;
+        });
       } finally {
         await rename(saved, path);
       }
