@@ -107,7 +107,7 @@ function productionInstallation(adminKeyPath) {
           },
           kubernetes: {
             runtimeClassName: "openshell",
-            serviceAccount: { mode: "driverConfig" },
+            serviceAccount: { mode: "gatewayConfigured" },
             sandboxDataMount: {
               subPath: "sandboxes",
               mountPath: "/sandbox/data",
@@ -120,6 +120,7 @@ function productionInstallation(adminKeyPath) {
               {
                 name: "dns",
                 endpoints: [{ host: "1.1.1.1", ports: [53], protocol: "udp" }],
+                binaries: [{ path: "/app/bin/dns-client" }],
               },
             ],
           },
