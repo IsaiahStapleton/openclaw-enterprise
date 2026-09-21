@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runPinnedClients } from "./clients.mjs";
 import { fixtureRepository, humanText } from "./github.mjs";
@@ -36,6 +36,15 @@ export async function exerciseGit(t, fixture, { push = true } = {}) {
   await writeFile(join(checkout, "change.txt"), "Agent change\n");
   await client.git(["add", "change.txt"], { cwd: checkout });
   await client.git(["commit", "-m", "Agent fixture change"], { cwd: checkout });
+  await client.git(["mv", "change.txt", "renamed.txt"], { cwd: checkout });
+  assert.equal(await readFile(join(checkout, "renamed.txt"), "utf8"), "Agent change\n");
+  await client.git(["commit", "-m", "Move fixture file"], { cwd: checkout });
+  await client.git(["rm", "renamed.txt"], { cwd: checkout });
+  await client.git(["commit", "-m", "Remove fixture file"], { cwd: checkout });
+  assert.equal(
+    (await client.git(["ls-files", "change.txt", "renamed.txt"], { cwd: checkout })).stdout,
+    "",
+  );
   const commit = (await client.git(["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
   if (push) {
     await client.git(["push", "origin", "HEAD:refs/heads/agent-feature"], { cwd: checkout });

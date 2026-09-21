@@ -28,13 +28,16 @@ function validateClient(client: PublicClientConfiguration): void {
     remote.password ||
     remote.search ||
     remote.hash ||
-    !/^\/[A-Za-z0-9._/-]+\.git$/.test(remote.pathname) ||
+    !/^\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.git$/.test(remote.pathname) ||
     remote.pathname.includes("..") ||
     !/^[A-Za-z0-9._-]{1,128}$/.test(client.gitUsername) ||
     !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(client.apiHost) ||
     !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(client.canonicalApiHost) ||
     client.apiHost !== origin.hostname ||
-    !/^[A-Za-z0-9._/-]{1,512}$/.test(client.repository)
+    !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(client.repository) ||
+    client.repository.length > 512 ||
+    client.repository.includes("..") ||
+    client.gitRemote !== `${client.gatewayOrigin}/${client.repository}.git`
   ) {
     throw new Error("invalid-client-configuration");
   }

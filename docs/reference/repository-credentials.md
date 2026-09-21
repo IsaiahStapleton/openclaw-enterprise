@@ -151,30 +151,49 @@ finish and their material is disposed.
 
 ## Client routing and limits
 
-The client launcher uses a private home and configuration, disables prompts,
-redirects and inherited global helpers, and removes ambient token, proxy and
-debug settings. Before running Git, it inspects configuration in the selected
-repository context and overrides URL-specific TLS verification, redirect, proxy
-and header settings. User-agent values containing carriage returns or newlines
-are rejected, including inherited URL-specific values; ordinary user-agent
-values remain supported. Repository trust-root, client-certificate, cookie and DNS
-overrides and URL-specific credential helper/identity settings are rejected. Git's helper answers only the exact configured HTTPS host and
-repository path with `credential.useHttpPath=true`. HTTP(S) usernames and passwords
-in command URLs, remote fetch/push URLs, and URL rewrite destinations are rejected
-before network commands run, including percent-encoded userinfo. Explicit remote
-helper forms such as `https::https://...` are unsupported on those same surfaces.
-Clone admits ordinary destination, branch/origin, shallow/filter, verbosity,
-checkout, bare/mirror and tag-selection options. It rejects additional options,
-including clone-specific `-c`/`--config`, templates and submodule recursion, and
-rejects inherited `init.templateDir` and conditional includes; these can add uninspected configuration
-or launch additional transports after preflight.
+Ordinary Git uses `/usr/bin/git` and native configuration. Git owns commands,
+identity, hooks, aliases, remotes, push URLs, worktrees, and user settings.
+The client does not parse Git arguments or create a temporary HOME. The operator's
+single-session launcher remains available and adds the same scoped defaults to
+stock Git.
 
-The launcher preserves the child command's exit status while retrying temporary
-home removal up to three times. If removal still fails, stderr reports
-`repository-client-cleanup-pending` with the JSON-quoted directory path.
-This warning reports a separate cleanup obligation; a successful mutation
-retains exit status zero. Remove that directory after any external writers stop;
-do not repeat a completed mutation to clear the warning.
+For a delivered generation, the native preparer reads the staged public manifest
+and session metadata, validates identities, final paths and private file metadata,
+and writes a private aggregate `gitconfig`. It does not read bearer contents or
+admit sessions. The supported automatic routing profile maps each canonical
+HTTPS host to one gateway origin. Distinct origins for one canonical host fail
+preparation; an environment pin cannot change the connection origin after Git
+has chosen it. Same-origin public CA inputs must agree.
+
+A host-prefix rewrite preserves owner/repository casing and an optional terminal
+`.git`. It also routes unadmitted repositories on that host to the gateway, where
+the helper releases no bearer. Separately authenticated same-host use needs an
+explicit native configuration override. SSH and additional-repository submodule
+workflows are outside supported acceptance.
+
+The generated defaults scope helper reset, `credential.useHttpPath=true`, verified
+TLS, optional CA trust and disabled redirects to the exact gateway HTTPS origin.
+The helper checks the effective protocol, host/port, username and repository path;
+escaped paths, dot segments, extra components and unmatched names receive no
+bearer. A literal repository name ending in `.git` can overlap another admitted
+identity, so the helper compares both spellings and refuses ambiguous selection.
+It never chooses a first, stronger or unexpired alternate grant.
+
+Duplicate repository bindings remain valid. Select one with `OCE_REPOSITORY_REF`;
+gh also propagates `OCE_REPOSITORY_SELECTION` containing generation, repository
+reference and session ID. Conflicting or stale pins fail remote authentication.
+The helper command embeds the prepared generation and refuses material from a
+new generation. It validates the selected original deadline before reading its
+bearer; gateway closure can deny use earlier. Local commands continue after
+expiry or with stale pins because they do not consult the helper. Generation
+pinning does not promise a command-wide snapshot across arbitrary subprocesses.
+
+Native user configuration can override these defaults, and caller-added helpers
+or credential stores can retain credentials. The feature installs no cache/store
+helper; its `store` and `erase` operations are inert. There is no whole-command
+preflight or guarantee that every request in a multi-request command fails before
+any allowed request executes. An uncertain mutation is never retried by the
+client to obtain a successful result.
 
 The API launcher requires GitHub CLI **2.100.0**, `GH_HOST=github.com`, a gateway
 hostname with verified TLS, and HTTPS port 443. Its private `hosts.yml` uses the

@@ -16,6 +16,8 @@ const requiredEntrypoints = [
   "drivers/repo/github/credentials/client/launch.ts",
   "drivers/repo/github/credentials/client/operator.ts",
   "drivers/repo/github/credentials/client/git-helper.ts",
+  "drivers/repo/github/credentials/client/native-git.ts",
+  "drivers/repo/github/credentials/client/router.ts",
 ];
 const sourceExtensions = new Set([".ts", ".mts", ".cts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"]);
 
@@ -31,7 +33,17 @@ const reviewedImports = {
   },
   "drivers/repo/github/credentials/client/launch.ts": {
     "node:child_process": ["spawn"],
-    "node:fs/promises": ["mkdtemp", "rm"],
+  },
+  "drivers/repo/github/credentials/client/manifest.ts": {
+    "node:crypto": ["createHash"],
+    "node:fs/promises": ["lstat"],
+  },
+  "drivers/repo/github/credentials/client/native-git.ts": {
+    "node:fs": ["constants"],
+    "node:fs/promises": ["open"],
+  },
+  "drivers/repo/github/credentials/client/targets.ts": {
+    "node:child_process": ["spawnSync"],
   },
   "drivers/repo/github/credentials/client/operator.ts": {
     "node:crypto": ["randomUUID"],
@@ -96,17 +108,32 @@ const rawGlobals = new Set([
 ]);
 const reviewedProcessMembers = {
   "composition/repository-credentials/check-config.ts": ["argv", "exitCode", "stderr", "stdout"],
-  "drivers/repo/github/credentials/client/commands.ts": ["execPath"],
   "drivers/repo/github/credentials/client/environment.ts": ["env"],
   "drivers/repo/github/credentials/client/git-helper.ts": [
     "argv",
+    "env",
     "exit",
     "exitCode",
     "stderr",
     "stdin",
     "stdout",
   ],
-  "drivers/repo/github/credentials/client/launch.ts": ["argv", "exitCode", "off", "on", "stderr"],
+  "drivers/repo/github/credentials/client/launch.ts": [
+    "argv",
+    "env",
+    "exitCode",
+    "off",
+    "on",
+    "stderr",
+  ],
+  "drivers/repo/github/credentials/client/manifest.ts": ["getuid"],
+  "drivers/repo/github/credentials/client/native-git.ts": [
+    "argv",
+    "execPath",
+    "exitCode",
+    "stderr",
+  ],
+  "drivers/repo/github/credentials/client/router.ts": ["argv", "env", "exitCode", "stderr"],
   "drivers/repo/github/credentials/client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
   "drivers/repo/github/credentials/client/private-files.ts": ["getuid"],
   "composition/repository-credentials/protected-file.ts": ["getuid"],

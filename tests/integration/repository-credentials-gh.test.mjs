@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { createNativeClientMaterial } from "../fixtures/repository-credentials/clients.mjs";
+import { appRoot, appExtension } from "../fixtures/repository-credentials/runtime.mjs";
+import { cleanEnvironment, run } from "../fixtures/repository-credentials/process.mjs";
 import {
   startCredentialServiceFixture,
   gatewayRequest,
@@ -59,6 +64,84 @@ test("pinned gh uses canonical GitHub identity for REST, pagination and native P
   assert.ok(
     fixture.github.trace.filter((entry) => entry.tokenIndex).every((entry) => entry.userAgent),
   );
+  // All fixed runtime paths below live only inside the disposable fixture
+  // container. Private HOME configuration proves real child Git is preserved;
+  // image-owned system include qualification belongs to the platform tests.
+  assert.equal(process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD, "1");
+  const materialRoot = "/run/oce/repository-credentials";
+  await mkdir(materialRoot, { recursive: true, mode: 0o700 });
+  t.after(() => rm(materialRoot, { recursive: true, force: true }));
+  const material = await createNativeClientMaterial(
+    t,
+    [{ opened: fixture.opened, repositoryRef: "fixture" }],
+    { root: materialRoot, ca: fixture.tls.ca },
+  );
+  const trace = join(client.directory, "native-child-git.jsonl");
+  await writeFile(
+    join(client.directory, ".gitconfig"),
+    `[include]\n\tpath = ${join(materialRoot, "gitconfig")}\n[trace2]\n\teventTarget = ${trace}\n`,
+  );
+  await client.git(["push", "origin", "HEAD:refs/heads/router-feature"], { cwd: checkout });
+  await rm(trace, { force: true });
+  const router = join(appRoot, `drivers/repo/github/credentials/client/router.${appExtension}`);
+  const routed = await run(
+    process.execPath,
+    [
+      router,
+      "gh",
+      "pr",
+      "create",
+      "-R",
+      "fixture/repository",
+      "--head",
+      "router-feature",
+      "--base",
+      "main",
+      "--title",
+      "Routed native child",
+      "--body",
+      "Selected gateway session",
+    ],
+    {
+      cwd: checkout,
+      env: cleanEnvironment({
+        HOME: client.directory,
+        GH_TOKEN: "ambient-token-marker",
+        GIT_CONFIG_SYSTEM: "/dev/null",
+        OCE_REPOSITORY_REF: "fixture",
+      }),
+      allowFailure: true,
+    },
+  );
+  assert.equal(routed.code, 0, routed.stderr);
+  assert.equal(routed.stderr.includes("ambient-token-marker"), false);
+  const events = (await readFile(trace, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.ok(
+    events.some((event) => event.event === "start" && /(?:^|\/)git$/.test(event.argv[0])),
+    "gh must execute real native Git with the normal user configuration",
+  );
+  assert.ok(
+    [...fixture.github.pulls.values()].some((pull) => pull.title === "Routed native child"),
+  );
+  const pinned = JSON.stringify([
+    material.manifest.generation,
+    "fixture",
+    fixture.opened.session.sessionId,
+  ]);
+  const deniedPin = await run(process.execPath, [router, "gh", "api", "repos/fixture/repository"], {
+    cwd: checkout,
+    env: cleanEnvironment({
+      HOME: client.directory,
+      OCE_REPOSITORY_SELECTION: pinned,
+      OCE_REPOSITORY_REF: "other",
+    }),
+    allowFailure: true,
+  });
+  assert.notEqual(deniedPin.code, 0);
+  assert.equal(deniedPin.stdout, "");
   const before = fixture.github.trace.length;
   for (const target of [
     "/user",

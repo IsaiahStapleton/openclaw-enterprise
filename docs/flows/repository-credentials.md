@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
-updated: "2026-09-19"
-last_updated_session: "authoring-run/9feb5f57-7456-4831-8474-1fc7871d17c6"
+updated: "2026-09-21"
+last_updated_session: "authoring-run/2c944a97-e78b-44f1-86cf-ddfec705e0a6"
 ---
 
 # Repository credential service flow
@@ -33,7 +33,9 @@ graph TD
   Admission -->|Construction failed| ConstructionCleanup["Seal renewal access<br/>drain unpublished custody"]
   Operator -->|Repeat admission ID| Recovery["Return public status<br/>close and reopen explicitly"]
   Admission --> Files["CLI publishes private<br/>client directory"]
-  Files --> Client["Git or pinned gh<br/>calls gateway"]
+  Files --> Client["Stock Git helper or pinned gh<br/>selects exact session"]
+  Staged["Staged runtime generation"] --> Native["Prepare native include<br/>without reading bearers"]
+  Native -.->|Receiver publication supplied separately| Client
   Client --> Route["Validate auth, profile route<br/>and request capacity"]
   Route -->|Denied| Denial["Bounded local failure"]
   Route -->|Admitted| Credential["Reuse valid credential<br/>or acquire and capture"]
@@ -115,30 +117,40 @@ the CLI to attempt closure and report the session ID for operator follow-up.
 
 ### 3. Authenticate the selected client
 
-`apps/controller/src/drivers/repo/github/credentials/client/launch.ts:launchClient` owns the temporary
-home, subprocess, signal forwarding and cleanup. Cleanup retries transient removal
-failures up to three times. An unresolved removal emits the temporary directory
-path separately and preserves the child exit status or original launch error.
-It composes
+`apps/controller/src/drivers/repo/github/credentials/client/native-git.ts:prepareNativeGitConfiguration`
+is the private preparation CLI for staged material. It calls
+`apps/controller/src/drivers/repo/github/credentials/client/manifest.ts:readRuntimeRepositoryManifest`
+to validate the complete generation's public identities, final paths and file
+metadata. The renderer checks same-origin CA agreement and one gateway origin
+per canonical host, then emits deterministic host rewrites and origin-scoped
+credential/TLS defaults. Exclusive no-follow creation writes only the staged
+`gitconfig`; the material receiver owns deadline rechecks and atomic publication.
+This source path does not establish installed image or receiver qualification.
+
+Stock Git reads the resulting include and owns its normal command/configuration
+semantics. On authentication,
+`apps/controller/src/drivers/repo/github/credentials/client/git-helper.ts`
+parses the bounded credential protocol and verifies the embedded generation.
+`apps/controller/src/drivers/repo/github/credentials/client/targets.ts:selectGitCredential`
+matches the effective HTTPS origin and owner/repository, including optional `.git`
+and case-insensitive repository identity. Explicit reference/session pins must
+match that endpoint. Ambiguous duplicates, stale pins or expired selected sessions
+release no bearer. The helper reads only the selected bearer and clears the byte
+buffer after use; store/erase do not mutate material.
+
+`apps/controller/src/drivers/repo/github/credentials/client/router.ts:routeRepositoryClient`
+handles only gh. It validates the supported API/explicit-head PR invocation,
+selects a binding from its explicit target, inherited pin or native Git remotes,
+and propagates the exact generation/reference/session pin to children.
 `apps/controller/src/drivers/repo/github/credentials/client/environment.ts:createClientEnvironment`
-for the isolated environment and
-`apps/controller/src/drivers/repo/github/credentials/client/commands.ts:prepareClientCommand` for
-command validation and arguments. Git receives an exact destination helper and
-command-level prompt/redirect/auth configuration. Before launch, Git reads its
-effective configuration using the same repository-selection options; the launcher
-resets inherited URL-specific HTTP protections at matching specificity and
-rejects user-agent values containing carriage returns or newlines before starting
-the client, including values from included configuration. Ordinary user-agent
-values remain intact. It also rejects custom trust, client certificates, cookies
-and DNS overrides. It rejects HTTP(S) userinfo in remote fetch/push URLs and
-`insteadOf`/`pushInsteadOf` destinations, as well as direct network-command URLs,
-before Git can transmit URL credentials in place of the session helper. The same
-surfaces reject explicit remote-helper syntax. Clone options are validated before
-inspection; config/template/submodule options, inherited `init.templateDir` and conditional
-includes refuse because they introduce state or transports after preflight. The helper reads the gateway
-bearer only after matching HTTPS host and repository path. API execution checks
-`gh` 2.100.0 and retains canonical GitHub identity while selecting the configured
-gateway API host. Absolute API destinations and unqualified commands refuse.
+keeps gh token/config isolation while preserving normal HOME and system Git
+configuration. `apps/controller/src/drivers/repo/github/credentials/client/commands.ts:prepareGhCommand`
+checks gh 2.100.0 and the canonical host/port profile.
+`apps/controller/src/drivers/repo/github/credentials/client/launch.ts:launchClient`
+retains the operator's single-session entrypoint, stock Git execution, signal
+forwarding and the original child exit status. Git has no command parser or
+temporary-HOME cleanup phase. The [reference](../reference/repository-credentials.md#client-routing-and-limits)
+owns native configuration overrides, ambiguity and generation limits.
 
 ### 4. Reserve, acquire and dispatch
 
@@ -292,6 +304,8 @@ A structural flow check does not establish any of those runtime results.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 03:16: Document accompanying native Git preparation, manifest helper selection and gh-only routing. (authoring-run/2c944a97-e78b-44f1-86cf-ddfec705e0a6 - a0e96101ba7a7e111816103b0f6336f3b9dbeee8)
 
 - 2026-09-19 21:46: Reconcile transport and client ownership with accompanying detached service/client build and runtime checks. (public authoring-run/9feb5f57-7456-4831-8474-1fc7871d17c6 - bd3af4a7214c3e7b2142ef38183137786226cde9)
 

@@ -67,6 +67,7 @@ node --test tests/conformance/repository-credentials-contracts.test.mjs \
   tests/conformance/repository-credentials-ownership-boundaries.test.mjs \
   tests/conformance/repository-credentials-sessions.test.mjs \
   tests/integration/repository-credentials-client-config.test.mjs \
+  tests/integration/repository-credentials-router.test.mjs \
   tests/integration/repository-credentials-config.test.mjs \
   tests/integration/repository-credentials-control.test.mjs \
   tests/integration/repository-credentials-http.test.mjs \
@@ -80,17 +81,33 @@ Common-owner tests cover custody, immutable admission, controlled-time replaceme
 closure, and uncertainty. Local transport cases cover admission correlation,
 separate listener capacity, TLS/header timing, framing, cancellation, streaming,
 and finite shutdown. The client-file cases exercise the real private-file and
-command-policy owners.
+native configuration and credential-protocol owners.
 
 The builder takes emitted modules from `apps/controller/dist` and stages service
 and client artifacts under `.build/repository-credentials/`. The service contains
 `dist/repository-credentials.js` and the check-config entrypoint. The client
-contains `launch.js`, `operator.js`, and `git-helper.js` under
+packages the native preparer, gh router, `launch.js`, `operator.js`, and `git-helper.js` under
 `dist/drivers/repo/github/credentials/client/`, plus their runtime dependencies.
 The package test starts the detached service, admits and closes a session over
 its Unix socket, and runs the emitted launcher and Git helper. Both artifacts
 run without workspace source or runtime `node_modules`; missing modules fail
 without a source fallback. No provider issuance is needed for that local test.
+
+Client configuration cases run the generated include through actual Git
+credential protocol and HTTPS requests. They cover optional suffix/case spelling,
+exact host/port/username, private files, malformed or oversized protocol input,
+CA conflicts and staged preparation. Router cases cover duplicate bindings,
+explicit and stale pins, `.git` name overlap and generation replacement. Native
+local hooks, aliases, moves, removals and worktrees remain usable independently
+of helper selection. These assertions replace the former command-wide preflight,
+ambient-configuration suppression and Git-shim traversal assumptions.
+
+The real Git journey commits a move and removal before pushing and compares
+upstream refs. Read-only deletion, closed-session denial and lost-response push
+cases retain their observed request/ref assertions; uncertain writes must have
+exactly one mutation dispatch. Multi-repository registry execution requires the
+separate platform fixture composition and is not inferred from synthetic public
+manifest selection cases.
 
 ### Real Git and pinned gh
 
@@ -107,7 +124,10 @@ node --test tests/conformance/repository-credentials-backend-conformance.test.mj
 
 The fixtures run with external networking disabled, a valid gateway DNS SAN,
 verified TLS, and canonical `GH_HOST=github.com`. They exercise the production
-listener and client launcher with real Git and pinned gh. The alternate backend
+listener with stock Git loading generated configuration and pinned gh using its
+private gateway configuration. The gh-router case records native child Git
+through its private HOME configuration; the image system include remains a
+separate platform qualification. The alternate backend
 uses the same common owners while varying repository identity, authentication,
 credential lifetime, and renewal behavior. It establishes conformance, not support
 for another production provider.

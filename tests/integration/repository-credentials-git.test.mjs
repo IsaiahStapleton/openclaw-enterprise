@@ -96,6 +96,13 @@ if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD === "1") {
     assert.equal(fixture.github.authenticationAttempts.length, beforeAuthentication);
     assert.equal(fixture.github.issuesOfTokens.length, 1);
     assert.equal((await remoteRefs()).stdout, beforeRefs);
+    const deletion = await client.git(["push", "origin", "--delete", "existing-branch"], {
+      cwd: checkout,
+      allowFailure: true,
+    });
+    assert.notEqual(deletion.code, 0);
+    assert.equal((await remoteRefs()).stdout, beforeRefs);
+    assert.equal(fixture.git.trace.length, beforeGit);
   });
 
   test("git-write preserves native repository deletion policy without widening or replay", async (t) => {
@@ -131,6 +138,27 @@ if (process.env.REPOSITORY_CREDENTIALS_CONTAINER_CHILD === "1") {
       metadata: "read",
       contents: "write",
     });
+  });
+
+  test("closed gateway sessions deny remote requests while native local work remains usable", async (t) => {
+    const fixture = await startCredentialServiceFixture(t);
+    const { client, checkout } = await exerciseGit(t, fixture);
+    const before = fixture.git.trace.length;
+    fixture.service.close(fixture.opened.session.sessionId);
+    const denied = await client.git(["fetch", "origin"], { cwd: checkout, allowFailure: true });
+    assert.notEqual(denied.code, 0);
+    assert.equal(fixture.git.trace.length, before);
+    await writeFile(join(checkout, "local.txt"), "Local work after closure\n");
+    await client.git(["add", "local.txt"], { cwd: checkout });
+    await client.git(["commit", "-m", "Local work after closure"], { cwd: checkout });
+    await client.git(["mv", "local.txt", "renamed.txt"], { cwd: checkout });
+    await client.git(["commit", "-m", "Local move after closure"], { cwd: checkout });
+    await client.git(["rm", "renamed.txt"], { cwd: checkout });
+    await client.git(["commit", "-m", "Local removal after closure"], { cwd: checkout });
+    assert.equal(
+      (await client.git(["log", "-1", "--format=%s"], { cwd: checkout })).stdout.trim(),
+      "Local removal after closure",
+    );
   });
 
   test("accepted push with a lost response is never replayed by the service", async (t) => {

@@ -1,11 +1,39 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readClientConfiguration } from "./config.ts";
-import { prepareClientCommand } from "./commands.ts";
+import { parseGhInvocation, prepareGhCommand, type ClientCommand } from "./commands.ts";
 import { createClientEnvironment } from "./environment.ts";
+import { singleSessionGitConfiguration } from "./native-git.ts";
+
+export async function executeClientCommand(
+  prepared: ClientCommand,
+  env: NodeJS.ProcessEnv,
+): Promise<number> {
+  return await new Promise<number>((resolveExit, reject) => {
+    const child = spawn(prepared.executable, prepared.arguments, { env, stdio: "inherit" });
+    const forward = (signal: NodeJS.Signals): void => {
+      child.kill(signal);
+    };
+    const interrupt = (): void => forward("SIGINT");
+    const terminate = (): void => forward("SIGTERM");
+    process.on("SIGINT", interrupt);
+    process.on("SIGTERM", terminate);
+    const cleanup = (): void => {
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", terminate);
+    };
+    child.once("error", () => {
+      cleanup();
+      reject(new Error("client-execution-failed"));
+    });
+    child.once("exit", (code, signal) => {
+      cleanup();
+      resolveExit(code ?? (signal ? 128 : 1));
+    });
+  });
+}
 
 export async function launchClient(
   directory: string,
@@ -17,40 +45,37 @@ export async function launchClient(
   }
   const sessionDirectory = resolve(directory);
   const configuration = await readClientConfiguration(sessionDirectory);
-  const home = await mkdtemp(join(tmpdir(), "repository-client-"));
-  try {
-    const env = createClientEnvironment(configuration, sessionDirectory, home);
-    const prepared = prepareClientCommand(command, args, configuration, sessionDirectory, env);
-    return await new Promise<number>((resolveExit, reject) => {
-      const child = spawn(prepared.executable, prepared.arguments, { env, stdio: "inherit" });
-      const forward = (signal: NodeJS.Signals): void => {
-        child.kill(signal);
-      };
-      const interrupt = (): void => forward("SIGINT");
-      const terminate = (): void => forward("SIGTERM");
-      process.on("SIGINT", interrupt);
-      process.on("SIGTERM", terminate);
-      const cleanup = (): void => {
-        process.off("SIGINT", interrupt);
-        process.off("SIGTERM", terminate);
-      };
-      child.once("error", () => {
-        cleanup();
-        reject(new Error("client-execution-failed"));
-      });
-      child.once("exit", (code, signal) => {
-        cleanup();
-        resolveExit(code ?? (signal ? 128 : 1));
-      });
-    });
-  } finally {
-    try {
-      await rm(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-    } catch {
-      // Cleanup must not replace an already completed mutation's exit status.
-      process.stderr.write(`repository-client-cleanup-pending ${JSON.stringify(home)}\n`);
-    }
+  if (command === "git") {
+    return executeClientCommand(
+      {
+        executable: "/usr/bin/git",
+        arguments: [
+          ...singleSessionGitConfiguration(configuration, sessionDirectory).flatMap((entry) => [
+            "-c",
+            entry,
+          ]),
+          ...args,
+        ],
+      },
+      process.env,
+    );
   }
+  if (configuration.deadlineWallMs <= Date.now()) {
+    throw new Error("repository-session-expired");
+  }
+  const env = createClientEnvironment(
+    configuration,
+    sessionDirectory,
+    process.env.HOME ?? homedir(),
+  );
+  const settings = singleSessionGitConfiguration(configuration, sessionDirectory);
+  env.GIT_CONFIG_COUNT = String(settings.length);
+  settings.forEach((setting, index) => {
+    const separator = setting.indexOf("=");
+    env[`GIT_CONFIG_KEY_${index}`] = setting.slice(0, separator);
+    env[`GIT_CONFIG_VALUE_${index}`] = setting.slice(separator + 1);
+  });
+  return executeClientCommand(prepareGhCommand(parseGhInvocation(args), configuration, env), env);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
