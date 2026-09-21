@@ -487,13 +487,26 @@ test(
           (work) =>
             work.idempotency_key === retirementKey &&
             work.state === "queued" &&
-            work.reason_code === "REPOSITORY_CLEANUP_PENDING",
+            work.reason_code === null,
         ),
       );
       assert.equal(retirement.namespace_id, namespace.id);
       assert.equal(retirement.agent_id, agent.id);
       assert.equal(retirement.revision_id, currentRevision.id);
       assert.equal(retirement.actor_id, failed.actor_id);
+      // Queued Work has no terminal reason; the worker reports pending cleanup separately.
+      await kube.waitFor("exact retirement Work pending cleanup event", () =>
+        fixture.events.some(
+          (event) =>
+            event.event === "worker.completed" &&
+            event.workId === retirementKey &&
+            event.namespaceId === namespace.id &&
+            event.agentId === agent.id &&
+            event.revisionId === currentRevision.id &&
+            event.outcome === "pending" &&
+            event.code === "REPOSITORY_CLEANUP_PENDING",
+        ),
+      );
       await kube.waitFor(
         "refused revision's actual Pod, process and Secret retirement",
         async () => {
