@@ -19,7 +19,8 @@ calls the model and runs tools. If you are new to OpenClaw Enterprise,
    response before treating a new deployment as working.
 4. **Stop when needed.** Stopping ends execution and routing but preserves
    revision history, credentials, and persistent state. Deploying again starts
-   a new revision. The public API has no Agent deletion or rollback operation.
+   a new revision. To remove the Agent and its revisions,
+   [delete it](../../reference/agents.md#deletion). There is no rollback endpoint.
 
 ## Work with an Agent
 

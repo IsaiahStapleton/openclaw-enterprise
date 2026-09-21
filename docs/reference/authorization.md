@@ -31,19 +31,20 @@ Fresh native-IAM bootstrap provisions the human administrator and one
 Installation-scoped, non-Agent ServicePrincipal. Each receives its own binding
 to the same administrator Role, with no Namespace or resource filter:
 
-| Resource kind                      | Actions                                         |
-| ---------------------------------- | ----------------------------------------------- |
-| `installation`                     | `administer`, `read`                            |
-| `namespace`                        | `create`, `read`, `delete`                      |
-| `configuration`, `service_account` | `create`, `read`, `update`, `delete`            |
-| `secret`                           | `create`, `read`, `update`, `delete`, `operate` |
-| `agent`                            | `create`, `read`, `update`, `deploy`, `operate` |
-| `agent_revision`                   | `read`                                          |
+| Resource kind                      | Actions                                                                 |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| `installation`                     | `administer`, `read`                                                    |
+| `namespace`                        | `create`, `read`, `delete`                                              |
+| `configuration`, `service_account` | `create`, `read`, `update`, `delete`                                    |
+| `secret`                           | `create`, `read`, `update`, `delete`, `operate`                         |
+| `agent`                            | `create`, `read`, `update`, `delete`, `deploy`, `operate`, `administer` |
+| `agent_revision`                   | `read`                                                                  |
 
 These grants cover existing and future Namespaces in this Installation, subject
 to exact authorization and matching Restrictions. They confer no Kubernetes or
-provider authority and no Agent-delete permission. Removing the original human
-account does not remove the service identity. See
+provider authority. Existing Installations retain their stored grants; rerunning
+bootstrap does not rewrite them. Removing the original human account does not
+remove the service identity. See
 [bootstrap authentication](authentication.md#installation-and-account-ownership)
 for credential delivery and lifecycle.
 
@@ -100,7 +101,9 @@ these actions can be granted to either a human Principal or an Agent-owned
 ServicePrincipal through an appropriately scoped Role and AccessBinding.
 
 Resource kinds currently include `installation`, `namespace`, `configuration`,
-`agent`, `agent_revision`, `secret`, and `service_account`.
+`agent`, `agent_revision`, `secret`, and `service_account`. Use the
+[permissions cheat sheet](cheatsheets/permissions.md) for the resource matrix and
+operations that require additional grants.
 
 An OCC-owned [service account](service-accounts.md) is not an IAM principal.
 Creation requires `create` in its exact Namespace; account operations require

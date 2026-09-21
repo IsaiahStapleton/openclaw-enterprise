@@ -9,6 +9,7 @@ the OpenClaw Control Plane (OCC).
 ## Cheat sheets
 
 - [API](cheatsheets/api.md): public method names by entity.
+- [Permissions](cheatsheets/permissions.md): all IAM actions, resources, and access scopes.
 - [Database entities](cheatsheets/database-entities.md): PostgreSQL tables and their columns.
 - [Environment variables](cheatsheets/environment-variables.md): variables by topic.
 

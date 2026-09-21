@@ -449,6 +449,10 @@
                     "label": "API"
                   },
                   {
+                    "page": "reference/cheatsheets/permissions",
+                    "label": "Permissions"
+                  },
+                  {
                     "page": "reference/cheatsheets/database-entities",
                     "label": "Database Entities"
                   },

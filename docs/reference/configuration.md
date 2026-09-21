@@ -164,8 +164,8 @@ The Kubernetes Configuration Driver stores live native documents in tenant Confi
 - **Configuration operation returns `404`:** Confirm the Configuration ID
   belongs to the Namespace in the request path.
 - **Configuration deletion returns `409`:** An Agent still references that
-  Configuration. Its reference must be reassigned before deletion; the current
-  API has no Agent deletion endpoint.
+  Configuration. Reassign every referencing Agent, or
+  [delete the Agents](agents.md#deletion) and wait for teardown before retrying.
 - **Configuration operation returns `503`:** Confirm the selected Driver and
   IAM service are available, Kubernetes authentication and TLS are valid,
   tenant placement is ready, exact namespaced ConfigMap access exists, and the
