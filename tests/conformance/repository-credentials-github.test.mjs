@@ -5,6 +5,7 @@ import {
   createGitHubKeyOwner,
 } from "../../apps/controller/src/drivers/repo/github/credentials/index.ts";
 import { validateServiceConfig } from "../../apps/controller/src/drivers/repo/credentials/configuration.ts";
+import { createCredentialService } from "../../apps/controller/src/drivers/repo/credentials/service.ts";
 import { createCustody } from "../../apps/controller/src/drivers/repo/credentials/custody.ts";
 import { createGitHubPlanningFixture } from "../fixtures/repository-credentials/planning.mjs";
 import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
@@ -134,6 +135,161 @@ test("gateway authentication preserves canonical syntax, token bounds and route-
     assert.deepEqual(factory.unauthenticated(head), denied);
   }
 });
+test("Git endpoint spellings share authentication and canonical request plans", async (t) => {
+  const { factory, bind } = await createGitHubPlanningFixture(t);
+  const bearer = "a".repeat(43);
+  const authorization = `Basic ${Buffer.from(`gateway-session:${bearer}`).toString("base64")}`;
+  for (const repository of ["fixture/repository", "FiXtUrE/RePoSiToRy", "FiXtUrE/RePoSiToRy.git"]) {
+    for (const service of ["upload", "receive"]) {
+      for (const method of ["GET", "POST"]) {
+        await t.test(`${method} ${repository} ${service}-pack`, () => {
+          const endpoint =
+            method === "GET" ? `info/refs?service=git-${service}-pack` : `git-${service}-pack`;
+          const head = requestHead(method, `/${repository}/${endpoint}`, {
+            "content-type": `application/x-git-${service}-pack-request`,
+            "git-protocol": "version=2",
+          });
+          assert.equal(factory.unauthenticated(head).kind, "challenge");
+          assert.equal(factory.parseAuthentication(head, authorization), bearer);
+          for (const profile of ["git-read", "git-write", "git-full"]) {
+            const plan = bind(profile).plan(head);
+            if (profile === "git-read" && service === "receive") {
+              assert.deepEqual(plan, { kind: "denied", status: 400, code: "unsupported-request" });
+            } else {
+              assert.equal(plan.kind, undefined);
+              assert.equal(plan.origin, "https://github.com");
+              assert.equal(plan.target, `/fixture/repository.git/${endpoint}`);
+              assert.equal(plan.method, method);
+              assert.equal(plan.effect, service === "receive" ? "write" : "read");
+              const rpcCategory = service === "receive" ? "git-push" : "git-fetch";
+              assert.equal(plan.category, method === "GET" ? "git-discovery" : rpcCategory);
+            }
+          }
+        });
+      }
+    }
+  }
+});
+
+test("Git normalization preserves raw endpoint and profile denial before acquisition", async (t) => {
+  const clock = createControlledClock();
+  const fixture = await startGitHubFixture(t, { clock });
+  const key = createGitHubKeyOwner({ privateKey: fixture.privateKey, appId: "12345", clock });
+  t.after(() => key.close());
+  const factory = createGitHubDriverFactory({
+    configuration: githubConfigurationData(),
+    key,
+    clock,
+    gatewayOrigin: config.gateway.publicOrigin,
+    limits: config.limits,
+    trustedEndpoints: { apiOrigin: fixture.origin, gitOrigin: fixture.origin, ca: fixture.tls.ca },
+  });
+  const service = createCredentialService({ config, factory, clock });
+  t.after(() => service.shutdown(1000));
+  const full = service.open({ durationSeconds: 3600, profile: "git-full" });
+  const read = service.open({ durationSeconds: 3600, profile: "git-read" });
+  const discovery = "/FiXtUrE/RePoSiToRy/info/refs?service=git-upload-pack";
+  const upload = "/FiXtUrE/RePoSiToRy/git-upload-pack";
+  const headers = { "content-type": "application/x-git-upload-pack-request" };
+  for (const [name, head] of [
+    ["owner prefix", requestHead("GET", discovery.replace("FiXtUrE", "FiXtUrE-other"))],
+    ["repository prefix", requestHead("GET", discovery.replace("RePoSiToRy", "RePoSiToRy-other"))],
+    ["nested suffix", requestHead("GET", discovery.replace("RePoSiToRy", "RePoSiToRy.git.git"))],
+    ["escaped character", requestHead("GET", discovery.replace("FiXtUrE", "%46iXtUrE"))],
+    ["escaped separator", requestHead("GET", discovery.replace("FiXtUrE/", "FiXtUrE%2f"))],
+    ["parent segment", requestHead("GET", discovery.replace("/info", "/../RePoSiToRy/info"))],
+    ["dot segment", requestHead("GET", discovery.replace("/info", "/./info"))],
+    ["extra separator", requestHead("GET", discovery.replace("/info", "//info"))],
+    ["network path", requestHead("GET", `/${discovery}`)],
+    ["absolute target", requestHead("GET", `https://github.com${discovery}`)],
+    ["fragment", requestHead("GET", `${discovery}#fragment`)],
+    ["endpoint casing", requestHead("GET", discovery.replace("info/refs", "Info/Refs"))],
+    ["extra path", requestHead("GET", discovery.replace("info/refs", "info/refs/extra"))],
+    ["discovery method", requestHead("POST", discovery)],
+    ["missing service", requestHead("GET", discovery.split("?")[0])],
+    ["unknown service", requestHead("GET", discovery.replace("git-upload-pack", "other"))],
+    ["escaped service", requestHead("GET", discovery.replace("git-upload", "%67it-upload"))],
+    ["duplicate query", requestHead("GET", `${discovery}&service=git-upload-pack`)],
+    ["extra query", requestHead("GET", `${discovery}&extra=1`)],
+    ["RPC method", requestHead("GET", upload, headers)],
+    ["RPC query", requestHead("POST", `${upload}?service=git-upload-pack`, headers)],
+    ["RPC media", requestHead("POST", upload)],
+    [
+      "RPC media parameters",
+      requestHead("POST", upload, { "content-type": `${headers["content-type"]}; charset=utf-8` }),
+    ],
+    ["protocol version", requestHead("GET", discovery, { "git-protocol": "version=1" })],
+  ]) {
+    await t.test(`denies ${name}`, () => {
+      assert.equal(factory.unauthenticated(head).kind, "denied");
+      const basic = `Basic ${Buffer.from(`gateway-session:${full.bearer}`).toString("base64")}`;
+      assert.equal(factory.parseAuthentication(head, basic).kind, "denied");
+      assert.deepEqual(service.reserve(full.bearer, head, new AbortController().signal), {
+        kind: "denied",
+        status: 400,
+        code: "unsupported-request",
+      });
+    });
+  }
+  for (const repository of ["FiXtUrE/RePoSiToRy", "FiXtUrE/RePoSiToRy.git"]) {
+    for (const head of [
+      requestHead("GET", `/${repository}/info/refs?service=git-receive-pack`),
+      requestHead("POST", `/${repository}/git-receive-pack`, {
+        "content-type": "application/x-git-receive-pack-request",
+      }),
+    ]) {
+      assert.equal(factory.unauthenticated(head).kind, "challenge");
+      assert.equal(service.reserve(read.bearer, head, new AbortController().signal).kind, "denied");
+    }
+  }
+  // Case/suffix normalization belongs to Git endpoints, not the REST policy.
+  for (const path of ["/repos/FiXtUrE/RePoSiToRy", "/repos/fixture/repository.git"]) {
+    assert.equal(
+      service.reserve(full.bearer, requestHead("GET", path), new AbortController().signal).kind,
+      "denied",
+    );
+  }
+  const api = service.reserve(
+    full.bearer,
+    requestHead("GET", "/repos/fixture/repository"),
+    new AbortController().signal,
+  );
+  assert.equal(service.plan(api).target, "/repos/fixture/repository");
+  service.cancel(api);
+  // Rejected requests cannot reach provider issuance or upstream mutation.
+  assert.equal(fixture.issuesOfTokens.length, 0);
+  assert.deepEqual(fixture.trace, []);
+  assert.deepEqual(fixture.errors, []);
+});
+
+test("literal .git repository names normalize against the admitted identity", async (t) => {
+  const { key } = await createGitHubPlanningFixture(t);
+  const clock = createControlledClock();
+  const factory = createGitHubDriverFactory({
+    configuration: githubConfigurationData({ repository: "Fixture/Repository.git" }),
+    key,
+    clock,
+    gatewayOrigin: config.gateway.publicOrigin,
+    limits: config.limits,
+  });
+  const bound = owner(factory, clock, "git-write", "literal-suffix");
+  for (const repository of ["fixture/repository.git", "FIXTURE/REPOSITORY.GIT.git"]) {
+    const head = requestHead("GET", `/${repository}/info/refs?service=git-upload-pack`);
+    assert.equal(factory.unauthenticated(head).kind, "challenge");
+    const plan = bound.driver.plan({ authority: bound.authority, session: {}, head });
+    assert.equal(plan.target, "/Fixture/Repository.git.git/info/refs?service=git-upload-pack");
+  }
+  // A literal suffix is part of this grant's identity; stripping it would select another repository.
+  for (const repository of ["fixture/repository", "fixture/repository.git.git.git"]) {
+    const head = requestHead("GET", `/${repository}/info/refs?service=git-upload-pack`);
+    assert.equal(factory.unauthenticated(head).kind, "denied");
+    assert.equal(
+      bound.driver.plan({ authority: bound.authority, session: {}, head }).kind,
+      "denied",
+    );
+  }
+});
+
 test("GitHub request plans reconstruct headers without forwarding caller credentials", async (t) => {
   const { bind } = await createGitHubPlanningFixture(t);
   const backend = bind();
