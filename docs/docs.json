@@ -302,6 +302,19 @@
                         "label": "Kubernetes"
                       }
                     ]
+                  },
+                  {
+                    "group": "Repository",
+                    "pages": [
+                      {
+                        "page": "guides/repository-credentials",
+                        "label": "Setup"
+                      },
+                      {
+                        "page": "reference/repository-credentials",
+                        "label": "Credential Lifecycle"
+                      }
+                    ]
                   }
                 ]
               },
@@ -729,6 +742,9 @@
               "documentation-inventory/repository-specs-1",
               "documentation-inventory/repository-specs-2",
               "documentation-inventory/repository-specs-3",
+              "flows/repository-credentials",
+              "flows/repository-credential-configuration",
+              "testing/repository-credentials",
               "flows/agent-presets"
             ]
           }

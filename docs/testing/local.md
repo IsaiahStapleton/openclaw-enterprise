@@ -17,11 +17,18 @@ pnpm test:conformance
 pnpm test:integration
 ```
 
-`check:workspace` checks the active workspace.
+`check:workspace` checks the active workspace, including the
+[repository credential source boundary](repository-credentials.md#check-source-authority-boundaries).
 The test scripts above run the same canonical workspace verification before
 their selected Node.js tests. `openapi:check` compares generated routes and the
 OpenAPI contract, HTTP API reference, and API cheat sheet with the checked-in
 versions. `typecheck` and `build` currently invoke the same TypeScript build command.
+
+The [repository credential checks](repository-credentials.md) use that controller
+output for the private common engine, GitHub backend, and configuration loader.
+`pnpm credentials:build` builds the workspace and emits the separate
+configuration-check closure; it does
+not start a credential service or package Git/gh clients at this cut.
 
 The [conformance tests](../../tests/conformance) cover domain rules and selected
 Driver contracts. Kubernetes conformance tests use fixtures and rendered

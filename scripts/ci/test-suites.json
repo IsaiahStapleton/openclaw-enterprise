@@ -227,6 +227,30 @@
             "native admin shared session configuration validates cookie scope and rejects keys",
             "native admin proxy strips browser credentials and preserves the Agent gateway base path"
           ]
+        },
+        {
+          "path": "tests/conformance/repository-credentials-source-boundary.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-contracts.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-github.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-sessions.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-custody.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-lifecycle.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-config.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-package.test.mjs"
         }
       ]
     },
