@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   Agent,
+  InitialWorkspaceFiles,
   AgentRevision,
   AgentRuntimeCredentialsInput,
   AgentRuntimeCredentialStatus,
@@ -54,6 +55,8 @@ import type {
   HarnessAuthSnapshot,
 } from "@openclaw-enterprise/contracts";
 import {
+  normalizeInitialWorkspaceFiles,
+  normalizeWorkspaceDefaultsId,
   DRIVER_CAPABILITIES,
   RESOURCE_KINDS,
   SANDBOX_FACETS,
@@ -208,6 +211,8 @@ export interface CreateNamespaceInput {
 }
 
 export interface CreateAgentInput {
+  readonly initialWorkspaceFiles?: InitialWorkspaceFiles;
+  readonly workspaceDefaultsId?: string;
   readonly namespaceId: string;
   readonly name: string;
   readonly configurationId: string;
@@ -2000,6 +2005,14 @@ export class OpenClawController {
     if (!isNonEmptyString(input.configurationId)) {
       throw new ScopeViolationError("The exact Agent Configuration identity is missing.");
     }
+    let initialWorkspaceFiles: InitialWorkspaceFiles | undefined;
+    let workspaceDefaultsId: string | undefined;
+    try {
+      initialWorkspaceFiles = normalizeInitialWorkspaceFiles(input.initialWorkspaceFiles);
+      workspaceDefaultsId = normalizeWorkspaceDefaultsId(input.workspaceDefaultsId);
+    } catch {
+      throw new ScopeViolationError("The initial workspace setup input is invalid.");
+    }
     this.rejectLegacyAgentAuth(input);
     const harnessAuth = this.harnessAuthBinding(input.harnessAuth ?? null);
     const executionMode = input.executionMode ?? "embedded";
@@ -2061,6 +2074,16 @@ export class OpenClawController {
         status: "active",
         createdAt: this.timestamp(),
       });
+      if (initialWorkspaceFiles !== undefined) {
+        await state.workspaceSetups.create({
+          id: crypto.randomUUID(),
+          namespaceId: namespace.id,
+          agentId,
+          ...(workspaceDefaultsId === undefined ? {} : { defaultsId: workspaceDefaultsId }),
+          files: initialWorkspaceFiles,
+          completed: false,
+        });
+      }
       return agent;
     });
   }
@@ -2495,6 +2518,8 @@ export class OpenClawController {
         id: agent.id,
         namespaceId: namespace.id,
       });
+      // Deletion ends delivery ownership immediately, including never-deployed Agents.
+      await state.workspaceSetups.delete(namespace.id, agent.id);
       // A repeated request converges on the in-flight teardown instead of
       // conflicting, matching deleteNamespace. The queued work item is
       // idempotent, so it is not appended twice.

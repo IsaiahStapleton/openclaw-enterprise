@@ -2,8 +2,8 @@
 
 Use the browser console at `/console/` on your OCC address to sign in, choose a
 Namespace, create, deploy, and delete Agents, and edit supported Slack or Microsoft Teams
-draft settings. You can also set up initial runtime credentials, read or replace
-supported live workspace files, and list the Agents, Providers, and Namespaces
+draft settings. You can also set initial workspace contents and runtime credentials,
+read or replace supported live workspace files, and list the Agents, Providers, and Namespaces
 you can access. When the pilot is enabled, trusted operators can open an Agent's
 [native admin UI](#open-the-native-admin-ui). The console does not offer rollback,
 live runtime health, or browser chat through OCE.
@@ -54,8 +54,9 @@ not broaden access.
 ## Agent creation and deployment
 
 The console creates an Agent and reusable Configuration, records optional
-Agent-owned plugin selections and a harness authentication binding, provisions transport/channel credentials,
-and deploys the saved draft. Follow
+Agent-owned plugin selections and a harness authentication binding, stages initial
+workspace contents, and provisions transport/channel credentials. Creation leaves
+the Agent stopped and undeployed; **Deploy** starts the saved draft. Follow
 [Create and deploy Agents](console/create-and-deploy.md) for the complete
 workflow, channel constraints, and recovery after partial or uncertain writes.
 Plugin selections use the same Agent create/update contract as the API: omitted
@@ -155,6 +156,21 @@ Logout immediately hides private content and stops pending reads. The console
 returns to login after sign-out succeeds or a session check confirms that the
 session is absent. If it cannot confirm logout, it stays on a blocking error with
 Retry. Do not treat that error as confirmation that the server session was revoked.
+
+## Set initial workspace contents
+
+The create form's **Workspace files** section contains editable OpenClaw defaults
+for `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md`. These are complete rendered
+templates, so you can keep them, replace them, or clear a field to create an empty
+file. Browser textareas submit LF newlines. The form submits all four fields,
+including unchanged values, for application before the first deployment runs.
+
+Creating the Agent stages these inputs privately. The live workspace editor
+becomes available after deployment. There is no editor for staged inputs on an
+undeployed Agent; to correct them, delete and recreate the Agent through the API.
+If creation reports that defaults changed, reload the form and review the new
+defaults before resubmitting. See [initial contents](agents.md#initial-contents-at-creation)
+for the release binding, limits, and deployment failure behavior.
 
 ## Edit workspace files
 

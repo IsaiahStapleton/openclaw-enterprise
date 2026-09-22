@@ -122,8 +122,32 @@ a replacement revision for the same Agent.
 gateway only when it still serves that revision. Embedded execution removes the
 combined gateway container. Repeating stop is safe; Docker stop does not retire
 the persisted AgentRevision or remove credentials outside the containers. The
-Driver's current writable container tmpfs is ephemeral and is not supported as
-persistent Agent storage.
+Driver retains the Agent-owned state and workspace volumes used for initial
+workspace setup across stop and revision replacement. Without initial workspace
+inputs, writable container tmpfs remains ephemeral.
+
+## Initial workspace storage
+
+When an Agent has [initial workspace contents](../agents.md#initial-contents-at-creation),
+the Driver creates two named volumes owned by its exact Namespace and Agent:
+one for native state at `/home/node/.openclaw` and one for workspace files. The
+same workspace volume is mounted at both `/home/node/.openclaw/workspace` and
+`/home/node/workspace`, so the native default and dedicated Harness directory
+refer to the same files. Initial setup accepts either path; other workspace
+locations and disabled native bootstrap are rejected.
+
+A separate setup container runs native initialization and writes the supplied
+files and completion marker before execution starts. Later startup checks the
+marker without replaying the original text. Missing initialized storage blocks
+startup. Stop, container replacement, and redeployment retain both volumes;
+Agent or Namespace deletion removes them after the owned runtimes are removed.
+These Driver-created volumes are separate from Compose's control-plane volumes
+and are not removed by `compose down --volumes`.
+
+Agents without initial inputs retain the existing tmpfs storage behavior.
+[Workspace setup](../../flows/workspace-files.md) owns the initialization and
+retry contract. The Agent admission limitation above still applies to these
+Driver capabilities.
 
 ## Credential and container-engine boundaries
 
@@ -140,8 +164,9 @@ dedicated gateway never receives the key. It must not appear in command
 arguments, API responses, audit events, logs, Compose output, Docker labels, or
 persisted controller configuration.
 
-Runtime containers receive isolated writable state and temporary directories
-inside the container. The Docker driver does not mount host workspaces,
+Runtime containers receive isolated writable state and temporary directories;
+Agents with initial inputs use the owned volumes described above for durable
+state and workspace contents. The Docker driver does not mount host workspaces,
 personal OpenClaw/Codex homes, SSH-agent sockets, cloud credentials, or
 controller credentials into workload containers.
 
@@ -149,7 +174,8 @@ The driver detects Podman's Docker-compatible API during preflight. Docker
 keeps UID/GID-owned `0700` tmpfs mount options. Podman receives the same bounded
 `1Gi` home and `64Mi` temporary filesystems using its supported mount options;
 the non-root runtime creates its `.openclaw` and workspace directories as
-`0700` before writing configuration or state.
+`0700` before writing configuration or state. For Agents with initial inputs,
+the setup container prepares ownership and permissions on the named volumes.
 
 ## Inspect owned resources
 
@@ -159,12 +185,14 @@ driver labels:
 ```bash
 docker network ls --filter label=org.openclaw.enterprise.compute-driver=docker
 docker ps --filter label=org.openclaw.enterprise.compute-driver=docker
+docker volume ls --filter label=org.openclaw.enterprise.compute-driver=docker
 ```
 
 Replace `docker` with `podman` for a Podman-backed development stack.
 
-After deleting a Namespace, the matching network and containers should be gone
-while other Namespaces remain.
+After deleting a Namespace, its matching network, containers, and Agent workspace
+volumes should be gone while other Namespaces remain. Agent deletion removes only
+that Agent's runtimes and volumes.
 
 ## Troubleshooting
 

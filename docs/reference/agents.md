@@ -177,6 +177,39 @@ and the selected-only runtime contract.
 
 ## Workspace files
 
+### Initial contents at creation
+
+`POST /namespaces/:namespaceId/agents` accepts `initialWorkspaceFiles`, an optional
+partial map of the four filenames below to strings. Replace the example Configuration ID with yours:
+
+```json
+{
+  "name": "Support assistant",
+  "configurationId": "cfg_12345678-1234-4123-8123-123456789abc",
+  "initialWorkspaceFiles": { "AGENTS.md": "Answer support questions.\n", "USER.md": "" }
+}
+```
+
+Omission or `{}` uses native initialization; omitted filenames keep native
+behavior. Empty strings create empty files. Values must satisfy the live-file
+Unicode and 16 KiB limits below; other names and non-strings are rejected.
+The API preserves whitespace and newlines. Create requests default to 448 KiB,
+including JSON escaping; configured controller limits take precedence.
+
+Creation uses existing permissions, stays undeployed, and stages inputs privately
+outside Agent, Configuration, and AgentRevision. First deployment applies them
+before execution. Completion prevents replay over later edits. Staged bytes are
+removed after activation or Agent deletion. Pending inputs have no read/update
+API; correction requires deleting and recreating the Agent.
+
+The optional `workspaceDefaultsId` is a SHA-256 defaults identity. Console sends
+all four rendered `2026.9.1` defaults with this identity. A stale identity rejects
+creation with `409 RESOURCE_CONFLICT`; runtime mismatch blocks initial setup.
+See the [workspace guide](../guides/topics/workspace-files.md) and
+[setup flow](../flows/workspace-files.md) for recovery and runtime requirements.
+
+### Live file access
+
 Read, create, or replace `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md`
 in an Agent's live workspace:
 

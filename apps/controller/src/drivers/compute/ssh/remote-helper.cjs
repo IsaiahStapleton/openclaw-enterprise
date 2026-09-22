@@ -1,5 +1,6 @@
+/* global SSH_OPERATION */
 const fs = require("node:fs");
-const { join } = require("node:path");
+const { join, resolve, isAbsolute, relative } = require("node:path");
 const { createHash, randomBytes } = require("node:crypto");
 const { execFile, spawn } = require("node:child_process");
 const { setTimeout: delay } = require("node:timers/promises");
@@ -121,6 +122,7 @@ async function userOwner(user) {
 async function probe(runtime) {
   await systemctl("--version");
   await command("sh", ["-c", "command -v flock"]);
+  await command("sh", ["-c", "command -v runuser"]);
   await command("sh", ["-c", "command -v getent"]);
   await command("sh", ["-c", "command -v groupadd"]);
   await command("sh", ["-c", "command -v useradd"]);
@@ -538,10 +540,143 @@ function launchEnvironment(input) {
   return entries.map(([name, value]) => `Environment=${name}=${value}\n`).join("");
 }
 
+// Resolve only the native main workspace, within this Agent's durable directories.
+function workspaceDirectory(input, agentDir) {
+  const agents = input.revision.configuration.agents ?? {};
+  if (
+    (agents.entries !== undefined &&
+      (typeof agents.entries !== "object" ||
+        agents.entries === null ||
+        Array.isArray(agents.entries) ||
+        Object.keys(agents.entries).some((id) => id !== "main"))) ||
+    agents.list !== undefined
+  ) {
+    throw new ConfigurationFailure("Workspace setup supports only the native main Agent.");
+  }
+  const configured =
+    agents.entries?.main?.workspace ??
+    agents.defaults?.workspace ??
+    join(agentDir, "state", "workspace");
+  if (
+    typeof configured !== "string" ||
+    !isAbsolute(configured) ||
+    !/^\/[A-Za-z0-9_./:@+-]*$/.test(configured)
+  ) {
+    throw new ConfigurationFailure("Workspace setup requires a supported absolute workspace path.");
+  }
+  const workspace = resolve(configured);
+  const managed = [join(agentDir, "state"), join(agentDir, "home")].find((root) =>
+    workspace.startsWith(`${root}/`),
+  );
+  if (managed === undefined) {
+    throw new ConfigurationFailure("Workspace setup requires this Agent's durable storage.");
+  }
+  let current = managed;
+  directory(current);
+  for (const component of relative(managed, workspace).split("/")) {
+    current = join(current, component);
+    if (inspect(current) !== undefined) {
+      directory(current);
+    }
+  }
+  return workspace;
+}
+
+async function initializeWorkspace(input, agentDir, owner) {
+  const metadataPath = join(agentDir, "workspace-setup.json");
+  const saved = inspect(metadataPath) === undefined ? undefined : readJson(metadataPath);
+  if (input.workspaceSetup === undefined && saved === undefined) {
+    return;
+  }
+  const setup = input.workspaceSetup ?? saved;
+  if (setup.namespaceId !== input.namespace.id || setup.agentId !== input.revision.agentId) {
+    throw new OwnershipFailure("Workspace setup belongs to another Agent.");
+  }
+  if (saved !== undefined) {
+    verify(saved, {
+      id: setup.id,
+      namespaceId: setup.namespaceId,
+      agentId: setup.agentId,
+      defaultsId: setup.defaultsId,
+      completed: true,
+    });
+  }
+  const scriptPath = join(agentDir, "workspace-setup.cjs");
+  if (input.workspaceSetupRuntime !== undefined) {
+    atomicWrite(scriptPath, input.workspaceSetupRuntime, 0o640, {
+      uid: process.getuid(),
+      gid: owner.gid,
+    });
+  } else {
+    regular(scriptPath);
+  }
+  const workspace = workspaceDirectory(input, agentDir);
+  const configPath = join(
+    agentDir,
+    "revisions",
+    hash(input.revision.id).slice(0, 12),
+    "openclaw.json",
+  );
+  await new Promise((resolve, reject) => {
+    child = execFile(
+      "runuser",
+      ["--user", accountName(input), "--", input.runtime.nodePath, scriptPath],
+      {
+        cwd: join(agentDir, "state"),
+        env: {
+          ...process.env,
+          HOME: join(agentDir, "home"),
+          OPENCLAW_STATE_DIR: join(agentDir, "state"),
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_EXECUTABLE: input.runtime.openclawPath,
+          OPENCLAW_WORKSPACE_DIR: workspace,
+          OPENCLAW_WORKSPACE_SETUP_ROOT: workspace,
+          OPENCLAW_WORKSPACE_SETUP_PATH: undefined,
+        },
+        timeout: 60_000,
+        maxBuffer: 64 * 1024,
+      },
+      (error) => {
+        child = undefined;
+        // Runtime diagnostics and output may include documents or config. Never forward them.
+        if (error) {
+          reject(new Error("Workspace initialization failed."));
+        } else {
+          resolve();
+        }
+      },
+    );
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify(saved ?? setup));
+  });
+  if (saved === undefined) {
+    atomicWrite(
+      metadataPath,
+      JSON.stringify({
+        id: setup.id,
+        namespaceId: setup.namespaceId,
+        agentId: setup.agentId,
+        ...(setup.defaultsId === undefined ? {} : { defaultsId: setup.defaultsId }),
+        completed: true,
+      }),
+      0o640,
+      { uid: process.getuid(), gid: owner.gid },
+    );
+  }
+}
+
 function renderUnit(input, agentDir, port, runtimeUser) {
   const { runtime, revision } = input;
   const token = revision.configuration.gateway?.auth?.mode !== "trusted-proxy";
   const extraEnvironment = launchEnvironment(input);
+  const setup =
+    inspect(join(agentDir, "workspace-setup.json")) === undefined
+      ? ""
+      : `Environment=OPENCLAW_EXECUTABLE=${runtime.openclawPath}\n` +
+        `Environment=OPENCLAW_WORKSPACE_DIR=${workspaceDirectory(input, agentDir)}\n` +
+        `Environment=OPENCLAW_WORKSPACE_SETUP_ROOT=${workspaceDirectory(input, agentDir)}\n` +
+        `Environment=OPENCLAW_WORKSPACE_SETUP_PATH=${agentDir}/workspace-setup.json\n` +
+        `ExecStartPre=${runtime.nodePath} ${agentDir}/workspace-setup.cjs\n`;
   return `[Unit]
 Description=OpenClaw Enterprise gateway ${revision.agentId}
 ${unitHeader(revision.namespaceId, revision.agentId)}
@@ -557,7 +692,7 @@ Environment=OPENCLAW_STATE_DIR=${agentDir}/state
 Environment=OPENCLAW_CONFIG_PATH=${agentDir}/current/openclaw.json
 Environment=OPENCLAW_GATEWAY_PORT=${port}
 ${extraEnvironment}${token ? `EnvironmentFile=${agentDir}/gateway.env\n` : ""}EnvironmentFile=-${agentDir}/env
-ExecStart=${runtime.nodePath} ${runtime.openclawPath} gateway --port ${port}
+${setup}ExecStart=${runtime.nodePath} ${runtime.openclawPath} gateway --port ${port}
 Restart=always
 RestartSec=2
 KillSignal=SIGTERM
@@ -674,6 +809,7 @@ async function prepare(input, nsDir) {
       regular(tokenFile);
     }
   }
+  await initializeWorkspace(input, agentDir, owner);
   return { ready: true };
 }
 
@@ -689,6 +825,7 @@ async function activate(input, agentDir, agent, current) {
   ) {
     throw new OwnershipFailure("Revision number belongs to another immutable revision.");
   }
+  await initializeWorkspace(input, agentDir, await verifyRuntimeIdentity(input, agent));
   directory(input.runtime.systemdUnitDirectory);
   const unit = unitName(revision.agentId);
   const unitPath = join(input.runtime.systemdUnitDirectory, unit);
@@ -869,7 +1006,7 @@ const heartbeat = setInterval(() => {
 
 function parseInput() {
   try {
-    const input = JSON.parse(Buffer.from(process.argv[2], "base64").toString("utf8"));
+    const input = JSON.parse(Buffer.from(SSH_OPERATION, "base64").toString("utf8"));
     if (Number.isSafeInteger(input.deadlineMs) && input.deadlineMs > 0) {
       return input;
     }

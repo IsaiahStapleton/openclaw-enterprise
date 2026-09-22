@@ -58,6 +58,12 @@ export function bindPlatformUnitOfWork(
       "deleteServiceAccount",
       "hasReferences",
     ]),
+    workspaceSetups: bindRepository(repositories.workspaceSetups, lifetime, [
+      "find",
+      "create",
+      "complete",
+      "delete",
+    ]),
     agents: bindRepository(repositories.agents, lifetime, [
       "findAgent",
       "listAgents",

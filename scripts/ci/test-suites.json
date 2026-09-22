@@ -229,6 +229,9 @@
           ]
         },
         {
+          "path": "tests/integration/workspace-setup-api.test.mjs"
+        },
+        {
           "path": "tests/conformance/repository-credentials-source-boundary.test.mjs"
         },
         {
@@ -519,6 +522,20 @@
           ]
         },
         {
+          "path": "tests/integration/postgres-workspace-setup.test.mjs",
+          "expectedTests": [
+            "OCC stages workspace input atomically, isolates it, and clears bytes on completion or deletion",
+            "PostgreSQL workspace setup survives reopen and enforces immutable input and completed state"
+          ]
+        },
+        {
+          "path": "tests/integration/workspace-setup-worker.test.mjs",
+          "expectedTests": [
+            "worker retains exact-Agent workspace input through activation failure and purges it only after success",
+            "worker rejects unsupported workspace setup before Compute preparation and retains pending files"
+          ]
+        },
+        {
           "path": "tests/integration/postgres-repository-sessions.test.mjs"
         }
       ]
@@ -595,6 +612,15 @@
             "production Helm logging Collector is opt-in and isolated from application credentials",
             "production Helm logging rejects mutable images, broad egress, and shared application Secrets"
           ]
+        },
+        {
+          "path": "tests/integration/workspace-setup-runtime.test.mjs",
+          "expectedTests": [
+            "workspace setup fails closed for invalid delivery, lost completed workspace, and symlink escape",
+            "native workspace setup preserves stock provisioning, template parity, and later edits across restart",
+            "native workspace setup preserves empty/exact API content and resumes partial writes without clobbering divergence",
+            "native workspace setup rejects stale defaults and hard-linked files without modifying external data"
+          ]
         }
       ]
     },
@@ -662,7 +688,9 @@
           "path": "tests/integration/docker-compute-real.test.mjs",
           "expectedTests": [
             "Docker Compose cleanup preserves the selected engine and removes volumes only when requested",
-            "Docker Compose development drives Docker Compute networks, containers, auth, cleanup, and real model turns"
+            "Docker Compose development drives Docker Compute networks, containers, auth, cleanup, and real model turns",
+            "Docker embedded workspace setup guards first runtime and preserves files across container replacement",
+            "Docker dedicated workspace setup guards first runtime and preserves files across container replacement"
           ]
         }
       ]

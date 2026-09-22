@@ -20,6 +20,9 @@ import { AuditEventFactory, type AuditSink } from "@openclaw-enterprise/audit";
 import { AuthAccountRoleNotFoundError, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
 import {
   harnessAuthBindingFromSnapshot,
+  WORKSPACE_DEFAULTS_ID,
+  normalizeInitialWorkspaceFiles,
+  type InitialWorkspaceFiles,
   PresetValidationError,
   ErrorResponse,
   AgentRuntimeCredentialResponse,
@@ -226,6 +229,8 @@ class RequestFailure extends Error {
 }
 
 const DEFAULT_BODY_LIMIT = 64 * 1024;
+// Four 16 KiB documents can expand sixfold in JSON, plus the ordinary create fields.
+const AGENT_CREATE_BODY_LIMIT = 448 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT = 48 * 1024;
 const WORKSPACE_FILE_CONTENT_LIMIT = 16 * 1024;
 const NATIVE_ADMIN_PROXY_ADMISSION_TIMEOUT_MS = 5_000;
@@ -1707,7 +1712,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
     const contentLength = request.headers["content-length"];
-    if (typeof contentLength === "string" && Number(contentLength) > bodyLimit) {
+    if (
+      typeof contentLength === "string" &&
+      Number(contentLength) > (request.routeOptions.bodyLimit ?? bodyLimit)
+    ) {
       throw failure(413, "PAYLOAD_TOO_LARGE", "The request body exceeds the permitted size.");
     }
   });
@@ -2533,9 +2541,34 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     }
 
     if (operation.operationId === "createAgent") {
+      try {
+        normalizeInitialWorkspaceFiles(body?.initialWorkspaceFiles);
+      } catch {
+        throw failure(
+          400,
+          "INVALID_REQUEST",
+          "Initial workspace files must use the four allowed names and valid Unicode without NUL, within 16 KiB per file.",
+        );
+      }
+      if (
+        body?.workspaceDefaultsId !== undefined &&
+        body.workspaceDefaultsId !== WORKSPACE_DEFAULTS_ID
+      ) {
+        throw failure(
+          409,
+          "RESOURCE_CONFLICT",
+          "Workspace defaults changed. Reload the create form before submitting.",
+        );
+      }
       const agent = await controller.transact(async (unit) => {
         const created = await controller!.createAgent(context.actorId, {
           namespaceId,
+          ...(body?.initialWorkspaceFiles === undefined
+            ? {}
+            : { initialWorkspaceFiles: body.initialWorkspaceFiles as InitialWorkspaceFiles }),
+          ...(body?.workspaceDefaultsId === undefined
+            ? {}
+            : { workspaceDefaultsId: body.workspaceDefaultsId as string }),
           name: body?.name as string,
           configurationId: body?.configurationId as string,
           ...(body?.providerId === undefined
@@ -3567,7 +3600,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         url: operation.path,
         ...(operation.operationId === "putAgentWorkspaceFile"
           ? { bodyLimit: WORKSPACE_FILE_BODY_LIMIT }
-          : {}),
+          : operation.operationId === "createAgent"
+            ? { bodyLimit: options.maxBodyBytes ?? AGENT_CREATE_BODY_LIMIT }
+            : {}),
         schema,
         onRequest: async (request) => admit(request, operation),
         preValidation: async (request) => {

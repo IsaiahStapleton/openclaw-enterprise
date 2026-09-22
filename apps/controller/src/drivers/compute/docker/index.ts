@@ -3,6 +3,9 @@ import { request as httpRequest } from "node:http";
 import type {
   AgentRevision,
   ComputeDriver,
+  ComputeAgentBinding,
+  ComputeRevisionContext,
+  WorkspaceSetup,
   ComputeReadiness,
   Driver,
   Namespace,
@@ -12,6 +15,11 @@ import type {
 } from "@openclaw-enterprise/contracts";
 import { admittedLoggingLevel } from "@openclaw-enterprise/contracts";
 import { asRecord, immutableCopy, isNonEmptyString, sha256Hex } from "@openclaw-enterprise/utils";
+import {
+  WORKSPACE_SETUP_RUNTIME,
+  workspaceSetupMainAgent,
+  workspaceSetupVerifier,
+} from "../workspace-setup-runtime.ts";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import {
@@ -42,6 +50,7 @@ interface DockerContainerInspect {
   };
   readonly State?: {
     readonly Running?: boolean;
+    readonly ExitCode?: number;
     readonly Health?: {
       readonly Status?: string;
     };
@@ -74,6 +83,7 @@ interface RuntimeContainerInput {
   readonly healthcheckScript: string;
   readonly exposedPort: number;
   readonly labels?: Readonly<Record<string, string>>;
+  readonly workspaceSetup?: boolean;
   readonly portBindings?: Readonly<
     Record<string, readonly { readonly HostIp: string; readonly HostPort: string }[]>
   >;
@@ -241,6 +251,7 @@ function dockerLoggingAddress(value: string | undefined): string | undefined {
 export class DockerComputeDriver implements ComputeDriver {
   readonly id = DRIVER_ID;
   readonly capability = "compute" as const;
+  readonly supportsWorkspaceSetup = true as const;
   readonly implementation = DRIVER_IMPLEMENTATION;
   private readonly options: DockerComputeDriverOptions;
   private lifecycle = new ComputeLifecycleDispatcher([]);
@@ -323,6 +334,7 @@ export class DockerComputeDriver implements ComputeDriver {
     try {
       const existing = await this.network(name);
       if (existing === undefined) {
+        await this.removeWorkspaceVolumes({ namespaceId: namespace.id });
         return { ...result, namespaceDeleted: true };
       }
       this.verifyOwnership(existing.Labels, { namespaceId: namespace.id }, `network ${name}`);
@@ -330,6 +342,7 @@ export class DockerComputeDriver implements ComputeDriver {
       for (const containerId of await this.containerIdsForNamespace(namespace.id)) {
         await this.removeContainer(containerId, true);
       }
+      await this.removeWorkspaceVolumes({ namespaceId: namespace.id });
       await this.removeNetwork(name);
       return { ...result, namespaceDeleted: true };
     } catch (error) {
@@ -343,7 +356,10 @@ export class DockerComputeDriver implements ComputeDriver {
     );
   }
 
-  async prepareRevision(revision: AgentRevision): Promise<ComputeReadiness> {
+  async prepareRevision(
+    revision: AgentRevision,
+    context?: ComputeRevisionContext,
+  ): Promise<ComputeReadiness> {
     if (revision.harnessAuth !== undefined) {
       this.validateHarnessAuth();
     }
@@ -390,33 +406,52 @@ export class DockerComputeDriver implements ComputeDriver {
     let agentCreated: string | undefined;
     let gatewayCreated: string | undefined;
     try {
+      if (context?.workspaceSetup !== undefined) {
+        await this.initializeWorkspace(prepared, context.workspaceSetup);
+      }
       const launch = await this.lifecycle.beforeWorkloadStart(prepared);
       launchPrepared = true;
       const provider = this.providerEnvironment();
       if (prepared.harness.mode === "embedded") {
-        const gateway = await this.reconcileGateway(prepared, network, {
-          ...provider,
-          ...launch.environment,
-          ...this.pluginRuntimeEnvironmentForWorkload(pluginRuntime, "gateway", true),
-        });
+        const gateway = await this.reconcileGateway(
+          prepared,
+          network,
+          {
+            ...provider,
+            ...launch.environment,
+            ...this.pluginRuntimeEnvironmentForWorkload(pluginRuntime, "gateway", true),
+          },
+          context?.workspaceSetup,
+        );
         gatewayCreated = gateway.created ? gateway.containerName : undefined;
         return { ...result, ready: gateway.ready };
       }
 
-      const agent = await this.reconcileAgent(prepared, network, loggingLevel, {
-        ...provider,
-        ...launch.environment,
-        ...this.pluginRuntimeEnvironmentForWorkload(pluginRuntime, "agent", false),
-      });
+      const agent = await this.reconcileAgent(
+        prepared,
+        network,
+        loggingLevel,
+        {
+          ...provider,
+          ...launch.environment,
+          ...this.pluginRuntimeEnvironmentForWorkload(pluginRuntime, "agent", false),
+        },
+        context?.workspaceSetup,
+      );
       agentCreated = agent.created ? agent.containerName : undefined;
       if (!agent.ready) {
         return result;
       }
-      const gateway = await this.reconcileGateway(prepared, network, {
-        APP_SERVER_URL: `ws://${agent.containerName}:${AGENT_TRANSPORT_PORT}`,
-        APP_SERVER_TOKEN: agent.appServerToken,
-        ...this.pluginRuntimeEnvironmentForWorkload(pluginRuntime, "gateway", false),
-      });
+      const gateway = await this.reconcileGateway(
+        prepared,
+        network,
+        {
+          APP_SERVER_URL: `ws://${agent.containerName}:${AGENT_TRANSPORT_PORT}`,
+          APP_SERVER_TOKEN: agent.appServerToken,
+          ...this.pluginRuntimeEnvironmentForWorkload(pluginRuntime, "gateway", false),
+        },
+        context?.workspaceSetup,
+      );
       gatewayCreated = gateway.created ? gateway.containerName : undefined;
       return { ...result, ready: gateway.ready };
     } catch (error) {
@@ -486,10 +521,252 @@ export class DockerComputeDriver implements ComputeDriver {
     }
   }
 
+  async deleteAgentRuntimeCredentials(binding: ComputeAgentBinding): Promise<void> {
+    if (binding.agent.namespaceId !== binding.namespace.id) {
+      throw new OwnershipFailure("Workspace storage must belong to the exact Agent namespace.");
+    }
+    const ownership = { namespaceId: binding.namespace.id, agentId: binding.agent.id };
+    const initializerName = `${this.gatewayContainerName(binding.namespace.id, binding.agent.id)}-setup`;
+    const initializer = await this.container(initializerName);
+    if (initializer !== undefined) {
+      this.verifyOwnership(initializer.Config?.Labels, ownership, `container ${initializerName}`);
+      await this.removeContainer(initializerName, true);
+    }
+    await this.removeWorkspaceVolumes(ownership);
+  }
+
+  private workspaceMounts(ownership: Ownership): readonly {
+    readonly Type: "volume";
+    readonly Source: string;
+    readonly Target: string;
+  }[] {
+    if (ownership.agentId === undefined) {
+      throw new OwnershipFailure("Workspace storage requires an exact Agent.");
+    }
+    const prefix = `oce-${sha256Hex(ownership.namespaceId, 12)}-${sha256Hex(ownership.agentId, 12)}`;
+    return [
+      { Type: "volume", Source: `${prefix}-state`, Target: "/home/node/.openclaw" },
+      { Type: "volume", Source: `${prefix}-workspace`, Target: "/home/node/workspace" },
+      { Type: "volume", Source: `${prefix}-workspace`, Target: "/home/node/.openclaw/workspace" },
+    ];
+  }
+
+  private workspaceDirectory(revision: Readonly<AgentRevision>): string {
+    const agents = asRecord(revision.configuration.agents);
+    const defaults = asRecord(agents?.defaults);
+    const main = workspaceSetupMainAgent(revision.configuration);
+    if (main === undefined) {
+      throw new ConfigurationFailure("Workspace setup requires only the native main Agent.");
+    }
+    const workspace = main?.workspace ?? defaults?.workspace ?? "/home/node/.openclaw/workspace";
+    if (
+      (workspace !== "/home/node/.openclaw/workspace" && workspace !== "/home/node/workspace") ||
+      defaults?.skipBootstrap === true ||
+      defaults?.skipOptionalBootstrapFiles === true ||
+      main?.skipBootstrap === true ||
+      main?.skipOptionalBootstrapFiles === true
+    ) {
+      throw new ConfigurationFailure(
+        "Workspace setup requires native bootstrap in exact-Agent managed storage.",
+      );
+    }
+    return workspace;
+  }
+
+  private async initializeWorkspace(
+    revision: Readonly<AgentRevision>,
+    setup: Readonly<WorkspaceSetup>,
+  ): Promise<void> {
+    if (setup.namespaceId !== revision.namespaceId || setup.agentId !== revision.agentId) {
+      throw new OwnershipFailure("Workspace setup must belong to the exact Agent.");
+    }
+    const workspace = this.workspaceDirectory(revision);
+    const ownership = this.gatewayOwnership(revision);
+    const mounts = this.workspaceMounts(ownership);
+    for (const mount of new Map(mounts.map((mount) => [mount.Source, mount])).values()) {
+      let volume: { Labels?: Readonly<Record<string, string>> } | undefined;
+      try {
+        volume = (await this.request(
+          "GET",
+          `/volumes/${encodeURIComponent(mount.Source)}`,
+          undefined,
+          [200],
+        )) as typeof volume;
+      } catch (error) {
+        if (statusCode(error) !== 404) {
+          throw error;
+        }
+      }
+      if (volume === undefined) {
+        if (setup.completed) {
+          throw new ConfigurationFailure("Initialized workspace storage is missing.");
+        }
+        volume = (await this.request(
+          "POST",
+          "/volumes/create",
+          {
+            Name: mount.Source,
+            Labels: { ...this.ownershipMetadata(ownership), [ROLE_LABEL]: "workspace" },
+          },
+          [201],
+        )) as typeof volume;
+      }
+      this.verifyOwnership(volume?.Labels, ownership, `volume ${mount.Source}`);
+      if (volume?.Labels?.[ROLE_LABEL] !== "workspace") {
+        throw new OwnershipFailure("Refusing unrelated Docker workspace storage.");
+      }
+    }
+    const name = `${this.gatewayContainerName(revision.namespaceId, revision.agentId)}-setup`;
+    const existing = await this.container(name);
+    if (existing !== undefined) {
+      this.verifyOwnership(existing.Config?.Labels, ownership, `container ${name}`);
+      if (existing.State?.Running) {
+        throw new Error("Workspace initialization is already running.");
+      }
+      await this.removeContainer(name, true);
+    }
+    await this.request(
+      "POST",
+      `/containers/create?name=${encodeURIComponent(name)}`,
+      {
+        Image: this.options.images.gateway,
+        User: "0:0",
+        Entrypoint: ["node"],
+        Cmd: [
+          "-e",
+          `
+const setupFs = require("node:fs");
+for (const path of ["/home/node/.openclaw", "/home/node/workspace"]) {
+  setupFs.chownSync(path, 1000, 1000);
+  setupFs.chmodSync(path, 0o700);
+}
+process.setgid(1000);
+process.setuid(1000);
+${WORKSPACE_SETUP_RUNTIME}`,
+        ],
+        Env: [
+          "HOME=/home/node",
+          "OPENCLAW_STATE_DIR=/home/node/.openclaw",
+          "OPENCLAW_EXECUTABLE=/app/openclaw.mjs",
+          "OPENCLAW_WORKSPACE_SETUP_PATH=/run/oce-workspace-setup.json",
+          `OPENCLAW_WORKSPACE_DIR=${workspace}`,
+          `OPENCLAW_WORKSPACE_SETUP_ROOT=${workspace}`,
+        ],
+        Labels: { ...this.ownershipMetadata(ownership), [ROLE_LABEL]: "workspace-setup" },
+        HostConfig: {
+          NetworkMode: "none",
+          CapDrop: ["ALL"],
+          CapAdd: ["CHOWN", "SETUID", "SETGID", "FOWNER"],
+          SecurityOpt: ["no-new-privileges"],
+          Mounts: mounts,
+          LogConfig: { Type: "none" },
+        },
+      },
+      [201],
+    );
+    try {
+      // Docker's archive endpoint keeps the payload out of container arguments and metadata.
+      // A single fixed-name, owner-only ustar entry is sufficient; no host files are staged.
+      const payload = Buffer.from(JSON.stringify(setup));
+      const header = Buffer.alloc(512);
+      header.write("oce-workspace-setup.json", 0);
+      for (const [offset, value, width] of [
+        [100, 0o600, 8],
+        [108, 1000, 8],
+        [116, 1000, 8],
+        [124, payload.length, 12],
+        [136, 0, 12],
+      ] as const) {
+        header.write(value.toString(8).padStart(width - 1, "0") + "\0", offset);
+      }
+      header.fill(32, 148, 156);
+      header.write("0", 156);
+      header.write("ustar\0", 257);
+      header.write("00", 263);
+      const checksum = header.reduce((sum, byte) => sum + byte, 0);
+      header.write(checksum.toString(8).padStart(6, "0") + "\0 ", 148);
+      const archive = Buffer.concat([
+        header,
+        payload,
+        Buffer.alloc(((512 - (payload.length % 512)) % 512) + 1024),
+      ]);
+      await this.request(
+        "PUT",
+        `/containers/${encodeURIComponent(name)}/archive?path=%2Frun`,
+        archive,
+        [200],
+      );
+      await this.request(
+        "POST",
+        `/containers/${encodeURIComponent(name)}/start`,
+        undefined,
+        [204, 304],
+      );
+      const started = Date.now();
+      while (Date.now() - started < STARTUP_TIMEOUT_MS) {
+        const inspected = await this.container(name);
+        if (inspected === undefined) {
+          throw new Error("Workspace initializer disappeared.");
+        }
+        if (inspected.State?.Running === false) {
+          if (inspected.State.ExitCode !== 0) {
+            throw new Error("Workspace initialization failed.");
+          }
+          return;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error("Workspace initialization timed out.");
+    } finally {
+      await this.removeContainer(name, true);
+    }
+  }
+
+  private async removeWorkspaceVolumes(ownership: Ownership): Promise<void> {
+    const labels = { ...this.ownershipMetadata(ownership), [ROLE_LABEL]: "workspace" };
+    const filters = encodeURIComponent(
+      JSON.stringify({ label: Object.entries(labels).map(([key, value]) => `${key}=${value}`) }),
+    );
+    const listed = (await this.request("GET", `/volumes?filters=${filters}`, undefined, [200])) as {
+      Volumes?: readonly { Name?: string; Labels?: Readonly<Record<string, string>> }[];
+    };
+    for (const volume of listed.Volumes ?? []) {
+      if (volume.Name === undefined) {
+        continue;
+      }
+      // Reinspect immediately before deletion rather than trusting the list response.
+      let current: { Labels?: Readonly<Record<string, string>> };
+      try {
+        current = (await this.request(
+          "GET",
+          `/volumes/${encodeURIComponent(volume.Name)}`,
+          undefined,
+          [200],
+        )) as typeof current;
+      } catch (error) {
+        if (statusCode(error) === 404) {
+          continue;
+        }
+        throw error;
+      }
+      this.verifyOwnership(current.Labels, ownership, `volume ${volume.Name}`);
+      if (current.Labels?.[ROLE_LABEL] !== "workspace") {
+        throw new OwnershipFailure("Refusing unrelated Docker volume.");
+      }
+      await this.request(
+        "DELETE",
+        `/volumes/${encodeURIComponent(volume.Name)}`,
+        undefined,
+        [204, 404],
+      );
+    }
+  }
+
   private async reconcileGateway(
     revision: Readonly<AgentRevision>,
     network: string,
     environment: Readonly<Record<string, string>>,
+    workspaceSetup?: Readonly<WorkspaceSetup>,
   ): Promise<{
     readonly containerName: string;
     readonly created: boolean;
@@ -535,6 +812,7 @@ export class DockerComputeDriver implements ComputeDriver {
       network,
       ownership,
       role: "gateway",
+      workspaceSetup: workspaceSetup !== undefined,
       environment: {
         ...environment,
         OPENCLAW_CONFIG_JSON: configuration,
@@ -547,7 +825,11 @@ export class DockerComputeDriver implements ComputeDriver {
         OPENCLAW_STATE_DIR: "/home/node/.openclaw",
         HOME: "/home/node",
       },
-      command: GATEWAY_RUNTIME_ENTRYPOINT,
+      command:
+        (workspaceSetup === undefined
+          ? ""
+          : workspaceSetupVerifier(workspaceSetup, this.workspaceDirectory(revision))) +
+        GATEWAY_RUNTIME_ENTRYPOINT,
       healthcheckScript: `fetch("http://127.0.0.1:${GATEWAY_PORT}/readyz").then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1));`,
       exposedPort: GATEWAY_PORT,
       labels: {
@@ -569,6 +851,7 @@ export class DockerComputeDriver implements ComputeDriver {
     network: string,
     loggingLevel: LoggingLevel,
     environment: Readonly<Record<string, string>>,
+    workspaceSetup?: Readonly<WorkspaceSetup>,
   ): Promise<{
     readonly containerName: string;
     readonly created: boolean;
@@ -594,6 +877,14 @@ export class DockerComputeDriver implements ComputeDriver {
       }
       await this.removeContainer(containerName, true);
     }
+    // OCC admission requires all native entries to share the same primary model.
+    const agents = asRecord(revision.configuration.agents);
+    const selection =
+      asRecord(agents?.defaults)?.model ??
+      Object.values(asRecord(agents?.entries) ?? {})
+        .map((entry) => asRecord(entry)?.model)
+        .find((model) => model !== undefined);
+    const model = typeof selection === "string" ? selection : asRecord(selection)?.primary;
     const appServerToken = randomBytes(32).toString("hex");
     await this.createRuntimeContainer({
       name: containerName,
@@ -601,17 +892,24 @@ export class DockerComputeDriver implements ComputeDriver {
       network,
       ownership,
       role: "agent",
+      workspaceSetup: workspaceSetup !== undefined,
       environment: {
         ...environment,
         APP_SERVER_PORT: String(AGENT_TRANSPORT_PORT),
         APP_SERVER_TOKEN: appServerToken,
         CODEX_HOME: "/home/node/.codex",
+        CODEX_LOGIN_MODE: "api_key",
+        ...(typeof model === "string" ? { OPENCLAW_HARNESS_MODEL: model } : {}),
         LOG_FORMAT: "json",
         RUST_LOG: `${loggingLevel},codex_otel=off`,
         HOME: "/home/node",
         PATH: "/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
       },
-      command: AGENT_RUNTIME_ENTRYPOINT,
+      command:
+        (workspaceSetup === undefined
+          ? ""
+          : workspaceSetupVerifier(workspaceSetup, this.workspaceDirectory(revision))) +
+        AGENT_RUNTIME_ENTRYPOINT,
       healthcheckScript: AGENT_READINESS_ENTRYPOINT,
       exposedPort: AGENT_TRANSPORT_PORT,
       labels: {
@@ -653,6 +951,7 @@ export class DockerComputeDriver implements ComputeDriver {
         },
         HostConfig: {
           NetworkMode: input.network,
+          ...(input.workspaceSetup ? { Mounts: this.workspaceMounts(input.ownership) } : {}),
           ReadonlyRootfs: true,
           CapDrop: ["ALL"],
           SecurityOpt: ["no-new-privileges"],
@@ -940,7 +1239,8 @@ export class DockerComputeDriver implements ComputeDriver {
       signal,
       () =>
         new Promise<unknown>((resolve, reject) => {
-          const payload = body === undefined ? undefined : JSON.stringify(body);
+          const payload =
+            body === undefined ? undefined : Buffer.isBuffer(body) ? body : JSON.stringify(body);
           const request = httpRequest(
             {
               socketPath: SOCKET_PATH,
@@ -951,7 +1251,9 @@ export class DockerComputeDriver implements ComputeDriver {
                 payload === undefined
                   ? undefined
                   : {
-                      "content-type": "application/json",
+                      "content-type": Buffer.isBuffer(body)
+                        ? "application/x-tar"
+                        : "application/json",
                       "content-length": Buffer.byteLength(payload),
                     },
             },

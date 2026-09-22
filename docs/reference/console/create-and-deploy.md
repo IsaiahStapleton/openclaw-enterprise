@@ -32,10 +32,15 @@ Agent; it does not verify an Agent you create in the console.
 5. Choose how the Agent will authenticate to its model. Use one of the options
    below, or choose **None** to save a draft and select a method later. A draft
    without a compatible method cannot be deployed.
-6. Select **Create Agent**. A successful save opens the Agent detail page on
-   **Saved draft**. No revision or workload exists yet. You can create or edit
-   [workspace files](../console.md#edit-workspace-files) after deployment, once
-   the gateway is reachable; the creation form does not save file contents.
+6. Review **Workspace files**. Each field contains its rendered OpenClaw default.
+   Edit any of the four files, keep the text to submit that default, or clear a
+   field to create an empty file. The browser submits LF newlines. See
+   [initial contents](../agents.md#initial-contents-at-creation) for limits.
+7. Select **Create Agent**. A successful save opens the Agent detail page on
+   **Saved draft**. No revision or workload exists yet. OCC privately stages the
+   initial contents for application before the first deployment runs. After
+   deployment, use the [live workspace editor](../console.md#edit-workspace-files).
+   Pending inputs have no update API; see [workspace recovery](../../guides/topics/workspace-files.md#set-files-when-creating-an-agent).
 
 | Authentication option            | What you need                                                                                                                                                                                                                             |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

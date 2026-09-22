@@ -10,6 +10,7 @@ import {
 import type {
   AccessBinding,
   Agent,
+  WorkspaceSetup,
   AgentRevision,
   AuditEvent,
   Group,
@@ -44,6 +45,7 @@ import {
 } from "../errors.ts";
 import type {
   AgentRepository,
+  WorkspaceSetupRepository,
   AgentRevisionRepository,
   ConfigurationOwnership,
   ConfigurationRepository,
@@ -1794,6 +1796,69 @@ export class PostgresPlatformState implements PlatformStateStore {
       return found === undefined ? undefined : agentFromRow(found);
     };
 
+    const setupFromRow = (row: PostgresRow): Readonly<WorkspaceSetup> =>
+      immutableCopy({
+        id: row.id as string,
+        namespaceId: row.namespace_id as string,
+        agentId: row.agent_id as string,
+        ...(row.defaults_id === null ? {} : { defaultsId: row.defaults_id as string }),
+        ...(row.files === null ? {} : { files: row.files as NonNullable<WorkspaceSetup["files"]> }),
+        completed: row.completed as boolean,
+      });
+    const workspaceSetups: WorkspaceSetupRepository = {
+      find: async (namespaceId, agentId) => {
+        const row = rows(
+          (
+            await client.query(
+              "SELECT id, namespace_id, agent_id, defaults_id, files, completed FROM occ.workspace_setups WHERE namespace_id = $1 AND agent_id = $2",
+              [namespaceId, agentId],
+            )
+          ).rows,
+        )[0];
+        return row === undefined ? undefined : setupFromRow(row);
+      },
+      create: async (setup) => {
+        const row = rows(
+          (
+            await client.query(
+              `INSERT INTO occ.workspace_setups (id, namespace_id, agent_id, defaults_id, files, completed)
+           VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING *`,
+              [
+                setup.id,
+                setup.namespaceId,
+                setup.agentId,
+                setup.defaultsId ?? null,
+                setup.files === undefined ? null : JSON.stringify(setup.files),
+                setup.completed,
+              ],
+            )
+          ).rows,
+        )[0];
+        return setupFromRow(row!);
+      },
+      complete: async (namespaceId, agentId, id) => {
+        const row = rows(
+          (
+            await client.query(
+              `UPDATE occ.workspace_setups SET files = NULL, completed = true
+           WHERE namespace_id = $1 AND agent_id = $2 AND id = $3 RETURNING *`,
+              [namespaceId, agentId, id],
+            )
+          ).rows,
+        )[0];
+        return row === undefined ? undefined : setupFromRow(row);
+      },
+      delete: async (namespaceId, agentId) =>
+        rows(
+          (
+            await client.query(
+              "DELETE FROM occ.workspace_setups WHERE namespace_id = $1 AND agent_id = $2 RETURNING id",
+              [namespaceId, agentId],
+            )
+          ).rows,
+        ).length > 0,
+    };
+
     const agents: AgentRepository = {
       findAgent,
       lockAgent: async (namespaceId, agentId) => findAgent(namespaceId, agentId, true),
@@ -2334,6 +2399,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       secrets,
       serviceAccounts,
       agents,
+      workspaceSetups,
       revisions,
       iamPolicy,
       repositorySessions: postgresRepositorySessions(client),

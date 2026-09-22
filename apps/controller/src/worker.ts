@@ -2132,7 +2132,19 @@ export class ControllerWorker {
     } else {
       harnessAuth = revision.harnessAuth;
     }
-    return { context: { secretEnvironment: Object.freeze(resolved), harnessAuth } };
+    const workspaceSetup = await this.state.read((view) =>
+      view.workspaceSetups.find(revision.namespaceId, revision.agentId),
+    );
+    if (workspaceSetup !== undefined && this.compute.supportsWorkspaceSetup !== true) {
+      return { result: { outcome: "permanent", code: "WORKSPACE_SETUP_UNSUPPORTED" } };
+    }
+    return {
+      context: {
+        secretEnvironment: Object.freeze(resolved),
+        harnessAuth,
+        ...(workspaceSetup === undefined ? {} : { workspaceSetup }),
+      },
+    };
   }
 
   private async withClaimHeartbeat<T>(
@@ -2469,6 +2481,10 @@ export class ControllerWorker {
       ) {
         await queue.retry(claim, { code: "ACTIVE_REVISION_CHANGED" });
         return;
+      }
+      const setup = await unit.workspaceSetups.find(revision.namespaceId, revision.agentId);
+      if (setup !== undefined && !setup.completed) {
+        await unit.workspaceSetups.complete(revision.namespaceId, revision.agentId, setup.id);
       }
       await this.appendRevisionObservation(unit, claim, result);
       await queue.complete(claim, {

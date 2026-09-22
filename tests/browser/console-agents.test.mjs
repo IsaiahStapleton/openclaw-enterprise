@@ -8,6 +8,10 @@ import test from "node:test";
 import { chromium } from "playwright";
 
 import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
+import {
+  WORKSPACE_DEFAULTS,
+  WORKSPACE_DEFAULTS_ID,
+} from "../../packages/contracts/src/workspace-defaults.mjs";
 import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { createConsoleAppFixture, providerFixtures } from "../helpers/console-app.mjs";
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
@@ -273,6 +277,13 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
   const secretInput = page.getByLabel("OpenAI API key Secret ID");
   assert.equal(await secretInput.getAttribute("type"), "password");
   await secretInput.fill(secret.id);
+  for (const [filename, content] of Object.entries(WORKSPACE_DEFAULTS)) {
+    assert.equal(await page.getByLabel(filename, { exact: true }).inputValue(), content);
+  }
+  // Textareas preserve literal markup as content and normalize browser newlines to LF.
+  const customIdentity = "# Identity\r\n<em>Workspace author</em>\r\n";
+  await page.getByLabel("IDENTITY.md", { exact: true }).fill(customIdentity);
+  await page.getByLabel("USER.md", { exact: true }).fill("");
   await page.getByLabel("Agent name").fill("Console-created Agent");
   await page.getByLabel("Execution mode").selectOption("dedicated");
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
@@ -302,6 +313,15 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
     false,
   );
   assert.equal(created.data.activeRevisionId, undefined);
+  const submittedWorkspace = agentPostRequests(requests, namespace.id)[0].body;
+  assert.deepEqual(submittedWorkspace.initialWorkspaceFiles, {
+    ...WORKSPACE_DEFAULTS,
+    "IDENTITY.md": customIdentity.replaceAll("\r\n", "\n"),
+    "USER.md": "",
+  });
+  assert.equal(submittedWorkspace.workspaceDefaultsId, WORKSPACE_DEFAULTS_ID);
+  assert.equal(Object.hasOwn(created.data, "initialWorkspaceFiles"), false);
+  assert.equal(Object.hasOwn(created.data, "workspaceDefaultsId"), false);
 
   await page.waitForURL((url) => {
     return (
@@ -484,6 +504,8 @@ test("Agent creation renders provider and service account choices and saves sele
   assert.deepEqual(agentPostRequests(requests, namespace.id).at(-1).body, {
     name: "Associated Agent",
     executionMode: "dedicated",
+    initialWorkspaceFiles: WORKSPACE_DEFAULTS,
+    workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
     providerId: providerFixtures[0].id,
     harnessAuth: { method: "chatgpt_service_account", serviceAccountId: firstAccount.id },
     configurationId: created.data.configurationId,
@@ -540,6 +562,7 @@ test("Agent creation reuses the saved Configuration after an Agent creation conf
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText("Choose an installed Provider.").waitFor();
   requests.length = 0;
+  await page.getByLabel("SOUL.md", { exact: true }).fill("# Keep this draft\n");
   await page.getByLabel("Agent name").fill("Retry Agent");
   await page.getByLabel("Execution mode").selectOption("dedicated");
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
@@ -568,6 +591,10 @@ test("Agent creation reuses the saved Configuration after an Agent creation conf
   );
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
 
+  assert.equal(
+    await page.getByLabel("SOUL.md", { exact: true }).inputValue(),
+    "# Keep this draft\n",
+  );
   await page.getByLabel("Agent name").fill("Retry Agent Corrected");
   const retryResponse = page.waitForResponse(
     (response) =>
@@ -581,6 +608,10 @@ test("Agent creation reuses the saved Configuration after an Agent creation conf
   assert.equal(retried.data.activeRevisionId, undefined);
   assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
   assert.equal(agentPostRequests(requests, namespace.id).length, 2);
+  for (const request of agentPostRequests(requests, namespace.id)) {
+    assert.equal(request.body.initialWorkspaceFiles["SOUL.md"], "# Keep this draft\n");
+    assert.equal(request.body.workspaceDefaultsId, WORKSPACE_DEFAULTS_ID);
+  }
 });
 
 test("Agent creation preserves edited JSON across mode changes and resets to the selected template", async (t) => {
