@@ -86,11 +86,18 @@ values. Keep persisted invariants in their authoritative database constraints;
 avoid repeating validation without an additional boundary to protect. Define
 outbound data deliberately as part of the caller's contract.
 
-Use absence when it leads to one ordinary caller action. Use distinct outcomes
-when the caller must react differently to rejection, work that never started,
-uncertain completion, or success. Preserve the information needed for that decision without
-exposing every internal state. Translate exceptions at the boundary that can
-explain or act on them; preserve cleanup during propagation. Avoid speculative
+At parsing and validation boundaries, return expected absence or rejection as
+values. Use an optional value when absence leads to one ordinary caller action;
+use distinct outcomes when callers must react differently to rejection, work
+that never started, uncertain completion, or success. Preserve the information
+needed for that decision without exposing every internal state.
+
+Let exceptional failures reach the layer that decides whether execution can
+continue. A full disk or exhausted memory does not become ordinary missing
+input; termination may be the correct response. Recover only under an explicit
+strategy, and preserve cleanup during propagation. The
+[catalog example](readable-code.md#return-expected-outcomes-as-values) shows
+validation results alongside I/O failures that propagate. Avoid speculative
 schemas for opaque data that the component does not interpret.
 
 ## Preserve invariants when simplifying control flow

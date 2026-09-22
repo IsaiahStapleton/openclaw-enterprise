@@ -1,6 +1,7 @@
 ---
 name: design-review
 description: Assess designs, public interfaces, state ownership, readability, and refactor proposals when the task calls for design review or structural simplification; not for unrelated routine edits.
+dependencies: [enterprise-testing, test-audit]
 ---
 
 # Review design through a real caller
@@ -36,6 +37,8 @@ report template.
    lifetimes, and cleanup. Follow consequential failure paths. Where asynchronous
    work outlives its caller, identify who owns settlement and disposal. Keep
    uncertain outcomes distinct when they require different caller behavior.
+   Check that expected validation failures and absence are explicit outcomes,
+   while exceptional failures reach the owner that decides whether to continue.
 3. **Audit the interface against its consumers.** Find actual uses of exported
    operations, types, inputs and outputs. Ask which decisions callers need to
    make and which mechanics belong inside the owner. Check runtime values when
@@ -59,8 +62,8 @@ report template.
 6. **Match the claim to proof.** Identify the supported caller and observable
    outcomes that would establish the result, including relevant failures. Inspect
    existing evidence and state its limits. When assessing or changing tests, use
-   [test-audit](../test-audit/SKILL.md); when selecting executable verification,
-   use [enterprise-testing](../enterprise-testing/SKILL.md). Follow repository
+   $test-audit; when selecting executable verification,
+   use $enterprise-testing. Follow repository
    requirements for the kind of change. Source inspection, composed behavior,
    installed runtime, and live-provider results establish different claims;
    missing proof remains a gap.
