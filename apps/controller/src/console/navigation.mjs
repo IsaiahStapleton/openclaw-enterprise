@@ -64,7 +64,7 @@ export function createNavigation({ getNamespaceId, isLoggingOut, loadPage }) {
       "",
       pageUrl(feature, selection),
     );
-    void loadPage();
+    void loadPage({ fromNavigation: true });
   }
 
   return {

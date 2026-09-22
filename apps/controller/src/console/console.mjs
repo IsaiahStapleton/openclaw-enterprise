@@ -11,6 +11,7 @@ let session = null;
 let namespaces = [];
 let namespaceId = null;
 let loggingOut = false;
+let navigateAgentTab = null;
 const navigation = createNavigation({
   getNamespaceId: () => namespaceId,
   isLoggingOut: () => loggingOut,
@@ -26,6 +27,7 @@ const request = createApiClient({
 });
 
 function resetReads() {
+  navigateAgentTab = null;
   shellUI.reset();
   return lifetime.reset();
 }
@@ -127,11 +129,14 @@ function showLogin(message = "", returnPath = null) {
   );
 }
 
-async function loadPage() {
+async function loadPage({ fromNavigation = false } = {}) {
   if (loggingOut) {
     return;
   }
   const current = route();
+  if (fromNavigation && navigateAgentTab?.(current.url)) {
+    return;
+  }
   const active = resetReads();
   clearPrivate();
   document.querySelectorAll('input[type="password"]').forEach((input) => {
@@ -247,6 +252,11 @@ async function loadPage() {
         app.querySelector("h1").textContent = title;
       },
       url: current.url,
+      setTabNavigation(handler) {
+        if (lifetime.isCurrent(active)) {
+          navigateAgentTab = handler;
+        }
+      },
     };
     if (current.creating) {
       renderCreateAgent(agentContext);
@@ -360,7 +370,7 @@ async function logout() {
 
 window.addEventListener("popstate", () => {
   if (!loggingOut) {
-    void loadPage();
+    void loadPage({ fromNavigation: true });
   }
 });
 window.addEventListener("focus", () => {

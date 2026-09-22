@@ -1284,3 +1284,131 @@ for (const [dmPolicy, groupPolicy] of [
     );
   });
 }
+
+test("Agent tabs replace only their content and preserve surrounding panels and history", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Tab navigation", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Tab navigation Agent",
+    nativeValues("tabs"),
+  );
+  const { page } = await newPage(t, fixture);
+  await page.setViewportSize({ width: 1200, height: 650 });
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Editable Configuration", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Channels", exact: true }).scrollIntoViewIfNeeded();
+  const panels = await page
+    .locator("h1, .agent-toolbar, .native-admin-access, .revision-selector, .agent-tabs")
+    .elementHandles();
+  const top = await page.evaluate(() => globalThis.scrollY);
+  requests.length = 0;
+
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await page.getByRole("button", { name: "Configure Slack", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("tab"), "channels");
+  // The surrounding DOM must stay mounted; a fast full-page rerender still loses focus and scroll.
+  for (const panel of panels) {
+    assert.equal(await panel.evaluate((node) => node.isConnected), true);
+  }
+  assert.ok(Math.abs((await page.evaluate(() => globalThis.scrollY)) - top) < 2);
+  await page.getByRole("button", { name: "Credentials", exact: true }).click();
+  const secret = page.getByLabel("OpenAI API key Secret ID");
+  await secret.waitFor();
+  const secretElement = await secret.elementHandle();
+  await page.getByRole("button", { name: "Workspace files", exact: true }).click();
+  await page
+    .getByText(
+      "Workspace files require a deployed Agent with an active revision and a reachable gateway.",
+    )
+    .waitFor();
+  assert.equal(await secretElement.evaluate((node) => node.value), "");
+  assert.equal(await secretElement.evaluate((node) => node.isConnected), false);
+  await page.goBack();
+  await page.getByLabel("OpenAI API key Secret ID").waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("tab"), "credentials");
+  await page.goForward();
+  await page.getByRole("heading", { name: "Workspace files", exact: true }).waitFor();
+  for (const panel of panels) {
+    assert.equal(await panel.evaluate((node) => node.isConnected), true);
+  }
+  assert.deepEqual(
+    requests.filter((request) =>
+      [
+        "/api/auth/session",
+        "/namespaces",
+        `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+      ].includes(request.path),
+    ),
+    [],
+  );
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+
+  // Refresh is still explicit and rereads the page, unlike a tab change.
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.getByRole("heading", { name: "Workspace files", exact: true }).waitFor();
+  assert.equal(await panels[0].evaluate((node) => node.isConnected), false);
+});
+
+test("Agent tab switches ignore late configuration reads and keep direct workspace access independent", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Slow tabs", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Slow tab Agent",
+    nativeValues("slow-tabs"),
+  );
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "workspace");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Workspace files", exact: true }).waitFor();
+  const configurationPath = `/namespaces/${namespace.id}/configurations/${agent.configurationId}`;
+  assert.equal(
+    requests.some((request) => request.path === configurationPath),
+    false,
+  );
+  assert.equal(
+    requests.some((request) => request.path.endsWith("/revisions")),
+    false,
+  );
+  const tabs = await page.locator(".agent-tabs").elementHandle();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  let reached;
+  const held = new Promise((resolve) => {
+    reached = resolve;
+  });
+  // Delay a real authorized response to exercise navigation while the first panel read is pending.
+  await page.route(`${fixture.origin}${configurationPath}`, async (route) => {
+    const response = await route.fetch();
+    reached();
+    await gate;
+    await route.fulfill({ response });
+  });
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await held;
+  await page.getByRole("button", { name: "Workspace files", exact: true }).click();
+  await page.getByRole("heading", { name: "Workspace files", exact: true }).waitFor();
+  const delivered = page.waitForResponse(`${fixture.origin}${configurationPath}`);
+  release();
+  await delivered;
+  // Configuration completion may prepare shared controls, but must not replace the active tab.
+  await page.getByRole("heading", { name: "Saved draft", exact: true }).waitFor();
+  assert.equal(
+    await page.getByRole("heading", { name: "Workspace files", exact: true }).isVisible(),
+    true,
+  );
+  assert.equal(await page.getByRole("button", { name: "Configure Slack", exact: true }).count(), 0);
+  assert.equal(await tabs.evaluate((node) => node.isConnected), true);
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await page.getByRole("button", { name: "Configure Slack", exact: true }).waitFor();
+  assert.equal(requests.filter((request) => request.path === configurationPath).length, 1);
+});
