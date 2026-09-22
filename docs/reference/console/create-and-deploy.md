@@ -43,6 +43,10 @@ Agent; it does not verify an Agent you create in the console.
 | **ChatGPT service account**      | An account in this Namespace that you can read, an already issued credential, the matching Provider, and dedicated execution. The console does not issue the credential for you. Listing Providers requires Installation `administer`.    |
 | **Operator-managed credentials** | An Installation using SSH with embedded OpenClaw. The operator configures the runtime host; OCC does not validate the credentials or model access. See [SSH credentials](../drivers/ssh-compute.md#credentials-and-supported-boundaries). |
 
+The Secret ID input is masked, including when a Preset fills it. Configuration
+summaries show **OpenAI API key · Secret configured** without the ID. The console
+does not resolve Secret values into native Configuration.
+
 Selecting a credential source does not change the configured model or execution
 mode, or confirm that the provider accepts it. For API-key deployments, the
 Agent's own service principal also needs `operate` on that Secret; ask an
