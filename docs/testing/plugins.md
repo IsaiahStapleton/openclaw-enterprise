@@ -75,9 +75,10 @@ All native scenarios use Kubernetes. Provide
 `OCC_TEST_PLUGIN_DRIVER_CODEX_CALENDAR_DATABASE_URL`. The Codex failure scenario
 requires its own distinct `OCC_TEST_PLUGIN_DRIVER_CODEX_FAILURE_DATABASE_URL`.
 The OpenClaw scenario also requires `OPENAI_API_KEY` in the process environment
-and a runtime image with `plugins install --no-enable` support. The repository
-still pins OpenClaw `2026.9.1`, which lacks that flag; update the pin after the
-prerequisite release. The extended scenario checks explicit tool allowlist
+and a runtime image with `plugins install --no-enable` support. The
+[pinned source runtime](../../deploy/runtime/README.md) does not yet expose this
+flag, so this OpenClaw plugin preparation lane remains a separate prerequisite.
+The extended scenario checks explicit tool allowlist
 composition, preserved plugin deny policy on a disabled deployment, and rejection
 of a later conflicting enabled selection before the replacement becomes ready.
 

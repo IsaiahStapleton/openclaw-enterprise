@@ -7,22 +7,30 @@ entrypoints:
 - OpenClaw gateway: `node /app/openclaw.mjs`.
 - Dedicated Codex app-server: `codex app-server`.
 
-The Dockerfile installs only public npm packages:
+The Dockerfile builds OpenClaw and its Codex/Slack plugins from the same public
+source snapshot. This makes the required workspace changes available before a
+matching npm release. It verifies the archive checksum, installs dependencies
+from the source lockfile with `--frozen-lockfile`, and uses OpenClaw's native
+build, plugin packaging and native-addon checks. Build tools stay in build stages;
+the final image receives production dependencies.
 
-| Input                           | Default                                                                                                      |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `NODE_BASE_IMAGE`               | `docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584` |
-| `OPENCLAW_VERSION`              | `2026.9.1`                                                                                                   |
-| `OPENCLAW_CODEX_PLUGIN_VERSION` | `2026.9.1`                                                                                                   |
-| `OPENCLAW_SLACK_PLUGIN_VERSION` | `2026.9.1`                                                                                                   |
-| `OPENAI_CODEX_VERSION`          | `0.152.1`                                                                                                    |
+| Input                    | Default                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `NODE_BASE_IMAGE`        | `docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584` |
+| `OPENCLAW_SOURCE_COMMIT` | `20db76a79212c7d0c4f2106fea4d61fdce9972a3` (package version `2026.9.5`)                                      |
+| `OPENCLAW_SOURCE_SHA256` | `456e6d042aff7dec501c9417e86ee4c41ec480cde0418468d8436e5785f5a6d0`                                           |
+
+The source lockfile also selects the Codex CLI version (`0.154.0` at this pin).
+Update the source commit and archive checksum together; do not independently mix
+OpenClaw, plugin and CLI versions. When changing the pin, align the creation-time
+workspace defaults and supported setup version, then verify the resulting image.
 
 Build it from the repository root:
 
 ```bash
 docker build -f deploy/runtime/Dockerfile \
   --tag openclaw-enterprise-runtime:quickstart \
-  deploy/runtime
+  .
 ```
 
 Set `OCC_DOCKER_RUNTIME_IMAGE=openclaw-enterprise-runtime:quickstart` for the
@@ -41,10 +49,11 @@ dependencies. They must load from a fresh runtime home without downloading or
 installing packages at gateway startup. Slack credentials remain operator-owned
 runtime Secrets; do not put them in the image.
 
-When overriding package versions, choose plugins compatible with the selected
-OpenClaw release and a Codex CLI accepted by the installed Codex plugin's runtime
-guard. A plugin's npm dependency version is not necessarily its exact app-server
-requirement. Run the compatibility check below against the resulting image.
+For a protected npm registry, pass its existing configuration as a BuildKit
+secret with `--secret id=npmrc,src=/path/to/npmrc`. If Corepack needs the same
+registry, supply `--secret id=COREPACK_NPM_REGISTRY,env=COREPACK_NPM_REGISTRY`.
+Secrets are mounted only during dependency installation and are not copied into
+image layers. Registry and source dependency-age checks remain enabled.
 
 Production Kubernetes installations can use this recipe as a starting point,
 but must push the resulting image to an operator-controlled registry and
@@ -55,27 +64,22 @@ configuration.
 
 ## Select a storage-split test image
 
-The default `2026.9.1` packages predate paired-node attachment, Memory and Skills
-support. For dedicated storage-split tests, both Gateway and Harness images must
-contain the implementation merged through OpenClaw commit
-`20db76a79212c7d0c4f2106fea4d61fdce9972a3`, or a verified descendant, with compatible
-plugins. The complete merged OC inventory and remaining Enterprise acceptance
-are tracked in [#76](https://github.com/openclaw/openclaw-enterprise/issues/76).
-Do not infer package publication from the source merge or select an unverified
-release number.
+CI and local builds use this same Dockerfile and source pin. Both Gateway and
+Harness images must contain the matching build and plugins; record their exact
+image digests. The merged OC inventory and remaining Enterprise acceptance are
+tracked in [#76](https://github.com/openclaw/openclaw-enterprise/issues/76).
 
 An unmerged Enterprise PR can supply a candidate controller build for a disposable
 staging environment. Record its exact commit and the selected runtime image
 digests; PR merge status is not runtime verification. Use the existing
 [Kubernetes test procedures](../../docs/testing/kubernetes.md) for explicit image
-selection and proof. The npm-only recipe above does not itself build an OpenClaw
-Git commit.
+selection and proof. A successful image build does not establish model E2E acceptance.
 
 ## Rebuild an existing image
 
 `scripts/dev-up` reuses the configured image tag and builds the default
 `openclaw-enterprise-runtime:quickstart` image only when that tag is absent.
-After changing this recipe or its package versions, run the build command above
+After changing this recipe or its source pin, run the build command above
 explicitly, verify the rebuilt image, then run `./scripts/dev-up` again. For a
 custom `OCC_DOCKER_RUNTIME_IMAGE`, build or pull that selected tag yourself.
 

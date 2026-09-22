@@ -9,7 +9,7 @@ Build the [runtime image](../../deploy/runtime/README.md), then run its startup 
 
 ```sh
 docker build -f deploy/runtime/Dockerfile \
-  --tag openclaw-enterprise-runtime:test deploy/runtime
+  --tag openclaw-enterprise-runtime:test .
 OCC_TEST_RUNTIME_IMAGE=openclaw-enterprise-runtime:test \
   node --test tests/integration/runtime-image-startup.test.mjs
 ```

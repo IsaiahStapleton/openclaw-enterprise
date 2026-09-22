@@ -152,8 +152,8 @@ settings. It refreshes the native registry, reapplies the requested policy to it
 private writable configuration, and checks plugin ID, package name,
 runtime/install version, recorded integrity, and that the runtime source resolves
 within the resolved install path. This requires an OpenClaw runtime that supports
-`--no-enable`; the currently pinned `2026.9.1` image must be updated before this
-preparation path can ship. There is no fallback to installation that changes policy.
+`--no-enable`; the pinned source runtime still lacks this flag, so this
+preparation path remains blocked. There is no fallback to installation that changes policy.
 Identity, integrity, or effective-policy verification failure prevents the
 replacement gateway from starting. A confirmed installation rejection can instead
 disable that optional selection and produce a warning. The previous revision
