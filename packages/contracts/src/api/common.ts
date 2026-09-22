@@ -4,6 +4,7 @@ const UUID_V4 = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 
 export const InstallationId = Type.String({ pattern: `^ins_${UUID_V4}$` });
 export const NamespaceId = Type.String({ pattern: `^ns_${UUID_V4}$` });
+export const PresetId = Type.String({ pattern: `^pre_${UUID_V4}$` });
 export const ConfigurationId = Type.String({ pattern: `^cfg_${UUID_V4}$` });
 export const ServiceAccountId = Type.String({ pattern: `^sa_${UUID_V4}$` });
 export const SecretId = Type.String({ pattern: `^sec_${UUID_V4}$` });
@@ -68,6 +69,11 @@ export const AgentParams = Type.Object(
 
 export const ConfigurationParams = Type.Object(
   { namespaceId: NamespaceId, configurationId: ConfigurationId },
+  { additionalProperties: false },
+);
+
+export const PresetParams = Type.Object(
+  { namespaceId: NamespaceId, presetId: PresetId },
   { additionalProperties: false },
 );
 
@@ -221,6 +227,7 @@ export const ResourceKindSchema = Type.Union([
   Type.Literal("installation"),
   Type.Literal("namespace"),
   Type.Literal("configuration"),
+  Type.Literal("preset"),
   Type.Literal("service_account"),
   Type.Literal("secret"),
   Type.Literal("agent"),
@@ -231,6 +238,7 @@ export const NamespacePolicyResourceKindSchema = Type.Union([
   Type.Literal("agent"),
   Type.Literal("agent_revision"),
   Type.Literal("configuration"),
+  Type.Literal("preset"),
   Type.Literal("secret"),
   Type.Literal("service_account"),
 ]);
@@ -309,6 +317,36 @@ export const UpdateServiceAccountCredentialBody = Type.Object(
   { additionalProperties: false },
 );
 
+const RepositoryBindingSelector = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+});
+
+export const RepositoryBindingRequestSchema = Type.Object(
+  {
+    repositoryRef: RepositoryBindingSelector,
+    profile: Type.Optional(RepositoryBindingSelector),
+  },
+  { additionalProperties: false },
+);
+
+export const RepositoryBindingSelectionSchema = Type.Object(
+  { repositoryRef: RepositoryBindingSelector, profile: RepositoryBindingSelector },
+  { additionalProperties: false },
+);
+
+export const RepositoryBindingRequestsSchema = Type.Array(RepositoryBindingRequestSchema, {
+  maxItems: 16,
+  description:
+    "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
+});
+
+export const RepositoryBindingSelectionsSchema = Type.Array(RepositoryBindingSelectionSchema, {
+  minItems: 1,
+  maxItems: 16,
+});
+
 export const CreateAgentBody = Type.Object(
   {
     name: Name,
@@ -317,6 +355,7 @@ export const CreateAgentBody = Type.Object(
     harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
   },
   { additionalProperties: false },
 );
@@ -328,6 +367,7 @@ export const UpdateAgentBody = Type.Object(
     harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
   },
   { additionalProperties: false },
 );
@@ -487,3 +527,69 @@ export type ErrorDetail = Type.Static<typeof ErrorDetail>;
 export type ErrorResponse = Type.Static<typeof ErrorResponse>;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 export type ErrorDetailCode = (typeof ERROR_DETAIL_CODES)[number];
+
+export const PresetVariableSchema = Type.Union(
+  (["string", "number", "boolean"] as const).map((type) =>
+    Type.Object(
+      {
+        type: Type.Literal(type),
+        description: Type.Optional(Type.String()),
+        default: Type.Optional(
+          type === "string" ? Type.String() : type === "number" ? Type.Number() : Type.Boolean(),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+  ),
+);
+
+export const PresetTemplateSchema = Type.Object(
+  {
+    variables: Type.Optional(
+      Type.Record(Type.String({ pattern: "^[A-Za-z_][A-Za-z0-9_]*$" }), PresetVariableSchema),
+    ),
+    agent: Type.Optional(
+      Type.Object(
+        Object.fromEntries(
+          ["name", "executionMode", "providerId", "harnessAuth", "plugins"].map((key) => [
+            key,
+            Type.Optional(Type.Ref("SafeJsonValue")),
+          ]),
+        ),
+        { additionalProperties: false },
+      ),
+    ),
+    configuration: Type.Optional(
+      Type.Object(
+        {
+          values: Type.Optional(ConfigurationValues),
+          secretBindings: Type.Optional(
+            Type.Object(
+              {},
+              {
+                additionalProperties: Type.Ref("SafeJsonValue"),
+                description:
+                  "Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}.",
+              },
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Reusable partial Agent launch settings. Scalar values may use {{ vars.name }}. Admission validates template syntax and credential boundaries. Ordinary creation APIs validate concrete launch settings.",
+  },
+);
+
+export const CreatePresetBody = Type.Object(
+  { name: Name, template: PresetTemplateSchema },
+  { additionalProperties: false },
+);
+export const UpdatePresetBody = Type.Object(
+  { name: Type.Optional(Name), template: Type.Optional(PresetTemplateSchema) },
+  { additionalProperties: false, minProperties: 1 },
+);

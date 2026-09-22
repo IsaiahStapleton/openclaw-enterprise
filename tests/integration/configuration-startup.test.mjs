@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,6 +16,7 @@ import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { createInstallationDriverConfiguration as installation } from "../helpers/installation-driver-configuration.mjs";
+import { createTlsMaterial } from "../fixtures/repository-credentials/process.mjs";
 
 function jsonLines(text) {
   return text
@@ -78,6 +79,192 @@ function retiredChatgptInstallation() {
   };
   return configuration;
 }
+
+async function repositoryInstallation(t) {
+  const directory = await mkdtemp(join(tmpdir(), "occ-repository-startup-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const tls = await createTlsMaterial(t);
+  await chmod(tls.certFile, 0o644);
+  const writableCaPath = join(directory, "writable-ca.crt");
+  await writeFile(writableCaPath, tls.ca);
+  await chmod(writableCaPath, 0o666);
+  const registry = {
+    version: 1,
+    providerId: "github-primary",
+    providerInstanceId: "github-com",
+    appId: "12345",
+    githubInstallationId: "67890",
+    maximumDurationSeconds: 3600,
+    repositories: [
+      {
+        repositoryRef: "application",
+        repositoryId: "34567",
+        repository: "example/application",
+        namespaces: [{ namespaceId: "ns_repository", profiles: ["git-read", "git-write"] }],
+      },
+    ],
+  };
+  const registrySource = join(directory, "registry-generation.json");
+  await writeFile(registrySource, JSON.stringify(registry), { mode: 0o644 });
+  const registryPath = join(directory, "registry.json");
+  // Kubernetes ConfigMap/public-CA projection uses symlinks; these nonsecret
+  // inputs must not inherit the service's stricter private-file loader.
+  await symlink(registrySource, registryPath);
+  const publicCaPath = join(directory, "ca.crt");
+  await symlink(tls.certFile, publicCaPath);
+  const configuration = installation();
+  configuration.provider = [
+    {
+      id: registry.providerId,
+      type: "github",
+      configuration: { registryPath },
+      drivers: { repo: "repository-credentials" },
+    },
+  ];
+  configuration.drivers.repo = {
+    id: "repository-credentials",
+    configuration: {
+      controlSocket: join(directory, "absent-control", "control.sock"),
+      sessionDurationSeconds: 600,
+      publicCaPath,
+    },
+  };
+  configuration.drivers.compute.configuration.network.repositoryCredentials = {
+    namespace: "occ-system",
+    podLabels: {
+      "app.kubernetes.io/name": "openclaw-enterprise",
+      "app.kubernetes.io/component": "worker",
+    },
+    port: 8443,
+  };
+  return { configuration, registry, registrySource, tls, writableCaPath };
+}
+
+test("repository startup constructs the same local resolver without a private socket or App key", async (t) => {
+  const { configuration } = await repositoryInstallation(t);
+  const path = await fixture(t, configuration);
+  const api = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  const worker = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  assert.equal(api.repoDriver.capability, "repo");
+  // The capability name does not replace the operator's opaque Driver identity.
+  assert.equal(api.repoDriver.id, "repository-credentials");
+  assert.equal(worker.repoDriver.id, api.repoDriver.id);
+  assert.deepEqual(api.installation.provider[0].drivers, { repo: api.repoDriver.id });
+  assert.equal(Object.hasOwn(api.installation.drivers, "repository_credentials"), false);
+  assert.equal(api.installation.drivers.repo.implementation, api.repoDriver.implementation);
+  const selection = { namespaceId: "ns_repository", bindings: [{ repositoryRef: "application" }] };
+  const resolved = api.repoDriver.resolve(selection);
+  assert.deepEqual(worker.repoDriver.resolve(selection), resolved);
+  assert.equal(resolved.bindings[0].profile, "git-write");
+  assert.equal(resolved.bindings[0].grant.repositoryId, "34567");
+  assert.equal(resolved.sessionDurationSeconds, 600);
+  assert.throws(
+    () => api.repoDriver.resolve({ ...selection, namespaceId: "ns_other" }),
+    /permitted/,
+  );
+  const chatgpt = chatgptInstallation();
+  const combined = structuredClone(configuration);
+  combined.provider.push(...chatgpt.provider);
+  combined.drivers.service_account = chatgpt.drivers.service_account;
+  const combinedDrivers = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: await fixture(t, combined) },
+  });
+  assert.deepEqual(
+    combinedDrivers.installation.provider.map((provider) => provider.type),
+    ["github", "chatgpt"],
+  );
+
+  // The actual API reaches its ordinary database dependency while the configured
+  // Unix directory is absent. No private service inputs are supplied to it.
+  const server = spawnSync(process.execPath, ["apps/controller/src/server.mjs"], {
+    cwd: process.cwd(),
+    env: {
+      PATH: process.env.PATH,
+      NODE_ENV: "production",
+      OCC_CONFIG_PATH: path,
+      OCC_DATABASE_URL: "postgresql://127.0.0.1:1/occ",
+      OCC_HOST: "192.0.2.10",
+      OCC_PORT: "8080",
+      OCC_AUTH_SECRET: "production-auth-secret-with-at-least-32-characters",
+      OCC_AUTH_BASE_URL: "http://192.0.2.10:8080",
+    },
+    encoding: "utf8",
+    timeout: 10000,
+  });
+  assert.equal(server.status, 1);
+  assert.equal(startupDiagnostic(server.stderr, "startup-error").code, "PERSISTENCE_UNAVAILABLE");
+});
+
+test("repository startup rejects unmatched ownership, registry identity, duration and CA inputs", async (t) => {
+  const { configuration: baseline, tls, writableCaPath } = await repositoryInstallation(t);
+  for (const [mutate, expected] of [
+    [(value) => delete value.provider, /requires an owning provider/],
+    [
+      (value) => {
+        value.drivers.repository_credentials = value.drivers.repo;
+        delete value.drivers.repo;
+      },
+      /unsupported option repository_credentials/,
+    ],
+    [
+      (value) => {
+        value.provider[0].drivers.repository_credentials = value.provider[0].drivers.repo;
+        delete value.provider[0].drivers.repo;
+      },
+      /plaintext credential/,
+    ],
+    [(value) => delete value.drivers.repo, /requires drivers\.repo/],
+    [(value) => (value.provider[0].drivers.repo = "other-driver"), /must match/],
+    [
+      (value) => (value.provider[0].configuration.registryPath = "relative.json"),
+      /absolute mounted/,
+    ],
+    [(value) => (value.provider[0].configuration.apiKeyPath = "/unavailable"), /unsupported/],
+    [
+      (value) => value.provider.push({ ...structuredClone(value.provider[0]), id: "other-github" }),
+      /cannot belong to multiple Providers/,
+    ],
+    [(value) => (value.provider[0].id = "other-provider"), /invalid-repository-registry/],
+    [
+      (value) => (value.drivers.repo.configuration.sessionDurationSeconds = 3601),
+      /duration|configuration/,
+    ],
+    [(value) => (value.drivers.repo.configuration.publicCaPath = tls.keyFile), /public CA/],
+    [(value) => (value.drivers.repo.configuration.publicCaPath = writableCaPath), /public CA/],
+    [(value) => (value.drivers.repo.package = "@example/driver"), /unsupported option package/],
+    [(value) => (value.drivers.repo.implementation = "other"), /unsupported option implementation/],
+    [(value) => (value.drivers.compute.id = "compute-ssh"), /bundled Kubernetes/],
+    [
+      (value) => delete value.drivers.compute.configuration.network.repositoryCredentials,
+      /repository service peer/,
+    ],
+    [
+      (value) => (value.drivers.compute.configuration.network.repositoryCredentials.port = 443),
+      /repository service peer/,
+    ],
+    [
+      (value) => (value.provider[0].drivers.repo = "ghp_notarealtoken123456"),
+      /plaintext credential/,
+    ],
+  ]) {
+    const configuration = structuredClone(baseline);
+    mutate(configuration);
+    await assert.rejects(
+      loadInstallationConfiguration({
+        mode: "production",
+        environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
+      }),
+      expected,
+    );
+  }
+});
 
 test("startup loads singleton Installation YAML and validates Drivers before construction", async (t) => {
   const path = await fixture(t);

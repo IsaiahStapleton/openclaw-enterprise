@@ -8,6 +8,7 @@ node_modules/
 /bin/occ
 target/
 dist/
+.build/
 coverage/
 *.log
 .DS_Store

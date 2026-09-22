@@ -4,6 +4,8 @@ import type {
   HarnessExecutionMode,
   HarnessAuthBinding,
   PluginDesiredState,
+  PresetTemplate,
+  RepositoryBindingSelection,
   SecretBindings,
   ServiceAccountCredential,
 } from "@openclaw-enterprise/contracts";
@@ -37,6 +39,7 @@ const collatedText = customType<{ data: string; driverData: string }>({
 const identifierPatterns = {
   installation: "^ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
   namespace: "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+  preset: "^pre_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
   configuration: "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
   serviceAccount: "^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
   agent: "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -98,6 +101,29 @@ export const namespaces = occSchema.table(
       "namespaces_tombstone_valid",
       sql`${table.deletedAt} IS NULL OR (${table.status} = 'deleting' AND ${table.deletedAt} >= ${table.createdAt})`,
     ),
+  ],
+);
+
+export const presets = occSchema.table(
+  "presets",
+  {
+    id: text("id").primaryKey(),
+    namespaceId: text("namespace_id")
+      .notNull()
+      .references(() => namespaces.id, { onDelete: "restrict", onUpdate: "restrict" }),
+    name: collatedText("name").notNull(),
+    template: jsonb("template").$type<PresetTemplate>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    unique("presets_namespace_id_name_unique").on(table.namespaceId, table.name),
+    check("presets_id_format", sql`${table.id} ~ ${identifierPatterns.preset}`),
+    check("presets_name_length", sql`char_length(${table.name}) BETWEEN 1 AND 200`),
+    check(
+      "presets_name_normalized",
+      sql`${table.name} = btrim(${table.name}) AND ${table.name} !~ '[[:cntrl:]]'`,
+    ),
+    check("presets_template_object", sql`jsonb_typeof(${table.template}) = 'object'`),
   ],
 );
 
@@ -229,6 +255,7 @@ export const agents = occSchema.table(
     providerId: text("provider_id"),
     executionMode: text("execution_mode").$type<HarnessExecutionMode>().notNull(),
     plugins: jsonb("plugins").$type<PluginDesiredState>(),
+    repositoryBindings: jsonb("repository_bindings").$type<readonly RepositoryBindingSelection[]>(),
     servicePrincipalId: text("service_principal_id").notNull(),
     harnessAuth: jsonb("harness_auth").$type<HarnessAuthBinding>(),
     harnessAuthSecretId: text("harness_auth_secret_id").generatedAlwaysAs(
@@ -272,6 +299,10 @@ export const agents = occSchema.table(
     check(
       "agents_plugins_object",
       sql`${table.plugins} IS NULL OR jsonb_typeof(${table.plugins}) = 'object'`,
+    ),
+    check(
+      "agents_repository_bindings_valid",
+      sql`${table.repositoryBindings} IS NULL OR occ.repository_bindings_are_valid(${table.repositoryBindings}, false)`,
     ),
     check(
       "agents_name_normalized",
@@ -417,7 +448,8 @@ export const agentRevisions = occSchema.table(
         AND (${table.admittedSpec}
           - 'configuration_id' - 'configuration_kind' - 'configuration_generation'
           - 'draft_spec' - 'harness' - 'compute' - 'sandbox_driver_id'
-          - 'secret_driver_id' - 'secret_bindings' - 'harness_auth' - 'plugins') = '{}'::jsonb
+          - 'secret_driver_id' - 'secret_bindings' - 'harness_auth' - 'plugins'
+          - 'repository_credentials') = '{}'::jsonb
         AND jsonb_typeof(${table.admittedSpec}->'configuration_id') = 'string'
         AND (${table.admittedSpec}->>'configuration_id') ~ ${identifierPatterns.configuration}
         AND jsonb_typeof(${table.admittedSpec}->'configuration_kind') = 'string'
@@ -463,9 +495,101 @@ export const agentRevisions = occSchema.table(
         )
         AND occ.harness_auth_is_valid(${table.admittedSpec}->'harness_auth', ${table.namespaceId}, true)
         AND (
+          NOT (${table.admittedSpec} ? 'repository_credentials')
+          OR occ.repository_credentials_are_valid(${table.admittedSpec}->'repository_credentials')
+        )
+        AND (
           NOT (${table.admittedSpec} ? 'plugins')
           OR jsonb_typeof(${table.admittedSpec}->'plugins') = 'object'
         )`,
+    ),
+  ],
+);
+
+export const repositorySessionAttempts = occSchema.table(
+  "repository_session_attempts",
+  {
+    namespaceId: text("namespace_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    revisionId: text("revision_id").notNull(),
+    liveRevisionId: text("live_revision_id"),
+    cleanupContext: jsonb("cleanup_context").notNull(),
+    repositoryRef: text("repository_ref").notNull(),
+    admissionId: text("admission_id").primaryKey(),
+    durationSeconds: bigint("duration_seconds", { mode: "number" }).notNull(),
+    deadlineWallMs: bigint("deadline_wall_ms", { mode: "number" }).notNull(),
+    phase: text("phase").notNull(),
+    sessionId: text("session_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (table): PgTableExtraConfigValue[] => [
+    foreignKey({
+      name: "repository_session_attempts_revision_owner",
+      columns: [table.namespaceId, table.agentId, table.liveRevisionId],
+      foreignColumns: [agentRevisions.namespaceId, agentRevisions.agentId, agentRevisions.id],
+    })
+      .onUpdate("restrict")
+      .onDelete("restrict"),
+    check(
+      "repository_session_attempts_live_revision_valid",
+      sql`(${table.liveRevisionId} IS NOT NULL AND ${table.liveRevisionId} = ${table.revisionId})
+        OR (${table.liveRevisionId} IS NULL AND ${table.phase} = 'disposed')`,
+    ),
+    check(
+      "repository_session_attempts_cleanup_context_valid",
+      sql`jsonb_typeof(${table.cleanupContext}) = 'object'
+        AND ${table.cleanupContext} ?& ARRAY['driver', 'binding']
+        AND ${table.cleanupContext} - 'driver' - 'binding' = '{}'::jsonb
+        AND occ.repository_credentials_are_valid(jsonb_build_object(
+          'driver', ${table.cleanupContext}->'driver', 'deadlineWallMs', ${table.deadlineWallMs},
+          'bindings', jsonb_build_array(${table.cleanupContext}->'binding')))
+        AND ${table.cleanupContext} #>> '{binding,repositoryRef}' = ${table.repositoryRef}`,
+    ),
+    uniqueIndex("repository_session_attempts_active_binding_unique")
+      .on(table.revisionId, table.repositoryRef)
+      .where(sql`${table.phase} IN ('opening', 'open')`),
+    uniqueIndex("repository_session_attempts_session_id_unique")
+      .on(table.sessionId)
+      .where(sql`${table.sessionId} IS NOT NULL`),
+    index("repository_session_attempts_owner").on(
+      table.namespaceId,
+      table.agentId,
+      table.revisionId,
+    ),
+    check(
+      "repository_session_attempts_repository_ref_valid",
+      sql`${table.repositoryRef} ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'`,
+    ),
+    check(
+      "repository_session_attempts_admission_id_valid",
+      sql`${table.admissionId} ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'`,
+    ),
+    check(
+      "repository_session_attempts_session_id_valid",
+      sql`${table.sessionId} IS NULL OR ${table.sessionId} ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'`,
+    ),
+    check(
+      "repository_session_attempts_duration_valid",
+      sql`${table.durationSeconds} BETWEEN 1 AND 9007199254740991`,
+    ),
+    check(
+      "repository_session_attempts_deadline_valid",
+      sql`${table.deadlineWallMs} BETWEEN 1 AND 9007199254740991`,
+    ),
+    check(
+      "repository_session_attempts_phase_valid",
+      sql`${table.phase} IN ('opening', 'open', 'closing', 'disposed', 'invalidated')`,
+    ),
+    check(
+      "repository_session_attempts_phase_session_valid",
+      sql`(${table.phase} = 'opening' AND ${table.sessionId} IS NULL)
+        OR (${table.phase} IN ('open', 'disposed') AND ${table.sessionId} IS NOT NULL)
+        OR ${table.phase} IN ('closing', 'invalidated')`,
+    ),
+    check(
+      "repository_session_attempts_timestamps_valid",
+      sql`isfinite(${table.createdAt}) AND isfinite(${table.updatedAt}) AND ${table.updatedAt} >= ${table.createdAt}`,
     ),
   ],
 );
@@ -628,7 +752,7 @@ export const iamRestrictions = occSchema.table(
     ),
     check(
       "iam_restrictions_resource_kind_valid",
-      sql`${table.resourceKind} IN ('installation', 'namespace', 'configuration', 'service_account', 'secret', 'agent', 'agent_revision')`,
+      sql`${table.resourceKind} IN ('installation', 'namespace', 'configuration', 'preset', 'service_account', 'secret', 'agent', 'agent_revision')`,
     ),
     check("iam_restrictions_effect_deny", sql`${table.effect} = 'deny'`),
     check(

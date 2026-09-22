@@ -31,13 +31,45 @@ function validateProviderDefinition(value: unknown, index: number): ProviderDefi
     }
   }
   const id = providerId(candidate.id, `provider[${index}].id`);
-  if (candidate.type !== "chatgpt") {
-    throw new ScopeViolationError(path(id, "type") + " must be chatgpt.");
+  if (candidate.type !== "chatgpt" && candidate.type !== "github") {
+    throw new ScopeViolationError(path(id, "type") + " must be chatgpt or github.");
   }
 
   const configuration = asRecord(candidate.configuration);
   if (configuration === undefined) {
     throw new ScopeViolationError(path(id, "configuration") + " must be one object.");
+  }
+  const drivers = asRecord(candidate.drivers);
+  if (drivers === undefined) {
+    throw new ScopeViolationError(path(id, "drivers") + " must be one object.");
+  }
+  if (candidate.type === "github") {
+    for (const key of Object.keys(configuration)) {
+      if (key !== "registryPath") {
+        throw new ScopeViolationError(path(id, `configuration.${key}`) + " is unsupported.");
+      }
+    }
+    const registryPath = configuration.registryPath;
+    if (!isNonEmptyString(registryPath) || !isAbsolute(registryPath)) {
+      throw new ScopeViolationError(
+        path(id, "configuration.registryPath") + " must be an absolute mounted file path.",
+      );
+    }
+    for (const key of Object.keys(drivers)) {
+      if (key !== "repo") {
+        throw new ScopeViolationError(path(id, `drivers.${key}`) + " is unsupported.");
+      }
+    }
+    const repo = drivers.repo;
+    if (!isNonEmptyString(repo)) {
+      throw new ScopeViolationError(path(id, "drivers.repo") + " is required.");
+    }
+    return immutableCopy({
+      id,
+      type: "github",
+      configuration: { registryPath },
+      drivers: { repo },
+    });
   }
   for (const key of Object.keys(configuration)) {
     if (!["workspaceId", "apiKeyPath", "credentialTtlSeconds"].includes(key)) {
@@ -66,10 +98,6 @@ function validateProviderDefinition(value: unknown, index: number): ProviderDefi
     );
   }
 
-  const drivers = asRecord(candidate.drivers);
-  if (drivers === undefined) {
-    throw new ScopeViolationError(path(id, "drivers") + " must be one object.");
-  }
   for (const key of Object.keys(drivers)) {
     if (key !== "service_account") {
       throw new ScopeViolationError(path(id, `drivers.${key}`) + " is unsupported.");
@@ -100,20 +128,30 @@ export function validateProviderDefinitions(value: unknown = []): readonly Provi
   }
   const providers = value.map((entry, index) => validateProviderDefinition(entry, index));
   const ids = new Set<string>();
-  const serviceAccountDrivers = new Set<string>();
+  const members = new Set<string>();
   for (const provider of providers) {
     if (ids.has(provider.id)) {
       throw new ScopeViolationError("Provider IDs must be unique.");
     }
     ids.add(provider.id);
-    const driverId = provider.drivers.service_account;
-    if (serviceAccountDrivers.has(driverId)) {
-      throw new ScopeViolationError("A ServiceAccount Driver cannot belong to multiple Providers.");
+    const member =
+      provider.type === "chatgpt"
+        ? `service_account:${provider.drivers.service_account}`
+        : `repo:${provider.drivers.repo}`;
+    if (members.has(member)) {
+      throw new ScopeViolationError(
+        provider.type === "chatgpt"
+          ? "A ServiceAccount Driver cannot belong to multiple Providers."
+          : "A repository credential Driver cannot belong to multiple Providers.",
+      );
     }
-    serviceAccountDrivers.add(driverId);
+    members.add(member);
   }
   if (providers.filter((provider) => provider.type === "chatgpt").length > 1) {
     throw new ScopeViolationError("Only one bundled ChatGPT Provider can be configured.");
+  }
+  if (providers.filter((provider) => provider.type === "github").length > 1) {
+    throw new ScopeViolationError("Only one bundled GitHub Provider can be configured.");
   }
   return Object.freeze(providers);
 }
@@ -141,10 +179,22 @@ export function assertConfiguredProvider(
 export function validateSelectedProviderDrivers(
   providers: readonly ProviderDefinition[],
   selectedServiceAccountDriver: Driver | undefined,
+  selectedRepoDriver?: Driver,
 ): void {
   for (const provider of providers) {
+    if (provider.type === "github") {
+      if (
+        selectedRepoDriver?.capability !== "repo" ||
+        selectedRepoDriver.id !== provider.drivers.repo
+      ) {
+        throw new DriverSelectionError(
+          "The configured Provider requires its repository credential Driver.",
+        );
+      }
+      continue;
+    }
     if (
-      selectedServiceAccountDriver === undefined ||
+      selectedServiceAccountDriver?.capability !== "service_account" ||
       selectedServiceAccountDriver.id !== provider.drivers.service_account
     ) {
       throw new DriverSelectionError("The configured Provider requires its ServiceAccount Driver.");
@@ -165,7 +215,7 @@ export function validateServiceAccountProviderBinding(
     | undefined,
 ): void {
   const provider = assertConfiguredProvider(providers, providerIdValue, "Agent Provider");
-  if (provider === undefined || binding === undefined) {
+  if (provider === undefined || provider.type !== "chatgpt" || binding === undefined) {
     throw new ResourceConflictError(
       "The managed ServiceAccount credential has no Provider binding.",
     );

@@ -67,6 +67,14 @@ jobs:
             title: Logging Collector
             profile: images
             timeout: 30
+          - lane: repository-credentials-container
+            title: Repository Credentials
+            profile: images
+            timeout: 40
+          - lane: repository-credentials-platform
+            title: Repository Credentials Platform
+            profile: k3d
+            timeout: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -77,6 +85,14 @@ jobs:
           profile: ${{ matrix.profile }}
           node-version: ${{ env.NODE_VERSION }}
           artifact-prefix: ci-results
+      - name: Upload repository credential image identities
+        if: always() && matrix.lane == 'repository-credentials-container'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-repository-credentials-images
+          path: ${{ runner.temp }}/state/repository-credentials-images.json
+          if-no-files-found: error
+          retention-days: 7
 
   ci-required:
     name: CI Required
@@ -104,7 +120,7 @@ jobs:
           node <<'NODE'
           const fs = require("fs");
           const needs = JSON.parse(process.env.NEEDS_JSON);
-          const lanes = ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector"];
+          const lanes = ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector", "repository-credentials-container", "repository-credentials-platform"];
           const expanded = { audit: needs.audit };
           for (const lane of lanes) {
             expanded[lane] = { result: needs["pr-safe"]?.result ?? "missing" };

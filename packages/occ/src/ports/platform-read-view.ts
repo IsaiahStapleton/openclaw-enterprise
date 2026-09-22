@@ -18,6 +18,7 @@ export function createPlatformReadView(
       "listNamespaces",
     ]),
     configurations: bindRepository(repositories.configurations, lifetime, ["findConfiguration"]),
+    presets: bindRepository(repositories.presets, lifetime, ["findPreset", "listPresets"]),
     secrets: bindRepository(repositories.secrets, lifetime, ["findSecret"]),
     serviceAccounts: bindRepository(repositories.serviceAccounts, lifetime, [
       "findServiceAccount",
@@ -31,6 +32,11 @@ export function createPlatformReadView(
       "getRole",
       "listAccessBindings",
       "getAccessBinding",
+    ]),
+    repositorySessions: bindRepository(repositories.repositorySessions, lifetime, [
+      "findAttempt",
+      "listRevisionAttempts",
+      "listNamespaceAttempts",
     ]),
   });
 }

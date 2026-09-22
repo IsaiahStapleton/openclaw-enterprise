@@ -11,6 +11,9 @@ nested `AGENTS.md`, the owning current reference, and relevant source before
 editing. Keep work within the approved platform scope and preserve unrelated work.
 Run repository commands from its root; bundled `./` paths below are relative to
 this skill directory. No global skill installation is required.
+Use explicit dependency records and focused factories when extracting behavior.
+The [fixture and scenario conventions](../../../docs/testing/fixtures-and-scenarios.md)
+apply the same composition rules to test infrastructure.
 
 ## HARD REQUIREMENT: OPEN-SOURCE CONTENT
 

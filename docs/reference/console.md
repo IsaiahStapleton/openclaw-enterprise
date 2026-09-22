@@ -1,12 +1,12 @@
 # Platform console
 
 Use the browser console at `/console/` on your OCC address to sign in, choose a
-Namespace, create and deploy Agents, and edit supported Slack or Microsoft Teams
+Namespace, create, deploy, and delete Agents, and edit supported Slack or Microsoft Teams
 draft settings. You can also set up initial runtime credentials, read or replace
 supported live workspace files, and list the Agents, Providers, and Namespaces
 you can access. When the pilot is enabled, trusted operators can open an Agent's
 [native admin UI](#open-the-native-admin-ui). The console does not offer rollback,
-live runtime health, browser chat through OCE, or Agent deletion.
+live runtime health, or browser chat through OCE.
 
 For browser deployment instructions, follow [Create and deploy Agents](console/create-and-deploy.md).
 See the [deployment guide](../guides/deploy.md) for operator procedures and
@@ -64,6 +64,11 @@ unsupported catalog or policy choices.
 
 ## Inspect detail, revisions, and channel drafts
 
+Switching between **Configuration**, **Channels**, **Credentials**, and **Workspace
+files** updates only the tab content. The surrounding Agent panels stay in place,
+and browser Back/Forward restores the selected tab. Password fields are cleared
+when leaving a tab. Use **Refresh** to reload the Agent and its Configuration.
+
 An Agent detail page has the saved draft and immutable AgentRevisions. The draft
 reads the current Configuration and is editable only through the supported
 channel editor and harness authentication controls. Choose **Operator-managed
@@ -103,8 +108,11 @@ automatic replay. **Disable Slack** and **Disable Microsoft Teams** edit only th
 draft. They do not disable access, stop execution, or change an admitted
 revision.
 
-Slack editing preserves existing per-channel user restrictions. **Allowed user
-IDs** controls the direct-message allowlist. Slack Socket Mode uses fixed
+Slack editing preserves existing direct-message and channel policies, including
+pairing, open, disabled, and omitted policies. It also preserves per-channel user
+restrictions. New Slack configurations use allowlist policies. **Allowed user
+IDs** edits `allowFrom`; the existing policy determines how those entries affect
+access. The editor does not change the policy when saving channel settings. Slack Socket Mode uses fixed
 unresolved references to `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`; Microsoft
 Teams uses application ID, tenant ID, require-mention, and `MSTEAMS_APP_PASSWORD`.
 Both integrations require dedicated execution and Kubernetes runtime projection.
@@ -115,6 +123,23 @@ including non-Socket Slack settings, non-standard credential references, mixed
 per-channel mention settings, or unsupported plugin shapes. Inspect unsupported
 settings in the native Configuration view and edit them through the API or
 operator workflow.
+
+## Delete an Agent
+
+Open the Agent and find **Delete Agent** below the detail tabs. In the
+confirmation dialog, select **Permanently delete Agent**. This requires `delete`
+permission on that Agent; being able to read or operate it does not grant
+deletion. Deletion is permanent: it removes the Agent, its revision history, and its workspace data.
+Namespace-owned Configurations and Secrets remain. See the [Agent deletion
+reference](agents.md#deletion) for the complete cleanup behavior.
+
+An accepted request starts asynchronous cleanup. The detail page shows the Agent
+as deleting; select **Refresh deletion status** to check progress. When the API
+confirms that the Agent is gone, the console returns to the Agents list in the
+same Namespace. An access-denied response stays on the detail page and tells you
+that deletion requires permission. If the console cannot confirm the outcome,
+the request may have succeeded; refresh to read the Agent's current state before
+retrying. The console does not automatically send another delete request.
 
 ## Failures and logout
 
@@ -156,17 +181,22 @@ result. For unavailable gateways, follow the
 ## Open the native admin UI
 
 When [Agent native admin UI access](agent-native-admin.md) is enabled, the
-Workspace files tab includes a **Native admin UI** panel for callers with exact
-Agent `administer` permission. The panel is hidden when the Installation disables
-the feature or when the caller lacks that grant. It reports stopped,
-unsupported, or unavailable gateway states without granting broader access.
+Agent detail tabs, including Configuration and Workspace files, include a
+**Native admin UI** panel for callers with exact Agent `administer` permission.
+The panel is hidden when the Installation disables the feature or when the
+caller lacks that grant. An Agent that is stopped reports that it must be started,
+including before its first deployment or after stopping clears its active
+revision. If a desired-running Agent has no active revision yet, the panel asks
+you to check the Agent's deployment and refresh access. It also reports when
+native admin is unsupported.
 
-**Open native admin UI** opens the returned per-Agent URL in a new tab. The
-visible warning is part of the operator contract: the native UI can change the
-gateway outside OCE, and those changes are not recorded in AgentRevisions. Use
-OCE for durable configuration. The Agent tab uses the same OCE session cookie as
-the console through the configured shared cookie parent domain; native chat or
-other Agent-host activity does not extend that console session.
+**Open native admin UI** opens the Agent's active revision in a new tab, even
+when you are viewing a draft or an older revision. The visible warning is part
+of the operator contract: the native UI can change the gateway outside OCE, and
+those changes are not recorded in AgentRevisions. Use OCE for durable
+configuration. The Agent tab uses the same OCE session cookie as the console
+through the configured shared cookie parent domain; native chat or other
+Agent-host activity does not extend that console session.
 
 ## Routes
 

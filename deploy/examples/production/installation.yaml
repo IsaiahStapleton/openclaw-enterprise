@@ -78,6 +78,15 @@ drivers:
               cpu: 500m
               memory: 256Mi
       network:
+        # With repositoryCredentials.enabled, add this exact service endpoint peer.
+        # The instance label must equal the Helm release name; this example uses oce.
+        # repositoryCredentials:
+        #   namespace: openclaw-system
+        #   podLabels:
+        #     app.kubernetes.io/name: openclaw-enterprise
+        #     app.kubernetes.io/instance: oce
+        #     app.kubernetes.io/component: worker
+        #   port: 8443
         # Select the cluster's actual DNS Pods so isolated tenants can resolve names.
         # See [Networking](../../../docs/reference/drivers/kubernetes-compute/networking-and-isolation.md#networking).
         dns:

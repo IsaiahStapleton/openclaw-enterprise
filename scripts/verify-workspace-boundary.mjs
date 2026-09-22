@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyRepositoryCredentialBoundary } from "./verify-repository-credentials-boundary.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const activeApplications = ["controller"];
@@ -105,7 +106,8 @@ const sources = (
   await Promise.all(activeSourceRoots.map((path) => sourceFiles(join(repositoryRoot, path))))
 ).flat();
 for (const name of activeApplications) {
-  for (const entrypoint of ["index.ts", "server.mjs"]) {
+  const entrypoints = ["index.ts", "server.mjs"];
+  for (const entrypoint of entrypoints) {
     assert.ok(
       sources.includes(join(repositoryRoot, "apps", name, "src", entrypoint)),
       `The ${name} application must provide its ${entrypoint} entrypoint.`,
@@ -127,8 +129,11 @@ for (const source of sources) {
   }
 }
 
+const credentialSources = await verifyRepositoryCredentialBoundary();
+
 process.stdout.write(
   "Workspace boundary verified: " +
     `${activeApplications.length} application, ${activePackages.length} packages, ` +
-    `${activeGoPackages.length} Go packages, ${sources.length} sources, legacy excluded.\n`,
+    `${activeGoPackages.length} Go packages, ${sources.length} sources, legacy excluded; ` +
+    `${credentialSources} credential sources checked.\n`,
 );

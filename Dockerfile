@@ -51,7 +51,10 @@ COPY --chown=node:node packages/utils/src packages/utils/src
 COPY --chown=node:node apps/controller/src apps/controller/src
 COPY --chown=node:node migrations/[0-9]*.sql migrations/
 COPY --chown=node:node migrations/meta/_journal.json migrations/meta/_journal.json
+COPY --chown=node:node migrations/meta/canonical-history.json migrations/meta/canonical-history.json
 COPY --chown=node:node scripts/migrate-production.mjs scripts/migrate-production.mjs
+COPY --chown=node:node scripts/migration-history.mjs scripts/migration-history.mjs
+COPY --chown=node:node scripts/migration-catalog.mjs scripts/migration-catalog.mjs
 COPY --chown=node:node scripts/bootstrap-installation.mjs scripts/bootstrap-installation.mjs
 COPY --chown=node:node scripts/production-healthcheck.mjs scripts/production-healthcheck.mjs
 

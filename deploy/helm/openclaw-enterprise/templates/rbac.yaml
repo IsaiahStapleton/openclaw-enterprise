@@ -56,6 +56,11 @@ rules:
     resources: [secrets]
     verbs: [get, create, update, delete]
   {{- end }}
+  {{- if .Values.repositoryCredentials.enabled }}
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create, delete]
+  {{- end }}
   - apiGroups: [""]
     resources: [configmaps, serviceaccounts, services, resourcequotas, limitranges]
     verbs: [get, list, create, patch, delete]

@@ -72,6 +72,39 @@
 {{- if eq .Values.database.secretName .Values.auth.secretName -}}
 {{- fail "Better Auth signing material must use a dedicated Secret" -}}
 {{- end -}}
+{{- if .Values.repositoryCredentials.enabled -}}
+{{- $credentials := .Values.repositoryCredentials -}}
+{{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-fA-F0-9]{64}$" $credentials.image) -}}
+{{- fail "repositoryCredentials.image must be an approved immutable SHA-256 image reference" -}}
+{{- end -}}
+{{- range $name := list "providerId" "registryConfigMapName" "registryKey" "serviceConfigSecretName" "serviceConfigKey" "appKeySecretName" "appKeyKey" "tlsSecretName" "publicCaSecretName" "publicCaKey" -}}
+{{- if not (index $credentials $name) -}}{{- fail (printf "repositoryCredentials.%s is required when enabled" $name) -}}{{- end -}}
+{{- end -}}
+{{- $secrets := dict "installation" .Values.installation.secretName "database" .Values.database.secretName "auth" .Values.auth.secretName -}}
+{{- if .Values.provider.chatgpt.enabled -}}{{- $_ := set $secrets "chatgpt" .Values.provider.chatgpt.secretName -}}{{- end -}}
+{{- if .Values.gatewayRouting.enabled -}}
+{{- $_ := set $secrets "gatewayApiKey" .Values.gatewayRouting.apiKeySecretName -}}
+{{- $_ := set $secrets "gatewayTls" (include "openclaw.gatewayRouting.tlsSecretName" .) -}}
+{{- $_ := set $secrets "gatewayRoot" (include "openclaw.gatewayRouting.rootSecretName" .) -}}
+{{- if .Values.gatewayRouting.caSecretName -}}{{- $_ := set $secrets "gatewayCa" .Values.gatewayRouting.caSecretName -}}{{- end -}}
+{{- end -}}
+{{- range $name := list "serviceConfigSecretName" "appKeySecretName" "tlsSecretName" "publicCaSecretName" -}}
+{{- $secret := index $credentials $name -}}
+{{- range $other, $value := $secrets -}}
+{{- if eq $secret $value -}}{{- fail (printf "repositoryCredentials.%s must use a dedicated Secret distinct from %s" $name $other) -}}{{- end -}}
+{{- end -}}
+{{- $_ := set $secrets $name $secret -}}
+{{- end -}}
+{{- if not $credentials.upstreamCidrs -}}{{- fail "repositoryCredentials.upstreamCidrs must contain approved provider IPv4 CIDRs" -}}{{- end -}}
+{{- range $cidr := $credentials.upstreamCidrs -}}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])$" $cidr) -}}
+{{- fail "repositoryCredentials.upstreamCidrs requires explicit IPv4 CIDRs with prefixes 1 through 32" -}}
+{{- end -}}
+{{- range $octet := splitList "." (first (splitList "/" $cidr)) -}}
+{{- if gt (int $octet) 255 -}}{{- fail "repositoryCredentials.upstreamCidrs contains an invalid IPv4 address" -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.gatewayRouting.enabled -}}
 {{- $routing := .Values.gatewayRouting -}}
 {{- $tlsSecretName := include "openclaw.gatewayRouting.tlsSecretName" . -}}

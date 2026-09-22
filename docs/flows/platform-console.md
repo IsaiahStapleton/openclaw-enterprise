@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
-updated: 2026-09-21
-last_updated_session: codex/01a0c580-9e39-7e21-bb0f-28fcc4752c59
+updated: 2026-09-22
+last_updated_session: codex/01a0c76f-2534-7991-932a-345782408759
 ---
 
 # Platform console request flow
@@ -10,10 +10,11 @@ last_updated_session: codex/01a0c580-9e39-7e21-bb0f-28fcc4752c59
 
 Opening `/console/` loads the controller's static browser client, resolves a
 cookie session, and reads authorized resources. This trace follows the Agents
-page through Namespace selection, Agent creation, detail revision selection, and
-saved channel draft edits, then covers the Provider branch and logout. It stops
-at rendered state or a submitted API mutation; rollback, deletion,
-and live gateway health remain outside the console flow. The
+page through Namespace selection, Agent creation, detail revision selection,
+saved channel draft edits, and Agent deletion, then covers the Provider branch
+and logout. It stops at rendered state or a submitted API mutation; deletion
+includes reading the Agent until the API confirms it is gone. Rollback and live
+gateway health remain outside the console flow. The
 [console reference](../reference/console.md) owns user-visible behavior; the API
 and IAM retain resource authority.
 
@@ -48,6 +49,7 @@ graph TD
     E --> E1["Edit starter JSON and select associations"]
     E --> E2["Select saved draft or AgentRevision by URL"]
     E2 --> E3["Save supported channel draft edit"]
+    E2 --> E4["Confirm Agent deletion"]
   end
   subgraph Controller["Controller API"]
     E --> F["Authenticate and authorize exact scope"]
@@ -57,6 +59,7 @@ graph TD
     M1 -->|returned Configuration ID| M["POST creates Agent draft only"]
     E2 --> N["GET draft Configuration or immutable revision"]
     E3 --> O["PATCH Configuration values"]
+    E4 --> P["DELETE exact Agent"]
   end
   subgraph Result["Browser result"]
     G --> I["Accept only current navigation response"]
@@ -64,6 +67,9 @@ graph TD
     M --> I
     N --> I
     O --> I
+    P -->|accepted or uncertain| Q["Show status and refresh exact Agent"]
+    P -->|denied| K
+    Q -->|Agent not found| R["Return to Agents list"]
     I --> J["Render list, draft, revision, or channel state"]
     F -->|denied or unavailable| K["Clear rows and show recovery"]
     J -->|Logout| L["Hide private state and confirm sign-out"]
@@ -147,15 +153,45 @@ execution mode; an explicit Agent retry reuses the saved Configuration. No write
 retries automatically, and creation alone does not admit a revision, validate the
 plugin catalog, or start runtime work.
 
+`apps/controller/src/console/agents/harness-auth.mjs:createHarnessAuthFields`
+masks the Secret ID input on creation and in the Credentials editor, including
+Preset-prefilled values. `harnessAuthDescription` reports a configured Secret
+without displaying its ID in either draft or revision summaries. Native
+Configuration displays unresolved references; the console does not fetch
+Secret values for these views.
+
 ### 4–6. Edit the Agent and access runtime files
 
-[Console Agent editing and runtime requests](platform-console/agent-editing.md) traces draft/revision rendering, channel changes, credential provisioning, and workspace reads/writes. Each request returns through the response-ordering checks below.
+[Console Agent editing and runtime requests](platform-console/agent-editing.md)
+traces draft/revision rendering, channel changes, credential provisioning,
+workspace reads/writes, and Agent deletion. Each request returns through the
+response-ordering checks below.
+
+`apps/controller/src/console/channels/slack.mjs:supportSlack` checks whether the
+channel editor can preserve the stored settings. Existing `dmPolicy` and
+`groupPolicy` values do not block editing. `updatedSlack` copies those values
+unchanged, including their absence, when saving channel IDs, allowed users, or
+mention settings. Only a new Slack configuration receives allowlist defaults.
+
+`apps/controller/src/console/agents/detail.mjs:renderAgentDetail` registers a
+handler for tab-only navigation with `console.mjs:loadPage`. For the same Agent,
+Namespace, and revision, tab clicks and browser history update the URL and replace
+only the content below the tabs. The shell, native-admin panel, and loaded
+revision controls remain mounted. Configuration and revision reads are shared
+within that detail view; a direct Workspace files URL does not wait for or start
+those reads. Refresh, revision changes, and successful channel or authentication
+edits use the full page read path.
+
+Each tab render captures its own generation. Late panel reads and form callbacks
+cannot overwrite a newer tab; leaving a tab clears its password inputs. Channel
+Secret saves update the shared draft snapshot used by other tabs and deployment
+preflight. Session expiry still clears the whole private view.
 
 ### 7. Commit only the current response, or clear the view
 
 `apps/controller/src/console/console.mjs:loadPage`, `logout`
 
-Navigation, Namespace changes, refocus, and logout invalidate prior reads. The
+Page or revision navigation, Namespace changes, refocus, and logout invalidate prior reads. The
 client cancels their requests and checks generation before accepting either
 success or failure. A late response cannot restore rows, change selection, or
 redirect a newer session. Current authorization and dependency errors clear
@@ -164,6 +200,14 @@ opens login immediately, without waiting for sibling reads. A late error from an
 older view cannot redirect a newer session. Only locally defined reason messages
 and bounded server request IDs enter failure views; backend error text is omitted.
 Global Providers and Namespaces pages remain visibly Installation-wide.
+
+`apps/controller/src/console/agents/deletion.mjs:createAgentDeletion` renders the
+Agent's deletion state. A confirmed deletion sends the existing exact Agent
+`DELETE`; the API owns the `delete` permission and asynchronous cleanup. An
+accepted or uncertain request stays on the detail page so the user can refresh
+the exact Agent. Only a confirmed not-found read returns to the Agents list. A
+denial is shown inline; an uncertain outcome blocks replay until a successful
+refresh. The [Agent reference](../reference/agents.md#deletion) owns cleanup.
 
 Logout first hides private state, then calls the existing sign-out endpoint.
 Confirmed success or session inspection proving absence replaces history with
@@ -212,6 +256,14 @@ refreshes and inspects the Agent and revision history.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-22 04:11: Preserve existing Slack policies while editing channel settings. (01a0b1f2-e696-7232-a439-5b668154bcd9 - f3dbdd41)
+
+- 2026-09-22 04:07: Keep Agent tab navigation within the content panel and preserve page state and browser history. (01a0b1f2-e696-7232-a439-5b668154bcd9 - f3dbdd41)
+
+- 2026-09-21 21:46: Trace confirmed Agent deletion, exact readback, and permission or uncertain-outcome recovery. (01a0c76f-2534-7991-932a-345782408759 - b61c3cae6c35e28db4153eaee9b477e8f5637894)
+
+- 2026-09-22 00:47: Mask authentication Secret IDs in forms and omit them from configuration summaries. (01a0b1f2-e696-7232-a439-5b668154bcd9 - ebcdaac25bc3890486badcfadf56cfc7c99bb95e)
 
 - 2026-09-21 19:52: Trace the shared default in dedicated and embedded Agent creation and preserve edited model selection. (01a0c580-9e39-7e21-bb0f-28fcc4752c59 - 4ec004dbefd25070ff1bdeb89cfb16d245296ac9)
 

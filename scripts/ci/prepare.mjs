@@ -3,13 +3,27 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer, isIPv4 } from "node:net";
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { cleanupResourceIds } from "./cleanup.mjs";
 import { prepareGatewayRouting } from "./routing.mjs";
 import { prepareLogging } from "./logging.mjs";
+import {
+  prepareRepositoryCredentials,
+  prepareRepositoryCredentialsFile,
+} from "./repository-credentials.mjs";
 import { prepareCodexSeccompProfile } from "./codex-seccomp.mjs";
 import {
   prepareOpenShell,
@@ -507,6 +521,9 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
   const name = laneName(lane);
   const prepare = lanePrepare(name);
   const effectiveEnv = effectiveLaneEnv(name, env);
+  if (prepare.k3d && name !== "openshell" && effectiveEnv.OPENCLAW_CI_K3S_IMAGE) {
+    assertImmutableImageReference(effectiveEnv.OPENCLAW_CI_K3S_IMAGE, "OPENCLAW_CI_K3S_IMAGE");
+  }
   requireEnv(prepare.requireEnv ?? [], effectiveEnv);
   if (prepare.nodeBaseImage) {
     assertNodeBaseImage(effectiveEnv.NODE_BASE_IMAGE);
@@ -519,12 +536,74 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
       prepare.mode0600Description ?? prepare.mode0600Env,
     );
   }
+  if (name === "repository-credentials-installed") {
+    if (effectiveEnv.OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED !== "1") {
+      throw new Error(
+        "Installed repository qualification requires explicit write and cleanup authorization.",
+      );
+    }
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(
+        effectiveEnv.OCC_TEST_REPOSITORY_CREDENTIALS_REPOSITORY,
+      )
+    ) {
+      throw new Error(
+        "OCC_TEST_REPOSITORY_CREDENTIALS_REPOSITORY must select one owner/repository.",
+      );
+    }
+    for (const input of ["APP_CONFIG_FILE", "APP_KEY_FILE"]) {
+      const variable = `OCC_TEST_REPOSITORY_CREDENTIALS_${input}`;
+      const path = effectiveEnv[variable];
+      if (!isAbsolute(path)) {
+        throw new Error(`${variable} must be an absolute protected file.`);
+      }
+      const info = await lstat(path);
+      if (
+        !info.isFile() ||
+        info.nlink !== 1 ||
+        (info.uid !== process.getuid() && info.uid !== 0) ||
+        info.size === 0 ||
+        info.size > 262144
+      ) {
+        throw new Error(`${variable} must be a bounded regular private file with a trusted owner.`);
+      }
+      if ((info.mode & 0o777) !== 0o600) {
+        throw new Error(`${variable} must have mode 0600.`);
+      }
+    }
+    const cidrs = effectiveEnv.OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS.split(",");
+    if (
+      cidrs.length > 64 ||
+      cidrs.some((cidr) => {
+        const [address, prefix, extra] = cidr.split("/");
+        return (
+          extra !== undefined ||
+          prefix !== "32" ||
+          !isIPv4(address) ||
+          /^(?:0\.|10\.|127\.|169\.254\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)/.test(address)
+        );
+      })
+    ) {
+      throw new Error(
+        "OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS must select approved public IPv4 /32 addresses.",
+      );
+    }
+    const gh = effectiveEnv.OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY;
+    if (gh && !isAbsolute(gh)) {
+      throw new Error("OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY must be absolute when supplied.");
+    }
+  }
 }
 
 async function buildRuntimeImages(
   statePath,
   state,
-  { controller = false, runtime = false, nodeBaseImage = process.env.NODE_BASE_IMAGE } = {},
+  {
+    controller = false,
+    runtime = false,
+    nodeBaseImage = process.env.NODE_BASE_IMAGE,
+    localStore = false,
+  } = {},
 ) {
   await commandAvailable(process.env.OCC_DOCKER_BIN ?? "docker", [
     "version",
@@ -542,6 +621,7 @@ async function buildRuntimeImages(
     await writeState(statePath, state);
     await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
       "build",
+      ...(localStore ? ["--builder", "default", "--load"] : []),
       "--pull=false",
       "--target",
       "runtime",
@@ -562,12 +642,13 @@ async function buildRuntimeImages(
     await writeState(statePath, state);
     await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
       "build",
+      ...(localStore ? ["--builder", "default", "--load"] : []),
       "--pull=false",
       "-f",
       runtimeDockerfile,
       "-t",
       tag,
-      join(repositoryRoot, "deploy/runtime"),
+      repositoryRoot,
     ]);
     await markResourceReady(statePath, state, resource);
     env.OCC_TEST_RUNTIME_IMAGE = tag;
@@ -608,7 +689,9 @@ async function ensureK3dCluster(statePath, state) {
       `k3d-${cluster}-server-0`,
       ...(crossNodePluginStatus ? [`k3d-${cluster}-agent-0`] : []),
     ],
-    ...(!openShell ? { nodeImage: "+v1.35" } : {}),
+    // An explicit digest bypasses k3d's online release-channel lookup. The
+    // running API server must still satisfy the ordinary Kubernetes 1.35 gate.
+    ...(!openShell ? { nodeImage: process.env.OPENCLAW_CI_K3S_IMAGE || "+v1.35" } : {}),
   });
   await writeState(statePath, state);
   if (openShell) {
@@ -954,6 +1037,54 @@ async function pinFixtureImageInK3d(cluster, image) {
   );
 }
 
+async function prepareRepositoryPlatformImage(statePath, state, cluster) {
+  const runtime = await buildRuntimeImages(statePath, state, { runtime: true, localStore: true });
+  const image = `localhost/${cluster.name}/repository-platform:local`;
+  const resource = addResource(state, "image-tag", { name: image, owner: state.prefix });
+  await writeState(statePath, state);
+  // Derive the controlled Harness from the delivered runtime so its Git/gh
+  // clients and credential material entrypoint remain the production ones.
+  await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
+    "build",
+    "--builder",
+    "default",
+    "--load",
+    "--pull=false",
+    "--build-arg",
+    `RUNTIME_IMAGE=${runtime.env.OCC_TEST_RUNTIME_IMAGE}`,
+    "-f",
+    join(repositoryRoot, "tests/fixtures/repository-credentials/Dockerfile.platform-fixture"),
+    "-t",
+    image,
+    join(repositoryRoot, "tests/fixtures/repository-credentials"),
+  ]);
+  await markResourceReady(statePath, state, resource);
+  return registerImageInK3d(
+    statePath,
+    state,
+    cluster,
+    image,
+    "OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE",
+  );
+}
+
+async function repositoryPlatformHostAddress(cluster) {
+  const result = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
+    "inspect",
+    "--format",
+    "{{json .NetworkSettings.Networks}}",
+    `k3d-${cluster.name}-server-0`,
+  ]);
+  const address = JSON.parse(result.stdout)[`k3d-${cluster.name}`]?.Gateway;
+  if (
+    !isIPv4(address ?? "") ||
+    !/^(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)/.test(address)
+  ) {
+    throw new Error("The owned k3d network must expose a private IPv4 Docker host gateway.");
+  }
+  return address;
+}
+
 function immutableDigest(image) {
   return image.match(/@sha256:([a-f0-9]{64})$/i)?.[1]?.toLowerCase();
 }
@@ -1014,6 +1145,17 @@ async function ensureDockerSourceImage(state, image, envName) {
     return dockerImageId(image);
   }
   assertImmutableImageReference(image, envName);
+  try {
+    if (await dockerImageHasRepoDigest(image)) {
+      return await dockerImageId(image);
+    }
+  } catch (error) {
+    // A locally built immutable image may have no reachable registry. Reuse
+    // only its verified repository digest; other Docker failures stay visible.
+    if (!/No such (?:image|object)/i.test(error.stderr ?? "")) {
+      throw error;
+    }
+  }
   await execFile(process.env.OCC_DOCKER_BIN ?? "docker", ["pull", image]);
   if (!(await dockerImageHasRepoDigest(image))) {
     throw new Error(`${envName} pull did not materialize the requested registry digest.`);
@@ -1234,11 +1376,18 @@ async function prepareK3dRuntimeImages(
   }
 }
 
-async function prepareProductionImages(statePath, state, cluster, env) {
+async function prepareProductionImages(
+  statePath,
+  state,
+  cluster,
+  env,
+  { localStore = false } = {},
+) {
   const built = await buildRuntimeImages(statePath, state, {
     controller: true,
     runtime: true,
     nodeBaseImage: effectiveLaneEnv(state.lane, env).NODE_BASE_IMAGE,
+    localStore,
   });
   Object.assign(env, built.env);
   env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE = (
@@ -1348,6 +1497,26 @@ async function prepareLane({ lane, statePath }) {
         ).env,
       );
       break;
+    case "repository-credentials-container":
+      Object.assign(
+        env,
+        await prepareRepositoryCredentials({
+          repositoryRoot,
+          imagePrefix: `localhost/${ownedName("openclaw-ci-image", state.prefix, { maxLength: 48 })}`,
+          receiptPath: join(dirname(resolvedStatePath), "repository-credentials-images.json"),
+          execFile,
+          registerImage: async (tag) => {
+            const resource = addResource(state, "image-tag", { name: tag });
+            await writeState(resolvedStatePath, state);
+            return resource;
+          },
+          markImageReady: async (resource, imageId) => {
+            resource.imageId = imageId;
+            await markResourceReady(resolvedStatePath, state, resource);
+          },
+        }),
+      );
+      break;
     case "k3d-fixture-configuration": {
       await ensurePostgresServer(resolvedStatePath, state);
       const cluster = await ensureK3dCluster(resolvedStatePath, state);
@@ -1377,6 +1546,39 @@ async function prepareLane({ lane, statePath }) {
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
       env.OCC_TEST_KUBERNETES_IMAGE = fixture.image;
       env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS = cluster.pluginStatusProxyCidrs;
+      break;
+    }
+    case "repository-credentials-platform": {
+      await ensurePostgresServer(resolvedStatePath, state);
+      const cluster = await ensureK3dCluster(resolvedStatePath, state);
+      env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
+      env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
+      env.OCC_TEST_REPOSITORY_CREDENTIALS_HOST_ADDRESS =
+        await repositoryPlatformHostAddress(cluster);
+      env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE = (
+        await prepareRepositoryPlatformImage(resolvedStatePath, state, cluster)
+      ).reference;
+      break;
+    }
+    case "repository-credentials-installed": {
+      await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
+      const cluster = await ensureK3dCluster(resolvedStatePath, state);
+      env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
+      env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
+      await prepareProductionImages(resolvedStatePath, state, cluster, env, { localStore: true });
+      env.OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE = (
+        await registerImageInK3d(
+          resolvedStatePath,
+          state,
+          cluster,
+          process.env.OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE,
+          "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
+        )
+      ).reference;
+      if (process.env.OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY) {
+        env.OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY =
+          process.env.OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY;
+      }
       break;
     }
     case "docker-model":
@@ -1482,6 +1684,18 @@ async function prepareFile({ lane, file, statePath }) {
   const effectiveState = state ?? baseState(name, resolvedStatePath);
   const env = baseEnv(resolvedStatePath, effectiveState);
   const resourceIds = [];
+
+  if (name === "repository-credentials-container") {
+    if (state?.lane !== name) {
+      throw new Error("Repository credential images require their own lane state.");
+    }
+    applyLaneEnv(name, env);
+    const prepared = await prepareRepositoryCredentialsFile({
+      clientImage: env.REPOSITORY_CREDENTIALS_CLIENT_IMAGE,
+      execFile,
+    });
+    return { env: { ...env, ...prepared.env }, cleanup: prepared.cleanup };
+  }
 
   if (prepare.postgres) {
     const dbKind = prepare.k3d ? "k8s" : "ci";

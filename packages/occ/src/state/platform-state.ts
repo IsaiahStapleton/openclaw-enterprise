@@ -2,6 +2,16 @@ import { RepositoryTransactionLifetime } from "../ports/transaction.ts";
 import { bindPlatformUnitOfWork } from "../ports/platform-unit-of-work.ts";
 import { createPlatformReadView } from "../ports/platform-read-view.ts";
 import type {
+  RepositorySessionAttempt,
+  RepositorySessionReadRepository,
+  RepositorySessionRepository,
+} from "../ports/repository-sessions.ts";
+import { memoryRepositorySessions } from "./memory-repository-sessions.ts";
+import {
+  normalizedRepositoryBindings,
+  validRepositoryRevisionState,
+} from "./repository-credential-state.ts";
+import type {
   AccessBinding,
   Agent,
   AgentDesiredRuntimeState,
@@ -15,6 +25,8 @@ import type {
   Namespace,
   NamespaceStatus,
   PluginDesiredState,
+  Preset,
+  RepositoryBindingSelection,
   Secret,
   SecretBindings,
   ServiceAccount,
@@ -62,6 +74,7 @@ export interface NamespaceRepository extends NamespaceReadRepository {
   ): Promise<Readonly<PersistedNamespace> | undefined>;
   hasAgents(namespaceId: string): Promise<boolean>;
   hasConfigurations(namespaceId: string): Promise<boolean>;
+  hasPresets(namespaceId: string): Promise<boolean>;
   hasServiceAccounts(namespaceId: string): Promise<boolean>;
   hasSecrets(namespaceId: string): Promise<boolean>;
   transitionNamespaceStatus(
@@ -91,6 +104,7 @@ export interface AgentRepository extends AgentReadRepository {
     harnessAuth?: HarnessAuthBinding | null,
     providerId?: string | null,
     plugins?: PluginDesiredState,
+    repositoryBindings?: readonly RepositoryBindingSelection[],
   ): Promise<Readonly<Agent> | undefined>;
   compareAndSetActiveRevision(
     namespaceId: string,
@@ -169,6 +183,22 @@ export interface ConfigurationRepository extends ConfigurationReadRepository {
     secretBindings?: SecretBindings,
   ): Promise<Readonly<ConfigurationOwnership> | undefined>;
   deleteConfiguration(namespaceId: string, configurationId: string): Promise<boolean>;
+}
+
+export interface PresetReadRepository {
+  findPreset(namespaceId: string, presetId: string): Promise<Readonly<Preset> | undefined>;
+  listPresets(namespaceId: string): Promise<readonly Readonly<Preset>[]>;
+}
+
+export interface PresetRepository extends PresetReadRepository {
+  createPreset(preset: Preset): Promise<Readonly<Preset>>;
+  lockPreset(namespaceId: string, presetId: string): Promise<Readonly<Preset> | undefined>;
+  updatePreset(
+    namespaceId: string,
+    presetId: string,
+    changes: Partial<Pick<Preset, "name" | "template">>,
+  ): Promise<Readonly<Preset> | undefined>;
+  deletePreset(namespaceId: string, presetId: string): Promise<boolean>;
 }
 
 export interface SecretReadRepository {
@@ -417,7 +447,9 @@ function assertAdmittedAgentRevision(revision: AgentRevision): void {
     (revision.secretDriverId !== undefined && !isNonEmptyString(revision.secretDriverId)) ||
     Object.hasOwn(revision, "serviceAccount") ||
     !validHarnessAuthSnapshot(revision.harnessAuth, revision.namespaceId) ||
-    !validPluginRevisionState(revision.plugins)
+    !validPluginRevisionState(revision.plugins) ||
+    (revision.repositoryCredentials !== undefined &&
+      !validRepositoryRevisionState(revision.repositoryCredentials))
   ) {
     throw new ScopeViolationError(
       "An AgentRevision requires valid Configuration metadata, a native document, and pinned Harness and Compute descriptors.",
@@ -491,11 +523,13 @@ export interface PlatformReadView {
   readonly installations: InstallationReadRepository;
   readonly namespaces: NamespaceReadRepository;
   readonly configurations: ConfigurationReadRepository;
+  readonly presets: PresetReadRepository;
   readonly secrets: SecretReadRepository;
   readonly serviceAccounts: ServiceAccountReadRepository;
   readonly agents: AgentReadRepository;
   readonly revisions: AgentRevisionReadRepository;
   readonly iamPolicy: IAMPolicyReadRepository;
+  readonly repositorySessions: RepositorySessionReadRepository;
   readonly operations: PlatformOperationReadRepository;
 }
 
@@ -503,11 +537,13 @@ export interface PlatformUnitOfWork extends PlatformReadView {
   readonly installations: InstallationRepository;
   readonly namespaces: NamespaceRepository;
   readonly configurations: ConfigurationRepository;
+  readonly presets: PresetRepository;
   readonly secrets: SecretRepository;
   readonly serviceAccounts: ServiceAccountRepository;
   readonly agents: AgentRepository;
   readonly revisions: AgentRevisionRepository;
   readonly iamPolicy: IAMPolicyRepository;
+  readonly repositorySessions: RepositorySessionRepository;
   readonly audit: PlatformAuditRepository;
   readonly operations: PlatformOperationRepository;
 }
@@ -538,12 +574,14 @@ interface PlatformSnapshot {
   installation: Readonly<Installation> | undefined;
   readonly namespaces: Map<string, Readonly<PersistedNamespace>>;
   readonly configurations: Map<string, Readonly<ConfigurationOwnership>>;
+  readonly presets: Map<string, Readonly<Preset>>;
   readonly secrets: Map<string, Readonly<Secret>>;
   readonly serviceAccounts: Map<string, Readonly<ServiceAccount>>;
   readonly agents: Map<string, Readonly<Agent>>;
   readonly revisions: Map<string, readonly Readonly<AgentRevision>[]>;
   readonly roles: Map<string, Readonly<Role>>;
   readonly bindings: Map<string, Readonly<AccessBinding>>;
+  readonly repositorySessions: Map<string, Readonly<RepositorySessionAttempt>>;
   readonly audit: Readonly<AuditEvent>[];
   readonly operations: Readonly<PlatformOperation>[];
 }
@@ -574,6 +612,7 @@ function cloneSnapshot(snapshot: PlatformSnapshot): PlatformSnapshot {
         immutableCopy(configuration),
       ]),
     ),
+    presets: new Map(Array.from(snapshot.presets, ([key, preset]) => [key, immutableCopy(preset)])),
     secrets: new Map(Array.from(snapshot.secrets, ([key, secret]) => [key, immutableCopy(secret)])),
     serviceAccounts: new Map(
       Array.from(snapshot.serviceAccounts, ([key, account]) => [key, immutableCopy(account)]),
@@ -588,6 +627,9 @@ function cloneSnapshot(snapshot: PlatformSnapshot): PlatformSnapshot {
     roles: new Map(Array.from(snapshot.roles, ([key, role]) => [key, immutableCopy(role)])),
     bindings: new Map(
       Array.from(snapshot.bindings, ([key, binding]) => [key, immutableCopy(binding)]),
+    ),
+    repositorySessions: new Map(
+      Array.from(snapshot.repositorySessions, ([key, attempt]) => [key, immutableCopy(attempt)]),
     ),
     audit: snapshot.audit.map((event) => immutableCopy(event)),
     operations: snapshot.operations.map((operation) => immutableCopy(operation)),
@@ -808,6 +850,8 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       Array.from(snapshot.configurations.values()).some(
         (configuration) => configuration.namespaceId === namespaceId,
       ),
+    hasPresets: async (namespaceId) =>
+      Array.from(snapshot.presets.values()).some((preset) => preset.namespaceId === namespaceId),
     hasServiceAccounts: async (namespaceId) =>
       Array.from(snapshot.serviceAccounts.values()).some(
         (account) => account.namespaceId === namespaceId,
@@ -851,6 +895,9 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         Array.from(snapshot.configurations.values()).some(
           (configuration) => configuration.namespaceId === namespaceId,
         ) ||
+        Array.from(snapshot.presets.values()).some(
+          (preset) => preset.namespaceId === namespaceId,
+        ) ||
         Array.from(snapshot.serviceAccounts.values()).some(
           (account) => account.namespaceId === namespaceId,
         ) ||
@@ -866,6 +913,71 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       const saved = immutableCopy({ ...namespace, deletedAt });
       snapshot.namespaces.set(key, saved);
       return immutableCopy(saved);
+    },
+  };
+
+  const findPreset: PresetReadRepository["findPreset"] = async (namespaceId, presetId) => {
+    if (snapshot.namespaces.get(namespaceId)?.deletedAt !== undefined) {
+      return undefined;
+    }
+    const preset = snapshot.presets.get(agentKey(namespaceId, presetId));
+    return preset === undefined ? undefined : immutableCopy(preset);
+  };
+  const presets: PresetRepository = {
+    findPreset,
+    listPresets: async (namespaceId) =>
+      Object.freeze(
+        snapshot.namespaces.get(namespaceId)?.deletedAt !== undefined
+          ? []
+          : Array.from(snapshot.presets.values())
+              .filter((preset) => preset.namespaceId === namespaceId)
+              .sort((a, b) => a.id.localeCompare(b.id))
+              .map((preset) => immutableCopy(preset)),
+      ),
+    createPreset: async (preset) => {
+      assertInitialized(snapshot);
+      const namespace = await namespaces.lockNamespace(preset.namespaceId);
+      if (namespace === undefined || !["provisioning", "ready"].includes(namespace.status)) {
+        throw new ScopeViolationError("The Preset belongs to an unavailable Namespace.");
+      }
+      if (
+        Array.from(snapshot.presets.values()).some(
+          (existing) =>
+            existing.id === preset.id ||
+            (existing.namespaceId === preset.namespaceId && existing.name === preset.name),
+        )
+      ) {
+        throw new ResourceConflictError("The Preset identity or Namespace name already exists.");
+      }
+      const saved = immutableCopy(preset);
+      snapshot.presets.set(agentKey(preset.namespaceId, preset.id), saved);
+      return immutableCopy(saved);
+    },
+    lockPreset: findPreset,
+    updatePreset: async (namespaceId, presetId, changes) => {
+      const current = await findPreset(namespaceId, presetId);
+      if (current === undefined) {
+        return undefined;
+      }
+      const saved = immutableCopy({ ...current, ...changes });
+      if (
+        Array.from(snapshot.presets.values()).some(
+          (existing) =>
+            existing.namespaceId === namespaceId &&
+            existing.id !== presetId &&
+            existing.name === saved.name,
+        )
+      ) {
+        throw new ResourceConflictError("The Preset name already exists in this Namespace.");
+      }
+      snapshot.presets.set(agentKey(namespaceId, presetId), saved);
+      return immutableCopy(saved);
+    },
+    deletePreset: async (namespaceId, presetId) => {
+      if ((await findPreset(namespaceId, presetId)) === undefined) {
+        return false;
+      }
+      return snapshot.presets.delete(agentKey(namespaceId, presetId));
     },
   };
 
@@ -1201,6 +1313,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         throw new ScopeViolationError("The Agent Provider identity is invalid.");
       }
       const plugins = normalizedPlugins(agent.plugins);
+      const repositoryBindings = normalizedRepositoryBindings(agent.repositoryBindings);
       const namespace = await namespaces.lockNamespace(agent.namespaceId);
       if (
         namespace === undefined ||
@@ -1242,10 +1355,15 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
           "An Agent service principal already belongs to another Agent.",
         );
       }
-      const { plugins: _providedPlugins, ...withoutPlugins } = agent;
+      const {
+        plugins: _providedPlugins,
+        repositoryBindings: _providedRepositoryBindings,
+        ...withoutPlugins
+      } = agent;
       const saved = immutableCopy({
         ...withoutPlugins,
         ...(plugins === undefined ? {} : { plugins }),
+        ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
         desiredRuntimeState: "stopped" as const,
         status: "active" as const,
       });
@@ -1299,6 +1417,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       harnessAuth,
       providerId,
       nextPlugins,
+      nextRepositoryBindings,
     ) => {
       const current = await agents.findAgent(namespaceId, agentId);
       if (!current) {
@@ -1322,7 +1441,15 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       await assertHarnessAuthAvailable({ secrets, serviceAccounts }, namespaceId, association);
       const nextProviderId = providerId === undefined ? current.providerId : providerId;
       const plugins = nextPlugins === undefined ? current.plugins : normalizedPlugins(nextPlugins);
-      const { plugins: _currentPlugins, ...withoutPlugins } = current;
+      const repositoryBindings =
+        nextRepositoryBindings === undefined
+          ? current.repositoryBindings
+          : normalizedRepositoryBindings(nextRepositoryBindings);
+      const {
+        plugins: _currentPlugins,
+        repositoryBindings: _currentRepositoryBindings,
+        ...withoutPlugins
+      } = current;
       const updated = immutableCopy({
         ...withoutPlugins,
         configurationId,
@@ -1330,6 +1457,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         executionMode: executionMode ?? current.executionMode,
         harnessAuth: association,
         ...(plugins === undefined ? {} : { plugins }),
+        ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
       });
       snapshot.agents.set(agentKey(namespaceId, agentId), updated);
       return immutableCopy(updated);
@@ -1444,6 +1572,9 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     }
     if (resourceKind === "configuration") {
       return (await configurations.findConfiguration(namespaceId, resourceId)) !== undefined;
+    }
+    if (resourceKind === "preset") {
+      return (await presets.findPreset(namespaceId, resourceId)) !== undefined;
     }
     if (resourceKind === "secret") {
       return (await secrets.findSecret(namespaceId, resourceId)) !== undefined;
@@ -1569,15 +1700,34 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       snapshot.bindings.delete(iamPolicyKey(namespaceId, bindingId)),
   };
 
+  const repositorySessions = memoryRepositorySessions(
+    snapshot.repositorySessions,
+    (owner) =>
+      snapshot.revisions
+        .get(agentKey(owner.namespaceId, owner.agentId))
+        ?.find((revision) => revision.id === owner.revisionId),
+    (owner) => {
+      const namespace = snapshot.namespaces.get(owner.namespaceId);
+      const agent = snapshot.agents.get(agentKey(owner.namespaceId, owner.agentId));
+      return (
+        namespace?.status === "ready" &&
+        agent?.status === "active" &&
+        agent.desiredRuntimeState === "running"
+      );
+    },
+  );
+
   return {
     installations,
     namespaces,
     configurations,
+    presets,
     secrets,
     serviceAccounts,
     agents,
     revisions,
     iamPolicy,
+    repositorySessions,
     audit: {
       async append(event) {
         if (event.installationId !== snapshot.installation?.id) {
@@ -1704,12 +1854,14 @@ export class InMemoryPlatformState implements PlatformStateStore {
     installation: undefined,
     namespaces: new Map(),
     configurations: new Map(),
+    presets: new Map(),
     secrets: new Map(),
     serviceAccounts: new Map(),
     agents: new Map(),
     revisions: new Map(),
     roles: new Map(),
     bindings: new Map(),
+    repositorySessions: new Map(),
     audit: [],
     operations: [],
   };

@@ -22,6 +22,22 @@ const safeChatGptOperations = new Set([
   "delete-credential",
 ]);
 
+const safeRepositoryPlatformSetupStages = new Set([
+  "selection",
+  "kubernetes-setup",
+  "database-bootstrap",
+  "controller-startup",
+  "namespace-create",
+  "namespace-provisioning",
+  "namespace-reconciliation",
+  "controller-stop",
+  "credential-service-startup",
+  "control-relay-startup",
+  "relay-creation",
+  "relay-readiness",
+  "controller-restart",
+]);
+
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -90,6 +106,163 @@ function pluginStatusPods(value) {
     }));
 }
 
+function schedulingFailureClasses(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  const allowed = [
+    "disk-pressure",
+    "memory-pressure",
+    "pid-pressure",
+    "not-ready",
+    "unreachable",
+    "cordoned",
+    "control-plane",
+    "insufficient-cpu",
+    "insufficient-memory",
+    "insufficient-ephemeral-storage",
+    "insufficient-pods",
+    "untolerated-taint",
+    "other",
+  ];
+  if (!Array.isArray(value) || value.length > allowed.length) {
+    return ["other"];
+  }
+  const unknown = value.some((entry) => !allowed.includes(entry));
+  const classes = allowed.filter(
+    (entry) => value.includes(entry) || (entry === "other" && unknown),
+  );
+  return classes.length > 0 ? classes : ["other"];
+}
+
+function relayPodDiagnostic(value) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (value.lookup !== "found") {
+    return { lookup: value.lookup === "unavailable" ? "unavailable" : "other" };
+  }
+  const closed = (field, allowed) => (allowed.includes(field) ? field : "other");
+  const integer = (field, maximum) =>
+    Number.isSafeInteger(field) && field >= 0 && field <= maximum ? field : undefined;
+  const boolean = (field) => (typeof field === "boolean" ? field : undefined);
+  return {
+    lookup: "found",
+    phase: closed(value.phase, ["Pending", "Running", "Succeeded", "Failed", "Unknown"]),
+    scheduled: closed(value.scheduled, ["True", "False", "Unknown"]),
+    scheduledReason:
+      value.scheduledReason === undefined
+        ? undefined
+        : closed(value.scheduledReason, ["Unschedulable", "SchedulingGated"]),
+    schedulingFailures: schedulingFailureClasses(value.schedulingFailures),
+    ready: closed(value.ready, ["True", "False", "Unknown"]),
+    containerState: closed(value.containerState, ["waiting", "running", "terminated"]),
+    waitingReason: closed(value.waitingReason, [
+      "ContainerCreating",
+      "PodInitializing",
+      "ImagePullBackOff",
+      "ErrImagePull",
+      "InvalidImageName",
+      "CreateContainerConfigError",
+      "CreateContainerError",
+      "RunContainerError",
+      "CrashLoopBackOff",
+    ]),
+    terminationReason: closed(value.terminationReason, [
+      "Completed",
+      "Error",
+      "OOMKilled",
+      "ContainerCannotRun",
+    ]),
+    exitCode: integer(value.exitCode, 255),
+    restartCount: integer(value.restartCount, 2 ** 31 - 1),
+    nodeAssigned: boolean(value.nodeAssigned),
+    imageIdPresent: boolean(value.imageIdPresent),
+    containerIdPresent: boolean(value.containerIdPresent),
+  };
+}
+
+function filesystemCounters(value) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const integer = (field) => (Number.isSafeInteger(field) && field >= 0 ? field : undefined);
+  return {
+    availableBytes: integer(value.availableBytes),
+    capacityBytes: integer(value.capacityBytes),
+    inodesFree: integer(value.inodesFree),
+    inodes: integer(value.inodes),
+  };
+}
+
+function nodeFilesystemDiagnostic(value) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return value.lookup === "found"
+    ? {
+        lookup: "found",
+        nodeFs: filesystemCounters(value.nodeFs),
+        imageFs: filesystemCounters(value.imageFs),
+      }
+    : { lookup: value.lookup === "unavailable" ? "unavailable" : "other" };
+}
+
+function nodeTaintDiagnostics(value) {
+  if (!Array.isArray(value) || value.length > 64) {
+    return [{ category: "other", effect: "other" }];
+  }
+  const categories = [
+    "disk-pressure",
+    "memory-pressure",
+    "pid-pressure",
+    "not-ready",
+    "unreachable",
+    "cordoned",
+    "network-unavailable",
+    "control-plane",
+    "cloud-provider-uninitialized",
+    "out-of-service",
+    "critical-addons",
+    "other",
+  ];
+  const effects = ["NoSchedule", "NoExecute", "PreferNoSchedule", "other"];
+  const taints = new Map();
+  for (const entry of value) {
+    const category = categories.includes(entry?.category) ? entry.category : "other";
+    const effect = effects.includes(entry?.effect) ? entry.effect : "other";
+    taints.set(`${category}/${effect}`, { category, effect });
+  }
+  return [...taints.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, entry]) => entry);
+}
+
+function relayNodeDiagnostic(value) {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (value.lookup !== "found") {
+    return { lookup: value.lookup === "unavailable" ? "unavailable" : "other" };
+  }
+  const condition = (field) => (["True", "False", "Unknown"].includes(field) ? field : "other");
+  const count = (field) =>
+    Number.isSafeInteger(field) && field >= 0 && field <= 2 ** 31 - 1 ? field : undefined;
+  return {
+    lookup: "found",
+    conditions: {
+      ready: condition(value.conditions?.ready),
+      diskPressure: condition(value.conditions?.diskPressure),
+      memoryPressure: condition(value.conditions?.memoryPressure),
+      pidPressure: condition(value.conditions?.pidPressure),
+      networkUnavailable: condition(value.conditions?.networkUnavailable),
+    },
+    unschedulable: typeof value.unschedulable === "boolean" ? value.unschedulable : undefined,
+    taints: nodeTaintDiagnostics(value.taints),
+    taintCount: count(value.taintCount),
+    unrecognizedTaintCount: count(value.unrecognizedTaintCount),
+    filesystems: nodeFilesystemDiagnostic(value.filesystems),
+  };
+}
+
 function failureDiagnostic(error) {
   const diagnostic = error?.openclawCiDiagnostic;
   if (!isRecord(diagnostic)) {
@@ -103,6 +276,19 @@ function failureDiagnostic(error) {
           kind: "kubernetes-plugin-status",
           stage: diagnostic.stage,
           pods: pluginStatusPods(diagnostic.pods),
+        }
+      : undefined;
+  }
+  if (diagnostic.kind === "repository-platform-setup") {
+    const stage = diagnostic.stage;
+    return typeof stage === "string" && safeRepositoryPlatformSetupStages.has(stage)
+      ? {
+          kind: "repository-platform-setup",
+          stage,
+          relayPod:
+            stage === "relay-readiness" ? relayPodDiagnostic(diagnostic.relayPod) : undefined,
+          relayNode:
+            stage === "relay-readiness" ? relayNodeDiagnostic(diagnostic.relayNode) : undefined,
         }
       : undefined;
   }

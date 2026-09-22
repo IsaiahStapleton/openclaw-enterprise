@@ -253,7 +253,9 @@ async function start() {
       throw new Error("The selected Compute Driver cannot manage ServiceAccount credentials.");
     }
     const providerDefinition = drivers.installation.provider.find(
-      (provider) => provider.drivers.service_account === selectedServiceAccountDriver.id,
+      (provider) =>
+        provider.type === "chatgpt" &&
+        provider.drivers.service_account === selectedServiceAccountDriver.id,
     );
     if (providerDefinition === undefined) {
       throw new Error("The selected ServiceAccount Driver requires an owning Provider.");

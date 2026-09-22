@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -35,7 +35,12 @@ function runPrepare(args, env = {}) {
   });
 }
 
-async function fixtureImageCommands(t, scenario) {
+async function fixtureImageCommands(
+  t,
+  scenario,
+  lane = "k3d-fixture-configuration",
+  extraEnv = {},
+) {
   const root = await fixture(t);
   const bin = join(root, "bin");
   const home = join(root, "home");
@@ -71,10 +76,46 @@ function finish(stdout = "") {
 
 if (command === "docker" || command === "podman") {
   if (equals(args, ["version", "--format", "{{.Server.Version}}"])) finish("29.4.0\n");
+  const sourceImage = process.env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE;
+  if (sourceImage && equals(args, ["image", "inspect", "--format", "{{json .RepoDigests}}", sourceImage])) {
+    if (scenario === "inspect-failed" || (scenario === "image-absent" && !state.pulled)) {
+      process.stderr.write(scenario === "inspect-failed" ? "Cannot connect to the Docker daemon\n" : "Error response from daemon: No such image\n");
+      process.exit(1);
+    }
+    const matching = scenario === "local-digest" || (state.pulled && scenario !== "pull-mismatch");
+    finish(JSON.stringify([matching ? sourceImage : "registry.example/other@sha256:" + "d".repeat(64)]));
+  }
+  if (sourceImage && equals(args, ["pull", sourceImage])) {
+    state.pulled = true;
+    finish();
+  }
+  if (sourceImage && equals(args, ["image", "inspect", "--format", "{{.Id}}", sourceImage])) finish(configId + "\n");
+  if (sourceImage && args[0] === "tag" && args[1] === sourceImage) {
+    state.tag = args[2];
+    finish();
+  }
   if (args[0] === "compose" && args[1] === "-f" && args[3] === "-p") {
     assert.match(args[4], /^openclaw_ci_pg_/);
     if (equals(args.slice(5), ["up", "-d", "--wait"])) finish();
     if (equals(args.slice(5), ["down", "--volumes", "--remove-orphans"])) finish();
+    if (args[5] === "exec" && args[8] === "psql") finish();
+  }
+  if (equals(args.slice(0, 3), ["inspect", "--format", "{{json .NetworkSettings.Networks}}"]) &&
+      args[3] === "k3d-" + state.cluster + "-server-0") {
+    finish(JSON.stringify({ ["k3d-" + state.cluster]: {
+      Gateway: scenario === "public-gateway" ? "203.0.113.1" : "172.19.0.1",
+    } }));
+  }
+  if (args[0] === "build" && args.includes("--build-arg")) {
+    assert.equal(args[args.indexOf("--build-arg") + 1], "RUNTIME_IMAGE=" + state.runtime);
+    assert.ok(args[args.indexOf("-f") + 1].endsWith("/Dockerfile.platform-fixture"));
+    state.tag = args[args.indexOf("-t") + 1];
+    finish();
+  }
+  if (args[0] === "build" && args.includes("-f")) {
+    assert.ok(args[args.indexOf("-f") + 1].endsWith("/deploy/runtime/Dockerfile"));
+    state.runtime = args[args.indexOf("-t") + 1];
+    finish();
   }
   if (equals(args.slice(0, 3), ["build", "--pull=false", "-t"]) && args.length === 5) {
     assert.equal(args[3], "localhost/" + state.cluster + "/fixture:local");
@@ -96,6 +137,7 @@ if (command === "docker" || command === "podman") {
     finish();
   }
   if (equals(args, ["image", "rm", "-f", state.tag])) finish();
+  if (state.runtime && equals(args, ["image", "rm", "-f", state.runtime])) finish();
   if (args[0] === "exec" && ["server-0", "agent-0"].some((suffix) =>
       args[1] === "k3d-" + state.cluster + "-" + suffix)) {
     const node = args[1];
@@ -132,11 +174,17 @@ if (command === "docker" || command === "podman") {
     }
   }
 }
+if (command === "helm" && equals(args, ["version", "--short"])) finish("v3.19.0\n");
+if (command === "corepack" && equals(args, ["pnpm", "db:migrate"])) {
+  assert.match(process.env.OCC_MIGRATION_DATABASE_URL, /^postgresql:\/\/occ_migrator:.*\/openclaw_k8s_/);
+  finish();
+}
 if (command === "k3d") {
   if (equals(args, ["version"])) finish("k3d version v5.8.3\n");
-  if (equals(args.slice(0, 2), ["cluster", "create"]) && args.length === 15) {
+  if (equals(args.slice(0, 2), ["cluster", "create"]) && [13, 15].includes(args.length)) {
     assert.match(args[2], /^openclaw-k8s-/);
-    assert.deepEqual(args.slice(3, 5), ["--image", "+v1.35"]);
+    assert.deepEqual(args.slice(3, 5), ["--image", process.env.OPENCLAW_CI_K3S_IMAGE || "+v1.35"]);
+    if (args.length === 15) {
     assert.deepEqual(args.slice(5, 10), ["--servers", "1", "--agents", "1", "--volume"]);
     const storage = args[10].split(":");
     assert.equal(storage[1], "/var/lib/rancher/k3s/storage@all");
@@ -144,6 +192,11 @@ if (command === "k3d") {
     assert.equal(args[11], "--api-port");
     assert.match(args[12], /^127\.0\.0\.1:\d+$/);
     assert.deepEqual(args.slice(13), ["--kubeconfig-update-default=false", "--kubeconfig-switch-context=false"]);
+    } else {
+    assert.deepEqual(args.slice(5, 10), ["--servers", "1", "--agents", "0", "--api-port"]);
+    assert.match(args[10], /^127\.0\.0\.1:\d+$/);
+    assert.deepEqual(args.slice(11), ["--kubeconfig-update-default=false", "--kubeconfig-switch-context=false"]);
+    }
     state.cluster = args[2];
     finish();
   }
@@ -174,7 +227,9 @@ if (command === "kubectl") {
     }
     if (equals(args.slice(4), ["wait", "--for=condition=Ready", "nodes", "--all", "--timeout=120s"])) finish();
     if (equals(args.slice(4), ["version", "-o", "json"])) {
-      finish(JSON.stringify({ serverVersion: { gitVersion: "v1.35.8+k3s1" } }));
+      finish(JSON.stringify({ serverVersion: {
+        gitVersion: scenario === "wrong-server-version" ? "v1.34.11+k3s1" : "v1.35.8+k3s1",
+      } }));
     }
     if (equals(args.slice(4), ["get", "node", "k3d-" + state.cluster + "-agent-0", "-o", "json"])) {
       finish(JSON.stringify({ spec: { podCIDR: "10.42.7.0/24" } }));
@@ -231,7 +286,7 @@ if (command === "kubectl") {
 }
 throw new Error("Unexpected external command: " + command + " " + JSON.stringify(args));
 `}`;
-  for (const command of ["docker.mjs", "k3d.mjs", "kubectl.mjs", "podman"]) {
+  for (const command of ["docker.mjs", "k3d.mjs", "kubectl.mjs", "podman", "corepack", "helm"]) {
     await writeFile(join(bin, command), commandSource, { mode: 0o700 });
   }
   const statePath = join(root, "state.json");
@@ -249,6 +304,7 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
     OCC_DOCKER_BIN: join(bin, scenario === "podman-success" ? "podman" : "docker.mjs"),
     OPENCLAW_CI_K3D_BIN: join(bin, "k3d.mjs"),
     OCC_KUBECTL_BIN: join(bin, "kubectl.mjs"),
+    ...extraEnv,
   };
   const run = (script, args) =>
     spawnSync(process.execPath, [join(repositoryRoot, "scripts/ci", script), ...args], {
@@ -261,14 +317,9 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
     statePath,
     githubEnv,
     prepare: () =>
-      run("prepare.mjs", [
-        "--lane",
-        "k3d-fixture-configuration",
-        "--state",
-        statePath,
-        "--github-env",
-        githubEnv,
-      ]),
+      run("prepare.mjs", ["--lane", lane, "--state", statePath, "--github-env", githubEnv]),
+    prepareFile: (file) =>
+      run("prepare.mjs", ["--lane", lane, "--file", file, "--state", statePath]),
     cleanup: () => run("cleanup.mjs", ["--state", statePath]),
     commands: async () =>
       (await readFile(join(root, "commands.jsonl"), "utf8")).trim().split("\n").map(JSON.parse),
@@ -418,6 +469,218 @@ const digest = "a".repeat(64);
 const immutableImage = `registry.example/openclaw/runtime@sha256:${digest}`;
 const nodeBaseImage = `docker.io/library/node:24-bookworm@sha256:${digest}`;
 const mutableImage = "registry.example/openclaw/runtime:latest";
+
+test("k3d preparation reuses only matching local immutable images and verifies fresh pulls", async (t) => {
+  for (const scenario of [
+    "local-digest",
+    "image-absent",
+    "local-mismatch",
+    "pull-mismatch",
+    "inspect-failed",
+  ]) {
+    const commands = await fixtureImageCommands(t, scenario, "k3d-model", {
+      NODE_BASE_IMAGE: nodeBaseImage,
+      // Supply the controller artifact so this case isolates image import, not its build.
+      OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: immutableImage,
+      OPENAI_API_KEY: "test-only-key",
+      OCC_TEST_OPENAI_MODEL: "test-model",
+      OCC_TEST_KUBERNETES_GATEWAY_IMAGE: immutableImage,
+      OCC_TEST_KUBERNETES_AGENT_IMAGE: immutableImage,
+      // Stop at the next independent preparation boundary after image import.
+      OCC_TEST_KUBERNETES_CODEX_VERSION: "0.153.0",
+    });
+    const result = commands.prepare();
+    assert.equal(result.status, 1);
+    const calls = await commands.commands();
+    const pulls = calls.filter(({ command, args }) => command === "docker" && args[0] === "pull");
+    assert.equal(
+      pulls.length,
+      ["local-digest", "inspect-failed"].includes(scenario) ? 0 : 1,
+      scenario,
+    );
+    const state = JSON.parse(await readFile(commands.statePath, "utf8"));
+    const imported = state.resources.filter(({ kind }) => kind === "k3d-image");
+    if (scenario === "pull-mismatch") {
+      assert.match(result.stderr, /pull did not materialize the requested registry digest/);
+      assert.equal(imported.length, 0);
+    } else if (scenario === "inspect-failed") {
+      assert.match(result.stderr, /Cannot connect to the Docker daemon/);
+      assert.equal(imported.length, 0);
+    } else {
+      assert.match(result.stderr, /limited to reviewed Codex versions/);
+      assert.equal(imported.length, 1);
+      assert.equal(imported[0].status, "ready");
+      assert.equal(imported[0].sourceImage, immutableImage);
+      assert.equal(imported[0].hostImageId, `sha256:${"b".repeat(64)}`);
+    }
+    const cleanup = commands.cleanup();
+    assert.equal(cleanup.status, 0, cleanup.stderr);
+    assert.ok(
+      !(await commands.commands()).some(
+        ({ args }) => args[0] === "image" && args[1] === "rm" && args.includes(immutableImage),
+      ),
+      "cleanup must preserve the caller's immutable source image",
+    );
+  }
+});
+
+test("ordinary k3d preparation forwards an immutable K3s override and retains the server version gate", async (t) => {
+  const image = `registry.example/k3s:v1.35.8-k3s1@sha256:${digest}`;
+  for (const scenario of ["success", "wrong-server-version"]) {
+    const commands = await fixtureImageCommands(t, scenario, "k3d-fixture-configuration", {
+      OPENCLAW_CI_K3S_IMAGE: image,
+    });
+    const result = commands.prepare();
+    assert.equal(result.status, scenario === "success" ? 0 : 1, result.stderr);
+    const state = JSON.parse(await readFile(commands.statePath, "utf8"));
+    const cluster = state.resources.find(({ kind }) => kind === "k3d-cluster");
+    assert.equal(cluster.nodeImage, image);
+    if (scenario === "success") {
+      assert.equal(cluster.kubernetesVersion, "v1.35.8+k3s1");
+    } else {
+      assert.match(result.stderr, /must resolve to Kubernetes 1\.35\.x/);
+      assert.equal(
+        (await commands.commands()).some(({ args }) => args[0] === "build"),
+        false,
+      );
+    }
+    const cleanup = commands.cleanup();
+    assert.equal(cleanup.status, 0, cleanup.stderr);
+  }
+});
+
+test("ordinary k3d preparation rejects mutable K3s overrides before creating state", async (t) => {
+  const root = await fixture(t);
+  const statePath = join(root, "state.json");
+  const result = runPrepare(["--lane", "repository-credentials-platform", "--state", statePath], {
+    OPENCLAW_CI_K3S_IMAGE: "rancher/k3s:latest",
+    OCC_DOCKER_BIN: join(root, "no-docker-command"),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /OPENCLAW_CI_K3S_IMAGE must be an immutable/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+});
+
+test("repository platform preparation binds runtime clients, an owned gateway and a fresh migrated database", async (t) => {
+  const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform");
+  const prepared = commands.prepare();
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const state = JSON.parse(await readFile(commands.statePath, "utf8"));
+  const cluster = state.resources.find(({ kind }) => kind === "k3d-cluster");
+  assert.equal(state.env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM, "1");
+  assert.equal(state.env.OCC_TEST_REPOSITORY_CREDENTIALS_HOST_ADDRESS, "172.19.0.1");
+  assert.equal(
+    state.env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE,
+    `localhost/${cluster.name}/repository-platform@sha256:${"c".repeat(64)}`,
+  );
+  assert.equal(state.env.OPENAI_API_KEY, undefined);
+
+  const file = commands.prepareFile("tests/integration/repository-credentials-platform.test.mjs");
+  assert.equal(file.status, 0, file.stderr);
+  const migrated = JSON.parse(await readFile(commands.statePath, "utf8"));
+  const database = migrated.resources.find(({ kind }) => kind === "postgres-database");
+  assert.match(database.name, /^openclaw_k8s_/);
+  assert.equal(database.status, "ready");
+  const calls = await commands.commands();
+  assert.ok(calls.some(({ command, args }) => command === "corepack" && args[1] === "db:migrate"));
+  const builds = calls.filter(({ command, args }) => command === "docker" && args[0] === "build");
+  assert.equal(builds.length, 2);
+  for (const { args } of builds) {
+    assert.equal(args[args.indexOf("--builder") + 1], "default");
+    assert.ok(args.includes("--load"));
+  }
+  assert.ok(
+    builds[1].args.includes(`RUNTIME_IMAGE=${builds[0].args[builds[0].args.indexOf("-t") + 1]}`),
+  );
+  const cleaned = commands.cleanup();
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+  await assert.rejects(() => stat(commands.statePath), { code: "ENOENT" });
+});
+
+test("repository platform preparation refuses a public relay gateway before building images", async (t) => {
+  const commands = await fixtureImageCommands(
+    t,
+    "public-gateway",
+    "repository-credentials-platform",
+  );
+  const prepared = commands.prepare();
+  assert.equal(prepared.status, 1);
+  assert.match(prepared.stderr, /private IPv4 Docker host gateway/);
+  assert.equal(
+    (await commands.commands()).some(({ args }) => args[0] === "build"),
+    false,
+  );
+  const cleaned = commands.cleanup();
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
+test("installed repository preparation requires explicit authorization and protected inputs before side effects", async (t) => {
+  const root = await fixture(t);
+  const statePath = join(root, "installed-state.json");
+  const configPath = join(root, "app.json");
+  const keyPath = join(root, "app.pem");
+  await writeFile(configPath, "{}", { mode: 0o600 });
+  await writeFile(keyPath, "test-only key", { mode: 0o600 });
+  const env = {
+    OPENAI_API_KEY: "test-only-model-key",
+    OCC_TEST_OPENAI_MODEL: "test-model",
+    NODE_BASE_IMAGE: `docker.io/library/node:24-bookworm@sha256:${digest}`,
+    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "0",
+    OCC_TEST_REPOSITORY_CREDENTIALS_REPOSITORY: "fixture/repository",
+    OCC_TEST_REPOSITORY_CREDENTIALS_APP_CONFIG_FILE: configPath,
+    OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE: keyPath,
+    OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE: immutableImage,
+    OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS: "203.0.113.1/32",
+    OCC_TEST_PRODUCTION_POSTGRES_IMAGE: immutableImage,
+    OCC_TEST_PRODUCTION_NODE_IMAGE: immutableImage,
+  };
+  const args = ["--lane", "repository-credentials-installed", "--state", statePath];
+  const unauthorized = runPrepare(args, env);
+  assert.equal(unauthorized.status, 1);
+  assert.match(unauthorized.stderr, /explicit write and cleanup authorization/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+
+  await chmod(keyPath, 0o644);
+  const unprotected = runPrepare(args, { ...env, OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1" });
+  assert.equal(unprotected.status, 1);
+  assert.match(unprotected.stderr, /must have mode 0600/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+
+  await chmod(keyPath, 0o600);
+  const linkedKey = join(root, "linked-key.pem");
+  await symlink(keyPath, linkedKey);
+  const linked = runPrepare(args, {
+    ...env,
+    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1",
+    OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE: linkedKey,
+  });
+  assert.equal(linked.status, 1);
+  assert.match(linked.stderr, /bounded regular private file/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+
+  const invalidScope = runPrepare(args, {
+    ...env,
+    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1",
+    OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS: "10.0.0.1/32",
+  });
+  assert.equal(invalidScope.status, 1);
+  assert.match(invalidScope.stderr, /approved public IPv4/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+});
+
+test("ordinary CI groups require platform proof and exclude installed live repository writes", async () => {
+  const manifest = JSON.parse(
+    await readFile(join(repositoryRoot, "scripts/ci/test-suites.json"), "utf8"),
+  );
+  for (const name of ["ci", "full"]) {
+    assert.ok(manifest.groups[name].includes("repository-credentials-platform"));
+    assert.ok(!manifest.groups[name].includes("repository-credentials-installed"));
+    for (const lane of manifest.groups[name]) {
+      assert.notEqual(manifest.lanes[lane].env?.OCC_TEST_REPOSITORY_CREDENTIALS_REAL, "1");
+    }
+  }
+});
+
 const runtimeDefaultBaseline = Object.freeze({
   architectures: ["SCMP_ARCH_X86_64"],
   defaultAction: "SCMP_ACT_ERRNO",

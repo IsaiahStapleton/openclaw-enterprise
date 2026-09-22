@@ -82,6 +82,23 @@ import {
   GATEWAY_READINESS_ENTRYPOINT,
 } from "./runtime-entrypoints.ts";
 
+import {
+  REPOSITORY_MATERIAL_GENERATION,
+  repositoryMaterialSpec,
+  repositoryMaterialDeployment,
+  type RepositoryMaterialSpec,
+  type ResolvedRepositoryMaterialSpec,
+} from "./repository-material.ts";
+import {
+  RepositoryMaterialStore,
+  completeKubernetesList,
+  type RepositoryMaterialOwner,
+} from "./repository-material-store.ts";
+import {
+  REPOSITORY_CLIENT_BIN,
+  repositoryNativeConfiguration,
+} from "./repository-native-configuration.ts";
+
 type KubernetesRecord = Record<string, unknown>;
 type ManagedResourceKind =
   | "Namespace"
@@ -190,6 +207,7 @@ export interface KubernetesComputeDriverOptions {
     readonly gatewayPort: number;
     readonly gatewayClients?: readonly KubernetesWorkloadPeer[];
     readonly pluginStatusProxySourceCidrs?: readonly string[];
+    readonly repositoryCredentials?: KubernetesWorkloadPeer & { readonly port: number };
   };
   readonly servicePrincipalCredentials:
     | { readonly mode: "disabled" }
@@ -740,6 +758,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
           gatewayPort: { type: "integer" },
           gatewayClients: { type: "array", items: WORKLOAD_PEER_SCHEMA },
           pluginStatusProxySourceCidrs: { type: "array", items: { type: "string" } },
+          repositoryCredentials: {
+            type: "object",
+            required: ["namespace", "podLabels", "port"],
+            additionalProperties: false,
+            properties: {
+              ...WORKLOAD_PEER_SCHEMA.properties,
+              port: { type: "integer", minimum: 1, maximum: 65535 },
+            },
+          },
         },
       },
       servicePrincipalCredentials: {
@@ -887,6 +914,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       options.network.pluginStatusProxySourceCidrs.forEach((cidr, index) =>
         validateCidr(cidr, `Plugin status proxy CIDR ${index}`),
+      );
+    }
+    if (options.network.repositoryCredentials !== undefined) {
+      validatePeer(options.network.repositoryCredentials, "Repository credential gateway");
+      validatePort(
+        options.network.repositoryCredentials.port,
+        "Repository credential gateway port",
       );
     }
     const hasDirectGatewayClients = Object.hasOwn(options.network, "gatewayClients");
@@ -1038,6 +1072,24 @@ export class KubernetesComputeDriver implements ComputeDriver {
           ]
         : [],
     };
+  }
+
+  validateRepositoryCredentials(
+    harness: RevisionHarnessDescriptor,
+    sandboxDriverId?: string,
+  ): void {
+    if (
+      this.options.runtime === undefined ||
+      this.options.network.repositoryCredentials === undefined ||
+      harness.id !== "openclaw" ||
+      harness.mode !== "embedded" ||
+      sandboxDriverId !== undefined ||
+      this.sandboxDriver !== undefined
+    ) {
+      throw new ConfigurationFailure(
+        "Repository credentials require a configured embedded OpenClaw Kubernetes runtime without a SandboxDriver.",
+      );
+    }
   }
 
   validateHarnessAuth(
@@ -1438,6 +1490,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
         await this.sandboxDriver.cleanup(await this.sandboxNamespaceContext(namespace, name));
       }
       if (external) {
+        if (this.options.network.repositoryCredentials !== undefined) {
+          const references = await this.repositoryMaterialReferences(ownership, name);
+          if (!(await (await this.repositoryMaterialStore(name)).cleanup(ownership, references))) {
+            return result;
+          }
+        }
         const deleted = await this.deleteOwnedNamespaceResources(name, ownership);
         if (!deleted) {
           return result;
@@ -1500,6 +1558,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new ConfigurationFailure("AgentRevision Configuration ownership is invalid.");
     }
+    const materialInput = this.repositoryMaterialInput(revision, context);
+    const nativeConfiguration =
+      materialInput === undefined
+        ? revision.configuration
+        : repositoryNativeConfiguration(revision.configuration);
     const embedded = revision.harness.mode === "embedded";
     if (
       (embedded && revision.harness.id !== "openclaw") ||
@@ -1595,7 +1658,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
             ...(status.failures.length === 0 ? {} : { warnings: status.failures }),
           };
     };
-    const document = JSON.stringify(revision.configuration);
+    const document = JSON.stringify(nativeConfiguration);
     const configuration = this.gatewayConfiguration(
       revision,
       await this.workspaceNodeDeviceId(revision, namespace),
@@ -1663,6 +1726,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }
       }
     }
+    const material =
+      materialInput === undefined
+        ? undefined
+        : await (await this.repositoryMaterialStore(namespace)).prepare(revision, materialInput);
+    if (material?.kind === "missing") {
+      return { ...result, repositoryCredentialMaterialMissing: material.missing };
+    }
+    const repositoryMaterial = material?.spec;
     const snapshot = this.manifest(
       "v1",
       "ConfigMap",
@@ -1772,6 +1843,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
             secretEnvironment,
             pluginRuntime,
             [],
+            repositoryMaterial,
           ),
           gatewayOwnership,
           namespace,
@@ -1815,6 +1887,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
         return incomplete();
       }
       if (embedded) {
+        if (repositoryMaterial !== undefined) {
+          if (!(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))) {
+            return incomplete();
+          }
+          await this.cleanupRepositoryMaterial(revision, namespace, repositoryMaterial);
+        }
         return ready();
       }
       await this.reconcile(
@@ -1960,6 +2038,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   async activateRevision(revision: AgentRevision, context?: ComputeRevisionContext): Promise<void> {
+    const materialInput = this.repositoryMaterialInput(revision, context);
+    if (materialInput !== undefined) {
+      repositoryNativeConfiguration(revision.configuration);
+    }
     if (this.options.runtime === undefined) {
       return;
     }
@@ -2009,7 +2091,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
       ) {
         throw new ConfigurationFailure("Refusing stale AgentRevision gateway activation.");
       }
-      if (currentRevisionId !== revision.id) {
+      const material =
+        materialInput === undefined
+          ? undefined
+          : await (await this.repositoryMaterialStore(namespace)).prepare(revision, materialInput);
+      if (material?.kind === "missing") {
+        throw new DependencyUnavailableError(
+          "Repository credential material is unavailable for activation.",
+        );
+      }
+      const repositoryMaterial = material?.spec;
+      if (
+        currentRevisionId !== revision.id ||
+        annotations[REPOSITORY_MATERIAL_GENERATION] !== repositoryMaterial?.generation
+      ) {
         const launch = await this.lifecycle.beforeWorkloadStart(revision);
         try {
           await this.reconcile(
@@ -2036,6 +2131,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
               secretEnvironment,
               pluginRuntime,
               [],
+              repositoryMaterial,
             ),
             gatewayOwnership,
             namespace,
@@ -2058,6 +2154,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
       await this.reconcileGatewayRoute(revision, gatewayOwnership, namespace);
       if (!(await this.gatewayReady(gatewayOwnership, gatewayName, namespace))) {
         throw new Error("The exact AgentRevision gateway is not ready.");
+      }
+      if (repositoryMaterial !== undefined) {
+        if (!(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))) {
+          throw new DependencyUnavailableError(
+            "The exact repository credential runtime generation is not ready.",
+          );
+        }
+        await this.cleanupRepositoryMaterial(revision, namespace, repositoryMaterial);
       }
       return;
     }
@@ -2284,6 +2388,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     // its exact Harness is being shut down.
     await this.removeStoppedGateway(revision, namespace);
     await this.shutdownRevisionRuntime(revision, namespace);
+    if (revision.repositoryCredentials !== undefined) {
+      await this.removeRepositoryMaterial(revision, namespace);
+    }
   }
 
   async retireRevision(revision: AgentRevision): Promise<void> {
@@ -2318,6 +2425,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     await this.shutdownRevisionRuntime(revision, namespace);
     await this.retireWorkspaceNode(revision, namespace);
     await this.removeRetiredGateway(revision, namespace);
+    if (revision.repositoryCredentials !== undefined) {
+      await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+      await this.removeRepositoryMaterial(revision, namespace);
+    }
   }
 
   private async shutdownRevisionRuntime(revision: AgentRevision, namespace: string): Promise<void> {
@@ -2347,18 +2458,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async removeStoppedGateway(revision: AgentRevision, namespace: string): Promise<void> {
     const name = `gateway-${sha256Hex(revision.agentId, 12)}`;
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    const gateway = await this.getOwned("Deployment", name, namespace, ownership);
-    const route = await this.gatewayRouteForRevision(name, ownership, namespace, revision.id);
     await this.deleteGatewayNodeRoute(name, ownership, namespace, revision.id);
-    if (
-      gateway?.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revision.id &&
-      route === undefined
-    ) {
-      await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
-      return;
-    }
     await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
-    await this.deleteNamedRuntimeResources(name, ownership, namespace);
+    await this.deleteNamedRuntimeResources(name, ownership, namespace, revision.id);
     await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
   }
 
@@ -2584,8 +2686,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (existing.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revisionId) {
       return;
     }
-    if (existing.metadata.uid === undefined) {
-      throw new OwnershipFailure(`${kind} ${name} UID must be explicitly observed before delete.`);
+    if (
+      !isNonEmptyString(existing.metadata.uid) ||
+      !isNonEmptyString(existing.metadata.resourceVersion)
+    ) {
+      throw new OwnershipFailure(
+        `${kind} ${name} UID and resourceVersion must be explicitly observed before delete.`,
+      );
     }
     const clients = await this.clients();
     await this.request(
@@ -2635,9 +2742,44 @@ export class KubernetesComputeDriver implements ComputeDriver {
     name: string,
     ownership: Ownership,
     namespace: string,
+    stoppedRevisionId?: string,
   ): Promise<void> {
     const clients = await this.clients();
-    for (const kind of ["Service", "ServiceAccount", "Deployment"] as const) {
+    if (stoppedRevisionId !== undefined) {
+      const gateway = await this.getOwned("Deployment", name, namespace, ownership);
+      if (gateway !== undefined) {
+        if (gateway.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== stoppedRevisionId) {
+          return;
+        }
+        const { uid, resourceVersion } = gateway.metadata;
+        if (!isNonEmptyString(uid) || !isNonEmptyString(resourceVersion)) {
+          throw new OwnershipFailure(
+            `Deployment ${name} UID and resourceVersion must be explicitly observed before delete.`,
+          );
+        }
+        // A cutover can update the same UID. Fence it before deleting shared resources.
+        await this.request(
+          () =>
+            clients.apps.deleteNamespacedDeployment({
+              name,
+              namespace,
+              body: {
+                preconditions: {
+                  uid,
+                  resourceVersion,
+                },
+              },
+            }),
+          { mutating: true },
+        );
+      }
+      // With the single owning worker, absence also permits retrying partial shared cleanup.
+    }
+    const kinds =
+      stoppedRevisionId === undefined
+        ? (["Service", "ServiceAccount", "Deployment"] as const)
+        : (["Service", "ServiceAccount"] as const);
+    for (const kind of kinds) {
       const existing = await this.getOwned(kind, name, namespace, ownership);
       if (existing === undefined) {
         continue;
@@ -2691,6 +2833,184 @@ export class KubernetesComputeDriver implements ComputeDriver {
       },
       { mutating: true },
     );
+  }
+
+  private repositoryMaterialInput(
+    revision: AgentRevision,
+    context?: ComputeRevisionContext,
+  ): RepositoryMaterialSpec | undefined {
+    const spec = repositoryMaterialSpec(revision, context?.repositoryCredentials);
+    if (spec !== undefined) {
+      this.validateRepositoryCredentials(revision.harness, revision.sandboxDriverId);
+    }
+    return spec;
+  }
+
+  private async repositoryMaterialStore(namespace: string): Promise<RepositoryMaterialStore> {
+    const clients = await this.clients();
+    return new RepositoryMaterialStore(namespace, clients.core, (operation, options) =>
+      this.request(operation, options),
+    );
+  }
+
+  private async repositoryMaterialReferences(
+    owner: RepositoryMaterialOwner,
+    namespace: string,
+  ): Promise<Set<string>> {
+    const clients = await this.clients();
+    const labels = this.ownershipMetadata(owner).labels;
+    const labelSelector = labelsToSelector(labels);
+    const pods = completeKubernetesList(
+      await this.request(() => clients.core.listNamespacedPod({ namespace, labelSelector })),
+    );
+    // Read current templates too: a replacement can reference material before its Pod exists.
+    const deployments = completeKubernetesList(
+      await this.request(() => clients.apps.listNamespacedDeployment({ namespace, labelSelector })),
+    );
+    const names = new Set<string>();
+    const collect = (spec: unknown) => {
+      const pod = asRecord(spec);
+      if (pod === undefined || (pod.volumes !== undefined && !Array.isArray(pod.volumes))) {
+        throw new OwnershipFailure("The Kubernetes material workload specification is invalid.");
+      }
+      for (const value of (pod.volumes ?? []) as unknown[]) {
+        const volume = asRecord(value);
+        if (volume === undefined) {
+          throw new OwnershipFailure("The Kubernetes material workload volume is invalid.");
+        }
+        const secret = asRecord(volume.secret);
+        if (typeof secret?.secretName === "string") {
+          names.add(secret.secretName);
+        }
+        const projected = asRecord(volume.projected);
+        if (projected !== undefined) {
+          if (!Array.isArray(projected.sources)) {
+            throw new OwnershipFailure("The Kubernetes material projection is invalid.");
+          }
+          for (const source of projected.sources) {
+            const secret = asRecord(asRecord(source)?.secret);
+            if (typeof secret?.name === "string") {
+              names.add(secret.name);
+            }
+          }
+        }
+      }
+    };
+    for (const pod of pods) {
+      if (
+        pod.metadata?.namespace !== namespace ||
+        !isNonEmptyString(pod.metadata.name) ||
+        Object.entries(labels).some(([key, value]) => pod.metadata?.labels?.[key] !== value)
+      ) {
+        throw new OwnershipFailure("Refusing an ambiguous repository-material Pod.");
+      }
+      collect(pod.spec);
+    }
+    for (const deployment of deployments) {
+      if (
+        deployment.metadata?.namespace !== namespace ||
+        !isNonEmptyString(deployment.metadata.name) ||
+        Object.entries(labels).some(([key, value]) => deployment.metadata?.labels?.[key] !== value)
+      ) {
+        throw new OwnershipFailure("Refusing an ambiguous repository-material Deployment.");
+      }
+      collect(deployment.spec?.template.spec);
+    }
+    return names;
+  }
+
+  private async repositoryMaterialReady(
+    revision: AgentRevision,
+    namespace: string,
+    material: ResolvedRepositoryMaterialSpec,
+  ): Promise<boolean> {
+    const owner = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+    const gateway = await this.getOwned(
+      "Deployment",
+      `gateway-${sha256Hex(revision.agentId, 12)}`,
+      namespace,
+      owner,
+    );
+    const template = asRecord(gateway?.spec?.template);
+    const templateMetadata = asRecord(template?.metadata);
+    if (
+      gateway === undefined ||
+      !this.deploymentReady(gateway) ||
+      asRecord(templateMetadata?.annotations)?.[REPOSITORY_MATERIAL_GENERATION] !==
+        material.generation
+    ) {
+      return false;
+    }
+    const labels = {
+      ...this.ownershipMetadata({ ...owner, revisionId: revision.id }).labels,
+      "openclaw.dev/workload-role": "gateway",
+    };
+    const clients = await this.clients();
+    const pods = completeKubernetesList(
+      await this.request(() =>
+        clients.core.listNamespacedPod({ namespace, labelSelector: labelsToSelector(labels) }),
+      ),
+    );
+    let ready = 0;
+    for (const pod of pods) {
+      if (
+        pod.metadata?.namespace !== namespace ||
+        !isNonEmptyString(pod.metadata.name) ||
+        Object.entries(labels).some(([key, value]) => pod.metadata?.labels?.[key] !== value)
+      ) {
+        throw new OwnershipFailure("Refusing an ambiguous repository-material readiness Pod.");
+      }
+      if (
+        pod.metadata.deletionTimestamp === undefined &&
+        pod.metadata.annotations?.[REPOSITORY_MATERIAL_GENERATION] === material.generation &&
+        pod.status?.conditions?.some(
+          (condition) => condition.type === "Ready" && condition.status === "True",
+        )
+      ) {
+        ready += 1;
+      }
+    }
+    return ready >= Number(gateway.spec?.replicas);
+  }
+
+  private async cleanupRepositoryMaterial(
+    revision: AgentRevision,
+    namespace: string,
+    material: ResolvedRepositoryMaterialSpec,
+  ): Promise<void> {
+    const owner = {
+      namespaceId: revision.namespaceId,
+      agentId: revision.agentId,
+      revisionId: revision.id,
+    };
+    const keep = await this.repositoryMaterialReferences(
+      { namespaceId: revision.namespaceId, agentId: revision.agentId },
+      namespace,
+    );
+    for (const binding of material.bindings) {
+      keep.add(binding.secretName);
+    }
+    await (await this.repositoryMaterialStore(namespace)).cleanup(owner, keep);
+  }
+
+  private async removeRepositoryMaterial(
+    revision: AgentRevision,
+    namespace: string,
+  ): Promise<void> {
+    const owner = {
+      namespaceId: revision.namespaceId,
+      agentId: revision.agentId,
+      revisionId: revision.id,
+    };
+    const references = await this.repositoryMaterialReferences(
+      { namespaceId: revision.namespaceId, agentId: revision.agentId },
+      namespace,
+    );
+    if (!(await (await this.repositoryMaterialStore(namespace)).cleanup(owner, references))) {
+      throw new DependencyUnavailableError(
+        "The repository credential material is still in use or awaiting deletion.",
+      );
+    }
   }
 
   private async resolveNamespace(
@@ -5374,7 +5694,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
         policy("allow-agent-runtime", {
           podSelector: gateway,
           policyTypes: ["Egress"],
-          egress: modelEgress,
+          egress: [
+            ...modelEgress,
+            ...(revision.repositoryCredentials === undefined
+              ? []
+              : [
+                  {
+                    to: [this.peer(this.options.network.repositoryCredentials!)],
+                    ports: [
+                      { protocol: "TCP", port: this.options.network.repositoryCredentials!.port },
+                    ],
+                  },
+                ]),
+          ],
         }),
         ...statusPolicies,
       ];
@@ -5522,6 +5854,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     secretEnvironment: readonly SecretEnvironmentProjection[] = [],
     pluginRuntime?: PluginRuntimeSnapshot,
     pluginWarnings: readonly PluginDeploymentWarning[] = [],
+    repositoryMaterial?: ResolvedRepositoryMaterialSpec,
   ): ManagedKubernetesObject {
     const metadata = this.ownershipMetadata(ownership);
     const workloadMetadata =
@@ -5682,6 +6015,21 @@ export class KubernetesComputeDriver implements ComputeDriver {
           value: JSON.stringify(pluginWarnings),
         });
       }
+    }
+    if (repositoryMaterial !== undefined) {
+      if (role !== "gateway" || !embedded || runtime === undefined) {
+        throw new ConfigurationFailure(
+          "Repository credential material requires the embedded Agent gateway.",
+        );
+      }
+      const delivery = repositoryMaterialDeployment(repositoryMaterial, image);
+      volumes.push(...delivery.volumes);
+      volumeMounts.push(...delivery.volumeMounts);
+      initContainers.push(delivery.initContainer);
+      variables.push({
+        name: "PATH",
+        value: `${REPOSITORY_CLIENT_BIN}:/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+      });
     }
     if (projected !== undefined) {
       volumes.push({
@@ -5859,6 +6207,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
         annotations: {
           ...metadata.annotations,
           ...configurationAnnotations,
+          ...(repositoryMaterial === undefined
+            ? {}
+            : { [REPOSITORY_MATERIAL_GENERATION]: repositoryMaterial.generation }),
         },
       },
       spec: {
@@ -5872,7 +6223,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
         template: {
           metadata: {
             ...workloadMetadata,
-            annotations: { ...workloadMetadata.annotations, ...configurationAnnotations },
+            annotations: {
+              ...workloadMetadata.annotations,
+              ...configurationAnnotations,
+              ...(repositoryMaterial === undefined
+                ? {}
+                : { [REPOSITORY_MATERIAL_GENERATION]: repositoryMaterial.generation }),
+            },
             labels: {
               ...workloadMetadata.labels,
               ...revisionLabels,

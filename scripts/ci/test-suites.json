@@ -52,6 +52,9 @@
           "path": "tests/conformance/platform-state-memory.test.mjs"
         },
         {
+          "path": "tests/conformance/presets.test.mjs"
+        },
+        {
           "path": "tests/conformance/secret-gateway-delivery.test.mjs"
         },
         {
@@ -74,6 +77,9 @@
         },
         {
           "path": "tests/conformance/workspace-node-supervisor.test.mjs"
+        },
+        {
+          "path": "tests/integration/presets-controller.test.mjs"
         },
         {
           "path": "tests/integration/bootstrap-output.test.mjs"
@@ -224,6 +230,97 @@
             "native admin shared session configuration validates cookie scope and rejects keys",
             "native admin proxy strips browser credentials and preserves the Agent gateway base path"
           ]
+        },
+        {
+          "path": "tests/conformance/repository-credentials-source-boundary.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-contracts.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-github.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-sessions.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-custody.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-lifecycle.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-ownership-boundaries.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-credentials-fixture-ownership.test.mjs",
+          "expectedTests": [
+            "runner timeout cancels and joins commands before teardown admits cleanup",
+            "accepted network creation with a lost response stays owned until verified absent",
+            "creation completes after 0ms",
+            "creation completes after 500ms",
+            "uncertain network creation remains unresolved when its cleanup budget expires empty",
+            "network cleanup reports failed readback and refuses foreign ownership"
+          ]
+        },
+        {
+          "path": "tests/integration/repository-credentials-config.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-http.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-transport-bounds.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-server-timeout.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-control.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-shutdown.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-client-config.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-router.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-package.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-service-loss.test.mjs",
+          "expectedTests": [
+            "TEST-001: SIGKILL after confirmed GitHub issuance loses session inventory",
+            "TEST-002: lost GitHub issuance response stays charged while service survives",
+            "TEST-002: SIGKILL before GitHub issuance response loses local reservation"
+          ]
+        },
+        {
+          "path": "tests/conformance/repository-credentials-registry.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-runtime-material.test.mjs"
+        },
+        {
+          "path": "tests/conformance/repository-sessions-memory.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-admission.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-driver.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-projected-inputs.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-restart.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-runtime-materialization.test.mjs"
         }
       ]
     },
@@ -275,6 +372,7 @@
         {
           "path": "tests/integration/postgres-migration-compatibility.test.mjs",
           "expectedTests": [
+            "Canonical repository-prefix upgrade retains exact attempt cleanup context",
             "Drizzle generates repository schema migrations without redundant regeneration",
             "Migration rejects legacy active_runtime state without changing persisted rows",
             "Migration rejects legacy harness_revision state without changing persisted rows",
@@ -326,7 +424,18 @@
             "transaction-scoped queue fencing rolls back Namespace mutation, completion, and audit together",
             "concurrent claims exclude one Namespace lifecycle and one Agent while distinct Agents progress",
             "a restarted queue recovers expired claims, fences old tokens, and persists exhausted failures",
-            "batch stale recovery reports each expired claim once and writes one audit event per item"
+            "batch stale recovery reports each expired claim once and writes one audit event per item",
+            "Agent deletion retains exact cleanup obligations on fail",
+            "Agent deletion retains exact cleanup obligations on retry",
+            "Agent deletion retains exact cleanup obligations on expired claim",
+            "Agent deletion retains exact cleanup obligations on exhausted queued"
+          ]
+        },
+        {
+          "path": "tests/integration/postgres-presets.test.mjs",
+          "expectedTests": [
+            "in-memory Presets preserve template copies, Namespace isolation, and deletion boundaries",
+            "PostgreSQL Presets survive reopening and enforce names, ownership, and Namespace deletion"
           ]
         },
         {
@@ -351,6 +460,7 @@
         {
           "path": "tests/integration/postgres-worker-agent-revision.test.mjs",
           "expectedTests": [
+            "worker revalidates admitted repository selections through the concrete GitHub Driver and Unix control",
             "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
             "Agent stop cleans a terminal candidate without an active revision",
             "a deployment during active cleanup supersedes the remaining Agent stop effects",
@@ -410,6 +520,9 @@
             "PostgreSQL native admin WebSocket lease closes within thirty seconds after active revision replacement",
             "PostgreSQL native admin WebSocket closes on API shutdown and disabled redeploy denies reuse"
           ]
+        },
+        {
+          "path": "tests/integration/postgres-repository-sessions.test.mjs"
         }
       ]
     },
@@ -946,6 +1059,151 @@
           "path": "tests/integration/plugin-driver-real.test.mjs"
         }
       ]
+    },
+    "repository-credentials-container": {
+      "requiredEnv": [
+        "REPOSITORY_CREDENTIALS_NODE_IMAGE",
+        "REPOSITORY_CREDENTIALS_GH_BINARY",
+        "REPOSITORY_CREDENTIALS_TEST_IMAGE",
+        "REPOSITORY_CREDENTIALS_SERVICE_IMAGE",
+        "REPOSITORY_CREDENTIALS_CLIENT_IMAGE"
+      ],
+      "prepare": {
+        "requiresPreparedStateForFile": true
+      },
+      "files": [
+        {
+          "path": "tests/conformance/repository-credentials-backend-conformance.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-git.test.mjs",
+          "expectedTests": [
+            "real Git clones, fetches, switches and pushes using the cold gateway helper"
+          ]
+        },
+        {
+          "path": "tests/integration/repository-credentials-native-paths.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-gh.test.mjs",
+          "expectedTests": [
+            "pinned gh uses canonical GitHub identity for REST, pagination and native PR creation"
+          ]
+        },
+        {
+          "path": "tests/integration/repository-credentials-long-session.test.mjs",
+          "expectedTests": [
+            "same session pushes and completes API workflows after controlled hour thirteen"
+          ]
+        },
+        {
+          "path": "tests/integration/repository-credentials-container.test.mjs",
+          "expectedTests": [
+            "emitted service and client artifacts qualify the same-session thirteen-hour workflow",
+            "emitted common owners qualify alternate-backend renewal, authentication and streamed drain",
+            "delivered Compose client mounts exclude provider inputs and the control socket"
+          ]
+        },
+        {
+          "path": "tests/integration/repository-credentials-isolation.test.mjs",
+          "expectedTests": [
+            "delivered service keeps provider credentials outside a separate Agent container"
+          ]
+        }
+      ]
+    },
+    "repository-credentials-live": {
+      "env": {
+        "REPOSITORY_CREDENTIALS_LIVE": "1"
+      },
+      "requiredEnv": [
+        "REPOSITORY_CREDENTIALS_LIVE_AUTHORIZED",
+        "REPOSITORY_CREDENTIALS_LIVE_CONTROL_SOCKET",
+        "REPOSITORY_CREDENTIALS_LIVE_CA"
+      ],
+      "prepare": {},
+      "files": [
+        {
+          "path": "tests/integration/repository-credentials-live.test.mjs"
+        }
+      ]
+    },
+    "repository-credentials-platform": {
+      "env": {
+        "OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM": "1"
+      },
+      "requiredEnv": [
+        "OCC_TEST_DATABASE_URL",
+        "OCC_TEST_KUBERNETES_KUBECONFIG",
+        "OCC_TEST_KUBERNETES_CONTEXT",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_HOST_ADDRESS"
+      ],
+      "prepare": {
+        "postgres": true,
+        "k3d": true,
+        "requiresPreparedStateForFile": true
+      },
+      "files": [
+        {
+          "path": "tests/integration/repository-credentials-platform.test.mjs",
+          "expectedTests": [
+            "ordinary Agent repository bindings traverse HTTP, PostgreSQL, Unix control and Kubernetes material"
+          ]
+        }
+      ]
+    },
+    "repository-credentials-installed": {
+      "env": {
+        "OCC_TEST_REPOSITORY_CREDENTIALS_REAL": "1"
+      },
+      "requiredEnv": [
+        "OPENAI_API_KEY",
+        "OCC_TEST_OPENAI_MODEL",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_REPOSITORY",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_APP_CONFIG_FILE",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
+        "OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS",
+        "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
+        "OCC_TEST_PRODUCTION_NODE_IMAGE",
+        "OCC_TEST_KUBERNETES_KUBECONFIG",
+        "OCC_TEST_KUBERNETES_CONTEXT",
+        "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
+        "OCC_TEST_KUBERNETES_RUNTIME_IMAGE"
+      ],
+      "prepare": {
+        "k3d": true,
+        "requiresPreparedStateForFile": true,
+        "requireEnv": [
+          "OPENAI_API_KEY",
+          "OCC_TEST_OPENAI_MODEL",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_REPOSITORY",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_APP_CONFIG_FILE",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
+          "OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS",
+          "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
+          "OCC_TEST_PRODUCTION_NODE_IMAGE",
+          "NODE_BASE_IMAGE"
+        ],
+        "nodeBaseImage": true,
+        "immutableEnvImages": [
+          "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
+          "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
+          "OCC_TEST_PRODUCTION_NODE_IMAGE"
+        ]
+      },
+      "files": [
+        {
+          "path": "tests/integration/repository-credentials-k3d-real.test.mjs",
+          "expectedTests": [
+            "installed embedded Agent clones, edits, commits, pushes and creates a native repository PR"
+          ]
+        }
+      ]
     }
   },
   "groups": {
@@ -954,7 +1212,9 @@
       "postgres",
       "images-packaging",
       "k3d-fixture-configuration",
-      "logging-collector"
+      "logging-collector",
+      "repository-credentials-container",
+      "repository-credentials-platform"
     ],
     "full": [
       "checks-baseline",
@@ -970,7 +1230,9 @@
       "openshell",
       "helper-timeout",
       "logging-collector",
-      "k3d-otel"
+      "k3d-otel",
+      "repository-credentials-container",
+      "repository-credentials-platform"
     ]
   }
 }

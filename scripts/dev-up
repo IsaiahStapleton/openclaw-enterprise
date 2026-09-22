@@ -361,8 +361,8 @@ runtime_images="$(sed -n '3,$p' "$compose_analysis")"
 if [ "$runtime_mode" = "default" ]; then
   export OCC_DOCKER_RUNTIME_IMAGE="$DEFAULT_RUNTIME_IMAGE"
   if ! engine image inspect "$DEFAULT_RUNTIME_IMAGE" >/dev/null 2>&1; then
-    if ! engine build -f deploy/runtime/Dockerfile --tag "$DEFAULT_RUNTIME_IMAGE" deploy/runtime; then
-      fail "runtime image" "could not build $DEFAULT_RUNTIME_IMAGE" "${engine_command[@]}" build -f deploy/runtime/Dockerfile --tag "$DEFAULT_RUNTIME_IMAGE" deploy/runtime
+    if ! engine build -f deploy/runtime/Dockerfile --tag "$DEFAULT_RUNTIME_IMAGE" .; then
+      fail "runtime image" "could not build $DEFAULT_RUNTIME_IMAGE" "${engine_command[@]}" build -f deploy/runtime/Dockerfile --tag "$DEFAULT_RUNTIME_IMAGE" .
     fi
   fi
 elif [ "$runtime_mode" = "custom" ]; then

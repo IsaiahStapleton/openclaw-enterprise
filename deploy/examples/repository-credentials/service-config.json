@@ -1,0 +1,16 @@
+{
+  "gateway": {
+    "publicOrigin": "https://openclaw-enterprise-repository-credentials.openclaw-system.svc",
+    "listen": "0.0.0.0:8443",
+    "controlSocket": "/run/openclaw/repository-control/private/control.sock"
+  },
+  "sessionPolicy": {
+    "maximumDurationSeconds": 86400,
+    "defaultProfile": "git-write",
+    "allowedProfiles": ["git-read", "git-write", "git-full"]
+  },
+  "backend": {
+    "kind": "github-app-registry",
+    "providerId": "repository-provider"
+  }
+}

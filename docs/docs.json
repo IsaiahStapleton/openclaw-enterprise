@@ -79,6 +79,10 @@
                     "label": "Deployment"
                   },
                   {
+                    "page": "guides/topics/agent-presets",
+                    "label": "Presets"
+                  },
+                  {
                     "page": "guides/topics/agent-compute",
                     "label": "Compute"
                   },
@@ -198,7 +202,8 @@
               "reference/configuration/secrets",
               "reference/security/runtime-isolation",
               "reference/agents",
-              "reference/agent-plugins"
+              "reference/agent-plugins",
+              "reference/presets"
             ]
           },
           {
@@ -295,6 +300,27 @@
                       {
                         "page": "reference/configuration/kubernetes",
                         "label": "Kubernetes"
+                      }
+                    ]
+                  },
+                  {
+                    "group": "Repository",
+                    "pages": [
+                      {
+                        "page": "guides/repository-credentials",
+                        "label": "Setup"
+                      },
+                      {
+                        "page": "guides/repository-credentials/installation",
+                        "label": "Installation"
+                      },
+                      {
+                        "page": "guides/repository-credentials/team-runbook",
+                        "label": "Team Runbook"
+                      },
+                      {
+                        "page": "reference/repository-credentials",
+                        "label": "Credential Lifecycle"
                       }
                     ]
                   }
@@ -619,6 +645,10 @@
                         "label": "Local Tests"
                       },
                       {
+                        "page": "testing/fixtures-and-scenarios",
+                        "label": "Fixtures and Scenarios"
+                      },
+                      {
                         "page": "testing/ci",
                         "label": "CI"
                       },
@@ -698,6 +728,7 @@
               "flows/pr-24-ssh-compute",
               "flows/github-actions-testing",
               "flows/container-package-bootstrap",
+              "flows/container-publication",
               "flows/github-actions-testing/preparation",
               "testing/postgresql",
               "testing/images",
@@ -722,7 +753,13 @@
               "documentation-inventory/repository-guidance",
               "documentation-inventory/repository-specs-1",
               "documentation-inventory/repository-specs-2",
-              "documentation-inventory/repository-specs-3"
+              "documentation-inventory/repository-specs-3",
+              "flows/agent-repository-credentials",
+              "flows/repository-credentials",
+              "flows/repository-credential-configuration",
+              "testing/repository-credentials",
+              "testing/repository-credentials-platform",
+              "flows/agent-presets"
             ]
           }
         ]

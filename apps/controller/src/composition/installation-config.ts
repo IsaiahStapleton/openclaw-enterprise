@@ -12,6 +12,7 @@ import type {
   IAMDriver,
   ProviderDefinition,
   ProviderSummary,
+  RepoDriver,
   PluginDriver,
   SandboxDriver,
   SecretDriver,
@@ -41,6 +42,8 @@ import { type LoggingConfiguration, operationalLoggingConfiguration } from "../l
 import { OCCPluginDriver, CodexPluginDriver } from "../drivers/plugin/index.ts";
 import { createGatewayNodeEnrollment } from "../gateway/node-enrollment-client.ts";
 import { readWorkspaceFilesApiKey } from "./workspace-files.ts";
+import { GitHubRepoDriver } from "../drivers/repo/github/driver.ts";
+import { composeRepoDriver } from "./repository-credentials/platform.ts";
 
 type ConfigurationRecord = Readonly<Record<string, unknown>>;
 
@@ -68,6 +71,7 @@ export interface InstallationStartupConfiguration {
     readonly sandbox?: SelectedDriverConfiguration;
     readonly plugin?: SelectedDriverConfiguration;
     readonly service_account?: { readonly id: string };
+    readonly repo?: SelectedDriverConfiguration;
   };
 }
 
@@ -83,6 +87,7 @@ export interface InstallationRuntimeDrivers {
   readonly secretDriver: SecretDriver;
   readonly sandboxDriver?: SandboxDriver;
   readonly pluginDriver?: PluginDriver;
+  readonly repoDriver?: RepoDriver;
   readonly createIAMDriver: (state: NativeIAMStateStore) => IAMDriver;
 }
 
@@ -234,12 +239,27 @@ function safe(value: unknown, path: string): void {
 function providerConfiguration(
   value: unknown,
   serviceAccount: InstallationStartupConfiguration["drivers"]["service_account"],
+  repoSelection: InstallationStartupConfiguration["drivers"]["repo"],
 ): readonly ProviderDefinition[] {
   const providers = validateProviderDefinitions(value ?? []);
-  if (serviceAccount !== undefined && providers.length === 0) {
+  if (serviceAccount !== undefined && !providers.some((provider) => provider.type === "chatgpt")) {
     throw new Error("drivers.service_account requires an owning provider entry with type chatgpt.");
   }
+  if (repoSelection !== undefined && !providers.some((provider) => provider.type === "github")) {
+    throw new Error("drivers.repo requires an owning provider entry with type github.");
+  }
   for (const provider of providers) {
+    if (provider.type === "github") {
+      if (repoSelection === undefined) {
+        throw new Error(`provider[${provider.id}].drivers.repo requires drivers.repo.`);
+      }
+      if (provider.drivers.repo !== repoSelection.id) {
+        throw new Error(
+          `provider[${provider.id}].drivers.repo must match the selected drivers.repo.id.`,
+        );
+      }
+      continue;
+    }
     if (serviceAccount === undefined) {
       throw new Error(
         `provider[${provider.id}].drivers.service_account requires drivers.service_account.`,
@@ -402,7 +422,7 @@ async function loadDriverPackage(
 
 function selected(
   value: unknown,
-  capability: "configuration" | "iam" | "compute" | "secret" | "sandbox" | "plugin",
+  capability: "configuration" | "iam" | "compute" | "secret" | "sandbox" | "plugin" | "repo",
   implementation: string,
   driver: DriverImplementation,
 ): SelectedDriverConfiguration {
@@ -476,7 +496,7 @@ export async function loadInstallationConfiguration(options: {
   const drivers = object(configuration.drivers, "drivers");
   closed(
     drivers,
-    ["configuration", "iam", "compute", "secret", "sandbox", "plugin", "service_account"],
+    ["configuration", "iam", "compute", "secret", "sandbox", "plugin", "service_account", "repo"],
     "drivers",
   );
 
@@ -491,7 +511,13 @@ export async function loadInstallationConfiguration(options: {
     closed(driverConfiguration, [], "drivers.service_account.configuration");
     serviceAccount = Object.freeze({ id: nonempty(selection.id, "drivers.service_account.id") });
   }
-  const providers = providerConfiguration(configuration.provider, serviceAccount);
+  let repoSelection: SelectedDriverConfiguration | undefined;
+  if (drivers.repo !== undefined) {
+    const selection = object(drivers.repo, "drivers.repo");
+    closed(selection, ["id", "configuration"], "drivers.repo");
+    repoSelection = selected(selection, "repo", "github", GitHubRepoDriver);
+  }
+  const providers = providerConfiguration(configuration.provider, serviceAccount, repoSelection);
 
   const configurationSelection = object(drivers.configuration, "drivers.configuration");
   const iamSelection = object(drivers.iam, "drivers.iam");
@@ -562,6 +588,11 @@ export async function loadInstallationConfiguration(options: {
   );
   const sshCompute = computePackage === undefined && computeSelection.id === "compute-ssh";
   const kubernetesCompute = computePackage === undefined && !sshCompute;
+  if (repoSelection !== undefined && (!kubernetesCompute || sandboxSelection !== undefined)) {
+    throw new Error(
+      "drivers.repo requires the bundled Kubernetes Compute Driver without a Sandbox Driver.",
+    );
+  }
   if (sshCompute && sandboxSelection !== undefined) {
     throw new Error(
       "drivers.sandbox is unsupported with compute-ssh; it requires the bundled Kubernetes Compute Driver.",
@@ -605,6 +636,14 @@ export async function loadInstallationConfiguration(options: {
     "occ/kubernetes-secret",
     KubernetesSecretDriver,
   );
+  if (repoSelection !== undefined) {
+    const kubernetes = compute.configuration as unknown as KubernetesComputeDriverOptions;
+    if (kubernetes.network.repositoryCredentials?.port !== 8443) {
+      throw new Error(
+        "drivers.repo requires an exact Kubernetes repository service peer on port 8443.",
+      );
+    }
+  }
   const sandbox =
     sandboxSelection === undefined
       ? undefined
@@ -643,6 +682,7 @@ export async function loadInstallationConfiguration(options: {
       ...(sandbox === undefined ? {} : { sandbox }),
       ...(plugin === undefined ? {} : { plugin }),
       ...(serviceAccount === undefined ? {} : { service_account: serviceAccount }),
+      ...(repoSelection === undefined ? {} : { repo: repoSelection }),
     }),
   });
   const configurationDriver =
@@ -727,6 +767,14 @@ export async function loadInstallationConfiguration(options: {
       ? new NativeIAMDriver(state, { id: iam.id, implementation: iam.implementation })
       : (createExternalDriver(iamPackage.module, iam, "iam", state) as IAMDriver);
   };
+  const repositoryProvider = providers.find((provider) => provider.type === "github");
+  const repositoryRuntime =
+    repoSelection === undefined || repositoryProvider === undefined
+      ? undefined
+      : await composeRepoDriver({
+          provider: repositoryProvider,
+          selection: repoSelection,
+        });
   if (
     options.mode === "production" &&
     (typeof computeDriver.activateRevision !== "function" ||
@@ -745,6 +793,7 @@ export async function loadInstallationConfiguration(options: {
     ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
     createIAMDriver,
     ...(pluginDriver === undefined ? {} : { pluginDriver }),
+    ...(repositoryRuntime ?? {}),
   });
 }
 

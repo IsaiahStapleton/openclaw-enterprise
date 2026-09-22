@@ -2,6 +2,8 @@ import { Type } from "typebox";
 
 import {
   AgentId,
+  PresetId,
+  PresetTemplateSchema,
   ConfigurationGeneration,
   ConfigurationId,
   ConfigurationKindSchema,
@@ -15,6 +17,7 @@ import {
   NamespaceId,
   PermissionActionSchema,
   ProviderId,
+  RepositoryBindingSelectionsSchema,
   RevisionId,
   ResourceKindSchema,
   SecretBindings,
@@ -72,6 +75,7 @@ export const AgentSchema = Type.Object(
     harnessAuth: Type.Union([HarnessAuthBindingSchema, Type.Null()]),
     executionMode: HarnessExecutionModeSchema,
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    repositoryBindings: Type.Optional(RepositoryBindingSelectionsSchema),
     desiredRuntimeState: Type.Union([Type.Literal("running"), Type.Literal("stopped")]),
     activeRevisionId: Type.Optional(RevisionId),
     status: Type.Union([Type.Literal("active"), Type.Literal("deleting")]),
@@ -210,7 +214,7 @@ export const ServiceAccountSchema = Type.Object(
 );
 
 export const ProviderSummarySchema = Type.Object(
-  { id: ProviderId, type: Type.Literal("chatgpt") },
+  { id: ProviderId, type: Type.Union([Type.Literal("chatgpt"), Type.Literal("github")]) },
   { additionalProperties: false },
 );
 
@@ -292,6 +296,22 @@ export const ProviderListResponse = Type.Object(
   { additionalProperties: false },
 );
 
+/** Public revision projection excludes provider grant identities and material. */
+export const RepositoryRevisionStateSchema = Type.Object(
+  {
+    driver: Type.Object(
+      {
+        id: Type.String({ minLength: 1 }),
+        implementation: Type.String({ minLength: 1 }),
+      },
+      { additionalProperties: false },
+    ),
+    deadlineWallMs: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+    bindings: RepositoryBindingSelectionsSchema,
+  },
+  { additionalProperties: false },
+);
+
 export const AgentRevisionSchema = Type.Object(
   {
     id: RevisionId,
@@ -327,6 +347,7 @@ export const AgentRevisionSchema = Type.Object(
       ),
     ),
     harnessAuth: HarnessAuthBindingSchema,
+    repositoryCredentials: Type.Optional(RepositoryRevisionStateSchema),
     createdAt: Timestamp,
   },
   { additionalProperties: false },
@@ -481,3 +502,25 @@ export type AgentRevisionListResponse = Type.Static<typeof AgentRevisionListResp
 export type AgentDeploymentStatusResponse = Type.Static<typeof AgentDeploymentStatusResponse>;
 export type WorkspaceFileResponse = Type.Static<typeof WorkspaceFileResponse>;
 export type WorkspaceFileUpdateResponse = Type.Static<typeof WorkspaceFileUpdateResponse>;
+
+export const PresetSchema = Type.Object(
+  {
+    id: PresetId,
+    namespaceId: NamespaceId,
+    name: Name,
+    template: PresetTemplateSchema,
+    createdAt: Timestamp,
+  },
+  { additionalProperties: false },
+);
+export const PresetResponse = Type.Object(
+  { data: PresetSchema, meta: Meta },
+  { additionalProperties: false },
+);
+export const PresetListResponse = Type.Object(
+  { data: Type.Array(PresetSchema), meta: Meta },
+  { additionalProperties: false },
+);
+export type PresetWire = Type.Static<typeof PresetSchema>;
+export type PresetResponse = Type.Static<typeof PresetResponse>;
+export type PresetListResponse = Type.Static<typeof PresetListResponse>;
