@@ -800,14 +800,6 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     "Native admin Agent",
     nativeValues("unsupported-ui"),
   );
-  let active = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
-  const initialNativeAccess = await fixture.request(
-    "GET",
-    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
-  );
-  assert.equal(initialNativeAccess.status, 200);
-  assert.equal(initialNativeAccess.data.status, "unsupported");
-  assert.equal(new URL(initialNativeAccess.data.origin).protocol, "https:");
   const { page } = await newPage(t, fixture, {
     args: [
       ...fixture.browserArgs,
@@ -815,8 +807,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     ],
   });
   const requests = apiRequests(page, fixture.origin);
-  const detail = () =>
-    detailUrl(fixture, namespace.id, agent.id, active.revision.id, "configuration");
+  const draftDetail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
 
   // A fresh shared-cookie login clears legacy host-only cookies from the Console.
   await page.context().addCookies([
@@ -830,7 +821,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
       sameSite: "Lax",
     },
   ]);
-  await login(page, fixture, `${detail().pathname}${detail().search}`);
+  await login(page, fixture, `${draftDetail.pathname}${draftDetail.search}`);
   assert.equal(
     (await page.context().cookies(fixture.origin)).some(
       (cookie) => cookie.value === "old-host-only",
@@ -838,6 +829,45 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     false,
   );
 
+  // New Agents are stopped; missing an active revision must not suggest a routing problem.
+  const initiallyStopped = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+  );
+  assert.equal(initiallyStopped.status, 200);
+  assert.deepEqual(initiallyStopped.data, { status: "stopped" });
+  await page.getByText("Start this Agent before opening its native admin UI.").waitFor();
+  assert.equal(await page.getByText("Open native admin UI", { exact: true }).isVisible(), false);
+
+  // A real deployment requests running before reconciliation selects the admitted revision.
+  const pending = await fixture.deployAgent(namespace.id, agent.id);
+  const unavailable = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+  );
+  assert.equal(unavailable.status, 200);
+  assert.deepEqual(unavailable.data, { status: "unavailable" });
+  await page.getByRole("button", { name: "Refresh access" }).click();
+  await page
+    .getByText(
+      "Native admin UI access is unavailable because OCE could not load an active AgentRevision. Check this Agent’s deployment, then refresh access.",
+    )
+    .waitFor({ timeout: 5_000 });
+  assert.equal(await page.getByText("Open native admin UI", { exact: true }).isVisible(), false);
+
+  let active = { revision: pending };
+  await fixture.activateRevision(namespace.id, agent.id, pending.id);
+  const historicalRevisionId = active.revision.id;
+  const initialNativeAccess = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+  );
+  assert.equal(initialNativeAccess.status, 200);
+  assert.equal(initialNativeAccess.data.status, "unsupported");
+  assert.equal(new URL(initialNativeAccess.data.origin).protocol, "https:");
+  const detail = () =>
+    detailUrl(fixture, namespace.id, agent.id, active.revision.id, "configuration");
+  await page.goto(`${fixture.origin}${detail().pathname}${detail().search}`);
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
   await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
   await page
@@ -863,6 +893,11 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     `/namespaces/${namespace.id}/agents/${agent.id}/stop`,
   );
   assert.equal(stopped.status, 202);
+  // Reproduce the state after the worker clears the revision, while this historical URL remains open.
+  const cleared = await fixture.controller.transact((state) =>
+    state.agents.compareAndClearActiveRevision(namespace.id, agent.id, active.revision.id),
+  );
+  assert.equal(cleared.activeRevisionId, undefined);
   await page.reload();
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
   await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
@@ -874,19 +909,29 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     agent.configurationId,
     nativeAdminValues("supported-ui", initialNativeAccess.data.origin),
   );
-  active = await fixture.seedActiveAgentRevision(namespace.id, agent.id, active.revision.id);
+  active = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
   await page.goto(`${fixture.origin}${detail().pathname}${detail().search}`);
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
-  await page.getByText("Native admin UI is available for the selected AgentRevision.").waitFor();
+  await page.getByText("Native admin UI is available for this Agent’s active revision.").waitFor();
   const expectedAccess = await fixture.request(
     "GET",
     `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
   );
   assert.equal(expectedAccess.status, 200);
   assert.equal(expectedAccess.data.status, "available");
+  assert.equal(expectedAccess.data.activeRevisionId, active.revision.id);
   assert.equal(expectedAccess.data.bootstrapUrl, undefined);
   assert.equal(new URL(expectedAccess.data.url).origin, expectedAccess.data.origin);
   assert.match(new URL(expectedAccess.data.url).hostname, new RegExp(`\\.${nativeDomain}$`));
+
+  // Viewing an older configuration snapshot must still open the current active gateway.
+  await page.getByLabel("AgentRevision").selectOption(historicalRevisionId);
+  await page.getByText("Native admin UI is available for this Agent’s active revision.").waitFor();
+  assertRevisionUrl(page, historicalRevisionId);
+  assert.equal(
+    await page.getByRole("link", { name: "Open native admin UI" }).getAttribute("href"),
+    expectedAccess.data.url,
+  );
   const sharedCookies = await page.context().cookies(expectedAccess.data.origin);
   const sessionCookies = sharedCookies.filter((cookie) =>
     cookie.name.endsWith("openclaw_occ_shared.session_token"),
