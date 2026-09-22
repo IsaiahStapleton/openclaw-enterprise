@@ -544,6 +544,10 @@
                     "label": "Overview"
                   },
                   {
+                    "page": "contributing/readable-code",
+                    "label": "Readable Code"
+                  },
+                  {
                     "page": "ARCHITECTURE",
                     "label": "Current Architecture"
                   },

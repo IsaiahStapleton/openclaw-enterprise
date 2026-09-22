@@ -9,6 +9,11 @@ Keep cleanup confined to the current diff and strictly behavior-neutral. Use it
 before requested [autoreview](../autoreview/SKILL.md); cleanup does not replace
 correctness or safety review.
 
+For readability choices in the current diff, consult the relevant sections of
+[Readable code](../../../docs/contributing/readable-code.md) on functions,
+values, composition, and state ownership. Apply those examples within this
+skill's behavior-neutral scope.
+
 ## Scope and checklist
 
 Establish the intended branch base from the PR or repository metadata. Inspect
