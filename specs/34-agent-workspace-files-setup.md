@@ -140,6 +140,8 @@ storage is not required here. Gateway authority does not dictate physical storag
 - Real native setup and SSH/systemd workflow passed, including exact/empty bytes,
   native provisioning, restart protection, preserved edits, and a successful first
   model response after file setup. The response does not prove instruction obedience.
+  A real SSH partial-write failure also withheld all runtime execution, preserved
+  divergent content on retry, and recovered after the conflict was removed.
 - Kubernetes live proof is blocked locally: k3s cannot start because this host lacks
   the required cpuset cgroup. Conformance checks do not replace that proof.
 - Docker embedded and dedicated native proofs passed after correcting shared
