@@ -299,3 +299,246 @@ test("Docker Compute recovery keeps dedicated transport paired across container 
     }
   }
 });
+
+// These checks exercise the real Driver at Docker's API boundary. Container exit
+// status is an external observation; native file writes are covered separately by
+// the shared initializer and selected real-runtime Agent journey.
+for (const mode of ["embedded", "dedicated"]) {
+  test(`Docker ${mode} workspace setup blocks execution, delivers privately, and retains Agent storage`, async () => {
+    const driver = new DockerComputeDriver({
+      images: { gateway: "gateway:local", agent: "agent:local" },
+    });
+    const revision = {
+      id: `revision-workspace-${mode}`,
+      namespaceId: tenant.id,
+      agentId: `agent-workspace-${mode}`,
+      revision: 1,
+      configurationId: "cfg-workspace",
+      configurationKind: "agent",
+      configurationGeneration: 1,
+      configuration: admitLoggingConfiguration(
+        mode === "dedicated"
+          ? { agents: { entries: { main: { workspace: "/home/node/workspace" } } } }
+          : {},
+        "info",
+      ),
+      harness: { id: mode === "embedded" ? "openclaw" : "codex", version: "1", mode },
+      compute: { id: driver.id, implementation: driver.implementation },
+      servicePrincipalId: "sp-workspace",
+      createdAt: tenant.createdAt,
+    };
+    const setup = {
+      id: "setup-private",
+      namespaceId: tenant.id,
+      agentId: revision.agentId,
+      completed: false,
+      files: { "AGENTS.md": "private-initial-instructions\n", "USER.md": "" },
+    };
+    const namespaceLabels = {
+      "org.openclaw.enterprise.managed": "true",
+      "org.openclaw.enterprise.compute-driver": "docker",
+      "org.openclaw.enterprise.namespace-id": tenant.id,
+    };
+    const volumes = new Map();
+    const containers = new Map();
+    const creations = [];
+    const deliveries = [];
+    let initializerExit = 1;
+    let setupFinished = false;
+    let runtimeStarts = 0;
+    driver.request = async (method, path, body) => {
+      const url = new URL(path, "http://docker.invalid");
+      if (method === "GET" && url.pathname.startsWith("/networks/")) {
+        return { Labels: namespaceLabels };
+      }
+      if (method === "POST" && url.pathname === "/volumes/create") {
+        volumes.set(body.Name, structuredClone(body));
+        return body;
+      }
+      if (url.pathname.startsWith("/volumes/")) {
+        const name = decodeURIComponent(url.pathname.slice("/volumes/".length));
+        if (method === "GET") {
+          return volumes.get(name);
+        }
+        if (method === "DELETE") {
+          volumes.delete(name);
+          return "";
+        }
+      }
+      if (method === "GET" && url.pathname === "/volumes") {
+        const filters = JSON.parse(url.searchParams.get("filters"));
+        return {
+          Volumes: [...volumes.values()].filter((volume) =>
+            filters.label.every((label) => {
+              const separator = label.indexOf("=");
+              return volume.Labels[label.slice(0, separator)] === label.slice(separator + 1);
+            }),
+          ),
+        };
+      }
+      if (method === "POST" && url.pathname === "/containers/create") {
+        const name = url.searchParams.get("name");
+        creations.push(structuredClone(body));
+        containers.set(name, { Config: body, State: { Running: false, ExitCode: 0 } });
+        return {};
+      }
+      const [, encodedName, action] =
+        /^\/containers\/([^/]+)(?:\/(\w+))?$/.exec(url.pathname) ?? [];
+      const name = decodeURIComponent(encodedName ?? "");
+      if (method === "GET" && action === "json") {
+        return containers.get(name);
+      }
+      if (method === "PUT" && action === "archive") {
+        assert.ok(Buffer.isBuffer(body));
+        assert.equal(url.searchParams.get("path"), "/run");
+        const length = Number.parseInt(body.subarray(124, 136).toString().replace(/\0.*$/, ""), 8);
+        deliveries.push(JSON.parse(body.subarray(512, 512 + length).toString()));
+        assert.equal(body.subarray(100, 108).toString(), "0000600\0");
+        return "";
+      }
+      if (method === "POST" && action === "start") {
+        const container = containers.get(name);
+        if (container.Config.Labels["org.openclaw.enterprise.role"] === "workspace-setup") {
+          assert.equal(deliveries.length > 0, true);
+          container.State = { Running: false, ExitCode: initializerExit };
+          setupFinished = initializerExit === 0;
+        } else {
+          assert.equal(setupFinished, true, "no runtime process can start before setup succeeds");
+          runtimeStarts += 1;
+          container.State = { Running: true, Health: { Status: "healthy" } };
+        }
+        return "";
+      }
+      if (method === "DELETE" && encodedName !== undefined) {
+        containers.delete(name);
+        return "";
+      }
+      throw new Error(`Unexpected Docker API request ${method} ${path}`);
+    };
+    const previousKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "fixture-model-key";
+    try {
+      for (const agents of [
+        null,
+        "invalid",
+        { list: [] },
+        { entries: null },
+        { entries: [] },
+        { entries: {} },
+        { entries: { main: null } },
+        { entries: { other: {} } },
+        { entries: { main: {}, other: {} } },
+      ]) {
+        await assert.rejects(
+          driver.prepareRevision(
+            { ...revision, configuration: { ...revision.configuration, agents } },
+            { workspaceSetup: setup },
+          ),
+          /native main/,
+        );
+        assert.equal(volumes.size, 0, "invalid roster must not create storage");
+        assert.equal(creations.length, 0, "invalid roster must not create containers");
+        assert.equal(deliveries.length, 0, "invalid roster must not deliver private content");
+      }
+      await assert.rejects(
+        driver.prepareRevision(revision, { workspaceSetup: setup }),
+        /Workspace initialization failed/,
+      );
+      assert.equal(runtimeStarts, 0);
+      assert.equal(containers.size, 0, "failed initializer and private payload must be removed");
+      assert.equal(volumes.size, 2, "retry retains exact-Agent durable storage");
+      initializerExit = 0;
+      assert.equal((await driver.prepareRevision(revision, { workspaceSetup: setup })).ready, true);
+      assert.deepEqual(
+        deliveries.at(-1),
+        setup,
+        "empty and nonempty values survive archive delivery",
+      );
+      assert.equal(JSON.stringify(creations).includes(setup.files["AGENTS.md"]), false);
+      const initializer = creations.find(
+        (entry) => entry.Labels["org.openclaw.enterprise.role"] === "workspace-setup",
+      );
+      assert.equal(initializer.HostConfig.NetworkMode, "none");
+      assert.equal(initializer.HostConfig.LogConfig.Type, "none");
+      const mounts = initializer.HostConfig.Mounts;
+      assert.equal(
+        mounts.find(({ Target }) => Target === "/home/node/.openclaw/workspace").Source,
+        mounts.find(({ Target }) => Target === "/home/node/workspace").Source,
+        "native workspace and Harness cwd must refer to the same durable files",
+      );
+      assert.notEqual(
+        mounts.find(({ Target }) => Target === "/home/node/.openclaw").Source,
+        mounts.find(({ Target }) => Target === "/home/node/workspace").Source,
+      );
+
+      for (const container of containers.values()) {
+        assert.deepEqual(container.Config.HostConfig.Mounts, mounts);
+      }
+      await driver.stopRevision(revision);
+      assert.equal(containers.size, 0);
+      assert.equal(volumes.size, 2, "stop preserves setup state and user edits");
+      const completed = { ...setup, completed: true };
+      delete completed.files;
+      assert.equal(
+        (
+          await driver.prepareRevision(
+            { ...revision, id: revision.id + "-next", revision: 2 },
+            { workspaceSetup: completed },
+          )
+        ).ready,
+        true,
+      );
+      assert.deepEqual(
+        deliveries.at(-1),
+        completed,
+        "recreation verifies metadata without sending original contents",
+      );
+      for (const container of containers.values()) {
+        assert.deepEqual(container.Config.HostConfig.Mounts, mounts);
+      }
+      await driver.stopRevision({ ...revision, id: revision.id + "-next", revision: 2 });
+      volumes.set("unrelated", {
+        Name: "unrelated",
+        Labels: {
+          ...namespaceLabels,
+          "org.openclaw.enterprise.agent-id": "another-agent",
+          "org.openclaw.enterprise.role": "workspace",
+        },
+      });
+      await driver.deleteAgentRuntimeCredentials({
+        namespace: tenant,
+        agent: { id: revision.agentId, namespaceId: tenant.id },
+      });
+      assert.deepEqual([...volumes.keys()], ["unrelated"]);
+      await assert.rejects(
+        driver.prepareRevision(revision, { workspaceSetup: completed }),
+        /storage is missing/,
+      );
+      await assert.rejects(
+        driver.prepareRevision(revision, {
+          workspaceSetup: { ...setup, agentId: "another-agent" },
+        }),
+        /exact Agent/,
+      );
+      await assert.rejects(
+        driver.prepareRevision(
+          {
+            ...revision,
+            configuration: admitLoggingConfiguration(
+              { agents: { entries: { main: { workspace: "/outside" } } } },
+              "info",
+            ),
+          },
+          { workspaceSetup: setup },
+        ),
+        /managed storage/,
+      );
+    } finally {
+      if (previousKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousKey;
+      }
+    }
+  });
+}

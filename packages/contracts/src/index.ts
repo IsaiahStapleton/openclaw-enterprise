@@ -1,3 +1,4 @@
+import type { WorkspaceSetup } from "./workspace-setup.ts";
 import { asRecord, immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
   PluginDesiredSelectionSchema,
@@ -243,6 +244,7 @@ export type ResolvedHarnessAuth =
   | Extract<HarnessAuthSnapshot, { method: "chatgpt_service_account" | "runtime" }>;
 
 export interface ComputeRevisionContext {
+  readonly workspaceSetup?: Readonly<WorkspaceSetup>;
   readonly harnessAuth: ResolvedHarnessAuth;
   readonly secretEnvironment: readonly SecretEnvironmentProjection[];
   readonly repositoryCredentials?: readonly RepositoryCredentialRuntimeBinding[];
@@ -849,6 +851,7 @@ export interface ComputePreflightResult {
 }
 
 export interface ComputeDriver extends Driver {
+  readonly supportsWorkspaceSetup?: true;
   readonly capability: "compute";
   /** Default: platform admission policy. Driver ownership preserves native logging settings. */
   readonly runtimeLogging?: "platform" | "driver";
@@ -915,3 +918,11 @@ export {
   validatePresetTemplate,
   presetTemplateDefaults,
 } from "./preset-variables.mjs";
+
+export type { InitialWorkspaceFiles, WorkspaceSetup } from "./workspace-setup.ts";
+export { normalizeInitialWorkspaceFiles, normalizeWorkspaceDefaultsId } from "./workspace-setup.ts";
+export {
+  WORKSPACE_DEFAULTS,
+  WORKSPACE_DEFAULTS_ID,
+  WORKSPACE_DEFAULTS_VERSION,
+} from "./workspace-defaults.mjs";

@@ -14,6 +14,7 @@ import {
 import type {
   AccessBinding,
   Agent,
+  WorkspaceSetup,
   AgentDesiredRuntimeState,
   AgentStatus,
   AgentRevision,
@@ -34,6 +35,8 @@ import type {
   Role,
 } from "@openclaw-enterprise/contracts";
 import {
+  normalizeInitialWorkspaceFiles,
+  normalizeWorkspaceDefaultsId,
   normalizePluginDesiredState,
   normalizeHarnessAuthBinding,
   harnessAuthBindingFromSnapshot,
@@ -86,6 +89,20 @@ export interface NamespaceRepository extends NamespaceReadRepository {
     namespaceId: string,
     deletedAt: string,
   ): Promise<Readonly<PersistedNamespace> | undefined>;
+}
+
+export interface WorkspaceSetupReadRepository {
+  find(namespaceId: string, agentId: string): Promise<Readonly<WorkspaceSetup> | undefined>;
+}
+
+export interface WorkspaceSetupRepository extends WorkspaceSetupReadRepository {
+  create(setup: WorkspaceSetup): Promise<Readonly<WorkspaceSetup>>;
+  complete(
+    namespaceId: string,
+    agentId: string,
+    id: string,
+  ): Promise<Readonly<WorkspaceSetup> | undefined>;
+  delete(namespaceId: string, agentId: string): Promise<boolean>;
 }
 
 export interface AgentReadRepository {
@@ -527,6 +544,7 @@ export interface PlatformReadView {
   readonly secrets: SecretReadRepository;
   readonly serviceAccounts: ServiceAccountReadRepository;
   readonly agents: AgentReadRepository;
+  readonly workspaceSetups: WorkspaceSetupReadRepository;
   readonly revisions: AgentRevisionReadRepository;
   readonly iamPolicy: IAMPolicyReadRepository;
   readonly repositorySessions: RepositorySessionReadRepository;
@@ -541,6 +559,7 @@ export interface PlatformUnitOfWork extends PlatformReadView {
   readonly secrets: SecretRepository;
   readonly serviceAccounts: ServiceAccountRepository;
   readonly agents: AgentRepository;
+  readonly workspaceSetups: WorkspaceSetupRepository;
   readonly revisions: AgentRevisionRepository;
   readonly iamPolicy: IAMPolicyRepository;
   readonly repositorySessions: RepositorySessionRepository;
@@ -578,6 +597,7 @@ interface PlatformSnapshot {
   readonly secrets: Map<string, Readonly<Secret>>;
   readonly serviceAccounts: Map<string, Readonly<ServiceAccount>>;
   readonly agents: Map<string, Readonly<Agent>>;
+  readonly workspaceSetups: Map<string, Readonly<WorkspaceSetup>>;
   readonly revisions: Map<string, readonly Readonly<AgentRevision>[]>;
   readonly roles: Map<string, Readonly<Role>>;
   readonly bindings: Map<string, Readonly<AccessBinding>>;
@@ -618,6 +638,9 @@ function cloneSnapshot(snapshot: PlatformSnapshot): PlatformSnapshot {
       Array.from(snapshot.serviceAccounts, ([key, account]) => [key, immutableCopy(account)]),
     ),
     agents: new Map(Array.from(snapshot.agents, ([key, agent]) => [key, immutableCopy(agent)])),
+    workspaceSetups: new Map(
+      Array.from(snapshot.workspaceSetups, ([key, setup]) => [key, immutableCopy(setup)]),
+    ),
     revisions: new Map(
       Array.from(snapshot.revisions, ([key, revisions]) => [
         key,
@@ -1284,6 +1307,62 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     },
   };
 
+  const workspaceSetups: WorkspaceSetupRepository = {
+    find: async (namespaceId, agentId) => {
+      const setup = snapshot.workspaceSetups.get(agentKey(namespaceId, agentId));
+      return setup === undefined ? undefined : immutableCopy(setup);
+    },
+    create: async (setup) => {
+      const owner = snapshot.agents.get(agentKey(setup.namespaceId, setup.agentId));
+      if (owner === undefined || owner.status !== "active") {
+        throw new ScopeViolationError("The workspace setup requires its exact active Agent.");
+      }
+      let files;
+      let defaultsId;
+      try {
+        files = normalizeInitialWorkspaceFiles(setup.files);
+        defaultsId = normalizeWorkspaceDefaultsId(setup.defaultsId);
+      } catch {
+        throw new ScopeViolationError("The workspace setup is invalid.");
+      }
+      if (
+        !isNonEmptyString(setup.id) ||
+        setup.id.length > 200 ||
+        setup.completed ||
+        files === undefined
+      ) {
+        throw new ScopeViolationError("The workspace setup must begin with pending files.");
+      }
+      const key = agentKey(setup.namespaceId, setup.agentId);
+      if (
+        snapshot.workspaceSetups.has(key) ||
+        Array.from(snapshot.workspaceSetups.values()).some((other) => other.id === setup.id)
+      ) {
+        throw new ResourceConflictError("The Agent already owns a workspace setup.");
+      }
+      const saved = immutableCopy({
+        ...setup,
+        files,
+        ...(defaultsId === undefined ? {} : { defaultsId }),
+      });
+      snapshot.workspaceSetups.set(key, saved);
+      return immutableCopy(saved);
+    },
+    complete: async (namespaceId, agentId, id) => {
+      const key = agentKey(namespaceId, agentId);
+      const setup = snapshot.workspaceSetups.get(key);
+      if (setup === undefined || setup.id !== id) {
+        return undefined;
+      }
+      const { files: _files, ...metadata } = setup;
+      const completed = immutableCopy({ ...metadata, completed: true });
+      snapshot.workspaceSetups.set(key, completed);
+      return immutableCopy(completed);
+    },
+    delete: async (namespaceId, agentId) =>
+      snapshot.workspaceSetups.delete(agentKey(namespaceId, agentId)),
+  };
+
   const agents: AgentRepository = {
     findAgent: async (namespaceId, agentId) => {
       const namespace = snapshot.namespaces.get(namespaceId);
@@ -1725,6 +1804,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     secrets,
     serviceAccounts,
     agents,
+    workspaceSetups,
     revisions,
     iamPolicy,
     repositorySessions,
@@ -1858,6 +1938,7 @@ export class InMemoryPlatformState implements PlatformStateStore {
     secrets: new Map(),
     serviceAccounts: new Map(),
     agents: new Map(),
+    workspaceSetups: new Map(),
     revisions: new Map(),
     roles: new Map(),
     bindings: new Map(),

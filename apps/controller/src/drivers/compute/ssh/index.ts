@@ -24,6 +24,7 @@ import {
 } from "@openclaw-enterprise/utils";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
 import { currentComputeAbortSignal } from "../operation-context.ts";
+import { WORKSPACE_SETUP_RUNTIME } from "../workspace-setup-runtime.ts";
 import { SystemSshCommandExecutor, type SshCommandExecutor } from "./executor.ts";
 
 export interface SshComputeHost {
@@ -268,6 +269,7 @@ export class SshComputeDriver implements ComputeDriver {
     }
   }
 
+  readonly supportsWorkspaceSetup = true;
   readonly id: string;
   readonly capability = "compute" as const;
   readonly implementation: string;
@@ -403,7 +405,7 @@ export class SshComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("SSH Compute does not support PluginDriver installation.");
     }
     admittedLoggingLevel(revision.configuration);
-    const result = await this.revisionOperation("prepare-revision", revision);
+    const result = await this.revisionOperation("prepare-revision", revision, undefined, context);
     return {
       namespaceId: revision.namespaceId,
       agentId: revision.agentId,
@@ -439,7 +441,7 @@ export class SshComputeDriver implements ComputeDriver {
     let launch: Readonly<WorkloadLaunchContext> | undefined;
     try {
       launch = await this.lifecycle.beforeWorkloadStart(revision);
-      await this.revisionOperation("activate-revision", revision, launch);
+      await this.revisionOperation("activate-revision", revision, launch, context);
     } catch (error) {
       if (launch === undefined) {
         throw error;
@@ -527,6 +529,7 @@ export class SshComputeDriver implements ComputeDriver {
     operation: string,
     revision: AgentRevision,
     launch?: Readonly<WorkloadLaunchContext>,
+    context?: ComputeRevisionContext,
   ): Promise<Record<string, unknown>> {
     const namespace = this.validateRevision(revision);
     return this.execute(this.host(namespace), {
@@ -534,6 +537,12 @@ export class SshComputeDriver implements ComputeDriver {
       namespace,
       revision,
       configurationHash: sha256Hex(JSON.stringify(revision.configuration)),
+      ...(context?.workspaceSetup === undefined
+        ? {}
+        : {
+            workspaceSetup: context.workspaceSetup,
+            workspaceSetupRuntime: WORKSPACE_SETUP_RUNTIME,
+          }),
       ...(launch === undefined ? {} : { launchEnvironment: launch.environment }),
     });
   }

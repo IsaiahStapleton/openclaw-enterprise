@@ -1152,6 +1152,7 @@ test(
     for (const [prefix, history] of [
       [24, "prePresetsMain"],
       [25, "main"],
+      [28, "repositoryRetention"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1257,6 +1258,7 @@ test(
       [24, "prePresetsMain"],
       [25, "main"],
       [27, "repositoryCredentials"],
+      [28, "repositoryRetention"],
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });
@@ -1271,7 +1273,7 @@ test(
           db,
           db.name,
           `CREATE FUNCTION public.reject_migration_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'migration rollback fixture' USING ERRCODE='55000'; END $$;
-        CREATE EVENT TRIGGER reject_migration_ddl ON ddl_command_start WHEN TAG IN ('${prefix === 27 ? "CREATE FUNCTION" : "ALTER FUNCTION"}') EXECUTE FUNCTION public.reject_migration_ddl()`,
+        CREATE EVENT TRIGGER reject_migration_ddl ON ddl_command_start WHEN TAG IN ('${prefix >= 27 ? "CREATE FUNCTION" : "ALTER FUNCTION"}') EXECUTE FUNCTION public.reject_migration_ddl()`,
         );
         assert.deepEqual(await runHistoryMigration(db), { ok: false, code: "MIGRATION_FAILED" });
         assert.deepEqual(await historyReceipts(db.migrator), before.receipts);
@@ -1354,7 +1356,7 @@ test(
       // retains its exact bytes, but this divergent history must not be relabeled.
       const entries = [
         ...journal.entries.slice(0, 24),
-        ...journal.entries.slice(25).map((entry) => ({
+        ...journal.entries.slice(25, 28).map((entry) => ({
           ...entry,
           idx: entry.idx - 1,
           when: entry.when - 1,

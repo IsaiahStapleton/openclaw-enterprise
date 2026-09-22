@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-22
-last_updated_session: codex/01a0c76f-2534-7991-932a-345782408759
+last_updated_session: codex/01a0c73a-cdc5-7e81-8c14-f1b59251894f
 ---
 
 # Platform console request flow
@@ -147,7 +147,12 @@ restores the selected mode’s starter. Submission parses the JSON object and
 posts `{kind: "agent", values}` to
 `POST /namespaces/:namespaceId/configurations`. After that returns its ID,
 `POST /namespaces/:namespaceId/agents` creates the Agent draft with the selected
-plugin map and returns to the detail URL with `revision=draft`. If that second
+plugin map, `initialWorkspaceFiles`, and `workspaceDefaultsId`, then returns to
+the detail URL with `revision=draft`. The form preloads the four rendered native
+defaults and submits every textarea, including unchanged and empty values. OCC
+stages those inputs outside the Agent and Configuration; the
+[workspace setup flow](workspace-files.md) traces application before execution.
+If that second
 write fails, the browser retains the Configuration ID and locks its JSON and
 execution mode; an explicit Agent retry reuses the saved Configuration. No write
 retries automatically, and creation alone does not admit a revision, validate the
@@ -256,6 +261,8 @@ refreshes and inspects the Agent and revision history.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-22 04:31: Trace initial workspace inputs separately from Configuration creation and link setup before execution. (01a0c755-0518-7502-a533-64cd7465de15 - f3dbdd41c8f3b49573d1353a4b06ce510ee43a56)
 
 - 2026-09-22 04:11: Preserve existing Slack policies while editing channel settings. (01a0b1f2-e696-7232-a439-5b668154bcd9 - f3dbdd41)
 

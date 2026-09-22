@@ -43,6 +43,9 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Initial Agent workspace files](34-agent-workspace-files-setup.md) — Proposed;
+create-only Console and API input, applied once before first runtime execution.
+
 [Agent presets](33-agent-presets.md) — Implementing; reusable, partial Agent launch
 templates with variables, CRUD APIs, and console selection.
 

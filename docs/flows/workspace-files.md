@@ -1,29 +1,32 @@
 ---
 created: 2026-08-31
-updated: 2026-09-18
-last_updated_session: authoring-run/245cc03e-4bd3-48b3-ba17-8d5e2768262d
+updated: 2026-09-22
+last_updated_session: 01a0c755-0518-7502-a533-64cd7465de15
 ---
 
 # Agent Workspace Files Flow
 
 ## Overview
 
-An authenticated caller reads or replaces `AGENTS.md`, `SOUL.md`, `IDENTITY.md`,
-or `USER.md` on an active Agent. OCC authorizes the exact Agent, derives its
-private endpoint through Compute, and sends one native file RPC through Envoy
-Gateway. The flow ends with a bounded response and, for writes, metadata-only
-audit evidence. File contents remain in the native workspace.
+An authenticated caller supplies initial `AGENTS.md`, `SOUL.md`, `IDENTITY.md`,
+and `USER.md` contents at Agent creation. OCC stages those inputs privately;
+Compute initializes the exact Agent's durable workspace before first execution.
+After activation, OCC discards staged bytes and retains completion metadata.
+
+A later read or edit authorizes the exact active Agent, derives its private
+endpoint through Compute, and sends one native file RPC through Envoy Gateway.
+This flow ends at setup completion or the bounded live-file response; model
+execution and general revision activation belong to adjacent flows.
 
 ## Entry Points
 
-- `apps/controller/src/index.ts:createFastifyApp` handles `GET` and
+- `apps/controller/src/index.ts:createFastifyApp` accepts initial contents through
+  `POST /namespaces/:namespaceId/agents` and handles live `GET` and
   `PUT /namespaces/:namespaceId/agents/:agentId/workspace/files/:name`.
-- `apps/controller/src/composition/workspace-files.ts:createWorkspaceFilesAccess`
-  binds the Installation-selected Compute Driver and mounted service-key file.
-- `apps/controller/src/gateway/workspace-files-client.ts:createNativeWorkspaceFilesAccess`
-  connects using the published native gateway client.
+- `packages/occ/src/index.ts:createAgent` authorizes creation and persists private
+  setup state; `apps/controller/src/worker.ts` passes it to Compute on deployment.
 
-The Kubernetes worker must have provisioned the Agent's private HTTPRoute and
+For live file access, the Kubernetes worker must have provisioned the Agent's private HTTPRoute and
 native gateway. Installation operators enable the shared Envoy Gateway,
 native trust, and network restrictions described in
 [deployment](../guides/deploy/workspace-routing.md#agent-workspace-files). The
@@ -37,6 +40,15 @@ an existing issuer and explicit hostname instead.
 
 ```mermaid
 graph TD
+  subgraph Initial["Creation and first deployment"]
+    S["Create Agent with initial files"] --> T["Authorize and stage exact-Agent input"]
+    T --> U["Separate deploy request"]
+    U --> V["Compute initializes durable workspace"]
+    V --> W{"Setup complete?"}
+    W -->|no| X["Block execution; retain pending input"]
+    W -->|yes| Y["Start runtime; activate revision"]
+    Y --> Z["Clear staged bytes; retain completion metadata"]
+  end
   A["GET or PUT Agent workspace file"] --> B["OCC authenticates and validates request"]
   B --> C["Authorize exact Agent and select active revision"]
   C --> D["Compute derives private Agent URL"]
@@ -56,7 +68,72 @@ graph TD
 
 ## Execution Trace
 
-### 1. Composition configures private access
+### 1. Creation validates and privately stages the inputs
+
+`apps/controller/src/console/agents/create.mjs` fills four textareas from
+`workspace-defaults.mjs` and submits their values with `WORKSPACE_DEFAULTS_ID`.
+`apps/controller/src/index.ts:createFastifyApp` rejects a stale defaults identity;
+`packages/contracts/src/workspace-setup.ts:normalizeInitialWorkspaceFiles`
+rejects unknown names, invalid Unicode, NUL, and values above 16 KiB UTF-8.
+An absent or empty map creates no setup state. The HTTP create route has a
+448 KiB default body limit; a configured controller limit takes precedence.
+
+`packages/occ/src/index.ts:createAgent` checks Namespace-scoped Agent creation,
+exact Configuration read, and the existing binding permissions. Its transaction
+creates a stopped Agent and, when keys were supplied, a private `workspaceSetups`
+record keyed by exact Namespace/Agent. No AgentRevision is created. Inputs do
+not enter the Agent, Configuration, revision snapshot, public response, or
+metadata-only create audit. The original API strings are preserved; Console
+textarea values use LF newlines.
+
+### 2. Deployment initializes storage before execution
+
+`apps/controller/src/worker.ts` reads private setup state while resolving
+`ComputeRevisionContext`. A selected Driver without `supportsWorkspaceSetup`
+returns `WORKSPACE_SETUP_UNSUPPORTED`. The existing deployment worker owns the
+Agent's serialized startup and passes `workspaceSetup` to Compute.
+
+The bundled Drivers deliver inputs to the shared
+`apps/controller/src/drivers/compute/workspace-setup-runtime.ts:WORKSPACE_SETUP_RUNTIME`:
+Kubernetes uses an owned Secret and gateway init container; Docker uses a
+separate setup container and Agent-owned durable volumes; SSH uses the protected
+exact-Agent directory and remote helper. Delivery does not put document strings
+in container arguments or environment values. Dedicated Harness startup must
+also verify completion before execution. Unsupported workspace placement fails
+instead of writing outside the Agent's managed storage.
+
+The runner checks the exact setup identity and workspace path, rejects links
+and conflicting files, and verifies OpenClaw `2026.9.1` and the optional rendered
+template digest. With no completion marker it runs native `setup` without
+starting the gateway, preserving native initialization such as Git creation.
+It atomically replaces supplied files, including empty strings, only if the
+existing value is absent, stock, or already submitted. It runs native setup
+again so native `BOOTSTRAP.md` lifecycle sees the submitted profile, verifies
+the results, then atomically writes `.oce-workspace-setup.json`.
+
+A matching marker skips application, including after lost acknowledgement.
+Incomplete writes retry against the same safe-content conditions. A divergent
+file or missing/mismatched marker after recorded completion blocks startup;
+it never authorizes replay over later user edits. Native setup output and
+failure details are suppressed at the delivery boundary to avoid disclosing
+contents.
+
+### 3. Activation clears staged contents and keeps completion metadata
+
+`apps/controller/src/worker.ts` completes setup in the activation-completion
+transaction only after checking the exact active revision and work claim.
+`workspaceSetups.complete` removes document bytes and retains identity and
+completion metadata. Drivers remove or replace private delivery bytes with
+metadata; subsequent startup verifies the durable workspace marker.
+
+Failed or never-deployed Agents retain pending inputs. Agent deletion removes
+the private setup record through `packages/occ/src/index.ts:deleteAgent` and
+Driver cleanup owns the Agent's runtime storage. There is no public setup read
+or update endpoint. Creation without supplied keys follows ordinary startup.
+Once an Agent is active, live edits follow the independent path below and do
+not update the original setup record.
+
+### 4. Composition configures private access
 
 `apps/controller/src/server.mjs:start` validates the optional absolute
 `OCC_GATEWAY_API_KEY_PATH` before opening the database. Production and
@@ -74,7 +151,7 @@ There is no per-Agent map. Kubernetes endpoint derivation uses the admitted
 Namespace and Agent IDs plus trusted Installation routing settings. A Driver
 without the optional endpoint capability cannot serve this file feature.
 
-### 2. OCC admits one exact-Agent file operation
+### 5. OCC admits one exact-Agent file operation
 
 `apps/controller/src/index.ts:createFastifyApp` requires a valid user
 session or scoped service API key. Native Agent credentials cannot invoke this
@@ -87,7 +164,7 @@ rejects NUL and unpaired UTF-16 surrogates, enforces 16 KiB of UTF-8 content,
 and uses a 48 KiB request-body limit. The deadline and disconnect signal cover
 admission and native access.
 
-### 3. Compute resolves a route and OCC loads the current key
+### 6. Compute resolves a route and OCC loads the current key
 
 `apps/controller/src/composition/workspace-files.ts:createWorkspaceFilesAccess`
 uses `ComputeDriver.getGatewayEndpoint(revision)`. Kubernetes returns
@@ -102,7 +179,7 @@ Secret rotation without an API restart. Missing routing, missing or invalid
 key material, expired deadlines, and unavailable targets fail closed. No URL
 or credential comes from caller JSON or headers.
 
-### 4. Envoy authenticates and routes the native connection
+### 7. Envoy authenticates and routes the native connection
 
 `apps/controller/src/gateway/workspace-files-client.ts:requestNativeWorkspaceFile` opens WSS with only the
 service key in `x-api-key`. The client verifies the server hostname and CA;
@@ -124,7 +201,7 @@ Envoy to the native gateway; the CIDR is not an independent authentication
 boundary. Native Configuration omits a gateway token in this mode. The native
 hello must grant `operator.admin` for writes; reads also accept `operator.read`.
 
-### 5. Native file access returns a bounded result
+### 8. Native file access returns a bounded result
 
 `apps/controller/src/gateway/workspace-files-client.ts:requestNativeWorkspaceFile`
 
@@ -145,6 +222,18 @@ replays it. The native client closes in the operation's cleanup path.
 
 ## Debugging and Verification
 
+- For initial setup failure, check revision/work status and the selected Driver's
+  support, native release, defaults identity, and durable workspace placement.
+  `WORKSPACE_SETUP_FAILED` intentionally omits document bytes. Do not delete a
+  completion marker to force a replay; missing initialized storage needs operator
+  recovery, not reuse of the creation payload.
+- A stale `workspaceDefaultsId` rejects creation with `409 RESOURCE_CONFLICT`;
+  reload the Console create form before submitting again. A create response alone
+  does not prove runtime initialization; verify active revision and live content.
+- The implementation gates initialization before execution. Structural checks,
+  Driver fixtures, and runtime setup checks each prove different boundaries;
+  the required first-use, retry, and redeploy scenarios need the real workflow
+  integration evidence described in the [feature spec](../../specs/34-agent-workspace-files-setup.md#verification).
 - For `503 DEPENDENCY_UNAVAILABLE`, check the Compute routing settings and key
   mount, then the Gateway, Certificate, SecurityPolicy, and HTTPRoute status.
   Check DNS/CA trust and exact NetworkPolicy peers before changing native auth.
@@ -171,6 +260,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-22 04:18: Added creation-time staging, native setup before execution, completion and retry boundaries, and live-edit handoff. (01a0c755-0518-7502-a533-64cd7465de15 - f3dbdd41c8f3b49573d1353a4b06ce510ee43a56)
 
 - 2026-09-18 00:02: Confirmed that Compute returns the standard private Service endpoint; local routing proof now runs OCC inside Kubernetes instead of adding a host-only port seam. (authoring-run/245cc03e-4bd3-48b3-ba17-8d5e2768262d - 782017d5405e156116bd31e78fa744ef20c540cc)
 

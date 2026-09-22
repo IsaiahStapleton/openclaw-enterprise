@@ -4739,3 +4739,287 @@ test("retiring a predecessor preserves both claims and final retirement deletes 
   );
   assert.deepEqual(deletions, []);
 });
+
+// These fixtures substitute Kubernetes transport only. Preparation, ownership, private delivery,
+// redaction, readiness, and completed-payload retention run through the production driver.
+function workspaceSetupFixture(embedded) {
+  const driver = createKubernetesComputeDriver(
+    options({
+      runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
+    }),
+  );
+  const revision = routedRevision(driver, {
+    configuration: {
+      agents: { defaults: { model: embedded ? "openai/gpt-5" : "codex/gpt-5" } },
+      logging: { level: "info", consoleLevel: "info", consoleStyle: "json" },
+      diagnostics: { otel: { logs: false } },
+    },
+    harness: embedded
+      ? { id: "openclaw", version: "1.0.0", mode: "embedded" }
+      : { id: "codex", version: "1.0.0", mode: "dedicated" },
+  });
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const objects = new Map();
+  const records = [];
+  const state = { ready: false, secretFailure: false, failedInitializer: false };
+  const key = (kind, name) => `${kind}:${name}`;
+  const save = (body) => {
+    const existing = objects.get(key(body.kind, body.metadata.name));
+    const object = structuredClone(body);
+    object.metadata = {
+      ...object.metadata,
+      uid: existing?.metadata.uid ?? `${body.metadata.name}-uid`,
+      resourceVersion: String(Number(existing?.metadata.resourceVersion ?? 0) + 1),
+      generation: 1,
+    };
+    objects.set(key(body.kind, body.metadata.name), object);
+    return object;
+  };
+  save({
+    ...driver.manifest("v1", "Namespace", namespace, { namespaceId: tenant.id }),
+    status: { phase: "Active" },
+  });
+  for (const policy of driver.networkPolicies({ namespaceId: tenant.id }, namespace)) {
+    save(policy);
+  }
+  const read =
+    (kind) =>
+    async ({ name }) => {
+      const object = objects.get(key(kind, name));
+      if (object === undefined) {
+        throw Object.assign(new Error("Not found"), { statusCode: 404 });
+      }
+      const observed = structuredClone(object);
+      if (kind === "Deployment" && state.ready) {
+        observed.status = { observedGeneration: 1, readyReplicas: 1 };
+      }
+      return observed;
+    };
+  const write = async ({ body }) => {
+    if (body.kind === "Secret" && state.secretFailure) {
+      throw Object.assign(new Error(`Rejected ${JSON.stringify(body)}`), { statusCode: 403 });
+    }
+    records.push(structuredClone(body));
+    return save(body);
+  };
+  const core = {
+    async listNamespace() {
+      return { items: [] };
+    },
+    readNamespace: read("Namespace"),
+    async listNamespacedPod() {
+      return {
+        items: state.failedInitializer
+          ? [
+              {
+                apiVersion: "v1",
+                kind: "Pod",
+                metadata: {
+                  name: "failed-initializer",
+                  namespace,
+                  labels: {
+                    "openclaw.dev/agent": revision.agentId,
+                    "openclaw.dev/revision": revision.id,
+                    "openclaw.dev/workload-role": "gateway",
+                  },
+                },
+                status: {
+                  initContainerStatuses: [
+                    {
+                      name: "initialize-workspace",
+                      state: {
+                        terminated: {
+                          exitCode: 1,
+                          finishedAt: "2026-09-22T00:00:00Z",
+                          message: "private-content-must-not-escape",
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+            ]
+          : [],
+      };
+    },
+    async deleteNamespacedSecret({ name, body }) {
+      const existing = objects.get(key("Secret", name));
+      assert.equal(body.preconditions.uid, existing.metadata.uid);
+      objects.delete(key("Secret", name));
+    },
+  };
+  for (const kind of [
+    "ConfigMap",
+    "ServiceAccount",
+    "Service",
+    "PersistentVolumeClaim",
+    "Secret",
+  ]) {
+    core[`readNamespaced${kind}`] = read(kind);
+    core[`patchNamespaced${kind}`] = write;
+  }
+  core.createNamespacedSecret = write;
+  core.replaceNamespacedSecret = write;
+  driver.apiClients = Promise.resolve({
+    core,
+    apps: { readNamespacedDeployment: read("Deployment"), patchNamespacedDeployment: write },
+    networking: {
+      readNamespacedNetworkPolicy: read("NetworkPolicy"),
+      patchNamespacedNetworkPolicy: write,
+    },
+    discovery: {
+      async listNamespacedEndpointSlice({ labelSelector }) {
+        const name = labelSelector.split("=")[1];
+        return {
+          items: [
+            {
+              metadata: {
+                labels: { "kubernetes.io/service-name": name },
+                ownerReferences: [{ kind: "Service", name, uid: `${name}-uid` }],
+              },
+              endpoints: [{ conditions: { ready: state.ready } }],
+            },
+          ],
+        };
+      },
+    },
+  });
+  const setup = {
+    id: "setup-private",
+    namespaceId: tenant.id,
+    agentId: revision.agentId,
+    files: { "AGENTS.md": "private-create-documents", "USER.md": "" },
+    completed: false,
+  };
+  const context = { ...authContext(revision), workspaceSetup: setup };
+  return { driver, revision, namespace, objects, records, state, setup, context };
+}
+
+for (const embedded of [true, false]) {
+  test(`Kubernetes ${embedded ? "embedded" : "dedicated"} setup stays private and retains only its completion guard`, async () => {
+    const { driver, revision, objects, records, state, setup, context } =
+      workspaceSetupFixture(embedded);
+    const pending = await driver.prepareRevision(revision, context);
+    assert.equal(pending.ready, false);
+    const secret = [...objects.values()].find(({ kind }) => kind === "Secret");
+    assert.deepEqual(JSON.parse(Buffer.from(secret.data["setup.json"], "base64")), setup);
+    const gateway = [...objects.values()].find(
+      ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("gateway-"),
+    );
+    const pod = gateway.spec.template.spec;
+    const initializer = pod.initContainers.find(({ name }) => name === "initialize-workspace");
+    assert.equal(initializer.image, driver.options.images.gateway);
+    // Container restarts do not rerun initContainers, so the gateway command also checks its marker.
+    assert.equal(pod.containers[0].args[0].includes(setup.id), true);
+    assert.equal(
+      initializer.volumeMounts.find(({ name }) => name === "workspace-setup").readOnly,
+      true,
+    );
+    assert.equal(
+      pod.containers[0].volumeMounts.some(({ name }) => name === "workspace-setup"),
+      false,
+    );
+    const durable = initializer.volumeMounts.find(
+      ({ mountPath }) => mountPath === "/home/node/.openclaw/workspace",
+    );
+    assert.equal(durable.subPath, "workspace");
+    assert.ok(pod.volumes.find(({ name }) => name === durable.name).persistentVolumeClaim);
+    for (const object of records.filter(({ kind }) => kind !== "Secret")) {
+      assert.equal(JSON.stringify(object).includes(setup.files["AGENTS.md"]), false);
+    }
+    if (!embedded) {
+      const harness = [...objects.values()].find(
+        ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("agent-"),
+      );
+      // The actual command sent to either Kubernetes or an external Sandbox carries only identity.
+      assert.equal(harness.spec.template.spec.containers[0].args[0].includes(setup.id), true);
+      assert.equal(
+        harness.spec.template.spec.containers[0].args[0].includes(setup.files["AGENTS.md"]),
+        false,
+      );
+    }
+    state.ready = true;
+    assert.equal((await driver.prepareRevision(revision, context)).ready, true);
+    const completed = JSON.parse(
+      Buffer.from(objects.get(`Secret:${secret.metadata.name}`).data["setup.json"], "base64"),
+    );
+    assert.equal(completed.completed, true);
+    assert.equal(Object.hasOwn(completed, "files"), false);
+    // Lost acknowledgement retries the old pending context without rehydrating discarded bytes.
+    const before = records.filter(({ kind }) => kind === "Secret").length;
+    assert.equal((await driver.prepareRevision(revision, context)).ready, true);
+    assert.equal(records.filter(({ kind }) => kind === "Secret").length, before);
+    await driver.deleteAgentRuntimeCredentials({
+      namespace: tenant,
+      agent: { id: revision.agentId, namespaceId: tenant.id },
+    });
+    assert.equal(objects.has(`Secret:${secret.metadata.name}`), false);
+  });
+}
+
+test("Kubernetes workspace setup rejects foreign identities and unsupported storage before delivery", async () => {
+  for (const mutate of [
+    ...[
+      null,
+      "invalid",
+      { list: [] },
+      { entries: null },
+      { entries: [] },
+      { entries: {} },
+      { entries: { main: null } },
+      { entries: { other: {} } },
+      { entries: { main: {}, other: {} } },
+    ].map((agents) => ({ revision }) => {
+      revision.configuration.agents = agents;
+    }),
+    ({ context }) => {
+      context.workspaceSetup.agentId = "another-agent";
+    },
+    ({ revision }) => {
+      revision.configuration.agents.defaults.workspace = "/tmp/unmanaged";
+    },
+    ({ revision }) => {
+      revision.configuration.agents.entries = { main: { workspace: "/tmp/unmanaged" } };
+    },
+  ]) {
+    const fixture = workspaceSetupFixture(true);
+    mutate(fixture);
+    await assert.rejects(
+      fixture.driver.prepareRevision(fixture.revision, fixture.context),
+      /Workspace setup/,
+    );
+    assert.equal(fixture.records.length, 0);
+  }
+});
+
+test("Kubernetes workspace setup redacts backend failures and refuses foreign private delivery", async () => {
+  const fixture = workspaceSetupFixture(true);
+  fixture.state.secretFailure = true;
+  await assert.rejects(fixture.driver.prepareRevision(fixture.revision, fixture.context), {
+    message: "Workspace setup private delivery is unavailable.",
+  });
+  fixture.state.secretFailure = false;
+  await fixture.driver.prepareRevision(fixture.revision, fixture.context);
+  const secret = [...fixture.objects.values()].find(({ kind }) => kind === "Secret");
+  secret.metadata.annotations["openclaw.dev/agent-id"] = "another-agent";
+  const before = fixture.records.length;
+  await assert.rejects(fixture.driver.prepareRevision(fixture.revision, fixture.context), {
+    message: "Workspace setup private delivery is unavailable.",
+  });
+  assert.equal(fixture.records.length, before);
+});
+
+test("Kubernetes failed workspace initialization reports safe evidence and retains retry content", async () => {
+  const fixture = workspaceSetupFixture(true);
+  fixture.state.failedInitializer = true;
+  const result = await fixture.driver.prepareRevision(fixture.revision, fixture.context);
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.runtimeFailure, {
+    component: "gateway",
+    check: "workspace-setup",
+    code: "WORKSPACE_SETUP_FAILED",
+    checkedAt: "2026-09-22T00:00:00Z",
+  });
+  const secret = [...fixture.objects.values()].find(({ kind }) => kind === "Secret");
+  assert.deepEqual(JSON.parse(Buffer.from(secret.data["setup.json"], "base64")), fixture.setup);
+});

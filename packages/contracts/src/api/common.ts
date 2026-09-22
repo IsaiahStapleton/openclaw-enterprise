@@ -349,6 +349,18 @@ export const RepositoryBindingSelectionsSchema = Type.Array(RepositoryBindingSel
 
 export const CreateAgentBody = Type.Object(
   {
+    initialWorkspaceFiles: Type.Optional(
+      Type.Object(
+        Object.fromEntries(
+          WORKSPACE_FILE_NAMES.map((name) => [
+            name,
+            Type.Optional(Type.String({ maxLength: 16 * 1024, pattern: "^[^\\u0000]*$" })),
+          ]),
+        ),
+        { additionalProperties: false },
+      ),
+    ),
+    workspaceDefaultsId: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
     name: Name,
     configurationId: ConfigurationId,
     providerId: Type.Optional(Type.Union([ProviderId, Type.Null()])),

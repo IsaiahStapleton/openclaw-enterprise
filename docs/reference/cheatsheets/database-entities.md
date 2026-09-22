@@ -67,6 +67,19 @@ Stores numbered, immutable snapshots of Agent settings accepted for deployment.
 - `admitted_spec`
 - `admitted_at`
 
+### `workspace_setups`
+
+Holds private initial workspace input for one exact Namespace and Agent. Activation
+completion clears `files`; setup identity and completion metadata remain until
+Agent deletion. See the [workspace setup flow](../../flows/workspace-files.md).
+
+- `id`
+- `namespace_id`
+- `agent_id`
+- `defaults_id`
+- `files`
+- `completed`
+
 ### `configurations`
 
 Stores each Agent Configuration’s current generation and Secret bindings; the Driver stores values.

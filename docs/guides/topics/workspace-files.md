@@ -1,8 +1,32 @@
 # Agent workspace files
 
-Use the console to read or edit an active Agent's `AGENTS.md`, `SOUL.md`,
-`IDENTITY.md`, and `USER.md`. Changes go directly to the live workspace; they
-are not saved in the Configuration draft or copied into an Agent Revision.
+Use the console to set initial `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and
+`USER.md` contents when creating an Agent, then edit them in its live workspace
+after deployment. These files are separate from the Configuration draft and
+AgentRevision.
+
+## Set files when creating an Agent
+
+1. Open **Agents** in the intended Namespace and start creating an Agent.
+2. In **Workspace files**, review the prefilled OpenClaw defaults and edit the
+   files you want to customize. Leaving the text unchanged submits that default;
+   clearing a field submits an empty file. Each field accepts up to 16 KiB of
+   UTF-8 text. The browser uses LF newlines.
+3. Create the Agent, then deploy it. Creation saves the inputs privately and
+   leaves the Agent undeployed. Deployment applies them before execution starts.
+4. Once the revision is active, open **Workspace files** on the Agent and reload
+   the files to check the contents.
+
+If creation says that defaults changed, reload the form and review the defaults
+again. If deployment cannot initialize the workspace, have an operator check
+runtime compatibility and durable storage before retrying. Setup refuses to
+overwrite conflicting edits during an incomplete attempt. After completion,
+restarting or redeploying preserves subsequent workspace edits.
+
+You cannot edit staged inputs on an undeployed Agent. To correct them, delete
+and recreate the Agent through the API; the console does not offer Agent deletion.
+The [initial contents reference](../../reference/agents.md#initial-contents-at-creation)
+defines API omission, empty values, and the pinned defaults contract.
 
 ## Edit a file
 

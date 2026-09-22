@@ -36,6 +36,7 @@ import type {
   ComputeReadiness,
   ComputePreflightResult,
   ComputeRevisionContext,
+  WorkspaceSetup,
   Driver,
   HarnessWorkloadRequirements,
   HarnessAuthSnapshot,
@@ -59,6 +60,11 @@ import type {
 import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterprise/contracts";
 import { DependencyUnavailableError, ResourceConflictError } from "@openclaw-enterprise/occ";
 import { createKubernetesClientConfiguration } from "../../kubernetes/client.ts";
+import {
+  WORKSPACE_SETUP_RUNTIME,
+  workspaceSetupMainAgent,
+  workspaceSetupVerifier,
+} from "../workspace-setup-runtime.ts";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import {
@@ -258,6 +264,7 @@ interface GatewayConfigurationSnapshot {
   readonly usesWritableNativeAdminConfig: boolean;
   readonly annotations: Readonly<Record<string, string>>;
   readonly loggingLevel: LoggingLevel;
+  readonly workspace: unknown;
 }
 
 interface PluginRuntimeSnapshot {
@@ -833,6 +840,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   readonly id: string;
   readonly capability = "compute" as const;
   readonly implementation: string;
+  readonly supportsWorkspaceSetup = true as const;
   private readonly options: KubernetesComputeDriverOptions;
   private readonly sandboxDriver: SandboxDriver | undefined;
   private lifecycle: ComputeLifecycleDispatcher;
@@ -1260,6 +1268,22 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     await this.withRuntimeCredentialErrors(async () => {
       const context = await this.runtimeCredentialContext(binding);
+      const setupName = this.workspaceSetupSecretName(binding.agent.id);
+      const setup = await this.getOwned("Secret", setupName, context.namespace, context.ownership);
+      if (setup !== undefined) {
+        const clients = await this.clients();
+        await this.request(
+          () =>
+            clients.core.deleteNamespacedSecret({
+              name: setupName,
+              namespace: context.namespace,
+              body: {
+                preconditions: { uid: required(setup.metadata.uid, "Workspace setup Secret UID") },
+              },
+            }),
+          { mutating: true },
+        );
+      }
       const existing = await this.getOwned(
         "Secret",
         context.transport.name,
@@ -1585,6 +1609,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (sandboxDriver !== undefined && embedded) {
       throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
     }
+    const workspaceSetup = this.workspaceSetupForRevision(revision, context);
     this.validateHarnessAuth(
       revision.harness,
       revision.harnessAuth,
@@ -1639,13 +1664,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
           : "agent"
         : undefined;
     const incomplete = async (): Promise<ComputeReadiness> => {
-      const runtimeFailure = await this.safeRuntimeFailureObservation(revision, namespace);
+      const runtimeFailure = await this.safeRuntimeFailureObservation(
+        revision,
+        namespace,
+        workspaceSetup !== undefined,
+      );
       return runtimeFailure === undefined ? result : { ...result, runtimeFailure };
     };
     const ready = async (
       expectedWarnings?: readonly PluginDeploymentWarning[],
     ): Promise<ComputeReadiness> => {
       if (pluginStatusContainer === undefined) {
+        await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace, true);
         return {
           ...result,
           ready: true,
@@ -1660,6 +1690,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
         pluginStatusContainer,
         expectedWarnings,
       );
+      if (status !== undefined) {
+        await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace, true);
+      }
       return status === undefined
         ? result
         : {
@@ -1668,6 +1701,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
             ...(status.failures.length === 0 ? {} : { warnings: status.failures }),
           };
     };
+    await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace);
     const document = JSON.stringify(nativeConfiguration);
     const configuration = this.gatewayConfiguration(revision);
     let existingGatewayRevisionId: string | undefined;
@@ -1786,7 +1820,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
       embedded &&
       this.options.runtime !== undefined &&
       existingGateway !== undefined &&
-      existingGateway.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revision.id
+      existingGateway.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== revision.id &&
+      (workspaceSetup === undefined || workspaceSetup.completed)
     ) {
       // The shared Recreate gateway validates auth in the replacement's startup.
       // An unready predecessor must not prevent repair through a new deployment.
@@ -1818,7 +1853,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
         !embedded &&
         this.options.runtime !== undefined &&
         pluginStatusContainer !== undefined &&
-        existingGateway === undefined;
+        existingGateway === undefined &&
+        workspaceSetup === undefined;
       const reconcileGatewayDeployment = async (environment: Record<string, string>) => {
         await this.reconcileChannelNetworkPolicy(revision, channels, namespace);
         await this.reconcile(
@@ -1839,6 +1875,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
             secretEnvironment,
             pluginRuntime,
             [],
+            workspaceSetup,
             repositoryMaterial,
           ),
           gatewayOwnership,
@@ -1935,6 +1972,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         [],
         pluginRuntime,
         [],
+        workspaceSetup,
       );
       if (sandboxDriver?.provisionHarness !== undefined) {
         const requirements = this.harnessRequirementsFromDeployment(
@@ -2037,6 +2075,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return;
     }
     this.verifyGatewayRoutingConfiguration(revision);
+    const workspaceSetup = this.workspaceSetupForRevision(revision, context);
     this.validateHarnessAuth(
       revision.harness,
       revision.harnessAuth,
@@ -2046,6 +2085,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const channels = this.enabledChannels(revision);
     const pluginRuntime = this.pluginRuntimeSnapshot(revision);
     const { name: namespace } = await this.resolveNamespace(revision.namespaceId);
+    await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace);
     const secretEnvironment = this.secretEnvironmentForRevision(revision, context, namespace);
     const harnessAuth = this.harnessAuthForRevision(revision, context, namespace);
     const agentName = `agent-${sha256Hex(revision.agentId, 12)}`;
@@ -2122,6 +2162,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
               secretEnvironment,
               pluginRuntime,
               [],
+              workspaceSetup,
               repositoryMaterial,
             ),
             gatewayOwnership,
@@ -2175,6 +2216,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       [],
       pluginRuntime,
       [],
+      workspaceSetup,
     );
     if (sandboxDriver?.provisionHarness === undefined) {
       const deployment = await this.getOwned("Deployment", revisionName, namespace, {
@@ -2222,6 +2264,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         secretEnvironment,
         pluginRuntime,
         [],
+        workspaceSetup,
       ),
       gatewayOwnership,
       namespace,
@@ -3890,12 +3933,45 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async safeRuntimeFailureObservation(
     revision: AgentRevision,
     namespace: string,
+    workspaceSetup = false,
   ): Promise<RuntimeFailureEvidence | undefined> {
     if (this.options.runtime === undefined) {
       return undefined;
     }
     const ownerSignal = currentComputeAbortSignal();
     try {
+      if (workspaceSetup) {
+        const pods = await this.revisionPods(revision, namespace, "gateway");
+        for (const pod of pods) {
+          if (asRecord(pod.metadata)?.deletionTimestamp !== undefined) {
+            continue;
+          }
+          const status = asRecord(pod.status);
+          const initialized = Array.isArray(status?.initContainerStatuses)
+            ? status.initContainerStatuses
+                .map(asRecord)
+                .find((item) => item?.name === "initialize-workspace")
+            : undefined;
+          const state = asRecord(initialized?.state);
+          const terminated =
+            asRecord(state?.terminated) ??
+            (state?.waiting === undefined
+              ? undefined
+              : asRecord(asRecord(initialized?.lastState)?.terminated));
+          if (typeof terminated?.exitCode === "number" && terminated.exitCode !== 0) {
+            return {
+              component: "gateway",
+              check: "workspace-setup",
+              code: "WORKSPACE_SETUP_FAILED",
+              checkedAt:
+                typeof terminated.finishedAt === "string" &&
+                this.validIsoTimestamp(terminated.finishedAt)
+                  ? terminated.finishedAt
+                  : new Date().toISOString(),
+            };
+          }
+        }
+      }
       for (const container of this.runtimeStatusContainers(revision)) {
         const readback = await this.privateStatusReadback(
           revision,
@@ -4395,6 +4471,112 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ];
   }
 
+  private workspaceSetupForRevision(
+    revision: AgentRevision,
+    context?: ComputeRevisionContext,
+  ): WorkspaceSetup | undefined {
+    const setup = context?.workspaceSetup;
+    if (setup === undefined) {
+      return undefined;
+    }
+    if (setup.namespaceId !== revision.namespaceId || setup.agentId !== revision.agentId) {
+      throw new ConfigurationFailure("Workspace setup identity does not match the Agent.");
+    }
+    if (this.options.runtime === undefined) {
+      throw new ConfigurationFailure("Workspace setup requires durable native runtime storage.");
+    }
+    if (workspaceSetupMainAgent(revision.configuration) === undefined) {
+      throw new ConfigurationFailure("Workspace setup requires only the native main Agent.");
+    }
+    const workspace = this.gatewayConfiguration(revision).workspace;
+    if (
+      workspace !== "/home/node/.openclaw/workspace" &&
+      !(revision.harness.mode === "dedicated" && workspace === "/home/node/workspace")
+    ) {
+      throw new ConfigurationFailure(
+        "Workspace setup requires the Agent's managed durable workspace.",
+      );
+    }
+    return setup;
+  }
+
+  private workspaceSetupSecretName(agentId: string): string {
+    return `workspace-setup-${sha256Hex(agentId, 12)}`;
+  }
+
+  private async deliverWorkspaceSetup(
+    revision: AgentRevision,
+    setup: WorkspaceSetup | undefined,
+    namespace: string,
+    completed = false,
+  ): Promise<void> {
+    if (setup === undefined) {
+      return;
+    }
+    const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+    const name = this.workspaceSetupSecretName(revision.agentId);
+    // API failure objects can echo request bodies; never let private content escape this boundary.
+    try {
+      const existing = await this.getOwned("Secret", name, namespace, ownership);
+      const identity = {
+        id: setup.id,
+        namespaceId: setup.namespaceId,
+        agentId: setup.agentId,
+        ...(setup.defaultsId === undefined ? {} : { defaultsId: setup.defaultsId }),
+      };
+      if (existing !== undefined) {
+        const data = asRecord(existing.data);
+        const raw = required(data?.["setup.json"], "Workspace setup payload");
+        const prior = asRecord(JSON.parse(Buffer.from(raw, "base64").toString("utf8")));
+        if (
+          prior === undefined ||
+          Object.entries(identity).some(([key, value]) => prior[key] !== value) ||
+          prior.defaultsId !== setup.defaultsId ||
+          typeof prior.completed !== "boolean"
+        ) {
+          throw new OwnershipFailure("Workspace setup delivery identity conflicted.");
+        }
+        // A lost ready acknowledgement must never restore document bytes after cleanup.
+        if (prior.completed === true || (!completed && !setup.completed)) {
+          return;
+        }
+      }
+      const payload = {
+        ...identity,
+        completed: completed || setup.completed,
+        ...(completed || setup.completed ? {} : { files: setup.files }),
+      };
+      const manifest = this.manifest("v1", "Secret", name, ownership, namespace);
+      const body = {
+        ...manifest,
+        metadata: {
+          ...manifest.metadata,
+          ...(existing === undefined
+            ? {}
+            : {
+                resourceVersion: required(
+                  existing.metadata.resourceVersion,
+                  "Workspace setup Secret version",
+                ),
+                uid: required(existing.metadata.uid, "Workspace setup Secret UID"),
+              }),
+        },
+        type: "Opaque",
+        data: { "setup.json": Buffer.from(JSON.stringify(payload)).toString("base64") },
+      };
+      const clients = await this.clients();
+      await this.request(
+        () =>
+          existing === undefined
+            ? clients.core.createNamespacedSecret({ namespace, body })
+            : clients.core.replaceNamespacedSecret({ name, namespace, body }),
+        { mutating: true },
+      );
+    } catch {
+      throw new DependencyUnavailableError("Workspace setup private delivery is unavailable.");
+    }
+  }
+
   private gatewayConfiguration(revision: AgentRevision): GatewayConfigurationSnapshot {
     const gateway = asRecord(revision.configuration.gateway);
     const auth = asRecord(gateway?.auth);
@@ -4420,6 +4602,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
         "openclaw.dev/configuration-generation": String(revision.configurationGeneration),
       },
       loggingLevel: admittedLoggingLevel(revision.configuration),
+      workspace:
+        asRecord(asRecord(asRecord(revision.configuration.agents)?.entries)?.main)?.workspace ??
+        asRecord(asRecord(revision.configuration.agents)?.defaults)?.workspace ??
+        "/home/node/.openclaw/workspace",
     };
   }
 
@@ -5424,6 +5610,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     secretEnvironment: readonly SecretEnvironmentProjection[] = [],
     pluginRuntime?: PluginRuntimeSnapshot,
     pluginWarnings: readonly PluginDeploymentWarning[] = [],
+    workspaceSetup?: WorkspaceSetup,
     repositoryMaterial?: ResolvedRepositoryMaterialSpec,
   ): ManagedKubernetesObject {
     const metadata = this.ownershipMetadata(ownership);
@@ -5737,6 +5924,57 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       variables.push(...harnessAuth.environment);
     }
+    if (workspaceSetup !== undefined && role === "gateway") {
+      const workspace = required(configuration?.workspace, "Initial workspace directory");
+      if (!embedded) {
+        // Native main and the dedicated Harness share the same durable workspace.
+        volumeMounts.push({
+          name: SHARED_WORKSPACE_VOLUME,
+          mountPath: "/home/node/.openclaw/workspace",
+          subPath: "workspace",
+          readOnly: false,
+        });
+      }
+      volumes.push({
+        name: "workspace-setup",
+        secret: {
+          secretName: this.workspaceSetupSecretName(workspaceSetup.agentId),
+          defaultMode: 0o440,
+        },
+      });
+      initContainers.push({
+        name: "initialize-workspace",
+        image: this.options.images.gateway,
+        imagePullPolicy: "IfNotPresent",
+        command: ["node", "-e"],
+        args: [WORKSPACE_SETUP_RUNTIME],
+        env: [
+          { name: "HOME", value: "/home/node" },
+          { name: "OPENCLAW_STATE_DIR", value: "/home/node/.openclaw" },
+          { name: "OPENCLAW_WORKSPACE_SETUP_PATH", value: "/run/workspace-setup/setup.json" },
+          { name: "OPENCLAW_WORKSPACE_DIR", value: workspace },
+          { name: "OPENCLAW_EXECUTABLE", value: "/app/openclaw.mjs" },
+          ...variables.filter(({ name }) => name === "OPENCLAW_CONFIG_PATH"),
+        ],
+        volumeMounts: [
+          ...volumeMounts.filter(({ name }) =>
+            [
+              "runtime-state",
+              "runtime-temporary",
+              GATEWAY_PRIVATE_STATE_VOLUME,
+              SHARED_WORKSPACE_VOLUME,
+              CONFIGURATION_VOLUME,
+            ].includes(name),
+          ),
+          { name: "workspace-setup", mountPath: "/run/workspace-setup", readOnly: true },
+        ],
+        securityContext: {
+          allowPrivilegeEscalation: false,
+          readOnlyRootFilesystem: true,
+          capabilities: { drop: ["ALL"] },
+        },
+      });
+    }
     const names = new Set<string>();
     for (const variable of variables) {
       if (names.has(variable.name)) {
@@ -5853,7 +6091,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
                   : {
                       command: ["node", "-e"],
                       args: [
-                        role === "gateway" ? GATEWAY_RUNTIME_ENTRYPOINT : AGENT_RUNTIME_ENTRYPOINT,
+                        (workspaceSetup === undefined
+                          ? ""
+                          : workspaceSetupVerifier(
+                              workspaceSetup,
+                              role === "gateway"
+                                ? required(configuration?.workspace, "Initial workspace directory")
+                                : "/home/node/workspace",
+                            )) +
+                          (role === "gateway"
+                            ? GATEWAY_RUNTIME_ENTRYPOINT
+                            : AGENT_RUNTIME_ENTRYPOINT),
                       ],
                     }),
               },

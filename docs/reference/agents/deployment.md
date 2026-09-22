@@ -115,6 +115,16 @@ selected Drivers' mode constraints. A replacement must preserve
 its predecessor's Service selector until activation succeeds. Without an
 eligible worker, revision work remains queued.
 
+When creation included [initial workspace files](../agents.md#initial-contents-at-creation),
+the worker passes private setup state to Compute before starting execution.
+Compute must support initialization in the exact Agent's durable workspace;
+unsupported Drivers or storage layouts fail deployment. Native setup, file
+application, and the durable completion marker must succeed before the gateway
+or Harness runs. A `202` deployment response does not establish that this gate
+has passed. After activation, OCC clears staged contents and retains setup
+identity and completion metadata. Later revisions check completion without
+reapplying the original text, preserving edits made in the live workspace.
+
 Revision list and read operations are scoped beneath the exact Namespace and
 Agent. Each returned revision requires its own authorized read; substituting a
 parent does not grant access to another Agent's history. Public response shapes

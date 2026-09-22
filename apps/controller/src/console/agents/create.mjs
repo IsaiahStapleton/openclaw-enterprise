@@ -1,4 +1,5 @@
 import { element, button } from "../dom.mjs";
+import { WORKSPACE_DEFAULTS, WORKSPACE_DEFAULTS_ID } from "../workspace-defaults.mjs";
 import { createHarnessAuthFields } from "./harness-auth.mjs";
 import { createPresetFields } from "./presets.mjs";
 import { defaultAgentModel } from "./starter-model.mjs";
@@ -194,6 +195,26 @@ function renderAgentForm(context, rendered) {
     spellcheck: "false",
   });
   secretBindings.value = JSON.stringify(rendered.configuration?.secretBindings ?? {}, null, 2);
+  const workspaceInputs = Object.entries(WORKSPACE_DEFAULTS).map(([filename, content]) => {
+    const input = element("textarea", {
+      id: `workspace-${filename.replace(".", "-")}`,
+      rows: "8",
+      spellcheck: "false",
+    });
+    input.value = content;
+    return [filename, input];
+  });
+  const workspaceSection = element(
+    "section",
+    {},
+    element("h2", {}, "Workspace files"),
+    element(
+      "p",
+      { className: "muted" },
+      "Customize the OpenClaw defaults for this Agent. These files are applied before its first deployment runs. Clearing a field creates an empty file. After deployment, edit them in Workspace files on the Agent.",
+    ),
+    ...workspaceInputs.map(([filename, input]) => field(filename, input)),
+  );
   const providerStatus = element("p", { className: "hint", role: "status" }, "Loading Providers…");
   let providersLoaded = false;
   let pending = false;
@@ -243,6 +264,7 @@ function renderAgentForm(context, rendered) {
       "Map environment names to existing Secret references in this Namespace. Do not enter credentials.",
     ),
     field("Plugin selections JSON", plugins, "Desired plugin selections and policies."),
+    workspaceSection,
   );
   form.addEventListener("input", (event) => {
     edited = true;
@@ -402,6 +424,10 @@ function renderAgentForm(context, rendered) {
     const body = {
       name: name.value.trim(),
       executionMode: mode.value,
+      initialWorkspaceFiles: Object.fromEntries(
+        workspaceInputs.map(([filename, input]) => [filename, input.value]),
+      ),
+      workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
       ...(Object.keys(desiredPlugins).length ? { plugins: desiredPlugins } : {}),
       ...(provider.value ? { providerId: provider.value } : {}),
     };
@@ -467,16 +493,6 @@ function renderAgentForm(context, rendered) {
     ),
     form,
     channelEditor,
-    element(
-      "section",
-      { className: "agent-card" },
-      element("h2", {}, "Workspace files"),
-      element(
-        "p",
-        { className: "muted" },
-        "After deployment, open Workspace files on the Agent to read or create AGENTS.md, SOUL.md, IDENTITY.md, and USER.md. File access requires an active revision and a reachable gateway; initial files cannot be saved during Agent creation.",
-      ),
-    ),
     savedStatus,
     feedback,
     actions,
