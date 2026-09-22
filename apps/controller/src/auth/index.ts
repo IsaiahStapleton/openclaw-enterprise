@@ -74,6 +74,7 @@ export { AuthAccountRoleNotFoundError, type AuthPrincipalSeed } from "@openclaw-
 
 export interface AuthPrincipalSeedOptions {
   readonly roleId?: string;
+  readonly grant?: "administrator" | "none";
 }
 
 export interface ControllerAuth {

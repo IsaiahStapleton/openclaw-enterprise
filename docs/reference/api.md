@@ -78,7 +78,7 @@ Create an administrator-controlled local auth account
 
 **Operation ID:** `createAuthAccount`
 
-**Permissions:** Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role; public signup remains disabled.
+**Permissions:** Requires administer permission on the Installation. Creates a Better Auth account and an explicit IAM Principal. Supplying roleId also creates a binding to that existing IAM Role; omitting roleId creates no grants. Public signup remains disabled.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -95,7 +95,7 @@ Create an administrator-controlled local auth account
 | `email` | `string` | Yes | min length: 3; max length: 320 |
 | `name` | `string` | No | min length: 1; max length: 200 |
 | `password` | `string` | Yes | min length: 12; max length: 128 |
-| `roleId` | `string` | Yes | min length: 1; max length: 200 |
+| `roleId` | `string` | No | min length: 1; max length: 200 |
 
 ##### Responses
 
@@ -2136,7 +2136,7 @@ Create an immutable exact-resource Namespace IAM AccessBinding
 
 **Operation ID:** `createIAMAccessBinding`
 
-**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Namespace when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -2145,6 +2145,7 @@ Create an immutable exact-resource Namespace IAM AccessBinding
 | `read` | `agent` | `request_body` |
 | `read` | `agent_revision` | `request_body` |
 | `read` | `configuration` | `request_body` |
+| `read` | `namespace` | `request_body` |
 | `read` | `secret` | `request_body` |
 | `read` | `service_account` | `request_body` |
 
@@ -2163,7 +2164,7 @@ Create an immutable exact-resource Namespace IAM AccessBinding
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `resourceId` | `string` | Yes | min length: 1; max length: 200 |
-| `resourceKind` | `"agent" or "agent_revision" or "configuration" or "preset" or "secret" or "service_account"` | Yes | — |
+| `resourceKind` | `"agent" or "agent_revision" or "configuration" or "namespace" or "preset" or "secret" or "service_account"` | Yes | — |
 | `roleId` | `string` | Yes | min length: 1; max length: 200 |
 | `subjectId` | `string` | Yes | min length: 1; max length: 200 |
 | `subjectKind` | `"identity"` | Yes | — |
@@ -2347,7 +2348,7 @@ Create an immutable Namespace IAM Role
 | `name` | `string` | No | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `permissions` | `array<object>` | Yes | min items: 1; max items: 64 |
 | `permissions[].action` | `"create" or "read" or "update" or "delete" or "deploy" or "operate" or "administer"` | Yes | — |
-| `permissions[].resourceKind` | `"agent" or "agent_revision" or "configuration" or "preset" or "secret" or "service_account"` | Yes | — |
+| `permissions[].resourceKind` | `"agent" or "agent_revision" or "configuration" or "namespace" or "preset" or "secret" or "service_account"` | Yes | — |
 
 ##### Responses
 

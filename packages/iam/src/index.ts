@@ -69,7 +69,9 @@ export function createBootstrapAdministratorSeed(
   issuer: string,
   account: { readonly id: string },
 ): BootstrapAdministratorSeed {
-  const human = createAuthPrincipalSeed(installationId, issuer, account);
+  const human = createAuthPrincipalSeed(installationId, issuer, account, {
+    grant: "administrator",
+  });
   const administratorRole = human.roles[0];
   if (administratorRole === undefined) {
     throw new Error("Bootstrap administrator seed requires an administrator Role.");
@@ -93,12 +95,12 @@ export function createBootstrapAdministratorSeed(
   };
 }
 
-/** IAM owns the Principal, administrator permissions, and exact account Role binding. */
+/** IAM owns the Principal plus optional administrator creation or exact account Role binding. */
 export function createAuthPrincipalSeed(
   installationId: string,
   issuer: string,
   account: { readonly id: string },
-  options: { readonly roleId?: string } = {},
+  options: { readonly roleId?: string; readonly grant?: "administrator" | "none" } = {},
 ): AuthPrincipalSeed {
   const principal: Principal = {
     kind: "principal",
@@ -109,6 +111,17 @@ export function createAuthPrincipalSeed(
   const existingRoleId = options.roleId;
   if (existingRoleId !== undefined && !isNonEmptyString(existingRoleId)) {
     throw new Error("Additional auth accounts require a Role id.");
+  }
+  if (existingRoleId !== undefined && options.grant === "none") {
+    throw new Error("Auth account Role binding and no-grant mode are mutually exclusive.");
+  }
+
+  if (options.grant === "none") {
+    return {
+      principal,
+      roles: [],
+      bindings: [],
+    };
   }
 
   const roleId = existingRoleId ?? `role_admin_${randomUUID()}`;
@@ -170,9 +183,6 @@ export function validateAuthAccountPrincipalSeed(
   if (seed.principal.kind !== "principal" || seed.principal.namespaceId !== undefined) {
     throw new Error("Auth account creation requires one Installation-scoped Principal.");
   }
-  if (seed.bindings.length === 0) {
-    throw new Error("Auth account creation requires an existing IAM Role binding.");
-  }
   for (const binding of seed.bindings) {
     const role = state.roles.find((candidate) => candidate.id === binding.roleId);
     if (role === undefined) {
@@ -206,6 +216,7 @@ const MANAGED_RESOURCE_KINDS: readonly ManagedIAMResourceKind[] = [
   "agent",
   "agent_revision",
   "configuration",
+  "namespace",
   "secret",
   "service_account",
 ];
@@ -279,6 +290,10 @@ function validatedManagedPermissions(permissions: readonly Permission[]): readon
     assertCondition(
       MANAGED_RESOURCE_KINDS.includes(permission.resourceKind as ManagedIAMResourceKind),
       "managed Role permission resource kind is invalid",
+    );
+    assertCondition(
+      permission.resourceKind !== "namespace" || permission.action === "read",
+      "managed Namespace Role permissions support only read",
     );
     const key = `${permission.action}\u0000${permission.resourceKind}`;
     assertCondition(!keys.has(key), "managed Role permissions must be duplicate-free");

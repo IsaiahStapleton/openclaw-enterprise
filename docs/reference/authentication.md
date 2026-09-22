@@ -158,10 +158,12 @@ activity does not renew the console session.
 ## Account provisioning
 
 `POST /api/auth/accounts` requires a human session and `administer` on the singleton Installation.
-It creates a Better Auth account, its explicit IAM Principal, and an
-AccessBinding to an existing Role. The request must supply `roleId`; it cannot
-implicitly create a Role or infer a grant from the account's email or session.
-Creating an account does not sign it in or issue a session.
+It creates a Better Auth account and its explicit IAM Principal. Supplying
+`roleId` also creates an AccessBinding to that existing Role. Omitting `roleId`
+creates no grants; the account can sign in, but protected API calls fail until an
+administrator adds exact IAM bindings. Account creation cannot implicitly create
+a Role or infer a grant from the account's email or session. Creating an account
+does not sign it in or issue a session.
 
 A representative provisioning body is:
 
@@ -172,6 +174,8 @@ A representative provisioning body is:
   "roleId": "role-existing-operator"
 }
 ```
+
+To create the account before assigning any IAM access, omit `roleId`.
 
 Emails are normalized to lowercase. Passwords must contain 12–128 characters.
 The backend provisions the account without a public email-verification or

@@ -2376,6 +2376,9 @@ export class PostgresPlatformState implements PlatformStateStore {
       resourceKind: NonNullable<AccessBinding["resourceKind"]>,
       resourceId: string,
     ): Promise<boolean> => {
+      if (resourceKind === "namespace") {
+        return namespaceId === resourceId;
+      }
       const queryByKind: Record<string, string> = {
         agent: "SELECT 1 FROM occ.agents WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
         agent_revision: "SELECT 1 FROM occ.agent_revisions WHERE namespace_id = $1 AND id = $2",
@@ -2497,16 +2500,34 @@ export class PostgresPlatformState implements PlatformStateStore {
         }
         const identity = await client.query(
           `SELECT 1 FROM occ.iam_identities
-           WHERE namespace_id = $1 AND id = $2 AND kind = 'service_principal'`,
-          [namespace.id, binding.subjectId],
+           WHERE id = $1
+             AND (
+               (kind = 'service_principal' AND namespace_id = $2)
+               OR (kind = 'principal' AND namespace_id IS NULL)
+             )`,
+          [binding.subjectId, namespace.id],
         );
         if (identity.rowCount !== 1) {
           throw new ScopeViolationError(
-            "The IAM AccessBinding subject does not belong to the exact Namespace.",
+            "The IAM AccessBinding subject must be an Installation human Principal or belong to the exact Namespace.",
           );
         }
-        if ((await iamPolicy.getRole(namespace.id, binding.roleId)) === undefined) {
+        if (binding.resourceKind === "namespace" && binding.resourceId !== namespace.id) {
+          throw new ScopeViolationError(
+            "The IAM AccessBinding Namespace target must be the exact Namespace.",
+          );
+        }
+        const role = await iamPolicy.getRole(namespace.id, binding.roleId);
+        if (role === undefined) {
           throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
+        }
+        if (
+          binding.resourceKind === "namespace" &&
+          role.permissions.some(
+            (permission) => permission.resourceKind === "namespace" && permission.action !== "read",
+          )
+        ) {
+          throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
         }
         if (!(await lockTarget(namespace.id, binding.resourceKind, binding.resourceId))) {
           throw new ScopeViolationError(

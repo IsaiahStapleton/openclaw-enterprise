@@ -1,7 +1,7 @@
 ---
 created: "2026-09-20"
-updated: "2026-09-23"
-last_updated_session: "codex/01a0d075-a358-7620-8c16-fd4290acddf1"
+updated: "2026-09-24"
+last_updated_session: "scoped-human-onboarding"
 ---
 
 # Namespace IAM Policy Flow
@@ -66,9 +66,12 @@ only after the transaction commits.
 `packages/occ/src/index.ts:createIAMAccessBinding`
 
 Role creation accepts only nonempty, duplicate-free permissions for Namespace
-resource kinds. AccessBinding creation accepts identity subjects and exact
-targets in the same Namespace. OCC verifies the target resource exists and that
-the caller can read it before asking the IAM Driver to create the binding.
+resource kinds. `namespace` permissions are limited to `read`. AccessBinding
+creation accepts same-Namespace service identities or Installation-scoped human
+Principals, then requires an exact target in the same Namespace. For the
+Namespace resource itself, `resourceId` must equal the path Namespace ID. OCC
+verifies the target exists and that the caller can read it before asking the IAM
+Driver to create the binding.
 
 ### 4. The IAM Driver persists or reads policy
 
@@ -111,6 +114,8 @@ authorization requests read the current policy through the IAM Driver.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24: Documented human Principal bindings and exact Namespace read targets.
 
 - 2026-09-23 22:56: Update source ownership for extracted IAM HTTP handlers; preserve admission and transaction boundaries. (codex/01a0d075-a358-7620-8c16-fd4290acddf1 - 4df9f9800836dc1c2b57afd5f8af4d91f55088d5)
 - 2026-09-20 09:32: Document Namespace IAM policy management flow. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 5f7728e8c5d128bc7067b7035e07f06c3c4da92c)

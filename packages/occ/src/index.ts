@@ -4649,6 +4649,7 @@ export class OpenClawController {
       kind !== "agent" &&
       kind !== "agent_revision" &&
       kind !== "configuration" &&
+      kind !== "namespace" &&
       kind !== "preset" &&
       kind !== "secret" &&
       kind !== "service_account"
@@ -4676,6 +4677,9 @@ export class OpenClawController {
           throw new ScopeViolationError("IAM Role Permissions are invalid.");
         }
         this.assertNamespacePolicyResourceKind(permission.resourceKind);
+        if (permission.resourceKind === "namespace" && permission.action !== "read") {
+          throw new ScopeViolationError("IAM Namespace Role Permissions support only read.");
+        }
         const key = `${permission.action}\u0000${permission.resourceKind}`;
         if (seen.has(key)) {
           throw new ScopeViolationError("IAM Role Permissions contain duplicates.");
@@ -4695,6 +4699,15 @@ export class OpenClawController {
     resourceId: string,
   ): Promise<void> {
     await this.read(async (state) => {
+      if (resourceKind === "namespace") {
+        if (resourceId !== namespaceId) {
+          throw new ScopeViolationError(
+            "The IAM target Namespace must be the exact path Namespace.",
+          );
+        }
+        await this.exactNamespace(state, namespaceId);
+        return;
+      }
       if (resourceKind === "agent") {
         if ((await state.agents.findAgent(namespaceId, resourceId)) === undefined) {
           throw new ScopeViolationError("The IAM target Agent does not belong to the Namespace.");

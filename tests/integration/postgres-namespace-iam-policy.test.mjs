@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { createBootstrapAdministratorSeed, NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import {
+  createAuthPrincipalSeed,
+  createBootstrapAdministratorSeed,
+  NativeIAMDriver,
+} from "../../packages/iam/src/index.ts";
 import { PostgresPlatformState } from "../../packages/occ/src/state/postgres-state.ts";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
@@ -522,6 +526,77 @@ test(
 );
 
 test(
+  "PostgreSQL native IAM authorizes Installation human principals for exact Namespace read",
+  requiresPostgres,
+  async (context) => {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: databaseUrl });
+    context.after(() => pool.end());
+    const state = new PostgresPlatformState(pool);
+    const iam = new NativeIAMDriver(state, { id: "postgres-namespace-iam-human-principal" });
+    const { installation, namespace } = await createNamespaceAgentState(state);
+    const seed = createAuthPrincipalSeed(
+      installation.id,
+      "https://identity.example.com",
+      { id: `human-namespace-reader-${randomUUID()}` },
+      { grant: "none" },
+    );
+    await state.appendNativeIAMPrincipal(seed);
+    let role;
+    let binding;
+
+    await state.transact(async (unit) => {
+      role = await iam.createNamespaceRole(
+        { policy: unit.iamPolicy },
+        {
+          id: identifier("role"),
+          namespaceId: namespace.id,
+          permissions: [{ action: "read", resourceKind: "namespace" }],
+        },
+      );
+      binding = await iam.createNamespaceAccessBinding(
+        { policy: unit.iamPolicy },
+        {
+          id: identifier("binding"),
+          namespaceId: namespace.id,
+          subjectKind: "identity",
+          subjectId: seed.principal.id,
+          roleId: role.id,
+          resourceKind: "namespace",
+          resourceId: namespace.id,
+        },
+      );
+    });
+
+    const granted = await iam.authorize({
+      principalId: seed.principal.id,
+      action: "read",
+      resource: { kind: "namespace", id: namespace.id, namespaceId: namespace.id },
+    });
+    assert.equal(granted.allowed, true);
+    assert.deepEqual(granted.evidence.bindingIds, [binding.id]);
+
+    await assert.rejects(
+      state.transact((unit) =>
+        iam.createNamespaceAccessBinding(
+          { policy: unit.iamPolicy },
+          {
+            id: identifier("binding"),
+            namespaceId: namespace.id,
+            subjectKind: "identity",
+            subjectId: seed.principal.id,
+            roleId: role.id,
+            resourceKind: "namespace",
+            resourceId: identifier("ns"),
+          },
+        ),
+      ),
+      { name: "ScopeViolationError" },
+    );
+  },
+);
+
+test(
   "PostgreSQL native IAM creates exact AgentRevision bindings with limited app privileges",
   requiresPostgres,
   async (context) => {
@@ -656,7 +731,7 @@ test(
           },
         ),
       ),
-      /resource kind/,
+      /Namespace Role Permissions/,
     );
     await assert.rejects(
       state.transact((unit) =>

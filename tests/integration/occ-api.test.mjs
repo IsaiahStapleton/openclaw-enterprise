@@ -512,7 +512,16 @@ async function createInjectedFixture(options = {}) {
         ? { controller }
         : {
             createController(installation) {
-              const baseState = new InMemoryPlatformState({ auditSink });
+              const baseState = new InMemoryPlatformState({
+                auditSink,
+                installationPrincipalExists: (identityId) =>
+                  state.identities.some(
+                    (identity) =>
+                      identity.id === identityId &&
+                      identity.kind === "principal" &&
+                      identity.namespaceId === undefined,
+                  ),
+              });
               platformState =
                 options.deploymentWorks === undefined
                   ? baseState
@@ -912,6 +921,63 @@ test("Namespace IAM routes manage exact Role and AccessBinding policy through th
   assert.equal(bindingDetail.status, 200);
   assert.deepEqual(bindingDetail.data, binding.data);
 
+  const namespaceRole = await controller.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
+    body: {
+      name: "Namespace reader",
+      permissions: [{ action: "read", resourceKind: "namespace" }],
+    },
+  });
+  assert.equal(namespaceRole.status, 201, JSON.stringify(namespaceRole.body));
+  const { principal: humanPrincipal } = await fixture.createAuthPrincipal("namespace-reader");
+  fixture.state.identities.push(humanPrincipal);
+  const namespaceBinding = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/iam/access-bindings`,
+    {
+      body: {
+        subjectKind: "identity",
+        subjectId: humanPrincipal.id,
+        roleId: namespaceRole.data.id,
+        resourceKind: "namespace",
+        resourceId: namespace.id,
+      },
+    },
+  );
+  assert.equal(namespaceBinding.status, 201, JSON.stringify(namespaceBinding.body));
+  assert.deepEqual(namespaceBinding.data, {
+    id: namespaceBinding.data.id,
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: humanPrincipal.id,
+    roleId: namespaceRole.data.id,
+    resourceKind: "namespace",
+    resourceId: namespace.id,
+  });
+  const unknownHumanBinding = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/iam/access-bindings`,
+    {
+      body: {
+        subjectKind: "identity",
+        subjectId: `prn_${randomUUID()}`,
+        roleId: namespaceRole.data.id,
+        resourceKind: "namespace",
+        resourceId: namespace.id,
+      },
+    },
+  );
+  assert.equal(unknownHumanBinding.status, 404);
+  assert.equal(unknownHumanBinding.body.error.code, "NOT_FOUND");
+  fixture.state.roles.push(namespaceRole.data);
+  fixture.state.bindings.push(namespaceBinding.data);
+  const humanApp = fixture.createApp(humanPrincipal);
+  const humanNamespaces = await injectedRequest(humanApp, "GET", "/namespaces");
+  assert.equal(humanNamespaces.status, 200);
+  assert.deepEqual(
+    humanNamespaces.data.map(({ id }) => id),
+    [namespace.id],
+  );
+
   const referencedDelete = await controller.request(
     "DELETE",
     `/namespaces/${namespace.id}/iam/roles/${role.data.id}`,
@@ -1036,12 +1102,12 @@ test("Namespace IAM read routes serialize broad native policy without widening m
     {
       body: {
         name: "Rejected broad mutating role",
-        permissions: [{ action: "read", resourceKind: "namespace" }],
+        permissions: [{ action: "update", resourceKind: "namespace" }],
       },
     },
   );
-  assert.equal(broadRoleCreate.status, 400);
-  assert.equal(broadRoleCreate.body.error.code, "INVALID_REQUEST");
+  assert.equal(broadRoleCreate.status, 404);
+  assert.equal(broadRoleCreate.body.error.code, "NOT_FOUND");
 
   const groupBindingCreate = await controller.request(
     "POST",
@@ -2170,14 +2236,27 @@ test("administrator-created auth accounts sign in and receive only provisioned I
   };
   fixture.state.roles.push(readOnlyRole);
 
-  const missingRole = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
+  const noGrantEmail = `no-grant-${randomUUID()}@example.com`;
+  const noGrantPassword = `generated-password-${randomUUID()}`;
+  const noGrant = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
     body: {
-      email: `missing-role-${randomUUID()}@example.com`,
-      password: `generated-password-${randomUUID()}`,
-      name: "Missing Role Operator",
+      email: noGrantEmail,
+      password: noGrantPassword,
+      name: "No Grant Operator",
     },
   });
-  assert.equal(missingRole.status, 400);
+  assert.equal(noGrant.status, 201, JSON.stringify(noGrant.body));
+  assert.deepEqual(provisionedSeed.roles, []);
+  assert.deepEqual(provisionedSeed.bindings, []);
+  const noGrantSession = await signInWithEmailPassword({
+    fetch: fixture.app.fetch.bind(fixture.app),
+    email: noGrantEmail,
+    password: noGrantPassword,
+  });
+  const noGrantInstallation = await injectedRequest(fixture.app, "GET", "/installation", {
+    session: noGrantSession,
+  });
+  assert.equal(noGrantInstallation.status, 403);
 
   const unknownRole = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
     body: {

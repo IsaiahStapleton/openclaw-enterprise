@@ -288,7 +288,32 @@ test(
       configurationDriver: createTestConfigurationDriver(),
     });
 
+    const iamBeforeNoGrant = await state.loadNativeIAMState(installation.id);
+    const noGrantEmail = `postgres-no-grant-${randomUUID()}@example.com`;
+    const noGrantPassword = `generated-password-${randomUUID()}`;
+    const noGrant = await appA.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: { email: noGrantEmail, password: noGrantPassword, name: "Postgres No Grant" },
+    });
+    assert.equal(noGrant.statusCode, 201, noGrant.body);
+    const noGrantSession = await signInWithEmailPassword({
+      fetch: (request) => fetchFromInjectedApp(appB, request),
+      email: noGrantEmail,
+      password: noGrantPassword,
+    });
+    const noGrantInstallation = await appB.inject({
+      method: "GET",
+      url: "/installation",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(noGrantInstallation.statusCode, 403, noGrantInstallation.body);
     const iamBefore = await state.loadNativeIAMState(installation.id);
+    assert.equal(iamBefore.identities.length, iamBeforeNoGrant.identities.length + 1);
+    assert.equal(iamBefore.bindings.length, iamBeforeNoGrant.bindings.length);
+    assert.ok(iamBefore.identities.some(({ id }) => id === noGrant.json().data.principalId));
+
     const role = iamBefore.roles.find((candidate) =>
       candidate.permissions.some(
         (permission) => permission.action === "read" && permission.resourceKind === "installation",

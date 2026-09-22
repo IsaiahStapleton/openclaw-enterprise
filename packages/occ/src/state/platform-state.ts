@@ -597,6 +597,7 @@ export interface PlatformAuditSink {
 
 export interface InMemoryPlatformStateOptions {
   readonly auditSink?: PlatformAuditSink;
+  readonly installationPrincipalExists?: (identityId: string) => boolean;
 }
 
 interface PlatformSnapshot {
@@ -798,7 +799,12 @@ function assertSecret(secret: Secret): void {
   }
 }
 
-function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
+function repositories(
+  snapshot: PlatformSnapshot,
+  options: {
+    readonly installationPrincipalExists?: ((identityId: string) => boolean) | undefined;
+  } = {},
+): PlatformUnitOfWork {
   const installations: InstallationRepository = {
     findInstallation: async (installationId) =>
       snapshot.installation?.id === installationId
@@ -1671,6 +1677,11 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     resourceKind: NonNullable<AccessBinding["resourceKind"]>,
     resourceId: string,
   ): Promise<boolean> => {
+    if (resourceKind === "namespace") {
+      return (
+        resourceId === namespaceId && snapshot.namespaces.get(namespaceId)?.deletedAt === undefined
+      );
+    }
     if (resourceKind === "agent") {
       return (await agents.findAgent(namespaceId, resourceId)) !== undefined;
     }
@@ -1699,6 +1710,13 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         agent.servicePrincipalId === identityId &&
         snapshot.namespaces.get(namespaceId)?.deletedAt === undefined,
     );
+
+  const policySubjectExists = (namespaceId: string, identityId: string): boolean => {
+    if (namespaceServicePrincipalExists(namespaceId, identityId)) {
+      return true;
+    }
+    return options.installationPrincipalExists?.(identityId) === true;
+  };
 
   const iamPolicy: IAMPolicyRepository = {
     listRoles: async (namespaceId) =>
@@ -1774,11 +1792,19 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
       }
       if (
+        binding.resourceKind === "namespace" &&
+        role.permissions.some(
+          (permission) => permission.resourceKind === "namespace" && permission.action !== "read",
+        )
+      ) {
+        throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
+      }
+      if (
         binding.subjectKind !== "identity" ||
-        !namespaceServicePrincipalExists(namespace.id, binding.subjectId)
+        !policySubjectExists(namespace.id, binding.subjectId)
       ) {
         throw new ScopeViolationError(
-          "The IAM AccessBinding subject does not belong to the exact Namespace.",
+          "The IAM AccessBinding subject must be an Installation human Principal or belong to the exact Namespace.",
         );
       }
       if (
@@ -2000,9 +2026,11 @@ export class InMemoryPlatformState implements PlatformStateStore {
   };
   private pending: Promise<void> = Promise.resolve();
   private readonly auditSink: PlatformAuditSink | undefined;
+  private readonly installationPrincipalExists: ((identityId: string) => boolean) | undefined;
 
   constructor(options: InMemoryPlatformStateOptions = {}) {
     this.auditSink = options.auditSink;
+    this.installationPrincipalExists = options.installationPrincipalExists;
   }
 
   pendingOperations(): readonly Readonly<PlatformOperation>[] {
@@ -2014,7 +2042,12 @@ export class InMemoryPlatformState implements PlatformStateStore {
     const lifetime = new RepositoryTransactionLifetime();
     try {
       return await work(
-        createPlatformReadView(repositories(cloneSnapshot(this.snapshot)), lifetime),
+        createPlatformReadView(
+          repositories(cloneSnapshot(this.snapshot), {
+            installationPrincipalExists: this.installationPrincipalExists,
+          }),
+          lifetime,
+        ),
       );
     } finally {
       await lifetime.finish();
@@ -2032,7 +2065,12 @@ export class InMemoryPlatformState implements PlatformStateStore {
       await previous;
       const working = cloneSnapshot(this.snapshot);
       const committedAuditCount = working.audit.length;
-      const result = await work(bindPlatformUnitOfWork(repositories(working), lifetime));
+      const result = await work(
+        bindPlatformUnitOfWork(
+          repositories(working, { installationPrincipalExists: this.installationPrincipalExists }),
+          lifetime,
+        ),
+      );
       await lifetime.finish();
       await this.publishAudit(working.audit.slice(committedAuditCount));
       this.snapshot = working;

@@ -271,7 +271,7 @@
   "paths": {
     "/api/auth/accounts": {
       "post": {
-        "description": "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role; public signup remains disabled.",
+        "description": "Requires administer permission on the Installation. Creates a Better Auth account and an explicit IAM Principal. Supplying roleId also creates a binding to that existing IAM Role; omitting roleId creates no grants. Public signup remains disabled.",
         "operationId": "createAuthAccount",
         "requestBody": {
           "content": {
@@ -284,7 +284,7 @@
                   "password": { "maxLength": 128, "minLength": 12, "type": "string" },
                   "roleId": { "maxLength": 200, "minLength": 1, "type": "string" }
                 },
-                "required": ["email", "password", "roleId"],
+                "required": ["email", "password"],
                 "type": "object"
               }
             }
@@ -7858,7 +7858,7 @@
         ]
       },
       "post": {
-        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.",
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Namespace when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.",
         "operationId": "createIAMAccessBinding",
         "parameters": [
           {
@@ -7883,6 +7883,7 @@
                       { "const": "agent", "type": "string" },
                       { "const": "agent_revision", "type": "string" },
                       { "const": "configuration", "type": "string" },
+                      { "const": "namespace", "type": "string" },
                       { "const": "preset", "type": "string" },
                       { "const": "secret", "type": "string" },
                       { "const": "service_account", "type": "string" }
@@ -8066,6 +8067,12 @@
             "action": "read",
             "condition": "iam_binding_target",
             "resourceKind": "configuration",
+            "scope": "request_body"
+          },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "namespace",
             "scope": "request_body"
           },
           {
@@ -8482,6 +8489,7 @@
                   "permissions": {
                     "items": {
                       "additionalProperties": false,
+                      "description": "Namespace policy permissions may include `resourceKind: \"namespace\"` only with `action: \"read\"`; other actions are rejected during admission.",
                       "properties": {
                         "action": {
                           "anyOf": [
@@ -8499,6 +8507,7 @@
                             { "const": "agent", "type": "string" },
                             { "const": "agent_revision", "type": "string" },
                             { "const": "configuration", "type": "string" },
+                            { "const": "namespace", "type": "string" },
                             { "const": "preset", "type": "string" },
                             { "const": "secret", "type": "string" },
                             { "const": "service_account", "type": "string" }

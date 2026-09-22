@@ -261,6 +261,7 @@ export const NamespacePolicyResourceKindSchema = Type.Union([
   Type.Literal("agent"),
   Type.Literal("agent_revision"),
   Type.Literal("configuration"),
+  Type.Literal("namespace"),
   Type.Literal("preset"),
   Type.Literal("secret"),
   Type.Literal("service_account"),
@@ -268,7 +269,11 @@ export const NamespacePolicyResourceKindSchema = Type.Union([
 
 export const IAMPermissionBody = Type.Object(
   { action: PermissionActionSchema, resourceKind: NamespacePolicyResourceKindSchema },
-  { additionalProperties: false },
+  {
+    additionalProperties: false,
+    description:
+      'Namespace policy permissions may include `resourceKind: "namespace"` only with `action: "read"`; other actions are rejected during admission.',
+  },
 );
 
 export const CreateIAMRoleBody = Type.Object(

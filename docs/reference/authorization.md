@@ -202,13 +202,15 @@ Bind it to the immutable `servicePrincipalId` returned in the Agent response:
 }
 ```
 
-The identity, Role, and target must exist in the path Namespace. Exact targets
-and Role permission kinds are `agent`, `agent_revision`, `configuration`,
-`preset`, `secret`, or `service_account`. A ServiceAccount resource is not an IAM
-identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
-and extra fields are rejected. Native IAM commits validated policy and its
-attributable audit event together; later requests on other replicas see it
-without a restart.
+The identity, Role, and target must exist in the path Namespace, except that an
+Installation-scoped human Principal can be the subject. Exact targets and Role
+permission kinds are `namespace`, `agent`, `agent_revision`, `configuration`,
+`preset`, `secret`, or `service_account`. `namespace` supports only exact read grants, and
+its `resourceId` must match the path Namespace ID. A ServiceAccount resource is
+not an IAM identity. Caller IDs, scope, wildcard targets, Groups, unknown
+permissions, and extra fields are rejected. Native IAM commits validated policy
+and its attributable audit event together; later requests on other replicas see
+it without a restart.
 
 Roles and bindings cannot be updated. Create replacements and explicitly
 remove old bindings. A referenced Role cannot be deleted (`409`), and deleting
