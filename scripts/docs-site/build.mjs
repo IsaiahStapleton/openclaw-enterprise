@@ -19,6 +19,8 @@ const docs = path.join(root, "docs");
 const output = path.join(root, "dist/docs");
 const assets = path.dirname(fileURLToPath(import.meta.url));
 const repository = "https://github.com/openclaw/openclaw-enterprise";
+const themeBootstrap =
+  '<script>try{const theme=localStorage.getItem("enterprise-docs-theme");if(theme==="light"||theme==="dark"){document.documentElement.dataset.theme=theme}}catch{}</script>';
 const config = JSON.parse(fs.readFileSync(path.join(docs, "docs.json"), "utf8"));
 const md = createMarkdownRenderer();
 const pages = new Map();
@@ -502,6 +504,7 @@ for (const page of pages.values()) {
     .join("");
   const html =
     '<!doctype html><html lang="en" data-theme="dark" data-oc-theme="product"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    themeBootstrap +
     "<title>" +
     escape(page.title) +
     " · OpenClaw Enterprise</title>" +

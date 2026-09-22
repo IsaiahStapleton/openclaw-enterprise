@@ -43,8 +43,7 @@ revealCurrentTab();
 document.fonts.ready.then(scheduleCurrentTab);
 window.addEventListener("resize", scheduleCurrentTab);
 const themeButton = document.querySelector("#theme");
-let theme = localStorage.getItem("enterprise-docs-theme") ?? "dark";
-document.documentElement.dataset.theme = theme;
+let theme = document.documentElement.dataset.theme;
 themeButton.addEventListener("click", () => {
   theme = theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = theme;
