@@ -262,7 +262,9 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText("Choose an installed Provider.").waitFor();
   await page.getByLabel("Authentication source").selectOption("api_key");
-  await page.getByLabel("OpenAI API key Secret ID").fill(secret.id);
+  const secretInput = page.getByLabel("OpenAI API key Secret ID");
+  assert.equal(await secretInput.getAttribute("type"), "password");
+  await secretInput.fill(secret.id);
   await page.getByLabel("Agent name").fill("Console-created Agent");
   await page.getByLabel("Execution mode").selectOption("dedicated");
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
@@ -304,6 +306,11 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
   await page.getByRole("button", { name: "Configuration" }).waitFor();
   await revealNativeConfiguration(page, "View native Configuration");
   await page.getByText('"marker": "create"').waitFor();
+  // Neither the summary nor expanded native Configuration reveals the credential or its ID.
+  const visibleConfiguration = await page.locator("body").textContent();
+  assert.equal(visibleConfiguration.includes(secret.id), false);
+  assert.equal(visibleConfiguration.includes("never-visible-model-secret"), false);
+  await page.getByText("OpenAI API key · Secret configured", { exact: true }).waitFor();
 
   const savedConfiguration = await fixture.request(
     "GET",
@@ -338,6 +345,9 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
     effect: "deny",
   });
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
+  const savedSecretInput = page.getByLabel("OpenAI API key Secret ID");
+  assert.equal(await savedSecretInput.getAttribute("type"), "password");
+  assert.equal(await savedSecretInput.inputValue(), secret.id);
   const deniedBinding = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/${created.data.id}` &&
@@ -732,9 +742,11 @@ test("Agent detail preserves admitted revision history while draft edits change 
   const current = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
   assert.equal(current.data.harnessAuth, null);
   await page.getByLabel("AgentRevision").selectOption(first.revision.id);
-  await page
-    .getByText(`OpenAI API key · ${agent.harnessAuth.source.id}`, { exact: true })
-    .waitFor();
+  await page.getByText("OpenAI API key · Secret configured", { exact: true }).waitFor();
+  assert.equal(
+    (await page.locator("body").textContent()).includes(agent.harnessAuth.source.id),
+    false,
+  );
 });
 
 test("Agent detail opens native admin UI only after real API access checks pass", async (t) => {
@@ -1118,6 +1130,15 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await page.getByLabel("Agent name", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("Preset template").count(), 0);
   assert.equal(await page.getByLabel("Variable: marker", { exact: true }).count(), 0);
+  const presetSecretInput = page.getByLabel("OpenAI API key Secret ID");
+  assert.equal(await presetSecretInput.getAttribute("type"), "password");
+  assert.equal(await presetSecretInput.inputValue(), secret.id);
+  assert.equal(
+    (await page.getByLabel("Configuration JSON", { exact: true }).inputValue()).includes(
+      "test-channel-token",
+    ),
+    false,
+  );
   assert.equal(await save.isEnabled(), true);
   const rendered = JSON.parse(
     await page.getByLabel("Configuration JSON", { exact: true }).inputValue(),
