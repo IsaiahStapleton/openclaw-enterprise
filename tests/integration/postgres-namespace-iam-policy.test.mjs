@@ -731,7 +731,7 @@ test(
           },
         ),
       ),
-      /Namespace Role Permissions/,
+      /managed Namespace Role permissions support only read/,
     );
     await assert.rejects(
       state.transact((unit) =>
