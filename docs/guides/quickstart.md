@@ -23,6 +23,28 @@ Run the commands below from the repository root on Linux or macOS. You need:
 You do not need a model credential to install the platform. Have an OpenAI API
 key available when you continue to [deploy your first Agent](first-agent.md).
 
+## Optional: use the published runtime
+
+On an amd64 or ARM64 Docker host, you can avoid the first runtime build by pulling the
+published image. Follow [Use published images](deploy/production-installation.md#use-published-images)
+for private GHCR access, authentication, and the `RUNTIME_IMAGE` digest export.
+Docker selects the matching Linux variant, including on Apple Silicon.
+
+Pull the pinned digest and tag it locally for k3d import:
+
+```bash
+: "${RUNTIME_IMAGE:?Set the published runtime digest reference}"
+docker pull "$RUNTIME_IMAGE"
+docker tag "$RUNTIME_IMAGE" openclaw-enterprise-runtime:published-e3b28515
+export OCC_KUBERNETES_RUNTIME_IMAGE='openclaw-enterprise-runtime:published-e3b28515'
+```
+
+Keep this export in the shell used for `dev up`. The CLI requires an explicitly
+selected runtime image to exist locally and imports it into k3d. OCC's controller
+and worker still build from the checkout's development target. To return to the
+default runtime selection, run `unset OCC_KUBERNETES_RUNTIME_IMAGE` before starting
+a new local stack.
+
 ## Start the local stack
 
 ```bash
@@ -30,8 +52,9 @@ pnpm cli:build
 OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev up
 ```
 
-The first start builds and imports the runtime image and can take several
-minutes. Wait for `OpenClaw Enterprise development stack is ready.` The
+The first start builds the development control plane and imports the runtime
+image, building the runtime too when no local image was selected or cached.
+This can take several minutes. Wait for `OpenClaw Enterprise development stack is ready.` The
 command prints the API URL, Installation ID, local service-key file, kubeconfig,
 Kubernetes context, and cleanup command. Keep this output; the service-key file
 is an administrator credential and must remain on your machine.
