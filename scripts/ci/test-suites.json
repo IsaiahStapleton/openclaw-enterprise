@@ -52,6 +52,9 @@
           "path": "tests/conformance/platform-state-memory.test.mjs"
         },
         {
+          "path": "tests/conformance/presets.test.mjs"
+        },
+        {
           "path": "tests/conformance/secret-gateway-delivery.test.mjs"
         },
         {
@@ -71,6 +74,9 @@
         },
         {
           "path": "tests/conformance/workspace-files.test.mjs"
+        },
+        {
+          "path": "tests/integration/presets-controller.test.mjs"
         },
         {
           "path": "tests/integration/bootstrap-output.test.mjs"
@@ -324,6 +330,13 @@
             "concurrent claims exclude one Namespace lifecycle and one Agent while distinct Agents progress",
             "a restarted queue recovers expired claims, fences old tokens, and persists exhausted failures",
             "batch stale recovery reports each expired claim once and writes one audit event per item"
+          ]
+        },
+        {
+          "path": "tests/integration/postgres-presets.test.mjs",
+          "expectedTests": [
+            "in-memory Presets preserve template copies, Namespace isolation, and deletion boundaries",
+            "PostgreSQL Presets survive reopening and enforce names, ownership, and Namespace deletion"
           ]
         },
         {

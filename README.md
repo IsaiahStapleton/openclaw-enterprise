@@ -19,6 +19,8 @@ You need Docker Engine with Compose or Podman with `podman-compose`, k3d, kubect
 
 After local setup, [deploy your first Agent](docs/guides/first-agent.md) and send it a model request. You need an OpenAI API key with access to the [default model or your selected override](docs/guides/first-agent.md#before-you-start) for that step. If you installed on an existing cluster, [deploy and verify an Agent on that installation](docs/guides/deploy/production-agents.md).
 
+Reuse settings with [Agent Presets](docs/guides/topics/agent-presets.md), then fill variables and review the copied draft in the console.
+
 ## Develop
 
 Follow [Make your first platform change](docs/contributing/first-change.md) for
