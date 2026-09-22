@@ -34,7 +34,6 @@ function fixture(t) {
     HOME: join(root, "home"),
     OPENCLAW_STATE_DIR: join(root, "state"),
     OPENCLAW_WORKSPACE_DIR: workspace,
-    OPENCLAW_WORKSPACE_SETUP_ROOT: root,
     OPENCLAW_EXECUTABLE:
       executable ?? (image === undefined ? join(root, "absent-runtime.mjs") : "/app/openclaw.mjs"),
     OPENCLAW_WORKSPACE_SETUP_PATH: undefined,

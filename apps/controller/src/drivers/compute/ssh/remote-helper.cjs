@@ -630,7 +630,6 @@ async function initializeWorkspace(input, agentDir, owner) {
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_EXECUTABLE: input.runtime.openclawPath,
           OPENCLAW_WORKSPACE_DIR: workspace,
-          OPENCLAW_WORKSPACE_SETUP_ROOT: workspace,
           OPENCLAW_WORKSPACE_SETUP_PATH: undefined,
         },
         timeout: 60_000,
@@ -674,7 +673,6 @@ function renderUnit(input, agentDir, port, runtimeUser) {
       ? ""
       : `Environment=OPENCLAW_EXECUTABLE=${runtime.openclawPath}\n` +
         `Environment=OPENCLAW_WORKSPACE_DIR=${workspaceDirectory(input, agentDir)}\n` +
-        `Environment=OPENCLAW_WORKSPACE_SETUP_ROOT=${workspaceDirectory(input, agentDir)}\n` +
         `Environment=OPENCLAW_WORKSPACE_SETUP_PATH=${agentDir}/workspace-setup.json\n` +
         `ExecStartPre=${runtime.nodePath} ${agentDir}/workspace-setup.cjs\n`;
   return `[Unit]

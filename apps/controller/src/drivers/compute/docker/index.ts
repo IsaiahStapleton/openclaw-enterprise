@@ -650,7 +650,6 @@ ${WORKSPACE_SETUP_RUNTIME}`,
           "OPENCLAW_EXECUTABLE=/app/openclaw.mjs",
           "OPENCLAW_WORKSPACE_SETUP_PATH=/run/oce-workspace-setup.json",
           `OPENCLAW_WORKSPACE_DIR=${workspace}`,
-          `OPENCLAW_WORKSPACE_SETUP_ROOT=${workspace}`,
         ],
         Labels: { ...this.ownershipMetadata(ownership), [ROLE_LABEL]: "workspace-setup" },
         HostConfig: {

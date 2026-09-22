@@ -5952,7 +5952,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
           { name: "HOME", value: "/home/node" },
           { name: "OPENCLAW_STATE_DIR", value: "/home/node/.openclaw" },
           { name: "OPENCLAW_WORKSPACE_SETUP_PATH", value: "/run/workspace-setup/setup.json" },
-          { name: "OPENCLAW_WORKSPACE_SETUP_ROOT", value: workspace },
           { name: "OPENCLAW_WORKSPACE_DIR", value: workspace },
           { name: "OPENCLAW_EXECUTABLE", value: "/app/openclaw.mjs" },
           ...variables.filter(({ name }) => name === "OPENCLAW_CONFIG_PATH"),

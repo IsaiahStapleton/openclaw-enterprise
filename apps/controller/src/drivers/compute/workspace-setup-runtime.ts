@@ -101,10 +101,7 @@ function main() {
       Object.entries(files).some(([name, value]) => !names.includes(name) || typeof value !== "string" ||
         !value.isWellFormed() || value.includes("\0") || Buffer.byteLength(value) > 16384)) fail();
   const workspace = process.env.OPENCLAW_WORKSPACE_DIR;
-  const root = process.env.OPENCLAW_WORKSPACE_SETUP_ROOT ?? workspace;
-  if (!workspace || !root || !path.isAbsolute(workspace) || !path.isAbsolute(root) ||
-      path.resolve(workspace) !== workspace || path.resolve(root) !== root ||
-      (workspace !== root && !workspace.startsWith(root + path.sep))) fail();
+  if (!workspace || !path.isAbsolute(workspace) || path.resolve(workspace) !== workspace) fail();
   directoryChain(workspace);
   const markerPath = path.join(workspace, markerName);
   const identity = { id: setup.id, namespaceId: setup.namespaceId, agentId: setup.agentId,
@@ -196,8 +193,7 @@ export function workspaceSetupVerifier(
       ["-e", ${JSON.stringify(WORKSPACE_SETUP_RUNTIME)}], {
         input: ${JSON.stringify(JSON.stringify(identity))},
         env: { ...process.env, OPENCLAW_WORKSPACE_SETUP_PATH: undefined,
-          OPENCLAW_WORKSPACE_DIR: ${JSON.stringify(workspace)},
-          OPENCLAW_WORKSPACE_SETUP_ROOT: ${JSON.stringify(workspace)} },
+          OPENCLAW_WORKSPACE_DIR: ${JSON.stringify(workspace)} },
         stdio: ["pipe", "pipe", "pipe"], timeout: 10000, maxBuffer: 4096,
       });
     if (verification.error || verification.status !== 0) {
