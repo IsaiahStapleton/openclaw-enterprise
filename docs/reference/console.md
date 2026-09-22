@@ -108,8 +108,11 @@ automatic replay. **Disable Slack** and **Disable Microsoft Teams** edit only th
 draft. They do not disable access, stop execution, or change an admitted
 revision.
 
-Slack editing preserves existing per-channel user restrictions. **Allowed user
-IDs** controls the direct-message allowlist. Slack Socket Mode uses fixed
+Slack editing preserves existing direct-message and channel policies, including
+pairing, open, disabled, and omitted policies. It also preserves per-channel user
+restrictions. New Slack configurations use allowlist policies. **Allowed user
+IDs** edits `allowFrom`; the existing policy determines how those entries affect
+access. The editor does not change the policy when saving channel settings. Slack Socket Mode uses fixed
 unresolved references to `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`; Microsoft
 Teams uses application ID, tenant ID, require-mention, and `MSTEAMS_APP_PASSWORD`.
 Both integrations require dedicated execution and Kubernetes runtime projection.

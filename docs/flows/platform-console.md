@@ -158,6 +158,12 @@ Secret values for these views.
 
 [Console Agent editing and runtime requests](platform-console/agent-editing.md) traces draft/revision rendering, channel changes, credential provisioning, and workspace reads/writes. Each request returns through the response-ordering checks below.
 
+`apps/controller/src/console/channels/slack.mjs:supportSlack` checks whether the
+channel editor can preserve the stored settings. Existing `dmPolicy` and
+`groupPolicy` values do not block editing. `updatedSlack` copies those values
+unchanged, including their absence, when saving channel IDs, allowed users, or
+mention settings. Only a new Slack configuration receives allowlist defaults.
+
 `apps/controller/src/console/agents/detail.mjs:renderAgentDetail` registers a
 handler for tab-only navigation with `console.mjs:loadPage`. For the same Agent,
 Namespace, and revision, tab clicks and browser history update the URL and replace
@@ -233,6 +239,8 @@ refreshes and inspects the Agent and revision history.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-22 04:11: Preserve existing Slack policies while editing channel settings. (01a0b1f2-e696-7232-a439-5b668154bcd9 - f3dbdd41)
 
 - 2026-09-22 04:07: Keep Agent tab navigation within the content panel and preserve page state and browser history. (01a0b1f2-e696-7232-a439-5b668154bcd9 - f3dbdd41)
 

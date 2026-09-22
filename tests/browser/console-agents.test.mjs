@@ -1221,6 +1221,70 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   );
 });
 
+for (const [dmPolicy, groupPolicy] of [
+  ["pairing", "allowlist"],
+  ["open", "open"],
+  ["disabled", "disabled"],
+  [undefined, undefined],
+]) {
+  test(`Slack channel editing preserves ${dmPolicy ?? "omitted"} DM and ${groupPolicy ?? "omitted"} group policies`, async (t) => {
+    const fixture = await createConsoleAppFixture(t);
+    await fixture.bootstrap();
+    const namespace = await fixture.createNamespace("Slack policy editing", { ready: true });
+    const slack = {
+      enabled: true,
+      mode: "socket",
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      ...(dmPolicy === undefined ? {} : { dmPolicy }),
+      ...(groupPolicy === undefined ? {} : { groupPolicy }),
+      allowFrom: dmPolicy === "open" ? ["*"] : ["UKEEP123"],
+      channels: { CKEEP123: { requireMention: true, users: ["UKEEP123"] } },
+    };
+    const agent = await fixture.createAgent(
+      namespace.id,
+      "Slack policy Agent",
+      nativeValues("policy-preservation", {
+        harnessId: "codex",
+        channels: { slack },
+      }),
+      { executionMode: "dedicated" },
+    );
+    const { page } = await newPage(t, fixture);
+    const url = detailUrl(fixture, namespace.id, agent.id, "draft", "channels");
+    await login(page, fixture, url.pathname + url.search);
+    const edit = page.getByRole("button", { name: "Edit Slack", exact: true });
+    await edit.waitFor();
+    assert.equal(await edit.isEnabled(), true);
+    await edit.click();
+    await page.getByLabel("Slack channel IDs").fill("CKEEP123, CNEW123");
+    await page.getByLabel("Require a mention", { exact: true }).uncheck();
+    const saved = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PATCH" &&
+        response.url().endsWith(`/configurations/${agent.configurationId}`),
+    );
+    await page.getByRole("button", { name: "Save configuration", exact: true }).click();
+    assert.equal((await saved).status(), 200);
+    const configuration = await fixture.request(
+      "GET",
+      `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+    );
+    // Editing channels must neither widen nor narrow DM/group access, including implicit defaults.
+    assert.deepEqual(configuration.data.values.channels.slack, {
+      ...slack,
+      channels: {
+        CKEEP123: { requireMention: false, users: ["UKEEP123"] },
+        CNEW123: { requireMention: false },
+      },
+    });
+    assert.equal(
+      configuration.data.values.plugins.entries.knowledge.config.marker,
+      "policy-preservation",
+    );
+  });
+}
+
 test("Agent tabs replace only their content and preserve surrounding panels and history", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
