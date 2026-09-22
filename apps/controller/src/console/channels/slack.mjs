@@ -44,20 +44,6 @@ function supportSlack(values) {
       config,
     };
   }
-  if (config.dmPolicy !== undefined && config.dmPolicy !== "allowlist") {
-    return {
-      supported: false,
-      reason: "Slack direct message policy is not the supported allowlist policy.",
-      config,
-    };
-  }
-  if (config.groupPolicy !== undefined && config.groupPolicy !== "allowlist") {
-    return {
-      supported: false,
-      reason: "Slack channel group policy is not the supported allowlist policy.",
-      config,
-    };
-  }
   if (config.mode !== undefined && config.mode !== "socket") {
     return {
       supported: false,
@@ -142,14 +128,7 @@ function updatedSlack(values, body) {
     allowFrom: users,
     channels,
   };
-  if (isRecord(existingConfig)) {
-    if (current.dmPolicy !== undefined) {
-      config.dmPolicy = current.dmPolicy;
-    }
-    if (current.groupPolicy !== undefined) {
-      config.groupPolicy = current.groupPolicy;
-    }
-  } else {
+  if (!isRecord(existingConfig)) {
     config.dmPolicy = "allowlist";
     config.groupPolicy = "allowlist";
   }
@@ -161,6 +140,11 @@ function appendFields(body, config) {
   const users = uniqueList(Array.isArray(config.allowFrom) ? config.allowFrom : []);
   const mention = Object.values(config.channels ?? {})[0]?.requireMention ?? true;
   body.append(
+    element(
+      "p",
+      { className: "hint" },
+      "Saving preserves existing direct-message and channel access policies.",
+    ),
     field(
       "Slack channel IDs",
       input("slack-channel-ids", channelIds.join(", ")),
@@ -200,7 +184,7 @@ function summary(config, status) {
 export const slack = {
   id: "slack",
   name: "Slack",
-  description: "Socket Mode with selected channels and user allowlists.",
+  description: "Socket Mode with channel and user settings.",
   setup: "Use the Agent Credentials tab after creation for SLACK_APP_TOKEN and SLACK_BOT_TOKEN.",
   plugin: "slack",
   support: supportSlack,
