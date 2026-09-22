@@ -11,9 +11,9 @@ OpenShell version this integration targets,
 Kubernetes Secret-backed environment entries or projected workload identity a
 dedicated Codex Agent requires. The Enterprise Driver rejects deployment rather
 than starting an incorrectly credentialed Harness. The real integration keeps
-that rejection proof and has a separate CI-only compatibility bridge for a real
-in-Sandbox model turn. That bridge is not a supported deployment path. Use
-Kubernetes Compute without OpenShell when you need to run Agents.
+that rejection proof and has a separate verification-only compatibility bridge
+for a real in-Sandbox model turn. That bridge is not a supported deployment
+path. Use Kubernetes Compute without OpenShell when you need to run Agents.
 
 Embedded OpenClaw also fails when OpenShell is selected; the integration is
 designed only for dedicated Codex. See the [upstream requirements](#current-upstream-preconditions)

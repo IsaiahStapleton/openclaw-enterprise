@@ -4,6 +4,65 @@ Verify provider-owned Codex execution and OpenShell filesystem and network
 enforcement. Prepare [credentials](README.md#requirements-and-credentials)
 and use the suite-specific infrastructure below.
 
+## Start a reusable model-test environment
+
+Use the [local Kubernetes OpenShell profile](../guides/deploy/local-kubernetes-development.md#start-the-openshell-fail-closed-profile)
+for an ordinary OpenClaw Enterprise development stack. That profile starts the
+real control plane, Gateway, and operator Workspaces and exercises the supported
+fail-closed Agent path.
+
+To repeat the credentialed model and containment experiment, use the test
+launcher from the repository root to prepare a separate, private OpenShell
+`v0.1.0-pre.7` environment:
+
+```sh
+./scripts/openshell up
+```
+
+The launcher detects Docker or Podman, builds the current runtime image, creates
+an owned loopback-only k3d cluster and migrated PostgreSQL database, downloads
+and verifies the pinned OpenShell prerequisites, imports immutable images, and
+leaves the environment running. You need Node.js 24 or newer with Corepack,
+k3d, Helm, OpenSSL, and a running Docker daemon or Podman API socket. The helper
+downloads its matched kubectl binary without changing your default kubeconfig
+or context.
+
+Export `OPENAI_API_KEY`, enter it at the interactive prompt, or point
+`OCC_OPENSHELL_ENV_FILE` to an absolute mode-`0600` dotenv file that contains
+the key. The helper passes the credential only to its child processes; it does
+not write the key into its prepared state. `OCC_TEST_OPENAI_MODEL` defaults to
+`gpt-6-astra`.
+
+Run the real model and containment proof against the prepared environment:
+
+```sh
+./scripts/openshell test
+```
+
+The command uses the verification-only compatibility bridge described below.
+It leaves the cluster, database service, and imported images available for
+repeat runs and debugging. Inspect non-secret state with
+`./scripts/openshell info`, or print only the kubeconfig path or context with
+`./scripts/openshell get kubeconfig` and `./scripts/openshell get context`.
+
+Remove the owned environment when finished:
+
+```sh
+./scripts/openshell down
+```
+
+Cleanup permanently deletes this helper's cluster and test database. A partial
+setup remains recorded for safe cleanup; run `down` before retrying. Set the
+absolute `OCC_OPENSHELL_STATE_DIR` before every command to keep multiple
+checkouts separate. Set `OCC_OPENSHELL_CONTAINER_ENGINE=docker` or `podman` when
+automatic engine selection is ambiguous. If `k3d` on `PATH` is an inactive
+version-manager shim, set `OCC_OPENSHELL_K3D_BIN` to an absolute working
+executable. Use `OCC_OPENSHELL_COREPACK_BIN` for the same problem with corepack.
+
+This launcher does not start a supported production Installation or an
+interactive OCC Agent. Stock pre.7 still lacks the workload projections needed
+by the regular Agent path.
+
 ## OpenShell Sandbox
 
 This suite needs the owned OpenShell CI recipe: a disposable K3s v1.36.4 k3d

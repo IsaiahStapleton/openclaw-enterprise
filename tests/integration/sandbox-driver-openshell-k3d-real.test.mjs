@@ -1641,8 +1641,10 @@ async function assertDuplicateReconciliationDoesNotDuplicateOpenShell(topology) 
     "openclaw.dev/revision": redeployed.data.id,
     "openclaw.dev/workload-role": "agent",
   };
+  // The API can publish the new active revision before Kubernetes reconciliation updates the
+  // stable Agent Service. Wait at the routing boundary instead of sampling the old selector.
   const activeService = await waitFor(
-    `Agent Service routing to replacement revision ${redeployed.data.id}`,
+    `OpenShell Agent Service routing to replacement revision ${redeployed.data.id}`,
     async () => {
       const observed = await resource(
         "service",

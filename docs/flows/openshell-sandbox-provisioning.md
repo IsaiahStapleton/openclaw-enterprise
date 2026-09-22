@@ -153,6 +153,10 @@ Kubernetes Compute delete the Kubernetes namespace.
 
 ## Debugging and Verification
 
+- `./scripts/openshell test` prepares or reuses the owned pre.7 environment and
+  runs the verification-only compatibility path. `./scripts/openshell info`
+  reports its non-secret cluster state, and `./scripts/openshell down` removes
+  only resources recorded by that helper.
 - `node --test tests/integration/ci-openshell.test.mjs` checks bootstrap safety
   and immutable Helm image value rendering without selecting a real cluster.
 - `node --test tests/integration/sandbox-driver-startup.test.mjs` checks Driver
@@ -195,6 +199,7 @@ Kubernetes Compute delete the Kubernetes namespace.
 - 2026-09-23 01:52: Documented explicit managed/operator selection and Driver-owned workspace-chart reconciliation before operator Workspace creation. (authoring-run/dc7a0b75-945c-4091-8600-eb919ad138dd - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)
 - 2026-09-23 01:11: Documented operator workspace mode, deployment-paired Gateway ownership, and split Sandbox versus Namespace cleanup. (authoring-run/955359e5-5631-48e4-acc1-a5e32b9ade00 - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)
 - 2026-09-22 18:36: Documented namespace readiness polling and the project-chart development profile that proves the supported fail-closed path. (authoring-run/e7b89de2-9e58-4849-b078-791560cc5d58 - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)
+- 2026-09-21 15:56: Added the reusable local OpenShell verification launcher and clarified that the compatibility bridge is verification-only rather than CI-only. (authoring-run/b80fed05-5371-4bb4-90ec-601221ec9daf - 18c5be736414ec2a040b7fa17534299092e19166)
 - 2026-09-21 15:05: Documented binary-scoped pre.5 network policy and the CI-only bootstrap for Secret, plugin-runtime, and workload-identity files. (authoring-run/09cfddeb-9530-40a4-9247-b093d2270929 - 946f5b52587be2720e2a8d3aaf74712f89088d5f)
 - 2026-09-21 12:41: Documented own-key network enum validation, the rejected pre.5 `passthrough` alias, and explicit CI projection-mode selection. (authoring-run/180c9046-1da2-444d-ab1d-7d5cf04532e2 - b3a4c00462163edb81cb0588b59a6be8722ffe40)
 - 2026-09-21 08:56: Documented the `v0.1.0-pre.5` workspace-scoped provisioning, fail-closed projection boundary, and cleanup flow. (authoring-run/a16c607b-1ddd-4146-a4c7-05b900b65be7 - aa6dd7415d65ffba5fa40098b2142eb2a7d73df4)
