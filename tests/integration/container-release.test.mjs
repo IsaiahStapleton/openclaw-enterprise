@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   ghcrPackageName,
   github,
+  readArchivePlatforms,
   repository,
   publishWorkflow,
   validateCi,
@@ -10,6 +16,7 @@ import {
   validateEnvironment,
   validatePackage,
   validatePreparedImage,
+  verifyGhcr,
 } from "../../scripts/ci/container-release.mjs";
 
 const sourceSha = "a".repeat(40);
@@ -122,6 +129,91 @@ test("container context rejects malformed repository privacy in preparation and 
   }
 });
 
+test("post-marker metadata retries only 404 and remains bounded", async (t) => {
+  const token = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "test-token";
+  t.after(() => {
+    if (token === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = token;
+    }
+  });
+  // Accelerate only the backoff; the real client still interprets API responses.
+  t.mock.method(globalThis, "setTimeout", (resolve) => queueMicrotask(resolve));
+  const pkg = { name: "example", package_type: "container", visibility: "private" };
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () =>
+    ++calls === 1 ? new Response(null, { status: 404 }) : Response.json(pkg),
+  );
+  assert.deepEqual(
+    await github("orgs/openclaw/packages/container/example", { retryNotFound: true }),
+    pkg,
+  );
+  assert.equal(calls, 2);
+  for (const status of [401, 403, 404, 429, 500]) {
+    calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls += 1;
+      return new Response(null, { status });
+    });
+    await assert.rejects(
+      github("orgs/openclaw/packages/container/example", { retryNotFound: true }),
+      new RegExp(`\\(${status}\\)`),
+    );
+    assert.equal(calls, status === 404 ? 6 : 1);
+  }
+});
+
+test("GHCR publication accepts omitted repository metadata without approval and rejects unsafe packages", async (t) => {
+  const token = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "test-token";
+  t.after(() => {
+    if (token === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = token;
+    }
+  });
+  const image = "ghcr.io/openclaw/openclaw-enterprise-controller";
+  // GHCR can omit repository even for connected packages. The real validator
+  // must accept that response without consulting deployment review history.
+  let pkg = {
+    name: "openclaw-enterprise-controller",
+    package_type: "container",
+    visibility: "private",
+  };
+  t.mock.method(globalThis, "fetch", async (url) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith("/versions")) {
+      return Response.json([]);
+    }
+    if (path.endsWith("/packages/container/openclaw-enterprise-controller")) {
+      return Response.json(pkg);
+    }
+    throw new Error(`Unexpected metadata request: ${path}`);
+  });
+  await verifyGhcr(image, digest, `sha-${sourceSha}`);
+  pkg.repository = null;
+  await verifyGhcr(image, digest, `sha-${sourceSha}`);
+  for (const patch of [
+    { visibility: "public" },
+    { visibility: undefined },
+    { name: "other" },
+    { repository: { ...repo, full_name: "openclaw/other" } },
+    { repository: { ...repo, private: false } },
+    { repository: {} },
+  ]) {
+    const original = pkg;
+    pkg = { ...pkg, ...patch };
+    await assert.rejects(verifyGhcr(image, digest, `sha-${sourceSha}`));
+    pkg = original;
+  }
+  // Explicit correct repository metadata remains valid.
+  pkg.repository = repo;
+  await verifyGhcr(image, digest, `sha-${sourceSha}`);
+});
+
 test("container release requires exact successful CI identity and its aggregate job", () => {
   // Shapes follow the Actions workflow, workflow-run, and attempt-jobs REST responses.
   const workflow = { id: 123, path: ".github/workflows/ci.yml", state: "active" };
@@ -160,17 +252,11 @@ test("container release requires exact successful CI identity and its aggregate 
   }
 });
 
-test("container publication rejects unprotected environments and public or unrelated packages", () => {
+test("container publication requires main-only environments and private matching packages", () => {
   const environment = {
     name: "container-publish",
     can_admins_bypass: false,
-    protection_rules: [
-      {
-        type: "required_reviewers",
-        prevent_self_review: true,
-        reviewers: [{ type: "Team", reviewer: { id: 1 } }],
-      },
-    ],
+    protection_rules: [],
     deployment_branch_policy: { custom_branch_policies: true, protected_branches: false },
   };
   const policies = [{ name: "main", type: "branch" }];
@@ -179,7 +265,6 @@ test("container publication rejects unprotected environments and public or unrel
   assert.throws(() =>
     validateEnvironment({ ...environment, can_admins_bypass: undefined }, policies),
   );
-  assert.throws(() => validateEnvironment({ ...environment, protection_rules: [] }, policies));
   assert.throws(() => validateEnvironment(environment, [{ name: "*", type: "branch" }]));
   assert.throws(() => validateEnvironment(environment, [{ name: "main", type: "tag" }]));
   const image = "ghcr.io/openclaw/openclaw-enterprise/controller";
@@ -190,6 +275,17 @@ test("container publication rejects unprotected environments and public or unrel
     repository: repo,
   };
   validatePackage(pkg, image);
+  // Missing linkage is allowed explicitly; reported conflicting linkage still fails.
+  for (const repository of [undefined, null]) {
+    const unreported = { ...pkg, repository };
+    assert.throws(() => validatePackage(unreported, image));
+    assert.equal(validatePackage(unreported, image, { allowMissingRepository: true }), false);
+    assert.throws(() =>
+      validatePackage({ ...unreported, visibility: "public" }, image, {
+        allowMissingRepository: true,
+      }),
+    );
+  }
   assert.throws(() => validatePackage({ ...pkg, visibility: "public" }, image));
   assert.throws(() => validatePackage({ ...pkg, repository: { ...repo, private: false } }, image));
   assert.throws(() =>
@@ -218,11 +314,152 @@ test("prepared OCI metadata cannot cross source, image, attempt, CI or base-imag
     nodeBaseImage: `docker.io/library/node:24-bookworm@${digest}`,
     image: "controller",
   };
-  const metadata = { ...expected, platform: "linux/amd64", digest, archiveSha256: "c".repeat(64) };
+  const metadata = {
+    ...expected,
+    platforms: ["linux/amd64", "linux/arm64"],
+    digest,
+    archiveSha256: "c".repeat(64),
+  };
   validatePreparedImage(metadata, expected);
   for (const key of Object.keys(expected)) {
     assert.throws(() => validatePreparedImage({ ...metadata, [key]: "different" }, expected));
   }
   assert.throws(() => validatePreparedImage({ ...metadata, digest: "latest" }, expected));
-  assert.throws(() => validatePreparedImage({ ...metadata, platform: "linux/arm64" }, expected));
+  assert.throws(() => validatePreparedImage({ ...metadata, platforms: ["linux/amd64"] }, expected));
+  assert.throws(() => validatePreparedImage({ ...metadata, platforms: ["linux/arm64"] }, expected));
+  assert.throws(() =>
+    validatePreparedImage({ ...metadata, platforms: ["linux/amd64", "linux/amd64"] }, expected),
+  );
+});
+
+test("OCI archive validation binds both platforms to their real manifest and config blobs", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "enterprise-oci-platforms-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(join(directory, "blobs/sha256"), { recursive: true });
+  async function blob(value) {
+    const bytes = JSON.stringify(value);
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    await writeFile(join(directory, "blobs/sha256", hash), bytes);
+    return { digest: `sha256:${hash}`, size: Buffer.byteLength(bytes) };
+  }
+  const manifests = [];
+  const configs = [];
+  // These are actual OCI scratch-image configs/manifests in a tar archive.
+  // No replacement tar, Docker, or registry implementation decides the outcome.
+  for (const architecture of ["amd64", "arm64"]) {
+    const config = await blob({
+      architecture,
+      os: "linux",
+      config: {},
+      rootfs: { type: "layers", diff_ids: [] },
+    });
+    configs.push(config);
+    const manifest = await blob({
+      schemaVersion: 2,
+      mediaType: "application/vnd.oci.image.manifest.v1+json",
+      config: { mediaType: "application/vnd.oci.image.config.v1+json", ...config },
+      layers: [],
+    });
+    manifests.push({
+      mediaType: "application/vnd.oci.image.manifest.v1+json",
+      ...manifest,
+      platform: { os: "linux", architecture },
+    });
+  }
+  async function archive(entries) {
+    const index = {
+      schemaVersion: 2,
+      mediaType: "application/vnd.oci.image.index.v1+json",
+      manifests: entries,
+    };
+    const descriptor = await blob(index);
+    await writeFile(
+      join(directory, "index.json"),
+      JSON.stringify({
+        ...index,
+        manifests: [{ mediaType: index.mediaType, ...descriptor }],
+      }),
+    );
+    await writeFile(join(directory, "oci-layout"), '{"imageLayoutVersion":"1.0.0"}');
+    const path = join(directory, "image.tar");
+    execFileSync("tar", ["-cf", path, "-C", directory, "blobs", "index.json", "oci-layout"]);
+    return [path, descriptor.digest];
+  }
+  assert.deepEqual(
+    readArchivePlatforms(...(await archive([...manifests].reverse()))),
+    manifests.map((manifest, index) => ({
+      platform: `linux/${manifest.platform.architecture}`,
+      digest: manifest.digest,
+      configDigest: configs[index].digest,
+    })),
+  );
+  for (const invalid of [
+    [manifests[0]],
+    [manifests[1]],
+    [manifests[0], manifests[0]],
+    [manifests[0], { ...manifests[1], platform: { os: "linux", architecture: "s390x" } }],
+    [manifests[0], { ...manifests[1], platform: { os: "linux", architecture: "amd64" } }],
+    [
+      manifests[0],
+      { ...manifests[1], platform: { os: "linux", architecture: "arm64", variant: "v9" } },
+    ],
+  ]) {
+    const input = await archive(invalid);
+    assert.throws(() => readArchivePlatforms(...input));
+  }
+  // Replacing an architecture's blob without updating its digest must fail.
+  await writeFile(join(directory, "blobs/sha256", configs[1].digest.slice(7)), "{}");
+  const corrupt = await archive(manifests);
+  assert.throws(() => readArchivePlatforms(...corrupt));
+});
+
+test("metadata GET transport retries are bounded, diagnostic and do not retry denials", async (t) => {
+  const token = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "test-token";
+  t.after(() => {
+    if (token === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = token;
+    }
+  });
+  t.mock.method(globalThis, "setTimeout", (resolve) => queueMicrotask(resolve));
+  const path = "orgs/openclaw/packages/container/example";
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new TypeError("fetch failed with a secret diagnostic");
+    }
+    if (calls === 2) {
+      return {
+        status: 200,
+        text: async () => {
+          throw new Error("body interrupted");
+        },
+      };
+    }
+    return Response.json({ visibility: "private" });
+  });
+  assert.deepEqual(await github(path), { visibility: "private" });
+  assert.equal(calls, 3);
+  calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    throw new TypeError("fetch failed with a secret diagnostic");
+  });
+  await assert.rejects(github(path), (error) => {
+    assert.equal(error.message, `GitHub GET ${path} transport failed after 3 attempts.`);
+    return true;
+  });
+  assert.equal(calls, 3);
+  for (const status of [401, 403, 404, 429, 500]) {
+    calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls += 1;
+      return new Response(null, { status });
+    });
+    await assert.rejects(github(path), new RegExp(`\\(${status}\\)`));
+    assert.equal(calls, 1);
+  }
 });

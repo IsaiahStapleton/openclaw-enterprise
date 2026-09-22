@@ -47,10 +47,16 @@ credential does not prove a package is absent.
 Bootstrap runs only from trusted `main`, after exact-source successful main-push
 CI and environment approval. It builds a scratch image from a temporary directory
 containing only a fixed non-sensitive marker and repository labels. It never
-copies the checkout into an image. Existing destinations must already be private
-and linked to this repository; valid existing packages are left unchanged.
+copies the checkout into an image. Existing destinations must already be private;
+explicit repository metadata must match this private repository. Valid existing packages are left unchanged.
 An authenticated 404 permits a marker push only, followed by required private
-visibility and linkage verification. Other API failures stop the run. Bootstrap
+visibility and digest verification. Post-push metadata 404s receive five bounded
+retries; other API failures stop the run. GHCR can omit repository metadata, so
+marker bootstrap does not establish linkage. Before real-image publication or
+promotion, missing linkage metadata requires the independent environment
+reviewer's recorded confirmation of live package settings, bound to the package,
+repository, source, current run and attempt. The [operator procedure](../.github/containers.md#confirm-package-linkage)
+defines the evidence; explicit conflicting metadata always fails. Bootstrap
 never changes visibility, grants, or Enterprise source tags. Its unique
 `bootstrap-<run-id>-<attempt>` tag is not a deployable release.
 
@@ -87,8 +93,11 @@ the publication receipt's digest references, not the bootstrap tag or chart vers
 
 Two-image publication is not atomic. On partial failure, inspect both destinations
 before retrying. Preserve already-published source tags; a fresh build may resolve
-different runtime dependencies and must fail on a digest conflict. Fix the cause
-and use a newly reviewed source when necessary. Never relax privacy or approval
+different runtime dependencies and must fail on a digest conflict. Use the protected [recovery workflow](../.github/containers.md#recover-a-partial-publication)
+to resume from the original retained archives after fixing the cause. Recovery
+separately verifies current workflow CI and original image CI, preserves the
+producer seals, and requires a fresh independent approval. Expired archives
+cannot be rebuilt under an existing source tag with different bytes. Never relax privacy or approval
 checks to complete a release.
 
 ## Verification
@@ -96,7 +105,7 @@ checks to complete a release.
 | Required outcome                     | Proof                                                                                                                                          |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Correct source and approval          | Exact main CI URL and SHA; live environment metadata; independent approval record.                                                             |
-| Harmless bootstrap                   | Review temporary build context; hosted marker-only push; private linked package metadata for both destinations.                                |
+| Harmless bootstrap                   | Review temporary build context; hosted marker-only push; private package metadata and remote marker digests for both destinations.             |
 | Fail-closed bootstrap                | Gate tests reject public/wrong repositories, invalid packages, unsafe contexts, and API failures.                                              |
 | Prepared image identity              | Hosted startup smoke and sealed OCI/config digests from the same publication run.                                                              |
 | Successful first publication         | Publish job succeeds; receipt names both remote digest references and `linux/amd64`; authenticated digest inspection and pull where available. |
@@ -108,7 +117,12 @@ introduced the intentionally separate bootstrap prerequisite.
 prepared images but skipped publication. On 2026-09-21 the required publication
 environment was initially absent. It is now configured with `openclaw/maintainer`
 reviewers, self-review and administrator bypass disabled, only branch `main`, and
-the two destination variables above. No published-image digest is claimed here.
+the two destination variables above. Bootstrap run `35647474652` succeeded. Publication run `35648198492`, attempt 1,
+prepared and smoked both images from `4ec004dbefd25070ff1bdeb89cfb16d245296ac9`;
+controller transfer and remote digest verification completed before a metadata
+transport failure. Runtime remains unpublished and no final receipt exists.
+Retained artifacts `10661476204` and `10660634184` are the recovery inputs.
+The first complete publication remains unverified.
 Repository administration alone proves neither package access nor independent approval.
 
 ## Manual Notes
