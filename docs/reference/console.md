@@ -64,6 +64,11 @@ unsupported catalog or policy choices.
 
 ## Inspect detail, revisions, and channel drafts
 
+Switching between **Configuration**, **Channels**, **Credentials**, and **Workspace
+files** updates only the tab content. The surrounding Agent panels stay in place,
+and browser Back/Forward restores the selected tab. Password fields are cleared
+when leaving a tab. Use **Refresh** to reload the Agent and its Configuration.
+
 An Agent detail page has the saved draft and immutable AgentRevisions. The draft
 reads the current Configuration and is editable only through the supported
 channel editor and harness authentication controls. Choose **Operator-managed
