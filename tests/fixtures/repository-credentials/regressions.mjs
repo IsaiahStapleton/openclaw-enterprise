@@ -129,8 +129,19 @@ export function registerCredentialFixtureRegressions() {
               },
             }
           : input;
+      const posts = () =>
+        fixture.trace.filter((entry) => entry.method === "POST" && entry.target === `/${path}`)
+          .length;
+      const postsBefore = posts();
       fixture.disconnectAfterMutation("POST", `/${path}`);
       await assert.rejects(send({ method: "POST", path, body }));
+      assert.equal(posts() - postsBefore, 1, `${label} creation must dispatch exactly once`);
+      const resources = kind === "comment" ? fixture.comments : fixture[kind];
+      assert.equal(
+        [...resources.values()].filter((resource) => resource.body === marker).length,
+        1,
+        `${label} creation must be accepted exactly once before fixture cleanup`,
+      );
     }
     for (const action of cleanups.reverse()) {
       await action(AbortSignal.timeout(5000));

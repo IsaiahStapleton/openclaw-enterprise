@@ -1525,7 +1525,7 @@ async function prepareFile({ lane, file, statePath }) {
     }
     applyLaneEnv(name, env);
     const prepared = await prepareRepositoryCredentialsFile({
-      clientImage: env.REPOSITORY_CREDENTIALS_NODE_IMAGE,
+      clientImage: env.REPOSITORY_CREDENTIALS_CLIENT_IMAGE,
       execFile,
     });
     return { env: { ...env, ...prepared.env }, cleanup: prepared.cleanup };

@@ -1,0 +1,9 @@
+ARG SERVICE_IMAGE
+ARG CLIENT_IMAGE
+FROM ${SERVICE_IMAGE} AS service-artifacts
+FROM ${CLIENT_IMAGE}
+# Qualify the emitted service closure and delivered client toolchain together.
+# This image is test-only; it exposes no test clock in either delivered image.
+USER root
+COPY --from=service-artifacts /app/dist /app/dist
+ENTRYPOINT ["node"]

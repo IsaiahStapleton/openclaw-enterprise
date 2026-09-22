@@ -1,15 +1,23 @@
 # Use the repository credential service
 
-Build the service and admit a session to give an ordinary container Git and
-selected GitHub CLI access to one repository. The container receives a gateway
+Use the [private Kubernetes production installation](deploy.md#production)
+for OCE Agents. Keep the repository credential gateway reachable only by its
+approved clients, with enforced NetworkPolicies and HTTPS on port 443. A
+Kubernetes `.svc` hostname or ClusterIP Service alone does not establish
+isolation: inspect operator-added forwarding, Ingress, load balancers and other
+exposure, and verify effective network-policy enforcement.
+
+The standalone procedure below builds the service and admits a session to give
+an ordinary container Git and selected GitHub CLI access to one repository.
+Its operator must supply private networking and access controls. The container receives a gateway
 bearer; GitHub App keys and installation tokens stay in the service. Review the
 [profiles and lifecycle](../reference/repository-credentials.md) before selecting
 `git-full`.
 
 ## Build and validate
 
-From a checkout with the repository's Node 24 and pinned pnpm dependencies
-prepared, compile the workspace and assemble the credential artifacts:
+From the repository root with Node 24 and the pinned pnpm dependencies prepared,
+build the emitted service and client artifacts:
 
 ```sh
 pnpm credentials:build
@@ -18,11 +26,13 @@ pnpm credentials:check-config /absolute/path/service.json
 
 The check reads protected configuration, validates the RSA key and TLS inputs,
 and prints a safe configuration summary. It does not start listeners or call
-GitHub. The service artifact is emitted under `.build/repository-credentials/service`;
-the client artifact is under `.build/repository-credentials/client`. Both contain
-only their required JavaScript modules and use Node built-ins without runtime
-`node_modules`. Source ownership under the controller does not combine the
-credential process with the control-plane process.
+GitHub. The builder writes separate `.build/repository-credentials/service` and
+`.build/repository-credentials/client` directories. Each contains its own manifest
+and emitted runtime closure, using Node built-ins without runtime `node_modules`.
+Source lives under the controller tree; the credential service still runs as a
+separate process and owns the App signing key. The client closure also includes the
+native Git configuration preparer and GitHub CLI router used by platform
+integration; the standalone commands below use the session launcher.
 
 For `invalid-configuration`, inspect the file and every directory in its absolute
 path. Use root or service-user ownership, private configuration/key files, and
@@ -34,9 +44,11 @@ in the [reference](../reference/repository-credentials.md#configuration).
 Create the protected configuration shown in the
 [reference](../reference/repository-credentials.md#configuration). Use a GitHub
 App installed on the selected repository with the permissions for your chosen
-profile. Configure public DNS and a TLS certificate covering the gateway
-hostname. GitHub CLI requires HTTPS port 443 on that hostname. Provision a
-private control directory owned by the service/operator:
+profile. Choose a gateway hostname resolvable by the intended clients and a
+matching TLS certificate trusted by those clients; public DNS is not required.
+Set `gateway.publicOrigin` to that HTTPS origin. GitHub CLI requires port 443
+on that hostname. Restrict gateway access to the approved clients before starting
+the listener. Provision a private control directory owned by the service/operator:
 
 ```sh
 install -d -m 700 /absolute/path/control /absolute/path/sessions
@@ -78,8 +90,8 @@ mode 0700. Bind-mount only the selected session directory, never its host parent
 or sibling sessions. The client validates that directory beneath the protected
 container root.
 
-Use the emitted client launcher for each supported command. Set its absolute
-path before changing into the checkout so later commands use the same artifact:
+Use the emitted client launcher for each supported command. Its absolute path
+continues to work after changing into the cloned repository:
 
 ```sh
 credential_client=/absolute/path/checkout/.build/repository-credentials/client/dist/drivers/repo/github/credentials/client/launch.js
@@ -132,7 +144,8 @@ exact App permissions define supported access.
 
 ## Recover an admission
 
-Run operator commands from the OCE source checkout. If `open` loses its response, use the `credential-admission` ID printed to
+Run the operator commands from the checkout root. If `open` loses its response,
+use the `credential-admission` ID printed to
 stderr before dispatch. Repeat the command with the same duration and profile,
 adding `--admission-id`:
 
@@ -152,6 +165,95 @@ without `--admission-id`, choosing a new output directory if needed.
 Do not generate replacement admissions blindly after an ambiguous response.
 An unknown stale ID or a service restart cannot recover the original session;
 see the [ephemeral-session limits](../reference/repository-credentials.md#sessions-and-closure).
+
+## Container images
+
+From the checkout root, rebuild the artifacts from the source you intend to run,
+then build the two images:
+
+```sh
+pnpm credentials:build
+pnpm credentials:image
+pnpm credentials:client-image
+```
+
+The image scripts use the following Dockerfiles and separate emitted contexts:
+
+```sh
+docker build -f deploy/runtime/repository-credentials/Dockerfile \
+  -t repository-credentials:local .build/repository-credentials/service
+docker build -f deploy/runtime/repository-credentials/Dockerfile.client \
+  -t repository-credentials-client:local .build/repository-credentials/client
+docker image inspect --format '{{.Id}} {{json .Config.Entrypoint}}' \
+  repository-credentials:local repository-credentials-client:local
+```
+
+The service entrypoint is `node /app/dist/repository-credentials.js`; the client
+entrypoint is
+`node /app/dist/drivers/repo/github/credentials/client/launch.js`. Record the
+source commit, working-tree changes and immutable image IDs with verification
+results; a reused tag alone does not identify the tested source.
+
+If build-time HTTPS downloads require an additional trusted CA, optionally pass
+a PEM CA bundle through a BuildKit secret:
+
+```sh
+docker build --secret id=build-ca,src=/absolute/path/build-ca-bundle.pem \
+  -f deploy/runtime/repository-credentials/Dockerfile.client \
+  -t repository-credentials-client:local .build/repository-credentials/client
+```
+
+The secret supplies curl trust for that download step and is not stored in the
+image. Without it, curl uses the image's default CA trust. Runtime gateway trust
+still comes from the selected session configuration.
+
+Each Dockerfile copies only its artifact's manifest and emitted code. The service
+artifact excludes the client command modules; the client artifact excludes the
+signing, session and listener owners. The client image installs Git and checksum-verifies pinned `gh`
+2.100.0. Neither image includes service configuration, private keys, session
+files or a control socket. The client entrypoint takes `SESSION_DIRECTORY
+ git|gh ARGS...`.
+
+The optional `deploy/examples/repository-credentials/compose.yaml` maps port 443
+on an explicitly selected private host IPv4 address to the service's port 8443.
+Set `CREDENTIAL_SERVICE_PRIVATE_ADDRESS` to an address assigned to the host and
+reachable from the separate client container. Do not use a wildcard address or
+loopback: the client's loopback address refers to its own container. Before
+starting the service, enforce host/container-network access controls that allow
+only approved clients to reach this published port and the container listener.
+The example does not install those controls; a private address alone is not an
+access policy. Keep this endpoint off public forwarding, Ingress and load balancers.
+
+Set `CREDENTIAL_GATEWAY_HOSTNAME` to the hostname in `gateway.publicOrigin`, such
+as `credentials.example.internal`, with a matching trusted TLS certificate. The
+client's `extra_hosts` entry resolves it to the selected private host address so
+the client uses HTTPS port 443. Retain `gateway.listen` as `0.0.0.0:8443` inside
+the service container. Any approved host client also needs hostname resolution
+to the private address and the same CA trust; Compose supplies neither for the host.
+
+Supply `CREDENTIAL_SERVICE_UID`, `CREDENTIAL_SERVICE_GID`,
+`CREDENTIAL_SERVICE_INPUTS`, `CREDENTIAL_SERVICE_CONTROL`,
+`CREDENTIAL_CLIENT_SESSION`, and `CREDENTIAL_CLIENT_WORKSPACE`. Match the UID/GID
+to the protected files. Set `CREDENTIAL_CLIENT_SESSION` to only the selected
+directory, such as `/absolute/path/sessions/task`; it appears as `/session` in
+the client. Service/control mounts remain separate from client mounts, and the
+reference configuration's file paths match these mounts. After configuring
+private access and certificate trust, render the configuration and run the client:
+
+```sh
+docker compose -f deploy/examples/repository-credentials/compose.yaml config
+docker compose -f deploy/examples/repository-credentials/compose.yaml up -d --build service
+docker compose -f deploy/examples/repository-credentials/compose.yaml run --rm --build client \
+  /session git clone https://credentials.example.internal/example/project.git
+```
+
+Rendering Compose checks declared configuration. To verify delivered separation,
+inspect the running service/client mounts and client surfaces using the
+[container qualification procedure](../testing/repository-credentials.md#verify-separate-running-containers).
+Also verify approved client connectivity and denied access from an unapproved
+workload and the relevant external network, without copying a session bearer
+into reachability probes. Neither a Compose rendering nor image inspection
+establishes deployment isolation or live GitHub compatibility.
 
 ## Inspect and close
 

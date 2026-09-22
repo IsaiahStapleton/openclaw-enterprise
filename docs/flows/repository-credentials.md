@@ -8,12 +8,11 @@ last_updated_session: "authoring-run/7c8439bf-8351-451a-8e82-a947e909fc31"
 
 ## Overview
 
-A trusted operator admits a bounded session over a private Unix socket. The
-client uses its gateway bearer to send Git or selected GitHub API requests over
-HTTPS. One process owns credential acquisition, use and cleanup. This flow ends
-at upstream response delivery or categorized failure, and then local session
-closure with separately tracked cleanup. It describes source composition;
-container and live-provider qualification have separate evidence.
+A trusted operator admits a bounded session over a private Unix socket. Clients
+send Git or selected GitHub API requests over HTTPS using a gateway bearer. One
+process owns acquisition, forwarding and cleanup; local closure tracks cleanup
+separately. This flow describes source composition. Container and live-provider
+qualification require separate evidence.
 
 ## Entry Points
 
@@ -284,6 +283,26 @@ Failed construction custody also participates in shutdown drainage. Its
 pending obligation contributes to `pendingAuxiliary` without inventing a
 published or disposed session; disposal wakes the shutdown waiters.
 
+## Emitted packaging
+
+`scripts/build-repository-credentials.mjs` follows the credential entrypoints in
+the controller's emitted tree into separate service/client artifacts.
+
+| Artifact context                        | Runtime entrypoints beneath `dist/`                                                        |
+| --------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `.build/repository-credentials/service` | `repository-credentials.js`, `composition/repository-credentials/check-config.js`          |
+| `.build/repository-credentials/client`  | `drivers/repo/github/credentials/client/{launch,operator,git-helper,native-git,router}.js` |
+
+The Dockerfiles under `deploy/runtime/repository-credentials/` consume those
+separate contexts. `deploy/examples/repository-credentials/compose.yaml` keeps
+service inputs/control and client session/workspace mounts separate. The
+[operator guide](../guides/repository-credentials.md#container-images) owns image
+builds and entrypoint inspection. The
+[test guide](../testing/repository-credentials.md#record-each-evidence-boundary)
+distinguishes detached loading, combined test images, rendered mounts and
+observations of separate running containers; none alone establishes live-provider
+or platform integration.
+
 ## Debugging and Verification
 
 Run `pnpm credentials:build` and `pnpm credentials:check-config CONFIG_FILE` for
@@ -299,7 +318,6 @@ host, gateway DNS/SAN and port 443.
 The [test guide](../testing/repository-credentials.md) owns controlled upstream,
 client and alternate-adapter checks. Detached service/client artifacts prove
 module closure. Separate-container isolation and live-provider behavior require their own selected qualification.
-A structural flow check does not establish any of those runtime results.
 
 ## Related docs
 
@@ -326,6 +344,8 @@ A structural flow check does not establish any of those runtime results.
 - 2026-09-17 21:49: Document callable common lifecycle ownership. (source `2f8435756d0e82f0cc5205b009f5f1e0df692808`)
 
 - 2026-09-21 03:16: Document accompanying native Git preparation, manifest helper selection and gh-only routing. (authoring-run/2c944a97-e78b-44f1-86cf-ddfec705e0a6 - a0e96101ba7a7e111816103b0f6336f3b9dbeee8)
+
+- 2026-09-19 21:58: Align emitted Docker contexts and container qualification with the separate service and client artifacts. (public authoring-run/8a16053e-895f-4ea3-8114-5bbe459856a0 - 99d01c1759ef28fe1ec2e6e22496879e752b5cb5)
 
 - 2026-09-19 21:46: Reconcile transport and client ownership with accompanying detached service/client build and runtime checks. (public authoring-run/9feb5f57-7456-4831-8474-1fc7871d17c6 - bd3af4a7214c3e7b2142ef38183137786226cde9)
 

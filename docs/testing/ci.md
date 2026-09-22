@@ -25,7 +25,20 @@ are flagged for review and pages above 2,500 fail, except the approved single-pa
 and links must pass. Run `pnpm docs:check-length` for the word-count
 check alone.
 
-The PR workflow runs six lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, logging collector, and repository credentials. The `repository-credentials-container` lane builds a Node/Git/pinned-gh source toolchain image and runs the alternate-backend, real Git, and pinned-gh suites with controlled provider fixtures. It does not contact a live GitHub installation. The baseline lane owns source-boundary and detached-artifact checks; the [credential testing guide](repository-credentials.md) lists their commands and prerequisites. The source fixtures prove Git and selected API behavior; delivered-image and separate-container isolation qualification remain separate delivery gates. Full Integration runs through manual dispatch using the immutable event commit. All lanes require `main` except `k3d-model`, which also accepts a branch explicitly allowed by the `integration-model` environment. Environment gates apply only to lanes that declare an environment; `helper-timeout` and standalone `logging-collector` declare none. The ChatGPT `provider-account` lane keeps its main-only credential environment without per-run approval. Other model, routing, Slack, OpenShell, and additional OpenTelemetry lanes require separately approved environments. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
+The PR workflow runs six lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, logging collector, and repository credentials. The repository-credentials lane builds separate emitted service/client images and a combined qualification image, then selects controlled provider and separate-container cases; it does not contact a live GitHub installation. Full Integration runs through manual dispatch using the immutable event commit. All lanes require `main` except `k3d-model`, which also accepts a branch explicitly allowed by the `integration-model` environment. Environment gates apply only to lanes that declare an environment; `helper-timeout` and standalone `logging-collector` declare none. The ChatGPT `provider-account` lane keeps its main-only credential environment without per-run approval. Other model, routing, Slack, OpenShell, and additional OpenTelemetry lanes require separately approved environments. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
+
+The `repository-credentials-container` lane builds
+`.build/repository-credentials/{service,client}` using Dockerfiles under
+`deploy/runtime/repository-credentials/` and records source, `gh` version and
+three image IDs. It selects immutable IDs through
+`REPOSITORY_CREDENTIALS_TEST_IMAGE`, `REPOSITORY_CREDENTIALS_SERVICE_IMAGE` and
+`REPOSITORY_CREDENTIALS_CLIENT_IMAGE`; its real Git/gh fixtures also receive
+`REPOSITORY_CREDENTIALS_NODE_IMAGE` and the extracted, version-checked
+`REPOSITORY_CREDENTIALS_GH_BINARY`. The [credential test guide](repository-credentials.md)
+separates detached artifacts, the combined image, rendered Compose, running
+container isolation and authorized live proof. CI preparation and suite ownership
+alone establish no result: inspect executed cases and skips at the exact tested
+commit, including whether a pull-request run tested a merge commit.
 
 The Kubernetes fixture lane uses a server and worker node with shared test-owned
 local-path storage. Preparation registers and verifies the fixture image's digest
@@ -111,6 +124,16 @@ testing the real helper deadline.
 | `k3d-otel`         | [harness-topology-k3d-otel-real.test.mjs](../../tests/integration/harness-topology-k3d-otel-real.test.mjs)       | Actual OTLP logs emitted during embedded and dedicated runtime model turns.                                              |
 
 #### No GitHub workflow entrypoint
+
+[repository-credentials-live.test.mjs](../../tests/integration/repository-credentials-live.test.mjs)
+belongs to the `repository-credentials-live` lane, excluded from both workflow
+groups and Full Integration dispatch options. Follow the
+[repository credential qualification guide](repository-credentials.md) for the
+authorized disposable repository, protected service setup, and cleanup. The
+automatic container lane exercises controlled provider behavior and separate
+container credential isolation. A passing run establishes only its selected
+checks at its recorded source and images; it does not establish installed
+platform or live-provider qualification.
 
 [postgres-azure-workload-identity.test.mjs](../../tests/integration/postgres-azure-workload-identity.test.mjs)
 belongs to the `postgres-azure-workload-identity` lane, excluded from both the

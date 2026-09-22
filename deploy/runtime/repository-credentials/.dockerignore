@@ -1,0 +1,8 @@
+**
+!package.json
+!dist/
+!dist/**
+# Incremental compiler state and source maps are not runtime inputs.
+dist/**/*.tsbuildinfo
+dist/**/*.map
+dist/**/*.d.ts
