@@ -9,7 +9,16 @@ const credentialRoots = [
   "drivers/repo/github/credentials",
   "composition/repository-credentials",
 ];
-const requiredEntrypoints = ["composition/repository-credentials/check-config.ts"];
+const processEntrypoints = ["repository-credentials.ts", "repository-credentials.mjs"];
+const requiredEntrypoints = [
+  ...processEntrypoints,
+  "composition/repository-credentials/check-config.ts",
+  "drivers/repo/github/credentials/client/launch.ts",
+  "drivers/repo/github/credentials/client/operator.ts",
+  "drivers/repo/github/credentials/client/git-helper.ts",
+  "drivers/repo/github/credentials/client/native-git.ts",
+  "drivers/repo/github/credentials/client/router.ts",
+];
 const sourceExtensions = new Set([".ts", ".mts", ".cts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"]);
 
 // Adding an I/O owner or member requires security review; see the owning test guide.
@@ -18,6 +27,33 @@ const reviewedImports = {
     "node:crypto": ["KeyObject", "constants", "sign"],
   },
   "drivers/repo/github/credentials/provider-transport/request.ts": { "node:https": ["request"] },
+  "drivers/repo/github/credentials/client/commands.ts": { "node:child_process": ["spawnSync"] },
+  "drivers/repo/github/credentials/client/config.ts": {
+    "node:fs/promises": ["lstat", "mkdir", "mkdtemp", "open", "rename", "rm"],
+  },
+  "drivers/repo/github/credentials/client/launch.ts": {
+    "node:child_process": ["spawn"],
+  },
+  "drivers/repo/github/credentials/client/manifest.ts": {
+    "node:crypto": ["createHash"],
+    "node:fs/promises": ["lstat"],
+  },
+  "drivers/repo/github/credentials/client/native-git.ts": {
+    "node:fs": ["constants"],
+    "node:fs/promises": ["open"],
+  },
+  "drivers/repo/github/credentials/client/targets.ts": {
+    "node:child_process": ["spawnSync"],
+  },
+  "drivers/repo/github/credentials/client/operator.ts": {
+    "node:crypto": ["randomUUID"],
+    "node:fs/promises": ["readFile"],
+    "node:http": ["request"],
+  },
+  "drivers/repo/github/credentials/client/private-files.ts": {
+    "node:fs": ["constants"],
+    "node:fs/promises": ["lstat", "open"],
+  },
   "composition/repository-credentials/config.ts": {
     "node:crypto": ["createPrivateKey"],
     "node:tls": ["createSecureContext"],
@@ -27,9 +63,18 @@ const reviewedImports = {
     "node:fs/promises": ["lstat", "open"],
   },
   "drivers/repo/credentials/lifecycle.ts": { "node:crypto": ["randomUUID"] },
+  "drivers/repo/credentials/server.ts": {
+    "node:fs/promises": ["chmod", "lstat", "realpath", "unlink"],
+    "node:http": ["createServer"],
+    "node:https": ["createServer"],
+  },
   "drivers/repo/credentials/sessions.ts": {
     "node:crypto": ["createHash", "randomBytes", "randomUUID"],
   },
+  "drivers/repo/credentials/transport/request-headers.ts": {
+    "node:http": ["validateHeaderName", "validateHeaderValue"],
+  },
+  "drivers/repo/credentials/transport/upstream.ts": { "node:https": ["request"] },
 };
 const ordinaryBuiltins = new Set([
   "node:os",
@@ -43,6 +88,9 @@ const ordinaryBuiltins = new Set([
 const senderConsumers = {
   "drivers/repo/github/credentials/provider-transport/request.ts": {
     "drivers/repo/github/credentials/provider-transport.ts": ["sendProviderRequest"],
+  },
+  "drivers/repo/credentials/transport/upstream.ts": {
+    "drivers/repo/credentials/transport/agent.ts": ["createUpstreamSender"],
   },
 };
 const rawGlobals = new Set([
@@ -60,7 +108,39 @@ const rawGlobals = new Set([
 ]);
 const reviewedProcessMembers = {
   "composition/repository-credentials/check-config.ts": ["argv", "exitCode", "stderr", "stdout"],
+  "drivers/repo/github/credentials/client/environment.ts": ["env"],
+  "drivers/repo/github/credentials/client/git-helper.ts": [
+    "argv",
+    "env",
+    "exit",
+    "exitCode",
+    "stderr",
+    "stdin",
+    "stdout",
+  ],
+  "drivers/repo/github/credentials/client/launch.ts": [
+    "argv",
+    "env",
+    "exitCode",
+    "off",
+    "on",
+    "stderr",
+  ],
+  "drivers/repo/github/credentials/client/manifest.ts": ["getuid"],
+  "drivers/repo/github/credentials/client/native-git.ts": [
+    "argv",
+    "execPath",
+    "exitCode",
+    "stderr",
+  ],
+  "drivers/repo/github/credentials/client/router.ts": ["argv", "env", "exitCode", "stderr"],
+  "drivers/repo/github/credentials/client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
+  "drivers/repo/github/credentials/client/private-files.ts": ["getuid"],
   "composition/repository-credentials/protected-file.ts": ["getuid"],
+  "repository-credentials.ts": ["argv", "exitCode", "stderr", "stdout"],
+  "composition/repository-credentials/service.ts": ["exit", "once", "stderr", "stdout"],
+  "repository-credentials.mjs": ["exitCode", "stderr"],
+  "drivers/repo/credentials/server.ts": ["getuid"],
 };
 const runtimeTypeScript = new Set([
   "TSAsExpression",
@@ -161,6 +241,13 @@ function inspectSource(path, root, sources, ast) {
     if (specifier.startsWith(".")) {
       let target = slash(relative(root, resolve(dirname(path), specifier)));
       if (
+        file === "repository-credentials.mjs" &&
+        specifier === "../dist/repository-credentials.js" &&
+        names.join() === "main"
+      ) {
+        return;
+      }
+      if (
         target === ".." ||
         target.startsWith("../") ||
         target.includes("?") ||
@@ -178,6 +265,12 @@ function inspectSource(path, root, sources, ast) {
           return;
         }
         target = sourceTarget;
+      }
+      if (
+        file.startsWith("drivers/repo/github/credentials/client/") &&
+        !target.startsWith("drivers/repo/github/credentials/client/")
+      ) {
+        deny(node, `client runtime cannot load service owner ${target}`);
       }
       const consumers = senderConsumers[target];
       if (consumers && !names.every((binding) => consumers[file]?.includes(binding))) {
@@ -314,6 +407,21 @@ export async function verifyRepositoryCredentialBoundary(root = sourceRoot) {
       throw new Error(`Empty credential source root: ${directory}`);
     }
     files.push(...owned);
+  }
+  for (const entrypoint of processEntrypoints) {
+    const path = join(root, entrypoint);
+    const stat = await lstat(path).catch((error) => {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+      return undefined;
+    });
+    if (stat && (!stat.isFile() || stat.isSymbolicLink())) {
+      throw new Error(`Invalid credential entrypoint: ${entrypoint}`);
+    }
+    if (stat) {
+      files.push(path);
+    }
   }
   const sources = new Set(files.map((path) => slash(relative(root, path))));
   const failures = [];

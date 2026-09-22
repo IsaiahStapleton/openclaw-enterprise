@@ -7,6 +7,7 @@ import { parsers } from "prettier/plugins/babel";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const emittedRoot = await realpath(join(repositoryRoot, "apps/controller/dist"));
 const artifactRoot = join(repositoryRoot, ".build/repository-credentials");
+const clientRoot = join(emittedRoot, "drivers/repo/github/credentials/client");
 
 function contained(root, path) {
   const suffix = relative(root, path);
@@ -77,6 +78,7 @@ async function closure(name, entrypoints) {
     }
     if (
       !contained(emittedRoot, path) ||
+      (name === "client" && !contained(clientRoot, path)) ||
       !path.endsWith(".js") ||
       !(await lstat(path)).isFile() ||
       (await realpath(path)) !== path
@@ -102,9 +104,18 @@ async function closure(name, entrypoints) {
   return files;
 }
 
-// Validate the complete emitted check-config closure before replacing its artifact.
-// Source-only types and unrelated controller modules stay outside the runtime.
-const service = await closure("service", ["composition/repository-credentials/check-config.js"]);
+// Validate both closures before replacing either artifact. Source-only types and
+// unrelated controller modules stay outside these separate runtimes.
+const service = await closure("service", [
+  "repository-credentials.js",
+  "composition/repository-credentials/check-config.js",
+]);
+const client = await closure(
+  "client",
+  ["launch", "operator", "git-helper"].map(
+    (name) => `drivers/repo/github/credentials/client/${name}.js`,
+  ),
+);
 
 async function stage(name, files) {
   const destination = join(artifactRoot, name);
@@ -121,3 +132,4 @@ async function stage(name, files) {
 }
 
 await stage("service", service);
+await stage("client", client);

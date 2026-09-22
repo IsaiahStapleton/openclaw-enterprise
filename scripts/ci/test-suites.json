@@ -247,7 +247,31 @@
           "path": "tests/conformance/repository-credentials-lifecycle.test.mjs"
         },
         {
+          "path": "tests/conformance/repository-credentials-ownership-boundaries.test.mjs"
+        },
+        {
           "path": "tests/integration/repository-credentials-config.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-http.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-transport-bounds.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-server-timeout.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-control.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-shutdown.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-client-config.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-router.test.mjs"
         },
         {
           "path": "tests/integration/repository-credentials-package.test.mjs"
@@ -970,6 +994,26 @@
           "path": "tests/integration/plugin-driver-real.test.mjs"
         }
       ]
+    },
+    "repository-credentials-container": {
+      "requiredEnv": ["REPOSITORY_CREDENTIALS_NODE_IMAGE", "REPOSITORY_CREDENTIALS_GH_BINARY"],
+      "prepare": {
+        "requiresPreparedStateForFile": true
+      },
+      "files": [
+        {
+          "path": "tests/conformance/repository-credentials-backend-conformance.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-git.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-gh.test.mjs"
+        },
+        {
+          "path": "tests/integration/repository-credentials-native-paths.test.mjs"
+        }
+      ]
     }
   },
   "groups": {
@@ -978,7 +1022,8 @@
       "postgres",
       "images-packaging",
       "k3d-fixture-configuration",
-      "logging-collector"
+      "logging-collector",
+      "repository-credentials-container"
     ],
     "full": [
       "checks-baseline",
@@ -994,7 +1039,8 @@
       "openshell",
       "helper-timeout",
       "logging-collector",
-      "k3d-otel"
+      "k3d-otel",
+      "repository-credentials-container"
     ]
   }
 }

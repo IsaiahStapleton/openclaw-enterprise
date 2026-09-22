@@ -637,6 +637,10 @@
                         "label": "Local Tests"
                       },
                       {
+                        "page": "testing/fixtures-and-scenarios",
+                        "label": "Fixtures and Scenarios"
+                      },
+                      {
                         "page": "testing/ci",
                         "label": "CI"
                       },

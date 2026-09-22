@@ -1,10 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { verify } from "node:crypto";
+import { request } from "node:https";
 import { access } from "node:fs/promises";
 import { createGitHubPlanningFixture } from "../fixtures/repository-credentials/planning.mjs";
 import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
-import { temporaryDirectory } from "../fixtures/repository-credentials/process.mjs";
+import {
+  temporaryDirectory,
+  createTlsMaterial,
+} from "../fixtures/repository-credentials/process.mjs";
+import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
+import { createServiceConfiguration } from "../fixtures/repository-credentials/service.mjs";
+import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
+import { startGitSmartHttpFixture } from "../fixtures/repository-credentials/git.mjs";
+import {
+  createGitHubServiceFactory,
+  startServiceListeners,
+  writeSessionClientConfiguration,
+} from "../fixtures/repository-credentials/service-resources.mjs";
 import {
   requestHead as head,
   issueResponse,
@@ -526,3 +539,69 @@ test("a cleanup deadline is a failure and does not prevent remaining resource re
   // Late completion cannot replace the recorded cleanup deadline with success.
   assert.equal(resources.close(), closed);
 });
+
+test(
+  "service resource factories revoke acquired credentials before closing local upstreams",
+  { timeout: 15000 },
+  async (t) => {
+    const resources = createResourceScope();
+    t.after(() => resources.close());
+    const clock = createControlledClock();
+    const tls = await createTlsMaterial(resources);
+    const original = await createServiceConfiguration(resources);
+    const config = { ...original, gateway: { ...original.gateway, listen: "127.0.0.1:0" } };
+    const github = await startGitHubFixture(resources, { clock, tls });
+    const git = await startGitSmartHttpFixture(resources, { authorize: github.authorize, tls });
+    const factory = await createGitHubServiceFactory(resources, {
+      config,
+      clock,
+      privateKey: github.privateKey,
+      trustedEndpoints: { apiOrigin: github.origin, gitOrigin: git.origin, ca: tls.ca },
+    });
+    const { service, listeners } = await startServiceListeners(resources, {
+      config,
+      factory,
+      clock,
+      tls,
+      upstreamOrigins: [github.origin, git.origin],
+    });
+    const opened = service.open({ durationSeconds: 86400, profile: "git-full" });
+    const clientDirectory = await writeSessionClientConfiguration(resources, {
+      opened,
+      ca: tls.ca,
+    });
+    // Dial the owned loopback listener while retaining the public authority and TLS validation.
+    const response = await new Promise((resolve, reject) => {
+      const outgoing = request(
+        {
+          hostname: "127.0.0.1",
+          port: listeners.address.port,
+          path: "/repos/fixture/repository",
+          ca: tls.ca,
+          headers: { host: "credentials.example.test", authorization: `Bearer ${opened.bearer}` },
+          agent: false,
+        },
+        (incoming) => {
+          const chunks = [];
+          incoming.on("data", (chunk) => chunks.push(chunk));
+          incoming.once("error", reject);
+          incoming.once("end", () =>
+            resolve({ status: incoming.statusCode, body: Buffer.concat(chunks) }),
+          );
+        },
+      );
+      outgoing.setTimeout(3000, () => outgoing.destroy(new Error("fixture request timeout")));
+      outgoing.once("error", reject);
+      outgoing.end();
+    });
+    assert.equal(response.status, 200);
+    assert.equal(JSON.parse(response.body).full_name, "fixture/repository");
+    assert.equal(github.issuesOfTokens.length, 1);
+    await resources.close();
+    assert.equal(service.status(opened.session.sessionId).state, "DISPOSED");
+    assert.equal(github.tokenState()[0].revoked, true);
+    assert.deepEqual(github.errors, []);
+    await assert.rejects(access(clientDirectory), { code: "ENOENT" });
+    await assert.rejects(access(config.gateway.controlSocket), { code: "ENOENT" });
+  },
+);

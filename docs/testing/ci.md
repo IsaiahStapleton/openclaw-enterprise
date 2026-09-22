@@ -25,7 +25,7 @@ are flagged for review and pages above 2,500 fail, except the approved single-pa
 and links must pass. Run `pnpm docs:check-length` for the word-count
 check alone.
 
-The PR workflow runs exactly five lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, and logging collector. Full Integration runs through manual dispatch using the immutable event commit. All lanes require `main` except `k3d-model`, which also accepts a branch explicitly allowed by the `integration-model` environment. Environment gates apply only to lanes that declare an environment; `helper-timeout` and standalone `logging-collector` declare none. The ChatGPT `provider-account` lane keeps its main-only credential environment without per-run approval. Other model, routing, Slack, OpenShell, and additional OpenTelemetry lanes require separately approved environments. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
+The PR workflow runs six lanes on ephemeral runners: checks/baseline/browser, PostgreSQL, image/packaging, Kubernetes fixture/Configuration, logging collector, and repository credentials. The `repository-credentials-container` lane builds a Node/Git/pinned-gh source toolchain image and runs the alternate-backend, real Git, and pinned-gh suites with controlled provider fixtures. It does not contact a live GitHub installation. The baseline lane owns source-boundary and detached-artifact checks; the [credential testing guide](repository-credentials.md) lists their commands and prerequisites. The source fixtures prove Git and selected API behavior; delivered-image and separate-container isolation qualification remain separate delivery gates. Full Integration runs through manual dispatch using the immutable event commit. All lanes require `main` except `k3d-model`, which also accepts a branch explicitly allowed by the `integration-model` environment. Environment gates apply only to lanes that declare an environment; `helper-timeout` and standalone `logging-collector` declare none. The ChatGPT `provider-account` lane keeps its main-only credential environment without per-run approval. Other model, routing, Slack, OpenShell, and additional OpenTelemetry lanes require separately approved environments. A missing environment or selected prerequisite fails the run. A PR aggregate is not full credentialed coverage; targeted protected runs also report only their selected lanes.
 
 The Kubernetes fixture lane uses a server and worker node with shared test-owned
 local-path storage. Preparation registers and verifies the fixture image's digest
@@ -50,7 +50,7 @@ and the aggregate to pass.
 
 ### Integration coverage by trigger
 
-The [CI workflow](../../.github/workflows/ci.yml) runs five noncredentialed lanes on
+The [CI workflow](../../.github/workflows/ci.yml) runs six noncredentialed lanes on
 pull requests, pushes to `main`, merge groups, and manual dispatch.
 [Full Integration](../../.github/workflows/full-integration.yml) runs only through
 manual dispatch, using the requested lane or `all`. The `k3d-model` branch exception below does not enable other lanes outside `main`. It does not run

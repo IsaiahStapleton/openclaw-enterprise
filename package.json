@@ -49,6 +49,9 @@
     "test:files": "node scripts/test-files.mjs",
     "credentials:build": "tsc --build tsconfig.json --pretty false && node scripts/build-repository-credentials.mjs",
     "credentials:check-config": "node .build/repository-credentials/service/dist/composition/repository-credentials/check-config.js --check-config",
+    "credentials:start": "node .build/repository-credentials/service/dist/repository-credentials.js",
+    "credentials:operator": "node .build/repository-credentials/client/dist/drivers/repo/github/credentials/client/operator.js",
+    "credentials:client": "node .build/repository-credentials/client/dist/drivers/repo/github/credentials/client/launch.js",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "pnpm lint --fix",
     "format": "pnpm format:fix"
