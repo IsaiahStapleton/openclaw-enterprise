@@ -69,11 +69,13 @@ k3s storage-version ownership instead of attempting an unsafe CRD downgrade.
 
 The focused fixture requires a supported local container engine. Preparation
 builds and imports the current controller image, then the fixture runs the
-production OCC API inside the disposable cluster. The API uses Compute's
+production OCC API and worker inside the disposable cluster with separate
+ServiceAccounts. Both use Compute's
 standard Envoy Service DNS URL and HTTPS port; no test-only endpoint port or
 host publisher is involved. A loopback port-forward exposes only the API to the
-local OCC console and test coordinator. The worker remains in the Node test
-process, so this is not a Helm-installed controller proof. The test applies the
+local OCC console and test coordinator. The coordinator reads real worker logs
+for lifecycle assertions. The fixture does not install the full controller Helm
+release. The test applies the
 chart's Gateway policies, rotates the listener key and API-side projected key,
 and verifies certificate renewal without restarting OCC.
 

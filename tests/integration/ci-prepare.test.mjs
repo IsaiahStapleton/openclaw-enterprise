@@ -521,7 +521,7 @@ test("codex seccomp preparation fails closed for unverified Codex versions and f
         execFile,
         codexVersion: "0.153.0",
       }),
-    /pinned to Codex 0\.152\.1/,
+    /reviewed Codex versions: 0\.152\.1, 0\.154\.0/,
   );
   await assert.rejects(
     () =>
@@ -620,6 +620,8 @@ test("codex seccomp preparation requires a namespace/seccomp RuntimeDefault deni
       prepareCodexSeccompProfile({
         cluster,
         image: immutableImage,
+        // The current runtime must still reject unrelated setup failures before node writes.
+        codexVersion: "0.154.0",
         execFile: execFileForRuntimeDefaultFailure((command, args) => {
           const commandText = `${command} ${args.join(" ")}`;
           assert.match(commandText, /--namespace/);
@@ -807,6 +809,7 @@ test("prepareLane rejects mutable Kubernetes image inputs before creating state"
       envName: "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
       env: {
         ...baseModelEnv,
+        NODE_BASE_IMAGE: nodeBaseImage,
         ...optionalKubernetesImages,
         OCC_TEST_KUBERNETES_GATEWAY_IMAGE: mutableImage,
       },
@@ -816,6 +819,7 @@ test("prepareLane rejects mutable Kubernetes image inputs before creating state"
       envName: "OCC_TEST_KUBERNETES_AGENT_IMAGE",
       env: {
         ...baseModelEnv,
+        NODE_BASE_IMAGE: nodeBaseImage,
         ...optionalKubernetesImages,
         OCC_TEST_KUBERNETES_AGENT_IMAGE: mutableImage,
       },
@@ -836,6 +840,7 @@ test("prepareLane rejects mutable Kubernetes image inputs before creating state"
       envName: "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
       env: {
         ...baseModelEnv,
+        NODE_BASE_IMAGE: nodeBaseImage,
         ...k3dImages,
         OCC_TEST_KUBERNETES_GATEWAY_IMAGE: mutableImage,
         OCC_TEST_SLACK_PROXY_URL: "http://127.0.0.1:3000",

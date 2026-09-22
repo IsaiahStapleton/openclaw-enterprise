@@ -505,6 +505,12 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     objects.has(key("Deployment", agentName)),
     "Harness can initialize plugins without the node",
   );
+  const initialStrategy = read("Deployment", agentName).spec.strategy;
+  assert.equal(
+    initialStrategy?.type,
+    "Recreate",
+    "node enrollment must not switch an existing RollingUpdate Deployment to Recreate",
+  );
   markReady(agentName);
   assert.equal((await prepare()).ready, false);
   assert.ok(
@@ -516,6 +522,7 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
   assert.equal((await prepare()).ready, false);
   assert.equal(setupCalls, 1);
   const agent = read("Deployment", agentName);
+  assert.deepEqual(agent.spec.strategy, initialStrategy);
   assert.ok(
     agent.spec.template.spec.containers[0].env.some(
       (variable) => variable.name === "OPENCLAW_NODE_SETUP_CODE",

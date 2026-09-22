@@ -1387,20 +1387,20 @@ async function prepareLane({ lane, statePath }) {
       await prepareLaneLogging(resolvedStatePath, state, env);
       break;
     case "k3d-model":
-      progress(name, "Starting an isolated PostgreSQL service.");
-      await ensurePostgresServer(resolvedStatePath, state);
-      progress(name, "Creating a disposable loopback k3d cluster.");
-      await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: true });
-      break;
+    case "slack":
+    case "k3d-otel":
     case "gateway-routing": {
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await ensurePostgresServer(resolvedStatePath, state);
       const cluster = await prepareK3dModelLane(resolvedStatePath, state, env, {
         buildController: true,
-        buildRuntime: true,
+        buildRuntime: name !== "slack",
       });
       const routing = await prepareGatewayRouting({ cluster, execFile });
       Object.assign(env, routing.env);
+      if (name === "k3d-otel") {
+        await prepareLaneLogging(resolvedStatePath, state, env, cluster);
+      }
       break;
     }
     case "production-tui": {
@@ -1413,10 +1413,6 @@ async function prepareLane({ lane, statePath }) {
       await prepareLaneLogging(resolvedStatePath, state, env, cluster);
       break;
     }
-    case "slack":
-      await ensurePostgresServer(resolvedStatePath, state);
-      await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: false });
-      break;
     case "provider-account":
       await ensurePostgresServer(resolvedStatePath, state);
       await prepareK3dModelLane(resolvedStatePath, state, env, { buildRuntime: true });
@@ -1443,14 +1439,6 @@ async function prepareLane({ lane, statePath }) {
     case "helper-timeout":
     case "logging-collector":
       break;
-    case "k3d-otel": {
-      await ensurePostgresServer(resolvedStatePath, state);
-      const cluster = await prepareK3dModelLane(resolvedStatePath, state, env, {
-        buildRuntime: true,
-      });
-      await prepareLaneLogging(resolvedStatePath, state, env, cluster);
-      break;
-    }
   }
 
   applyLaneEnv(name, env);

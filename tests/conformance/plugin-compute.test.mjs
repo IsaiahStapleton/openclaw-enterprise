@@ -254,6 +254,8 @@ function kubernetesOptions(overrides = {}) {
 }
 
 function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
+  const gatewayRuntime =
+    options.workspaceNodeId !== undefined || options.env?.APP_SERVER_URL !== undefined;
   const calls = [];
   const files = new Map([
     [
@@ -320,13 +322,13 @@ function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
   };
   try {
     const execution = vm.runInNewContext(
-      options.workspaceNodeId === undefined
+      !gatewayRuntime
         ? `${PLUGIN_RUNTIME_HELPERS}
 result.value = installOpenClawPlugins(${JSON.stringify(runtime)}, ${JSON.stringify(options.failures ?? [])});`
         : GATEWAY_RUNTIME_ENTRYPOINT,
       sandbox,
     );
-    if (options.workspaceNodeId !== undefined) {
+    if (gatewayRuntime) {
       return execution.then(() => ({ calls, files }));
     }
   } catch (error) {
@@ -362,6 +364,26 @@ test("Gateway launch binds the enrolled node without expanding owner writes or c
     },
   };
   const original = JSON.stringify(baseConfig);
+  const initial = await runOpenClawRuntimeHelper(undefined, [], {
+    baseConfig,
+    env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
+  });
+  const initialConfig = JSON.parse(
+    initial.files.get("/home/node/.openclaw/openclaw.json") ??
+      initial.files.get("/etc/openclaw/openclaw.json"),
+  );
+  assert.deepEqual(initialConfig.gateway.nodes.commands.allow, [
+    "existing.command",
+    "file.fetch",
+    "file.stat",
+    "file.write",
+    "file.create",
+    "dir.list",
+    "workspace.memory",
+    "workspace.skills",
+  ]);
+  assert.equal(initialConfig.plugins.entries["file-transfer"], undefined);
+  assert.equal(initial.files.get("/etc/openclaw/openclaw.json"), original);
   // This exercises launch-time configuration only. Native file RPC execution
   // remains the real Gateway/node integration test's responsibility.
   const { files, calls } = await runOpenClawRuntimeHelper(undefined, [], {

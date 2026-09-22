@@ -3901,6 +3901,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
       name: NODE_STATE_VOLUME,
       persistentVolumeClaim: { claimName: this.sharedWorkspaceClaimName(revision.agentId) },
     });
+    // Create the private subdirectory as the runtime user before kubelet mounts it.
+    // A kubelet-created subPath is root-owned; native setup cannot tighten its mode.
+    const initialization = (pod.initContainers as KubernetesRecord[])[0]!;
+    (initialization.volumeMounts as V1VolumeMount[]).push({
+      name: NODE_STATE_VOLUME,
+      mountPath: "/workspace-node-state",
+    });
+    (initialization.args as string[])[0] +=
+      `\nmkdirSync(${JSON.stringify(`/workspace-node-state/${name}`)}, { recursive: true, mode: 0o700 });`;
     // Reuse Harness storage outside the project directory. Revision-specific
     // subpaths preserve restart identity without sharing another node's token.
     (container.volumeMounts as V1VolumeMount[]).push({
@@ -3913,7 +3922,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     // reaps them, including when a Sandbox provider runs this below PID 1.
     container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
     container.args = [AGENT_WITH_NODE_ENTRYPOINT];
-    deployment.spec!.strategy = { type: "Recreate" };
   }
 
   private async workspaceNodeDeviceId(
@@ -5855,7 +5863,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       },
       spec: {
         replicas: 1,
-        ...(role === "gateway" ? { strategy: { type: "Recreate" } } : {}),
+        // Node enrollment updates the initial Harness after its Gateway starts.
+        // Keep one strategy: Kubernetes rejects Recreate while default RollingUpdate fields remain.
+        ...(role === "gateway" || (runtime !== undefined && this.nodeEnrollment !== undefined)
+          ? { strategy: { type: "Recreate" } }
+          : {}),
         selector: { matchLabels: selector },
         template: {
           metadata: {

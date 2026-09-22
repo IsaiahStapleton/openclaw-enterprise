@@ -1,6 +1,6 @@
 ---
 created: 2026-08-31
-updated: 2026-09-20
+updated: 2026-09-21
 last_updated_session: 01a082d6-50c7-7953-808f-7e609f6fc7cb
 ---
 
@@ -70,9 +70,8 @@ root Secret and receive only its public certificate. They do not receive the
 CA signing key. An explicit external issuer uses the configured public CA
 bundle, or Node's existing trust store when no bundle is configured.
 
-There is no per-Agent map. Kubernetes endpoint derivation uses the admitted
-Namespace and Agent IDs plus trusted Installation routing settings. A Driver
-without the optional endpoint capability cannot serve this file feature.
+Kubernetes derives endpoints from admitted Namespace/Agent IDs and Installation
+routing settings. Drivers without endpoint support cannot serve workspace files.
 
 ### 2. OCC admits one exact-Agent file operation
 
@@ -115,21 +114,23 @@ The local Compute path in
 uses native setup RPCs through
 `apps/controller/src/gateway/node-enrollment-client.ts:createGatewayNodeEnrollment`:
 
-- First startup can initialize Harness plugins before the Gateway is ready.
-  `prepareWorkspaceNode` waits to create a setup code until the Gateway is ready;
-  the next reconciliation attaches the node to the same Harness workspace.
-  An existing enrollment remains attached during Gateway restarts. Readiness
-  still waits for the node, and the existing plugin startup-token checks remain.
-- A revision-owned Secret holds the setup code and then the confirmed device ID.
-  Subsequent observations use that ID rather than expiring setup-status records.
-  Readiness requires a connected node with admitted `file.fetch`, `file.stat`,
-  `file.write`, `file.create`, and `dir.list` commands; a node missing attachment
-  upload support is not ready.
-- The Harness PVC stores node identity in a revision-specific subdirectory,
-  mounted at `/home/node/.openclaw-node`, outside the project workspace. Pod
-  replacement reuses that directory; another revision mounts a different one.
-  Retirement deletes the enrollment Secret. Saved identity files remain until
-  the Agent's Harness PVC is deleted; there is no separate node PVC lifecycle.
+- `prepareWorkspaceNode` waits for Gateway readiness before creating a setup
+  code. The next reconciliation attaches the node to the Harness workspace.
+  The Harness uses `Recreate` from its initial Deployment, avoiding a conflict
+  with Kubernetes default RollingUpdate fields. Enrollment survives Gateway
+  restarts; node readiness and plugin startup-token checks still apply.
+- A revision-owned Secret holds the setup code, then the confirmed device ID.
+  Readiness requires `file.fetch`, `file.stat`, `file.write`, `file.create`,
+  `dir.list`, `workspace.memory`, and `workspace.skills`.
+  `GATEWAY_RUNTIME_ENTRYPOINT` admits these commands before pairing on dedicated
+  transport, preserving denies; admitting them after binding persists an empty grant.
+- The Harness PVC holds revision-specific node identity at
+  `/home/node/.openclaw-node`, outside the workspace. `addWorkspaceNode` extends
+  the existing nonroot `prepare-private-state` init container to create its
+  directory at `0700` before the subPath mount, so native setup can tighten
+  permissions. Pod replacement reuses identity; each revision has its own
+  directory. Retirement removes the enrollment Secret; identity files remain
+  until Harness PVC deletion. There is no separate node PVC.
 - `AGENT_WITH_NODE_ENTRYPOINT` first runs native `setup --baseline` in the
   Harness workspace. Missing default documents are created without replacing
   existing edits; initialization failure stops startup. Compute passes only the
@@ -138,7 +139,8 @@ uses native setup RPCs through
   existing Codex entrypoint and native node separately. Only the file node receives its setup code; neither child
   receives OCC's administrative key. Compute starts the supervisor under `tini`
   to reap descendants left by failed wrappers; the Sandbox command carries the
-  same invocation.
+  same invocation. Native Codex shell policy preserves the managed PATH and
+  disables login/profile replacement, keeping installed Skill commands discoverable.
 - Activation reads the exact revision's saved device ID. `GATEWAY_RUNTIME_ENTRYPOINT`
   adds the native `file-transfer.config.workspaces.main` binding to its runtime
   config before clearing the startup-failure observation and spawning Gateway;
@@ -266,6 +268,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-21 14:26: Document initial node command admission, stable Harness rollout strategy and nonroot node-state initialization in the accompanying startup fixes. (01a082d6-50c7-7953-808f-7e609f6fc7cb - a34328eb09ad9374d856a178af8cb03f5b0dfa57)
 
 - 2026-09-20 19:37: Combined native admin UI subpath routing with the exact node endpoint and retained startup status ordering during upstream integration. (01a082d6-50c7-7953-808f-7e609f6fc7cb - afe3861dfec5d288fd5a4651a9e052e935e6493d)
 
