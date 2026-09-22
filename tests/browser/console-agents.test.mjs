@@ -800,14 +800,6 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     "Native admin Agent",
     nativeValues("unsupported-ui"),
   );
-  let active = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
-  const initialNativeAccess = await fixture.request(
-    "GET",
-    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
-  );
-  assert.equal(initialNativeAccess.status, 200);
-  assert.equal(initialNativeAccess.data.status, "unsupported");
-  assert.equal(new URL(initialNativeAccess.data.origin).protocol, "https:");
   const { page } = await newPage(t, fixture, {
     args: [
       ...fixture.browserArgs,
@@ -815,8 +807,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     ],
   });
   const requests = apiRequests(page, fixture.origin);
-  const detail = () =>
-    detailUrl(fixture, namespace.id, agent.id, active.revision.id, "configuration");
+  const draftDetail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
 
   // A fresh shared-cookie login clears legacy host-only cookies from the Console.
   await page.context().addCookies([
@@ -830,7 +821,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
       sameSite: "Lax",
     },
   ]);
-  await login(page, fixture, `${detail().pathname}${detail().search}`);
+  await login(page, fixture, `${draftDetail.pathname}${draftDetail.search}`);
   assert.equal(
     (await page.context().cookies(fixture.origin)).some(
       (cookie) => cookie.value === "old-host-only",
@@ -838,6 +829,45 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     false,
   );
 
+  // New Agents are stopped; missing an active revision must not suggest a routing problem.
+  const initiallyStopped = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+  );
+  assert.equal(initiallyStopped.status, 200);
+  assert.deepEqual(initiallyStopped.data, { status: "stopped" });
+  await page.getByText("Start this Agent before opening its native admin UI.").waitFor();
+  assert.equal(await page.getByText("Open native admin UI", { exact: true }).isVisible(), false);
+
+  // A real deployment requests running before reconciliation selects the admitted revision.
+  const pending = await fixture.deployAgent(namespace.id, agent.id);
+  const unavailable = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+  );
+  assert.equal(unavailable.status, 200);
+  assert.deepEqual(unavailable.data, { status: "unavailable" });
+  await page.getByRole("button", { name: "Refresh access" }).click();
+  await page
+    .getByText(
+      "Native admin UI access is unavailable because OCE could not load an active AgentRevision. Check this Agent’s deployment, then refresh access.",
+    )
+    .waitFor({ timeout: 5_000 });
+  assert.equal(await page.getByText("Open native admin UI", { exact: true }).isVisible(), false);
+
+  let active = { revision: pending };
+  await fixture.activateRevision(namespace.id, agent.id, pending.id);
+  const historicalRevisionId = active.revision.id;
+  const initialNativeAccess = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+  );
+  assert.equal(initialNativeAccess.status, 200);
+  assert.equal(initialNativeAccess.data.status, "unsupported");
+  assert.equal(new URL(initialNativeAccess.data.origin).protocol, "https:");
+  const detail = () =>
+    detailUrl(fixture, namespace.id, agent.id, active.revision.id, "configuration");
+  await page.goto(`${fixture.origin}${detail().pathname}${detail().search}`);
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
   await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
   await page
@@ -863,6 +893,11 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     `/namespaces/${namespace.id}/agents/${agent.id}/stop`,
   );
   assert.equal(stopped.status, 202);
+  // Reproduce the state after the worker clears the revision, while this historical URL remains open.
+  const cleared = await fixture.controller.transact((state) =>
+    state.agents.compareAndClearActiveRevision(namespace.id, agent.id, active.revision.id),
+  );
+  assert.equal(cleared.activeRevisionId, undefined);
   await page.reload();
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
   await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
@@ -874,19 +909,29 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     agent.configurationId,
     nativeAdminValues("supported-ui", initialNativeAccess.data.origin),
   );
-  active = await fixture.seedActiveAgentRevision(namespace.id, agent.id, active.revision.id);
+  active = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
   await page.goto(`${fixture.origin}${detail().pathname}${detail().search}`);
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
-  await page.getByText("Native admin UI is available for the selected AgentRevision.").waitFor();
+  await page.getByText("Native admin UI is available for this Agent’s active revision.").waitFor();
   const expectedAccess = await fixture.request(
     "GET",
     `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
   );
   assert.equal(expectedAccess.status, 200);
   assert.equal(expectedAccess.data.status, "available");
+  assert.equal(expectedAccess.data.activeRevisionId, active.revision.id);
   assert.equal(expectedAccess.data.bootstrapUrl, undefined);
   assert.equal(new URL(expectedAccess.data.url).origin, expectedAccess.data.origin);
   assert.match(new URL(expectedAccess.data.url).hostname, new RegExp(`\\.${nativeDomain}$`));
+
+  // Viewing an older configuration snapshot must still open the current active gateway.
+  await page.getByLabel("AgentRevision").selectOption(historicalRevisionId);
+  await page.getByText("Native admin UI is available for this Agent’s active revision.").waitFor();
+  assertRevisionUrl(page, historicalRevisionId);
+  assert.equal(
+    await page.getByRole("link", { name: "Open native admin UI" }).getAttribute("href"),
+    expectedAccess.data.url,
+  );
   const sharedCookies = await page.context().cookies(expectedAccess.data.origin);
   const sessionCookies = sharedCookies.filter((cookie) =>
     cookie.name.endsWith("openclaw_occ_shared.session_token"),
@@ -1219,4 +1264,196 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
     pathRequests(requests, "GET", `/namespaces/${namespace.id}/presets/${preset.data.id}`).length,
     1,
   );
+});
+
+for (const [dmPolicy, groupPolicy] of [
+  ["pairing", "allowlist"],
+  ["open", "open"],
+  ["disabled", "disabled"],
+  [undefined, undefined],
+]) {
+  test(`Slack channel editing preserves ${dmPolicy ?? "omitted"} DM and ${groupPolicy ?? "omitted"} group policies`, async (t) => {
+    const fixture = await createConsoleAppFixture(t);
+    await fixture.bootstrap();
+    const namespace = await fixture.createNamespace("Slack policy editing", { ready: true });
+    const slack = {
+      enabled: true,
+      mode: "socket",
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      ...(dmPolicy === undefined ? {} : { dmPolicy }),
+      ...(groupPolicy === undefined ? {} : { groupPolicy }),
+      allowFrom: dmPolicy === "open" ? ["*"] : ["UKEEP123"],
+      channels: { CKEEP123: { requireMention: true, users: ["UKEEP123"] } },
+    };
+    const agent = await fixture.createAgent(
+      namespace.id,
+      "Slack policy Agent",
+      nativeValues("policy-preservation", {
+        harnessId: "codex",
+        channels: { slack },
+      }),
+      { executionMode: "dedicated" },
+    );
+    const { page } = await newPage(t, fixture);
+    const url = detailUrl(fixture, namespace.id, agent.id, "draft", "channels");
+    await login(page, fixture, url.pathname + url.search);
+    const edit = page.getByRole("button", { name: "Edit Slack", exact: true });
+    await edit.waitFor();
+    assert.equal(await edit.isEnabled(), true);
+    await edit.click();
+    await page.getByLabel("Slack channel IDs").fill("CKEEP123, CNEW123");
+    await page.getByLabel("Require a mention", { exact: true }).uncheck();
+    const saved = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PATCH" &&
+        response.url().endsWith(`/configurations/${agent.configurationId}`),
+    );
+    await page.getByRole("button", { name: "Save configuration", exact: true }).click();
+    assert.equal((await saved).status(), 200);
+    const configuration = await fixture.request(
+      "GET",
+      `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+    );
+    // Editing channels must neither widen nor narrow DM/group access, including implicit defaults.
+    assert.deepEqual(configuration.data.values.channels.slack, {
+      ...slack,
+      channels: {
+        CKEEP123: { requireMention: false, users: ["UKEEP123"] },
+        CNEW123: { requireMention: false },
+      },
+    });
+    assert.equal(
+      configuration.data.values.plugins.entries.knowledge.config.marker,
+      "policy-preservation",
+    );
+  });
+}
+
+test("Agent tabs replace only their content and preserve surrounding panels and history", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Tab navigation", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Tab navigation Agent",
+    nativeValues("tabs"),
+  );
+  const { page } = await newPage(t, fixture);
+  await page.setViewportSize({ width: 1200, height: 650 });
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Editable Configuration", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Channels", exact: true }).scrollIntoViewIfNeeded();
+  const panels = await page
+    .locator("h1, .agent-toolbar, .native-admin-access, .revision-selector, .agent-tabs")
+    .elementHandles();
+  const top = await page.evaluate(() => globalThis.scrollY);
+  requests.length = 0;
+
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await page.getByRole("button", { name: "Configure Slack", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("tab"), "channels");
+  // The surrounding DOM must stay mounted; a fast full-page rerender still loses focus and scroll.
+  for (const panel of panels) {
+    assert.equal(await panel.evaluate((node) => node.isConnected), true);
+  }
+  assert.ok(Math.abs((await page.evaluate(() => globalThis.scrollY)) - top) < 2);
+  await page.getByRole("button", { name: "Credentials", exact: true }).click();
+  const secret = page.getByLabel("OpenAI API key Secret ID");
+  await secret.waitFor();
+  const secretElement = await secret.elementHandle();
+  await page.getByRole("button", { name: "Workspace files", exact: true }).click();
+  await page
+    .getByText(
+      "Workspace files require a deployed Agent with an active revision and a reachable gateway.",
+    )
+    .waitFor();
+  assert.equal(await secretElement.evaluate((node) => node.value), "");
+  assert.equal(await secretElement.evaluate((node) => node.isConnected), false);
+  await page.goBack();
+  await page.getByLabel("OpenAI API key Secret ID").waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("tab"), "credentials");
+  await page.goForward();
+  await page.getByRole("heading", { name: "Workspace files", exact: true }).waitFor();
+  for (const panel of panels) {
+    assert.equal(await panel.evaluate((node) => node.isConnected), true);
+  }
+  assert.deepEqual(
+    requests.filter((request) =>
+      [
+        "/api/auth/session",
+        "/namespaces",
+        `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+      ].includes(request.path),
+    ),
+    [],
+  );
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+
+  // Refresh is still explicit and rereads the page, unlike a tab change.
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.getByRole("heading", { name: "Workspace files", exact: true }).waitFor();
+  assert.equal(await panels[0].evaluate((node) => node.isConnected), false);
+});
+
+test("Agent tab switches ignore late configuration reads and keep direct workspace access independent", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Slow tabs", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Slow tab Agent",
+    nativeValues("slow-tabs"),
+  );
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "workspace");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Workspace files", exact: true }).waitFor();
+  const configurationPath = `/namespaces/${namespace.id}/configurations/${agent.configurationId}`;
+  assert.equal(
+    requests.some((request) => request.path === configurationPath),
+    false,
+  );
+  assert.equal(
+    requests.some((request) => request.path.endsWith("/revisions")),
+    false,
+  );
+  const tabs = await page.locator(".agent-tabs").elementHandle();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  let reached;
+  const held = new Promise((resolve) => {
+    reached = resolve;
+  });
+  // Delay a real authorized response to exercise navigation while the first panel read is pending.
+  await page.route(`${fixture.origin}${configurationPath}`, async (route) => {
+    const response = await route.fetch();
+    reached();
+    await gate;
+    await route.fulfill({ response });
+  });
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await held;
+  await page.getByRole("button", { name: "Workspace files", exact: true }).click();
+  await page.getByRole("heading", { name: "Workspace files", exact: true }).waitFor();
+  const delivered = page.waitForResponse(`${fixture.origin}${configurationPath}`);
+  release();
+  await delivered;
+  // Configuration completion may prepare shared controls, but must not replace the active tab.
+  await page.getByRole("heading", { name: "Saved draft", exact: true }).waitFor();
+  assert.equal(
+    await page.getByRole("heading", { name: "Workspace files", exact: true }).isVisible(),
+    true,
+  );
+  assert.equal(await page.getByRole("button", { name: "Configure Slack", exact: true }).count(), 0);
+  assert.equal(await tabs.evaluate((node) => node.isConnected), true);
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await page.getByRole("button", { name: "Configure Slack", exact: true }).waitFor();
+  assert.equal(requests.filter((request) => request.path === configurationPath).length, 1);
 });
