@@ -79,6 +79,10 @@
                     "label": "Deployment"
                   },
                   {
+                    "page": "guides/topics/agent-presets",
+                    "label": "Presets"
+                  },
+                  {
                     "page": "guides/topics/agent-compute",
                     "label": "Compute"
                   },
@@ -198,7 +202,8 @@
               "reference/configuration/secrets",
               "reference/security/runtime-isolation",
               "reference/agents",
-              "reference/agent-plugins"
+              "reference/agent-plugins",
+              "reference/presets"
             ]
           },
           {
@@ -708,6 +713,7 @@
               "flows/service-api-keys",
               "flows/harness-execution-topology",
               "flows/compute-driver-lifecycle-hooks",
+              "flows/openshell-sandbox-provisioning",
               "flows/driver-plugin-loading",
               "flows/agent-plugins",
               "flows/agent-native-admin",
@@ -718,6 +724,7 @@
               "flows/pr-24-ssh-compute",
               "flows/github-actions-testing",
               "flows/container-package-bootstrap",
+              "flows/container-publication",
               "flows/github-actions-testing/preparation",
               "testing/postgresql",
               "testing/images",
@@ -730,6 +737,7 @@
               "testing/service-accounts",
               "testing/plugins",
               "testing/openshell",
+              "testing/openshell-pre5-local-experiment",
               "driver-docs-inventory",
               "documentation-inventory/gaps",
               "documentation-inventory/getting-started",
@@ -746,7 +754,8 @@
               "flows/repository-credentials",
               "flows/repository-credential-configuration",
               "testing/repository-credentials",
-              "testing/repository-credentials-platform"
+              "testing/repository-credentials-platform",
+              "flows/agent-presets"
             ]
           }
         ]

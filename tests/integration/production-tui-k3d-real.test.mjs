@@ -1,3 +1,4 @@
+import { defaultAgentModel } from "../../apps/controller/src/console/agents/starter-model.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -55,7 +56,7 @@ test(
       }),
     );
     assert.ok(process.env.OPENAI_API_KEY, "A real model credential is required");
-    const model = process.env.OCC_TEST_OPENAI_MODEL ?? "gpt-5.1";
+    const model = process.env.OCC_TEST_OPENAI_MODEL ?? defaultAgentModel;
     const suffix = randomBytes(4).toString("hex");
     const system = `oce-tui-${suffix}`;
     const foreign = `oce-denied-${suffix}`;

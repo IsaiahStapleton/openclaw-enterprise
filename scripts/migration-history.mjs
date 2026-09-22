@@ -96,12 +96,15 @@ function classifyReceipts(receipts, manifest) {
     return "empty";
   }
   if (receipts.length === 24) {
+    return "prePresetsMain";
+  }
+  if (receipts.length === 25) {
     return "main";
   }
   if (receipts.length === manifest.entries.length) {
     return "completed";
   }
-  if (receipts.length === 26) {
+  if (receipts.length === 27) {
     return "repositoryCredentials";
   }
   refuse("an incomplete or unsupported development history is installed");

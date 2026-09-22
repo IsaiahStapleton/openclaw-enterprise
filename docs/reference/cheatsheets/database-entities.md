@@ -6,7 +6,7 @@ querying the `user` table.
 
 The [database schema](../../../packages/occ/src/state/postgres-schema.ts) defines
 columns and constraints. The
-[repository-credentials migration](../../../migrations/0024_repository_credentials.sql)
+[repository-credentials migration](../../../migrations/0025_repository_credentials.sql)
 adds the repository binding and session-attempt storage below. The
 [Drizzle migration-history table](../../../drizzle.config.ts),
 `drizzle.__drizzle_migrations`, is excluded. See [migration history](../settings/operations.md#migration-history)
@@ -76,6 +76,16 @@ Stores each Agent Configuration’s current generation and Secret bindings; the 
 - `kind`
 - `generation`
 - `secret_bindings`
+- `created_at`
+
+### `presets`
+
+Stores reusable Agent launch templates and variable definitions within one Namespace.
+
+- `id`
+- `namespace_id`
+- `name`
+- `template`
 - `created_at`
 
 ### `secrets`

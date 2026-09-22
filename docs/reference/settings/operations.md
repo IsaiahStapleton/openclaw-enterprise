@@ -52,12 +52,12 @@ Classify a database without applying migrations:
 pnpm db:migrate --check
 ```
 
-An exit-0 `migration.checked` record reports `empty`, `main`,
-`repositoryCredentials`, or `completed`.
-`main` means the exact canonical history through
-`0023_runtime_failure_timestamp_validation`; `repositoryCredentials` includes
-`0024_repository_credentials` and `0025_privileged_function_search_paths`.
-`completed` also includes `0027_repository_attempt_retention` at journal index 26.
+An exit-0 `migration.checked` record reports `empty`, `prePresetsMain`, `main`,
+`repositoryCredentials`, or `completed`. `prePresetsMain` means the exact canonical
+history through `0023_runtime_failure_timestamp_validation`; `main` also includes
+`0024_agent_presets`. `repositoryCredentials` adds `0025_repository_credentials`
+and `0026_privileged_function_search_paths`. `completed` also includes
+`0027_repository_attempt_retention` at journal index 27.
 The source manifest is
 [`migrations/meta/canonical-history.json`](../../../migrations/meta/canonical-history.json).
 Empty schemas may be absent or have only their owner's ordinary `CREATE` and
@@ -73,6 +73,9 @@ canonical receipts remain unchanged. `--check` is also accepted by the
 production command.
 
 `MIGRATION_HISTORY_UNSUPPORTED` means the command refused before migration DDL.
+The earlier development history that installed repository credentials at index 24
+without Agent presets is unsupported, even if all of its own migrations completed.
+It cannot be converted by renaming or rewriting applied receipts.
 Do not edit the ledger, run Drizzle directly to bypass the check, or restore an
 old schema over the canonical one. A failed or disconnected migration is not
 proof of rollback: reconnect, run `--check`, and inspect the retained database

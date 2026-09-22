@@ -21,6 +21,8 @@ RUN corepack pnpm credentials:build
 FROM ${NODE_BASE_IMAGE} AS runtime
 
 ARG TARGETARCH
+# TODO: Pin the OpenClaw release providing `plugins install --no-enable` before
+# shipping managed plugin preparation; 2026.9.1 cannot preserve install policy.
 ARG OPENCLAW_VERSION=2026.9.1
 ARG OPENCLAW_CODEX_PLUGIN_VERSION=2026.9.1
 ARG OPENCLAW_SLACK_PLUGIN_VERSION=2026.9.1
