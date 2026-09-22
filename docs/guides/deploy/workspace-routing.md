@@ -8,12 +8,15 @@ the [strict-mode routing prerequisites](eks.md#enable-console-workspace-files).
 
 ## Runtime prerequisite for separate storage
 
-Dedicated Harness storage requires private routing, native node enrollment, and
+The current dedicated Codex implementation requires private routing, native node enrollment, and
 Gateway and Harness images containing the matching OpenClaw workspace changes.
 [Storage integration #76](https://github.com/openclaw/openclaw-enterprise/issues/76)
 tracks the current runtime PRs and remaining limits. The Codex plugin must include
 the matching attachment changes. Compute rejects dedicated runtime revisions
 without routing or an enrollment client before provisioning workloads.
+
+These prerequisites describe the [Kubernetes Codex implementation](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#shared-contracts-and-the-codex-implementation).
+They do not establish support for a dedicated OpenClaw remote worker.
 
 The production Installation and Helm examples enable routing together. Create
 the service-key Secret and configure native trusted-proxy authentication below

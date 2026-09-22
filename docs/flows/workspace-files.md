@@ -18,6 +18,11 @@ endpoint through Compute, and sends one native file RPC through Envoy Gateway.
 This flow ends at setup completion or the bounded live-file response; model
 execution and general revision activation belong to adjacent flows.
 
+The dedicated path in this flow uses the Kubernetes Codex implementation.
+See [shared contracts and the Codex implementation](../reference/drivers/kubernetes-compute/storage-and-credentials.md#shared-contracts-and-the-codex-implementation)
+for the boundary between workspace capabilities and its launcher, paths and
+app-server settings. Dedicated OpenClaw worker execution remains pending.
+
 ## Entry Points
 
 - `apps/controller/src/index.ts:createFastifyApp` accepts initial contents through

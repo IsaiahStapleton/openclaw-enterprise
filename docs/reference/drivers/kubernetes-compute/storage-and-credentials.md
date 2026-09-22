@@ -3,6 +3,32 @@
 Configure separate Gateway and Harness storage, and runtime
 Secrets for the [Kubernetes Compute Driver](../kubernetes-compute.md).
 
+## Shared contracts and the Codex implementation
+
+The public `ComputeDriver` and `HarnessWorkloadRequirements` contracts describe
+platform operations and workload requirements. OpenClaw's `AgentWorkspaceAccess`
+provides workspace capabilities without depending on the Codex app-server
+protocol. The dedicated storage implementation below currently supports Codex;
+its launcher and filesystem layout are concrete Kubernetes implementation choices.
+
+| Boundary         | Shared behavior                                                                           | Current dedicated Codex implementation                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Workspace access | Gateway file consumers address the workspace used by the Harness, subject to file policy. | A paired file node serves `/home/node/workspace`; the Codex plugin uses the corresponding `appServer.remoteWorkspaceRoot`.  |
+| Execution        | The selected Harness owns execution and its workspace lifecycle.                          | Codex app-server executes turns; a separate node serves file, Memory and Skills operations.                                 |
+| Startup          | Compute delivers the selected workload and observes readiness.                            | The launcher supervises Codex and the file node separately, separates their credentials, and sets Codex shell/PATH options. |
+
+These Codex details belong in OCE because OCE deploys this Harness. They are not
+requirements for every Harness or additions to the public Compute contract.
+The file node's explicit command allowlist disables OpenClaw worker hosting;
+this launcher is not an OpenClaw remote worker launcher.
+
+[Dedicated OpenClaw worker support (#77)](https://github.com/openclaw/openclaw-enterprise/issues/77)
+remains pending and has no end-to-end proof here. Its integration must align
+Gateway file access with the worker's actual assigned workspace and validate
+worker command admission, attachments and readiness. Codex validation does not
+establish that compatibility or require the worker to adopt Codex paths or
+app-server settings.
+
 ## Gateway storage
 
 Each real gateway, embedded or dedicated, receives one private `10Gi`

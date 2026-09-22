@@ -1211,6 +1211,7 @@ if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
     }
     transfer.enabled = true;
     const fileConfig = transfer.config ??= {};
+    // Current Kubernetes Codex layout; this is not a cross-Harness workspace root.
     const remoteRoot = "/home/node/workspace";
     // Codex stages reply artifacts while its client is live, even when both
     // hosts use the same workspace path. A shared path no longer means shared files.
@@ -1508,8 +1509,10 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 
 }
 `;
 
-// The node serves files while Codex is restarting. Reuse the existing Codex
-// entrypoint, including login and plugin initialization, for each Codex start.
+// Kubernetes Codex implementation: this file-only node is not an OpenClaw
+// execution worker; its explicit command allowlist disables worker hosting.
+// It serves files while Codex restarts. Reuse Codex login/plugin initialization
+// for each Codex start; other Harnesses need their own execution composition.
 export const AGENT_WITH_NODE_ENTRYPOINT = String.raw`
 const { mkdirSync, writeFileSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
