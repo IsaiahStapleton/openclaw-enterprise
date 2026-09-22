@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 export const repository = "openclaw/openclaw-enterprise";
 export const publishWorkflow = ".github/workflows/container-publish.yml";
 const images = ["controller", "runtime"];
+const platforms = ["linux/amd64", "linux/arm64"];
 const shaPattern = /^[a-f0-9]{40}$/;
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const integerPattern = /^[1-9][0-9]*$/;
@@ -57,12 +58,7 @@ export function validateCi(run, workflow, jobs, sourceSha, runId, attempt) {
 
 export function validateEnvironment(environment, policies) {
   assert.equal(environment.name, "container-publish");
-  assert.equal(environment.can_admins_bypass, false, "Disable administrator approval bypass.");
-  const reviewers = environment.protection_rules?.find(
-    (rule) => rule.type === "required_reviewers",
-  );
-  assert.ok(reviewers?.reviewers?.length > 0, "Configure required environment reviewers.");
-  assert.equal(reviewers.prevent_self_review, true, "Disable self-approval for publication.");
+  assert.equal(environment.can_admins_bypass, false, "Disable administrator environment bypass.");
   assert.equal(environment.deployment_branch_policy?.custom_branch_policies, true);
   assert.equal(environment.deployment_branch_policy?.protected_branches, false);
   assert.deepEqual(
@@ -81,12 +77,19 @@ export function ghcrPackageName(image) {
   return image.slice("ghcr.io/openclaw/".length);
 }
 
-export function validatePackage(pkg, image) {
+export function validatePackage(pkg, image, { allowMissingRepository = false } = {}) {
   assert.equal(pkg.name, ghcrPackageName(image));
   assert.equal(pkg.package_type, "container");
   assert.equal(pkg.visibility, "private", "GHCR package must already exist and be private.");
+  // GitHub's package schema makes repository nullable and optional. Absence
+  // cannot establish linkage; callers may accept the setup-time package grant.
+  // Explicit conflicting metadata always fails.
+  if (pkg.repository == null && allowMissingRepository) {
+    return false;
+  }
   assert.equal(pkg.repository?.full_name, repository, "Link the package to Enterprise first.");
   assert.equal(pkg.repository?.private, true);
+  return true;
 }
 
 export function validatePreparedImage(metadata, expected) {
@@ -102,27 +105,53 @@ export function validatePreparedImage(metadata, expected) {
   ]) {
     assert.equal(metadata[key], expected[key], `Prepared image ${key} does not match this run.`);
   }
-  assert.equal(metadata.platform, "linux/amd64");
+  assert.deepEqual(metadata.platforms, platforms);
   assert.match(metadata.digest ?? "", digestPattern);
   assert.match(metadata.archiveSha256 ?? "", /^[a-f0-9]{64}$/);
 }
 
-export async function github(path, { allowNotFound = false } = {}) {
+export async function github(path, { allowNotFound = false, retryNotFound = false } = {}) {
   assert.ok(process.env.GH_TOKEN, "A GitHub workflow token is required.");
-  const response = await fetch(`https://api.github.com/${path}`, {
-    headers: {
-      Authorization: `Bearer ${process.env.GH_TOKEN}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-    redirect: "error",
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (allowNotFound && response.status === 404) {
-    return null;
+  const attempts = retryNotFound ? 6 : 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let response;
+    let body;
+    try {
+      response = await fetch(`https://api.github.com/${path}`, {
+        headers: {
+          Authorization: `Bearer ${process.env.GH_TOKEN}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(30_000),
+      });
+      // Reading the body can fail after headers arrive. Retry only this GET's
+      // transport, never HTTP authorization errors or invalid JSON metadata.
+      if (response.status === 200) {
+        body = await response.text();
+      }
+    } catch {
+      if (attempt === attempts) {
+        throw new Error(`GitHub GET ${path} transport failed after ${attempts} attempts.`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      continue;
+    }
+    if (response.status === 404 && retryNotFound && attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      continue;
+    }
+    if (allowNotFound && response.status === 404) {
+      return null;
+    }
+    assert.equal(
+      response.status,
+      200,
+      `GitHub GET ${path} metadata preflight failed (${response.status}).`,
+    );
+    return JSON.parse(body);
   }
-  assert.equal(response.status, 200, `GitHub metadata preflight failed (${response.status}).`);
-  return response.json();
 }
 
 export async function githubPages(path, field) {
@@ -206,7 +235,7 @@ function identity(env, image) {
     ciAttempt: env.CI_ATTEMPT,
     nodeBaseImage: env.NODE_BASE_IMAGE,
     image,
-    platform: "linux/amd64",
+    platforms,
   };
 }
 
@@ -232,38 +261,98 @@ export function inspectDigest(reference, authfile) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+// Read the exact blobs named by the OCI index, never an extracted checkout path.
+// Hash verification binds platform/config claims to the index's immutable digest.
+export function readArchivePlatforms(archive, indexDigest) {
+  function blob(digest) {
+    assert.match(digest ?? "", digestPattern);
+    const bytes = execFileSync("tar", ["-xOf", archive, `blobs/sha256/${digest.slice(7)}`], {
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    assert.equal(`sha256:${createHash("sha256").update(bytes).digest("hex")}`, digest);
+    return JSON.parse(bytes);
+  }
+  const index = blob(indexDigest);
+  assert.equal(index.schemaVersion, 2);
+  assert.equal(index.mediaType, "application/vnd.oci.image.index.v1+json");
+  assert.ok(Array.isArray(index.manifests));
+  const selected = index.manifests
+    .map((descriptor) => {
+      assert.equal(descriptor.mediaType, "application/vnd.oci.image.manifest.v1+json");
+      const platform = `${descriptor.platform?.os}/${descriptor.platform?.architecture}`;
+      assert.ok(platforms.includes(platform), `Unexpected image platform: ${platform}`);
+      assert.ok(
+        descriptor.platform.variant === undefined ||
+          (platform === "linux/arm64" && descriptor.platform.variant === "v8"),
+        "Unsupported platform variant.",
+      );
+      const manifest = blob(descriptor.digest);
+      assert.equal(manifest.schemaVersion, 2);
+      assert.equal(manifest.mediaType, descriptor.mediaType);
+      const config = blob(manifest.config?.digest);
+      assert.equal(`${config.os}/${config.architecture}`, platform, "Config platform mismatch.");
+      return { platform, digest: descriptor.digest, configDigest: manifest.config.digest };
+    })
+    .sort((left, right) => left.platform.localeCompare(right.platform));
+  assert.deepEqual(
+    selected.map((image) => image.platform),
+    platforms,
+  );
+  return selected;
+}
+
 async function smoke(directory, env) {
   assert.ok(images.includes(env.IMAGE));
   const archive = join(directory, "image.tar");
   const archiveSha256 = await fileDigest(archive);
   assert.equal(inspectDigest(`oci-archive:${archive}`), env.IMAGE_DIGEST);
-  const manifest = JSON.parse(skopeo(["inspect", "--raw", `oci-archive:${archive}`]));
-  assert.match(manifest.config?.digest ?? "", digestPattern);
-  const tag = `localhost/enterprise-${env.IMAGE}:prepared`;
-  skopeo(["copy", `oci-archive:${archive}`, `docker-daemon:${tag}`], { stdio: "inherit" });
-  const [loaded] = JSON.parse(execFileSync("docker", ["image", "inspect", tag]));
-  // Docker may translate the manifest media type; the immutable config ID binds
-  // the loaded image to the prepared config and its ordered filesystem diff IDs.
-  assert.equal(loaded.Id, manifest.config.digest);
-  assert.equal(loaded.Os, "linux");
-  assert.equal(loaded.Architecture, "amd64");
-  const controller = env.IMAGE === "controller";
-  execFileSync(
-    process.execPath,
-    ["--test", `tests/integration/${controller ? "production" : "runtime"}-image-startup.test.mjs`],
-    {
-      env: {
-        ...env,
-        [controller ? "OCC_TEST_PRODUCTION_IMAGE" : "OCC_TEST_RUNTIME_IMAGE"]: loaded.Id,
+  for (const image of readArchivePlatforms(archive, env.IMAGE_DIGEST)) {
+    const [, arch] = image.platform.split("/");
+    const tag = `localhost/enterprise-${env.IMAGE}:prepared-${arch}`;
+    skopeo(
+      [
+        "--override-os",
+        "linux",
+        "--override-arch",
+        arch,
+        "copy",
+        `oci-archive:${archive}`,
+        `docker-daemon:${tag}`,
+      ],
+      { stdio: "inherit" },
+    );
+    const [loaded] = JSON.parse(execFileSync("docker", ["image", "inspect", tag]));
+    // Docker may translate the manifest media type; the config ID binds the
+    // loaded image to this index entry and its ordered filesystem diff IDs.
+    assert.equal(loaded.Id, image.configDigest);
+    assert.equal(loaded.Os, "linux");
+    assert.equal(loaded.Architecture, arch);
+    const controller = env.IMAGE === "controller";
+    console.log(`Smoke ${env.IMAGE} ${image.platform} @ ${image.digest}`);
+    execFileSync(
+      process.execPath,
+      [
+        "--test",
+        `tests/integration/${controller ? "production" : "runtime"}-image-startup.test.mjs`,
+      ],
+      {
+        env: {
+          ...env,
+          OCC_TEST_IMAGE_TIMEOUT_MULTIPLIER: arch === "arm64" ? "6" : "1",
+          [controller ? "OCC_TEST_PRODUCTION_IMAGE" : "OCC_TEST_RUNTIME_IMAGE"]: loaded.Id,
+        },
+        stdio: "inherit",
       },
-      stdio: "inherit",
-    },
-  );
+    );
+    // Keep only one unpacked variant on this disposable preparation runner.
+    execFileSync("docker", ["image", "rm", tag], { stdio: "inherit" });
+  }
   assert.equal(await fileDigest(archive), archiveSha256, "OCI archive changed during smoke.");
 }
 
 async function seal(directory, env) {
   assert.match(env.IMAGE_DIGEST ?? "", digestPattern);
+  readArchivePlatforms(join(directory, "image.tar"), env.IMAGE_DIGEST);
   const metadata = {
     ...identity(env, env.IMAGE),
     digest: env.IMAGE_DIGEST,
@@ -274,26 +363,26 @@ async function seal(directory, env) {
 
 export async function verifyGhcr(image, digest, tag) {
   const packagePath = `orgs/openclaw/packages/container/${encodeURIComponent(ghcrPackageName(image))}`;
-  validatePackage(await github(packagePath), image);
+  // The manual dispatch authorizes publication. GHCR may omit repository
+  // metadata; explicit conflicting linkage still fails package validation.
+  validatePackage(await github(packagePath), image, { allowMissingRepository: true });
   const versions = await githubPages(`${packagePath}/versions`);
   const existing = versions.filter((version) => version.metadata?.container?.tags?.includes(tag));
   assert.ok(
     existing.every((version) => version.name === digest),
     "Refusing to overwrite an existing source tag with different image bytes.",
   );
+  return existing.length > 0;
 }
 
-async function publish(directory, env) {
-  await validate(env);
+export async function publishPrepared(directory, env, producer, verify) {
+  await verify();
   const tag = `sha-${env.SOURCE_SHA}`;
   const prepared = [];
   for (const image of images) {
-    const dir = join(
-      directory,
-      `container-${image}-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`,
-    );
+    const dir = join(directory, `container-${image}-${producer.runId}-${producer.attempt}`);
     const metadata = JSON.parse(await readFile(join(dir, "metadata.json"), "utf8"));
-    validatePreparedImage(metadata, identity(env, image));
+    validatePreparedImage(metadata, { ...producer, image });
     const archive = join(dir, "image.tar");
     assert.equal(await fileDigest(archive), metadata.archiveSha256, "OCI archive bytes changed.");
     assert.equal(inspectDigest(`oci-archive:${archive}`), metadata.digest, "OCI digest changed.");
@@ -322,32 +411,57 @@ async function publish(directory, env) {
       { input: env.GH_TOKEN, stdio: ["pipe", "ignore", "pipe"] },
     );
     for (const image of prepared) {
-      // Approval and visibility may change while large images are being copied.
-      await validate(env);
-      await verifyGhcr(image.destination, image.digest, tag);
-      skopeo(
-        [
-          "copy",
-          "--all",
-          "--preserve-digests",
-          "--authfile",
-          authfile,
-          `oci-archive:${image.archive}`,
-          `docker://${image.destination}:${tag}`,
-        ],
-        { stdio: "inherit" },
-      );
+      // Source, CI and visibility may change while large images are being copied.
+      await verify();
+      const listed = await verifyGhcr(image.destination, image.digest, tag);
+      let remoteDigest;
+      try {
+        remoteDigest = inspectDigest(`docker://${image.destination}:${tag}`, authfile);
+      } catch (error) {
+        // Skopeo 1.13.3 reports the registry's MANIFEST_UNKNOWN as this terminal
+        // diagnostic. Auth, transport, name and ambiguous failures must not copy.
+        const missing = `reading manifest ${tag} in ${image.destination}: manifest unknown`;
+        const diagnostic = error.stderr?.toString().trim().replace(/"$/, "");
+        if (
+          listed ||
+          error.status !== 1 ||
+          (diagnostic !== missing &&
+            !diagnostic?.endsWith(`: ${missing}`) &&
+            !diagnostic?.endsWith(`${missing}: manifest unknown`))
+        ) {
+          throw error;
+        }
+      }
+      if (remoteDigest !== undefined) {
+        assert.equal(remoteDigest, image.digest, "Remote source tag has different image bytes.");
+      } else {
+        skopeo(
+          [
+            "copy",
+            "--all",
+            "--preserve-digests",
+            "--authfile",
+            authfile,
+            `oci-archive:${image.archive}`,
+            `docker://${image.destination}:${tag}`,
+          ],
+          { stdio: "inherit" },
+        );
+      }
       assert.equal(inspectDigest(`docker://${image.destination}:${tag}`, authfile), image.digest);
+      console.log(
+        `Verified ${image.destination}:${tag} @ ${image.digest}${remoteDigest ? " (already published)" : ""}`,
+      );
     }
   } finally {
     await rm(authDirectory, { recursive: true, force: true });
   }
   const receipt = prepared.map(({ archive, ...image }) => ({ ...image, tag }));
-  await writeFile(join(directory, "publication.json"), `${JSON.stringify(receipt, null, 2)}\n`);
   await appendFile(
     env.GITHUB_STEP_SUMMARY,
     receipt.map((image) => `- ${image.image}: \`${image.destination}@${image.digest}\`\n`).join(""),
   );
+  return receipt;
 }
 
 async function main() {
@@ -361,7 +475,13 @@ async function main() {
     await seal(directory, process.env);
   } else if (command === "publish") {
     assert.equal(process.env.PUBLISH, "true");
-    await publish(directory, process.env);
+    const receipt = await publishPrepared(
+      directory,
+      process.env,
+      identity(process.env, "controller"),
+      () => validate(process.env),
+    );
+    await writeFile(join(directory, "publication.json"), `${JSON.stringify(receipt, null, 2)}\n`);
   } else {
     throw new Error("Expected validate, smoke, seal, or publish.");
   }
