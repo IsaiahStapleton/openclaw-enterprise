@@ -58,12 +58,7 @@ export function validateCi(run, workflow, jobs, sourceSha, runId, attempt) {
 
 export function validateEnvironment(environment, policies) {
   assert.equal(environment.name, "container-publish");
-  assert.equal(environment.can_admins_bypass, false, "Disable administrator approval bypass.");
-  const reviewers = environment.protection_rules?.find(
-    (rule) => rule.type === "required_reviewers",
-  );
-  assert.ok(reviewers?.reviewers?.length > 0, "Configure required environment reviewers.");
-  assert.equal(reviewers.prevent_self_review, true, "Disable self-approval for publication.");
+  assert.equal(environment.can_admins_bypass, false, "Disable administrator environment bypass.");
   assert.equal(environment.deployment_branch_policy?.custom_branch_policies, true);
   assert.equal(environment.deployment_branch_policy?.protected_branches, false);
   assert.deepEqual(
@@ -87,8 +82,8 @@ export function validatePackage(pkg, image, { allowMissingRepository = false } =
   assert.equal(pkg.package_type, "container");
   assert.equal(pkg.visibility, "private", "GHCR package must already exist and be private.");
   // GitHub's package schema makes repository nullable and optional. Absence
-  // cannot establish linkage; only marker bootstrap or independent review may
-  // handle that case. Explicit conflicting metadata always fails.
+  // cannot establish linkage; callers may accept the setup-time package grant.
+  // Explicit conflicting metadata always fails.
   if (pkg.repository == null && allowMissingRepository) {
     return false;
   }
@@ -366,36 +361,11 @@ async function seal(directory, env) {
   await writeFile(join(directory, "metadata.json"), `${JSON.stringify(metadata, null, 2)}\n`);
 }
 
-export async function verifyGhcr(image, digest, tag, env) {
+export async function verifyGhcr(image, digest, tag) {
   const packagePath = `orgs/openclaw/packages/container/${encodeURIComponent(ghcrPackageName(image))}`;
-  const linked = validatePackage(await github(packagePath), image, {
-    allowMissingRepository: true,
-  });
-  if (!linked) {
-    assert.match(env.GITHUB_RUN_ID ?? "", integerPattern);
-    assert.match(env.GITHUB_RUN_ATTEMPT ?? "", integerPattern);
-    assert.match(env.SOURCE_SHA ?? "", shaPattern);
-    assert.ok(env.GITHUB_ACTOR);
-    const environment = await github(`repos/${repository}/environments/container-publish`);
-    assert.ok(Number.isSafeInteger(environment.id) && environment.id > 0);
-    const reviews = await github(`repos/${repository}/actions/runs/${env.GITHUB_RUN_ID}/approvals`);
-    const confirmation = `Verified GHCR linkage: ${image} -> ${repository}; source=${env.SOURCE_SHA}; run=${env.GITHUB_RUN_ID}; attempt=${env.GITHUB_RUN_ATTEMPT}`;
-    assert.ok(
-      Array.isArray(reviews) &&
-        reviews.some(
-          (review) =>
-            review.state === "approved" &&
-            review.user?.type === "User" &&
-            review.user.login !== env.GITHUB_ACTOR &&
-            review.user.login !== env.GITHUB_TRIGGERING_ACTOR &&
-            review.environments?.some(
-              (entry) => entry.id === environment.id && entry.name === "container-publish",
-            ) &&
-            review.comment?.split(/\r?\n/).some((line) => line.trim() === confirmation),
-        ),
-      `Missing independent package linkage confirmation. Verify package settings, then include this line when approving this attempt: ${confirmation}`,
-    );
-  }
+  // The manual dispatch authorizes publication. GHCR may omit repository
+  // metadata; explicit conflicting linkage still fails package validation.
+  validatePackage(await github(packagePath), image, { allowMissingRepository: true });
   const versions = await githubPages(`${packagePath}/versions`);
   const existing = versions.filter((version) => version.metadata?.container?.tags?.includes(tag));
   assert.ok(
@@ -417,7 +387,7 @@ export async function publishPrepared(directory, env, producer, verify) {
     assert.equal(await fileDigest(archive), metadata.archiveSha256, "OCI archive bytes changed.");
     assert.equal(inspectDigest(`oci-archive:${archive}`), metadata.digest, "OCI digest changed.");
     const destination = env[`GHCR_${image.toUpperCase()}_IMAGE`];
-    await verifyGhcr(destination, metadata.digest, tag, env);
+    await verifyGhcr(destination, metadata.digest, tag);
     prepared.push({ ...metadata, destination, archive });
   }
   assert.notEqual(
@@ -441,9 +411,9 @@ export async function publishPrepared(directory, env, producer, verify) {
       { input: env.GH_TOKEN, stdio: ["pipe", "ignore", "pipe"] },
     );
     for (const image of prepared) {
-      // Approval and visibility may change while large images are being copied.
+      // Source, CI and visibility may change while large images are being copied.
       await verify();
-      const listed = await verifyGhcr(image.destination, image.digest, tag, env);
+      const listed = await verifyGhcr(image.destination, image.digest, tag);
       let remoteDigest;
       try {
         remoteDigest = inspectDigest(`docker://${image.destination}:${tag}`, authfile);

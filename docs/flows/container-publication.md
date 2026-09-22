@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
 updated: 2026-09-22
-last_updated_session: codex/01a0c179-19f7-7111-8bb4-fc7680da5545
+last_updated_session: codex/01a0c70f-8a8f-7c62-ac81-ee1a3e99f48b
 ---
 
 # Container publication flow
@@ -9,7 +9,7 @@ last_updated_session: codex/01a0c179-19f7-7111-8bb4-fc7680da5545
 ## Overview
 
 Manual Enterprise container publication builds controller and runtime OCI archives
-for Linux amd64 and arm64, checks both variants, and transfers the approved bytes
+for Linux amd64 and arm64, checks both variants, and transfers the tested bytes
 to private GHCR packages. Each package receives one multi-platform index digest.
 This flow ends with verified remote digests and a publication receipt; it does
 not deploy workloads or change package visibility.
@@ -20,8 +20,9 @@ not deploy workloads or change package visibility.
   `main` with its exact source SHA, successful main-push CI run ID, and publish flag.
 - `scripts/ci/container-release.mjs:main`: validation, smoke, seal, and publication
   commands called by the workflow.
-- Publication requires pre-existing private packages and independent approval
-  through the protected `container-publish` environment.
+- Publication requires pre-existing private packages. The manual dispatch
+  authorizes publication without a separate environment approval. GitHub grants
+  manual dispatch to repository writers, including maintainers.
 
 ## Flow
 
@@ -34,8 +35,7 @@ graph TD
   E -->|either fails| X["Stop before publication"]
   E -->|both pass| F["Seal and upload each archive"]
   F -->|publish false| G["Finish with retained artifacts"]
-  F -->|publish true| H["Independent environment approval"]
-  H --> I["Recheck source, CI, seals and private packages"]
+  F -->|publish true| I["Recheck source, CI, seals and private packages"]
   I --> J["Copy all manifests with digest preservation"]
   J --> K["Verify remote index digests and write receipt"]
 ```
@@ -49,7 +49,7 @@ particular hosted build or registry transfer succeeded.
 
 `scripts/ci/container-release.mjs:validate` verifies the trusted workflow, exact
 main source and successful CI identity, and approved Node base digest. Publication
-also checks environment protections. No-push preparation has no package write
+also checks the main-only environment branch policy. No-push preparation has no package write
 permission or protected-environment credentials.
 
 `.github/workflows/container-publish.yml:jobs.prepare` runs once per image. It
@@ -78,24 +78,28 @@ unchanged. A failure prevents sealing and artifact upload for that image.
 After each successful platform smoke, the loaded image tag is removed before
 the next variant is loaded. The exported archive remains the publication input.
 
-### 3. Seal and await approval
+### 3. Seal and enter publication
 
 `scripts/ci/container-release.mjs:seal` rechecks the platform contents and records
 the archive hash, multi-platform index digest, platform list, source, workflow,
 run attempt, CI identity, and approved base. Both prepared artifacts must exist
 before `.github/workflows/container-publish.yml:jobs.publish` can start.
 
-No-push runs end with artifacts. Publication waits for independent protected
-environment approval. Archive retention and package access requirements are owned
+No-push runs end with artifacts. Publishing runs proceed directly to automated
+validation. Archive retention and package access requirements are owned
 by the [operator instructions](../../.github/containers.md).
 
 ### 4. Publish and hand off immutable references
 
 `scripts/ci/container-release.mjs:publishPrepared` checks both seals, archive hashes,
-index digests, and destinations before copying either image. It repeats approval,
-CI, and package checks during transfer. A matching existing source tag is retained;
+index digests, and destinations before copying either image. It repeats source,
+CI, environment branch policy, and package checks during transfer. A matching existing source tag is retained;
 a conflicting tag or ambiguous registry error fails. An absent tag receives the
 entire index and both child manifests through Skopeo `--all --preserve-digests`.
+
+Package metadata must report the expected name and private visibility. Reported
+repository linkage must match the private Enterprise repository. Omitted linkage
+is accepted without review-history lookups; package setup owns that connection.
 
 Each remote index digest must match before the receipt is written. Deployment
 uses that index digest, letting the container runtime select its architecture.
@@ -124,6 +128,8 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-22 03:04: Use manual dispatch without an independent approval or linkage comment (codex/01a0c70f-8a8f-7c62-ac81-ee1a3e99f48b - 149ac0fe)
 
 - 2026-09-22 01:34: Record bounded QEMU smoke timeouts while retaining native deadlines and startup assertions (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - 473d9b45ee5aa8d8a081cca7664973fee5bd7e11)
 

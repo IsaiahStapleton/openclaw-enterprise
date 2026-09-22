@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       publish:
-        description: Publish prepared images after container-publish environment approval
+        description: Publish prepared images after automated validation
         required: true
         default: false
         type: boolean
@@ -160,7 +160,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y skopeo
           skopeo --version | grep -Fx 'skopeo version 1.13.3'
-      - name: Revalidate approval, private packages, CI and bytes before transfer
+      - name: Revalidate private packages, CI and bytes before transfer
         env:
           GH_TOKEN: ${{ github.token }}
           CI_ATTEMPT: ${{ needs.validate.outputs.ci_attempt }}

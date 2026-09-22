@@ -165,7 +165,7 @@ test("post-marker metadata retries only 404 and remains bounded", async (t) => {
   }
 });
 
-test("GHCR repository omission needs independent linkage evidence for this run attempt", async (t) => {
+test("GHCR publication accepts omitted repository metadata without approval and rejects unsafe packages", async (t) => {
   const token = process.env.GH_TOKEN;
   process.env.GH_TOKEN = "test-token";
   t.after(() => {
@@ -176,35 +176,15 @@ test("GHCR repository omission needs independent linkage evidence for this run a
     }
   });
   const image = "ghcr.io/openclaw/openclaw-enterprise-controller";
-  const context = {
-    ...env,
-    GITHUB_RUN_ID: "123",
-    GITHUB_RUN_ATTEMPT: "2",
-    GITHUB_ACTOR: "publisher",
-    GITHUB_TRIGGERING_ACTOR: "rerunner",
-  };
-  // GHCR can omit repository even for a connected package. Approval history
-  // comes from GitHub's documented workflow-run reviews endpoint, not OCI labels.
+  // GHCR can omit repository even for connected packages. The real validator
+  // must accept that response without consulting deployment review history.
   let pkg = {
     name: "openclaw-enterprise-controller",
     package_type: "container",
     visibility: "private",
   };
-  const approval = {
-    state: "approved",
-    user: { login: "maintainer", type: "User" },
-    environments: [{ id: 42, name: "container-publish" }],
-    comment: `Verified GHCR linkage: ${image} -> ${repository}; source=${sourceSha}; run=123; attempt=2`,
-  };
-  let reviews = [approval];
   t.mock.method(globalThis, "fetch", async (url) => {
     const path = new URL(url).pathname;
-    if (path.endsWith("/approvals")) {
-      return Response.json(reviews);
-    }
-    if (path.endsWith("/environments/container-publish")) {
-      return Response.json({ id: 42 });
-    }
     if (path.endsWith("/versions")) {
       return Response.json([]);
     }
@@ -213,34 +193,9 @@ test("GHCR repository omission needs independent linkage evidence for this run a
     }
     throw new Error(`Unexpected metadata request: ${path}`);
   });
-  await verifyGhcr(image, digest, `sha-${sourceSha}`, context);
+  await verifyGhcr(image, digest, `sha-${sourceSha}`);
   pkg.repository = null;
-  await verifyGhcr(image, digest, `sha-${sourceSha}`, context);
-  // No approval, an ordinary approval, stale evidence, another destination,
-  // self-review, or a different environment must not authorize source bytes.
-  for (const patch of [
-    { comment: "" },
-    { state: "rejected" },
-    { comment: approval.comment.replace("attempt=2", "attempt=1") },
-    { comment: approval.comment.replace("run=123", "run=456") },
-    { comment: approval.comment.replace(sourceSha, "c".repeat(40)) },
-    { comment: approval.comment.replace(image, `${image}-other`) },
-    { user: { login: "publisher", type: "User" } },
-    { user: { login: "rerunner", type: "User" } },
-    { environments: [{ id: 41, name: "container-publish" }] },
-  ]) {
-    reviews = [{ ...approval, ...patch }];
-    await assert.rejects(
-      verifyGhcr(image, digest, `sha-${sourceSha}`, context),
-      /linkage confirmation/,
-    );
-  }
-  reviews = [];
-  await assert.rejects(
-    verifyGhcr(image, digest, `sha-${sourceSha}`, context),
-    /linkage confirmation/,
-  );
-  reviews = [approval];
+  await verifyGhcr(image, digest, `sha-${sourceSha}`);
   for (const patch of [
     { visibility: "public" },
     { visibility: undefined },
@@ -251,13 +206,12 @@ test("GHCR repository omission needs independent linkage evidence for this run a
   ]) {
     const original = pkg;
     pkg = { ...pkg, ...patch };
-    await assert.rejects(verifyGhcr(image, digest, `sha-${sourceSha}`, context));
+    await assert.rejects(verifyGhcr(image, digest, `sha-${sourceSha}`));
     pkg = original;
   }
-  // Explicit correct repository metadata continues to work without fallback.
+  // Explicit correct repository metadata remains valid.
   pkg.repository = repo;
-  reviews = [];
-  await verifyGhcr(image, digest, `sha-${sourceSha}`, context);
+  await verifyGhcr(image, digest, `sha-${sourceSha}`);
 });
 
 test("container release requires exact successful CI identity and its aggregate job", () => {
@@ -298,17 +252,11 @@ test("container release requires exact successful CI identity and its aggregate 
   }
 });
 
-test("container publication rejects unprotected environments and public or unrelated packages", () => {
+test("container publication requires main-only environments and private matching packages", () => {
   const environment = {
     name: "container-publish",
     can_admins_bypass: false,
-    protection_rules: [
-      {
-        type: "required_reviewers",
-        prevent_self_review: true,
-        reviewers: [{ type: "Team", reviewer: { id: 1 } }],
-      },
-    ],
+    protection_rules: [],
     deployment_branch_policy: { custom_branch_policies: true, protected_branches: false },
   };
   const policies = [{ name: "main", type: "branch" }];
@@ -317,7 +265,6 @@ test("container publication rejects unprotected environments and public or unrel
   assert.throws(() =>
     validateEnvironment({ ...environment, can_admins_bypass: undefined }, policies),
   );
-  assert.throws(() => validateEnvironment({ ...environment, protection_rules: [] }, policies));
   assert.throws(() => validateEnvironment(environment, [{ name: "*", type: "branch" }]));
   assert.throws(() => validateEnvironment(environment, [{ name: "main", type: "tag" }]));
   const image = "ghcr.io/openclaw/openclaw-enterprise/controller";
@@ -328,7 +275,7 @@ test("container publication rejects unprotected environments and public or unrel
     repository: repo,
   };
   validatePackage(pkg, image);
-  // Only harmless bootstrap can accept missing linkage without review evidence.
+  // Missing linkage is allowed explicitly; reported conflicting linkage still fails.
   for (const repository of [undefined, null]) {
     const unreported = { ...pkg, repository };
     assert.throws(() => validatePackage(unreported, image));
