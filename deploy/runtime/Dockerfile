@@ -10,7 +10,6 @@ COPY packages/iam/package.json packages/iam/package.json
 COPY packages/occ/package.json packages/occ/package.json
 COPY packages/utils/package.json packages/utils/package.json
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
-    --mount=type=secret,id=COREPACK_NPM_REGISTRY,env=COREPACK_NPM_REGISTRY \
     corepack pnpm install --frozen-lockfile --ignore-scripts
 COPY tsconfig.base.json tsconfig.json ./
 COPY packages packages
@@ -19,53 +18,15 @@ COPY scripts/build-repository-credentials.mjs scripts/build-repository-credentia
 COPY deploy/runtime/repository-credentials/.dockerignore deploy/runtime/repository-credentials/.dockerignore
 RUN corepack pnpm credentials:build
 
-# Build OpenClaw and its plugins from one immutable public source snapshot.
-FROM ${NODE_BASE_IMAGE} AS openclaw-source
-ARG OPENCLAW_SOURCE_COMMIT=20db76a79212c7d0c4f2106fea4d61fdce9972a3
-ARG OPENCLAW_SOURCE_SHA256=456e6d042aff7dec501c9417e86ee4c41ec480cde0418468d8436e5785f5a6d0
-ADD --checksum=sha256:${OPENCLAW_SOURCE_SHA256} https://codeload.github.com/openclaw/openclaw/tar.gz/${OPENCLAW_SOURCE_COMMIT} /tmp/openclaw.tar.gz
-WORKDIR /openclaw
-RUN tar -xzf /tmp/openclaw.tar.gz --strip-components=1 -C /openclaw \
-    && rm /tmp/openclaw.tar.gz && corepack enable
-ENV GIT_COMMIT=${OPENCLAW_SOURCE_COMMIT}
-
-FROM openclaw-source AS openclaw-production-deps
-RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
-    --mount=type=secret,id=COREPACK_NPM_REGISTRY,env=COREPACK_NPM_REGISTRY \
-    --mount=type=cache,id=oce-openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    pnpm install --frozen-lockfile --prod \
-      --config.supportedArchitectures.os=linux \
-      --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
-      --config.supportedArchitectures.libc=glibc
-
-FROM openclaw-source AS openclaw-build
-RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
-    --mount=type=secret,id=COREPACK_NPM_REGISTRY,env=COREPACK_NPM_REGISTRY \
-    --mount=type=cache,id=oce-openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    pnpm install --frozen-lockfile
-RUN NODE_OPTIONS=--max-old-space-size=4096 \
-    OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=4096 \
-    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 \
-    OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS="codex slack" pnpm build:docker \
-    && OPENCLAW_PREFER_PNPM=1 pnpm ui:build
-
-# Preserve compiled workspace packages and generated plugin assets without
-# overwriting the clean production dependency tree with development dependencies.
-FROM openclaw-build AS openclaw-build-output
-RUN rm -rf node_modules ui/node_modules \
-    && find packages extensions -name node_modules -prune -exec rm -rf {} +
-
-FROM openclaw-production-deps AS openclaw-runtime
-COPY --from=openclaw-build-output /openclaw/ ./
-RUN OPENCLAW_EXTENSIONS="codex slack" node scripts/prune-docker-plugin-dist.mjs \
-    && node scripts/docker/verify-fs-safe-native.mjs --package-root /openclaw --mode require \
-    && rm -rf node_modules/openclaw node_modules/.bin/openclaw \
-    && node scripts/check-package-dist-imports.mjs /openclaw \
-    && rm -rf src test tests ui apps vendor .github
-
 FROM ${NODE_BASE_IMAGE} AS runtime
 
 ARG TARGETARCH
+# TODO: Pin the OpenClaw release providing `plugins install --no-enable` before
+# shipping managed plugin preparation; 2026.9.1 cannot preserve install policy.
+ARG OPENCLAW_VERSION=2026.9.1
+ARG OPENCLAW_CODEX_PLUGIN_VERSION=2026.9.1
+ARG OPENCLAW_SLACK_PLUGIN_VERSION=2026.9.1
+ARG OPENAI_CODEX_VERSION=0.152.1
 
 ENV NODE_ENV=production
 ENV PATH=/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -99,13 +60,20 @@ RUN chmod -R a+rX /opt/oce/repository-credentials \
     && test -f /opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/native-git.js \
     && /usr/bin/git config --system --add include.path /run/oce/repository-credentials/gitconfig
 
-COPY --from=openclaw-runtime /openclaw /app/node_modules/openclaw
+RUN npm init -y >/dev/null \
+  && npm install --omit=dev --no-audit --no-fund \
+    "openclaw@${OPENCLAW_VERSION}" \
+    "@openclaw/codex@${OPENCLAW_CODEX_PLUGIN_VERSION}" \
+    "@openclaw/slack@${OPENCLAW_SLACK_PLUGIN_VERSION}" \
+    "@openai/codex@${OPENAI_CODEX_VERSION}" \
+  && npm cache clean --force
 
-RUN mkdir -p node_modules/.bin ./plugin-skills /etc/openclaw /home/node/.codex/generated_images \
+RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw /home/node/.codex/generated_images \
   && chown node:node /home/node/.codex /home/node/.codex/generated_images \
   && chmod 700 /home/node/.codex /home/node/.codex/generated_images \
-  && ln -s ../openclaw/extensions/codex/node_modules/.bin/codex node_modules/.bin/codex \
-  && cp -R node_modules/openclaw/extensions/slack/skills/slack ./plugin-skills/slack \
+  && cp -R node_modules/@openclaw/codex node_modules/openclaw/dist/extensions/codex \
+  && cp -R node_modules/@openclaw/slack node_modules/openclaw/dist/extensions/slack \
+  && cp -R node_modules/@openclaw/slack/skills/slack ./plugin-skills/slack \
   && ln -s node_modules/openclaw/openclaw.mjs ./openclaw.mjs \
   && ln -s node_modules/openclaw/dist ./dist \
   && cp -R node_modules/openclaw/skills ./skills \
@@ -118,8 +86,6 @@ RUN mkdir -p node_modules/.bin ./plugin-skills /etc/openclaw /home/node/.codex/g
   && test "$(stat -c '%U:%G:%a' /home/node/.codex/generated_images)" = "node:node:700" \
   && node /app/openclaw.mjs --version \
   && codex --version \
-  && test -f /app/dist/extensions/file-transfer/openclaw.plugin.json \
-  && test -f /app/dist/extensions/memory-core/openclaw.plugin.json \
   && test -f /app/dist/extensions/codex/openclaw.plugin.json \
   && test -f /app/dist/extensions/slack/openclaw.plugin.json
 

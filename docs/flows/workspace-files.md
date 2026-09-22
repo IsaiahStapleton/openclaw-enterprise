@@ -111,7 +111,7 @@ startup cannot carry this init container and rejects workspace setup rather than
 dropping initialization.
 
 The runner checks the exact setup identity and workspace path, rejects links
-and conflicting files, and verifies OpenClaw `2026.9.5` and the optional rendered
+and conflicting files, and verifies OpenClaw `2026.9.1` and the optional rendered
 template digest. With no completion marker it runs native `setup` without
 starting the gateway, preserving native initialization such as Git creation.
 It atomically replaces supplied files, including empty strings, only if the
@@ -320,8 +320,6 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
-
-- 2026-09-22 10:36: Aligned native setup and rendered defaults with the pinned source runtime. (01a082d6-50c7-7953-808f-7e609f6fc7cb - 40ccb6041048db489eec703d041b3a3905b11440)
 
 - 2026-09-22 04:18: Added creation-time workspace setup and completion boundaries. (01a0c755-0518-7502-a533-64cd7465de15 - f3dbdd41c8f3b49573d1353a4b06ce510ee43a56)
 

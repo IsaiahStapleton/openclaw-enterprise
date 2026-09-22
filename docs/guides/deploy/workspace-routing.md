@@ -23,11 +23,11 @@ the service-key Secret and configure native trusted-proxy authentication below
 before creating a dedicated Agent. Direct access remains available for embedded
 Harnesses.
 
-The [runtime image recipe](../../../deploy/runtime/README.md) builds the required
-OpenClaw and plugins from one pinned source snapshot. Build and select matching
-Gateway and Harness images before deployment; updating the controller alone does
-not update installed images. See [runtime evidence and limits](../../testing/gateway-routing.md)
-for the scope of integration verification.
+The runtime Dockerfile's default `2026.9.1` packages do not include this stack.
+Updating the controller alone removes dedicated Gateway workspace mounts without
+supplying the replacement runtime path. Use matching images before deploying
+this change; source merges alone do not update installed images. Native node
+enrollment through Envoy and a complete Enterprise task remain unverified.
 
 ## Agent workspace files
 
