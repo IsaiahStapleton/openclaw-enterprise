@@ -3,8 +3,9 @@
 Follow one caller task from input to observable result. Keep decisions in
 functions that take data and return values; make effects and their orchestration
 easy to find. A reader should need little surrounding context to understand a
-step and identify who owns resources after failure. The readability preferences
-in this guide are recommendations; the linked language documents establish the
+step and identify who owns resources after failure. This guide puts the
+[design philosophy](design-philosophy.md) into practice. Its readability
+preferences are recommendations; the linked language documents establish the
 mechanics.
 
 The **illustrative TypeScript sketch** below exports enabled catalog entries in

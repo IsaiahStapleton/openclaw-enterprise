@@ -7,8 +7,12 @@ before treating a planned capability as available.
 
 ## Find the right source
 
-- [Readable code](readable-code.md) explains functions, values, composition,
-  and state ownership through an illustrative TypeScript example.
+- [Design philosophy](design-philosophy.md) explains how to put complete caller
+  tasks behind small interfaces with clear ownership and failure behavior.
+- [Readable code](readable-code.md) develops those principles through functions,
+  values, composition, and an illustrative TypeScript example. Use the
+  [design-review skill](../../.agents/skills/design-review/SKILL.md) to assess a
+  design or refactor through a supported caller.
 - [Driver development](driver-development.md) collects the base contracts for
   extending infrastructure behavior. For supported products and setup, use
   [Integrations](../guides/integrations/README.md).
