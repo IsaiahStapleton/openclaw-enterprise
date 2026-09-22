@@ -1,4 +1,5 @@
 import type {
+  InitialWorkspaceFiles,
   AgentDesiredRuntimeState,
   AgentStatus,
   HarnessExecutionMode,
@@ -349,6 +350,34 @@ export const agents = occSchema.table(
     })
       .onUpdate("restrict")
       .onDelete("no action"),
+  ],
+);
+
+export const workspaceSetups = occSchema.table(
+  "workspace_setups",
+  {
+    id: text("id").primaryKey(),
+    namespaceId: text("namespace_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    defaultsId: text("defaults_id"),
+    files: jsonb("files").$type<InitialWorkspaceFiles>(),
+    completed: boolean("completed").notNull().default(false),
+  },
+  (table) => [
+    unique("workspace_setups_agent_unique").on(table.namespaceId, table.agentId),
+    check("workspace_setups_id_length", sql`char_length(${table.id}) BETWEEN 1 AND 200`),
+    check("workspace_setups_defaults_id_valid", sql`${table.defaultsId} ~ '^[a-f0-9]{64}$'`),
+    check(
+      "workspace_setups_completion_valid",
+      sql`(${table.completed} AND ${table.files} IS NULL) OR (NOT ${table.completed} AND occ.workspace_setup_files_valid(${table.files}))`,
+    ),
+    foreignKey({
+      name: "workspace_setups_agent_owner",
+      columns: [table.namespaceId, table.agentId],
+      foreignColumns: [agents.namespaceId, agents.id],
+    })
+      .onUpdate("restrict")
+      .onDelete("cascade"),
   ],
 );
 

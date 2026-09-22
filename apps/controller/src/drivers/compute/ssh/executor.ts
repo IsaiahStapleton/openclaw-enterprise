@@ -57,7 +57,6 @@ export class SystemSshCommandExecutor implements SshCommandExecutor {
           "--",
           command.nodePath,
           "-",
-          command.operation,
         ],
         { stdio: ["pipe", "pipe", "pipe"] },
       );
@@ -104,7 +103,11 @@ export class SystemSshCommandExecutor implements SshCommandExecutor {
           resolve({ code: code ?? 1, stdout, stderr });
         }
       });
-      child.stdin.end(command.helper);
+      // Operation data can contain private setup documents. Send it on the encrypted
+      // stdin channel rather than exposing it in either local or remote process argv.
+      child.stdin.end(
+        `const SSH_OPERATION = ${JSON.stringify(command.operation)};\n${command.helper}`,
+      );
     });
   }
 }

@@ -7,7 +7,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
 import { SystemSshCommandExecutor } from "../../apps/controller/src/drivers/compute/ssh/executor.ts";
-import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
+import {
+  admitLoggingConfiguration,
+  WORKSPACE_DEFAULTS_ID,
+} from "../../packages/contracts/src/index.ts";
 import { sha256Hex } from "../../packages/utils/src/index.ts";
 
 const requiredNames = [
@@ -29,7 +32,7 @@ const skip = selected
 const INSPECT = String.raw`
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
-const input = JSON.parse(Buffer.from(process.argv[2], "base64").toString("utf8"));
+const input = JSON.parse(Buffer.from(SSH_OPERATION, "base64").toString("utf8"));
 function readJson(path) {
   return JSON.parse(fs.readFileSync(path, "utf8"));
 }
@@ -76,6 +79,101 @@ function output(command, args) {
       foreignStateReadable: foreignState.status === 0,
       foreignConfigReadable: foreignConfig.status === 0,
     };
+  }
+  if (input.operation.startsWith("workspace-failure-")) {
+    const agent = readJson(input.agentDir + "/agent.json");
+    const state = input.agentDir + "/state";
+    const workspace = state + "/workspace";
+    const userFile = workspace + "/USER.md";
+    const stockFile = state + "/proof-user-stock.md";
+    const configPath = state + "/proof-setup.json";
+    if (input.operation === "workspace-failure-seed") {
+      const runtimeOwner = fs.statSync(state);
+      fs.writeFileSync(configPath, JSON.stringify({
+        agents: { defaults: { workspace }, entries: { main: {} } }, gateway: { mode: "local" },
+      }), { mode: 0o600 });
+      fs.chownSync(configPath, runtimeOwner.uid, runtimeOwner.gid);
+      const native = spawnSync("runuser", ["--user", agent.runtimeUser, "--", process.execPath,
+        input.executable, "setup", "--baseline", "--workspace", workspace], {
+        env: { ...process.env, HOME: input.agentDir + "/home", OPENCLAW_STATE_DIR: state,
+          OPENCLAW_CONFIG_PATH: configPath },
+        cwd: state, encoding: "utf8", timeout: 120000,
+      });
+      if (native.status !== 0) throw new Error("Native baseline setup failed.");
+      const owner = fs.statSync(userFile);
+      fs.copyFileSync(userFile, stockFile);
+      fs.chownSync(stockFile, owner.uid, owner.gid);
+      if (output("mount", ["--bind", stockFile, userFile]).status !== 0) {
+        throw new Error("Disposable workspace bind mount failed.");
+      }
+      return { seeded: true };
+    }
+    if (input.operation === "workspace-failure-recover") {
+      if (output("mountpoint", ["-q", userFile]).status === 0 &&
+          output("umount", [userFile]).status !== 0) throw new Error("Workspace unmount failed.");
+      if (fs.existsSync(stockFile)) {
+        fs.writeFileSync(userFile, input.divergentContent ?? fs.readFileSync(stockFile));
+        if (input.divergentContent === undefined) {
+          fs.unlinkSync(stockFile);
+          fs.rmSync(configPath, { force: true });
+        }
+      }
+      return { recovered: true };
+    }
+    const uid = fs.statSync(workspace).uid;
+    const runtimeProcess = fs.readdirSync("/proc").some((pid) => {
+      if (!/^[0-9]+$/.test(pid)) return false;
+      try { return fs.statSync("/proc/" + pid).uid === uid; }
+      catch (error) { if (["ENOENT", "ESRCH"].includes(error.code)) return false; throw error; }
+    });
+    const listener = await new Promise((resolve) => {
+      const socket = require("node:net").connect(agent.port, "127.0.0.1");
+      socket.once("connect", () => { socket.destroy(); resolve("connected"); });
+      socket.once("error", (error) => resolve(error.code));
+      socket.setTimeout(1000, () => { socket.destroy(); resolve("timeout"); });
+    });
+    return {
+      filesMatch: Object.entries(input.files).every(([name, content]) => fs.readFileSync(workspace + "/" + name, "utf8") === content),
+      userIsStock: fs.readFileSync(userFile, "utf8") === fs.readFileSync(stockFile, "utf8"),
+      markerExists: fs.existsSync(workspace + "/.oce-workspace-setup.json"),
+      metadataExists: fs.existsSync(input.agentDir + "/workspace-setup.json"),
+      currentExists: fs.existsSync(input.agentDir + "/current"),
+      unitExists: fs.existsSync(input.unitPath), runtimeProcess, listener,
+    };
+  }
+  if (input.operation === "workspace") {
+    const workspace = input.agentDir + "/state/workspace";
+    const metadata = readJson(input.agentDir + "/workspace-setup.json");
+    const active = spawnSync("systemctl", ["is-active", "--quiet", input.unit]).status === 0;
+    return {
+      matches: Object.entries(input.files).every(([name, content]) => fs.readFileSync(workspace + "/" + name, "utf8") === content),
+      git: fs.existsSync(workspace + "/.git"),
+      metadataOnly: metadata.completed === true && !Object.hasOwn(metadata, "files") && metadata.defaultsId === input.defaultsId,
+      active,
+    };
+  }
+  if (input.operation === "workspace-edit") {
+    const agent = readJson(input.agentDir + "/agent.json");
+    const result = spawnSync("runuser", ["--user", agent.runtimeUser, "--", process.execPath, "-"], {
+      input: "require('node:fs').writeFileSync(" + JSON.stringify(input.agentDir + "/state/workspace/AGENTS.md") + "," + JSON.stringify(input.content) + ")",
+      encoding: "utf8",
+    });
+    return { edited: result.status === 0 };
+  }
+  if (input.operation === "workspace-guard") {
+    const marker = input.agentDir + "/state/workspace/.oce-workspace-setup.json";
+    const saved = marker + ".proof-backup";
+    output("systemctl", ["stop", input.unit]);
+    fs.renameSync(marker, saved);
+    try {
+      const started = spawnSync("systemctl", ["start", input.unit], { timeout: 15000, encoding: "utf8" });
+      const active = spawnSync("systemctl", ["is-active", "--quiet", input.unit]);
+      return { refused: started.status !== 0, active: active.status === 0 };
+    } finally {
+      output("systemctl", ["stop", input.unit]);
+      fs.renameSync(saved, marker);
+      output("systemctl", ["reset-failed", input.unit]);
+    }
   }
   if (input.operation === "env-state") {
     const contents = fs.readFileSync(input.agentDir + "/env");
@@ -205,10 +303,27 @@ test(
       configurationKind: "agent",
       configurationGeneration: 1,
       configuration,
-      harness: { id: "openclaw", version: "2026.7.1", mode: "embedded" },
+      harness: { id: "openclaw", version: "2026.9.1", mode: "embedded" },
       compute: { id: driver.id, implementation: driver.implementation },
       servicePrincipalId: `sp-${randomUUID()}`,
       createdAt: namespace.createdAt,
+    };
+    const setup = {
+      id: `setup-${randomUUID()}`,
+      namespaceId: namespace.id,
+      agentId,
+      defaultsId: WORKSPACE_DEFAULTS_ID,
+      files: { "AGENTS.md": "# SSH setup proof\r\nPrivate setup instructions.\r\n", "USER.md": "" },
+      completed: false,
+    };
+    const setupContext = {
+      harnessAuth: { method: "runtime" },
+      secretEnvironment: [],
+      workspaceSetup: setup,
+    };
+    const completedContext = {
+      ...setupContext,
+      workspaceSetup: { ...setup, files: undefined, completed: true },
     };
     const second = {
       ...first,
@@ -272,13 +387,19 @@ test(
             ...extra,
           }),
         ).toString("base64"),
-        timeoutMs: operation === "model" ? 190_000 : 30_000,
+        timeoutMs:
+          operation === "workspace-failure-seed"
+            ? 150_000
+            : operation === "model"
+              ? 190_000
+              : 30_000,
       });
       assert.equal(result.code, 0, "Real SSH host inspection must succeed.");
       return JSON.parse(result.stdout);
     };
     await driver.preflight();
     let meterStarted = false;
+    let partialWriteSeeded = false;
     try {
       assert.equal((await driver.ensureNamespace(namespace)).namespaceReady, true);
       if (modelProof) {
@@ -342,14 +463,64 @@ test(
         },
       };
       driver.bindAgent(binding);
-      assert.equal((await driver.prepareRevision(first, { secretEnvironment: [] })).ready, true);
+      // An incompatible preview must not install a runnable service or admit first use.
+      await assert.rejects(
+        driver.prepareRevision(first, {
+          ...setupContext,
+          workspaceSetup: { ...setup, defaultsId: "0".repeat(64) },
+        }),
+      );
+      // A real bind mount permits native reads but refuses replacement of the second
+      // supplied file. The first atomic write must survive without opening execution.
+      partialWriteSeeded = true;
+      assert.deepEqual(
+        await inspect("workspace-failure-seed", { executable: runtime.openclawPath }),
+        { seeded: true },
+      );
+      await assert.rejects(driver.prepareRevision(first, setupContext));
+      const inactiveSetup = {
+        filesMatch: true,
+        userIsStock: true,
+        markerExists: false,
+        metadataExists: false,
+        currentExists: false,
+        unitExists: false,
+        runtimeProcess: false,
+        listener: "ECONNREFUSED",
+      };
+      assert.deepEqual(
+        await inspect("workspace-failure-inspect", {
+          files: { "AGENTS.md": setup.files["AGENTS.md"] },
+        }),
+        inactiveSetup,
+      );
+      // A subsequent user edit must fail closed rather than be overwritten on retry.
+      const divergentUser = "User-owned content after interrupted initialization.\n";
+      assert.deepEqual(
+        await inspect("workspace-failure-recover", { divergentContent: divergentUser }),
+        { recovered: true },
+      );
+      await assert.rejects(driver.prepareRevision(first, setupContext));
+      assert.deepEqual(
+        await inspect("workspace-failure-inspect", {
+          files: { "AGENTS.md": setup.files["AGENTS.md"], "USER.md": divergentUser },
+        }),
+        { ...inactiveSetup, userIsStock: false },
+      );
+      assert.deepEqual(await inspect("workspace-failure-recover"), { recovered: true });
+      partialWriteSeeded = false;
+      assert.equal((await driver.prepareRevision(first, setupContext)).ready, true);
+      assert.deepEqual(
+        await inspect("workspace", { files: setup.files, defaultsId: setup.defaultsId }),
+        { matches: true, git: true, metadataOnly: true, active: false },
+      );
       let operatorEnv;
       if (modelProof) {
         await provision(providerKey);
         operatorEnv = await inspect("env-state");
         assert.equal(operatorEnv.mode, 0o600);
       }
-      await driver.activateRevision(first);
+      await driver.activateRevision(first, setupContext);
       const observedFirst = await inspect("inspect");
       assert.equal(observedFirst.current, `revisions/${sha256Hex(first.id, 12)}`);
       assert.equal(observedFirst.active, true);
@@ -366,6 +537,21 @@ test(
         assert.ok((await inspect("meter")).count > 0);
         assert.deepEqual(await inspect("env-state"), operatorEnv);
       }
+      const editedFiles = {
+        ...setup.files,
+        "AGENTS.md": "Edited by the Agent after initial setup.\n",
+      };
+      assert.deepEqual(await inspect("workspace-edit", { content: editedFiles["AGENTS.md"] }), {
+        edited: true,
+      });
+      // A lost completion acknowledgement still delivers pending bytes; replay must preserve edits.
+      assert.equal((await driver.prepareRevision(first, setupContext)).ready, true);
+      assert.deepEqual(
+        await inspect("workspace", { files: editedFiles, defaultsId: setup.defaultsId }),
+        { matches: true, git: true, metadataOnly: true, active: true },
+      );
+      assert.deepEqual(await inspect("workspace-guard"), { refused: true, active: false });
+      await driver.activateRevision(first, completedContext);
       const marker = randomUUID();
       assert.deepEqual(await inspect("marker", { marker }), { written: true });
       driver.bindAgent({
@@ -392,8 +578,8 @@ test(
       assert.equal(isolation.foreignStateReadable, false);
       assert.equal(isolation.foreignConfigReadable, false);
       driver.bindAgent(binding);
-      assert.equal((await driver.prepareRevision(second, { secretEnvironment: [] })).ready, true);
-      await driver.activateRevision(second);
+      assert.equal((await driver.prepareRevision(second, completedContext)).ready, true);
+      await driver.activateRevision(second, completedContext);
       // A changed admitted snapshot restarts this Agent while its writable state remains intact.
       const cutover = await inspect("inspect");
       assert.equal(cutover.current, `revisions/${sha256Hex(second.id, 12)}`);
@@ -401,6 +587,10 @@ test(
       assert.equal(cutover.readyStatus, 200);
       assert.equal(cutover.marker, marker);
       assert.equal(cutover.oldRevisionExists, true);
+      assert.deepEqual(
+        await inspect("workspace", { files: editedFiles, defaultsId: setup.defaultsId }),
+        { matches: true, git: true, metadataOnly: true, active: true },
+      );
       driver.bindAgent(binding);
       await driver.retireRevision(first);
       const retired = await inspect("inspect");
@@ -423,7 +613,7 @@ test(
         );
         await provision("sk-invalid-runtime-proof");
         const invalidEnv = await inspect("env-state");
-        await driver.activateRevision(second);
+        await driver.activateRevision(second, completedContext);
         assert.equal((await inspect("inspect")).readyStatus, 200);
         assert.equal(
           (await inspect("meter")).count,
@@ -442,6 +632,9 @@ test(
         assert.deepEqual(await inspect("env-state"), invalidEnv);
       }
     } finally {
+      if (partialWriteSeeded) {
+        await inspect("workspace-failure-recover");
+      }
       if (meterStarted) {
         await inspect("stop-meter");
       }

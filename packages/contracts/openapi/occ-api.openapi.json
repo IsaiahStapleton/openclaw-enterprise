@@ -2326,6 +2326,32 @@
                       { "type": "null" }
                     ]
                   },
+                  "initialWorkspaceFiles": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "AGENTS.md": {
+                        "maxLength": 16384,
+                        "pattern": "^[^\\u0000]*$",
+                        "type": "string"
+                      },
+                      "IDENTITY.md": {
+                        "maxLength": 16384,
+                        "pattern": "^[^\\u0000]*$",
+                        "type": "string"
+                      },
+                      "SOUL.md": {
+                        "maxLength": 16384,
+                        "pattern": "^[^\\u0000]*$",
+                        "type": "string"
+                      },
+                      "USER.md": {
+                        "maxLength": 16384,
+                        "pattern": "^[^\\u0000]*$",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
                   "name": {
                     "maxLength": 200,
                     "minLength": 1,
@@ -2367,7 +2393,8 @@
                     },
                     "maxItems": 16,
                     "type": "array"
-                  }
+                  },
+                  "workspaceDefaultsId": { "pattern": "^[a-f0-9]{64}$", "type": "string" }
                 },
                 "required": ["name", "configurationId"],
                 "type": "object"

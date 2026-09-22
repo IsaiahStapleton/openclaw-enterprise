@@ -107,6 +107,9 @@ function classifyReceipts(receipts, manifest) {
   if (receipts.length === 27) {
     return "repositoryCredentials";
   }
+  if (receipts.length === 28) {
+    return "repositoryRetention";
+  }
   refuse("an incomplete or unsupported development history is installed");
 }
 

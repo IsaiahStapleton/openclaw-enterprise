@@ -8,7 +8,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
+import {
+  admitLoggingConfiguration,
+  WORKSPACE_DEFAULTS_ID,
+} from "../../packages/contracts/src/index.ts";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import {
   configureExistingK3dLocalPathSharedFileSystem,
@@ -1872,6 +1875,39 @@ test(
       assert.equal(denied.status, 403, `${label}: ${JSON.stringify(denied.error)}`);
     }
 
+    const initialWorkspaceFilesByAgent = new Map();
+    async function assertInitialWorkspace(
+      namespaceId,
+      agentId,
+      expectedFiles,
+      candidate,
+      executionMode = "dedicated",
+    ) {
+      const placement = placements.get(namespaceId);
+      const output = await kubectl(
+        "exec",
+        `deployment/${executionMode === "embedded" ? gatewayName(agentId) : revisionName(candidate)}`,
+        "--namespace",
+        placement,
+        "-c",
+        executionMode === "embedded" ? "gateway" : "agent",
+        "--",
+        "node",
+        "-e",
+        `const fs = require('node:fs'); process.stdout.write(JSON.stringify(Object.fromEntries(${JSON.stringify(Object.keys(expectedFiles))}.map(name => [name, fs.readFileSync(${JSON.stringify(executionMode === "embedded" ? "/home/node/.openclaw/workspace/" : "/home/node/workspace/")} + name, 'utf8')]))));`,
+      );
+      assert.deepEqual(JSON.parse(output), expectedFiles);
+      const completed = await state.read((view) => view.workspaceSetups.find(namespaceId, agentId));
+      assert.equal(completed.completed, true);
+      assert.equal(completed.files, undefined, "activation removes staged document bytes");
+      const delivered = await resource("secret", `workspace-setup-${hash(agentId)}`, placement);
+      const payload = JSON.parse(
+        Buffer.from(delivered.data["setup.json"], "base64").toString("utf8"),
+      );
+      assert.equal(payload.completed, true);
+      assert.equal(payload.files, undefined, "runtime delivery retains only its restart guard");
+    }
+
     async function createAgent(namespaceId, label, options = {}) {
       const executionMode = options.executionMode ?? "dedicated";
       const model = executionMode === "embedded" ? "openai/gpt-4.1" : "codex/gpt-4.1";
@@ -1932,6 +1968,15 @@ test(
       const created = await request("POST", `/namespaces/${namespaceId}/agents`, {
         name: `${label}-${randomUUID()}`,
         configurationId: configuration.data.id,
+        ...(runtimeImage === undefined
+          ? {}
+          : {
+              initialWorkspaceFiles: {
+                "USER.md": `Initial ${label} user directives\n`,
+                "SOUL.md": "",
+              },
+              workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
+            }),
         executionMode,
         harnessAuth: {
           method: "api_key",
@@ -1941,6 +1986,16 @@ test(
       assert.equal(created.status, 201, JSON.stringify(created.error));
       assert.equal(typeof created.data.servicePrincipalId, "string");
       assert.notEqual(created.data.servicePrincipalId.trim(), "");
+      if (runtimeImage !== undefined) {
+        initialWorkspaceFilesByAgent.set(created.data.id, {
+          "USER.md": `Initial ${label} user directives\n`,
+          "SOUL.md": "",
+        });
+        assert.equal(
+          JSON.stringify(created.data).includes(`Initial ${label} user directives`),
+          false,
+        );
+      }
       await assertDeployDenied(namespaceId, created.data.id, `${label} before model Secret grant`);
       await grantSecretOperate(namespaceId, created.data.servicePrincipalId, secret.data.id, label);
       if (boundSecret !== undefined) {
@@ -2079,6 +2134,17 @@ test(
         await waitForActive(namespaceId, agent.id, candidate.id);
         const placement = placements.get(namespaceId);
         await assertReadyGateway(placement, agent.id, namespaceId, candidate);
+        if (runtimeImage !== undefined) {
+          // These bytes came through normal HTTP creation, PostgreSQL and the worker;
+          // readiness cannot be reported before native setup and private delivery cleanup.
+          await assertInitialWorkspace(
+            namespaceId,
+            agent.id,
+            initialWorkspaceFilesByAgent.get(agent.id),
+            candidate,
+            executionMode,
+          );
+        }
         if (executionMode === "dedicated") {
           const deployment = await resource("deployment", revisionName(candidate), placement);
           assert.equal(deployment.spec.template.spec.serviceAccountName, agentName(agent.id));
@@ -2262,6 +2328,25 @@ test(
       "-e",
       `require('node:fs').writeFileSync('/home/node/workspace/${retainedFile}', ${JSON.stringify(retainedValue)})`,
     );
+    const editedWorkspaceFiles = {
+      "USER.md": "User edit retained across stop and redeploy\n",
+      "SOUL.md": "",
+    };
+    if (runtimeImage !== undefined) {
+      // A real edit to the live durable files must survive a later admitted revision.
+      await kubectl(
+        "exec",
+        `deployment/${gatewayName(adoptedTenant.id)}`,
+        "--namespace",
+        existingName,
+        "-c",
+        "gateway",
+        "--",
+        "node",
+        "-e",
+        `require('node:fs').writeFileSync('/home/node/.openclaw/workspace/USER.md', ${JSON.stringify(editedWorkspaceFiles["USER.md"])})`,
+      );
+    }
     const stopped = await request(
       "POST",
       `/namespaces/${adopted.data.id}/agents/${adoptedTenant.id}/stop`,
@@ -2308,6 +2393,14 @@ test(
     assert.notEqual(restarted.id, admitted[4].id);
     await waitForActive(adopted.data.id, adoptedTenant.id, restarted.id);
     await assertReadyGateway(existingName, adoptedTenant.id, adopted.data.id, restarted);
+    if (runtimeImage !== undefined) {
+      await assertInitialWorkspace(
+        adopted.data.id,
+        adoptedTenant.id,
+        editedWorkspaceFiles,
+        restarted,
+      );
+    }
     const restartedPod = await waitFor("redeployed Agent revision Pod to become ready", async () =>
       (await resources("pods", existingName)).find(
         ({ metadata, status }) =>

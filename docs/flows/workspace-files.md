@@ -1,6 +1,6 @@
 ---
 created: 2026-08-31
-updated: 2026-09-21
+updated: 2026-09-22
 last_updated_session: 01a082d6-50c7-7953-808f-7e609f6fc7cb
 ---
 
@@ -8,22 +8,25 @@ last_updated_session: 01a082d6-50c7-7953-808f-7e609f6fc7cb
 
 ## Overview
 
-An authenticated caller reads or replaces `AGENTS.md`, `SOUL.md`, `IDENTITY.md`,
-or `USER.md` on an active Agent. OCC authorizes the exact Agent, derives its
-private endpoint through Compute, and sends one native file RPC through Envoy
-Gateway. The flow ends with a bounded response and, for writes, metadata-only
-audit evidence. File contents remain in the native workspace.
+An authenticated caller supplies initial `AGENTS.md`, `SOUL.md`, `IDENTITY.md`,
+and `USER.md` contents at Agent creation. OCC stages those inputs privately;
+Compute initializes the exact Agent's durable workspace before first execution.
+After activation, OCC discards staged bytes and retains completion metadata.
+
+A later read or edit authorizes the exact active Agent, derives its private
+endpoint through Compute, and sends one native file RPC through Envoy Gateway.
+This flow ends at setup completion or the bounded live-file response; model
+execution and general revision activation belong to adjacent flows.
 
 ## Entry Points
 
-- `apps/controller/src/index.ts:createFastifyApp` handles `GET` and
+- `apps/controller/src/index.ts:createFastifyApp` accepts initial contents through
+  `POST /namespaces/:namespaceId/agents` and handles live `GET` and
   `PUT /namespaces/:namespaceId/agents/:agentId/workspace/files/:name`.
-- `apps/controller/src/composition/workspace-files.ts:createWorkspaceFilesAccess`
-  binds the Installation-selected Compute Driver and mounted service-key file.
-- `apps/controller/src/gateway/workspace-files-client.ts:createNativeWorkspaceFilesAccess`
-  connects using the published native gateway client.
+- `packages/occ/src/index.ts:createAgent` authorizes creation and persists private
+  setup state; `apps/controller/src/worker.ts` passes it to Compute on deployment.
 
-The Kubernetes worker must have provisioned the Agent's private HTTPRoute and
+For live file access, the Kubernetes worker must have provisioned the Agent's private HTTPRoute and
 native gateway. Installation operators enable the shared Envoy Gateway,
 native trust, and network restrictions described in
 [deployment](../guides/deploy/workspace-routing.md#agent-workspace-files). The
@@ -37,6 +40,15 @@ an existing issuer and explicit hostname instead.
 
 ```mermaid
 graph TD
+  subgraph Initial["Creation and first deployment"]
+    S["Create Agent with initial files"] --> T["Authorize and stage exact-Agent input"]
+    T --> U["Separate deploy request"]
+    U --> V["Compute initializes durable workspace"]
+    V --> W{"Setup complete?"}
+    W -->|no| X["Block execution; retain pending input"]
+    W -->|yes| Y["Start runtime; activate revision"]
+    Y --> Z["Clear staged bytes; retain completion metadata"]
+  end
   A["GET or PUT Agent workspace file"] --> B["OCC authenticates and validates request"]
   B --> C["Authorize exact Agent and select active revision"]
   C --> D["Compute derives private Agent URL"]
@@ -56,7 +68,75 @@ graph TD
 
 ## Execution Trace
 
-### 1. Composition configures private access
+### 1. Creation validates and privately stages the inputs
+
+`apps/controller/src/console/agents/create.mjs` fills four textareas from
+`workspace-defaults.mjs` and submits their values with `WORKSPACE_DEFAULTS_ID`.
+`apps/controller/src/index.ts:createFastifyApp` rejects a stale defaults identity;
+`packages/contracts/src/workspace-setup.ts:normalizeInitialWorkspaceFiles`
+rejects unknown names, invalid Unicode, NUL, and values above 16 KiB UTF-8.
+An absent or empty map creates no setup state. The HTTP create route has a
+448 KiB default body limit; a configured controller limit takes precedence.
+
+`packages/occ/src/index.ts:createAgent` checks Namespace-scoped Agent creation,
+exact Configuration read, and the existing binding permissions. Its transaction
+creates a stopped Agent and, when keys were supplied, a private `workspaceSetups`
+record keyed by exact Namespace/Agent. No AgentRevision is created. Inputs do
+not enter the Agent, Configuration, revision snapshot, public response, or
+metadata-only create audit. The original API strings are preserved; Console
+textarea values use LF newlines.
+
+### 2. Deployment initializes storage before execution
+
+`apps/controller/src/worker.ts` reads private setup state while resolving
+`ComputeRevisionContext`. A selected Driver without `supportsWorkspaceSetup`
+returns `WORKSPACE_SETUP_UNSUPPORTED`. The existing deployment worker owns the
+Agent's serialized startup and passes `workspaceSetup` to Compute.
+
+The bundled Drivers deliver inputs to the shared
+`apps/controller/src/drivers/compute/workspace-setup-runtime.ts:WORKSPACE_SETUP_RUNTIME`:
+Kubernetes uses an owned Secret and an init container on the workspace owner
+(Gateway for embedded execution; Harness for dedicated execution); Docker uses a
+separate setup container and Agent-owned durable volumes; SSH uses the protected
+exact-Agent directory and remote helper. Delivery does not put document strings
+in container arguments or environment values. Dedicated Harness startup must
+also verify completion before execution. Unsupported workspace placement fails
+instead of writing outside the Agent's managed storage. Provider-owned Sandbox
+startup cannot carry this init container and rejects workspace setup rather than
+dropping initialization.
+
+The runner checks the exact setup identity and workspace path, rejects links
+and conflicting files, and verifies OpenClaw `2026.9.1` and the optional rendered
+template digest. With no completion marker it runs native `setup` without
+starting the gateway, preserving native initialization such as Git creation.
+It atomically replaces supplied files, including empty strings, only if the
+existing value is absent, stock, or already submitted. It runs native setup
+again so native `BOOTSTRAP.md` lifecycle sees the submitted profile, verifies
+the results, then atomically writes `.oce-workspace-setup.json`.
+
+A matching marker skips application, including after lost acknowledgement.
+Incomplete writes retry against the same safe-content conditions. A divergent
+file or missing/mismatched marker after recorded completion blocks startup;
+it never authorizes replay over later user edits. Native setup output and
+failure details are suppressed at the delivery boundary to avoid disclosing
+contents.
+
+### 3. Activation clears staged contents and keeps completion metadata
+
+`apps/controller/src/worker.ts` completes setup in the activation-completion
+transaction only after checking the exact active revision and work claim.
+`workspaceSetups.complete` removes document bytes and retains identity and
+completion metadata. Drivers remove or replace private delivery bytes with
+metadata; subsequent startup verifies the durable workspace marker.
+
+Failed or never-deployed Agents retain pending inputs. Agent deletion removes
+the private setup record through `packages/occ/src/index.ts:deleteAgent` and
+Driver cleanup owns the Agent's runtime storage. There is no public setup read
+or update endpoint. Creation without supplied keys follows ordinary startup.
+Once an Agent is active, live edits follow the independent path below and do
+not update the original setup record.
+
+### 4. Composition configures private access
 
 `apps/controller/src/server.mjs:start` validates the optional absolute
 `OCC_GATEWAY_API_KEY_PATH` before opening the database. Production and
@@ -73,7 +153,7 @@ bundle, or Node's existing trust store when no bundle is configured.
 Kubernetes derives endpoints from admitted Namespace/Agent IDs and Installation
 routing settings. Drivers without endpoint support cannot serve workspace files.
 
-### 2. OCC admits one exact-Agent file operation
+### 5. OCC admits one exact-Agent file operation
 
 `apps/controller/src/index.ts:createFastifyApp` requires a valid user
 session or scoped service API key. Native Agent credentials cannot invoke this
@@ -86,7 +166,7 @@ rejects NUL and unpaired UTF-16 surrogates, enforces 16 KiB of UTF-8 content,
 and uses a 48 KiB request-body limit. The deadline and disconnect signal cover
 admission and native access.
 
-### 3. Compute resolves a route and OCC loads the current key
+### 6. Compute resolves a route and OCC loads the current key
 
 `apps/controller/src/composition/workspace-files.ts:createWorkspaceFilesAccess`
 uses `ComputeDriver.getGatewayEndpoint(revision)` to resolve
@@ -104,102 +184,57 @@ before candidate activation. Stop and retirement remove the exact revision's
 endpoint before its policy, checking ownership and UID. See the
 [node endpoint contract](../reference/gateway-routing.md#native-node-endpoint).
 
-Dedicated runtime revisions require private routing and an enrollment client.
-`verifyGatewayRoutingConfiguration` rejects missing wiring before Kubernetes
-access, so removing shared storage cannot silently select a Gateway-local workspace.
-The enrollment path is implemented; matching runtime images and deployed
-Enterprise acceptance remain unverified.
-The local Compute path in
-`apps/controller/src/drivers/compute/kubernetes/index.ts:prepareWorkspaceNode`
-uses native setup RPCs through
-`apps/controller/src/gateway/node-enrollment-client.ts:createGatewayNodeEnrollment`:
+Dedicated runtimes require routing and enrollment wiring before Kubernetes access.
+`prepareWorkspaceNode` uses
+`gateway/node-enrollment-client.ts:createGatewayNodeEnrollment` after Gateway
+readiness. A revision-owned Secret holds the setup code, then the device ID.
+The next reconciliation attaches the node to the Harness; its Deployment uses
+`Recreate` throughout enrollment.
 
-- `prepareWorkspaceNode` waits for Gateway readiness before creating a setup
-  code. The next reconciliation attaches the node to the Harness workspace.
-  The Harness uses `Recreate` from its initial Deployment, avoiding a conflict
-  with Kubernetes default RollingUpdate fields. Enrollment survives Gateway
-  restarts; node readiness and plugin startup-token checks still apply.
-- A revision-owned Secret holds the setup code, then the confirmed device ID.
-  Readiness requires `file.fetch`, `file.stat`, `file.write`, `file.create`,
-  `dir.list`, `workspace.memory`, and `workspace.skills`.
-  `GATEWAY_RUNTIME_ENTRYPOINT` admits these commands before pairing on dedicated
-  transport, preserving denies; admitting them after binding persists an empty grant.
-- The Harness PVC holds revision-specific node identity at
-  `/home/node/.openclaw-node`, outside the workspace. `addWorkspaceNode` extends
-  the existing nonroot `prepare-private-state` init container to create its
-  directory at `0700` before the subPath mount, so native setup can tighten
-  permissions. Pod replacement reuses identity; each revision has its own
-  directory. Retirement removes the enrollment Secret; identity files remain
-  until Harness PVC deletion. There is no separate node PVC.
-- `AGENT_WITH_NODE_ENTRYPOINT` first runs native `setup --baseline` in the
-  Harness workspace. Missing default documents are created without replacing
-  existing edits; initialization failure stops startup. Compute passes only the
-  admitted `skipBootstrap` and `skipOptionalBootstrapFiles` options to this
-  setup, not the Gateway config or credentials. It then supervises the
-  existing Codex entrypoint and native node separately. Only the file node receives its setup code; neither child
-  receives OCC's administrative key. Compute starts the supervisor under `tini`
-  to reap descendants left by failed wrappers; the Sandbox command carries the
-  same invocation. Native Codex shell policy preserves the managed PATH and
-  disables login/profile replacement, keeping installed Skill commands discoverable.
-- Activation reads the exact revision's saved device ID. `GATEWAY_RUNTIME_ENTRYPOINT`
-  adds the native `file-transfer.config.workspaces.main` binding to its runtime
-  config before clearing the startup-failure observation and spawning Gateway;
-  the immutable revision ConfigMap stays unchanged. Candidate preparation
-  leaves the serving revision's binding intact. Losing an established binding
-  fails rather than restoring local file reads.
-- Default node grants permit reading the four owner documents, `BOOTSTRAP.md`,
-  and `MEMORY.md`; owner writes remain limited to four documents. Enabled
-  `bootstrap-extra-files` adds literal workspace document read grants, including
-  bracketed names. Explicit node policies are preserved; glob traversal and
-  contained symlinks remain unsupported by these defaults.
-- Attachments use read grants for `media/inbound/openclaw-staged-*` and read/write
-  grants for `media/inbound/openclaw-staged-*/**`. `file.create` transfers inputs
-  without replacing Harness edits. Outputs under `media/outbound/**` are read-only.
-  Fetches above 16 MiB use binary `file.fetch`, bounded by caller and node policy.
-  `dir.list` still requires native path grants; enabling a command grants no
-  additional file access.
-- Codex's `appServer.remoteWorkspaceRoot` defaults to the Harness workspace,
-  preserving explicit configuration. Its existing reader stages reply artifacts
-  before client cleanup, without broader node grants. These paths require the
-  matching upstream runtime; real Codex delivery and Envoy transfer remain unverified.
+- Readiness requires `file.fetch`, `file.stat`, `file.write`, `file.create`,
+  `dir.list`, `workspace.memory`, and `workspace.skills`. Gateway admits these
+  commands before pairing, preserving explicit denies.
+- The Harness PVC stores revision-specific identity at `/home/node/.openclaw-node`.
+  The nonroot private-state initializer creates it at `0700`; Pod replacement
+  reuses it. Retirement deletes the enrollment Secret; PVC deletion removes identity.
+- `AGENT_WITH_NODE_ENTRYPOINT` runs native `setup --baseline` before supervising
+  Codex and the node under `tini`. It passes admitted bootstrap options, preserves
+  existing edits, and stops on setup failure. Only the node receives its setup
+  code; neither process receives OCC's key. Codex preserves the managed PATH.
+- Activation reads the exact revision's device ID and sets
+  `file-transfer.config.workspaces.main` in runtime configuration before Gateway
+  starts. Candidate preparation preserves the serving binding; losing it fails
+  rather than restoring local reads. The revision ConfigMap remains immutable.
+- Default grants read the four owner documents, `BOOTSTRAP.md`, and `MEMORY.md`;
+  owner writes remain limited to four documents. Enabled `bootstrap-extra-files`
+  adds literal read grants. Explicit policies survive; glob traversal and contained
+  symlinks remain unsupported by defaults.
+- Input grants cover `media/inbound/openclaw-staged-*` and its contents; `file.create`
+  preserves Harness edits. Outputs under `media/outbound/**` are read-only.
+  Binary fetches above 16 MiB remain bounded by caller and node policy. Command
+  admission never substitutes for path authorization.
 
-The chart supplies worker credentials and public trust; Compute installs
-Harness-to-Envoy egress before enrollment. The node also declares `workspace.memory`.
-The File Transfer adapter connects the shared Memory client to the existing native
-file worker over node duplex; default grants cover Memory files and maintenance
-outputs, while owner document editing retains its four-file allowlist. The index
-and embedding configuration remain on Gateway. Local native-worker read, write
-and watch checks pass; deployment verification remains pending.
+The chart supplies worker credentials/public trust and Compute installs node
+access to Envoy. Memory uses node duplex with existing native file workers;
+index and embedding configuration stay on Gateway. Skills uses remote discovery,
+reads and policy-checked dependency installation. Each host initializes its own
+image assets; Gateway-provided Skills stay local. See the
+[ownership table](../../specs/30-storage-split-integration.md#where-data-lives).
+Remote channel menus remain deferred to [#241](https://github.com/openclaw/openclaw-enterprise/issues/241).
 
-`workspace.skills` supplies workspace discovery, source reads and dependency
-installation. Gateway-provided Skills remain local; the
-[ownership table](../../specs/30-storage-split-integration.md#where-data-lives)
-distinguishes these from Harness-owned files. Gateway checks policy before
-requesting dependency installation on Harness. Each launcher runs
-`runtime-entrypoints.ts:initializeRuntimeAssets` from its own image; this replaces
-shared asset mounts, not local Gateway discovery. Remote-derived channel menus
-are deferred to [#241](https://github.com/openclaw/openclaw-enterprise/issues/241).
-Local discovery, reads, npm installation and Harness image initialization pass;
-deployed integration remains unverified.
-`kubernetes/index.ts:deployment` mounts the workspace and generated-image PVC
-only on Harness. Dedicated Gateway sessions move to its private state PVC;
-Harness no longer receives them. The existing Codex remote-media reader transfers
-generated-image bytes into Gateway media storage, so Gateway has no image-directory
-mount. Embedded mode keeps its existing storage layout.
-
-The Harness PVC still requests RWX because `worker.ts:observeRevision` prepares a
-new Harness revision before retiring the old one. This preserves the existing
-rollout behavior; the workspace interface itself does not require RWX. Removing
-that remaining backend requirement would require a separate revision/storage
-choice. The cutover has manifest checks, not deployed Enterprise proof.
-The custom-bootstrap limitations above remain explicit.
+Only Harness mounts dedicated workspace/generated-image storage. Gateway sessions
+use its private PVC; Codex's existing remote-media reader transfers reply artifacts
+before cleanup. Embedded storage is unchanged. The Harness PVC remains RWX because
+revision preparation precedes predecessor retirement; removing that backend
+requirement needs a separate rollout decision. These contracts require matching
+runtime images; local checks alone do not prove deployed Enterprise acceptance.
 
 The API reads the mounted key for each operation, so new connections pick up
 Secret rotation without an API restart. Missing routing, missing or invalid
 key material, expired deadlines, and unavailable targets fail closed. No URL
 or credential comes from caller JSON or headers.
 
-### 4. Envoy authenticates and routes the native connection
+### 7. Envoy authenticates and routes the native connection
 
 `apps/controller/src/gateway/workspace-files-client.ts:requestNativeWorkspaceFile` opens WSS with only the
 service key in `x-api-key`. The client verifies the server hostname and CA;
@@ -221,7 +256,7 @@ Envoy to the native gateway; the CIDR is not an independent authentication
 boundary. Native Configuration omits a gateway token in this mode. The native
 hello must grant `operator.admin` for writes; reads also accept `operator.read`.
 
-### 5. Native file access returns a bounded result
+### 8. Native file access returns a bounded result
 
 `apps/controller/src/gateway/workspace-files-client.ts:requestNativeWorkspaceFile`
 
@@ -242,6 +277,18 @@ replays it. The native client closes in the operation's cleanup path.
 
 ## Debugging and Verification
 
+- For initial setup failure, check revision/work status and the selected Driver's
+  support, native release, defaults identity, and durable workspace placement.
+  `WORKSPACE_SETUP_FAILED` intentionally omits document bytes. Do not delete a
+  completion marker to force a replay; missing initialized storage needs operator
+  recovery, not reuse of the creation payload.
+- A stale `workspaceDefaultsId` rejects creation with `409 RESOURCE_CONFLICT`;
+  reload the Console create form before submitting again. A create response alone
+  does not prove runtime initialization; verify active revision and live content.
+- The implementation gates initialization before execution. Structural checks,
+  Driver fixtures, and runtime setup checks each prove different boundaries;
+  the required first-use, retry, and redeploy scenarios need the real workflow
+  integration evidence described in the [feature spec](../../specs/34-agent-workspace-files-setup.md#verification).
 - For `503 DEPENDENCY_UNAVAILABLE`, check the Compute routing settings and key
   mount, then the Gateway, Certificate, SecurityPolicy, and HTTPRoute status.
   Check DNS/CA trust and exact NetworkPolicy peers before changing native auth.
@@ -269,60 +316,62 @@ replays it. The native client closes in the operation's cleanup path.
 
 ## Changelog
 
-- 2026-09-21 14:26: Document initial node command admission, stable Harness rollout strategy and nonroot node-state initialization in the accompanying startup fixes. (01a082d6-50c7-7953-808f-7e609f6fc7cb - a34328eb09ad9374d856a178af8cb03f5b0dfa57)
+- 2026-09-22 04:18: Added creation-time workspace setup and completion boundaries. (01a0c755-0518-7502-a533-64cd7465de15 - f3dbdd41c8f3b49573d1353a4b06ce510ee43a56)
 
-- 2026-09-20 19:37: Combined native admin UI subpath routing with the exact node endpoint and retained startup status ordering during upstream integration. (01a082d6-50c7-7953-808f-7e609f6fc7cb - afe3861dfec5d288fd5a4651a9e052e935e6493d)
+- 2026-09-21 14:26: Documented node admission and nonroot startup. (01a082d6-50c7-7953-808f-7e609f6fc7cb - a34328eb09ad9374d856a178af8cb03f5b0dfa57)
 
-- 2026-09-19 15:37: Required dedicated runtime routing before workload changes; reconciled node startup with plugin readiness and moved the native node probe into OCC's existing in-cluster fixture. (01a082d6-50c7-7953-808f-7e609f6fc7cb - 30878c9b0f830126e8433b76d1c7174227d311b6)
+- 2026-09-20 19:37: Combined admin and node routing. (01a082d6-50c7-7953-808f-7e609f6fc7cb - afe3861dfec5d288fd5a4651a9e052e935e6493d)
 
-- 2026-09-18 14:15: Clarified Skill source ownership and deferred remote channel menus; corrected dedicated workspace persistence. (01a082d6-50c7-7953-808f-7e609f6fc7cb - 56e4fa74eacb0c411f51353f4f726444fc572336)
+- 2026-09-19 15:37: Required dedicated routing and plugin readiness. (01a082d6-50c7-7953-808f-7e609f6fc7cb - 30878c9b0f830126e8433b76d1c7174227d311b6)
 
-- 2026-09-18 13:22: Reused Harness storage for revision-specific node identity; removed the separate node PVC lifecycle. (01a082d6-50c7-7953-808f-7e609f6fc7cb - e257c4d96934895de7d3e06980dddce05ae19725)
+- 2026-09-18 14:15: Clarified Skill ownership and menu deferral. (01a082d6-50c7-7953-808f-7e609f6fc7cb - 56e4fa74eacb0c411f51353f4f726444fc572336)
 
-- 2026-09-18 00:02: Confirmed that Compute returns the standard private Service endpoint; local routing proof now runs OCC inside Kubernetes instead of adding a host-only port seam. (authoring-run/245cc03e-4bd3-48b3-ba17-8d5e2768262d - 782017d5405e156116bd31e78fa744ef20c540cc)
-- 2026-09-17 20:24: Removed dedicated Gateway workspace/image mounts and made sessions Gateway-private; Harness revision storage remains RWX. (authoring-run/81318408-6a1f-4628-b3f2-04ab723554c8 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-18 13:22: Reused revision-specific Harness identity storage. (01a082d6-50c7-7953-808f-7e609f6fc7cb - e257c4d96934895de7d3e06980dddce05ae19725)
 
-- 2026-09-17 20:10: Initialized bundled/plugin Skills from each host image and removed their shared mounts; native Harness initialization and owner-edit preservation passed. (authoring-run/81318408-6a1f-4628-b3f2-04ab723554c8 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-18 00:02: Used in-cluster endpoint verification. (authoring-run/245cc03e-4bd3-48b3-ba17-8d5e2768262d - 782017d5405e156116bd31e78fa744ef20c540cc)
+- 2026-09-17 20:24: Separated Gateway sessions and Harness storage. (authoring-run/81318408-6a1f-4628-b3f2-04ab723554c8 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 20:00: Added Skills node command, path grants and Harness dependency PATH; discovery and reads verified locally, installation and storage cutover remain incomplete. (authoring-run/81318408-6a1f-4628-b3f2-04ab723554c8 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 20:10: Initialized assets from each host image. (authoring-run/81318408-6a1f-4628-b3f2-04ab723554c8 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 19:43: Added Memory node command and path grants; native-worker proof passed locally, deployment verification remains pending. (authoring-run/81318408-6a1f-4628-b3f2-04ab723554c8 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 20:00: Added remote Skills commands and grants. (authoring-run/81318408-6a1f-4628-b3f2-04ab723554c8 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 19:09: Limited completion gates to normal storage workflows; kept unsupported custom bootstrap behavior explicit. (authoring-run/aaa352ba-dcbd-49b1-b031-0580d511f561 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 19:43: Added remote Memory commands and grants. (authoring-run/81318408-6a1f-4628-b3f2-04ab723554c8 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 13:18: Connected the existing Codex remote reply-artifact path in the runtime configuration; live delivery verification remains pending. (authoring-run/d81f8dbd-ab58-4115-bad4-7d4d50382e04 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 19:09: Clarified ordinary-flow completion gates. (authoring-run/aaa352ba-dcbd-49b1-b031-0580d511f561 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 13:13: Reused exact command-bound grants for declared extra bootstrap files without expanding owner writes; glob and symlink support remain pending. (authoring-run/2a92b4f3-ac86-4352-a64a-3a0126288787 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 13:18: Connected Codex reply-artifact reads. (authoring-run/d81f8dbd-ab58-4115-bad4-7d4d50382e04 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 13:08: Required attachment upload support for node readiness and connected the routed test to the production enrollment client; real routed verification remains pending. (authoring-run/545cf8dc-f67c-4e84-aa23-e80359fea1d3 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 13:13: Granted literal extra bootstrap reads. (authoring-run/2a92b4f3-ac86-4352-a64a-3a0126288787 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 06:09: Updated the upstream binary output-read dependency; retained final-artifact and Enterprise runtime verification gaps. (authoring-run/7783310f-9f59-4cd0-9109-ca74877c066f - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 13:08: Connected attachment readiness and enrollment. (authoring-run/545cf8dc-f67c-4e84-aa23-e80359fea1d3 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 05:35: Added the output-folder read grant for pending native attachment delivery; retained transfer-size and staging verification gaps. (authoring-run/999ece5a-22b2-40a7-80fa-7d0d1f35bda2 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 06:09: Updated binary output-read dependency. (authoring-run/7783310f-9f59-4cd0-9109-ca74877c066f - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 05:13: Added the staging-directory read grant required by attachment preparation; native process verification exposed the missing grant. (authoring-run/e4b0b1f2-63ce-4291-8214-aa218ba984aa - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 05:35: Added output-folder read grant. (authoring-run/999ece5a-22b2-40a7-80fa-7d0d1f35bda2 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 05:01: Connected the native attachment command and restricted input-directory grants in the pending runtime integration. (authoring-run/87bd4d73-3f20-4949-8db1-54a3691ca4fe - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 05:13: Added attachment staging-directory read grant. (authoring-run/e4b0b1f2-63ce-4291-8214-aa218ba984aa - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 03:44: Enabled the native directory-list command without broadening file path grants; custom bootstrap grant selection remains pending. (authoring-run/e253e9b6-4a46-4c3c-84e6-f2f8ab34cc91 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 05:01: Connected restricted attachment commands. (authoring-run/87bd4d73-3f20-4949-8db1-54a3691ca4fe - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 03:35: Added native Harness workspace initialization before node and Codex startup; runtime image verification remains required. (authoring-run/b75fab11-a672-432b-a966-61bb491af2b4 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 03:44: Enabled bounded directory listing. (authoring-run/e253e9b6-4a46-4c3c-84e6-f2f8ab34cc91 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 03:24: Traced revision-owned node binding into native runtime configuration and its lost-binding failure; retained initialization and workflow parity gaps. (authoring-run/7804ba57-dbe8-4a75-8a04-b02ff9f03b38 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 03:35: Initialized Harness before node startup. (authoring-run/b75fab11-a672-432b-a966-61bb491af2b4 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 03:13: Added worker credentials, restricted node egress, and init-based descendant reaping; corrected CA rotation scope. Native workspace binding remains pending. (authoring-run/be0c5601-ea50-414b-a5f7-fdbc2aa6ef0d - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 03:24: Traced revision-owned workspace binding. (authoring-run/7804ba57-dbe8-4a75-8a04-b02ff9f03b38 - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 02:54: Added the pending Compute enrollment trace and serving-revision route repair; distinguished process tests from native container proof. (authoring-run/9238ab38-287b-43d6-818f-132a2aeab7df - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 03:13: Added worker trust and node egress. (authoring-run/be0c5601-ea50-414b-a5f7-fdbc2aa6ef0d - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-17 01:36: Added dedicated native node route provisioning and exact-owned cleanup through Compute; real Envoy node authentication remains pending verification. (authoring-run/e63c5d56-929f-40cb-9b31-e80f856690ca - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
+- 2026-09-17 02:54: Traced Compute enrollment and route repair. (authoring-run/9238ab38-287b-43d6-818f-132a2aeab7df - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-01 17:26: Replaced per-Agent endpoint maps with Compute-owned private Envoy routes, API-key authentication, and cert-manager certificate renewal. (01a04ae1-7ba7-7372-88a4-488e01f690ae - 3e26931d31ba03a7fa187c12009867c636a86041)
+- 2026-09-17 01:36: Added exact-owned native node routes. (authoring-run/e63c5d56-929f-40cb-9b31-e80f856690ca - 14ad14c04deeeaa79f325b14d492ab13730adc7f)
 
-- 2026-09-01 12:03: Documented the operator-configured endpoint map, API startup loading, Helm ConfigMap mount, and private WSS proxy boundary. (NOT_IN_SPEC)
-- 2026-09-01 12:03: Added the trusted-proxy native Configuration precondition that omits gateway auth tokens and recorded Docker/Kubernetes automatic token projection omission for that explicit mode. (NOT_IN_SPEC)
-- 2026-09-01 12:03: Clarified Docker tmpfs workspace lifetime and Kubernetes PVC workspace-file persistence proof boundaries. (NOT_IN_SPEC)
-- 2026-09-01 13:24: Replaced the superseded generic gateway administration flow with the current four-file workspace route and recorded the missing WSS target provisioning gap. (NOT_IN_SPEC)
-- 2026-09-01 08:38: Replaced the superseded native-device enrollment flow with the current fixed CLI execution path through Kubernetes exec. (cody/01a05d9c-4cb5-7602-8df5-56d7f8309f44 - 7b4a819f02d6950e8cc2a2e08eb29c2f668493ad)
-- 2026-08-31 16:49: Documented canonical private-key storage with derived native identity; the independent PVC identity pin remains unchanged. (cody/01a04ae1-7ba7-7372-88a4-488e01f690ae - f2e164c)
-- 2026-08-31 12:52: Corrected the native SDK pin and documented manual pairing pause, single helper barrier, and one reconnect under the enrollment deadline. (cody/01a04ae1-7ba7-7372-88a4-488e01f690ae - 61542d0)
-- 2026-08-31 12:41: Documented bundled Kubernetes native gateway enrollment, controller-owned token readiness, Agent-scoped dispatch, and unknown-outcome handling. (cody/01a04ae1-7ba7-7372-88a4-488e01f690ae - 61542d0)
+- 2026-09-01 17:26: Adopted Compute-owned Envoy routes. (01a04ae1-7ba7-7372-88a4-488e01f690ae - 3e26931d31ba03a7fa187c12009867c636a86041)
+
+- 2026-09-01 12:03: Documented endpoint-map configuration. (NOT_IN_SPEC)
+- 2026-09-01 12:03: Clarified trusted-proxy authentication. (NOT_IN_SPEC)
+- 2026-09-01 12:03: Clarified workspace persistence boundaries. (NOT_IN_SPEC)
+- 2026-09-01 13:24: Replaced generic administration flow. (NOT_IN_SPEC)
+- 2026-09-01 08:38: Documented bounded Kubernetes execution. (cody/01a05d9c-4cb5-7602-8df5-56d7f8309f44 - 7b4a819f02d6950e8cc2a2e08eb29c2f668493ad)
+- 2026-08-31 16:49: Documented private-key storage. (cody/01a04ae1-7ba7-7372-88a4-488e01f690ae - f2e164c)
+- 2026-08-31 12:52: Updated SDK and pairing behavior. (cody/01a04ae1-7ba7-7372-88a4-488e01f690ae - 61542d0)
+- 2026-08-31 12:41: Documented enrollment and uncertain outcomes. (cody/01a04ae1-7ba7-7372-88a4-488e01f690ae - 61542d0)

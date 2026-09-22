@@ -90,7 +90,7 @@ Envoy Pods on the configured HTTPS target port. File, Memory and Skills access
 use the enrolled node. Dedicated Gateway does not mount the Harness workspace
 or generated-image directories; sessions stay in Gateway private storage.
 Native runtime and Envoy integration verification remain incomplete. See the
-[enrollment trace](../flows/workspace-files.md#3-compute-resolves-a-route-and-occ-loads-the-current-key).
+[enrollment trace](../flows/workspace-files.md#6-compute-resolves-a-route-and-occ-loads-the-current-key).
 Real Envoy node-authentication verification is described in
 [routing tests](../testing/gateway-routing.md).
 

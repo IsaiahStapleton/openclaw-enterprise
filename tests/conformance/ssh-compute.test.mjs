@@ -162,7 +162,7 @@ async function fixture(t, selection = {}) {
     execute(command) {
       calls.push(command);
       return new Promise((resolve, reject) => {
-        const child = spawn(process.execPath, ["-", command.operation], {
+        const child = spawn(process.execPath, ["-"], {
           env: {
             ...process.env,
             PATH: `${fixtureBin}:${process.env.PATH}`,
@@ -193,7 +193,9 @@ async function fixture(t, selection = {}) {
             resolve({ code: code ?? 1, stdout, stderr });
           }
         });
-        child.stdin.end(command.helper);
+        child.stdin.end(
+          `const SSH_OPERATION = ${JSON.stringify(command.operation)};\n${command.helper}`,
+        );
       });
     },
   };
@@ -964,6 +966,52 @@ test("SSH host lock excludes concurrent helpers and is released by the kernel wh
   assert.equal((await stat(join(f.root, ".compute-lock"))).isFile(), true);
 });
 
+test("SSH setup failures withhold activation, preserve private input, and reject foreign workspaces", async (t) => {
+  for (const scenario of [
+    "foreign Agent",
+    "foreign workspace",
+    "unsupported roster",
+    "native failure",
+  ]) {
+    await t.test(scenario, async (t) => {
+      const f = await fixture(t);
+      assert.equal((await f.driver.ensureNamespace(tenant)).namespaceReady, true);
+      const configuration =
+        scenario === "foreign workspace"
+          ? { agents: { defaults: { workspace: "/tmp/foreign-workspace" } } }
+          : scenario === "unsupported roster"
+            ? { agents: { entries: { helper: {} } } }
+            : {};
+      const first = revision(f.driver, 1, "agent-ssh-setup", configuration);
+      bind(f.driver, first);
+      const content = "private-setup-content-must-not-leak";
+      const context = {
+        secretEnvironment: [],
+        harnessAuth: { method: "runtime" },
+        workspaceSetup: {
+          id: "setup-ssh",
+          namespaceId: tenant.id,
+          agentId: scenario === "foreign Agent" ? "another-agent" : first.agentId,
+          files: { "AGENTS.md": content },
+          completed: false,
+        },
+      };
+      assert.equal(f.driver.supportsWorkspaceSetup, true);
+      await assert.rejects(f.driver.prepareRevision(first, context), (error) => {
+        assert.equal(error.message.includes(content), false);
+        return /SSH/.test(error.message);
+      });
+      await missing(join(f.agentDir(first), "workspace-setup.json"));
+      await missing(join(f.agentDir(first), "current"));
+      await missing(join(f.units, f.unit(first)));
+      const snapshot = await readFile(join(f.revisionDir(first), "openclaw.json"), "utf8");
+      assert.equal(snapshot.includes(content), false);
+      const marker = await readFile(join(f.revisionDir(first), "revision.json"), "utf8");
+      assert.equal(marker.includes(content), false);
+    });
+  }
+});
+
 test("system SSH executor sends exact argv and stdin and bounds cancellation and timeout", async (t) => {
   const f = await fixture(t);
   const bin = join(f.base, "bin");
@@ -972,7 +1020,7 @@ test("system SSH executor sends exact argv and stdin and bounds cancellation and
   const ssh = join(bin, "ssh");
   await writeFile(
     ssh,
-    `#!${process.execPath}\nconst fs = require('node:fs');\nconst { spawn } = require('node:child_process');\nfs.writeFileSync(${JSON.stringify(join(f.base, "argv.json"))}, JSON.stringify(process.argv.slice(2)));\nconst child = spawn(process.execPath, ['-', process.argv.at(-1)], { stdio: 'inherit' });\nprocess.on('SIGTERM', () => child.kill('SIGTERM'));\nchild.on('exit', (code) => process.exit(code ?? 1));\n`,
+    `#!${process.execPath}\nconst fs = require('node:fs');\nconst { spawn } = require('node:child_process');\nfs.writeFileSync(${JSON.stringify(join(f.base, "argv.json"))}, JSON.stringify(process.argv.slice(2)));\nconst child = spawn(process.execPath, ['-'], { stdio: 'inherit' });\nprocess.on('SIGTERM', () => child.kill('SIGTERM'));\nchild.on('exit', (code) => process.exit(code ?? 1));\n`,
   );
   await chmod(ssh, 0o755);
   const previousPath = process.env.PATH;
@@ -989,7 +1037,7 @@ test("system SSH executor sends exact argv and stdin and bounds cancellation and
     identityFile: "/keys/id",
     knownHostsFile: "/keys/known_hosts",
     connectTimeoutSeconds: 7,
-    helper: 'process.stdout.write(JSON.stringify({value: process.argv[2]}) + "\\n");',
+    helper: 'process.stdout.write(JSON.stringify({value: SSH_OPERATION}) + "\\n");',
     operation: "e30=",
     timeoutMs: 5000,
   };
@@ -1021,7 +1069,6 @@ test("system SSH executor sends exact argv and stdin and bounds cancellation and
     "--",
     "/usr/bin/node",
     "-",
-    "e30=",
   ]);
   const pidFile = join(f.base, "helper.pid");
   const waiting = {

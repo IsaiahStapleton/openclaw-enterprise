@@ -117,8 +117,13 @@ Each result stays local to its file. Unknown write outcomes require a successful
 reload before another save; the editor never retries a write automatically.
 
 Creation uses the channel editor to update the initial Configuration JSON before
-its POST. It cannot send initial workspace files because the create API has no
-file fields and workspace access requires a deployed gateway.
+its POST. Separately, `apps/controller/src/console/agents/create.mjs` submits the
+four workspace textarea values as `initialWorkspaceFiles` plus
+`workspaceDefaultsId` in the Agent POST. OCC stages these exact-Agent inputs
+privately until Compute initializes the workspace before execution. This does
+not require a deployed gateway. The [workspace setup flow](../workspace-files.md)
+owns initialization, retry, and completion cleanup; the live editor above
+becomes available after deployment.
 
 ### 7. Confirm deletion and read back the Agent
 
