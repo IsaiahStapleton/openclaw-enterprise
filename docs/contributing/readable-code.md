@@ -90,6 +90,91 @@ OpenClaw Enterprise (OCE) uses exhaustive `ts-pattern` matching for tagged union
 and branches that would otherwise become nested ternaries. Follow that local convention without
 wrapping every `if` in a matcher.
 
+## Return expected outcomes as values
+
+Parsers and validators routinely encounter missing or invalid input. Return those
+expected outcomes as values so the caller can decide what to do. An optional
+value such as `string | undefined` is enough when every absent result calls for
+the same action. Use tagged outcomes when callers need different responses.
+Preserve those distinctions, especially when an absent required value must stop
+an operation.
+
+The same catalog exporter needs a title and a bullet. Here, a command's input
+adapter supplies optional strings. The title must contain non-whitespace text and
+no carriage return or newline; surrounding whitespace is trimmed. The bullet must
+be exactly `-` or `*`. Both fields are required, and validation reports the first
+problem, checking the title before the bullet.
+
+```ts
+import { match } from "ts-pattern";
+
+type ReportConfiguration = Readonly<{ title?: string; bullet?: string }>;
+type ReportOptionsOutcome =
+  | Readonly<{ kind: "missing"; field: "title" | "bullet" }>
+  | Readonly<{ kind: "invalid"; field: "title" | "bullet"; reason: string }>
+  | Readonly<{ kind: "ready"; options: ReportOptions }>;
+
+function parseReportTitle(value: string): string | undefined {
+  const title = value.trim();
+  if (title.length === 0 || /[\r\n]/u.test(value)) {
+    return undefined;
+  }
+  return title;
+}
+
+function parseReportOptions(input: ReportConfiguration): ReportOptionsOutcome {
+  if (input.title === undefined) {
+    return { kind: "missing", field: "title" };
+  }
+  const title = parseReportTitle(input.title);
+  if (title === undefined) {
+    return {
+      kind: "invalid",
+      field: "title",
+      reason: "Use a nonblank title without carriage returns or newlines.",
+    };
+  }
+  if (input.bullet === undefined) {
+    return { kind: "missing", field: "bullet" };
+  }
+  if (input.bullet !== "-" && input.bullet !== "*") {
+    return { kind: "invalid", field: "bullet", reason: "Choose - or *." };
+  }
+  return { kind: "ready", options: { title, bullet: input.bullet } };
+}
+
+async function exportConfiguredCatalog(
+  input: ReportConfiguration,
+  dependencies: ReportDependencies,
+): Promise<string> {
+  return match(parseReportOptions(input))
+    .with({ kind: "missing" }, ({ field }) => `Set the required ${field}.`)
+    .with({ kind: "invalid" }, ({ field, reason }) => `Correct ${field}: ${reason}`)
+    .with({ kind: "ready" }, async ({ options }) => {
+      const exportCatalog = createCatalogExporter(dependencies, options);
+      const count = await exportCatalog();
+      return count === 0 ? "No enabled entries; report unchanged." : `Exported ${count} entries.`;
+    })
+    .exhaustive();
+}
+```
+
+`parseReportTitle` groups its invalid cases because each needs a corrected title.
+`parseReportOptions` preserves missing versus invalid fields so the caller can
+ask for a required value or explain a correction. Neither case
+loads entries or writes a report. No default replaces a missing required option.
+With `{ title: "Catalog", bullet: "-" }`, the caller runs the existing exporter:
+it prepares the complete report before writing and preserves the empty-selection
+behavior.
+
+These values describe expected validation outcomes. The caller does not catch
+load or write failures. Exceptional failures such as a full disk or resource
+exhaustion propagate, or terminate execution, so the responsible upper layer can
+decide what to do. Do not turn them into an empty catalog, a validation message,
+or an invented retry. When a failure unwinds through the stack, resource owners
+still release what they acquire in `finally`. Fatal termination may prevent cleanup;
+returning outcomes does not remove cleanup obligations.
+
 ## Select dependencies once; pass changing data explicitly
 
 Choose concrete collaborators at startup or session construction: the composition
