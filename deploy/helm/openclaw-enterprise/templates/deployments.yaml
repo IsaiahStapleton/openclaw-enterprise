@@ -8,6 +8,10 @@ metadata:
     {{- include "openclaw.labels" (dict "root" $ "component" $component) | nindent 4 }}
 spec:
   replicas: 1
+  {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: openclaw-enterprise
@@ -19,7 +23,12 @@ spec:
         {{- include "openclaw.labels" (dict "root" $ "component" $component) | nindent 8 }}
     spec:
       serviceAccountName: openclaw-enterprise-{{ $component }}
+      {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 75
+      {{- else }}
       automountServiceAccountToken: true
+      {{- end }}
       securityContext:
         {{- include "openclaw.podSecurity" $ | nindent 8 }}
       {{- with $.Values.controlPlane.nodeSelector }}
@@ -27,6 +36,69 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
+        {{- if $.Values.repositoryCredentials.enabled }}
+        - name: repository-registry
+          configMap:
+            name: {{ $.Values.repositoryCredentials.registryConfigMapName | quote }}
+            items:
+              - key: {{ $.Values.repositoryCredentials.registryKey | quote }}
+                path: registry.json
+        - name: repository-public-ca
+          secret:
+            secretName: {{ $.Values.repositoryCredentials.publicCaSecretName | quote }}
+            items:
+              - key: {{ $.Values.repositoryCredentials.publicCaKey | quote }}
+                path: ca.crt
+        {{- if eq $component "worker" }}
+        - name: worker-api-access
+          projected:
+            defaultMode: 288 # 0440: root and the Pod filesystem group only.
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
+        - name: repository-inputs
+          projected:
+            defaultMode: 288 # 0440: root and the Pod filesystem group only.
+            sources:
+              - secret:
+                  name: {{ $.Values.repositoryCredentials.serviceConfigSecretName | quote }}
+                  items:
+                    - key: {{ $.Values.repositoryCredentials.serviceConfigKey | quote }}
+                      path: config.json
+              - secret:
+                  name: {{ $.Values.repositoryCredentials.appKeySecretName | quote }}
+                  items:
+                    - key: {{ $.Values.repositoryCredentials.appKeyKey | quote }}
+                      path: private-key.pem
+              - secret:
+                  name: {{ $.Values.repositoryCredentials.tlsSecretName | quote }}
+                  items:
+                    - key: tls.crt
+                      path: tls.crt
+                    - key: tls.key
+                      path: tls.key
+        - name: repository-private
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Mi
+        - name: repository-control
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        {{- end }}
+        {{- end }}
         - name: installation-startup
           secret:
             secretName: {{ $.Values.installation.secretName }}
@@ -131,7 +203,7 @@ spec:
             {{- end }}
             {{- else }}
             - name: OCC_WORKER_READINESS_PATH
-              value: /var/run/openclaw/ready
+              value: /run/openclaw-worker/ready
             - name: OCC_WORKER_POLL_INTERVAL_MS
               value: {{ $.Values.worker.pollIntervalMs | quote }}
             - name: OCC_WORKER_LEASE_DURATION_MS
@@ -142,6 +214,21 @@ spec:
               value: {{ $.Values.worker.convergenceTimeoutMs | quote }}
             {{- end }}
           volumeMounts:
+            {{- if $.Values.repositoryCredentials.enabled }}
+            - name: repository-registry
+              mountPath: /etc/openclaw/repository-registry
+              readOnly: true
+            - name: repository-public-ca
+              mountPath: /etc/openclaw/repository-ca
+              readOnly: true
+            {{- if eq $component "worker" }}
+            - name: worker-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: repository-control
+              mountPath: /run/openclaw/repository-control
+            {{- end }}
+            {{- end }}
             - name: installation-startup
               mountPath: /etc/openclaw/installation
               readOnly: true
@@ -168,7 +255,7 @@ spec:
             {{- end }}
             {{- else }}
             - name: worker-readiness
-              mountPath: /var/run/openclaw
+              mountPath: /run/openclaw-worker
             {{- end }}
           {{- if or (eq $component "api") $.Values.metrics.enabled }}
           ports:
@@ -198,4 +285,43 @@ spec:
             exec:
               command: [node, scripts/production-healthcheck.mjs, worker]
           {{- end }}
+        {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}
+        - name: repository-credentials
+          image: {{ $.Values.repositoryCredentials.image | quote }}
+          command: [node, /app/dist/composition/repository-credentials/projected-inputs.js]
+          args:
+            - --public-origin
+            - {{ printf "https://openclaw-enterprise-repository-credentials.%s.svc" $.Release.Namespace | quote }}
+            - --provider-id
+            - {{ $.Values.repositoryCredentials.providerId | quote }}
+          securityContext:
+            {{- include "openclaw.containerSecurity" $ | nindent 12 }}
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+          ports:
+            - name: repository-tls
+              containerPort: 8443
+          volumeMounts:
+            - name: repository-registry
+              mountPath: /etc/openclaw/repository-registry
+              readOnly: true
+            - name: repository-inputs
+              mountPath: /etc/openclaw/repository-inputs
+              readOnly: true
+            - name: repository-private
+              mountPath: /run/openclaw/repository-private
+            - name: repository-control
+              mountPath: /run/openclaw/repository-control
+          readinessProbe:
+            exec:
+              command: [node, /app/dist/composition/repository-credentials/probe.js]
+          livenessProbe:
+            exec:
+              command: [node, /app/dist/composition/repository-credentials/probe.js]
+          startupProbe:
+            exec:
+              command: [node, /app/dist/composition/repository-credentials/probe.js]
+            periodSeconds: 5
+            failureThreshold: 12
+        {{- end }}
 {{- end }}

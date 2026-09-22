@@ -662,6 +662,9 @@ List authorized Agents in one exact Namespace
 | `data[].namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data[].plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data[].providerId` | `string or null` | Yes | — |
+| `data[].repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
+| `data[].repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data[].repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data[].servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
 | `data[].status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
@@ -704,6 +707,9 @@ Create a Namespace-owned Agent
 | `name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `providerId` | `string or null` | No | — |
+| `repositoryBindings` | `array<object>` | No | max items: 16; Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references. |
+| `repositoryBindings[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 
 ##### Responses
 
@@ -736,6 +742,9 @@ Create a Namespace-owned Agent
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
+| `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
 | `data.status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
@@ -791,6 +800,9 @@ Begin deletion of an exact Namespace-owned Agent and its AgentRevisions
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
+| `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
 | `data.status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
@@ -845,6 +857,9 @@ Get an exact Namespace-owned Agent
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
+| `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
 | `data.status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
@@ -887,6 +902,9 @@ Replace an exact Namespace-owned Agent's editable draft
 | `harnessAuth` | `object or object or object or null` | No | — |
 | `plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `providerId` | `string or null` | No | — |
+| `repositoryBindings` | `array<object>` | No | max items: 16; Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references. |
+| `repositoryBindings[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 
 ##### Responses
 
@@ -919,6 +937,9 @@ Replace an exact Namespace-owned Agent's editable draft
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
+| `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
 | `data.status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
@@ -988,6 +1009,14 @@ Admit an immutable revision from the Agent's saved draft
 | `data.plugins.driver.implementation` | `string` | Yes | min length: 1 |
 | `data.plugins.plugins` | `PluginDesiredState` | Yes | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryCredentials` | `object` | No | — |
+| `data.repositoryCredentials.bindings` | `array<object>` | Yes | min items: 1; max items: 16 |
+| `data.repositoryCredentials.bindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryCredentials.bindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryCredentials.deadlineWallMs` | `integer` | Yes | minimum: 1; maximum: 9007199254740991 |
+| `data.repositoryCredentials.driver` | `object` | Yes | — |
+| `data.repositoryCredentials.driver.id` | `string` | Yes | min length: 1 |
+| `data.repositoryCredentials.driver.implementation` | `string` | Yes | min length: 1 |
 | `data.revision` | `integer` | Yes | minimum: 1 |
 | `data.secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth. |
 | `data.secretDriverId` | `string` | No | min length: 1 |
@@ -1184,6 +1213,9 @@ Stop one Agent while retaining its revision and persistent state
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
+| `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
 | `data.status` | `"active" or "deleting"` | Yes | — |
 | `meta` | `object` | Yes | — |
@@ -1418,6 +1450,14 @@ List authorized immutable revisions for one exact Agent
 | `data[].plugins.driver.implementation` | `string` | Yes | min length: 1 |
 | `data[].plugins.plugins` | `PluginDesiredState` | Yes | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data[].providerId` | `string or null` | Yes | — |
+| `data[].repositoryCredentials` | `object` | No | — |
+| `data[].repositoryCredentials.bindings` | `array<object>` | Yes | min items: 1; max items: 16 |
+| `data[].repositoryCredentials.bindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data[].repositoryCredentials.bindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data[].repositoryCredentials.deadlineWallMs` | `integer` | Yes | minimum: 1; maximum: 9007199254740991 |
+| `data[].repositoryCredentials.driver` | `object` | Yes | — |
+| `data[].repositoryCredentials.driver.id` | `string` | Yes | min length: 1 |
+| `data[].repositoryCredentials.driver.implementation` | `string` | Yes | min length: 1 |
 | `data[].revision` | `integer` | Yes | minimum: 1 |
 | `data[].secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth. |
 | `data[].secretDriverId` | `string` | No | min length: 1 |
@@ -1485,6 +1525,14 @@ Get an exact authorized immutable Agent revision
 | `data.plugins.driver.implementation` | `string` | Yes | min length: 1 |
 | `data.plugins.plugins` | `PluginDesiredState` | Yes | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryCredentials` | `object` | No | — |
+| `data.repositoryCredentials.bindings` | `array<object>` | Yes | min items: 1; max items: 16 |
+| `data.repositoryCredentials.bindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryCredentials.bindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryCredentials.deadlineWallMs` | `integer` | Yes | minimum: 1; maximum: 9007199254740991 |
+| `data.repositoryCredentials.driver` | `object` | Yes | — |
+| `data.repositoryCredentials.driver.id` | `string` | Yes | min length: 1 |
+| `data.repositoryCredentials.driver.implementation` | `string` | Yes | min length: 1 |
 | `data.revision` | `integer` | Yes | minimum: 1 |
 | `data.secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth. |
 | `data.secretDriverId` | `string` | No | min length: 1 |
@@ -2986,7 +3034,7 @@ List configured Providers
 | --- | --- | --- | --- |
 | `data` | `array<object>` | Yes | — |
 | `data[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
-| `data[].type` | `"chatgpt"` | Yes | — |
+| `data[].type` | `"chatgpt" or "github"` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 

@@ -32,7 +32,11 @@ export async function createGitHubPlanningFixture(t) {
       limits: config.limits,
     });
     const bind = (profile = "git-full") => {
-      const admitted = admitSession(factory.resolve(profile).binding, 86400, clock);
+      const admitted = admitSession(
+        factory.resolve(profile).binding,
+        clock.wallNow() + 86400 * 1000,
+        clock,
+      );
       const custody = createCustody({
         clock,
         maximumSlots: 2,

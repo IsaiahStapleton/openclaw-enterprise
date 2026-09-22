@@ -17,6 +17,7 @@ import {
   NamespaceId,
   PermissionActionSchema,
   ProviderId,
+  RepositoryBindingSelectionsSchema,
   RevisionId,
   ResourceKindSchema,
   SecretBindings,
@@ -74,6 +75,7 @@ export const AgentSchema = Type.Object(
     harnessAuth: Type.Union([HarnessAuthBindingSchema, Type.Null()]),
     executionMode: HarnessExecutionModeSchema,
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    repositoryBindings: Type.Optional(RepositoryBindingSelectionsSchema),
     desiredRuntimeState: Type.Union([Type.Literal("running"), Type.Literal("stopped")]),
     activeRevisionId: Type.Optional(RevisionId),
     status: Type.Union([Type.Literal("active"), Type.Literal("deleting")]),
@@ -212,7 +214,7 @@ export const ServiceAccountSchema = Type.Object(
 );
 
 export const ProviderSummarySchema = Type.Object(
-  { id: ProviderId, type: Type.Literal("chatgpt") },
+  { id: ProviderId, type: Type.Union([Type.Literal("chatgpt"), Type.Literal("github")]) },
   { additionalProperties: false },
 );
 
@@ -294,6 +296,22 @@ export const ProviderListResponse = Type.Object(
   { additionalProperties: false },
 );
 
+/** Public revision projection excludes provider grant identities and material. */
+export const RepositoryRevisionStateSchema = Type.Object(
+  {
+    driver: Type.Object(
+      {
+        id: Type.String({ minLength: 1 }),
+        implementation: Type.String({ minLength: 1 }),
+      },
+      { additionalProperties: false },
+    ),
+    deadlineWallMs: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+    bindings: RepositoryBindingSelectionsSchema,
+  },
+  { additionalProperties: false },
+);
+
 export const AgentRevisionSchema = Type.Object(
   {
     id: RevisionId,
@@ -329,6 +347,7 @@ export const AgentRevisionSchema = Type.Object(
       ),
     ),
     harnessAuth: HarnessAuthBindingSchema,
+    repositoryCredentials: Type.Optional(RepositoryRevisionStateSchema),
     createdAt: Timestamp,
   },
   { additionalProperties: false },

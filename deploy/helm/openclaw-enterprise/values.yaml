@@ -62,6 +62,23 @@ provider:
     # This permits network egress; it does not configure a forward proxy.
     providerCidr: ""
 
+repositoryCredentials:
+  enabled: false
+  image: ""
+  providerId: ""
+  # Operator-created immutable, versioned ConfigMap shared by all three consumers.
+  registryConfigMapName: ""
+  registryKey: registry.json
+  serviceConfigSecretName: ""
+  serviceConfigKey: config.json
+  appKeySecretName: ""
+  appKeyKey: private-key.pem
+  tlsSecretName: ""
+  # Public trust only; must be separate from every private credential Secret.
+  publicCaSecretName: ""
+  publicCaKey: ca.crt
+  upstreamCidrs: []
+
 gatewayRouting:
   enabled: false
   # Empty derives the private Envoy Service DNS name:

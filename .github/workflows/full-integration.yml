@@ -89,6 +89,10 @@ jobs:
             title: Repository Credentials
             profile: images
             timeout: 40
+          - lane: repository-credentials-platform
+            title: Repository Credentials Platform
+            profile: k3d
+            timeout: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -403,7 +407,7 @@ jobs:
           const lane = process.env.SELECTED_LANE || process.env.LANE;
           const out = { preflight: needs.preflight };
           if (lane === "all") {
-            for (const name of ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector", "repository-credentials-container"]) {
+            for (const name of ["checks-baseline", "postgres", "images-packaging", "k3d-fixture-configuration", "logging-collector", "repository-credentials-container", "repository-credentials-platform"]) {
               out[name] = { result: needs["pr-safe-same-sha"]?.result ?? "missing" };
             }
           } else if (lane === "logging-collector") {

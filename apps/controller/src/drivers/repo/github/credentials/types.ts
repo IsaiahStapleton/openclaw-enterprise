@@ -1,3 +1,4 @@
+import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
 import type { KeyObject } from "node:crypto";
 import type { RepositoryBackendFactory, Clock } from "../../credentials/backend-contracts.ts";
 import type { ServiceLimits } from "../../credentials/service-contracts.ts";
@@ -19,6 +20,10 @@ export interface GitHubKeyOwner {
 }
 export interface GitHubFactoryOptions {
   readonly configuration: GitHubConfiguration;
+  readonly binding?: Readonly<{
+    profile: GitHubProfile;
+    identity: RepositoryCredentialGrantIdentity;
+  }>;
   readonly key: GitHubKeyOwner;
   readonly gatewayOrigin: string;
   readonly limits: ServiceLimits;

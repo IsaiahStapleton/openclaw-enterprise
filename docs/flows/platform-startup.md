@@ -1,7 +1,7 @@
 ---
 created: 2026-08-20
-updated: 2026-09-17
-last_updated_session: authoring-run/a6571e7c-996e-4f11-9c4c-f61418a8d109
+updated: 2026-09-22
+last_updated_session: authoring-run/a9a43fbc-2e26-46d5-a17c-ea6636555547
 ---
 
 # Platform Startup Flow
@@ -79,6 +79,15 @@ graph TD
 ### 1. Launch independent API and worker processes
 
 `apps/controller/src/server.mjs:start`
+
+Before launch, the operator runs the supported migration command using the
+separate migrator role. Its
+[history preflight](../../scripts/migration-history.mjs) accepts only reviewed
+receipt and catalog prefixes, including current main with Agent presets; it
+refuses the older divergent credential history before migration DDL. The
+[migration history reference](../reference/settings/operations.md#migration-history)
+owns the exact supported shapes and recovery boundary. Neither API nor worker
+startup rewrites migration receipts or converts an unsupported database.
 
 The [API entrypoint](../../apps/controller/src/server.mjs) and
 [worker entrypoint](../../apps/controller/src/worker.mjs) are separate commands;
@@ -237,6 +246,8 @@ execution begins in the adjacent
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-22 04:19: Record the migration prerequisite and refusal boundary accompanying the main synchronization. (authoring-run/a9a43fbc-2e26-46d5-a17c-ea6636555547 - a7fbcdc39a1cfb1d093c2b4d1e238e39e89dae2a)
 
 - 2026-09-17 12:56: Record generic Compute preflight warning handoff to API and worker logs. (authoring-run/a6571e7c-996e-4f11-9c4c-f61418a8d109 - 324fe2d17f3856cd1602a57e4d8aa99a34d6514c)
 

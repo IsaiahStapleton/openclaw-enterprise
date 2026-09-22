@@ -1,6 +1,26 @@
 ARG NODE_BASE_IMAGE=docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
-FROM ${NODE_BASE_IMAGE}
+FROM ${NODE_BASE_IMAGE} AS repository-client-build
 
+WORKDIR /build
+COPY LICENSE package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/controller/package.json apps/controller/package.json
+COPY packages/audit/package.json packages/audit/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/iam/package.json packages/iam/package.json
+COPY packages/occ/package.json packages/occ/package.json
+COPY packages/utils/package.json packages/utils/package.json
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
+    corepack pnpm install --frozen-lockfile --ignore-scripts
+COPY tsconfig.base.json tsconfig.json ./
+COPY packages packages
+COPY apps/controller apps/controller
+COPY scripts/build-repository-credentials.mjs scripts/build-repository-credentials.mjs
+COPY deploy/runtime/repository-credentials/.dockerignore deploy/runtime/repository-credentials/.dockerignore
+RUN corepack pnpm credentials:build
+
+FROM ${NODE_BASE_IMAGE} AS runtime
+
+ARG TARGETARCH
 # TODO: Pin the OpenClaw release providing `plugins install --no-enable` before
 # shipping managed plugin preparation; 2026.9.1 cannot preserve install policy.
 ARG OPENCLAW_VERSION=2026.9.1
@@ -14,6 +34,31 @@ ENV PATH=/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bi
 WORKDIR /app
 
 RUN node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major !== 24 || minor < 15) throw new Error(`OpenClaw Enterprise runtime images require Node.js 24.15+; found ${process.version}.`);'
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=secret,id=build-ca,required=false \
+    set -eu; \
+    if [ -f /run/secrets/build-ca ]; then export CURL_CA_BUNDLE=/run/secrets/build-ca; fi; \
+    architecture="${TARGETARCH:-amd64}"; \
+    case "$architecture" in amd64|arm64) ;; *) exit 1 ;; esac; \
+    cd /tmp; \
+    curl --fail --location --silent --show-error -O "https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_linux_${architecture}.tar.gz"; \
+    curl --fail --location --silent --show-error -O "https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_checksums.txt"; \
+    grep " gh_2.100.0_linux_${architecture}.tar.gz$" gh_2.100.0_checksums.txt | sha256sum --check --strict; \
+    tar -xzf "gh_2.100.0_linux_${architecture}.tar.gz"; \
+    install -m 0755 "gh_2.100.0_linux_${architecture}/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh_2.100.0*; \
+    /usr/bin/git --version; \
+    /usr/local/bin/gh --version | grep '^gh version 2.100.0 '
+
+COPY --from=repository-client-build /build/.build/repository-credentials/client/package.json /opt/oce/repository-credentials/package.json
+COPY --from=repository-client-build /build/.build/repository-credentials/client/dist /opt/oce/repository-credentials/dist
+COPY deploy/runtime/bin /opt/oce/repository-credentials/bin
+RUN chmod -R a+rX /opt/oce/repository-credentials \
+    && chmod 0555 /opt/oce/repository-credentials/bin/gh \
+    && test -f /opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/router.js \
+    && test -f /opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/native-git.js \
+    && /usr/bin/git config --system --add include.path /run/oce/repository-credentials/gitconfig
 
 RUN npm init -y >/dev/null \
   && npm install --omit=dev --no-audit --no-fund \

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { run, temporaryDirectory } from "./process.mjs";
 import { registerResourceCleanup, closeAndDispose } from "./cleanup.mjs";
@@ -15,18 +15,43 @@ export function registerCredentialFixtureRegressions() {
     test(`owned command tree stops on ${reason} without leaking diagnostics`, async (t) => {
       const directory = await temporaryDirectory(t);
       const pidFile = join(directory, "descendant.pid");
-      const descendant = `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      const naturalExitFile = join(directory, "natural-exit");
+      const descendant = `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid) + '\\n');
       ${reason === "output overflow" ? "process.stdout.write('sensitive-fixture-value'.repeat(150000));" : ""}
-      setTimeout(() => {}, 1500);`;
+      setTimeout(() => {
+        ${reason === "cancelled" ? `require('node:fs').writeFileSync(${JSON.stringify(naturalExitFile)}, 'expired');` : ""}
+      }, 1500);`;
       const launcher = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], {stdio:'inherit'});`;
       const controller = new AbortController();
       let timer;
+      let cancelledAt;
+      let cancelledPid;
+      let readinessError;
       if (reason === "cancelled") {
-        // Cancel only after the descendant exists, so this proves tree cleanup
-        // rather than racing process startup on a busy container host.
+        // A complete PID and live process separate cancellation from startup.
         timer = setInterval(() => {
-          if (existsSync(pidFile)) {
+          try {
+            const value = readFileSync(pidFile, "utf8");
+            if (!/^[1-9]\d*\n$/.test(value)) {
+              return;
+            }
+            const pid = Number(value);
+            if (
+              !Number.isSafeInteger(pid) ||
+              /\) [ZX] /.test(readFileSync(`/proc/${pid}/stat`, "utf8"))
+            ) {
+              return;
+            }
+            cancelledPid = pid;
+            clearInterval(timer);
+            cancelledAt = performance.now();
             controller.abort("sensitive-fixture-value");
+          } catch (error) {
+            if (error.code !== "ENOENT") {
+              readinessError = error;
+              clearInterval(timer);
+              controller.abort("sensitive-fixture-value");
+            }
           }
         }, 10);
       }
@@ -40,11 +65,12 @@ export function registerCredentialFixtureRegressions() {
           (error) =>
             error.message.includes(reason) && !error.message.includes("sensitive-fixture-value"),
         );
-        assert.ok(
-          performance.now() - start < 1250,
-          "launcher descendants must not extend the command bound",
-        );
+        const settledAt = performance.now();
+        if (readinessError) {
+          throw readinessError;
+        }
         const pid = Number(await readFile(pidFile, "utf8"));
+        assert.ok(Number.isSafeInteger(pid) && pid > 0, "descendant PID must be valid");
         // A killed orphan may await the container init's reap; a zombie cannot
         // execute or retain pipes. No running descendant may survive completion.
         let running = false;
@@ -56,6 +82,15 @@ export function registerCredentialFixtureRegressions() {
           }
         }
         assert.equal(running, false, "owned descendant remains running");
+        if (reason === "cancelled") {
+          assert.equal(pid, cancelledPid, "cancellation must observe the owned descendant");
+          // Natural expiry cannot substitute for termination, even after delayed startup.
+          assert.equal(existsSync(naturalExitFile), false, "descendant exited naturally");
+        }
+        assert.ok(
+          settledAt - (reason === "cancelled" ? cancelledAt : start) < 1250,
+          "launcher descendants must not extend the command bound",
+        );
       } finally {
         clearInterval(timer);
       }

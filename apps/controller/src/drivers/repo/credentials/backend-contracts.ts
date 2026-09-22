@@ -1,4 +1,6 @@
-import type { PublicClientConfiguration, RepositoryGrantIdentity } from "./service-contracts.ts";
+import type { RepositoryCredentialBoundSessionInput } from "./service-contracts.ts";
+import type { RepositoryCredentialGrantIdentity } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialClientConfiguration } from "./client-contracts.ts";
 import type { JsonValue } from "./json-value.ts";
 
 /** Backend extension protocol. Runtime owners also check original object identity. */
@@ -10,7 +12,7 @@ declare const outcomeIdentity: unique symbol;
 export type CredentialRef = Readonly<{ [credentialIdentity]: true }>;
 export type RenewalRef = Readonly<{ [renewalIdentity]: true }>;
 export type SessionRef = Readonly<{ [sessionIdentity]: true }>;
-export type AuthorityIdentity = RepositoryGrantIdentity & Readonly<{ sessionId: string }>;
+export type AuthorityIdentity = RepositoryCredentialGrantIdentity & Readonly<{ sessionId: string }>;
 export interface Clock {
   wallNow(): number;
   monotonicNow(): number;
@@ -121,7 +123,7 @@ export interface PrivateUpstreamRequest {
 }
 export type Denied = Readonly<{ kind: "denied"; status: number; code: string }>;
 export interface RepositoryBackend {
-  readonly binding: RepositoryGrantIdentity;
+  readonly binding: RepositoryCredentialGrantIdentity;
   readonly replacement: "overlap" | "drain-before";
   readonly cleanup: "revocable" | "expiry-only";
   acquire(
@@ -140,12 +142,14 @@ export interface RepositoryBackend {
   ): Promise<T>;
 }
 export interface ResolvedGrant {
-  readonly binding: RepositoryGrantIdentity;
-  readonly client: PublicClientConfiguration;
+  readonly binding: RepositoryCredentialGrantIdentity;
+  readonly client: RepositoryCredentialClientConfiguration;
 }
 export interface RepositoryBackendFactory {
   parseAuthentication(head: RequestHead, authorization: string): string | Denied;
   resolve(profile: string): ResolvedGrant;
+  /** Presence selects registry-bound admission; it never falls back to resolve. */
+  resolveBound?(input: RepositoryCredentialBoundSessionInput): ResolvedGrant;
   create(
     input: Readonly<{ authority: AuthorityIdentity; custody: DriverCustody; clock: Clock }>,
   ): RepositoryBackend;

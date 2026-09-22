@@ -6,10 +6,11 @@ import type {
   RequestPlan,
 } from "./backend-contracts.ts";
 import type {
-  OpenSessionInput,
+  RepositoryCredentialSessionInput,
+  RepositoryCredentialBoundSessionInput,
   ServiceConfig,
-  SessionStatus,
   ShutdownSummary,
+  SessionStatus,
 } from "./service-contracts.ts";
 import type { CredentialServiceOwner, ExchangeRef, ExchangeSender } from "./internal-contracts.ts";
 import { createCustody } from "./custody.ts";
@@ -19,7 +20,14 @@ import type { LifecycleOwner } from "./lifecycle.ts";
 import { executeExchange } from "./lifecycle/exchange.ts";
 import type { ExecutingExchange } from "./lifecycle/exchange.ts";
 import { createProviderQueue, waitWithin } from "./provider-queue.ts";
-import { admitSession, bearerDigest, snapshotBinding } from "./sessions.ts";
+import {
+  admitSession,
+  bearerDigest,
+  snapshotBinding,
+  snapshotSessionInput,
+  isBoundInput,
+  sameBinding,
+} from "./sessions.ts";
 import type { SessionAdmission } from "./sessions.ts";
 
 type Admission = Omit<SessionAdmission, "bearer">;
@@ -66,7 +74,11 @@ export function createCredentialService(
   }
 
   function isOpen(session: Session) {
-    if (session.state === "OPEN" && clock.monotonicNow() >= session.admission.deadlineMonoMs) {
+    if (
+      session.state === "OPEN" &&
+      (clock.monotonicNow() >= session.admission.deadlineMonoMs ||
+        clock.wallNow() >= session.admission.deadlineWallMs)
+    ) {
       close(session);
     }
     return session.state === "OPEN";
@@ -159,7 +171,7 @@ export function createCredentialService(
   }
 
   return Object.freeze({
-    open(input: OpenSessionInput) {
+    open(input: RepositoryCredentialSessionInput | RepositoryCredentialBoundSessionInput) {
       if (shuttingDown) {
         throw new Error("SERVICE_CLOSED");
       }
@@ -170,7 +182,14 @@ export function createCredentialService(
       ) {
         throw new Error("INVALID_DURATION");
       }
-      const profile = input.profile ?? policy.defaultProfile;
+      if ("recoverOnly" in input && input.recoverOnly !== undefined) {
+        throw new Error("INVALID_ADMISSION");
+      }
+      const admittedInput = snapshotSessionInput(input);
+      if (isBoundInput(admittedInput) !== (factory.resolveBound !== undefined)) {
+        throw new Error("INVALID_BINDING");
+      }
+      const profile = admittedInput.profile ?? policy.defaultProfile;
       if (!policy.allowedProfiles.includes(profile)) {
         throw new Error("INVALID_PROFILE");
       }
@@ -183,8 +202,20 @@ export function createCredentialService(
       if (sessions.size + failedConstructions.size >= limits.sessions) {
         throw new Error("SESSION_CAPACITY");
       }
-      const resolved = factory.resolve(profile);
-      const { bearer, ...admission } = admitSession(resolved.binding, input.durationSeconds, clock);
+      const resolved = isBoundInput(admittedInput)
+        ? factory.resolveBound!(admittedInput)
+        : factory.resolve(profile);
+      if (
+        isBoundInput(admittedInput) &&
+        !sameBinding(resolved.binding, admittedInput.expectedBinding)
+      ) {
+        throw new Error("INVALID_BINDING");
+      }
+      const durationDeadline = clock.wallNow() + admittedInput.durationSeconds * 1000;
+      const deadlineWallMs = isBoundInput(admittedInput)
+        ? Math.min(durationDeadline, admittedInput.deadlineWallMs)
+        : durationDeadline;
+      const { bearer, ...admission } = admitSession(resolved.binding, deadlineWallMs, clock);
       let session: Session | undefined = undefined;
       let constructing = true;
       const custody = createCustody({

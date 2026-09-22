@@ -1,19 +1,18 @@
 import { lstat, mkdir, mkdtemp, open, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type {
-  OpenSessionResult,
-  PublicClientConfiguration,
-} from "../../../credentials/service-contracts.ts";
+import type { RepositoryCredentialSessionFiles } from "@openclaw-enterprise/contracts";
+import type { RepositoryCredentialClientConfiguration } from "../../../credentials/client-contracts.ts";
+import type { RepositoryCredentialSessionResult } from "../../../credentials/service-contracts.ts";
 import { assertPrivateDirectory, readPrivateFile } from "./private-files.ts";
 
 export interface ClientFiles {
   readonly sessionId: string;
   readonly deadlineWallMs: number;
-  readonly client: PublicClientConfiguration;
+  readonly client: RepositoryCredentialClientConfiguration;
   readonly hasPublicCa: boolean;
 }
 
-function validateClient(client: PublicClientConfiguration): void {
+function validateClient(client: RepositoryCredentialClientConfiguration): void {
   const origin = new URL(client.gatewayOrigin);
   const remote = new URL(client.gitRemote);
   if (
@@ -43,12 +42,11 @@ function validateClient(client: PublicClientConfiguration): void {
   }
 }
 
-/** Publish a new private directory atomically; existing sessions are never overwritten. */
-export async function writeClientConfiguration(
-  opened: OpenSessionResult,
-  directory: string,
-  publicCa: Uint8Array | undefined,
-): Promise<void> {
+/** Encode ephemeral client material; the caller owns its filesystem lifecycle. */
+export function encodeRepositoryCredentialSessionFiles(
+  opened: RepositoryCredentialSessionResult,
+  publicCa?: Uint8Array,
+): RepositoryCredentialSessionFiles {
   validateClient(opened.client);
   if (
     !/^[A-Za-z0-9_-]{32,256}$/.test(opened.bearer) ||
@@ -58,6 +56,32 @@ export async function writeClientConfiguration(
   ) {
     throw new Error("invalid-client-configuration");
   }
+  const files: ClientFiles = {
+    sessionId: opened.session.sessionId,
+    deadlineWallMs: opened.session.deadlineWallMs,
+    client: opened.client,
+    hasPublicCa: publicCa !== undefined,
+  };
+  return {
+    bearer: opened.bearer,
+    "client.json": JSON.stringify(files) + "\n",
+    gitconfig:
+      "[credential]\n\thelper =\n\tuseHttpPath = true\n[http]\n\tfollowRedirects = false\n\tsslVerify = true\n",
+    "gh/hosts.yml": `${JSON.stringify(opened.client.canonicalApiHost)}:\n  api_host: ${JSON.stringify(opened.client.apiHost)}\n  git_protocol: https\n  oauth_token: ${JSON.stringify(opened.bearer)}\n`,
+    "gh/config.yml": "version: 1\nprompt: disabled\ngit_protocol: https\n",
+    ...(publicCa === undefined
+      ? {}
+      : { "ca.pem": new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(publicCa) }),
+  };
+}
+
+/** Publish a new private directory atomically; existing sessions are never overwritten. */
+export async function writeClientConfiguration(
+  opened: RepositoryCredentialSessionResult,
+  directory: string,
+  publicCa: Uint8Array | undefined,
+): Promise<void> {
+  const contents = encodeRepositoryCredentialSessionFiles(opened, publicCa);
   const target = resolve(directory);
   const parent = dirname(target);
   await assertPrivateDirectory(parent);
@@ -72,29 +96,7 @@ export async function writeClientConfiguration(
   const staging = await mkdtemp(join(parent, ".session-"));
   try {
     await mkdir(join(staging, "gh"), { mode: 0o700 });
-    const files: ClientFiles = {
-      sessionId: opened.session.sessionId,
-      deadlineWallMs: opened.session.deadlineWallMs,
-      client: opened.client,
-      hasPublicCa: publicCa !== undefined,
-    };
-    const contents: [string, string | Uint8Array][] = [
-      ["bearer", opened.bearer],
-      ["client.json", JSON.stringify(files) + "\n"],
-      [
-        "gitconfig",
-        "[credential]\n\thelper =\n\tuseHttpPath = true\n[http]\n\tfollowRedirects = false\n\tsslVerify = true\n",
-      ],
-      [
-        "gh/hosts.yml",
-        `${JSON.stringify(opened.client.canonicalApiHost)}:\n  api_host: ${JSON.stringify(opened.client.apiHost)}\n  git_protocol: https\n  oauth_token: ${JSON.stringify(opened.bearer)}\n`,
-      ],
-      ["gh/config.yml", "version: 1\nprompt: disabled\ngit_protocol: https\n"],
-    ];
-    if (publicCa) {
-      contents.push(["ca.pem", publicCa]);
-    }
-    for (const [name, content] of contents) {
+    for (const [name, content] of Object.entries(contents)) {
       const file = await open(join(staging, name), "wx", 0o600);
       try {
         await file.writeFile(content);

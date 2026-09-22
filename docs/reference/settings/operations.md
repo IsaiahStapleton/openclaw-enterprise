@@ -6,7 +6,7 @@ This reference owns worker, compose, and postgresql settings. Start with the
 ## PostgreSQL connection authentication
 
 Both PostgreSQL API modes, the worker, shared Installation bootstrap, and
-`node scripts/migrate-production.mjs` use the same connection pool factory.
+both migration commands use the same connection pool factory.
 `OCC_DATABASE_AUTH` defaults to `password`, which preserves PostgreSQL URL
 credentials. The other supported mode is `azure-workload-identity`; unknown
 modes fail before opening a pool.
@@ -31,13 +31,114 @@ Each new pool connection requests an access token through the Azure SDK's
 `WorkloadIdentityCredential` for
 `https://ossrdbms-aad.database.windows.net/.default`. The SDK owns token caching
 and renewal; OCC does not persist tokens or fall back to a developer login.
-Use `node scripts/migrate-production.mjs` for migrations in this mode. The
-development Drizzle CLI migration command does not use the shared factory.
+Use `pnpm db:migrate` or `pnpm db:migrate:production` for migrations in this mode.
 
 See [operator setup](../../guides/deploy/production-installation.md#azure-postgresql-workload-identity)
 for deployment-owned identity inputs and chart limits, and
 [PostgreSQL testing](../../testing/postgresql.md#azure-workload-identity-connections)
 for the available connection proof and its limits.
+
+## Migration history
+
+Set `OCC_MIGRATION_DATABASE_URL` privately to the intended database's dedicated
+`occ_migrator` login. The application login is `occ_app`; neither role may be a
+superuser, create roles or databases, replicate, or bypass row security. The
+migrator needs database `CREATE` and owns the `occ` and `drizzle` schemas. The
+application role must not inherit the migrator or have database/schema `CREATE`.
+
+Classify a database without applying migrations:
+
+```sh
+pnpm db:migrate --check
+```
+
+An exit-0 `migration.checked` record reports `empty`, `prePresetsMain`, `main`,
+`repositoryCredentials`, or `completed`. `prePresetsMain` means the exact canonical
+history through `0023_runtime_failure_timestamp_validation`; `main` also includes
+`0024_agent_presets`. `repositoryCredentials` adds `0025_repository_credentials`
+and `0026_privileged_function_search_paths`. `completed` also includes
+`0027_repository_attempt_retention` at journal index 27.
+The source manifest is
+[`migrations/meta/canonical-history.json`](../../../migrations/meta/canonical-history.json).
+Empty schemas may be absent or have only their owner's ordinary `CREATE` and
+`USAGE` privileges, with no objects or unexpected default privileges. An empty
+stock Drizzle ledger left by a rolled-back first migration is also supported.
+
+Run `pnpm db:migrate` for development or `pnpm db:migrate:production` for
+production after a successful check. Both commands validate source hashes,
+receipts, catalog definitions, effective application privileges, and role
+separation under one PostgreSQL advisory lock. Drizzle applies the pending SQL
+and receipts in its normal transaction on that same connection. Existing
+canonical receipts remain unchanged. `--check` is also accepted by the
+production command.
+
+`MIGRATION_HISTORY_UNSUPPORTED` means the command refused before migration DDL.
+The earlier development history that installed repository credentials at index 24
+without Agent presets is unsupported, even if all of its own migrations completed.
+It cannot be converted by renaming or rewriting applied receipts.
+Do not edit the ledger, run Drizzle directly to bypass the check, or restore an
+old schema over the canonical one. A failed or disconnected migration is not
+proof of rollback: reconnect, run `--check`, and inspect the retained database
+before deciding whether another attempt is appropriate.
+
+### Recreate an unsupported disposable development installation
+
+First match the target to the startup output: container engine and connection,
+Compute profile, Compose project/files or Kubernetes state directory, database
+host/port/name, and Installation ID. The database-only
+`compose.postgres.yaml` helper and the full development stack have different
+default project names. `pnpm db:down` stops only its selected database-only
+project and retains its volume.
+
+For an unsupported premerge history, choose either to retain the old
+installation and start a separately configured fresh one, or to discard that
+specific disposable installation. Preserve any needed database/storage archive
+and protected bootstrap output first. An archive is not a supported import into
+the canonical history; a whole-database restore would restore the unsupported
+ledger too. There is no general reset, conversion, or reseed command. Recreate
+selected business data through its owning supported API or import procedure.
+Account for outstanding Agent resources and credential cleanup before disposal;
+removing control-plane storage does not retire external resources or grants.
+
+For Docker or Podman, copy the exact `Cleanup` command printed by the original
+startup. Add `--volumes` before its `--` only when intentionally deleting that
+installation's PostgreSQL, Configuration, and bootstrap volumes. Preserve its
+engine connection, environment, project, Compose files, and overrides. For
+example, after setting `DEV_COMPOSE_PROJECT` to your own recorded project:
+
+```sh
+./bin/occ dev down --volumes -- -p "$DEV_COMPOSE_PROJECT" -f compose.yaml
+./bin/occ dev up --key-output /absolute/private/new-installation-key.json -- \
+  -p "$DEV_COMPOSE_PROJECT" -f compose.yaml
+```
+
+The recorded Kubernetes cleanup is already destructive: it removes that
+profile's cluster and Compose volumes, then removes its private state. Use its
+exact printed command and state directory:
+
+```sh
+OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes \
+OCC_DEVELOPMENT_STATE_DIRECTORY="$DEV_STATE_DIRECTORY" ./bin/occ dev down
+```
+
+Start the chosen fresh profile from the canonical source using a new protected
+key-output path. `occ dev up` applies migrations, bootstraps the initial
+administrators/Installation/default Namespace, and checks authenticated
+Installation access. Fresh bootstrap refuses existing output files; an old
+bootstrap volume or key file is not valid output for the new database. Repeating
+bootstrap against an existing Installation verifies it and issues no new key.
+
+Use the startup's printed authenticated-check command, or privately select
+`OCC_URL` and `OCC_SERVICE_KEY_FILE` and run:
+
+```sh
+./bin/occ installation get --output json
+```
+
+Its Installation ID must match the protected key response's
+`meta.installationId`. Stop on mismatches, missing output, failed migration,
+uncertain bootstrap outcome, or incomplete cleanup. This proves control-plane
+access; qualify worker, Agent, repository, and provider behavior separately.
 
 ## Controller worker environment
 

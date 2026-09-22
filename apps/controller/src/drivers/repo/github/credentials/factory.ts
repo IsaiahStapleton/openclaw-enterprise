@@ -1,5 +1,6 @@
 import type { RepositoryBackend } from "../../credentials/backend-contracts.ts";
 import { createGitHubDriver } from "./driver.ts";
+import { snapshotBinding } from "../../credentials/sessions.ts";
 import { validateGitHubConfiguration } from "./config.ts";
 import { createProviderTransport } from "./provider-transport.ts";
 import { permissionsForProfile } from "./profiles.ts";
@@ -17,10 +18,25 @@ function endpoint(value: string): string {
 }
 export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHubDriverFactory {
   const config = validateGitHubConfiguration(options.configuration);
+  const selectedBinding =
+    options.binding &&
+    Object.freeze({
+      profile: options.binding.profile,
+      identity: snapshotBinding(options.binding.identity),
+    });
+  if (selectedBinding) {
+    permissionsForProfile(selectedBinding.profile);
+    if (
+      selectedBinding.identity.providerInstanceId !== config.providerInstanceId ||
+      selectedBinding.identity.repositoryId !== config.repositoryId
+    ) {
+      throw new Error("invalid-binding");
+    }
+  }
   const apiOrigin = endpoint(options.trustedEndpoints?.apiOrigin ?? "https://api.github.com");
   const gitOrigin = endpoint(options.trustedEndpoints?.gitOrigin ?? "https://github.com");
   const gatewayOrigin = endpoint(options.gatewayOrigin);
-  const grants = createGrantResolver({ config, gatewayOrigin });
+  const grants = createGrantResolver({ config, gatewayOrigin, selectedBinding });
   const policy = (profile: GitHubProfile) =>
     createRoutePolicy({
       repository: config.repository,

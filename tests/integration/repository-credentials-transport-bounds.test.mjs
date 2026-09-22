@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import { createServer, request } from "node:https";
+import { connect } from "node:net";
 import { connect as connectTls } from "node:tls";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
@@ -171,6 +172,89 @@ function connectTlsClient(fixture) {
   });
   return state;
 }
+
+test("listener header deadlines stop unauthenticated peers", { timeout: 15000 }, async (t) => {
+  const fixture = await startTransport(
+    t,
+    (incoming, outgoing) => {
+      incoming.resume();
+      outgoing.writeHead(200, replyHeaders).end("0000");
+    },
+    { headerMs: 150, stallMs: 3000 },
+  );
+  for (const scenario of [
+    {
+      name: "an incomplete TLS handshake",
+      open: () => connect({ host: "127.0.0.1", port: fixture.listeners.address.port }),
+      ready: "connect",
+    },
+    {
+      name: "a TLS peer without HTTP headers",
+      open: () =>
+        connectTls({
+          host: "127.0.0.1",
+          port: fixture.listeners.address.port,
+          ca: fixture.tls.ca,
+        }),
+      ready: "secureConnect",
+    },
+    {
+      name: "a control peer without HTTP headers",
+      open: () => connect(fixture.config.gateway.controlSocket),
+      ready: "connect",
+    },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const socket = scenario.open();
+      let closed = false;
+      socket.on("error", () => {});
+      const close = new Promise((resolve) =>
+        socket.once("close", () => {
+          closed = true;
+          resolve();
+        }),
+      );
+      fixture.resources.after(async () => {
+        socket.destroy();
+        await close;
+      });
+      await new Promise((resolve, reject) => {
+        socket.once(scenario.ready, resolve);
+        socket.once("error", reject);
+      });
+      // No request is admitted: handshake/header bounds must close the peer
+      // before the independent three-second stall timeout could do so.
+      await eventually(() => closed, { timeoutMs: 1000 });
+    });
+  }
+  assert.equal(fixture.github.issuesOfTokens.length, 0);
+  assert.equal(fixture.received.length, 0);
+  assert.equal((await readDiscovery(fixture)).status, 200);
+});
+
+test("an admitted TLS request clears its header deadline", { timeout: 15000 }, async (t) => {
+  const fixture = await startTransport(
+    t,
+    (incoming, outgoing) => {
+      incoming.resume();
+      incoming.once("end", () => {
+        // The response deliberately outlives header admission while remaining
+        // inside the separate response-header, stall and exchange budgets.
+        const timer = setTimeout(() => outgoing.writeHead(200, replyHeaders).end("0000"), 400);
+        outgoing.once("close", () => clearTimeout(timer));
+      });
+    },
+    { headerMs: 150, firstHeaderMs: 2000, stallMs: 2000 },
+  );
+  assert.deepEqual(await readDiscovery(fixture), {
+    kind: "completed",
+    status: 200,
+    bytes: 4,
+    complete: true,
+  });
+  assert.deepEqual(fixture.received, [{ method: "GET", path: discovery }]);
+  await eventually(() => fixture.service.status(fixture.opened.session.sessionId).activeUses === 0);
+});
 
 test(
   "occupied per-session and total exchange limits refuse excess traffic and recover",
@@ -454,6 +538,52 @@ test(
   },
 );
 
+test(
+  "an upstream disconnect before headers returns a sanitized error and releases the exchange slot",
+  { timeout: 15000 },
+  async (t) => {
+    let requests = 0;
+    const fixture = await startTransport(t, (incoming, outgoing) => {
+      incoming.resume();
+      incoming.once("end", () => {
+        // The peer received the complete request but supplied no response. The
+        // gateway may report uncertainty; it must not replay the operation.
+        if (++requests === 1) {
+          outgoing.destroy();
+        } else {
+          outgoing.writeHead(200, replyHeaders).end("0000");
+        }
+      });
+    });
+    const chunks = [];
+    const client = startRequest(fixture, {
+      onResponse: (incoming) => incoming.on("data", (chunk) => chunks.push(chunk)),
+    });
+    client.outgoing.end();
+    const result = await client.result;
+    assert.equal(result.kind, "completed");
+    assert.equal(result.status, 502);
+    assert.equal(result.complete, true);
+    assert.deepEqual(JSON.parse(Buffer.concat(chunks)), {
+      error: { code: "exchange-uncertain" },
+    });
+    await eventually(
+      () => fixture.service.status(fixture.opened.session.sessionId).activeUses === 0,
+    );
+    assert.deepEqual(fixture.received, [{ method: "GET", path: discovery }]);
+    assert.equal(fixture.github.issuesOfTokens.length, 1);
+    // Reusing the sole slot proves failure settled I/O and credential ownership.
+    assert.deepEqual(await readDiscovery(fixture), {
+      kind: "completed",
+      status: 200,
+      bytes: 4,
+      complete: true,
+    });
+    assert.equal(fixture.received.length, 2);
+    assert.equal(fixture.github.issuesOfTokens.length, 1);
+  },
+);
+
 const declaredResponseCases = [
   {
     name: "a response exactly at the limit is delivered completely",
@@ -461,9 +591,14 @@ const declaredResponseCases = [
     expected: { kind: "completed", status: 200, bytes: responseLimit, complete: true },
   },
   {
-    name: "an oversized declared response is refused before client headers or bytes",
+    name: "an oversized declared response returns a sanitized error before forwarding upstream bytes",
     bytes: responseLimit + 1,
-    expected: { kind: "closed", status: undefined, bytes: 0, complete: false },
+    expected: {
+      kind: "completed",
+      status: 502,
+      bytes: Buffer.byteLength('{"error":{"code":"exchange-uncertain"}}'),
+      complete: true,
+    },
   },
 ];
 
@@ -473,12 +608,25 @@ for (const scenario of declaredResponseCases) {
       t,
       (incoming, outgoing) => {
         incoming.resume();
-        outgoing.writeHead(200, { ...replyHeaders, "content-length": scenario.bytes });
-        outgoing.end(Buffer.alloc(scenario.bytes, 42));
+        incoming.once("end", () => {
+          outgoing.writeHead(200, { ...replyHeaders, "content-length": scenario.bytes });
+          outgoing.end(Buffer.alloc(scenario.bytes, 42));
+        });
       },
       { gitResponseBytes: responseLimit },
     );
-    assert.deepEqual(await readDiscovery(fixture), scenario.expected);
+    const chunks = [];
+    assert.deepEqual(
+      await readDiscovery(fixture, {
+        onResponse: (incoming) => incoming.on("data", (chunk) => chunks.push(chunk)),
+      }),
+      scenario.expected,
+    );
+    if (scenario.expected.status === 502) {
+      assert.deepEqual(JSON.parse(Buffer.concat(chunks)), {
+        error: { code: "exchange-uncertain" },
+      });
+    }
     await eventually(
       () => fixture.service.status(fixture.opened.session.sessionId).activeUses === 0,
     );
@@ -770,70 +918,79 @@ test(
   },
 );
 
-test(
-  "control close interrupts a live response and releases its credential and exchange slot",
-  { timeout: 15000 },
-  async (t) => {
-    let upstreamCancelled = false;
-    let requests = 0;
-    const fixture = await startTransport(t, (incoming, outgoing) => {
-      incoming.resume();
-      outgoing.writeHead(200, replyHeaders);
-      if (++requests === 1) {
-        outgoing.once("close", () => (upstreamCancelled = !outgoing.writableFinished));
-        outgoing.write("0000");
-      } else {
-        outgoing.end("0000");
-      }
-    });
-    let delivered = 0;
-    const client = startRequest(fixture, {
-      onResponse: (incoming) => incoming.on("data", (chunk) => (delivered += chunk.length)),
-    });
-    client.outgoing.end();
-    await eventually(() => delivered === 4);
-    const sessionId = fixture.opened.session.sessionId;
-    assert.equal(fixture.service.status(sessionId).activeUses, 1);
-    const { callControl } = await appModule("drivers/repo/github/credentials/client/operator");
-    const closed = await callControl(fixture.config.gateway.controlSocket, {
-      method: "POST",
-      path: `/v1/sessions/${sessionId}/close`,
-    });
-    assert.equal(closed.state, "CLOSED");
-    // Closure must cancel active I/O before the independent five-second stall
-    // timer could do so; eventual timeout is not proof of session cancellation.
-    await eventually(
-      () => upstreamCancelled && fixture.service.status(sessionId).state === "DISPOSED",
-      { timeoutMs: 1000 },
-    );
-    assert.deepEqual(await client.result, {
-      kind: "closed",
-      status: 200,
-      bytes: 4,
-      complete: false,
-    });
-    const status = fixture.service.status(sessionId);
-    assert.equal(status.activeUses, 0);
-    assert.deepEqual(status.cleanup, {
-      active: 0,
-      pending: 0,
-      revoked: 1,
-      expired: 0,
-      uncertain: 0,
-      auxiliaryPending: false,
-    });
-    assert.equal(fixture.github.tokenState()[0].revoked, true);
-    assert.equal((await readDiscovery(fixture)).status, 401);
-    assert.equal(fixture.received.length, 1);
-    assert.equal(fixture.github.issuesOfTokens.length, 1);
-    // A new session uses the sole exchange slot after the cancelled I/O settles.
-    fixture.opened = fixture.service.open({ durationSeconds: 300, profile: "git-write" });
-    assert.deepEqual(await readDiscovery(fixture), {
-      kind: "completed",
-      status: 200,
-      bytes: 4,
-      complete: true,
-    });
-    assert.equal(fixture.received.length, 2);
-  },
-);
+for (const responseStarted of [false, true]) {
+  test(
+    `control close ${responseStarted ? "during a live response" : "before response headers"} releases its credential and exchange slot`,
+    { timeout: 15000 },
+    async (t) => {
+      let upstreamCancelled = false;
+      let inputReceived = false;
+      let requests = 0;
+      const fixture = await startTransport(t, (incoming, outgoing) => {
+        incoming.once("end", () => {
+          inputReceived = true;
+          if (++requests === 1) {
+            outgoing.once("close", () => (upstreamCancelled = !outgoing.writableFinished));
+            if (responseStarted) {
+              outgoing.writeHead(200, replyHeaders).write("0000");
+            }
+          } else {
+            outgoing.writeHead(200, replyHeaders).end("0000");
+          }
+        });
+        incoming.resume();
+      });
+      let delivered = 0;
+      const client = startRequest(fixture, {
+        onResponse: (incoming) => incoming.on("data", (chunk) => (delivered += chunk.length)),
+      });
+      client.outgoing.end();
+      // Consume the complete input before closing. With no response headers,
+      // revocation must still abort where an upstream failure could report 502.
+      await eventually(() => (responseStarted ? delivered === 4 : inputReceived));
+      const sessionId = fixture.opened.session.sessionId;
+      assert.equal(fixture.service.status(sessionId).activeUses, 1);
+      const { callControl } = await appModule("drivers/repo/github/credentials/client/operator");
+      const closed = await callControl(fixture.config.gateway.controlSocket, {
+        method: "POST",
+        path: `/v1/sessions/${sessionId}/close`,
+      });
+      assert.equal(closed.state, "CLOSED");
+      // Closure must cancel active I/O before the independent five-second stall
+      // timer could do so; eventual timeout is not proof of session cancellation.
+      await eventually(
+        () => upstreamCancelled && fixture.service.status(sessionId).state === "DISPOSED",
+        { timeoutMs: 1000 },
+      );
+      assert.deepEqual(await client.result, {
+        kind: "closed",
+        status: responseStarted ? 200 : undefined,
+        bytes: responseStarted ? 4 : 0,
+        complete: false,
+      });
+      const status = fixture.service.status(sessionId);
+      assert.equal(status.activeUses, 0);
+      assert.deepEqual(status.cleanup, {
+        active: 0,
+        pending: 0,
+        revoked: 1,
+        expired: 0,
+        uncertain: 0,
+        auxiliaryPending: false,
+      });
+      assert.equal(fixture.github.tokenState()[0].revoked, true);
+      assert.equal((await readDiscovery(fixture)).status, 401);
+      assert.equal(fixture.received.length, 1);
+      assert.equal(fixture.github.issuesOfTokens.length, 1);
+      // A new session uses the sole exchange slot after the cancelled I/O settles.
+      fixture.opened = fixture.service.open({ durationSeconds: 300, profile: "git-write" });
+      assert.deepEqual(await readDiscovery(fixture), {
+        kind: "completed",
+        status: 200,
+        bytes: 4,
+        complete: true,
+      });
+      assert.equal(fixture.received.length, 2);
+    },
+  );
+}

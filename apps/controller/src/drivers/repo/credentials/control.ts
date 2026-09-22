@@ -1,9 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Clock } from "./backend-contracts.ts";
-import type { OpenSessionInput, SessionControl, ServiceConfig } from "./service-contracts.ts";
+import type { SessionInput } from "./sessions.ts";
+import { snapshotSessionInput, sameSessionInput, isBoundInput } from "./sessions.ts";
+import type { SessionControl, ServiceConfig } from "./service-contracts.ts";
 import { inspectRequestHead } from "./transport/request.ts";
 
-// A new correlation must be fresh; this also bounds closed-session tombstones.
+// A new correlation must be fresh; completed-session tombstones share this window.
 const admissionWindowMs = 60_000;
 
 export function createControlAdmission(
@@ -14,8 +16,8 @@ export function createControlAdmission(
   const records = new Map<
     string,
     {
-      input: OpenSessionInput;
-      sessionId: string;
+      input: SessionInput;
+      sessionId: string | undefined;
       forgetAt: number;
       cancel: () => void;
     }
@@ -34,8 +36,9 @@ export function createControlAdmission(
   };
   const sweep = () => {
     for (const [id, record] of records) {
+      const status = record.sessionId === undefined ? undefined : service.status(record.sessionId);
       if (
-        service.status(record.sessionId)?.state !== "OPEN" &&
+        (status === undefined || status.state === "DISPOSED") &&
         clock.monotonicNow() >= record.forgetAt
       ) {
         record.cancel();
@@ -44,48 +47,67 @@ export function createControlAdmission(
     }
   };
   return {
-    open(id: string, input: OpenSessionInput) {
+    open(id: string, input: SessionInput) {
       if (disposed) {
         throw new Error("CONTROL_CLOSED");
       }
+      const recoverOnly = "recoverOnly" in input && input.recoverOnly === true;
+      const snapshot = snapshotSessionInput(input);
+      const admittedInput = isBoundInput(snapshot)
+        ? snapshot
+        : Object.freeze({
+            durationSeconds: snapshot.durationSeconds,
+            profile: snapshot.profile ?? config.sessionPolicy.defaultProfile,
+          });
       sweep();
       const previous = records.get(id);
       if (previous) {
-        if (
-          previous.input.durationSeconds !== input.durationSeconds ||
-          previous.input.profile !== input.profile
-        ) {
+        if (!sameSessionInput(previous.input, admittedInput)) {
           throw new Error("ADMISSION_CONFLICT");
         }
-        const status = service.status(previous.sessionId);
+        const status =
+          previous.sessionId === undefined ? undefined : service.status(previous.sessionId);
         if (!status) {
-          throw new Error("ADMISSION_NOT_FOUND");
+          throw new Error("ADMISSION_MISSING");
         }
-        return { result: status, sessionId: previous.sessionId, created: false };
+        return { result: status, sessionId: previous.sessionId!, created: false };
       }
       const timestamp =
         /^([0-9]{13})-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.exec(
           id,
         );
       const age = timestamp ? now() - Number(timestamp[1]) : -1;
-      if (age < 0 || age >= admissionWindowMs) {
+      if (age < 0) {
         throw new Error("INVALID_ADMISSION");
+      }
+      if (age >= admissionWindowMs) {
+        throw new Error("ADMISSION_MISSING");
       }
       if (records.size >= 2 * config.limits.sessions) {
         throw new Error("SESSION_CAPACITY");
       }
-      const opened = service.open(input);
+      const forgetAt = clock.monotonicNow() + admissionWindowMs - age;
+      if (recoverOnly) {
+        // A missing result fences a delayed first-open for this still-fresh ID.
+        // Without the fence, cleanup could finish before that request creates authority.
+        const record = { input: admittedInput, sessionId: undefined, forgetAt, cancel: () => {} };
+        records.set(id, record);
+        record.cancel = clock.schedule(admissionWindowMs - age, () => records.delete(id));
+        throw new Error("ADMISSION_MISSING");
+      }
+      const opened = service.open(admittedInput);
       const record = {
-        input,
+        input: admittedInput,
         sessionId: opened.session.sessionId,
-        forgetAt: clock.monotonicNow() + admissionWindowMs - age,
+        forgetAt,
         cancel: () => {},
       };
       records.set(id, record);
-      // Recovery retains only the input binding and ID, never the once-returned bearer.
+      // Recovery retains only immutable input and ID, never the once-returned bearer.
+      // Deadline expiry cannot discard correlation while CLOSED still owns cleanup.
       record.cancel = clock.schedule(
-        Math.max(input.durationSeconds * 1000, admissionWindowMs - age),
-        () => records.delete(id),
+        Math.max(opened.session.deadlineWallMs - clock.wallNow(), admissionWindowMs - age),
+        sweep,
       );
       return { result: opened, sessionId: opened.session.sessionId, created: true };
     },
@@ -146,9 +168,15 @@ export async function handleControl(
     return;
   }
   const open = head.method === "POST" && head.rawTarget === "/v1/sessions";
+  const health = head.method === "GET" && head.rawTarget === "/healthz";
   const status = /^\/v1\/sessions\/([A-Za-z0-9_-]{1,128})$/.exec(head.rawTarget);
   const close = /^\/v1\/sessions\/([A-Za-z0-9_-]{1,128})\/close$/.exec(head.rawTarget);
-  if (!open && !(head.method === "GET" && status) && !(head.method === "POST" && close)) {
+  if (
+    !open &&
+    !health &&
+    !(head.method === "GET" && status) &&
+    !(head.method === "POST" && close)
+  ) {
     reply(response, 404, { error: "not-found" });
     return;
   }
@@ -176,31 +204,11 @@ export async function handleControl(
         reply(response, 400, { error: "invalid-request" });
         return;
       }
-      if (
-        body === null ||
-        typeof body !== "object" ||
-        Array.isArray(body) ||
-        Object.keys(body).some((key) => key !== "durationSeconds" && key !== "profile")
-      ) {
-        reply(response, 400, { error: "invalid-request" });
-        return;
-      }
-      const input = body as Record<string, unknown>;
-      if (
-        typeof input.durationSeconds !== "number" ||
-        !Number.isSafeInteger(input.durationSeconds) ||
-        input.durationSeconds <= 0 ||
-        input.durationSeconds > config.sessionPolicy.maximumDurationSeconds ||
-        (input.profile !== undefined &&
-          (typeof input.profile !== "string" ||
-            !config.sessionPolicy.allowedProfiles.includes(input.profile)))
-      ) {
-        reply(response, 400, { error: "invalid-request" });
-        return;
-      }
+      const input = snapshotSessionInput(body);
+      const recoverOnly = (body as Record<string, unknown>).recoverOnly === true;
       const admission = admissions.open(head.headers["x-admission-id"] ?? "", {
-        durationSeconds: input.durationSeconds,
-        profile: input.profile ?? config.sessionPolicy.defaultProfile,
+        ...input,
+        ...(recoverOnly ? { recoverOnly: true as const } : {}),
       });
       // Before handing bytes to the socket, nondelivery is certain. Once writes
       // begin, a lost response is ambiguous and must remain recoverable.
@@ -223,6 +231,10 @@ export async function handleControl(
         reply(response, 400, { error: "invalid-request" });
         return;
       }
+      if (health) {
+        reply(response, 200, { ready: true, protocolVersion: 1 });
+        return;
+      }
       const id = (status ?? close)![1]!;
       const found = service.status(id);
       if (!found) {
@@ -235,7 +247,15 @@ export async function handleControl(
     if (!response.destroyed && !response.headersSent) {
       const invalid =
         error instanceof Error &&
-        ["INVALID_ADMISSION", "ADMISSION_CONFLICT"].includes(error.message);
+        [
+          "INVALID_ADMISSION",
+          "ADMISSION_CONFLICT",
+          "INVALID_BINDING",
+          "INVALID_DEADLINE",
+          "INVALID_PROFILE",
+          "INVALID_DURATION",
+          "BOUND_SESSION_REQUIRED",
+        ].includes(error.message);
       let code = "unavailable";
       let status = 503;
       if (invalid) {
@@ -243,8 +263,8 @@ export async function handleControl(
         status = 400;
       } else if (error instanceof Error && error.message === "SESSION_CAPACITY") {
         code = "overloaded";
-      } else if (error instanceof Error && error.message === "ADMISSION_NOT_FOUND") {
-        code = "not-found";
+      } else if (error instanceof Error && error.message === "ADMISSION_MISSING") {
+        code = "admission-missing";
         status = 404;
       }
       reply(response, status, { error: code });

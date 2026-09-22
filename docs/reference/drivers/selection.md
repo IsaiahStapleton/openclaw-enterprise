@@ -17,7 +17,7 @@ images; individual Agents cannot choose their own implementations.
    supplied on those hosts, start with [SSH Compute](ssh-compute.md) instead.
 2. Select the required Configuration, IAM, Compute, and Secret implementations.
    The table below lists each capability and its allowed choices. Omit optional
-   Sandbox, ServiceAccount, and Plugin selections unless you need them.
+   Sandbox, ServiceAccount, Plugin, and Repo selections unless you need them.
 3. Set `OCC_CONFIG_PATH` to the absolute path of that trusted YAML and select
    `NODE_ENV=development` or `NODE_ENV=production` explicitly. Run the API and
    worker with the same file and controller image. Follow the
@@ -48,15 +48,16 @@ IAM, and Docker Compute without Installation YAML and does not select a
 SecretDriver. An operator can select installed IAM, Compute, Configuration, or
 Sandbox packages in trusted YAML in either mode.
 
-| Capability        | Shared contract                            | Selection boundary                                                                                   |
-| ----------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `configuration`   | [ConfigurationDriver](configuration.md)    | Required in Installation YAML; bundled Kubernetes or installed package.                              |
-| `iam`             | [IAMDriver](iam.md)                        | Required in Installation YAML; bundled native IAM or installed package.                              |
-| `compute`         | [ComputeDriver](compute.md)                | Required in Installation YAML; bundled Kubernetes, bundled SSH, or installed package.                |
-| `secret`          | [SecretDriver](secret.md)                  | Required in trusted Installation YAML, including SSH; bundled Kubernetes only.                       |
-| `sandbox`         | [SandboxDriver](sandbox.md)                | Optional; bundled OpenShell or installed package, and currently requires bundled Kubernetes Compute. |
-| `service_account` | [ServiceAccountDriver](service-account.md) | Optional bundled ChatGPT Provider member; no installed-package selector.                             |
-| `plugin`          | [PluginDriver](plugin.md)                  | Optional bundled `occ-plugin` or `codex-plugin`; no installed-package selector.                      |
+| Capability        | Shared contract                                                 | Selection boundary                                                                                   |
+| ----------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `configuration`   | [ConfigurationDriver](configuration.md)                         | Required in Installation YAML; bundled Kubernetes or installed package.                              |
+| `iam`             | [IAMDriver](iam.md)                                             | Required in Installation YAML; bundled native IAM or installed package.                              |
+| `compute`         | [ComputeDriver](compute.md)                                     | Required in Installation YAML; bundled Kubernetes, bundled SSH, or installed package.                |
+| `secret`          | [SecretDriver](secret.md)                                       | Required in trusted Installation YAML, including SSH; bundled Kubernetes only.                       |
+| `sandbox`         | [SandboxDriver](sandbox.md)                                     | Optional; bundled OpenShell or installed package, and currently requires bundled Kubernetes Compute. |
+| `service_account` | [ServiceAccountDriver](service-account.md)                      | Optional bundled ChatGPT Provider member; no installed-package selector.                             |
+| `plugin`          | [PluginDriver](plugin.md)                                       | Optional bundled `occ-plugin` or `codex-plugin`; no installed-package selector.                      |
+| `repo`            | [RepoDriver](../repository-credentials.md#repo-driver-contract) | Optional bundled GitHub Provider member; requires bundled Kubernetes Compute without Sandbox.        |
 
 Installed packages run unsandboxed with control-plane authority and
 access to controller credentials, database state, and Kubernetes identity.
@@ -78,9 +79,10 @@ client with exact related Driver selections. `provider[].drivers` owns
 membership, and composition injects the Provider into the concrete member.
 The generic Driver contract has no Provider identity field. All declared members
 are required and must match the selected registry `(capability, id)`. The bundled ChatGPT Provider requires its selected
-ServiceAccount Driver. There is no per-Agent Driver selection.
+ServiceAccount Driver; the bundled GitHub Provider requires its selected Repo
+Driver. There is no per-Agent Driver selection.
 
-Runtime Provider injection is limited to that bundled Driver. Installed factory
+Runtime Provider injection is limited to those bundled Drivers. Installed factory
 arguments remain the contract below; Provider loading or injection into
 installed packages is deferred.
 
@@ -167,8 +169,9 @@ Driver package. OCC does not merge package-provided defaults.
 
 IAM, Compute, Configuration, and Sandbox selections accept only `id`, optional
 `package`, and `configuration`. Omit `package` for a bundled Driver. The
-Secret selection accepts only the bundled Kubernetes implementation and does
-not accept an installed package. Installed implementation identity is
+Secret selection accepts only the bundled Kubernetes implementation. The optional
+Repo selection accepts only the bundled GitHub implementation with its declared
+Provider member; neither selection accepts an installed package. Installed implementation identity is
 `<package-name>@<installed-version>`; bundled identity is intrinsic. Operators
 cannot supply `implementation` or `version`; factory identity and capability
 must match the selection:

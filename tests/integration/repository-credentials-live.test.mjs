@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFile, chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { appModule } from "../fixtures/repository-credentials/runtime.mjs";
+import { credentialDriverModule } from "../fixtures/repository-credentials/runtime.mjs";
 import { runPinnedClients } from "../fixtures/repository-credentials/clients.mjs";
 import { removeRemoteBranches } from "../fixtures/repository-credentials/workflows.mjs";
 import {
@@ -34,8 +34,8 @@ test(
       "live smoke requires the private control socket and public gateway CA",
     );
     const [{ callControl }, { writeClientConfiguration }] = await Promise.all([
-      appModule("drivers/repo/github/credentials/client/operator"),
-      appModule("drivers/repo/github/credentials/client/config"),
+      credentialDriverModule("client/operator"),
+      credentialDriverModule("client/config"),
     ]);
     const opened = await callControl(socket, {
       method: "POST",
