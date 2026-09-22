@@ -5,6 +5,9 @@ Create and deploy an Agent with approved repository references, then use ordinar
 credentials remain in the service. Review the
 [profiles](../reference/repository-credentials.md#profiles) before selecting `git-full`.
 
+For a team GitHub App, start with the [team runbook](repository-credentials/team-runbook.md)
+for App registration, copyable configuration, a first draft PR, and cleanup.
+
 Keep the gateway private to approved clients, with enforced NetworkPolicies and
 HTTPS on port 443. A `.svc` hostname or ClusterIP alone does not establish isolation;
 check forwarding, Ingress, load balancers and effective policy enforcement.

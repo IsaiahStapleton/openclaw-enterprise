@@ -315,6 +315,10 @@
                         "label": "Installation"
                       },
                       {
+                        "page": "guides/repository-credentials/team-runbook",
+                        "label": "Team Runbook"
+                      },
+                      {
                         "page": "reference/repository-credentials",
                         "label": "Credential Lifecycle"
                       }

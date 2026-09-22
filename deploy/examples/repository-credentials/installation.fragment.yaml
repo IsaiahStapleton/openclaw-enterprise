@@ -1,0 +1,26 @@
+# Merge into an existing Installation; preserve its other Providers and Drivers.
+# Kubernetes Compute, embedded OpenClaw, api_key auth, and no Sandbox Driver.
+provider:
+  - id: repository-provider
+    type: github
+    configuration:
+      registryPath: /etc/openclaw/repository-registry/registry.json
+    drivers:
+      repo: repository-credentials
+drivers:
+  repo:
+    id: repository-credentials
+    configuration:
+      controlSocket: /run/openclaw/repository-control/private/control.sock
+      sessionDurationSeconds: 86400
+      publicCaPath: /etc/openclaw/repository-ca/ca.crt
+  compute:
+    configuration:
+      network:
+        repositoryCredentials:
+          namespace: openclaw-system
+          podLabels:
+            app.kubernetes.io/name: openclaw-enterprise
+            app.kubernetes.io/instance: oce
+            app.kubernetes.io/component: worker
+          port: 8443

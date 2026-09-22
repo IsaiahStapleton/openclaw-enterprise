@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "providerId": "repository-provider",
+  "providerInstanceId": "github-team",
+  "appId": "123456",
+  "githubInstallationId": "789012",
+  "maximumDurationSeconds": 86400,
+  "repositories": [
+    {
+      "repositoryRef": "application",
+      "repositoryId": "345678",
+      "repository": "example/project",
+      "namespaces": [
+        {
+          "namespaceId": "replace-with-occ-namespace-id",
+          "profiles": ["git-read", "git-write", "git-full"]
+        }
+      ]
+    }
+  ]
+}
