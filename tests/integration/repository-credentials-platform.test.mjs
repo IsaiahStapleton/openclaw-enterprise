@@ -185,6 +185,42 @@ test(
       "HEAD:refs/heads/native-feature",
     ]);
     assert.equal(await first.git.ref("refs/heads/native-feature"), commit);
+    // One forbidden destination rejects the whole native push before
+    // receive-pack; the real upstream must retain both observed refs.
+    const beforeMain = await first.git.ref("refs/heads/main");
+    const beforeFeature = await first.git.ref("refs/heads/native-feature");
+    const beforeMixed = first.git.trace.length;
+    await fixture.tool(
+      pod,
+      "git",
+      [
+        "-C",
+        firstCheckout,
+        "push",
+        "origin",
+        "HEAD:refs/heads/agent/mixed",
+        "HEAD:refs/heads/main",
+      ],
+      { expected: "failure" },
+    );
+    assert.equal(await first.git.ref("refs/heads/main"), beforeMain);
+    assert.equal(await first.git.ref("refs/heads/native-feature"), beforeFeature);
+    assert.equal(
+      (
+        await fixture.tool(pod, "git", [
+          "-C",
+          firstCheckout,
+          "ls-remote",
+          "origin",
+          "refs/heads/agent/mixed",
+        ])
+      ).trim(),
+      "",
+    );
+    assert.equal(
+      first.git.trace.slice(beforeMixed).some(({ path }) => path.endsWith("/git-receive-pack")),
+      false,
+    );
     await fixture.tool(
       pod,
       "gh",

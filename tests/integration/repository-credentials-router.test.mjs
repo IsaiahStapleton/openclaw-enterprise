@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cp, readFile, writeFile } from "node:fs/promises";
+import { cp, readFile, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { createNativeClientMaterial } from "../fixtures/repository-credentials/clients.mjs";
@@ -121,6 +121,100 @@ test("duplicate bindings select only explicit authority and never an alternate u
   const expired = await fill(material, { OCE_REPOSITORY_REF: "read" });
   assert.notEqual(expired.code, 0);
   assert.equal(expired.stdout, "");
+});
+
+test("native pre-push uses the exact pinned binding and actual destination", async (t) => {
+  const restricted = opened("restricted");
+  restricted.client.pushRefAllowlist = [];
+  const permitted = opened("permitted");
+  permitted.client.pushRefAllowlist = ["refs/heads/agent/*"];
+  const other = opened("other", "example/other");
+  other.client.pushRefAllowlist = ["refs/heads/main"];
+  const material = await createNativeClientMaterial(t, [
+    { opened: restricted, repositoryRef: "restricted" },
+    { opened: permitted, repositoryRef: "permitted" },
+    { opened: other, repositoryRef: "other" },
+  ]);
+  const work = await temporaryDirectory(t);
+  await run("/usr/bin/git", ["init", work]);
+  const input = "HEAD " + "1".repeat(40) + " refs/heads/agent/topic " + "0".repeat(40) + "\n";
+  const inputFile = join(work, "push-input");
+  await writeFile(inputFile, input);
+  const invoke = (extra = {}, destination = restricted.client.gitRemote) =>
+    run(
+      "/usr/bin/git",
+      ["hook", "run", "--to-stdin=" + inputFile, "pre-push", "--", "origin", destination],
+      {
+        cwd: work,
+        env: environment(material, extra),
+        allowFailure: true,
+      },
+    );
+  assert.notEqual((await invoke()).code, 0);
+  assert.notEqual((await invoke({ OCE_REPOSITORY_REF: "restricted" })).code, 0);
+  assert.equal((await invoke({ OCE_REPOSITORY_REF: "permitted" })).code, 0);
+  const selected = material.manifest.bindings.find(
+    ({ repositoryRef }) => repositoryRef === "permitted",
+  );
+  assert.equal((await invoke({ OCE_REPOSITORY_SELECTION: pin(material, selected) })).code, 0);
+  assert.notEqual(
+    (await invoke({ OCE_REPOSITORY_REF: "permitted" }, other.client.gitRemote)).code,
+    0,
+  );
+  assert.notEqual(
+    (
+      await invoke({
+        OCE_REPOSITORY_SELECTION: JSON.stringify([
+          "0".repeat(64),
+          "permitted",
+          permitted.session.sessionId,
+        ]),
+      })
+    ).code,
+    0,
+  );
+  assert.equal(
+    (await invoke({ OCE_REPOSITORY_REF: "restricted" }, "/unmanaged/local/repository")).code,
+    0,
+  );
+});
+
+test("delegating an ordinary hook back to the managed dispatcher fails without recursion", async (t) => {
+  const selected = opened("recursive");
+  selected.client.pushRefAllowlist = ["refs/heads/agent/*"];
+  const material = await createNativeClientMaterial(t, [
+    { opened: selected, repositoryRef: "project" },
+  ]);
+  const work = await temporaryDirectory(t);
+  await run("/usr/bin/git", ["init", work]);
+  // A repository may install a symlink to the managed wrapper as its own hook.
+  // Delegation must fail promptly, preserving the caller's refs and process lifetime.
+  await symlink(join(material.hooks, "pre-push"), join(work, ".git/hooks/pre-push"));
+  const inputFile = join(work, "push-input");
+  await writeFile(
+    inputFile,
+    "HEAD " + "1".repeat(40) + " refs/heads/agent/topic " + "0".repeat(40) + "\n",
+  );
+  const result = await run(
+    "/usr/bin/git",
+    [
+      "hook",
+      "run",
+      "--to-stdin=" + inputFile,
+      "pre-push",
+      "--",
+      "origin",
+      selected.client.gitRemote,
+    ],
+    {
+      cwd: work,
+      env: environment(material),
+      allowFailure: true,
+      timeout: 3000,
+    },
+  );
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /repository-pre-push-guard-failed/);
 });
 
 test("literal dot-git names and effective repository endpoints cannot silently switch bindings", async (t) => {

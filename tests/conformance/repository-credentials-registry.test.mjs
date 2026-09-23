@@ -90,6 +90,9 @@ test("canonical registry fingerprints bind exact authority and the selected Name
     "selected Namespace profiles": (value) => {
       value.repositories[0].namespaces[0].profiles = ["git-write"];
     },
+    "selected Namespace push refs": (value) => {
+      value.repositories[0].namespaces[0].pushRefAllowlist = [];
+    },
   })) {
     await t.test(name, () => {
       const changed = registryInput();
@@ -136,7 +139,11 @@ test("GitHub factory snapshots a registry-selected write grant through session a
     repositoryRef: "application",
     profile: "git-write",
   });
-  const selection = { profile: binding.profile, identity: { ...binding.grant } };
+  const selection = {
+    profile: binding.profile,
+    identity: { ...binding.grant },
+    pushRefAllowlist: ["refs/heads/agent/*"],
+  };
   const expected = { ...selection.identity };
   const clock = createControlledClock(1700000000000);
   const config = validateServiceConfig(serviceConfigurationData());
@@ -165,7 +172,9 @@ test("GitHub factory snapshots a registry-selected write grant through session a
   selection.identity.providerInstanceId = "changed-instance";
   selection.identity.repositoryId = "74";
   selection.identity.grantId = "changed-grant";
+  selection.pushRefAllowlist.push("refs/heads/main");
   const resolved = factory.resolve("git-write");
+  assert.deepEqual(resolved.client.pushRefAllowlist, ["refs/heads/agent/*"]);
   assert.deepEqual(resolved.binding, expected);
   assert.equal(Object.isFrozen(resolved.binding), true);
   assert.throws(() => factory.resolve("git-read"), /unsupported-profile/);
@@ -182,6 +191,54 @@ test("GitHub factory snapshots a registry-selected write grant through session a
     /unsupported-profile/,
   );
   service.close(opened.session.sessionId);
+});
+
+test("push-ref policy normalizes branch refs and changes grant identity", () => {
+  const request = { namespaceId: "namespace-a", repositoryRef: "application" };
+  const resolvePolicy = (policy) => {
+    const input = registryInput();
+    input.repositories[0].namespaces[0].pushRefAllowlist = policy;
+    const registry = validateGitHubRepositoryRegistry(input);
+    return { registry, binding: resolveGitHubRepositoryBinding(registry, request) };
+  };
+  const first = resolvePolicy(["refs/heads/z", "refs/heads/agent/*", "refs/heads/z"]);
+  const reordered = resolvePolicy(["refs/heads/agent/*", "refs/heads/z"]);
+  assert.deepEqual(first.binding, reordered.binding);
+  assert.deepEqual(first.registry.repositories[0].namespaces[0].pushRefAllowlist, [
+    "refs/heads/agent/*",
+    "refs/heads/z",
+  ]);
+  assert.notEqual(resolvePolicy([]).binding.grant.grantId, first.binding.grant.grantId);
+  assert.notEqual(
+    resolvePolicy([]).binding.grant.grantId,
+    resolveGitHubRepositoryBinding(validateGitHubRepositoryRegistry(registryInput()), request).grant
+      .grantId,
+  );
+  assert.ok(resolvePolicy(["refs/heads/*"]).binding.grant.grantId);
+  assert.equal(
+    resolvePolicy(Array.from({ length: 40 }, (_, index) => `refs/heads/branch-${index}`)).registry
+      .repositories[0].namespaces[0].pushRefAllowlist.length,
+    40,
+  );
+  assert.ok(resolvePolicy(["refs/heads/" + "a/".repeat(150) + "branch"]).binding.grant.grantId);
+  for (const invalid of [
+    null,
+    "refs/heads/main",
+    ["main"],
+    ["refs/tags/v1"],
+    ["refs/heads/"],
+    ["refs/heads/a*"],
+    ["refs/heads/a/**"],
+    ["refs/heads/a/../b"],
+    ["refs/heads/.hidden"],
+    ["refs/heads/a.lock"],
+    ["refs/heads/a@{b"],
+    ["refs/heads/a\nb"],
+    ["refs/heads/a?"],
+    ["refs/heads/a//b"],
+  ]) {
+    assert.throws(() => resolvePolicy(invalid), /invalid-repository-registry/);
+  }
 });
 
 test("registry refuses ambiguous repositories, wildcard policy, unsupported profiles and noncanonical IDs", async (t) => {

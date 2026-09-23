@@ -10,7 +10,10 @@ import { join } from "node:path";
 import { DependencyUnavailableError, ScopeViolationError } from "../../packages/occ/src/index.ts";
 import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
 import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/providers/repository-credentials/control-client.ts";
-import { startRegistryCredentialServiceFixture } from "../fixtures/repository-credentials/registry.mjs";
+import {
+  defaultRegistryRepositories,
+  startRegistryCredentialServiceFixture,
+} from "../fixtures/repository-credentials/registry.mjs";
 
 async function unusedPort() {
   const server = createNetServer();
@@ -82,6 +85,11 @@ test(
   async (t) => {
     const fixture = await startRegistryCredentialServiceFixture(t, {
       autoOpen: false,
+      repositories: defaultRegistryRepositories.map((entry) =>
+        entry.repositoryRef === "repo-b"
+          ? { ...entry, pushRefAllowlist: ["refs/heads/agent/*"] }
+          : entry,
+      ),
       gateway: { listen: `127.0.0.1:${await unusedPort()}` },
     });
     const signal = new AbortController().signal;
@@ -139,6 +147,10 @@ test(
         ["bearer", "ca.pem", "client.json", "gh/config.yml", "gh/hosts.yml", "gitconfig"].sort(),
       );
       assert.equal(JSON.parse(result.files["client.json"]).sessionId, result.session.sessionId);
+      assert.deepEqual(
+        JSON.parse(result.files["client.json"]).client.pushRefAllowlist,
+        index === 1 ? ["refs/heads/agent/*"] : undefined,
+      );
       const response = await gateway(fixture, result, fixture.repositories[index].repository);
       assert.equal(response.status, 200, response.body);
       assert.equal(
@@ -470,6 +482,13 @@ test("Unix control rejects malformed status and preserves authoritative absence 
       },
     };
     assert.deepEqual((await client.open(input, admissionId, signal)).result.client, configuration);
+    for (const policy of [null, "refs/heads/main", ["refs/tags/v1"], ["refs/heads/topic/**"]]) {
+      reply.body.client = { ...configuration, pushRefAllowlist: policy };
+      await assert.rejects(
+        client.open(input, admissionId, signal),
+        (error) => error.retryable === true,
+      );
+    }
     // A username bypasses URL parsing but still crosses the untrusted control-response boundary.
     reply.body.client = { ...configuration, gitUsername: 1 };
     await assert.rejects(

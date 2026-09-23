@@ -1,0 +1,171 @@
+import { spawnSync } from "node:child_process";
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
+import { isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { allowsPushRef } from "../../../credentials/client-contracts.ts";
+import { readClientConfiguration } from "./config.ts";
+import {
+  inheritedRepositoryBinding,
+  readRuntimeRepositoryManifest,
+  requireCurrentBinding,
+  type RuntimeRepositoryBinding,
+  type RuntimeRepositoryManifest,
+} from "./manifest.ts";
+import { hasGitPushDestination, selectGitPushDestination } from "./targets.ts";
+
+function gitOutput(args: readonly string[], absent = false): string | undefined {
+  const result = spawnSync("/usr/bin/git", args, {
+    encoding: "utf8",
+    timeout: 5000,
+    maxBuffer: 64 * 1024,
+  });
+  if (absent && result.status === 1 && !result.error) {
+    return undefined;
+  }
+  if (result.status !== 0 || result.error) {
+    throw new Error("repository-hook-inspection-failed");
+  }
+  return result.stdout;
+}
+
+function setting(name: string): string | undefined {
+  const output = gitOutput(["config", "--null", "--get", "oce.repository." + name], true);
+  if (output === undefined) {
+    return undefined;
+  }
+  if (!output.endsWith("\0") || output.slice(0, -1).includes("\0")) {
+    throw new Error("repository-hook-inspection-failed");
+  }
+  return output.slice(0, -1) || undefined;
+}
+
+async function checkPush(destination: string, input: Buffer): Promise<void> {
+  if (!destination.startsWith("https://")) {
+    return;
+  }
+  const directory = setting("session");
+  let manifest: RuntimeRepositoryManifest;
+  let expectedGeneration: string | undefined;
+  let pinned: RuntimeRepositoryBinding | undefined;
+  if (directory) {
+    const configuration = await readClientConfiguration(directory);
+    const binding: RuntimeRepositoryBinding = {
+      repositoryRef: "operator",
+      sessionId: configuration.sessionId,
+      deadlineWallMs: configuration.deadlineWallMs,
+      directory: resolve(directory),
+      materialDirectory: resolve(directory),
+      client: configuration.client,
+      configuration,
+    };
+    manifest = { generation: "", bindings: [binding] };
+  } else {
+    const root = setting("manifestRoot");
+    expectedGeneration = setting("generation");
+    if (!root || !expectedGeneration) {
+      throw new Error("invalid-repository-selection");
+    }
+    manifest = await readRuntimeRepositoryManifest(root);
+  }
+  // An unrelated destination must not be rejected by an inherited pin.
+  if (!hasGitPushDestination(manifest, destination)) {
+    return;
+  }
+  if (!directory) {
+    if (manifest.generation !== expectedGeneration) {
+      throw new Error("invalid-repository-selection");
+    }
+    pinned = inheritedRepositoryBinding(manifest, process.env);
+  }
+  const binding = selectGitPushDestination(manifest, destination, pinned);
+  if (!binding || binding.client.pushRefAllowlist === undefined) {
+    return;
+  }
+  requireCurrentBinding(binding);
+  const lines = input.toString("utf8").split("\n");
+  if (lines.pop() !== "") {
+    throw new Error("invalid-pre-push-input");
+  }
+  for (const line of lines) {
+    const fields = line.split(" ");
+    if (
+      fields.length !== 4 ||
+      !fields[0] ||
+      !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(fields[1] ?? "") ||
+      !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(fields[3] ?? "") ||
+      !allowsPushRef(binding.client.pushRefAllowlist, fields[2] ?? "")
+    ) {
+      throw new Error("repository-push-ref-not-allowed");
+    }
+  }
+}
+
+async function readPushInput(): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const bytes = Buffer.from(chunk);
+    size += bytes.length;
+    if (size > 16 * 1024 * 1024) {
+      throw new Error("pre-push-input-too-large");
+    }
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks);
+}
+
+/** Image-owned dispatch preserves Git's ordinary hooks in the common directory. */
+async function run(): Promise<number> {
+  const [name, ...args] = process.argv.slice(2);
+  if (!name || !/^[a-z][a-z0-9-]{0,63}$/.test(name)) {
+    throw new Error("invalid-repository-hook");
+  }
+  let input: Buffer | undefined;
+  if (name === "pre-push") {
+    if (args.length !== 2) {
+      throw new Error("invalid-pre-push-input");
+    }
+    input = await readPushInput();
+    await checkPush(args[1]!, input);
+  }
+  const commonOutput = gitOutput(["rev-parse", "--path-format=absolute", "--git-common-dir"])!;
+  const common = commonOutput.slice(0, -1);
+  if (!commonOutput.endsWith("\n") || !isAbsolute(common) || /[\r\n\0]/.test(common)) {
+    throw new Error("repository-hook-inspection-failed");
+  }
+  const hook = join(common, "hooks", name);
+  const activeHooks = (process.env.OCE_REPOSITORY_ACTIVE_HOOKS ?? "").split("\n").filter(Boolean);
+  if (activeHooks.includes(hook)) {
+    throw new Error("recursive-repository-hook");
+  }
+  try {
+    await access(hook, constants.X_OK);
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      return 0;
+    }
+    throw error;
+  }
+  const env = { ...process.env, OCE_REPOSITORY_ACTIVE_HOOKS: [...activeHooks, hook].join("\n") };
+  const child =
+    input === undefined
+      ? spawnSync(hook, args, { env, stdio: "inherit" })
+      : spawnSync(hook, args, { env, input, stdio: ["pipe", "inherit", "inherit"] });
+  if (child.error) {
+    throw new Error("repository-hook-execution-failed");
+  }
+  return child.status ?? 1;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  run().then(
+    (code) => {
+      process.exitCode = code;
+    },
+    () => {
+      process.stderr.write("repository-pre-push-guard-failed\n");
+      process.exitCode = 1;
+    },
+  );
+}

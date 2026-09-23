@@ -4,6 +4,7 @@ import type {
   RepositoryBindingRequest,
 } from "@openclaw-enterprise/contracts";
 import type { GitHubProfile } from "./types.ts";
+import { normalizePushRefAllowlist } from "../../credentials/client-contracts.ts";
 
 export const GITHUB_REPOSITORY_REGISTRY_MAX_BYTES = 256 * 1024;
 
@@ -14,6 +15,7 @@ export interface GitHubRepositoryRegistration {
   readonly namespaces: readonly Readonly<{
     namespaceId: string;
     profiles: readonly GitHubProfile[];
+    pushRefAllowlist?: readonly string[];
   }>[];
 }
 
@@ -121,13 +123,22 @@ export function validateGitHubRepositoryRegistry(
   const repositories = array(root.repositories, 128).map((candidate) => {
     const entry = object(candidate, ["repositoryRef", "repositoryId", "repository", "namespaces"]);
     const namespaces = array(entry.namespaces, 128).map((candidatePolicy) => {
-      const policy = object(candidatePolicy, ["namespaceId", "profiles"]);
+      const policy = object(candidatePolicy, ["namespaceId", "profiles", "pushRefAllowlist"]);
       const profiles = array(policy.profiles, 3).map(profile).sort();
       unique(profiles);
+      let pushRefAllowlist: readonly string[] | undefined;
+      if (Object.hasOwn(policy, "pushRefAllowlist")) {
+        try {
+          pushRefAllowlist = normalizePushRefAllowlist(policy.pushRefAllowlist);
+        } catch {
+          return invalid();
+        }
+      }
       namespaceRows += 1;
       return Object.freeze({
         namespaceId: text(policy.namespaceId),
         profiles: Object.freeze(profiles),
+        ...(pushRefAllowlist === undefined ? {} : { pushRefAllowlist }),
       });
     });
     unique(namespaces.map((policy) => policy.namespaceId));
@@ -189,6 +200,9 @@ export function resolveGitHubRepositoryBinding(
         repository: repository.repository,
         namespaceId,
         allowedProfiles: policy.profiles,
+        ...(policy.pushRefAllowlist === undefined
+          ? {}
+          : { pushRefAllowlist: policy.pushRefAllowlist }),
         profile: selectedProfile,
       }),
     )

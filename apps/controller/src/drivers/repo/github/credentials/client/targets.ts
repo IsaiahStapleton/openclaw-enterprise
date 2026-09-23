@@ -64,6 +64,50 @@ export function selectGhRepository(
   );
 }
 
+/** Select the actual pre-push destination; unrelated transports keep native behavior. */
+function gitPushDestinations(
+  manifest: RuntimeRepositoryManifest,
+  destination: string,
+): readonly RuntimeRepositoryBinding[] {
+  if (
+    !destination.startsWith("https://") ||
+    /[\s\\%?#@]/.test(destination) ||
+    destination.includes("..")
+  ) {
+    return [];
+  }
+  let url: URL;
+  try {
+    url = new URL(destination);
+  } catch {
+    return [];
+  }
+  const path = url.pathname.slice(1).toLowerCase();
+  return manifest.bindings.filter(({ client }) => {
+    const repository = client.repository.toLowerCase();
+    return (
+      [client.gatewayOrigin, "https://" + client.canonicalApiHost].includes(url.origin) &&
+      [repository, repository + ".git"].includes(path)
+    );
+  });
+}
+
+export function hasGitPushDestination(
+  manifest: RuntimeRepositoryManifest,
+  destination: string,
+): boolean {
+  return gitPushDestinations(manifest, destination).length > 0;
+}
+
+export function selectGitPushDestination(
+  manifest: RuntimeRepositoryManifest,
+  destination: string,
+  pinned?: RuntimeRepositoryBinding,
+): RuntimeRepositoryBinding | undefined {
+  const matches = gitPushDestinations(manifest, destination);
+  return matches.length === 0 ? undefined : selectBinding(matches, pinned);
+}
+
 /** Ask native Git for effective remotes only when gh has no explicit target. */
 export function selectImplicitGhRepository(
   manifest: RuntimeRepositoryManifest,
