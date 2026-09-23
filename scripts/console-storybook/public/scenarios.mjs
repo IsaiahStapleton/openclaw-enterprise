@@ -8,7 +8,8 @@ const form = [click("Start without Preset")];
 const readyForm = [
   ...form,
   { selector: "#agent-name", value: "Research assistant" },
-  { selector: "#harness-auth-method", value: "runtime" },
+  { selector: "#provider-api-key", value: "storybook-model-api-key" },
+  { selector: "#agent-model", value: "openai-story-model" },
 ];
 const account = [{ selector: ".account-toggle", click: true }];
 const createSlackBotSecret = [
@@ -19,8 +20,8 @@ const createSlackBotSecret = [
 const createWorkspaceFields = [
   ...form,
   { selector: "#agent-name", value: "Workspace seed demo" },
-  { selector: "#harness-auth-method", value: "api_key" },
-  { selector: "#harness-auth-secret", value: "sec_demo_model" },
+  { selector: "#provider-api-key", value: "storybook-model-api-key" },
+  { selector: "#agent-model", value: "openai-story-model" },
   {
     selector: "#workspace-IDENTITY-md",
     value:
@@ -29,10 +30,8 @@ const createWorkspaceFields = [
   { selector: "#workspace-USER-md", value: "" },
 ];
 const createProvisioningSecrets = [
-  ...form,
+  ...readyForm,
   { selector: "#agent-name", value: "Slack research assistant" },
-  { selector: "#harness-auth-method", value: "api_key" },
-  { selector: "#harness-auth-secret", value: "sec_demo_model" },
   click("Configure Slack"),
   { selector: "#slack-secret-slack-app-token", value: "sec_demo_slack_app_token" },
   ...createSlackBotSecret,
@@ -48,7 +47,7 @@ export const scenarios = {
     path: "/console/agents",
     description:
       "Browse pages, component states, and guided Agent workflows. Every preview mounts the production console modules and styles in its own frame. Reset story discards all local changes.",
-    gap: "Stop Agent requests the stopped desired state; deployment resumes an Agent. Model-Secret creation, Namespace provisioning, Preset management, and Provider setup require an API, CLI, or operator workflow. Serving health and model responses require separate runtime verification.",
+    gap: "Stop Agent requests the stopped desired state; deployment resumes an Agent. Namespace provisioning, Preset management, and installed Provider setup require an API, CLI, or operator workflow. Serving health and model responses require separate runtime verification.",
   },
   login: {
     group: "Pages/Sign in",
@@ -214,7 +213,13 @@ export const scenarios = {
     path: create,
     actions: form,
     description:
-      "Name, execution mode, inline native JSON, saved Secrets, authentication, Providers, plugins, Secret bindings, channel controls, and seeded workspace files.",
+      "Choose a provider and authentication method, enter a credential, and load model choices before provisioning. No model is selected by default.",
+    steps: [
+      "Keep OpenAI and Dedicated, enter a dummy API key, and select a returned model.",
+      'In Configuration JSON, edit plugins.entries.codex.config.appServer: set sandbox to "workspace-write", approvalPolicy to "never", and remoteWorkspaceRoot to "/workspace/custom".',
+      "Change the model, then replace the dummy credential and choose a model again. Confirm all three edited appServer settings remain in Configuration JSON.",
+      "Choose Reset template and confirm to restore the standard runtime settings for the selected model.",
+    ],
   },
   createProvisioningSecrets: {
     group: "Pages/Create Agent",
@@ -305,16 +310,107 @@ export const scenarios = {
     emptyPresets: true,
     description: "Creation remains available without a Preset.",
   },
-  createDiscoveryError: {
+  createBoundCredentialPreset: {
     group: "Pages/Create Agent",
-    name: "Optional discovery denied",
+    name: "Preset with saved model credential",
     path: create,
-    actions: form,
-    rules: [
-      { path: "/providers", status: 403 },
-      { path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/service-accounts", status: 403 },
+    actions: [
+      { selector: "#agent-preset", value: "pre_00000000-0000-4000-8000-000000000001" },
+      { selector: "#preset-variable-name", value: "Preset credential demo" },
+      { selector: "#preset-variable-model", value: "codex/gpt-5.1" },
+      click("Use Preset"),
     ],
-    description: "Unavailable Provider and service-account lists do not hide the Agent form.",
+    description:
+      "The saved API-key credential fixes the provider. Models and compatible execution modes remain editable; JSON cannot redirect the credential to another provider.",
+  },
+  createAnthropic: {
+    group: "Pages/Create Agent",
+    name: "Anthropic API key",
+    path: create,
+    actions: [
+      ...form,
+      { selector: "#model-provider", value: "anthropic" },
+      { selector: "#provider-api-key", value: "storybook-anthropic-key" },
+    ],
+    description:
+      "Entering a key loads Anthropic model choices without selecting one. Anthropic uses Embedded OpenClaw execution.",
+  },
+  createCodexPat: {
+    group: "Pages/Create Agent",
+    name: "Service Accounts",
+    path: create,
+    actions: [
+      ...form,
+      { selector: "#execution-mode", value: "embedded" },
+      { selector: "#agent-auth-method", value: "codex_pat" },
+      { selector: "#provider-api-key", value: "at-storybook-pat" },
+    ],
+    description:
+      "Service Accounts use a workspace token for Dedicated Codex. The form links to OpenAI admin and shows the at- prefix hint. Switching methods clears the credential and model selection.",
+  },
+  createModels: {
+    group: "Pages/Create Agent",
+    name: "Choose an available model",
+    path: create,
+    actions: [...form, { selector: "#provider-api-key", value: "storybook-model-api-key" }],
+    description:
+      "The model dropdown appears after key entry and starts with an unselected placeholder.",
+  },
+  createModelsEmpty: {
+    group: "Pages/Create Agent",
+    name: "No model choices",
+    path: create,
+    emptyModels: true,
+    actions: [...form, { selector: "#provider-api-key", value: "storybook-model-api-key" }],
+    description:
+      "An empty list allows an explicit model ID or a retry; no default model is invented.",
+  },
+  createModelsUnavailable: {
+    group: "Pages/Create Agent",
+    name: "Model discovery unavailable",
+    path: create,
+    actions: [...form, { selector: "#provider-api-key", value: "storybook-model-api-key" }],
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/models",
+        method: "POST",
+        status: 503,
+      },
+    ],
+    description:
+      "A discovery failure keeps the key private and lets the user retry or enter a known model ID.",
+  },
+  createSecretDenied: {
+    group: "Pages/Create Agent",
+    name: "API key storage denied",
+    path: create,
+    actions: [...readyForm, click("Create Agent")],
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets",
+        method: "POST",
+        status: 403,
+      },
+    ],
+    description:
+      "A rejected Secret write keeps the form available and does not create a Configuration or Agent.",
+  },
+  createGrantDenied: {
+    unsupportedProvisioning: true,
+    group: "Pages/Create Agent",
+    name: "Credential access retry",
+    path: create,
+    actions: [...readyForm, click("Create Agent")],
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/iam/access-bindings",
+        method: "POST",
+        status: 403,
+        once: true,
+      },
+    ],
+    description:
+      "The Agent is saved but its Secret grant failed. Retry credential access reuses the same Agent and Secret.",
   },
   createInvalid: {
     group: "Pages/Create Agent",
@@ -844,12 +940,11 @@ export const scenarios = {
     emptyAgents: true,
     transport: false,
     description:
-      "Interactive walkthrough from Preset selection through draft creation, credential provisioning, workspace defaults, and deployment admission. Worker progress is simulated; it is not a live deployment.",
+      "Interactive walkthrough from Preset selection through first-time provisioning and deployment activation. Worker progress is simulated; it is not a live deployment.",
     steps: [
       "Choose Research assistant, fill Variable: name, then Use Preset.",
       "Review the Configuration, masked pre-existing model Secret reference, and four seeded workspace files; click Create Agent.",
-      "Open Credentials and Provision generated runtime credentials.",
-      "Click Deploy new revision. Inspect Deployment status and Refresh deployment to advance the simulated worker, then Refresh the page to read the active revision.",
+      "Wait for the simulated provisioning and deployment to finish; the Console opens Workspace files for the admitted revision.",
       "Use AgentRevision to inspect the immutable snapshot and Workspace files to inspect runtime files seeded during creation.",
     ],
     gap: "The fixture supplies a ready Namespace, Preset, and model Secret. Set those up outside the console. Verify actual serving health and a model response outside this walkthrough.",
@@ -861,11 +956,11 @@ export const scenarios = {
     emptyAgents: true,
     transport: false,
     description:
-      "Create an Agent from the no-Preset form after editing IDENTITY.md and clearing USER.md, then deploy and inspect the seeded runtime workspace files.",
+      "Create a Dedicated Agent from the no-Preset form after editing IDENTITY.md and clearing USER.md, then inspect the seeded workspace after simulated provisioning.",
     steps: [
-      "Start without Preset, enter a demo Agent name, choose OpenAI API key, and enter the existing fixture Secret ID sec_demo_model.",
+      "Start without Preset, enter a demo Agent name, keep OpenAI and Dedicated, enter a dummy API key or service account token, and choose one of the returned demo models.",
       "Review AGENTS.md, SOUL.md, IDENTITY.md, and USER.md. Edit IDENTITY.md, leave USER.md empty, and create the Agent.",
-      "Provision generated runtime credentials, then Deploy new revision and Refresh deployment until the simulated worker succeeds. Use the page Refresh button to read the active revision.",
+      "Wait for automatic provisioning and deployment activation; the Console then opens Workspace files for the returned revision.",
       "Open Workspace files and inspect IDENTITY.md or USER.md to confirm the fixture carried the creation-time file contents into the deployed workspace.",
     ],
     gap: "This Storybook flow proves the UI request body and fixture readback path. It does not prove real gateway filesystem writes or serving health.",
@@ -877,9 +972,8 @@ export const scenarios = {
     emptyAgents: true,
     transport: false,
     actions: [
-      ...form,
+      ...readyForm,
       { selector: "#agent-name", value: "Slack launch demo" },
-      { selector: "#harness-auth-method", value: "runtime" },
       click("Configure Slack"),
       { selector: "#slack-channel-ids", value: "CDEMO123" },
       { selector: "#slack-secret-slack-app-token", value: "sec_demo_slack_app_token" },
