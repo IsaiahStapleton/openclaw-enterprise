@@ -577,6 +577,8 @@ test("repository platform preparation binds runtime clients, an owned gateway an
     "k3d-create",
     "runtime-image-build",
     "platform-fixture-build",
+    "image-archive-save",
+    "image-archive-import",
     "platform-image-import",
   ]) {
     assert.match(
