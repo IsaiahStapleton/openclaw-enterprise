@@ -6,6 +6,10 @@ copied settings before saving. The new Agent and Configuration are independent:
 editing or deleting the Preset cannot change them or their deployed revisions.
 See [Create an Agent from a Preset](../guides/topics/agent-presets.md).
 
+The checked-in [standard Codex Preset](../guides/topics/standard-codex-preset.md)
+uses this same API and chooser. It is explicitly installed per Namespace;
+its native sandbox settings do not establish Pod-wide egress isolation.
+
 ## Contents
 
 A Preset has `id`, `namespaceId`, a Namespace-unique `name`, `template`, and

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -377,4 +377,93 @@ test("Presets block Namespace deletion and deleting one removes only its managed
     `/namespaces/${namespace.id}/agents/${agent.id}`,
   );
   assert.equal(retainedAgent.status, 200);
+});
+
+test("standard Codex Preset installs and creates a dedicated Agent with restricted native configuration", async (t) => {
+  const { renderPresetTemplate } = await import("../../packages/contracts/src/index.ts");
+  const fixture = await createFixture(t);
+  const namespace = await fixture.createNamespace("Standard Codex", { ready: true });
+  const secret = await fixture.createSecret(namespace.id, "Model key", "synthetic-model-key");
+  const artifact = JSON.parse(
+    await readFile(new URL("../../deploy/presets/standard-codex.json", import.meta.url), "utf8"),
+  );
+  // Install the shipped request through the operator API, then render the
+  // persisted template as the existing console chooser does.
+  const installed = await fixture.request("POST", collection(namespace.id), { body: artifact });
+  assert.equal(installed.status, 201, JSON.stringify(installed.body));
+  const catalog = await fixture.request("GET", collection(namespace.id));
+  assert.equal(catalog.status, 200);
+  const preset = catalog.data.find(({ id }) => id === installed.data.id);
+  assert.equal(preset.name, "standard-codex");
+  const rendered = renderPresetTemplate(preset.template, {
+    name: "Restricted assistant",
+    model: "gpt-5.1",
+    namespaceId: namespace.id,
+    modelSecretId: secret.ref.id,
+  });
+  const configuration = await fixture.request(
+    "POST",
+    `/namespaces/${namespace.id}/configurations`,
+    {
+      body: { kind: "agent", ...rendered.configuration },
+    },
+  );
+  assert.equal(configuration.status, 201, JSON.stringify(configuration.body));
+  const agent = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: { ...rendered.agent, configurationId: configuration.data.id },
+  });
+  assert.equal(agent.status, 201, JSON.stringify(agent.body));
+  assert.equal(agent.data.executionMode, "dedicated");
+  assert.deepEqual(agent.data.harnessAuth, { method: "api_key", source: secret.ref });
+  assert.deepEqual(agent.data.plugins, {});
+
+  // These are persisted launch contracts, not proof of a running Codex sandbox.
+  const values = configuration.data.values;
+  assert.equal(values.agents.defaults.model, "codex/gpt-5.1");
+  assert.equal(values.agents.defaults.models["codex/gpt-5.1"].agentRuntime.id, "codex");
+  assert.equal(values.models.providers.codex.baseUrl, "http://127.0.0.1:9");
+  assert.equal(Object.hasOwn(values.models.providers.codex, "apiKey"), false);
+  assert.equal(configuration.data.secretBindings, undefined);
+  const appServer = values.plugins.entries.codex.config.appServer;
+  assert.equal(appServer.transport, "websocket");
+  assert.equal(appServer.url, "${APP_SERVER_URL}");
+  assert.equal(appServer.authToken, "${APP_SERVER_TOKEN}");
+  assert.equal(appServer.sandbox, "workspace-write");
+  assert.equal(appServer.approvalPolicy, "never");
+  assert.deepEqual(appServer.networkProxy, {
+    enabled: true,
+    baseProfile: "workspace",
+    mode: "limited",
+    domains: {},
+    unixSockets: {},
+    enableSocks5: false,
+    enableSocks5Udp: false,
+    allowUpstreamProxy: false,
+    allowLocalBinding: false,
+    dangerouslyAllowNonLoopbackProxy: false,
+    dangerouslyAllowAllUnixSockets: false,
+  });
+  assert.deepEqual(values.tools.web.search, {
+    enabled: true,
+    openaiCodex: { enabled: true, mode: "cached" },
+  });
+  assert.equal(values.tools.web.fetch.enabled, false);
+  assert.equal(values.browser.enabled, false);
+  assert.equal(values.tools.elevated.enabled, false);
+
+  // Variable substitution cannot grant access to another Namespace's model key.
+  const other = await fixture.createNamespace("Other owner", { ready: true });
+  const otherConfiguration = await fixture.request(
+    "POST",
+    `/namespaces/${other.id}/configurations`,
+    {
+      body: { kind: "agent", ...rendered.configuration },
+    },
+  );
+  assert.equal(otherConfiguration.status, 201, JSON.stringify(otherConfiguration.body));
+  const rejected = await fixture.request("POST", `/namespaces/${other.id}/agents`, {
+    body: { ...rendered.agent, configurationId: otherConfiguration.data.id },
+  });
+  assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
+  assert.equal(JSON.stringify(installed.body).includes("synthetic-model-key"), false);
 });

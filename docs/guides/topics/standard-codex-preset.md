@@ -1,0 +1,123 @@
+# Install the standard Codex Preset
+
+Install [standard-codex](../../../deploy/presets/standard-codex.json) in a ready
+Namespace through the existing Preset API. It creates drafts for a dedicated
+Codex Harness connected to its own separate OpenClaw gateway. The template
+requests cached hosted search and starts with an empty tool-network allowlist.
+
+**This is a launch template, not a Pod-wide network isolation guarantee.**
+Read the enforcement boundary below before deploying.
+
+## Prerequisites
+
+- Preset create/read access and the normal Agent and Configuration permissions.
+- An Installation with dedicated Codex execution and compatible gateway, Codex
+  plugin, and Codex app-server images. The plugin must support
+  `appServer.networkProxy` and `tools.web.search.openaiCodex.mode`; Codex must
+  support named permission profiles and its managed network proxy. Do not infer
+  support from a saved Configuration or a ready Pod.
+- Working native Linux sandbox enforcement in the Harness environment. For
+  Kubernetes, follow the [runtime and seccomp setup](../../testing/kubernetes.md).
+  Do not select a SandboxDriver that replaces this policy with external
+  containment unless its policy has independently been verified.
+- A model available to your credential and supporting Codex hosted search, plus
+  a same-Namespace Secret holding the model API key. The template takes only
+  the Secret ID. Follow [Harness authentication](../../reference/harness-execution.md#harness-authentication)
+  for credential authorization and delivery.
+
+## Install and select
+
+From the repository root, use the authenticated request in
+[Create a Preset](agent-presets.md#create-a-preset), replacing its
+`--data-binary @preset.json` argument with:
+
+```bash
+--data-binary @deploy/presets/standard-codex.json
+```
+
+The POST returns HTTP `201`. A duplicate name returns `409`; read the existing
+Preset and review it before replacing its template through PATCH. Installation
+is explicit per Namespace; bootstrap does not seed or overwrite Presets.
+
+Open **Agents → Create Agent**, choose **standard-codex**, and supply:
+
+| Variable        | Value                                                       |
+| --------------- | ----------------------------------------------------------- |
+| `name`          | A unique Agent name.                                        |
+| `model`         | Your available Codex model ID, without the `codex/` prefix. |
+| `namespaceId`   | The current Namespace ID.                                   |
+| `modelSecretId` | The existing model Secret ID in that Namespace.             |
+
+Select **Use Preset**, review the draft, then create the Agent. Complete the
+existing [credentials and deployment procedure](../../reference/console/create-and-deploy.md#initial-runtime-credentials),
+including the Agent's authorization to use its model Secret and gateway runtime
+credentials. The template keeps `${APP_SERVER_URL}`, `${APP_SERVER_TOKEN}`,
+and the gateway password SecretRef unresolved. Compute supplies transport
+credentials; the model credential belongs only in the dedicated Harness.
+
+The native model catalog contains only your selected `codex/<model>`, with
+an explicit Codex runtime and an unreachable direct HTTP base URL. This keeps
+model execution on authenticated app-server transport. There are no selected
+optional plugins, channels, browser, web fetch, or elevated execution.
+
+## Enforcement boundary
+
+The native bridge requests a workspace-write permission profile with its managed
+network proxy enabled, `mode: limited`, and an empty `domains` map. No domain
+is granted by default. Upstream proxies, local binding, SOCKS, and unrestricted
+Unix-socket access are disabled. `approvalPolicy: never` requests denial of
+operations that need approval instead of approving an escape from the sandbox.
+
+These permissions apply to sandboxed Codex tools. Required model calls and
+gateway/app-server control traffic are separate. Hosted cached search uses the
+model service; it does not require granting tool access to search-result sites.
+The template sets `tools.web.search.openaiCodex.mode: cached` and disables
+browser and web-fetch alternatives. Keep the restricted permission profile:
+Codex can promote a cached preference to live search under unrestricted
+permissions.
+
+OCE stores native Configuration values; it does not validate every installed
+plugin option or attest that the running app-server applied this policy.
+Installation requirements, runtime versions, later draft edits, and per-session
+overrides can affect the effective policy. A Preset is an editable copy and is
+not an administrator-enforced ceiling.
+
+Kubernetes currently adds public TCP/443 egress to the dedicated Codex Pod for
+model transport. That exception is wider than model-only traffic and also
+applies to processes outside the native sandbox. Its namespace default-deny
+NetworkPolicy does **not** remove that grant. Docker networking likewise does
+not turn this template into a domain firewall. Strict Pod-wide deny-by-default
+egress requires an independently enforced model/control transport policy; the
+smallest backend follow-up is replacing the existing broad model-egress grant
+with an approved model proxy and exact peer/port rules. This Preset does not
+implement that backend change.
+
+To allow a destination, explicitly add its hostname with value `allow` to
+`plugins.entries.codex.config.appServer.networkProxy.domains` in the copied
+Configuration and redeploy. Keep grants narrow, review the change, and repeat
+the checks below. Do not copy a host's general network allowlist.
+
+## Verify before use
+
+On your selected runtime, verify all of these through a fresh gateway session:
+
+1. Read effective app-server thread configuration: the named permission profile
+   has no allowed domains, approvals remain disabled, and search is cached.
+   Inspect the rendered runtime configuration as well as the saved draft.
+2. Execute a tool request to a known reachable, operator-controlled destination.
+   Confirm native proxy denial, and attempt direct-IP/proxy-bypass access from
+   the same sandbox. A timeout alone does not establish policy enforcement.
+3. Confirm a normal model turn and cached hosted-search result succeed while
+   direct web fetch and browser access remain unavailable.
+4. In an isolated test copy, allow one controlled hostname and verify that it
+   succeeds while another stays denied. Inspect gateway and Harness separately;
+   keep credentials out of logs and the gateway.
+
+If the runtime rejects or ignores the network/search fields, stop deployment
+and select compatible images. Do not switch to danger-full-access or live
+search to make it work. A sandbox startup failure requires fixing the runtime
+or seccomp prerequisites.
+
+[Preset integration coverage](../../testing/local.md#standard-codex-preset)
+checks installation and draft creation. It does not substitute for the native
+enforcement and model checks above.
