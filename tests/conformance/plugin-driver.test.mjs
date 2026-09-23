@@ -454,7 +454,6 @@ test("Codex startup translation rejects malformed native plugin detail metadata"
 
   for (const [detail, pattern] of [
     [{ plugin: { ...baseDetail.plugin, apps: "linear_app" } }, /app/i],
-    [{ plugin: { ...baseDetail.plugin, appTemplates: "template" } }, /appTemplates/i],
     [{ plugin: { ...baseDetail.plugin, hooks: "hook" } }, /hooks/i],
     [{ plugin: { ...baseDetail.plugin, skills: "skill" } }, /skills/i],
     [{ plugin: { ...baseDetail.plugin, mcpServers: "native" } }, /mcpServers/i],

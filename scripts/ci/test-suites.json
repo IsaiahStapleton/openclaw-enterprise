@@ -214,6 +214,9 @@
           "path": "tests/conformance/plugin-driver.test.mjs"
         },
         {
+          "path": "tests/conformance/plugin-runtime-templates.test.mjs"
+        },
+        {
           "path": "tests/integration/plugin-driver-startup.test.mjs"
         },
         {

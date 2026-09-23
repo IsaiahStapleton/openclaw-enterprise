@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
 updated: 2026-09-21
-last_updated_session: codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed
+last_updated_session: codex/01a0b632-4907-7362-9c51-28129db5a3b9
 ---
 
 # Agent Plugin Deployment Flow
@@ -128,6 +128,9 @@ entries remain selected but cannot execute through that bridge.
 
 At startup, native `plugin/list` discovers the `openai-curated-remote` marketplace;
 `plugin/read` resolves each selection using the summary's opaque remote identity.
+`runtime-translator.ts:codexRuntimeArtifact` derives policy only from concrete
+`detail.apps` and ignores `appTemplates`; template-only IDs do not receive an
+app grant. See the [bundled Driver limits](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
 The shared translator validates the entire selection set before Compute writes
 native app configuration with `config/batchWrite`, including optional
 `approvals_reviewer`. Compute then calls `plugin/install` for each enabled selection, collecting confirmed
@@ -240,6 +243,8 @@ completed deployment attempt rather than ongoing runtime health.
 ## Changelog
 
 - 2026-09-21 21:23: Reconciled policy composition and installation without enablement changes with optional-plugin warnings and the bundled Driver reference; runtime release and Kubernetes proof remain pending (codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed - 9405e20)
+
+- 2026-09-21 19:15: Ignore template metadata while retaining concrete app policy and startup mapping checks. (codex/01a0b632-4907-7362-9c51-28129db5a3b9 - aa6dd741)
 
 - 2026-09-18 17:38: Documented plugin policy conflict rejection, tool allowlist composition, and installation without enablement changes; runtime release and Kubernetes proof remain pending (codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed - 724dcb5)
 
