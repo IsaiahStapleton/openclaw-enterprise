@@ -115,6 +115,31 @@ async function readPushInput(): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/** This hook's presence replaces Git's built-in updateInstead implementation. */
+function defaultPushToCheckout(args: readonly string[]): number {
+  if (args.length !== 1 || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(args[0]!)) {
+    throw new Error("invalid-push-to-checkout-input");
+  }
+  const checkedGit = (arguments_: readonly string[]): void => {
+    const result = spawnSync("/usr/bin/git", arguments_, { stdio: "inherit" });
+    if (result.error || result.status !== 0) {
+      throw new Error("repository-checkout-update-failed");
+    }
+  };
+  // Preserve Git's default clean-index/worktree checks, including an unborn HEAD.
+  checkedGit(["update-index", "-q", "--ignore-submodules", "--refresh"]);
+  checkedGit(["diff-files", "--quiet", "--ignore-submodules", "--"]);
+  const history = spawnSync("/usr/bin/git", ["cat-file", "-e", "HEAD"], { stdio: "ignore" });
+  if (history.error || history.signal) {
+    throw new Error("repository-hook-inspection-failed");
+  }
+  const head =
+    history.status === 0 ? "HEAD" : gitOutput(["hash-object", "-t", "tree", "--stdin"])!.trim();
+  checkedGit(["diff-index", "--quiet", "--cached", "--ignore-submodules", head, "--"]);
+  checkedGit(["read-tree", "-u", "-m", args[0]!]);
+  return 0;
+}
+
 /** Image-owned dispatch preserves Git's ordinary hooks in the common directory. */
 async function run(): Promise<number> {
   const [name, ...args] = process.argv.slice(2);
@@ -143,7 +168,7 @@ async function run(): Promise<number> {
     await access(hook, constants.X_OK);
   } catch (error) {
     if (["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) {
-      return 0;
+      return name === "push-to-checkout" ? defaultPushToCheckout(args) : 0;
     }
     throw error;
   }

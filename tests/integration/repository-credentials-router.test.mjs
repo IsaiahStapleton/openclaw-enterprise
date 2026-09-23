@@ -217,6 +217,49 @@ test("delegating an ordinary hook back to the managed dispatcher fails without r
   assert.match(result.stderr, /repository-pre-push-guard-failed/);
 });
 
+test("managed hooks preserve Git's default push-to-checkout behavior", async (t) => {
+  const selected = opened("checkout");
+  selected.client.pushRefAllowlist = ["refs/heads/agent/*"];
+  const material = await createNativeClientMaterial(t, [
+    { opened: selected, repositoryRef: "project" },
+  ]);
+  const root = await temporaryDirectory(t);
+  const source = join(root, "source");
+  const target = join(root, "target");
+  const git = (args, options = {}) =>
+    run("/usr/bin/git", args, { env: environment(material), ...options });
+  await git(["init", "-b", "main", source]);
+  await git(["-C", source, "config", "user.name", "Native fixture"]);
+  await git(["-C", source, "config", "user.email", "fixture@example.test"]);
+  await writeFile(join(source, "tracked"), "first\n");
+  await git(["-C", source, "add", "tracked"]);
+  await git(["-C", source, "commit", "-m", "Initial contents"]);
+  await git(["clone", "--no-hardlinks", source, target]);
+  await git(["-C", target, "config", "receive.denyCurrentBranch", "updateInstead"]);
+  await writeFile(join(source, "tracked"), "second\n");
+  await git(["-C", source, "commit", "-am", "Update contents"]);
+  const head = (await git(["-C", source, "rev-parse", "HEAD"])).stdout.trim();
+  await git(["-C", source, "push", target, "HEAD:refs/heads/main"]);
+  assert.equal((await git(["-C", target, "rev-parse", "HEAD"])).stdout.trim(), head);
+  assert.equal(await readFile(join(target, "tracked"), "utf8"), "second\n");
+  assert.equal((await git(["-C", target, "status", "--porcelain"])).stdout, "");
+
+  await writeFile(join(source, "tracked"), "third\n");
+  await git(["-C", source, "commit", "-am", "Next contents"]);
+  for (const staged of [false, true]) {
+    await writeFile(join(target, "tracked"), "local changes\n");
+    if (staged) {
+      await git(["-C", target, "add", "tracked"]);
+    }
+    const denied = await git(["-C", source, "push", target, "HEAD:refs/heads/main"], {
+      allowFailure: true,
+    });
+    assert.notEqual(denied.code, 0);
+    assert.equal((await git(["-C", target, "rev-parse", "HEAD"])).stdout.trim(), head);
+    assert.equal(await readFile(join(target, "tracked"), "utf8"), "local changes\n");
+  }
+});
+
 test("literal dot-git names and effective repository endpoints cannot silently switch bindings", async (t) => {
   const a = opened("a");
   const b = opened("b", "example/project.git");

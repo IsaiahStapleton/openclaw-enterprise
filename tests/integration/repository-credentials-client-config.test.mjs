@@ -548,6 +548,7 @@ test(
     await invoke(["-C", checkout, "config", "user.email", "fixture@example.test"]);
     const marker = join(work, "pre-commit");
     const pushedInput = join(work, "pre-push");
+    const pushedArguments = join(work, "pre-push-arguments");
     await writeFile(
       join(checkout, ".git/hooks/pre-commit"),
       "#!/bin/sh\nprintf 'called\\n' >> '" + marker + "'\n",
@@ -555,7 +556,7 @@ test(
     );
     await writeFile(
       join(checkout, ".git/hooks/pre-push"),
-      "#!/bin/sh\ncat > '" + pushedInput + "'\n",
+      "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + pushedArguments + "'\ncat > '" + pushedInput + "'\n",
       { mode: 0o755 },
     );
     const linked = join(work, "linked");
@@ -565,7 +566,14 @@ test(
     const head = (await invoke(["-C", linked, "rev-parse", "HEAD"])).stdout.trim();
     await invoke(["-C", linked, "push", "origin", "HEAD:refs/heads/exact"]);
     assert.equal(await guarded.git.ref("refs/heads/exact"), head);
-    assert.match(await readFile(pushedInput, "utf8"), / refs\/heads\/exact [a-f0-9]{40}\n$/);
+    assert.equal(
+      await readFile(pushedArguments, "utf8"),
+      "origin\nhttps://localhost/fixture/repository.git\n",
+    );
+    assert.equal(
+      await readFile(pushedInput, "utf8"),
+      "HEAD " + head + " refs/heads/exact " + "0".repeat(40) + "\n",
+    );
     await invoke(["-C", linked, "push", "origin", "+HEAD:refs/heads/agent/one"]);
     assert.equal(await guarded.git.ref("refs/heads/agent/one"), head);
     for (const refs of [
@@ -606,5 +614,19 @@ test(
       "HEAD:refs/heads/ordinary",
     ]);
     assert.equal(await fixture.byRef.get("ordinary").git.ref("refs/heads/ordinary"), head);
+    await writeFile(join(checkout, ".git/hooks/pre-push"), "#!/bin/sh\nexit 7\n", {
+      mode: 0o755,
+    });
+    const beforeVeto = await snapshot();
+    const vetoTrace = guarded.git.trace.length;
+    const vetoed = await invoke(["-C", linked, "push", "origin", "HEAD:refs/heads/agent/vetoed"], {
+      allowFailure: true,
+    });
+    assert.notEqual(vetoed.code, 0);
+    assert.equal(await snapshot(), beforeVeto);
+    assert.equal(
+      guarded.git.trace.slice(vetoTrace).some(({ path }) => path.endsWith("/git-receive-pack")),
+      false,
+    );
   },
 );
