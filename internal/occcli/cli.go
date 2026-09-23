@@ -737,6 +737,31 @@ func (app *application) agentCommand() *cobra.Command {
 			})
 		},
 	}
+	deploymentStatus := &cobra.Command{
+		Use:   "deployment-status AGENT_ID DEPLOYMENT_ID",
+		Short: "Show durable status for one Agent deployment",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			deployment, err := client.GetAgentDeployment(namespace, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return app.printItems(deployment, false, []column{
+				{title: "ID", key: "deploymentId"},
+				{title: "AGENT", key: "agentId"},
+				{title: "STATUS", key: "status"},
+				{title: "ERROR", key: "error"},
+			})
+		},
+	}
 	stop := &cobra.Command{
 		Use:   "stop ID",
 		Short: "Stop an Agent while retaining its revision history and persistent state",
@@ -778,7 +803,7 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, update, deploy, stop, deleteAgent)
+	command.AddCommand(create, list, get, update, deploy, deploymentStatus, stop, deleteAgent)
 	return command
 }
 

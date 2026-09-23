@@ -26,6 +26,8 @@ prerequisites fail the selected test instead of skipping.
 | `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`    | Imported immutable runtime image reference used for the embedded OpenClaw gateway.                                      |
 | `OCC_TEST_PRODUCTION_POSTGRES_IMAGE`   | Imported immutable PostgreSQL image reference for the task-owned database Pod.                                          |
 | `OCC_TEST_PRODUCTION_NODE_IMAGE`       | Imported immutable Node image reference for the operator HTTPS proxy and network probes.                                |
+| `OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE` | Optional second immutable controller image; set with the matching runtime image to exercise coordinated upgrade. |
+| `OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE` | Optional second immutable runtime image from the same reviewed source as the upgrade controller.                    |
 | `OPENAI_API_KEY`                       | Existing authorized provider credential used only by the Agent-owned embedded gateway path.                             |
 | `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-6-astra`.                                                                   |
 | `OCC_TEST_PRODUCTION_TUI_KEEP`         | Optional `1` retains the owned Helm release, namespaces, final gateway, `attach.sh`, and `proof.json` rehearsal output. |
@@ -38,6 +40,14 @@ for operator rehearsal: it keeps the owned setup running, leaves an executable
 `attach.sh` for the final gateway TUI session, and writes `proof.json` with the
 cluster, image, Namespace, Agent, revision, Pod, and nonce-response evidence.
 Do not treat an in-progress run as passing live proof until the test completes.
+
+When both upgrade image variables are set, the test runs
+`scripts/upgrade-production-images` after the initial revision and model proof.
+It requires different controller and runtime digests, verifies the resulting
+revisions and images for two running Agents, preserves one stopped Agent without
+a new revision, and sends a fresh model turn. Setting only one variable fails
+the selected test. Omitting both keeps the original installation and TUI coverage
+but does not prove coordinated upgrade behavior.
 
 ## Run the suite
 

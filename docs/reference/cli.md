@@ -61,14 +61,15 @@ input is not supported. The server validates document fields against the
 | `occ agent create --file FILE`              | Creates an Agent draft.                                                                                                                                          |
 | `occ agent update ID --file FILE`           | Updates editable Agent fields; the body must include `configurationId`.                                                                                          |
 | `occ agent deploy ID`                       | Requests deployment and creates an immutable revision.                                                                                                           |
+| `occ agent deployment-status ID DEPLOYMENT_ID` | Reads the durable status of one exact Agent deployment.                                                                                                       |
 | `occ agent stop ID`                         | Requests a stop while retaining revisions and persistent state.                                                                                                  |
 
-Use the [HTTP API](api.md) to inspect Agent deployment status and revisions, or
-to work with ServiceAccounts and configured Providers; the CLI has no
-commands for these. Neither the CLI nor the HTTP API offers Configuration
+Use the [HTTP API](api.md) to inspect revision history or to work with
+ServiceAccounts and configured Providers; the CLI has no commands for these.
+Neither the CLI nor the HTTP API offers Configuration
 listing. An accepted deploy returns a revision; `agent get`
 shows desired state and the selected revision, not runtime health. Use the
-[deployment status API](agents.md#deployment-status) and verify the model
+[deployment status command](#namespace-resources) and verify the model
 separately.
 
 The `installation get` and `namespace list` commands require an

@@ -100,14 +100,15 @@ its [update body](../reference/agents.md#editable-configuration) must include
 `configurationId`.
 
 ```bash
-occ agent deploy '<agent-id>'
+REVISION_ID="$(occ agent deploy '<agent-id>' --output json | jq -r .id)"
+occ agent deployment-status '<agent-id>' "$REVISION_ID"
 occ agent get '<agent-id>'
 ```
 
-Deployment returns an immutable revision. `agent get` shows the desired state
-and selected revision; neither command reports live health or proves a model
-responded. There is no CLI deployment-status command. Check the
-[deployment status API](../reference/agents.md#deployment-status) and follow
+Deployment returns an immutable revision. `deployment-status` reports the
+durable worker outcome for that revision, and `agent get` shows the desired
+state and selected revision. None of these commands reports live health or
+proves a model responded. Follow
 [Verify production workloads](deploy/production-agents.md#verify-production-workloads)
 to verify a response from this Agent on Kubernetes. If you lost the
 deploy result, check [revision history](../reference/agents/deployment.md#revisions-and-deployment)

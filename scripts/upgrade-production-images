@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: scripts/upgrade-production-images \
+  --kubeconfig FILE --context NAME --namespace NAME --release NAME \
+  --values FILE --installation FILE \
+  --controller-image IMAGE@sha256:DIGEST \
+  --runtime-image IMAGE@sha256:DIGEST \
+  --source-revision FULL_GIT_SHA --evidence-dir NEW_DIRECTORY \
+  [--occ PATH] [--timeout-seconds SECONDS]
+
+Replace the production controller/runtime image pair, restart the OCC control
+plane through Helm, then concurrently deploy every Agent that was running in
+the authenticated baseline inventory. OCC_URL, OCC_SERVICE_KEY_FILE, and
+OCC_CA_BUNDLE configure the OCC CLI connection.
+EOF
+}
+
+die() {
+  printf 'upgrade-production-images: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "required command $1 is unavailable."
+}
+
+private_file_mode() {
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+}
+
+require_regular_file() {
+  local path=$1
+  [[ -f "$path" && ! -L "$path" && -r "$path" ]] ||
+    die "$path must be a readable regular file, not a symbolic link."
+}
+
+require_private_file() {
+  local path=$1
+  local mode
+  require_regular_file "$path"
+  mode=$(private_file_mode "$path")
+  ((8#$mode & 077 == 0)) || die "$path must not grant group or other permissions."
+}
+
+immutable_image() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[A-Fa-f0-9]{64}$ ]]
+}
+
+json_file_name() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+kubeconfig=
+context=
+namespace=
+release=
+values=
+installation=
+controller_image=
+runtime_image=
+source_revision=
+evidence_dir=
+occ=occ
+timeout_seconds=900
+
+while (($#)); do
+  case "$1" in
+    --kubeconfig | --context | --namespace | --release | --values | --installation | --controller-image | --runtime-image | --source-revision | --evidence-dir | --occ | --timeout-seconds)
+      (($# >= 2)) || die "$1 requires a value."
+      case "$1" in
+        --kubeconfig) kubeconfig=$2 ;;
+        --context) context=$2 ;;
+        --namespace) namespace=$2 ;;
+        --release) release=$2 ;;
+        --values) values=$2 ;;
+        --installation) installation=$2 ;;
+        --controller-image) controller_image=$2 ;;
+        --runtime-image) runtime_image=$2 ;;
+        --source-revision) source_revision=$2 ;;
+        --evidence-dir) evidence_dir=$2 ;;
+        --occ) occ=$2 ;;
+        --timeout-seconds) timeout_seconds=$2 ;;
+      esac
+      shift 2
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      die "unsupported argument $1."
+      ;;
+  esac
+done
+
+for input in kubeconfig context namespace release values installation controller_image runtime_image source_revision evidence_dir; do
+  [[ -n "${!input}" ]] || die "--${input//_/-} is required."
+done
+[[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] || die "--timeout-seconds must be positive."
+immutable_image "$controller_image" ||
+  die "--controller-image must be an approved immutable SHA-256 image reference."
+immutable_image "$runtime_image" ||
+  die "--runtime-image must be an approved immutable SHA-256 image reference."
+[[ "$source_revision" =~ ^[a-f0-9]{40}$ ]] ||
+  die "--source-revision must be a full lowercase Git commit SHA."
+[[ ! -e "$evidence_dir" ]] || die "--evidence-dir must not already exist."
+
+require_private_file "$kubeconfig"
+require_private_file "$values"
+require_private_file "$installation"
+: "${OCC_URL:?Set OCC_URL to the trusted HTTPS OCC origin.}"
+: "${OCC_SERVICE_KEY_FILE:?Set OCC_SERVICE_KEY_FILE to a protected service-key response.}"
+require_private_file "$OCC_SERVICE_KEY_FILE"
+if [[ -n "${OCC_CA_BUNDLE:-}" ]]; then
+  require_regular_file "$OCC_CA_BUNDLE"
+fi
+for command in helm jq kubectl python3 yq; do
+  require_command "$command"
+done
+[[ -x "$occ" ]] || command -v "$occ" >/dev/null 2>&1 || die "the OCC CLI is unavailable."
+
+umask 077
+mkdir -m 700 "$evidence_dir"
+mkdir -m 700 "$evidence_dir/inventory" "$evidence_dir/dispatch" "$evidence_dir/status"
+printf '%s\n' "$source_revision" >"$evidence_dir/source-revision"
+printf '%s\n' "$controller_image" >"$evidence_dir/controller-image"
+printf '%s\n' "$runtime_image" >"$evidence_dir/runtime-image"
+cp "$values" "$evidence_dir/before-values.yaml"
+cp "$installation" "$evidence_dir/before-installation.yaml"
+
+kube=(kubectl --kubeconfig "$kubeconfig" --context "$context")
+helm_args=(--kubeconfig "$kubeconfig" --kube-context "$context" --namespace "$namespace")
+occ_json=("$occ" --output json)
+installation_secret=$(yq -er '.installation.secretName // "occ-installation-startup"' "$values")
+installation_key=$(yq -er '.installation.key // "installation.yaml"' "$values")
+
+"${kube[@]}" --request-timeout=15s get --raw=/readyz >"$evidence_dir/kubernetes-readyz"
+helm status "$release" "${helm_args[@]}" >"$evidence_dir/before-helm-status.txt"
+helm get values "$release" "${helm_args[@]}" --output yaml >"$evidence_dir/before-live-values.yaml"
+"${kube[@]}" --namespace "$namespace" get secret "$installation_secret" --output json |
+  jq -er --arg key "$installation_key" '.data[$key]' |
+  python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read()))' \
+    >"$evidence_dir/before-live-installation.yaml"
+"${kube[@]}" get deployments,statefulsets,pods,persistentvolumeclaims --all-namespaces \
+  --output json >"$evidence_dir/before-workloads.json"
+"${occ_json[@]}" installation get >"$evidence_dir/installation.json"
+"${occ_json[@]}" namespace list >"$evidence_dir/inventory/namespaces.json"
+
+targets="$evidence_dir/targets.jsonl"
+: >"$targets"
+while IFS=$'\t' read -r namespace_id namespace_status; do
+  namespace_file="$evidence_dir/inventory/$(json_file_name "$namespace_id").json"
+  "${occ_json[@]}" --namespace "$namespace_id" agent list >"$namespace_file"
+  if jq -e '.[] | select(.status == "active" and .desiredRuntimeState == "running" and (.activeRevisionId == null))' \
+    "$namespace_file" >/dev/null; then
+    die "Namespace $namespace_id contains a running Agent without an active revision; resolve its in-flight deployment first."
+  fi
+  if [[ "$namespace_status" != "ready" ]] &&
+    jq -e '.[] | select(.status == "active" and .desiredRuntimeState == "running")' \
+      "$namespace_file" >/dev/null; then
+    die "Namespace $namespace_id is $namespace_status but still owns a running Agent; resolve its lifecycle before upgrading."
+  fi
+  [[ "$namespace_status" == "ready" ]] || continue
+  jq -c --arg namespaceId "$namespace_id" \
+    '.[] | select(.status == "active" and .desiredRuntimeState == "running" and (.activeRevisionId != null)) |
+      {namespaceId: $namespaceId, agentId: .id, baselineRevisionId: .activeRevisionId}' \
+    "$namespace_file" >>"$targets"
+done < <(jq -r '.[] | [.id, .status] | @tsv' "$evidence_dir/inventory/namespaces.json")
+
+target_count=$(wc -l <"$targets" | tr -d ' ')
+((target_count > 0)) || die "the authenticated baseline contains no running Agents to upgrade."
+
+current_controller=$(yq -er '.images.controller' "$values")
+current_gateway=$(yq -er '.drivers.compute.configuration.images.gateway' "$installation")
+current_agent=$(yq -er '.drivers.compute.configuration.images.agent' "$installation")
+[[ "$controller_image" != "$current_controller" ]] || die "the controller image already selects the candidate digest."
+[[ "$runtime_image" != "$current_gateway" || "$runtime_image" != "$current_agent" ]] ||
+  die "both runtime image slots already select the candidate digest."
+
+candidate_values="$evidence_dir/candidate-values.yaml"
+candidate_installation="$evidence_dir/candidate-installation.yaml"
+cp "$values" "$candidate_values"
+cp "$installation" "$candidate_installation"
+CONTROLLER_IMAGE="$controller_image" yq -i '.images.controller = strenv(CONTROLLER_IMAGE)' "$candidate_values"
+RUNTIME_IMAGE="$runtime_image" yq -i \
+  '.drivers.compute.configuration.images.gateway = strenv(RUNTIME_IMAGE) |
+   .drivers.compute.configuration.images.agent = strenv(RUNTIME_IMAGE)' \
+  "$candidate_installation"
+
+rendered="$evidence_dir/rendered.yaml"
+helm template "$release" deploy/helm/openclaw-enterprise "${helm_args[@]}" \
+  --values "$candidate_values" >"$rendered"
+helm upgrade --install "$release" deploy/helm/openclaw-enterprise "${helm_args[@]}" \
+  --values "$candidate_values" --dry-run=server --hide-secret \
+  >"$evidence_dir/server-dry-run.txt"
+
+# The protected local inputs become the recovery source before either cluster
+# mutation. Their original bytes remain in the private evidence directory.
+install -m 600 "$candidate_values" "$values"
+install -m 600 "$candidate_installation" "$installation"
+
+"${kube[@]}" --namespace "$namespace" create secret generic "$installation_secret" \
+  --from-file="$installation_key=$installation" --dry-run=client --output yaml |
+  "${kube[@]}" --namespace "$namespace" apply --filename - \
+  >"$evidence_dir/installation-secret-apply.txt"
+
+helm upgrade --install "$release" deploy/helm/openclaw-enterprise "${helm_args[@]}" \
+  --values "$values" --wait --timeout 5m >"$evidence_dir/helm-upgrade.txt"
+
+for component in api worker; do
+  deployment="openclaw-enterprise-$component"
+  "${kube[@]}" --namespace "$namespace" rollout status "deployment/$deployment" --timeout=180s
+  observed=$("${kube[@]}" --namespace "$namespace" get "deployment/$deployment" \
+    --output "jsonpath={.spec.template.spec.containers[?(@.name=='$component')].image}")
+  [[ "$observed" == "$controller_image" ]] ||
+    die "$deployment uses $observed instead of the candidate controller image."
+done
+
+deadline=$((SECONDS + timeout_seconds))
+until "${occ_json[@]}" installation get >"$evidence_dir/installation-after.json" 2>"$evidence_dir/occ-recovery-error.txt"; do
+  ((SECONDS < deadline)) || die "OCC authentication did not recover before the timeout."
+  sleep 2
+done
+rm -f "$evidence_dir/occ-recovery-error.txt"
+
+pids=()
+while IFS= read -r target; do
+  namespace_id=$(jq -r '.namespaceId' <<<"$target")
+  agent_id=$(jq -r '.agentId' <<<"$target")
+  output="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").json"
+  error="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").error"
+  ("${occ_json[@]}" --namespace "$namespace_id" agent deploy "$agent_id" >"$output" 2>"$error") &
+  pids+=("$!")
+done <"$targets"
+
+dispatch_failed=0
+for pid in "${pids[@]}"; do
+  wait "$pid" || dispatch_failed=1
+done
+((dispatch_failed == 0)) || die "at least one Agent deployment request failed; inspect $evidence_dir/dispatch before retrying."
+
+deployments="$evidence_dir/deployments.jsonl"
+: >"$deployments"
+while IFS= read -r target; do
+  namespace_id=$(jq -r '.namespaceId' <<<"$target")
+  agent_id=$(jq -r '.agentId' <<<"$target")
+  output="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").json"
+  deployment_id=$(jq -er '.id' "$output")
+  jq -cn --arg namespaceId "$namespace_id" --arg agentId "$agent_id" \
+    --arg deploymentId "$deployment_id" \
+    '{namespaceId: $namespaceId, agentId: $agentId, deploymentId: $deploymentId}' >>"$deployments"
+done <"$targets"
+
+pending=$target_count
+while ((pending > 0)); do
+  ((SECONDS < deadline)) || die "$pending Agent deployments remained incomplete at the upgrade timeout."
+  pending=0
+  failed=0
+  while IFS= read -r deployment; do
+    namespace_id=$(jq -r '.namespaceId' <<<"$deployment")
+    agent_id=$(jq -r '.agentId' <<<"$deployment")
+    deployment_id=$(jq -r '.deploymentId' <<<"$deployment")
+    status_file="$evidence_dir/status/$(json_file_name "$namespace_id--$agent_id--$deployment_id").json"
+    "${occ_json[@]}" --namespace "$namespace_id" agent deployment-status "$agent_id" "$deployment_id" \
+      >"$status_file"
+    status=$(jq -er '.status' "$status_file")
+    case "$status" in
+      queued | running) ((pending += 1)) ;;
+      succeeded) ;;
+      failed) failed=1 ;;
+      *) die "deployment $deployment_id returned unknown status $status." ;;
+    esac
+  done <"$deployments"
+  ((failed == 0)) || die "at least one Agent deployment failed; inspect $evidence_dir/status."
+  ((pending == 0)) || sleep 2
+done
+
+while IFS= read -r deployment; do
+  namespace_id=$(jq -r '.namespaceId' <<<"$deployment")
+  agent_id=$(jq -r '.agentId' <<<"$deployment")
+  deployment_id=$(jq -r '.deploymentId' <<<"$deployment")
+  selected=$("${occ_json[@]}" --namespace "$namespace_id" agent get "$agent_id" | jq -er '.activeRevisionId')
+  [[ "$selected" == "$deployment_id" ]] ||
+    die "Agent $agent_id selected $selected instead of deployment $deployment_id."
+  pods="$evidence_dir/status/$(json_file_name "$namespace_id--$agent_id--$deployment_id").pods.json"
+  "${kube[@]}" get pods --all-namespaces --selector "openclaw.dev/revision=$deployment_id" \
+    --output json >"$pods"
+  jq -e --arg image "$runtime_image" '
+    [.items[].spec.containers[] | select(.name == "gateway" or .name == "agent")] as $runtime |
+    ($runtime | length) > 0 and all($runtime[]; .image == $image)
+  ' "$pods" >/dev/null ||
+    die "Agent $agent_id does not expose ready revision Pods on the candidate runtime image."
+done <"$deployments"
+
+helm status "$release" "${helm_args[@]}" >"$evidence_dir/after-helm-status.txt"
+"${kube[@]}" get deployments,statefulsets,pods,persistentvolumeclaims --all-namespaces \
+  --output json >"$evidence_dir/after-workloads.json"
+printf 'Upgraded controller and runtime images; %s running Agents selected new revisions.\n' "$target_count"

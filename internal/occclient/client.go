@@ -236,6 +236,18 @@ func (client *Client) DeployAgent(namespaceID, agentID string) (any, error) {
 	)
 }
 
+// GetAgentDeployment fetches durable deployment status for one Agent revision.
+func (client *Client) GetAgentDeployment(namespaceID, agentID, deploymentID string) (any, error) {
+	return client.get(
+		"namespaces",
+		namespaceID,
+		"agents",
+		agentID,
+		"deployments",
+		deploymentID,
+	)
+}
+
 // StopAgent stops an Agent while retaining its revision history and persistent state.
 func (client *Client) StopAgent(namespaceID, agentID string) (any, error) {
 	return client.send(

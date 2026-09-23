@@ -378,6 +378,10 @@
                     "label": "Control Plane Setup"
                   },
                   {
+                    "page": "guides/deploy/production-upgrade",
+                    "label": "Image Upgrades"
+                  },
+                  {
                     "page": "guides/deploy/kubernetes",
                     "label": "Kubernetes"
                   },

@@ -449,8 +449,14 @@ After the production API authenticates, continue with Namespace preparation,
 Agent deployment, and a [real model-response check](production-agents.md#verify-production-workloads)
 that matches the Agent's native gateway authentication mode.
 
+For later releases, use the
+[coordinated production image upgrade](production-upgrade.md). It updates the
+controller and runtime image pair together and redeploys the baseline running
+Agent fleet after OCC becomes ready.
+
 ## Related
 
-Continue with [production Agent deployment](production-agents.md). For failed
+Continue with [production Agent deployment](production-agents.md), or use the
+[coordinated image upgrade](production-upgrade.md) for an existing release. For failed
 initialization, preserve state and follow [bootstrap recovery](../../reference/authentication/service-api-keys.md#recover-an-incomplete-bootstrap)
 and the [production startup flow](../../flows/production-startup.md).
