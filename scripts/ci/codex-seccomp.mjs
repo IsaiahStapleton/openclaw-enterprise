@@ -8,22 +8,27 @@ const kubeletSeccompRoot = "/var/lib/kubelet/seccomp";
 const codexProbeTimeoutMs = 180_000;
 const kubectlRequestTimeout = "75s";
 
+// These three sources are byte-identical in rust-v0.152.1 and rust-v0.154.0.
+// Version admission does not change the syscall rules or the live positive/negative probes.
 const codexBwrapSourceProvenance = Object.freeze([
   {
     name: "containerd RuntimeDefault seccomp",
     source: "actual CRI runtimeSpec.linux.seccomp from each selected k3d node",
   },
   {
-    name: "Codex 0.152.1 bubblewrap launcher",
-    source: "openai/codex rust-v0.152.1 codex-rs/linux-sandbox/src/bwrap.rs",
+    name: "Codex 0.152.1 and 0.154.0 bubblewrap launcher",
+    source: "openai/codex rust-v0.152.1 and rust-v0.154.0 codex-rs/linux-sandbox/src/bwrap.rs",
+    sha256: "bfce8aa44048b2441a7c02b301fe7366ae1b8b9ddd8ff8518711cd874a9e749e",
   },
   {
     name: "bubblewrap mount setup",
-    source: "openai/codex rust-v0.152.1 codex-rs/vendor/bubblewrap/bubblewrap.c",
+    source: "openai/codex rust-v0.152.1 and rust-v0.154.0 codex-rs/vendor/bubblewrap/bubblewrap.c",
+    sha256: "9bc38fb46080b6854e0c414ccb5fbd369d9d7c0230fdfa877283d31aef0c5720",
   },
   {
     name: "bubblewrap bind mount flags",
-    source: "openai/codex rust-v0.152.1 codex-rs/vendor/bubblewrap/bind-mount.c",
+    source: "openai/codex rust-v0.152.1 and rust-v0.154.0 codex-rs/vendor/bubblewrap/bind-mount.c",
+    sha256: "19a6ae020803e342667dd562efab027967b1c1f2965525ec7ee09521554f8f71",
   },
 ]);
 
@@ -636,10 +641,9 @@ async function prepareCodexSeccompProfile({
   const exec = requireExecFile(execFile);
   assertImmutableImageReference(image);
   assertLocalhostProfileName(profileName);
-  assert.equal(
-    codexVersion,
-    "0.152.1",
-    "Codex seccomp profile verification is pinned to Codex 0.152.1.",
+  assert.ok(
+    ["0.152.1", "0.154.0"].includes(codexVersion),
+    "Codex seccomp profile verification is limited to reviewed Codex versions: 0.152.1, 0.154.0.",
   );
   const selection = { kubeconfig: selectedCluster.kubeconfig, context: selectedCluster.context };
   const namespace = `openclaw-ci-seccomp-${randomSuffix(4)}`;
