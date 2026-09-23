@@ -43,9 +43,13 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[GitHub sign-in for existing accounts](31-human-federated-sign-in.md) — Proposed;
+GitHub login with existing OCE accounts and permissions.
+
 [Native OpenClaw plugin tool policies](35-native-plugin-tool-policy.md) — Proposed;
 enforce Agent plugin policies through a managed native policy plugin and existing
 approval transport.
+
 
 [Initial Agent workspace files](34-agent-workspace-files-setup.md) — Proposed;
 create-only Console and API input, applied once before first runtime execution.

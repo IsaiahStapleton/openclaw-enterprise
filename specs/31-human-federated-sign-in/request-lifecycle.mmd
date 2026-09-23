@@ -1,8 +1,9 @@
 ---
 config:
   theme: base
+  htmlLabels: true
   themeVariables:
-    fontSize: 16px
+    fontSize: 15px
     actorBkg: "#EDF2F7"
     actorBorder: "#879AB0"
     actorTextColor: "#25364A"
@@ -11,62 +12,64 @@ config:
     noteBkgColor: "#F7F1E5"
     noteBorderColor: "#B3A078"
   sequence:
-    mirrorActors: true
-    useMaxWidth: false
-    actorMargin: 42
-    width: 145
-    messageMargin: 28
-    noteMargin: 14
+    mirrorActors: false
+    useMaxWidth: true
+    actorMargin: 24
+    width: 132
+    messageMargin: 22
+    noteMargin: 12
 ---
 sequenceDiagram
   actor Browser as Person / browser
-  box Controller process
-    participant Auth as Authentication
-    participant Owners as Account + IAM + State
+  box OCC controller owners
+    participant Auth as Authentication<br/>Better Auth mechanics
+    participant State as Account + State<br/>PostgreSQL unit
+    participant IAM as IAM / resource API
   end
-  participant DB as PostgreSQL
-  participant Provider as Identity provider
-  Note over Browser,Provider: 1 · Start proposed browser journey
-  Browser->>Auth: Trusted-origin start, selected provider
-  Auth->>Owners: Reserve bound one-use attempt
-  Owners->>DB: Persist attempt with finite expiry
-  DB-->>Owners: Acknowledge persistence
-  Owners-->>Auth: Bound attempt
-  Auth-->>Browser: Authorization URL
-  Browser->>Provider: Sign in and authorize
-  Provider-->>Browser: Exact callback with code and state
-  Note over Browser,DB: 2 · Consume attempt before remote work
+  participant GitHub as github.com
+  Note over Browser,GitHub: Proposed flow · requests solid, replies dashed
+  Browser->>Auth: Trusted-origin start
+  Auth->>State: Reserve bound attempt, at most ten minutes
+  State-->>Auth: Reservation acknowledged
+  Auth-->>Browser: Authorization URL and browser binding
+  Browser->>GitHub: Sign in
+  GitHub-->>Browser: Exact callback with code / state
   Browser->>Auth: Bound callback
-  Auth->>Owners: Match and consume attempt
-  Owners->>DB: Atomic consumption
-  DB-->>Owners: Consumption acknowledged
-  Owners-->>Auth: Consumed attempt
-  Note over Auth,Provider: 3 · Remote verification outside State locks
-  Auth->>Provider: Bounded exchange and identity verification
-  Provider-->>Auth: Token response / authenticated identity
-  Auth->>Auth: Validate then discard provider tokens
-  Note over Auth,DB: 4 · Short guarded session transaction
-  Auth->>Owners: Verified provider instance and subject
-  Owners->>DB: Guard current method and active account
-  DB-->>Owners: Current association and version
-  alt Known current account
-    Owners->>DB: Insert fresh session and required login facts
-    DB-->>Owners: COMMIT acknowledgment or unknown
-    alt Commit acknowledged
-      Owners-->>Auth: Persisted session accepted
-      Auth-->>Browser: Ordinary stored-session cookie
-    else Commit uncertain
-      Owners-->>Auth: Unknown outcome
-      Auth-->>Browser: No credential, no blind replay
+  Auth->>State: Match and atomically consume once
+  alt Invalid or uncertain consumption
+    State-->>Auth: No accepted consumption
+    Auth-->>Browser: No exchange or session, new start
+  else Consumption acknowledged
+    State-->>Auth: Consumed attempt
+    Note over Auth,GitHub: Remote work outside account / policy locks
+    Auth->>GitHub: Bounded code exchange, then authenticated /user
+    GitHub-->>Auth: Token and numeric identity
+    Auth->>Auth: Verify identity, discard provider tokens
+    Auth->>State: Exact instance / subject, guarded issuance
+    Note over Auth,State: Recheck method, Principal, active account and currentness
+    alt Unknown / disabled / stale identity
+      State-->>Auth: Deny issuance
+      Auth-->>Browser: No session, confined handoff if unknown
+    else Admitted current account
+      State->>State: Insert fresh session and required facts
+      alt Failed or unknown commit
+        State-->>Auth: No acknowledged session
+        Auth-->>Browser: No credential and no blind replay
+      else Commit acknowledged
+        State-->>Auth: Session and State-authoritative expiry
+        Auth->>Auth: Final expiry check, derive cookie age
+        Auth-->>Browser: Ordinary OCE cookie if unexpired
+      end
     end
-  else Unknown verified identity
-    Owners-->>Auth: No matching active account
-    Auth-->>Browser: Actionable no-access result, no session
   end
-  Note over Browser,DB: 5 · Only acknowledged session enters authorized Console
-  Browser->>Auth: Configuration / Agent lifecycle request
-  Auth->>Owners: Admit current session, authorize exact operation
-  Owners->>DB: Allowed resource operation and required facts
-  DB-->>Owners: Acknowledged result
-  Owners-->>Auth: Authorized result
-  Auth-->>Browser: Console result within granted scope
+  Note over Browser,IAM: Later request · only a current session proceeds
+  Browser->>Auth: Console session, Namespace list, existing Agent GET
+  Auth->>State: Admit current stored session
+  State-->>Auth: Current account / Principal or denial
+  alt Current session
+    Auth->>IAM: Authorize exact requested resource
+    IAM-->>Auth: Allowed result or permission denial
+    Auth-->>Browser: Console result within existing grants
+  else Admission denied
+    Auth-->>Browser: Clear protected content, sign-in required
+  end

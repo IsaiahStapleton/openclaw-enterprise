@@ -1,41 +1,47 @@
-# RFC: Federated human sign-in
+<a id="rfc-federated-human-sign-in"></a>
 
-**Date:** 2026-09-18
-**Status:** Draft. Shared account and policy interfaces under review.
-**Owner:** OCC authentication, account lifecycle, and native IAM.
-**Source baseline:** `openclaw/openclaw-enterprise` at `046e12b007bb1b4928bd3f7497a2353714be11a8`.
+# RFC: GitHub sign-in for existing accounts
+
+**Date:** 2026-09-22
+
+**Status:** Draft; proposed integration and activation profile, not release qualification.
+
+**Owner:** OCC Authentication, Account, State, and IAM.
+
+**Source baseline:** [main at `311bc23`](https://github.com/openclaw/openclaw-enterprise/tree/311bc23012d0fd269483168b865adf79df630542).
 
 ## Problem and proposal
 
-People need to sign into OpenClaw Enterprise (OCE) with Google or GitHub while
-keeping the same account and permissions. At the
-[review baseline](31-human-federated-sign-in/architecture.md#current-source-and-proposed-joins),
-the OpenClaw Control Plane (OCC) supports password sessions and service keys;
-federated sign-in and joint account/policy administration remain proposed.
+Use **Better Auth's provider and session machinery** to let an existing person
+sign into OpenClaw Enterprise (OCE) with GitHub. OCE continues to own exact
+account association, local admission and revocation, IAM authorization, and
+required audit facts. The OpenClaw Control Plane (OCC) already uses Better Auth
+for [password sessions](https://github.com/openclaw/openclaw-enterprise/blob/311bc23012d0fd269483168b865adf79df630542/apps/controller/src/auth/index.ts#L535-L585).
+This proposal connects GitHub through curated routes and a guarded State adapter;
+configuring a provider or adding an audit callback alone does not complete it.
 
-Add provider sign-in to the OCC Console for manually provisioned accounts.
-Multiple sign-in methods identify one stable human account and its authorization
-identity (Principal). Sign-in grants no resource access, creates no workspace,
-and never links accounts by email. Existing Namespaces support personal and shared
-workspaces without new Team, Organization, membership, or personal-workspace
-resources. Agent runtime authority and repository credential custody remain
-separate.
+Keep one stable OCE account and its existing authorization identity, or
+**Principal**, with separate sign-in methods. An administrator attaches an exact
+GitHub identity; login creates no account, Principal, permission, Namespace, or
+Agent credential. Email never links accounts. Existing Namespaces remain the
+personal and shared workspace boundary.
 
 ## First usable delivery
 
-The browser milestone includes both Google and GitHub, manual account and method
-administration, repair, explicit grants, and local session revocation. A person
-must be able to see an authorized Namespace, create and read a Configuration,
-create an Agent, and perform an allowed lifecycle operation. The selected identity
-and access management (IAM) Driver checks every operation against its
-[exact resource grants](31-human-federated-sign-in/account-lifecycle.md#console-grants).
-Agent creation alone does not establish deployment.
+A current human Installation administrator attaches the configured github.com
+numeric subject to an existing active account. The operation preserves its real
+password, Principal, contact data, and grants, and invalidates its old sessions.
+The person then chooses GitHub in Console, obtains an ordinary OCE session, and
+reads an **existing authorized Agent**. The actual Console path is
+`/api/auth/session` → `/namespaces` →
+`GET /namespaces/:namespaceId/agents/:agentId`.
 
-Account and policy changes must commit together and preserve the last usable
-local-password administrator. Empty `authentication.providers` preserves local
-passwords, the explicitly provisioned development administrator, and service keys.
-A provider outage leaves independent local recovery available; a failed selected
-identity never silently selects another credential or person.
+Existing accounts, resource setup, explicit IAM grants, and a usable protected
+password administrator are prerequisites. IAM checks each requested operation;
+optional panels may deny without adding permissions. Unknown identities receive
+no session and a confined identity handoff for an administrator. Local disable,
+account-wide revocation, and ordinary logout remain required. A GitHub outage
+must leave independently selected password recovery usable.
 
 ## Sign-in flow
 
@@ -45,61 +51,147 @@ config:
   theme: base
   htmlLabels: true
   themeVariables:
-    fontSize: 16px
+    fontSize: 14px
+    primaryTextColor: "#344054"
     lineColor: "#8B949E"
     edgeLabelBackground: "#FFFFFF"
+    clusterBkg: "#FAFBFC"
+    clusterBorder: "#D8DEE6"
   flowchart:
     curve: linear
     nodeSpacing: 24
-    rankSpacing: 26
-    padding: 12
+    rankSpacing: 30
+    padding: 14
+    diagramPadding: 12
+    subGraphTitleMargin:
+      top: 10
+      bottom: 14
 ---
 flowchart TB
-  Person["<b>Provisioned person</b><br/>Google or GitHub"]
-  Verify["<b>Controller sign-in</b><br/>One-use verification"]
-  Session["<b>Current account</b><br/>Commit session + facts"]
-  Console["<b>Authorized Console</b><br/>Configuration → Agent"]
-  Deny["<b>No account access</b><br/>No session"]
-  Person -.->|sign in| Verify
-  Verify -.->|resolve method| Session
-  Verify -.->|unknown identity| Deny
-  Session -.->|cookie after commit| Console
-  classDef pending fill:#F3F4F6,stroke:#98A2AE,color:#344054,stroke-width:1px,stroke-dasharray:4 4
+  subgraph External["Browser and identity provider"]
+    Browser["<b>Existing person</b><br/>Console sign-in"]
+    GitHub["<b>github.com</b><br/>Numeric identity"]
+  end
+  subgraph Controller["OCC · proposed authentication join"]
+    Auth["<b>Better Auth mechanics</b><br/>Bound attempt + verification"]
+    Password["<b>Local password</b><br/>Independent recovery"]
+    Account["<b>OCE account gate</b><br/>Exact method + current state"]
+    State[("<b>Original State unit</b><br/>Session + required facts")]
+    Deny["<b>No session</b><br/>Denied or uncertain"]
+  end
+  subgraph Access["Console and resource authorization"]
+    Console["<b>Ordinary OCE session</b><br/>Read an existing Agent"]
+    IAM["<b>Existing IAM</b><br/>Exact resource decision"]
+  end
+  Browser -.->|start / callback| Auth
+  Auth -.->|bounded exchange| GitHub
+  GitHub -.->|verified response| Auth
+  Auth -.->|identity only| Account
+  Password -.->|verified password| Account
+  Account -.->|current account| State
+  Account -.->|unknown / disabled| Deny
+  State -.->|failure / unknown commit| Deny
+  State -.->|cookie after acknowledgment| Console
+  Console -->|authorize requested read| IAM
+  classDef external fill:#F1EEF5,stroke:#A091AD,color:#3A3243,stroke-width:1px
+  classDef storage fill:#EDF2F7,stroke:#879AB0,color:#25364A,stroke-width:1px
+  classDef operation fill:#EBF3F0,stroke:#7F9D93,color:#2B4038,stroke-width:1px
   classDef gate fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
-  class Person,Verify,Session,Console pending
+  class Browser,GitHub,Password external
+  class Auth,State storage
+  class Account,Console,IAM operation
   class Deny gate
   linkStyle default stroke:#8B949E,stroke-width:1px
 ```
 
-Dashed arrows show the proposed connections. The controller verifies the provider
-identity and resolves an existing active account. It discards provider tokens and
-returns a cookie only after the commit of the session and required login facts is
-acknowledged. An unknown verified person receives an actionable no-access result
-without a session.
-The [full request lifecycle](31-human-federated-sign-in/architecture.md#request-lifecycle)
-shows callback consumption, verification, and commit ordering.
+Dashed edges are proposed joins; they do not mean asynchronous work. The solid
+edge represents the existing resource-authorization path at the pinned baseline
+([Console reader](https://github.com/openclaw/openclaw-enterprise/blob/311bc23012d0fd269483168b865adf79df630542/apps/controller/src/console/agents/detail.mjs#L153-L160),
+[IAM decision](https://github.com/openclaw/openclaw-enterprise/blob/311bc23012d0fd269483168b865adf79df630542/packages/iam/src/index.ts#L899-L906)).
+Neither edge style establishes installed or live-provider behavior.
+
+The controller acknowledges one-use callback consumption before remote work.
+After verification, one original State transaction rechecks the exact method and
+active account and persists the fresh session with required facts. Only an
+acknowledged, still-unexpired result releases a cookie. Audit failure or uncertain
+commit releases none. Provider tokens are transient controller inputs and are
+discarded. [Architecture](31-human-federated-sign-in/architecture.md#request-lifecycle)
+owns the complete ordering; [security](31-human-federated-sign-in/security.md)
+owns protocol, transport, and custody controls.
+
+## Proposed activation and compatibility
+
+The initial profile proposes one github.com **OAuth App**, a fixed eight-hour
+absolute session lifetime without refresh, and a protected existing local
+password administrator under qualified native IAM. Eight hours is this profile's
+initial value, not a universal future maximum. Every retained password/GitHub
+issuer, session reader, API admission path, and logout must use the same account
+currentness checks.
+
+Activation is a maintenance transition: stop every serving controller, enforce
+exclusion of incompatible processes, then atomically establish recovery and
+currentness, invalidate unbound legacy sessions, and persist activation before
+compatible controllers resume. This forces reauthentication while preserving
+account IDs, passwords, and grants. The exclusion mechanism needs implementation
+proof; startup checks alone do not fence an already-running replica.
+
+Before activation, absent GitHub configuration preserves the existing password
+profile. After activation, missing required profile configuration prevents startup
+until restored. This deliberate availability cost differs from a provider outage,
+when password recovery must work.
+
+The **initial implementation draft uses pre-activation accounts** and refuses
+`POST /api/auth/accounts` after activation. Existing creator compatibility remains
+an open acceptance obligation, not an approved permanent removal. Shared-cookie
+and native-admin consumers also need the common gate; unproved combinations
+refuse activation. See the [support table](31-human-federated-sign-in/account-lifecycle.md#activation-and-supported-consumers).
+
+## Implementation and acceptance
+
+Deliver curated Better Auth routes, original-State attempt/session persistence,
+authorized local controls, and the actual Console path as one reviewable increment.
+Reuse existing stores; add no identity service or parallel policy writer.
+
+Use the real controller, Console, selected native IAM, State/audit, and migrated
+PostgreSQL with separate migrator and restricted application roles. Controlled
+endpoints may replace only the remote provider. Record exact source/supplier
+revisions, setup, routes, grants, results, and remaining gaps.
+
+| Boundary                | Required evidence                                                                                                                                                                                                                                                                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Identity and Console    | Unchanged password/GitHub account, Principal, and grants; positive existing-Agent read; optional email; exact subject uniqueness; unknown/same-email/disabled and cross-Namespace denial; grant removal and protected-content clearing. Label administrator-based proof honestly.                                |
+| Protocol and custody    | Bound attempts, ambiguous callbacks, concurrent consumption, replay/fixation refusal, expiry/origin/return checks, shared quotas/cleanup; cancellation through body reads, byte limits, redirect refusal; no provider tokens in storage, cookies, controller or installed ingress logs, including failure paths. |
+| Transactions            | Two-controller issuance/disable/revoke and actor-revocation races; rollback, required-audit failure, unknown acknowledgment without credentials/replay/compensation; authorized exact result lookup and stale/expired stored-session logout.                                                                     |
+| Activation and recovery | Fresh/populated migration preserving identities, passwords, and grants; restart and actual incompatible-controller exclusion; rejected legacy sessions; configuration-removal refusal; every retained consumer; usable password administration during provider outage.                                           |
+
+Require independent changed-SQL and complete security-boundary review, resolve
+defects, and update living references, operator guides, and source-backed flows.
+Source review, composed integration, installed HTTPS/cookie/log custody, actual
+GitHub registration, and release acceptance remain separate gates. This RFC
+claims none of those product outcomes. Existing creator compatibility remains
+open; neither passing tests nor draft publication grants a permanent waiver.
 
 ## Selected scope and exclusions
 
-[Enterprise providers](31-human-federated-sign-in/interfaces.md#enterprise-profiles)
-(standards-based OpenID Connect, Okta, tenant-bound Entra, and enterprise GitHub) and
-[browser-assisted human CLI login](31-human-federated-sign-in/interfaces.md#human-cli)
-remain selected later deliveries. The browser milestone can ship independently;
-it does not complete that scope or require model execution or a History UI.
+Google could follow through the same account/session path, with approved stable
+subject enrollment and nonce/claim qualification. External-only onboarding and
+individually qualified static Okta, Keycloak, or Entra connections are other
+possible extensions. These are tentative directions, not a committed delivery
+program. Broad method repair, combined policy administration, CLI approval,
+bootstrap overhaul, and the fuller Configuration → Agent lifecycle remain outside
+this increment.
 
-Public signup, invitations, self-service linking, automatic workspaces, SAML,
-SCIM/directory synchronization, continuous provider offboarding, and
-provider-derived repository grants remain excluded.
+Public signup, invitations, self-service linking, automatic workspaces,
+SAML/SCIM/JIT, group synchronization, dynamic SSO administration, provider-driven
+global logout/offboarding, and provider-derived repository grants are excluded.
+Human login adds no SPIFFE/SPIRE, model-execution, or History-UI prerequisite.
+Agent identity, repository GitHub App credentials, transport withdrawal, and
+physical runtime stop retain their separate owners.
 
 ## Design details
 
-- [Architecture](31-human-federated-sign-in/architecture.md) and
-  [security](31-human-federated-sign-in/security.md) define component boundaries,
-  protocol validation, and credential handling.
-- [Account lifecycle](31-human-federated-sign-in/account-lifecycle.md) defines
-  method repair, atomic policy changes, session invalidation, and recovery.
-- [Interfaces](31-human-federated-sign-in/interfaces.md) defines browser,
-  administration, enterprise, and CLI contracts. Browser lifetime configuration,
-  no-access presentation, and operation-digest encoding remain open choices.
-- [Delivery](31-human-federated-sign-in/delivery.md) defines the increments and
-  the implementation, installation, and provider checks required for acceptance.
+[Architecture](31-human-federated-sign-in/architecture.md) owns the account,
+transaction, activation, and handoff contracts; [security](31-human-federated-sign-in/security.md)
+owns protocol and custody. The original [account](31-human-federated-sign-in/account-lifecycle.md),
+[interface](31-human-federated-sign-in/interfaces.md), and
+[delivery](31-human-federated-sign-in/delivery.md) paths remain as compact references.

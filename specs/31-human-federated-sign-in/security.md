@@ -1,144 +1,91 @@
 # Federated sign-in security
 
-[Overview](../31-human-federated-sign-in.md) · [Request lifecycle](architecture.md#request-lifecycle)
+[Overview](../31-human-federated-sign-in.md) · [Lifecycle](architecture.md#request-lifecycle)
 
-The proposal protects a person's stable OCE identity while admitting only an
-existing active account. Provider authentication must not create resource
-authority, revive revoked sessions, or expose provider credentials. The controls
-below remain requirements for the selected delivery, not claims of installed
-protection.
+These controls are requirements of the proposed GitHub increment, not claims of
+installed protection.
 
 ## Assets, actors, and trust
 
-The protected assets are human identity, immutable method ownership, local
-session credentials, provider client secrets, and the integrity of account and
-policy changes. Confusing a provider identity with a local account could admit
-the wrong person. Confusing sign-in with authorization could grant that person
-access that an administrator never selected.
+Protect stable human identity, immutable method ownership, session credentials,
+provider secrets, and local mutation/audit integrity. Treat browser, callback,
+profile, CLI, and workload inputs as untrusted. Deployment and database
+administrators remain trusted; their compromise is outside containment.
 
-Treat browsers, CLI clients, callbacks, provider profiles, and Agent workloads as
-untrusted inputs. A signed-in human still needs the exact IAM permission for a
-resource operation. Configuration selects which providers may establish identity
-evidence. It does not grant provider claims authority over OCE resources.
-
-Privileged deployment and database administrators are trusted by this design.
-Compromise of those administrators is outside its containment guarantee. That
-recorded assumption does not waive protocol checks, currentness, transaction
-integrity, or qualification within the supported boundary.
-
-Authentication owns protocol verification and password hashing. The account
-owner resolves current method association. IAM owns resource authority. The Agent
-retains its independent ServicePrincipal, and repository credential owners retain
-custody and execution-time permission checks. No provider email, domain, UPN,
-display name, groups, GitHub login, or repository membership conveys OCE authority.
+Provider email, domain, UPN, display name, groups, GitHub login, and repository
+membership confer neither association nor authority. IAM authorizes exact resource
+operations. Agent ServicePrincipals and repository credential custody remain
+independent of human authentication.
 
 ## Protocol validation
 
-Browser binding prevents a callback for one sign-in from authorizing another.
-The attempt binds unpredictable state, provider instance, exact callback,
-S256 proof key, OIDC nonce, browser-cookie digest, purpose, and permitted return.
-S256 uses a hash of a private proof value so possession of the authorization code
-alone is insufficient. The nonce binds the ID token to the initiating attempt.
+Reserve an unpredictable-state attempt for **at most ten minutes**, bound to
+purpose, Installation, immutable provider instance, exact callback, S256 PKCE
+verifier, initiating browser-cookie digest, and permitted local return. PKCE binds
+the code exchange to its private verifier. Use Secure, HttpOnly, host-only attempt
+cookies with the qualified SameSite policy; session-cookie sharing must not widen
+the attempt cookie.
 
-The controller rejects duplicate callback parameters, replay, mismatched browser
-or configuration, provider confusion, and unsafe redirects. It atomically consumes
-and acknowledges the attempt before remote verification. Expired attempts,
-exchange failure, and uncertain persistence fail closed. Shared rate limits and
-pending caps cover the browser/provider and Installation, rather than only one
-controller process. These controls address login CSRF and concurrent callbacks.
+Acknowledge reservation before redirect. Reject duplicate or ambiguous callback
+parameters, replay, expiry, browser/provider/configuration/purpose mismatch, and
+unsafe returns. Atomically consume the matched attempt, including valid
+provider-error callbacks, and acknowledge consumption **before remote work**.
+Uncertain consumption stops exchange; consumed failures require a new start.
+Share finite start/callback quotas and pending caps across browser/provider and
+Installation, with bounded cleanup across controllers.
 
-OIDC means OpenID Connect, the identity layer used here with an authorization-code
-exchange. Require the ID token and complete
-[token-response validation](https://openid.net/specs/openid-connect-core-1_0.html#TokenResponseValidation):
+Exchange the code and call authenticated `/user` for the exact numeric subject,
+using only necessary identity permissions. No email enrichment is required.
+Perform remote work outside account/policy locks. Reuse qualified Better Auth
+request construction and token parsing with **scoped bounded transport for both
+calls**: server-owned endpoints, full-operation cancellation through body reads,
+finite response bytes, refused redirects, and fixed sanitized errors. A direct
+helper call, outer promise timeout, or process-global fetch replacement is not
+proof of those bounds.
 
-- Validate required claim types and the signature using a permitted algorithm.
-- Require the exact configured issuer, the intended audience, and a valid
-  authorized-party claim where required.
-- Check issued-at and expiry using bounded clock skew. Enforce not-before when
-  present.
-- Validate nonce and immutable subject. If UserInfo is consulted, its subject
-  must match the validated ID token.
-
-Discovery remains pinned to the configured issuer. Restrict every remote
-discovery, token, signing-key, and UserInfo endpoint to the allowed origins and
-bound timeouts, response sizes, and redirects. Validate public origin and exact
-callbacks. HTTP is allowed only for explicit loopback development fixtures.
-These rules prevent endpoint selection from becoming arbitrary server-side
-network access.
-
-Google uses its canonical issuer. GitHub exchanges the authorization code, then
-calls authenticated `/user` for the numeric user ID. An OAuth App requests only
-necessary identity permissions. A GitHub App uses a separate identity-only
-registration without additional repository or organization permissions, and
-expanded registrations are rejected.
-[OAuth scopes cannot narrow GitHub App user-token permissions](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app).
-Repository App and installation-token issuance remain separate capabilities.
-
-Immutable provider-instance identity and exact subject matching prevent automatic
-account association by convenient profile fields. Email may be absent. Matching
-email must never merge accounts or attach a method. See the
-[identity contract](interfaces.md#provider-configuration-and-identity).
+The first application kind is an OAuth App. A login GitHub App is deferred; if
+selected later, qualify a separate identity-only registration and refuse unknown
+or expanded repository/organization permissions. OAuth scopes cannot narrow a
+[GitHub App's user-token permission profile](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app). Never reuse the Agent repository App.
 
 ## Session and credential custody
 
-Adapters discard all login provider tokens after verification and avoid
-unnecessary offline access. Their result contains no tokens, raw claims, account
-choice, or authority. Provider credentials never reach the human CLI. No identity
-or credential belongs in a redirect URL.
+Provider access, refresh, and ID tokens remain transient controller inputs and
+are discarded after verification. Avoid unnecessary offline access. No provider
+credential reaches OCE session/account cookies, persistence, the CLI, or Agents.
+Provider tokens, OCE session credentials, and identity handoffs must not enter
+redirect URLs. OAuth authorization responses still use the protocol's
+code/state or error parameters.
 
-The session owner must prevent late insertion from restoring revoked access.
-Security changes invalidate sessions in the same original transaction. Every
-issuer and reader must follow the [session contract](interfaces.md#sessions-and-no-access)
-and [account transitions](account-lifecycle.md#administration-and-currentness).
+[Guarded issuance](architecture.md#request-lifecycle) prevents stale sessions from
+restoring revoked access and requires acknowledged session/fact persistence before
+cookie release. Fixed nonsensitive errors may include request IDs. Redact raw
+provider errors, claims, codes, tokens, cookies, and secrets before responses,
+controller logs, ingress/access logs, audit, or telemetry.
 
-Required session persistence and login facts must receive commit acknowledgment
-before credential release. An uncertain acknowledgment releases no credential and
-authorizes no blind replay. State retains responsibility for distinguishing
-rollback, committed outcome, and uncertainty.
+Required facts use closed local account, Principal, method, operation, and
+currentness references with fixed outcomes, never an invented Agent subject.
+Exclude external subjects, email, profiles, and raw claims from durable audit and
+History. External identity details are limited to authorized management or the
+[confined no-access result](interfaces.md#sessions-and-no-access). Receipt payloads
+must meet the same privacy constraints.
 
-Protocol failures expose fixed nonsensitive errors and request IDs. Redact raw
-provider errors, claims, codes, tokens, cookies, and secrets before they reach
-responses, logs, or audit. Account audit uses closed local account, Principal,
-method, operation, and currentness references with fixed outcomes. It joins the
-common ledger without inventing an Agent subject. Durable audit and History must
-exclude external subjects, email, profiles, raw claims, and provider error text.
+## Future OIDC controls
 
-External identity details appear only in authorized account management or the
-direct no-access response. They must not appear in URLs or telemetry. The
-[proposed same-origin response](interfaces.md#sessions-and-no-access) confines
-disclosure to the verified initiating browser without persistence or third-party
-assets. Its exact presentation remains an owner decision.
-
-CLI cookie custody uses an origin-bound owner-only file. Atomic file operations
-reject unsafe permissions and symlinks, while cross-process serialization covers
-aliases for the same file. TLS verification, redirect restrictions, explicit
-credential selection, and failed-logout retention follow the complete
-[CLI contract](interfaces.md#human-cli).
+If a future OIDC provider is selected, retain [the original nonce, token, claim,
+and endpoint-validation contract](https://github.com/openclaw/openclaw-enterprise/blob/085610f971591221b0f9c6e036e1cd7a4de89e0d/specs/31-human-federated-sign-in/security.md#protocol-validation)
+and qualify the actual provider independently. This is conditional scope.
 
 ## Accepted limits and closure
 
-The recorded trust and scope limits are specific. Provider suspension does not
-continuously revoke OCE sessions. Local logout, disablement, and account-wide
-revocation provide the selected local controls. Deployment or database
-administrator compromise is outside containment. Continuous provider offboarding
-requires a new product selection. None of these statements accepts a defect in
-the required controls.
+The proposed local disable and revoke operations provide local offboarding; provider suspension does not
+continuously revoke OCE sessions. The protected usable password administrator
+and [recovery transaction](account-lifecycle.md#atomic-policy-and-recovery) remain
+mandatory. A failed selected identity never falls back to another credential. Existing tools retain explicit service-key precedence, credential-conflict rejection, TLS verification, and redirect restrictions; new browser-assisted CLI approval remains deferred.
+Unfulfilled controls are not accepted residual risk.
 
-The last usable local-password administrator must remain enabled and authorized
-under the complete candidate policy, including Groups and overriding
-Restrictions. Independent local recovery is an invariant, not permission to fall
-back after a failed selected identity. Its transaction and concurrency rules
-belong to [account lifecycle](account-lifecycle.md#atomic-policy-and-recovery).
-
-Required but unfulfilled evidence includes real controller and PostgreSQL
-composition, protocol negatives, two-controller revocation races, token
-nonretention, independent SQL review, and complete security-boundary review.
-Lifetime exposure and no-access presentation remain explicit proposals. Their
-missing decisions are not accepted residual risks.
-
-Protected credential closure, physical runtime stop, cleanup, and unknown provider
-effects remain separate outcomes from local session denial. Their owners retain
-the independently qualified withdrawal deadlines described in
-[delivery](delivery.md#decisions-and-follow-ups). The browser delivery cannot claim
-those outcomes from a local account transaction. Installed HTTPS and actual
-provider registrations need separate qualification for each delivery.
+Local session denial does not prove repository transport closure, physical Agent
+stop, cleanup, or resolution of unknown provider effects. Those receivers retain
+their separately qualified withdrawal contracts. Human login adds no runtime
+identity dependency. [Acceptance](delivery.md#acceptance-evidence) separately
+requires composed, installed HTTPS/logging, live-registration, and release proof.
