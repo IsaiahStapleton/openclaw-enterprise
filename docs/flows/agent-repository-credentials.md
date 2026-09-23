@@ -90,13 +90,15 @@ uses `resolveRepositoryBindings` after existing authorization. The public input
 contains distinct opaque references and optional profiles, not provider tokens
 or caller-selected grant identities. The concrete
 `apps/controller/src/drivers/repo/github/driver.ts:GitHubRepoDriver.resolve`
-uses local registry policy and defaults an omitted profile to `git-write`.
+uses local registry policy and defaults an omitted profile to Contributor
+(`git-write`).
 It performs no control-socket or GitHub call.
 
 `apps/controller/src/drivers/repo/github/credentials/registry.ts:resolveGitHubRepositoryBinding`
 requires the exact Namespace/reference/profile combination. Its fingerprint
 binds provider/App/installation/repository identity, duration policy and the
-Namespace's complete profile policy and normalized push-ref allowlist, if set.
+Namespace's complete profile policy, exact permissions and normalized push-ref
+allowlist, if set.
 The same registry supports several
 repositories under one App installation, with one grant per selected binding.
 OCC stores normalized selections on the Agent; an update's omitted array
@@ -233,6 +235,13 @@ Git remotes and pins the generation, reference and session for Git children.
 Its API environment selects private `gh` configuration while preserving normal HOME.
 Concurrent commands do not mutate shared repository-selection state.
 
+`apps/controller/src/drivers/repo/github/credentials/profiles.ts` owns the exact
+Reader, Contributor and Collaborator permission maps. The GitHub route classifier
+admits selected REST operations for that profile and token-bounded GraphQL for
+all three. Every GraphQL POST remains a possible write; Reader's token, not a
+query parser, enforces its read-only grant. See
+[access levels](../reference/repository-credentials/access-levels.md).
+
 The [service exchange flow](repository-credentials.md#4-reserve-acquire-and-dispatch)
 then enforces the bearer, immutable repository/profile, capacity and deadlines.
 It acquires fresh installation tokens on demand under the same grant, allowing
@@ -327,6 +336,8 @@ State/worker, real-client, installed/runtime and live-provider checks.
 ## Changelog
 
 - 2026-09-23 08:16: Trace accompanying initialization-safe hook delegation and equivalent native HTTPS destination matching. (authoring-run/fca0cd1e-2248-4139-aae8-d12423b5667e - 45c4cf5584b631c9ae5018c56a579d4bafa79ca5)
+
+- 2026-09-23 06:18: Trace the accompanying access-level permissions and grant fingerprint changes. (authoring-run/0dffba8f-d16f-4f90-8fe2-893368f6926a - a2e94cf8ac2d94306f0701cee5457d1a9797e50a)
 
 - 2026-09-23 04:15: Trace the accompanying optional push-ref guardrail and ordinary hook delegation. (48c7cd3a-4677-44e0-b710-c39ada9d4f48 - cbf1851308a2db398820ae9e1000f57837703ace)
 

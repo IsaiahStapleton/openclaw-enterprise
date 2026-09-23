@@ -53,7 +53,10 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
     });
   const unauthenticatedPolicy = policy("git-write");
   const authentication = createGatewayAuthentication({
-    isGitRoute: (head) => unauthenticatedPolicy.route(head) !== undefined,
+    isGitRoute: (head) => {
+      const route = unauthenticatedPolicy.route(head);
+      return route !== undefined && route.kind !== "api";
+    },
   });
   return Object.freeze<GitHubDriverFactory>({
     trustedUpstreamOrigins: new Set([apiOrigin, gitOrigin]),

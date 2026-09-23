@@ -120,6 +120,33 @@ test(
       controlSocket: fixture.config.gateway.controlSocket,
     });
     await client.health(signal);
+    const contributor = driver.resolve({
+      namespaceId: fixture.namespaceId,
+      bindings: [{ repositoryRef: "repo-a" }],
+    }).bindings[0];
+    // This exact registry used to admit the narrower git-write grant under this
+    // digest. The real Driver/control/service join must reject its stale authority
+    // before either repository's provider sees acquisition or exchange traffic.
+    const legacyGrant = "sha256:94c2dc4513de2fa4a6f885c7fd2f857110510100111cb4f4424db6ddf8d37ae5";
+    assert.notEqual(contributor.grant.grantId, legacyGrant);
+    await assert.rejects(
+      driver.open(
+        {
+          namespaceId: fixture.namespaceId,
+          admissionId: `${fixture.clock.wallNow()}-${randomUUID()}`,
+          binding: { ...contributor, grant: { ...contributor.grant, grantId: legacyGrant } },
+          durationSeconds: 3600,
+          deadlineWallMs: fixture.clock.wallNow() + 1800_000,
+        },
+        signal,
+      ),
+      ScopeViolationError,
+    );
+    assert.ok(
+      fixture.repositories.every(
+        (entry) => entry.github.trace.length === 0 && entry.github.issuesOfTokens.length === 0,
+      ),
+    );
     const inputs = resolution.bindings.map((binding) => ({
       namespaceId: fixture.namespaceId,
       admissionId: `${fixture.clock.wallNow()}-${randomUUID()}`,
@@ -174,6 +201,10 @@ test(
     assert.deepEqual(fixture.repositories[0].github.issuesOfTokens[0].permissions, {
       metadata: "read",
       contents: "read",
+      issues: "read",
+      pull_requests: "read",
+      checks: "read",
+      statuses: "read",
     });
     assert.equal(fixture.repositories[1].github.issuesOfTokens.length, 1);
     assert.deepEqual(fixture.repositories[1].github.issuesOfTokens[0].repositoryIds, [74]);
@@ -182,6 +213,8 @@ test(
       contents: "write",
       pull_requests: "write",
       issues: "write",
+      checks: "read",
+      statuses: "read",
     });
     await assert.rejects(
       driver.open({ ...inputs[0], durationSeconds: 3599 }, signal),

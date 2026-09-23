@@ -73,7 +73,7 @@ Git discovery or authentication.
 They also withhold a created admission response until the real PostgreSQL claim
 expires, then check recovery without bearer replay. Additional assertions inspect
 private regular-file modes, retained material after worker replacement, exact
-missing-Secret repair, Git-only API denial and ordinary stop cleanup without
+missing-Secret repair, Reader write denial and ordinary stop cleanup without
 closing a sibling Agent's sessions. The credential service runs in a separate
 child. Graceful restart and joined SIGKILL preserve the HTTP app, worker and
 controlled provider inventories. After the crash, the replacement service rejects
