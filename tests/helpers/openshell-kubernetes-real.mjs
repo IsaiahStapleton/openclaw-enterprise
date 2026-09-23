@@ -58,6 +58,26 @@ export function openShellRevisionName(revision) {
   return `${openShellAgentName(revision.agentId)}-rev-${openshellHash(revision.id)}`;
 }
 
+export function createOpenShellServiceLoopbackLookup(serviceHostname) {
+  const expectedHostname = serviceHostname.toLowerCase();
+
+  return (hostname, options, callback) => {
+    if (hostname.toLowerCase() !== expectedHostname) {
+      const error = new Error(`Refusing to resolve unexpected OpenShell hostname ${hostname}.`);
+      error.code = "ENOTFOUND";
+      callback(error);
+      return;
+    }
+
+    const address = { address: "127.0.0.1", family: 4 };
+    if (typeof options === "object" && options.all === true) {
+      callback(null, [address]);
+      return;
+    }
+    callback(null, address.address, address.family);
+  };
+}
+
 export function createOpenShellInstallationConfiguration({
   authentication,
   platformNamespace,

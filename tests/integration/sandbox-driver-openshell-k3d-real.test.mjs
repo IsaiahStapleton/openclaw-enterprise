@@ -15,6 +15,7 @@ import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs
 import {
   createOpenShellInstallationConfiguration,
   createOpenShellKubernetesFixture,
+  createOpenShellServiceLoopbackLookup,
   openShellAgentName,
   openshellHash as hash,
 } from "../helpers/openshell-kubernetes-real.mjs";
@@ -1719,6 +1720,8 @@ async function observeExposedCodexAuthenticationBoundary(serviceUrl, appServerTo
   const request = url.protocol === "https:" ? httpsRequest : httpRequest;
   return await new Promise((resolve, reject) => {
     const upgrade = request(url, {
+      // Connect through the loopback port-forward without discarding OpenShell's Host routing key.
+      lookup: createOpenShellServiceLoopbackLookup(url.hostname),
       headers: {
         authorization: `Bearer ${appServerToken}`,
         connection: "Upgrade",
