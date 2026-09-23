@@ -1191,6 +1191,17 @@ test(
     );
 
     await driver.retireRevision(secondRevision);
+    await assertSharedWorkspaceClaim(
+      owned[0],
+      first.id,
+      primaryAgent,
+      sharedWorkspaceIdentities.get(`${first.id}:${primaryAgent}`),
+    );
+    // Revision cleanup preserves the Agent workspace; only final Agent deletion removes it.
+    await driver.deleteAgentRuntimeCredentials({
+      namespace: first,
+      agent: { id: primaryAgent, namespaceId: first.id },
+    });
     await waitFor(
       `shared workspace claim ${sharedWorkspaceClaimName(primaryAgent)} to be deleted`,
       () => missing("persistentvolumeclaim", sharedWorkspaceClaimName(primaryAgent), owned[0]),

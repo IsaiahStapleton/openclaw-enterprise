@@ -4240,7 +4240,7 @@ test("private gateway claim reuse and deletion verify exact ownership and storag
   assert.equal(mutations.length, 1);
 });
 
-test("stopping a Kubernetes revision removes routing and execution but retains persistent claims", async () => {
+test("stopping a Kubernetes revision and retiring its predecessor retains Agent storage", async () => {
   const driver = createKubernetesComputeDriver(
     routedOptions({
       runtime: {
@@ -4256,6 +4256,7 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
   const gatewayName = "gateway-" + createHash("sha256").update(agentId).digest("hex").slice(0, 12);
   const revision = routedRevision(driver, {
     id: revisionId,
+    revision: 2,
     agentId,
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     harnessAuth: apiKeyAuth,
@@ -4283,14 +4284,19 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
   const account = driver.manifest("v1", "ServiceAccount", gatewayName, ownership, namespace);
   account.metadata.uid = "account-uid";
   const route = driver.gatewayRoute(
-    { id: revisionId, revision: 1, namespaceId: tenant.id, agentId },
+    { id: revisionId, revision: 2, namespaceId: tenant.id, agentId },
     ownership,
     namespace,
     service,
   );
   route.metadata.uid = "route-uid";
   route.metadata.resourceVersion = "1";
+  const privateClaim = driver.gatewayPrivateStateClaim(agentId, ownership, namespace);
+  privateClaim.metadata.uid = "private-state-uid";
   const deletions = [];
+  let privateClaimDeleted = false;
+  let serviceDeleted = false;
+  let accountDeleted = false;
   let gatewayDeleted = false;
   let routeDeleted = false;
   let failServiceDelete = true;
@@ -4338,7 +4344,10 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
           items: gatewayPodObservations === 1 ? [structuredClone(gatewayPod)] : [],
         };
       },
-      async readNamespacedService() {
+      async readNamespacedService({ name }) {
+        if (name !== gatewayName || serviceDeleted) {
+          throw Object.assign(new Error("Not found"), { code: 404 });
+        }
         return structuredClone(service);
       },
       async deleteNamespacedService(request) {
@@ -4347,18 +4356,33 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
           failServiceDelete = false;
           throw new Error("service delete failed");
         }
+        serviceDeleted = true;
       },
-      async readNamespacedServiceAccount() {
+      async readNamespacedServiceAccount({ name }) {
+        if (name !== gatewayName || accountDeleted) {
+          throw Object.assign(new Error("Not found"), { code: 404 });
+        }
         return structuredClone(account);
       },
       async deleteNamespacedServiceAccount(request) {
         deletions.push(["ServiceAccount", request]);
+        accountDeleted = true;
       },
-      async readNamespacedPersistentVolumeClaim() {
-        throw new Error("stop must not inspect persistent claims");
+      async readNamespacedPersistentVolumeClaim({ name }) {
+        assert.equal(name, privateClaim.metadata.name);
+        return structuredClone(privateClaim);
       },
-      async deleteNamespacedPersistentVolumeClaim() {
-        throw new Error("stop must not delete persistent claims");
+      async deleteNamespacedPersistentVolumeClaim(request) {
+        deletions.push(["PersistentVolumeClaim", request]);
+        privateClaimDeleted = true;
+      },
+      async readNamespacedConfigMap() {
+        throw Object.assign(new Error("Not found"), { code: 404 });
+      },
+    },
+    networking: {
+      async readNamespacedNetworkPolicy() {
+        throw Object.assign(new Error("Not found"), { code: 404 });
       },
     },
     objects: {
@@ -4383,6 +4407,12 @@ test("stopping a Kubernetes revision removes routing and execution but retains p
     ["HTTPRoute", "Deployment", "Service", "Service", "ServiceAccount"],
   );
   assert.equal(gatewayPodObservations, 2);
+
+  // The worker stops the published revision before retiring predecessors. A missing
+  // gateway after stop does not make Agent-owned durable state revision garbage.
+  const predecessor = { ...revision, id: "revision-stop-storage-predecessor", revision: 1 };
+  await driver.retireRevision(predecessor);
+  assert.equal(privateClaimDeleted, false, "stopping and retiring must retain native Agent state");
 });
 
 for (const cutover of ["already deployed", "during Deployment deletion", "during route deletion"]) {
@@ -4880,6 +4910,9 @@ test("retiring a running embedded revision waits for gateway Pods and removes ow
               : [],
         };
       },
+      async readNamespacedSecret({ name }) {
+        return read("Secret", name);
+      },
       async readNamespacedConfigMap({ name }) {
         return read("ConfigMap", name);
       },
@@ -4933,9 +4966,22 @@ test("retiring a running embedded revision waits for gateway Pods and removes ow
   assert.equal(podObservations, 2);
   const podWait = deletions.findIndex(({ kind }) => kind === "PodList");
   assert.ok(podWait > deletions.findIndex(({ kind }) => kind === "Deployment"));
+  assert.equal(
+    objects.has(
+      key("PersistentVolumeClaim", driver.gatewayPrivateStateClaimName(revision.agentId)),
+    ),
+    true,
+    "revision retirement must preserve Agent-owned native state",
+  );
+
+  // The worker invokes final Agent cleanup only after every revision has retired.
+  await driver.deleteAgentRuntimeCredentials({
+    namespace: tenant,
+    agent: { id: revision.agentId, namespaceId: tenant.id },
+  });
   assert.ok(
     podWait < deletions.findIndex(({ kind }) => kind === "PersistentVolumeClaim"),
-    "persistent state must not be deleted until the exact gateway Pod has terminated",
+    "Agent storage cleanup must follow terminated gateway Pods",
   );
   for (const [kind, name] of [
     ["Deployment", gatewayName],
@@ -5193,10 +5239,6 @@ test("retirement preserves active storage and node routing and deletes exact own
       "Deployment",
       { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-uid" } } },
     ],
-    ...claims.map(({ metadata }) => [
-      "PersistentVolumeClaim",
-      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
-    ]),
     [
       "Service",
       { name: agentName, namespace, body: { preconditions: { uid: "agent-service-uid" } } },
@@ -5242,10 +5284,6 @@ test("retirement preserves active storage and node routing and deletes exact own
       "ServiceAccount",
       { name: gatewayName, namespace, body: { preconditions: { uid: "gateway-account-uid" } } },
     ],
-    ...claims.map(({ metadata }) => [
-      "PersistentVolumeClaim",
-      { name: metadata.name, namespace, body: { preconditions: { uid: metadata.uid } } },
-    ]),
     [
       "Service",
       { name: agentName, namespace, body: { preconditions: { uid: "agent-service-uid" } } },
@@ -5411,6 +5449,13 @@ function workspaceSetupFixture(embedded) {
     records.push(structuredClone(body));
     return save(body);
   };
+  const remove =
+    (kind) =>
+    async ({ name, body }) => {
+      const existing = objects.get(key(kind, name));
+      assert.equal(body.preconditions.uid, existing.metadata.uid);
+      objects.delete(key(kind, name));
+    };
   const core = {
     async listNamespace() {
       return { items: [] };
@@ -5466,19 +5511,27 @@ function workspaceSetupFixture(embedded) {
   ]) {
     core[`readNamespaced${kind}`] = read(kind);
     core[`patchNamespaced${kind}`] = write;
+    core[`deleteNamespaced${kind}`] = remove(kind);
   }
   core.createNamespacedSecret = write;
   core.replaceNamespacedSecret = write;
   driver.apiClients = Promise.resolve({
     core,
-    apps: { readNamespacedDeployment: read("Deployment"), patchNamespacedDeployment: write },
+    apps: {
+      readNamespacedDeployment: read("Deployment"),
+      patchNamespacedDeployment: write,
+      deleteNamespacedDeployment: remove("Deployment"),
+    },
     objects: {
       read: async (object) => read(object.kind)({ name: object.metadata.name }),
       patch: async (body) => write({ body }),
+      delete: async (object, _pretty, _dryRun, _grace, _orphan, _propagation, body) =>
+        remove(object.kind)({ name: object.metadata.name, body }),
     },
     networking: {
       readNamespacedNetworkPolicy: read("NetworkPolicy"),
       patchNamespacedNetworkPolicy: write,
+      deleteNamespacedNetworkPolicy: remove("NetworkPolicy"),
     },
     discovery: {
       async listNamespacedEndpointSlice({ labelSelector }) {
@@ -5586,6 +5639,7 @@ for (const embedded of [true, false]) {
     const before = records.filter(({ kind }) => kind === "Secret").length;
     assert.equal((await driver.prepareRevision(revision, context)).ready, true);
     assert.equal(records.filter(({ kind }) => kind === "Secret").length, before);
+    await driver.retireRevision(revision);
     await driver.deleteAgentRuntimeCredentials({
       namespace: tenant,
       agent: { id: revision.agentId, namespaceId: tenant.id },

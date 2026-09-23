@@ -110,11 +110,11 @@ cutover and gateway Pod replacement. Reconciliation rejects foreign,
 terminating, or incompatible claims without mutating them. The driver creates
 the claims before their consumers and relies on gateway workload readiness;
 waiting for `Bound` before creating a Pod would deadlock
-`WaitForFirstConsumer` storage classes. Retiring a predecessor preserves the
-current gateway and its claims. Final gateway teardown requests deletion of
-its owned claims using their exact Kubernetes UIDs before deleting the
-gateway; PVC protection completes deletion after Pods unmount. Agent deletion
-is not currently a supported API operation.
+`WaitForFirstConsumer` storage classes. Stopping or retiring a revision retains
+both claims, including when the gateway has already stopped. Agent deletion
+retires every revision before its final cleanup hook deletes the owned claims
+using their exact Kubernetes UIDs. A cleanup failure keeps deletion pending
+for retry; it does not remove the Agent's database identity.
 
 ## Managed native configuration
 

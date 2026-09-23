@@ -86,9 +86,10 @@ before retrying. See the [initial credential workflow](../console/create-and-dep
 
 `deleteAgentRuntimeCredentials(binding)` is the idempotent teardown counterpart.
 During Agent deletion, the worker calls it after retiring every revision and
-before removing the Agent's database identity. Kubernetes Compute deletes only
-the admitted Agent-owned transport and Slack Secrets and treats absence as
-success. Namespace-owned Harness model authentication survives Agent deletion.
+before removing the Agent's database identity. Kubernetes Compute deletes
+the admitted Agent-owned private-state and shared-workspace claims, workspace
+setup Secret, and transport Secret; absence is success. Revision retirement
+retains those claims. Namespace-owned Harness model authentication survives Agent deletion.
 A Driver that supports provisioning but not deletion fails Agent deletion
 permanently on its first worker attempt. Drivers that implement neither optional
 method are unaffected.

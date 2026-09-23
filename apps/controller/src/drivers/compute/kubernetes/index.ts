@@ -1253,11 +1253,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   async deleteAgentRuntimeCredentials(binding: ComputeAgentBinding): Promise<void> {
-    if (this.options.runtime === undefined) {
-      return;
-    }
     await this.withRuntimeCredentialErrors(async () => {
+      if (this.options.runtime === undefined) {
+        const context = await this.agentResourceContext(binding);
+        if (context !== undefined) {
+          await this.deleteSharedWorkspaceClaim(context.ownership, context.namespace);
+        }
+        return;
+      }
       const context = await this.runtimeCredentialContext(binding);
+      // Only Agent deletion owns durable state. Revision retirement also runs after
+      // stop, when no gateway remains to distinguish it from final teardown.
+      await this.deleteGatewayPrivateStateClaim(context.ownership, context.namespace);
+      await this.deleteSharedWorkspaceClaim(context.ownership, context.namespace);
       const setupName = this.workspaceSetupSecretName(binding.agent.id);
       const setup = await this.getOwned("Secret", setupName, context.namespace, context.ownership);
       if (setup !== undefined) {
@@ -2631,12 +2639,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     await this.deleteGatewayRoute(gatewayName, ownership, namespace, revision.id);
     await this.deleteNamedRuntimeResources(gatewayName, ownership, namespace);
     await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
-    if (this.options.runtime !== undefined) {
-      await this.deleteGatewayPrivateStateClaim(ownership, namespace);
-    }
-    if (revision.harness.mode === "dedicated") {
-      await this.deleteSharedWorkspaceClaim(ownership, namespace);
-    }
     await this.deleteNamedRuntimeResources(
       `agent-${sha256Hex(revision.agentId, 12)}`,
       { ...ownership, servicePrincipalId: revision.servicePrincipalId },
@@ -3082,6 +3084,26 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (runtime === undefined) {
       throw new DependencyUnavailableError("The Agent runtime credentials are not configured.");
     }
+    const context = await this.agentResourceContext(binding);
+    if (context === undefined) {
+      throw new DependencyUnavailableError(
+        "The Agent runtime credential Kubernetes namespace is unavailable.",
+      );
+    }
+    const transportName = `${runtime.transportSecretPrefix}-${context.suffix}`;
+    validateKubernetesResourceName(transportName, "Agent runtime credential Secret name");
+    return {
+      ...context,
+      transport: {
+        name: transportName,
+        keys: [AGENT_TRANSPORT_TOKEN_KEY, GATEWAY_TOKEN_KEY, GATEWAY_PASSWORD_KEY],
+      },
+    };
+  }
+
+  private async agentResourceContext(
+    binding: ComputeAgentBinding,
+  ): Promise<Omit<RuntimeCredentialContext, "transport"> | undefined> {
     const namespaceId = required(binding.namespace?.id, "Runtime credential Namespace ID");
     const agentId = required(binding.agent?.id, "Runtime credential Agent ID");
     if (binding.agent.namespaceId !== namespaceId) {
@@ -3089,7 +3111,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     const { name: namespace, external } = await this.resolveNamespace(namespaceId);
     const observed = await this.get("Namespace", namespace);
-    if (observed === undefined || observed.status?.phase !== "Active") {
+    if (observed === undefined) {
+      return undefined;
+    }
+    if (observed.status?.phase !== "Active") {
       throw new DependencyUnavailableError(
         "The Agent runtime credential Kubernetes namespace is unavailable.",
       );
@@ -3097,18 +3122,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     this.verifyNamespaceOwnership(observed, { namespaceId }, external);
     const suffix = sha256Hex(agentId, 12);
     const ownership = { namespaceId, agentId };
-    const transportName = `${runtime.transportSecretPrefix}-${suffix}`;
-    validateKubernetesResourceName(transportName, "Agent runtime credential Secret name");
     return {
       namespaceId,
       namespace,
       agentId,
       suffix,
       ownership,
-      transport: {
-        name: transportName,
-        keys: [AGENT_TRANSPORT_TOKEN_KEY, GATEWAY_TOKEN_KEY, GATEWAY_PASSWORD_KEY],
-      },
     };
   }
 
